@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { RELEASE_CLEARS, RELEASE_ON } from "../workflows/release.workflow";
+import { RELEASE_CLEARS, RELEASE_ON, SHARE_CLEARS } from "../workflows/release.workflow";
 import { contentOf } from "../src/sdk";
 import onGitlab from "../workflows/release.gitlab.md" with { type: "text" };
 import onGithub from "../workflows/release.github.md" with { type: "text" };
@@ -25,6 +25,7 @@ test("both forges' release content has the steps the module asks for, and every 
       "stage",
       "rollback",
       "production",
+      "share",
     ]);
   // A template naming anything ReleaseInput does not give is refused as it is made.
   expect(Object.keys(RELEASE_ON.github)).toEqual(Object.keys(RELEASE_ON.gitlab));
@@ -119,4 +120,29 @@ test("staging a merge request deploys its own pipeline's head, checks stage and 
     ])
       expect(tagging).toContain(said);
   }
+});
+
+test("sharing for approval posts one Slack message, the merge request linked by its title, and nothing else", () => {
+  for (const [forge, one] of Object.entries(content)) {
+    const share = flat(one.sections.get("share") ?? "");
+    for (const said of [
+      "{{inputs.mr}}",
+      "{{channel}}",
+      "`<URL|TITLE>`",
+      "no other words, no emoji, no mention and no thread reply",
+      "Post nowhere else",
+      "If you have no Slack tool",
+    ])
+      expect(share).toContain(said);
+    expect(share).toContain(forge === "gitlab" ? "glab mr view" : "gh pr view");
+  }
+});
+
+test("sharing's Clearance names the channel and the merge request, well under the 400 characters a Clearance may be", () => {
+  const mr = "https://gitlab.example.com/spilnu/frontend/monorepo/-/merge_requests/12345";
+  const clears = SHARE_CLEARS(mr, "#frontend-approval-requests");
+  const joined = clears.join("; ");
+  expect(joined).toContain("one Slack message in #frontend-approval-requests");
+  expect(joined).toContain(mr);
+  expect(joined.length).toBeLessThanOrEqual(200);
 });

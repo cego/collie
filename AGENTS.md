@@ -118,6 +118,7 @@ here are in [`src/README.md`](src/README.md).
 - **Child workflows, services** → [ADR-0022](docs/adr/0022-a-workflow-is-made-of-workflows.md),
   [`docs/sdk.md`](docs/sdk.md#a-workflow-made-of-other-workflows), `test/children.test.ts`.
 - **Release Run** → [ADR-draft-a-merge-request-is-released-on-a-humans-go](docs/adr/draft-a-merge-request-is-released-on-a-humans-go.md),
+  sharing it for approval: [ADR-draft-a-release-shares-its-merge-request-on-a-humans-say](docs/adr/draft-a-release-shares-its-merge-request-on-a-humans-say.md),
   [`docs/workflows.md`](docs/workflows.md#release), `workflows/release.workflow.ts`,
   `workflows/release.gitlab.md`, `workflows/release.github.md`, `src/review-wait.ts`,
   `src/releasing.ts`, `src/landing.ts`, `test/release-content.test.ts`, `test/review-wait.test.ts`,

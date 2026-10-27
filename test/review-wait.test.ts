@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import type { ReviewComment, ReviewRead } from "../src/forge/review";
-import { reviewWaitOf, settleAnswers, standingOf } from "../src/review-wait";
+import { reviewWaitOf, settleAnswers, standingOf, waitsOnApproval } from "../src/review-wait";
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
 const MOVED = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
@@ -109,6 +109,20 @@ test("what is missing is said, every piece of it", () => {
     _tag: "Waiting",
     why: ["the pipeline at 1a2b3c4d", "mergeability (the forge has not said)"],
   });
+});
+
+test("a standing waits on a teammate's approval only while the approval is what is missing", () => {
+  const standing = (over: Partial<Extract<ReviewRead, { ok: true }>>) => standingOf(read(over), at);
+  expect(waitsOnApproval(standing({ approved: false, unapproved: "1 of 2 approvals" }))).toBe(true);
+  expect(
+    waitsOnApproval(standing({ approved: false, pipeline: { state: "running" }, mergeable: null })),
+  ).toBe(true);
+  expect(waitsOnApproval(standing({ pipeline: { state: "failed", name: "approval" } }))).toBe(
+    false,
+  );
+  expect(waitsOnApproval(standing({ pipeline: { state: "running" } }))).toBe(false);
+  expect(waitsOnApproval(standing({ approved: false, head: MOVED }))).toBe(false);
+  expect(waitsOnApproval(standing({}))).toBe(false);
 });
 
 test("a repository with no pipeline has none to wait for", () => {

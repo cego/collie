@@ -59,7 +59,7 @@ export const applyChange = (
   change: DesktopSettingsChange,
   offers: Offers = {},
 ): DesktopSettings => {
-  const { chatModel, chatEffort, ...rest } = { ...settings, ...change };
+  const { chatModel, chatEffort, chatWidth, ...rest } = { ...settings, ...change };
   const otherHarness =
     change.chatHarness !== undefined &&
     change.chatHarness !== (settings.chatHarness ?? DEFAULT_CHAT_HARNESS);
@@ -82,6 +82,7 @@ export const applyChange = (
     ...rest,
     ...(model !== undefined && { chatModel: model }),
     ...(effort !== undefined && !dropsEffort && { chatEffort: effort }),
+    ...(chatWidth != null && { chatWidth }),
   };
 };
 

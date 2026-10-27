@@ -241,3 +241,14 @@ that fails once, then stop and say so.
 
 Then write your Output, naming the jobs you played. Collie waits until GitLab shows
 production carries the merge, whatever your Output says.
+
+## share
+
+The human checked {{inputs.mr}} and asked for it to be shared for approval in the Slack
+channel {{channel}}. Read its title with `glab mr view`. Then post exactly one message
+in {{channel}}: {{inputs.mr}} as a Slack link whose text is that title, written
+`<URL|TITLE>`, with no other words, no emoji, no mention and no thread reply. Post nowhere
+else, and change nothing in this checkout or on the merge request.
+
+If you have no Slack tool, or cannot post in {{channel}}, post nothing and say why in your
+Output. Then write your Output: whether you posted, and the message's permalink.

@@ -66,6 +66,19 @@ describe("Collie's settings", () => {
     expect(parseSetting("harness", "  ")).toEqual({ value: null });
   });
 
+  test("share a release for approval only once turned on, and in the channel named", () => {
+    expect(settingOf("release.share_for_approval")).toMatchObject({
+      kind: "boolean",
+      fallback: "false",
+    });
+    expect(settingOf("release.approval_channel")).toMatchObject({ kind: "text", fallback: "" });
+    expect(settingOf("release.approval_channel")!.description).toContain("#frontend");
+    expect(parseSetting("release.share_for_approval", "true")).toEqual({ value: true });
+    expect(parseSetting("release.approval_channel", " #frontend ")).toEqual({
+      value: "#frontend",
+    });
+  });
+
   test("refuse what no Run could use, saying what would do", () => {
     expect(parseSetting("max_iterations", "five")).toEqual({
       refused: 'max_iterations has to be a whole number, not "five"',
@@ -131,7 +144,13 @@ describe("Each setting explains itself", () => {
       "agent_profile",
       "claude_subagents",
     ],
-    Runs: ["max_iterations", "handoff_timeout_ms", "memory_hold"],
+    Runs: [
+      "max_iterations",
+      "handoff_timeout_ms",
+      "memory_hold",
+      "release.share_for_approval",
+      "release.approval_channel",
+    ],
     Board: ["scope", "density", "board_quiet_ms"],
     Chat: ["proactive"],
     Notifications: ["questions", ...NOTIFICATION_KINDS.map((kind) => `notifications.${kind}`)],

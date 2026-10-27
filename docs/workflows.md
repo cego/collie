@@ -519,6 +519,20 @@ or whose commit the head does not carry, goes to the next round, and a round tha
 answers none of its comments parks the Run, naming them. Comment rounds are not bounded:
 they follow the reviewers.
 
+**Sharing for approval** is off until you turn on `release.share_for_approval` and name a
+Slack channel in `release.approval_channel` ([Your defaults](using.md#your-defaults)); the
+Run reads both once, so a restart asks what it asked before. On, before each wait, it reads
+the review once, and where the merge request waits on a teammate's approval it asks
+**`share-for-approval`** (`share-for-approval-<n>` after the first), naming the merge
+request and its head and saying to check it first. **Post for approval** reads the review
+again, posts nothing where the merge request no longer waits on an approval, and otherwise
+has the agent's `share` step post one message in that channel: the merge request's address,
+linked by its title, and nothing else. Collie records the permalink, or why nothing was posted, such as an
+agent with no Slack tool; a share that fails never fails the release, and is asked again at
+the next head. **Wait for changes** posts nothing and is asked again only once the head
+moves; a teammate who approves meanwhile takes the Run on to its go. Turned on with no
+channel, the Run says so on its log and asks nothing.
+
 **Checks** run on every head before it can be asked about, the one a round pushed
 included, and a check Collie leaves to CI is waited on there. A failure goes to a fix
 round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. Four rounds in a
@@ -639,14 +653,17 @@ afresh; where production already carries the merge it asks nothing and ends.
 **Its [Flow](../CONTEXT.md)** forecasts **Assess**, **Prove the head**, **Review wait**,
 **Merge go**, **Helle claim** and **Merge**, then for an application **Stage**, **Production
 go** and **Production**. Once the assessment finds a package, the path ends at **Tag**
-instead. A comment round and staging the merge request are drawn off the path, and the fix
+instead. A comment round, staging the merge request and, with sharing on, **Share for
+approval** and **Share** are drawn off the path, and the fix
 rounds belong to the Step that proved the head they fix. Proved checks that still fail park
 the Run with that Step failed, and a resume runs them again.
 
 Module: [`workflows/release.workflow.ts`](../workflows/release.workflow.ts), with its
 content in [`workflows/release.gitlab.md`](../workflows/release.gitlab.md) and
 [`workflows/release.github.md`](../workflows/release.github.md). Why it is shaped this way:
-[ADR-draft-a-merge-request-is-released-on-a-humans-go](adr/draft-a-merge-request-is-released-on-a-humans-go.md).
+[ADR-draft-a-merge-request-is-released-on-a-humans-go](adr/draft-a-merge-request-is-released-on-a-humans-go.md),
+and for sharing it:
+[ADR-draft-a-release-shares-its-merge-request-on-a-humans-say](adr/draft-a-release-shares-its-merge-request-on-a-humans-say.md).
 
 ## `stage`
 
@@ -831,6 +848,8 @@ Each names only what that step's content tells the agent to do:
   production carries, never a production job.
 - **`release`'s `production`**: playing exactly the production jobs the go named, at their
   addresses, and no other job.
+- **`release`'s `share`**: posting one Slack message in the approval channel, the merge
+  request linked by its title, and nothing else.
 - **`stage`'s `stage`**: playing, retrying and watching the stage deploy jobs the assessment
   named, by name, and the stage check jobs that follow them in the merge request's pipeline,
   and rolling back only the stage environments those jobs deploy to — never a production

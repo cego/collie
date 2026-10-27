@@ -27,6 +27,7 @@ import {
   settleAnswers,
   step,
   stepFailed,
+  waitsOnApproval,
   type Finding,
   type JobLink,
   type OpenComment,
@@ -79,6 +80,8 @@ export const ReleaseInput = Schema.Struct({
   failure: text,
   /** The production jobs a step plays. */
   jobs: text,
+  /** The Slack channel a merge request is shared in for approval. */
+  channel: text,
 });
 
 const stepsOf = (markdown: string) => {
@@ -94,6 +97,7 @@ const stepsOf = (markdown: string) => {
     stage: content.template("stage", ReleaseInput.fields),
     rollback: content.template("rollback", ReleaseInput.fields),
     production: content.template("production", ReleaseInput.fields),
+    share: content.template("share", ReleaseInput.fields),
   };
 };
 
@@ -144,6 +148,11 @@ export const RELEASE_CLEARS = {
   ],
 };
 
+/** Not one of RELEASE_CLEARS: it is cleared for a Slack channel, not the repository. */
+export const SHARE_CLEARS = (mr: string, channel: string) => [
+  `posting one Slack message in ${channel}: ${mr} linked by its title, and nothing else`,
+];
+
 const verdict = {
   verdict: Schema.Literals(["clean", "findings"]),
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
@@ -186,6 +195,14 @@ export const Played = Schema.Struct({
   }),
 });
 
+export const Shared = Schema.Struct({
+  posted: Schema.Boolean.annotate({ description: "true once the one message is posted" }),
+  link: Schema.optionalKey(Schema.String).annotate({
+    description: "the posted message's permalink",
+  }),
+  why: Schema.optionalKey(Schema.String).annotate({ description: "why nothing was posted" }),
+});
+
 /** One agent for the whole Run, which each step continues. */
 export const RELEASER = "release";
 
@@ -198,6 +215,11 @@ const GO = {
 const PRODUCTION = { send: "Send to production", leave: "Leave production to me" } as const;
 const UNCLAIMED = { again: "Try again", without: "Release without a Helle claim" } as const;
 type ProductionGo = (typeof PRODUCTION)[keyof typeof PRODUCTION];
+const SHARE = { post: "Post for approval", wait: "Wait for changes" } as const;
+const SHARE_SETTINGS = {
+  on: "release.share_for_approval",
+  channel: "release.approval_channel",
+} as const;
 
 /** Fix rounds in a row before a failing head parks the Run, as implement's gate fixes. */
 const ROUNDS = 4;
@@ -230,6 +252,19 @@ const comments = step({
   title: "Comment round",
   description:
     "The agent answers each new review comment: fixed and pushed, or disputed with a reason.",
+  kind: "agent",
+  role: "implementer",
+});
+const shareAsk = step({
+  id: "share-for-approval",
+  title: "Share for approval",
+  description: "Whether the merge request, waiting on a teammate's approval, is posted for it.",
+  kind: "question",
+});
+const sharePost = step({
+  id: "share",
+  title: "Share",
+  description: "The agent posts the merge request in the approval channel, linked by its title.",
   kind: "agent",
   role: "implementer",
 });
@@ -397,6 +432,7 @@ export default defineWorkflow({
         stage_jobs: "",
         failure: "",
         jobs: "",
+        channel: "",
       };
       const as = (operation: string) => ({
         operation,
@@ -649,8 +685,83 @@ export default defineWorkflow({
         let gos = 0;
         let stagings = 0;
         let merged: Omit<Landed, "recovery"> | null = null;
+        // Journaled: a replay asks what the first pass asked, whatever the settings say now.
+        const sharing = yield* Activity.make({
+          name: "share-settings",
+          success: Schema.Struct({ on: Schema.Boolean, channel: Schema.String }),
+          execute: Effect.gen(function* () {
+            const on = (yield* host.config(SHARE_SETTINGS.on)).trim() === "true";
+            const channel = (yield* host.config(SHARE_SETTINGS.channel)).trim();
+            return { on, channel };
+          }),
+        });
+        const channel = sharing.channel;
+        if (sharing.on && channel === "")
+          yield* host.record(
+            runId,
+            `${SHARE_SETTINGS.on} is on but ${SHARE_SETTINGS.channel} names no channel, so nothing is shared for approval`,
+          );
+        let shared = !sharing.on || channel === "";
+        let shares = 0;
+        /** After a wait, the question comes again only at a new head. */
+        let askedAt: string | null = null;
+        const standingAt = (name: string) =>
+          Activity.make({
+            name,
+            success: ReviewStandingSchema,
+            error: WorkflowError,
+            execute: host.review({ runId, cwd, proved, seen: [] }),
+          });
+        /** Asks to share the merge request while it waits on a teammate's approval at `proved`. */
+        const offerShare = (at: number) =>
+          Effect.gen(function* () {
+            if (!waitsOnApproval(yield* standingAt(`share-standing.${at}`))) return;
+            shares += 1;
+            askedAt = proved;
+            const answer = yield* shareAsk(
+              ask({
+                name: nth("share-for-approval", shares),
+                prompt: `${mr} at ${short(proved)} waits for a teammate's approval. Check it first. ${SHARE.post} posts it in ${channel} as its title, linked, and nothing else; ${SHARE.wait} posts nothing and asks again once its head moves.`,
+                options: [SHARE.post, SHARE.wait],
+              }),
+              { round: shares },
+            );
+            if (answer === SHARE.wait)
+              return yield* host.record(
+                runId,
+                `not shared at ${short(proved)}: waiting for ${mr} to change`,
+              );
+            // The answer can come long after the question, once nobody need approve it any more.
+            if (!waitsOnApproval(yield* standingAt(`${nth("share", shares)}.standing`)))
+              return yield* host.record(
+                runId,
+                `not shared: ${mr} no longer waits for a teammate's approval`,
+              );
+            const posted = yield* sharePost(
+              agentWork({
+                ...as(nth("share", shares)),
+                clears: SHARE_CLEARS(mr, channel),
+                instructions: steps.share,
+                input: { ...input, channel },
+                output: Shared,
+              }).pipe(
+                Effect.catch((failed) =>
+                  Effect.succeed<typeof Shared.Type>({ posted: false, why: failed.reason }),
+                ),
+              ),
+              { round: shares },
+            );
+            shared = posted.posted;
+            yield* host.record(
+              runId,
+              posted.posted
+                ? `shared ${mr} in ${channel} for approval: ${posted.link ?? "no permalink given"}`
+                : `did not share ${mr} in ${channel}: ${posted.why ?? "no reason given"}`,
+            );
+          });
         while (merged === null) {
           waits += 1;
+          if (!shared && askedAt !== proved) yield* offerShare(waits);
           const standing = yield* reviewWait(awaited(waits, proved));
           if (standing._tag === "Merged")
             return yield* fail(

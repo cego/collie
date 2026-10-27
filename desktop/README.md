@@ -87,6 +87,7 @@ The message box uses `UChatPrompt`, with the harness, model and effort selects i
 | `src/shared/chat-stream.ts`         | The reply reader's lifetime, bound to the chat client's abort signal                                                                                                                                                             |
 | `view/app/components/FlockChat.vue` | The message rows and message box, rendering the shared module's choices and notices; keyboard, paste, drop and Stop actions                                                                                                      |
 | `src/shared/chat-view.ts`           | What the window says of a tool call, and the card a message is about                                                                                                                                                             |
+| `src/shared/chat-width.ts`          | The chat's width beside the board: its least and greatest, a drag, the ← and → nudges and the start width (`test/desktop-chat-width.test.ts`); `useChatWidth.ts` keeps the chosen one as `chatWidth` in Desktop's settings       |
 
 The Toolkit both chats share is the root's `src/toolkit.ts`.
 
