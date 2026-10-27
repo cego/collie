@@ -1555,7 +1555,7 @@ So an agent may end its turn waiting on a verify, and on nothing else in the bac
 An agent may `collie verify` anything but this run's own
 [checks](../CONTEXT.md), which only the gate runs; Collie runs only those, matched argument for argument, and nobody approves them
 ([ADR-0055](adr/0055-a-run-never-asks-to-run-its-checks.md)). They are settled when the run starts — the `--verify`
-entries given with it, else `.collie/verify.json` in the project, else the checks remembered
+entries given with it, else the project's `.collie/verify.json` at the run's base, else the checks remembered
 for the checkout's remote (`~/.collie/user/verify/<host>/<path>.json`, by `origin`, then
 `upstream`), else `~/.collie/user/verify.json`, whichever is found first and taken whole — and copied into the run's Intent as its `run_verification` list. Editing the file afterwards changes the next run and never a
 running one. Where none of those has any, the run starts anyway and its agent names them
@@ -1599,14 +1599,22 @@ commit.
 ]
 ```
 
+The base is the ref a checkout for the run is cut from: the remote branch it works on, else
+the remote's default branch, else the local one. It is read the same way for a run that has
+no checkout of its own, such as `plan`, and the run it starts inherits what it read. Only a
+repository with none of those refs reads its working tree. So an uncommitted edit to the
+file, or a checkout behind its remote, does not reach a new run: push the edit to the branch
+the run starts from, or name the checks with `--verify` or `collie run intent verification`
+([ADR-draft-a-runs-checks-are-read-where-its-checkout-starts](adr/draft-a-runs-checks-are-read-where-its-checkout-starts.md)).
+
 Collie's own `.collie/verify.json` leaves its one check, `check` (`bun run check`), to CI's
 `test` job, which runs that script: its implement Runs and Releases wait for the job rather
 than run the suite again.
 
-A file that is there and does not decode is an error naming it, never an empty set, and
+A file that is there and does not decode is an error naming it and the ref it was read at, never an empty set, and
 the start is refused as `invalid_input`, so a typo is never quietly replaced by an agent's
 choice. So is `--verify` given to a plan that spans repositories: each repository is held to
-its own `.collie/verify.json` or remembered checks. No start is refused for having no
+its own `.collie/verify.json` at its own base, or remembered checks. No start is refused for having no
 checks.
 
 ```sh

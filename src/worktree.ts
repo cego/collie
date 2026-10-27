@@ -122,6 +122,8 @@ export interface BranchAsk {
   githubLogin?: string | null | undefined;
   /** The Flock's GitLab, which a checkout's or a repository URL's host is whatever its name. */
   gitlabHost?: string | undefined;
+  /** False reads the base from the refs this checkout has, fetching none. */
+  fetches?: boolean | undefined;
   run?: Runner<ChildProcessSpawner.ChildProcessSpawner>;
 }
 
@@ -268,7 +270,10 @@ export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: Branch
     const legal = yield* run("git", ["check-ref-format", `refs/heads/${branch}`], opts.cwd);
     if (legal.code !== 0) return refuse(`${branch} is not a branch name git will accept`);
   }
-  const base = yield* baseFor(branch, opts.cwd, run, { reviewed: asked.reviewed });
+  const base = yield* baseFor(branch, opts.cwd, run, {
+    reviewed: asked.reviewed,
+    fetches: opts.fetches !== false,
+  });
   if (base.refused !== undefined) return refuse(base.refused);
   return {
     branch,
@@ -433,7 +438,7 @@ const baseFor = Effect.fn("worktree.baseFor")(function* (
   branch: string,
   cwd: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
-  opts: { reviewed: boolean },
+  opts: { reviewed: boolean; fetches: boolean },
 ) {
   const exists = (ref: string) => run("git", ["rev-parse", "--verify", ref], cwd);
   if ((yield* exists(`origin/${branch}`)).code === 0) return { base: `origin/${branch}` };
@@ -442,13 +447,21 @@ const baseFor = Effect.fn("worktree.baseFor")(function* (
     if ((yield* exists(`refs/heads/${branch}`)).code === 0) return { base: branch };
     // Otherwise it holds the work that was reviewed, so it is on the remote whether or
     // not this checkout has heard of it yet.
-    yield* run("git", ["fetch", "origin", branch], cwd);
+    if (opts.fetches) yield* run("git", ["fetch", "origin", branch], cwd);
     if ((yield* exists(`origin/${branch}`)).code === 0) return { base: `origin/${branch}` };
     return { refused: `${branch} is not on the remote, so there is no reviewed work to fix` };
   }
+  return { base: yield* defaultStart(cwd, run) };
+});
+
+/** Where new work starts, as `baseFor` says. */
+export const defaultStart = Effect.fn("worktree.defaultStart")(function* (
+  cwd: string,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
   const head = (yield* defaultBase(run, cwd)) ?? "master";
-  const tracked = (yield* exists(`origin/${head}`)).code === 0;
-  return { base: tracked ? `origin/${head}` : head };
+  const tracked = (yield* run("git", ["rev-parse", "--verify", `origin/${head}`], cwd)).code === 0;
+  return tracked ? `origin/${head}` : head;
 });
 
 /**
@@ -908,12 +921,7 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
   ) {
     return { refused: `could not fetch origin: ${whatItSaid(fetched) || "git fetch failed"}` };
   }
-  const head = (yield* defaultBase(run, opts.repo)) ?? "master";
-  // Where there is no remote-tracking ref there is no remote, and the local branch is
-  // all there is — the same guard `baseFor` makes for a branch-owning checkout.
-  const tracked =
-    (yield* run("git", ["rev-parse", "--verify", `origin/${head}`], opts.repo)).code === 0;
-  const base = tracked ? `origin/${head}` : head;
+  const base = yield* defaultStart(opts.repo, run);
 
   // Each slot left as it is, and why: Collie never stashes, commits, resets or deletes one.
   const passed: Array<{ at: string; kept: string }> = [];

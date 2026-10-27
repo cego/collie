@@ -9153,6 +9153,72 @@ scenario(
   120_000,
 );
 
+scenario(
+  "a Release whose check is left to CI's test job is not asked its go on a job that passed before its head moved, and is asked once it passes at the new head",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        // The Release reads the job again on a fast clock; the test waits on the wall's.
+        const wall = yield* Clock.Clock;
+        const onWall = <A, E, R>(wait: Effect.Effect<A, E, R>) =>
+          Effect.provideService(wait, Clock.Clock, wall);
+        const { bin, forge, head, reviewed } = yield* releasable("gitlab", {
+          jobs: [{ name: "test", state: "passed" }],
+        });
+        const before = yield* revParse(`${head}^`, reviewed);
+        const passed = yield* forge.model();
+        yield* forge.set({
+          ...passed,
+          ancestry: { [before]: [] },
+          mrs: passed.mrs.map((one) => ({ ...one, pipelineAt: before })),
+        });
+        const runId = "r-release-own-check-moved";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        const asked = yield* fastForward(
+          driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: RELEASING.gitlab.target },
+              host: releaseHost(),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () =>
+                    FileSystem.FileSystem.pipe(
+                      Effect.flatMap((fs) => fs.readFileString(`${runDir(dir, runId)}/log.txt`)),
+                      Effect.orElseSucceed(() => ""),
+                    ),
+                  (log) => log.includes(`ci: waiting on job test for check on ${head}`),
+                );
+                expect((yield* run.asked).filter((row) => row.decision.startsWith("go-"))).toEqual(
+                  [],
+                );
+                const now = yield* forge.model();
+                yield* forge.set({
+                  ...now,
+                  mrs: now.mrs.map(({ pipelineAt: _, ...one }) => one),
+                });
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                yield* ended(run.status);
+                return yield* run.asked;
+              }).pipe(onWall),
+          ),
+        );
+        yield* bin.restore();
+        expect(asked.filter((row) => row.decision.startsWith("go-"))).toHaveLength(1);
+        expect(yield* runsOf(`${rig.root}/check-runs`)).toBe(0);
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({ name: "check", result: "pass", end: { head_sha: head } });
+      }),
+    ),
+  120_000,
+);
+
 for (const [state, jobs] of [
   ["failing", [{ name: "test", state: "failed", retried: "failed" }]],
   ["not reported", []],

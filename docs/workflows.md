@@ -145,8 +145,10 @@ more: unclassified work is not a feature by default, and asking
 documentation for a feature's evidence would ask for tickets that do not exist.
 
 **Checks.** A run is held to the checks it started with: `--verify`, else the project's
-`.collie/verify.json`, else the ones remembered for its remote, else the user's
-`verify.json`. Where none of those names any, the builder names the repository's checks
+`.collie/verify.json` as the run's base has it, else the ones remembered for its remote, else
+the user's `verify.json`. The base is the ref a checkout for the run is cut from, so a
+checkout that is behind, ahead or has uncommitted edits does not decide them
+([ADR-draft-a-runs-checks-are-read-where-its-checkout-starts](adr/draft-a-runs-checks-are-read-where-its-checkout-starts.md)). Where none of those names any, the builder names the repository's checks
 before it changes anything, from its `package.json` scripts, a Makefile or its CI config,
 each with `collie run intent verification`. Nobody approves them, and the merge request
 lists each with its command ([ADR-0055](adr/0055-a-run-never-asks-to-run-its-checks.md)).
@@ -269,8 +271,8 @@ starts one Run of itself per repository, each from that repository's checkout un
 root, each with the shared plan directory, `then=finish`, its own `repo` and every other
 option it was started with — `risks`, `outcome` — and all on one branch name: the `branch` you gave,
 else `<login>/<task>`, else one named after the Run that fanned out, so the sibling merge
-requests are findable by it. Each is held to its own checkout's `.collie/verify.json`, else
-the checks remembered for its remote, else the ones its builder names. See [Repo run](../CONTEXT.md) for the term.
+requests are findable by it. Each is held to its own repository's `.collie/verify.json` at that
+repository's base, else the checks remembered for its remote, else the ones its builder names. See [Repo run](../CONTEXT.md) for the term.
 
 They start in **waves**. A repository's run starts once every repository its tickets are
 blocked by has been built; repositories that block nothing start together. Ticket order

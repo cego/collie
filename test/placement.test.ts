@@ -769,6 +769,7 @@ test(
           `${rig.projectDir}/web/.collie/verify.json`,
           '[{"name":"web-unit","executable":"true","argv":[],"cwd":"worktree"}]',
         );
+        for (const repo of ["api", "web"]) yield* checksCommitted(`${rig.projectDir}/${repo}`);
 
         const seen = yield* hosted(
           Effect.gen(function* () {
@@ -827,6 +828,7 @@ test(
           `${rig.projectDir}/api/.collie/verify.json`,
           '[{"name":"api-unit","executable":"true","argv":[],"cwd":"worktree"}]',
         );
+        yield* checksCommitted(`${rig.projectDir}/api`);
         const outcome = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -845,6 +847,7 @@ test(
             const started = yield* start(implement!, { request: "r1", text: { plan } });
             const rows = yield* (yield* Store).runs;
             yield* fs.writeFileString(`${rig.projectDir}/web/.collie/verify.json`, '[{"name":');
+            yield* checksCommitted(`${rig.projectDir}/web`);
             return {
               verified,
               started,
@@ -863,6 +866,12 @@ test(
 );
 
 const UNIT = { name: "unit", executable: "true", argv: [], cwd: "worktree" } as const;
+
+/** A repository's checks file committed, since a start reads it where its checkout starts. */
+const checksCommitted = (at: string) =>
+  committing(at, "add", ".collie/verify.json").pipe(
+    Effect.andThen(committing(at, "commit", "--quiet", "-m", "checks")),
+  );
 
 /** What a Run was frozen with at admission. */
 const frozen = (runId: string) =>
@@ -885,6 +894,7 @@ test(
           `${rig.projectDir}/.collie/verify.json`,
           '[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]',
         );
+        yield* checksCommitted(rig.projectDir);
         const started = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;

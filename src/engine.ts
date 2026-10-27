@@ -192,7 +192,15 @@ import {
   RunReport,
   type Disposition,
 } from "./board-model";
-import { TASK_INPUT, branchFor, checkoutFor, repositoryName, workOf } from "./worktree";
+import {
+  TASK_INPUT,
+  branchFor,
+  checkoutFor,
+  defaultStart,
+  repositoryName,
+  workOf,
+  type BranchAsk,
+} from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
@@ -227,6 +235,7 @@ import {
   approvedFrom,
   approvedIn,
   encodeApproved,
+  PROJECT_FILE,
   VerifySpecSchema,
   type VerifySpec,
 } from "./verify-spec";
@@ -2682,6 +2691,35 @@ const mergeRequestOf = (fs: FileSystem.FileSystem, dir: string, runId: string) =
 
 const approvedPath = (dir: string, runId: string) => approvedFile(evidenceDir(dir, runId));
 
+/** Where new work in `cwd` starts, or null where it has no such ref. */
+const startOf = (cwd: string) =>
+  defaultStart(cwd, runShell).pipe(
+    Effect.flatMap((ref) =>
+      runShell("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd).pipe(
+        Effect.map((found) => (found.code === 0 ? ref : null)),
+      ),
+    ),
+  );
+
+/**
+ * The checks a Run in `cwd` starting at `ref` takes: the project's file as that ref has it,
+ * or as the working tree has it where there is no ref (ADR-draft-a-runs-checks-are-read-where-its-checkout-starts).
+ */
+const approvedAt = Effect.fn("Engine.approvedAt")(function* (
+  cwd: string,
+  userDir: string,
+  ref: string | null,
+) {
+  const shown =
+    ref === null ? null : yield* runShell("git", ["show", `${ref}:./${PROJECT_FILE}`], cwd);
+  return yield* approvedFrom({
+    cwd,
+    userDir,
+    project: yield* projectHere(cwd, runShell),
+    base: ref === null ? undefined : { ref, text: shown?.code === 0 ? shown.stdout : null },
+  });
+});
+
 /**
  * This Run's checks as they were when the Run started. Frozen at
  * admission, so editing the file changes the next Run and never a live one.
@@ -2699,11 +2737,9 @@ export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (opti
   if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))) return;
   const approved =
     options.approved ??
-    (yield* approvedFrom({
-      cwd: options.project,
-      userDir: options.userDir,
-      project: yield* projectHere(options.project, runShell),
-    }).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => [])));
+    (yield* approvedAt(options.project, options.userDir, yield* startOf(options.project)).pipe(
+      Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []),
+    ));
   yield* fs.makeDirectory(evidenceDir(options.dir, options.runId), { recursive: true });
   yield* fs.writeFileString(path, encodeApproved(approved));
 });
@@ -4896,16 +4932,12 @@ const checksOfStart = Effect.fn("Engine.checksOfStart")(function* (o: {
   readonly project: string;
   readonly verify: ReadonlyArray<VerifySpec> | undefined;
   readonly userDir: string;
+  /** Where a checkout for the Run starts, by placement's rule. */
+  readonly start: Effect.Effect<string | null, never, BunServices>;
 }) {
-  const readApproved = (cwd: string) =>
-    Effect.gen(function* () {
-      return yield* approvedFrom({
-        cwd,
-        userDir: o.userDir,
-        project: yield* projectHere(cwd, runShell),
-      }).pipe(Effect.catch((cause) => refusedInput(cause.message)));
-    });
-  const approved = o.verify ?? (yield* readApproved(o.project));
+  const readApproved = (cwd: string, ref: string | null) =>
+    approvedAt(cwd, o.userDir, ref).pipe(Effect.catch((cause) => refusedInput(cause.message)));
+  const approved = o.verify ?? (yield* readApproved(o.project, yield* o.start));
   const fanOut = yield* fanOutOf(o.generation, o.input, o.launch, o.from);
   // Placement refuses a plan it cannot fan out, and says why.
   if (fanOut === null || fanOut.refusal !== null) return approved;
@@ -4914,7 +4946,10 @@ const checksOfStart = Effect.fn("Engine.checksOfStart")(function* (o: {
       "--verify gives one repository's checks, and this plan spans repositories: each is held to its own .collie/verify.json or remembered checks",
     );
   const path = yield* Path.Path;
-  for (const repo of fanOut.repos) yield* readApproved(path.join(o.from, repo.path));
+  for (const repo of fanOut.repos) {
+    const cwd = path.join(o.from, repo.path);
+    yield* readApproved(cwd, yield* startOf(cwd));
+  }
   return approved;
 });
 
@@ -5731,6 +5766,73 @@ const makeRegistry: (
     return branch;
   });
 
+  /** What deciding a Run's branch asks, as placement and admission both put it. */
+  const branchAskOf = Effect.fn("Engine.branchAskOf")(function* (ask: {
+    readonly generation: Generation;
+    readonly runId: string;
+    readonly from: string;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly provenance: Readonly<Record<string, string>>;
+    readonly options: Readonly<Record<string, string>>;
+  }) {
+    const { generation } = ask;
+    const inputs = yield* branchInputs(generation, ask.input, ask.options);
+    // A build of a review's findings works on the branch that review was pointed at.
+    const source = fieldWith(generation.hints, "work-source");
+    const reviewed =
+      source !== undefined &&
+      inputs[`${source}_kind`] === "review" &&
+      fieldWith(generation.hints, "diff-target") === undefined
+        ? yield* reviewedTarget(inputs[source] ?? "")
+        : null;
+    if (reviewed !== null) inputs[REVIEWED] = reviewed;
+    const planRun = planRunOf(workSourceOf({ inputs, strategies: generation.hints })?.value ?? "");
+    const taskBranch = planRun === null ? null : yield* plannedOn(planRun, ask.runId);
+    return {
+      cwd: ask.from,
+      name: ask.runId,
+      inputs,
+      strategies:
+        reviewed === null ? generation.hints : { ...generation.hints, [REVIEWED]: "diff-target" },
+      sources: ask.provenance,
+      explicit: ask.options.branch ?? null,
+      taskBranch,
+      login: placing.env.gitlabLogin,
+      githubLogin: placing.env.githubLogin,
+      gitlabHost: yield* gitlabHostOf(placing.env).pipe(Effect.orElseSucceed(() => undefined)),
+    } satisfies BranchAsk;
+  });
+
+  /**
+   * Where a checkout for a starting Run is cut from, by placement's own rule but fetching
+   * nothing, so the checks it is admitted with are its tree's. Null where there is no such ref.
+   */
+  const startRefOf = Effect.fn("Engine.startRefOf")(function* (ask: {
+    readonly generation: Generation;
+    readonly runId: string;
+    readonly from: string;
+    readonly project: string;
+    readonly branchBase?: string | undefined;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly provenance: Readonly<Record<string, string>>;
+    readonly options: Readonly<Record<string, string>>;
+  }) {
+    const { generation } = ask;
+    if (
+      generation.checkout === "branch" &&
+      ask.from === ask.project &&
+      (yield* fanOutOf(generation, ask.input, ask.options, ask.from)) === null
+    ) {
+      const plan = yield* branchFor({ ...(yield* branchAskOf(ask)), fetches: false }).pipe(
+        Effect.option,
+      );
+      // A branch that cannot be settled here is placement's to refuse, saying why.
+      if (Option.isSome(plan) && plan.value.refused === null)
+        return ask.branchBase ?? plan.value.base;
+    }
+    return yield* startOf(ask.project);
+  });
+
   /**
    * Where a Run will work, settled before it exists. A workflow that declares a checkout is
    * cut one from the checkout it starts from, and one that cannot be is refused here, while
@@ -5776,20 +5878,7 @@ const makeRegistry: (
     }
     if (ask.checkout !== undefined) ({ placed, opened } = ask.checkout);
     else if (generation.checkout !== "none" && fanOut === null) {
-      const inputs = yield* branchInputs(generation, ask.input, ask.options);
-      // A build of a review's findings works on the branch that review was pointed at.
-      const source = fieldWith(generation.hints, "work-source");
-      const reviewed =
-        source !== undefined &&
-        inputs[`${source}_kind`] === "review" &&
-        fieldWith(generation.hints, "diff-target") === undefined
-          ? yield* reviewedTarget(inputs[source] ?? "")
-          : null;
-      if (reviewed !== null) inputs[REVIEWED] = reviewed;
-      const planRun = planRunOf(
-        workSourceOf({ inputs, strategies: generation.hints })?.value ?? "",
-      );
-      const taskBranch = planRun === null ? null : yield* plannedOn(planRun, ask.runId);
+      const branchAsk = yield* branchAskOf(ask);
       if (
         generation.checkout === "branch" &&
         (yield* repositoryName(runShell, from).pipe(Effect.mapError(failed))) === null
@@ -5800,23 +5889,13 @@ const makeRegistry: (
       }
       yield* ask.record({ checkout: null });
       const checkout = yield* checkoutFor(placing.herdr, {
-        cwd: from,
+        ...branchAsk,
         stateDir: placing.env.stateDir,
         workflow: generation.id,
         checkout: generation.checkout,
         separate: ask.request.kind === "separate",
-        name: ask.runId,
-        inputs,
-        strategies:
-          reviewed === null ? generation.hints : { ...generation.hints, [REVIEWED]: "diff-target" },
-        sources: ask.provenance,
         openLabel: ask.taskLabel ?? null,
-        explicit: ask.options.branch ?? null,
-        taskBranch,
         branchBase: ask.branchBase,
-        login: placing.env.gitlabLogin,
-        githubLogin: placing.env.githubLogin,
-        gitlabHost: yield* gitlabHostOf(placing.env).pipe(Effect.orElseSucceed(() => undefined)),
         recordedBy: (at) =>
           Effect.gen(function* () {
             const rows = yield* store.runs;
@@ -6954,6 +7033,13 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
     );
+    const provenance = {
+      ...settled.provenance,
+      // A host option a front door worked out, such as the checkout it placed the Run in.
+      ...Object.fromEntries(
+        (options.inferred ?? []).filter((name) => name in asked).map((name) => [name, INFERRED]),
+      ),
+    };
     // A retry of a Run already admitted is not a new start: it keeps what it froze, or
     // freezes what it carries.
     const approved =
@@ -6966,9 +7052,22 @@ const makeRegistry: (
             project: options.project,
             verify,
             userDir,
+            start: startRefOf({
+              generation,
+              runId,
+              from: request.kind === "existing" ? request.path : options.project,
+              project: options.project,
+              branchBase: options.branchBase,
+              input: settled.input,
+              provenance,
+              options: launch,
+            }).pipe(
+              Effect.provideService(ForgeHttp, Context.get(hostServices, ForgeHttp)),
+              Effect.provideContext(bun),
+            ),
           }).pipe(Effect.provideContext(bun))
         : verify;
-    return { request, launch, settled, payload, approved };
+    return { request, launch, settled, provenance, payload, approved };
   });
 
   const startWork = Effect.fn("Engine.Registry.start")(function* (options: StartOptions) {
@@ -6976,20 +7075,17 @@ const makeRegistry: (
     const runId =
       options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
     const asked = options.options ?? {};
-    const { request, launch, settled, payload, approved } = yield* settleStart(options, runId);
+    const { request, launch, settled, provenance, payload, approved } = yield* settleStart(
+      options,
+      runId,
+    );
     const claimed = yield* claimAndPlace({
       request: options.request,
       run: runId,
       workflow: generation.id,
       project: options.project,
       input: settled.input,
-      provenance: {
-        ...settled.provenance,
-        // A host option a front door worked out, such as the checkout it placed the Run in.
-        ...Object.fromEntries(
-          (options.inferred ?? []).filter((name) => name in asked).map((name) => [name, INFERRED]),
-        ),
-      },
+      provenance,
       options: launch,
       placing: encodePlacing({
         requestedBy: options.requestedBy,
