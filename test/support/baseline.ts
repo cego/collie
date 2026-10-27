@@ -10055,6 +10055,97 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
+    `release on ${name}: a lost reply in a thread is recorded as the one posted after its comment, not an earlier one`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const thread = name === "gitlab" ? "d48" : "48";
+          const where = { thread, file: "src/app.ts", line: 3 };
+          const { bin, forge } = yield* releasable(name, {
+            comments: [
+              { id: 48, author: "bob", at: "2026-10-20T10:00:00Z", body: "rename it", ...where },
+              { id: 49, author: "bob", at: "2026-10-20T12:00:00Z", body: "and this", ...where },
+            ],
+          });
+          const runId = `r-lost-thread-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const ask = (comment: string, body: string) => ({
+            runId,
+            cwd: rig.projectDir,
+            comment,
+            body,
+            kind: "disputed" as const,
+          });
+          const at = (now: string) =>
+            Effect.flatMap(forge.model(), (model) => forge.set({ ...model, now }));
+          const said = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              yield* at("2026-10-20T11:00:00Z");
+              const first = yield* host.reply(ask("48", "Not changed: the name is the domain's"));
+              yield* at("2026-10-20T13:00:00Z");
+              const second = yield* host.reply(ask("49", "Not changed: this one too"));
+              yield* fs.remove(`${runDir(dir, runId)}/replies.jsonl`);
+              return [first, second, yield* host.reply(ask("49", "Not changed: this one too"))];
+            }),
+          );
+          yield* bin.restore();
+          expect(said).toEqual(["posted", "posted", "already"]);
+          expect((yield* readReplies(runDir(dir, runId))).map((one) => one.body)).toEqual([
+            `Not changed: this one too${signed(runId)}`,
+          ]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a reply to a comment whose address starts with another's is not recorded for that other`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* releasable(name, {
+            comments: [
+              { id: 52, author: "bob", at: "2026-10-20T10:00:00Z", body: "rename it" },
+              { id: 520, author: "bob", at: "2026-10-20T10:30:00Z", body: "and this" },
+              {
+                id: 53,
+                author: "tester",
+                at: "2026-10-20T11:00:00Z",
+                body: `${commentUrl(name, 52)} renamed by hand`,
+              },
+            ],
+          });
+          const runId = `r-prefix-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const ask = (id: number) => ({
+            runId,
+            cwd: rig.projectDir,
+            comment: String(id),
+            body: `${commentUrl(name, id)}\n\nNot changed: the name is the domain's`,
+            kind: "disputed" as const,
+          });
+          const said = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              return [yield* host.reply(ask(520)), yield* host.reply(ask(52))];
+            }),
+          );
+          yield* bin.restore();
+          expect(said).toEqual(["posted", "already"]);
+          expect((yield* readReplies(runDir(dir, runId))).map((one) => one.comment)).toEqual([
+            commentUrl(name, 520),
+          ]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     `release on ${name}: a reply in a comment's thread after Collie's starts a round of its own`,
     () =>
       runEffect(

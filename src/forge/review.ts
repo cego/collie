@@ -90,7 +90,7 @@ export function judgeComments(
 }
 
 /** `body` names `url` whole: `#note_1` is not linked by `#note_12`. */
-function links(body: string, url: string): boolean {
+export function links(body: string, url: string): boolean {
   if (url === "") return false;
   for (let at = body.indexOf(url); at !== -1; at = body.indexOf(url, at + 1))
     if (!/\w/.test(body[at + url.length] ?? "")) return true;

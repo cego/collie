@@ -146,6 +146,7 @@ import type { Metrics } from "./board-model";
 import { mrLabel, mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
 import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
+import { links } from "./forge/review";
 import { integrateDefault, integratedLine } from "./integrate";
 import { planRunOf, strategyNamed, workSourceOf } from "./strategies";
 import { Notifier, SOUND, notificationTitle, openedSubject, wanted, type Sound } from "./notify";
@@ -4086,13 +4087,18 @@ export const hostLayer = (options: {
               ).pipe(Effect.orDie);
             if (comment.answered) {
               // The forge may have taken this Run's reply before the host could record it.
-              const posted = read.comments.find(
-                (one) =>
-                  one.author === read.login &&
-                  one.body.includes(signature) &&
-                  ((comment.thread !== null && one.thread === comment.thread) ||
-                    one.body.includes(comment.url)),
-              );
+              const others = read.comments.filter((one) => one !== comment);
+              const posted = read.comments
+                .slice(read.comments.indexOf(comment) + 1)
+                .find(
+                  (one) =>
+                    one.author === read.login &&
+                    one.body.includes(signature) &&
+                    (links(one.body, comment.url) ||
+                      (comment.thread !== null &&
+                        one.thread === comment.thread &&
+                        !others.some((other) => links(one.body, other.url)))),
+                );
               const recorded = yield* under(readReplies(runDir(dir, asked.runId))).pipe(
                 Effect.orDie,
               );
