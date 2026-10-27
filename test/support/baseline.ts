@@ -10012,6 +10012,50 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
+    `release on ${name}: a reply the forge took before its record was written is recorded on the next try`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const comment = { id: 47, author: "bob", at: "2026-10-20T11:00:00Z", body: "rename it" };
+          const { bin, forge } = yield* releasable(name, { comments: [comment] });
+          const runId = `r-lost-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const asked = {
+            runId,
+            cwd: rig.projectDir,
+            comment: "47",
+            body: `${commentUrl(name, 47)}\n\nNot changed: the name is the domain's`,
+            kind: "disputed" as const,
+          };
+          const said = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              const first = yield* host.reply(asked);
+              yield* fs.remove(`${runDir(dir, runId)}/replies.jsonl`);
+              return [first, yield* host.reply(asked), yield* host.reply(asked)];
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(said).toEqual(["posted", "already", "already"]);
+          const body = `${commentUrl(name, 47)}\n\nNot changed: the name is the domain's${signed(runId)}`;
+          expect(repliesOf(model).map((one) => one.body)).toEqual([body]);
+          expect(
+            (yield* readReplies(runDir(dir, runId))).map(({ comment, kind, body, mr: on }) => ({
+              comment,
+              kind,
+              body,
+              on,
+            })),
+          ).toEqual([{ comment: commentUrl(name, 47), kind: "disputed", body, on: mr }]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     `release on ${name}: a reply in a comment's thread after Collie's starts a round of its own`,
     () =>
       runEffect(

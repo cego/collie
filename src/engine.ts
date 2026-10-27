@@ -13,7 +13,7 @@ import type { Asker } from "./proposals";
 import { actorOf, readAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
-import { recordReply } from "./replies";
+import { readReplies, recordReply } from "./replies";
 import { hostname } from "node:os";
 import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
@@ -4073,10 +4073,34 @@ export const hostLayer = (options: {
               return yield* new WorkflowError({
                 reason: `${mr} has no comment ${asked.comment} to reply to`,
               });
-            if (comment.answered) return "already" as const;
-            const body = redact(
-              `${asked.body}\n\nPosted by Collie's Run ${asked.runId} on ${hostname()}.`,
-            );
+            const signature = `Posted by Collie's Run ${asked.runId} on `;
+            const record = (body: string, at: string) =>
+              under(
+                recordReply(runDir(dir, asked.runId), {
+                  at,
+                  mr,
+                  comment: comment.url,
+                  ...(asked.kind !== undefined && { kind: asked.kind }),
+                  body,
+                }),
+              ).pipe(Effect.orDie);
+            if (comment.answered) {
+              // The forge may have taken this Run's reply before the host could record it.
+              const posted = read.comments.find(
+                (one) =>
+                  one.author === read.login &&
+                  one.body.includes(signature) &&
+                  ((comment.thread !== null && one.thread === comment.thread) ||
+                    one.body.includes(comment.url)),
+              );
+              const recorded = yield* under(readReplies(runDir(dir, asked.runId))).pipe(
+                Effect.orDie,
+              );
+              if (posted !== undefined && !recorded.some((one) => one.comment === comment.url))
+                yield* record(posted.body, posted.at);
+              return "already" as const;
+            }
+            const body = redact(`${asked.body}\n\n${signature}${hostname()}.`);
             const replied = yield* under(
               forgeOf(ref).reply(ref, comment, body, asked.cwd, runShell),
             );
@@ -4084,15 +4108,7 @@ export const hostLayer = (options: {
               return yield* new WorkflowError({
                 reason: `the forge refused the reply to ${comment.url}: ${replied.reason}`,
               });
-            yield* under(
-              recordReply(runDir(dir, asked.runId), {
-                at: yield* nowIso(),
-                mr,
-                comment: comment.url,
-                ...(asked.kind !== undefined && { kind: asked.kind }),
-                body,
-              }),
-            ).pipe(Effect.orDie);
+            yield* record(body, yield* nowIso());
             return "posted" as const;
           }),
         reviewHead: (asked) =>
