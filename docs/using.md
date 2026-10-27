@@ -715,7 +715,7 @@ land, such as a review, or it ended with nothing to file — as one line, `3 fin
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
 An **Unseen** card — a Run that ended by itself with a report and nothing to land, which
 nobody has opened since — is drawn above that line, marked `● unseen`, and still counted in
-it. Its sentence states how the Run ended and then quotes the report as the Run's own:
+it, however old: it does not go behind `older…` until it is seen. Its sentence states how the Run ended and then quotes the report as the Run's own:
 `Completed. It reported: “two blockers remain”`. Opening its record, or its **Acknowledge**
 button, records it seen once for the whole Flock, on every board and Desktop, and it goes back
 behind the line.

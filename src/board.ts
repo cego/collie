@@ -982,18 +982,31 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // is still going, and the card must say so.
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
         const checking = everyRun.filter((run) => checked.has(run.id));
+        const leader = leaderOf(runs);
+        const unseenReport = (run: RunFacts) =>
+          disposition === null &&
+          run.state === "succeeded" &&
+          (run.summary ?? "") !== "" &&
+          since !== null &&
+          endedAt(run) > since
+            ? Effect.map(
+                readSeen(run.dir).pipe(Effect.orElseSucceed(() => [])),
+                (lines) => lines.length === 0,
+              )
+            : Effect.succeed(false);
         // Finished work older than a day is History's, behind `older…` — landed work only:
-        // an unmerged branch from last week is still waiting on you, however old.
+        // an unmerged branch from last week is still waiting on you, however old, and so is
+        // a report nobody has seen.
         if (
           opts.only === undefined &&
           checking.length === 0 &&
           runs.every((run) => over(run, runs)) &&
           last < now - FINISHED_FOR_MS &&
           pending.length === 0 &&
-          (disposition !== null || (yield* nothingToFile(runs)))
+          (disposition !== null || (yield* nothingToFile(runs))) &&
+          !(yield* unseenReport(leader))
         )
           return null;
-        const leader = leaderOf(runs);
         const agents = agentsOf(everyRun, registered, live);
         const waits = new Map(
           yield* Effect.forEach(everyRun, (run) =>
@@ -1142,14 +1155,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           mergeable: forged?.mergeable ?? null,
         });
         const finishedAt = settledNow ? endedAt(leader) : 0;
-        const unseen =
-          landed &&
-          state === "done" &&
-          disposition === null &&
-          (leader.summary ?? "") !== "" &&
-          since !== null &&
-          finishedAt > since &&
-          (yield* readSeen(leader.dir).pipe(Effect.orElseSucceed(() => []))).length === 0;
+        const unseen = landed && state === "done" && (yield* unseenReport(leader));
         // Only a ready plan's first action is an offer; asking every card would ask every refresh.
         const offer = planReady ? primaryOf(yield* offersOfRun(leader.id)) : null;
         const holders = new Map<string, string | null>();

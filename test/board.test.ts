@@ -1146,6 +1146,32 @@ test("a Finished Task's report is unseen until someone sees it, and stays Finish
     }),
   ));
 
+test("an unseen report is still drawn a day later, and a seen one goes to History", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      yield* markSeenSince(dir, "2026-09-14T09:00:00Z");
+      const reported = {
+        task: "task-1",
+        state: "succeeded",
+        summary: "two blockers remain",
+        created: "2026-09-14T09:10:00Z",
+        finished: "2026-09-14T10:00:00Z",
+      } as const;
+      const later = { now: epochMs("2026-09-16T10:00:00Z") };
+
+      const [unseen] = yield* board(
+        env,
+        [yield* madeRun(dir, { ...reported, id: "r-unseen" })],
+        later,
+      );
+      expect(unseen?.unseen).toBe(true);
+      const seen = yield* madeRun(dir, { ...reported, id: "r-seen" });
+      yield* recordSeen(seen.dir, { at: "2026-09-14T10:02:00Z", by: "human:ack-1" });
+      expect(yield* board(env, [seen], later)).toEqual([]);
+    }),
+  ));
+
 test("a Run that ended with nothing to file is finished, not waiting", () =>
   runEffect(
     Effect.gen(function* () {
