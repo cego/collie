@@ -679,16 +679,17 @@ export default defineWorkflow({
         let shares = 0;
         /** After a wait, the question comes again only at a new head. */
         let askedAt: string | null = null;
+        const standingAt = (name: string) =>
+          Activity.make({
+            name,
+            success: ReviewStandingSchema,
+            error: WorkflowError,
+            execute: host.review({ runId, cwd, proved, seen: [] }),
+          });
         /** Asks to share the merge request while it waits on a teammate's approval at `proved`. */
         const offerShare = (at: number) =>
           Effect.gen(function* () {
-            const now = yield* Activity.make({
-              name: `share-standing.${at}`,
-              success: ReviewStandingSchema,
-              error: WorkflowError,
-              execute: host.review({ runId, cwd, proved, seen: [] }),
-            });
-            if (!waitsOnApproval(now)) return;
+            if (!waitsOnApproval(yield* standingAt(`share-standing.${at}`))) return;
             shares += 1;
             askedAt = proved;
             const answer = yield* ask({
@@ -700,6 +701,12 @@ export default defineWorkflow({
               return yield* host.record(
                 runId,
                 `not shared at ${short(proved)}: waiting for ${mr} to change`,
+              );
+            // The answer can come long after the question, once nobody need approve it any more.
+            if (!waitsOnApproval(yield* standingAt(`${nth("share", shares)}.standing`)))
+              return yield* host.record(
+                runId,
+                `not shared: ${mr} no longer waits for a teammate's approval`,
               );
             const posted = yield* agentWork({
               ...as(nth("share", shares)),

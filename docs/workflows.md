@@ -478,9 +478,10 @@ Slack channel in `release.approval_channel` ([Your defaults](using.md#your-defau
 Run reads both once, so a restart asks what it asked before. On, before each wait, it reads
 the review once, and where the merge request waits on a teammate's approval it asks
 **`share-for-approval`** (`share-for-approval-<n>` after the first), naming the merge
-request and its head and saying to check it first. **Post for approval** has the agent's
-`share` step post one message in that channel: the merge request's address, linked by its
-title, and nothing else. Collie records the permalink, or why nothing was posted, such as an
+request and its head and saying to check it first. **Post for approval** reads the review
+again, posts nothing where the merge request no longer waits on an approval, and otherwise
+has the agent's `share` step post one message in that channel: the merge request's address,
+linked by its title, and nothing else. Collie records the permalink, or why nothing was posted, such as an
 agent with no Slack tool; a share that fails never fails the release, and is asked again at
 the next head. **Wait for changes** posts nothing and is asked again only once the head
 moves; a teammate who approves meanwhile takes the Run on to its go. Turned on with no

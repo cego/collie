@@ -21,7 +21,8 @@ Turned on with no channel, the Run says so on its log and shares nothing.
 **D2. The human checks first.** Before each review wait, while nothing is shared yet, the
 Run reads the review once. Where it waits on a teammate's approval it asks
 `share-for-approval`: **Post for approval** or **Wait for changes**. A wait is asked again
-only at a new head. A teammate's approval meanwhile goes on to the go as before.
+only at a new head. A teammate's approval meanwhile goes on to the go as before, and a Post
+answered after it posts nothing: the review is read again before the message goes.
 
 **D3. One message, by the Run's agent.** Collie has no Slack client of its own, and the
 operator's agent already has their Slack tool. The `share` step is cleared for one message
