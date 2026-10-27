@@ -116,8 +116,10 @@ Beside the database, a Run's files are its audit trail: `agents/<run>/<operation
 with the Output it came back with, `evidence/<run>/` with its checks
 and the ones collected, and `runs/<run>/` with its cards, its `plan/`, the review it left and the notes its agents
 handed on in `handoffs/`, which the shipped workflows tell them to write there rather than in
-`/tmp` and which `run show` and the Run's record list. They are the Run's, so they go only
-when it does.
+`/tmp` and which `run show` and the Run's record list. `handoffs/` is made when the Run is
+placed, before any agent of it starts, and a Claude Code agent is started with
+`--add-dir <run dir>`, so its MCP servers count the Run's directory among the session's
+roots and may write there. They are the Run's, so they go only when it does.
 Nothing an older Collie recorded is read ([ADR-0027](adr/0027-one-engine-and-a-hard-cutover.md)),
 and the host's cleanup sweep removes it once it has not changed for a day.
 

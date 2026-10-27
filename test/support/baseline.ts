@@ -68,6 +68,7 @@ import {
 } from "../../src/sdk";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
+import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import {
   type Finding,
@@ -3647,6 +3648,36 @@ scenario(
   120_000,
 );
 
+for (const [kind, plan] of [
+  ["typed text", "Count every registry once"],
+  ["Linear issue", "ABC-125"],
+  ["follow-up", "followup:r-spec-parent"],
+] as const)
+  scenario(
+    `the spec a ${kind} build wrote is handed to its reviewers`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* noMergeRequests;
+          yield* repository();
+          const fs = yield* FileSystem.FileSystem;
+          const runId = `r-spec-${kind.replace(/\W/g, "-")}`;
+          yield* approve(runId, ["unit"]);
+          yield* fs.makeDirectory(`${runDir(dir, runId)}/plan`, { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
+          yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+          const result = yield* ran({
+            entry: shipped("implement"),
+            runId,
+            input: { plan, ...FINISH },
+          });
+          expect(said(result)).toBe(OPENED.mr_url);
+          expect(yield* asked(runId, "review-1")).toContain(`Spec: ${runDir(dir, runId)}/plan\n`);
+        }).pipe(Effect.orDie),
+      ),
+    120_000,
+  );
+
 scenario(
   "the planner route is read again for each ticket, so a planner that has gone is not called live",
   () =>
@@ -4670,7 +4701,7 @@ scenario(
 
         const building = yield* asked("r-impl-review", "build");
         expect(building).toContain(`Work source (review): ${reviewed}`);
-        expect(building).toContain("Do the one that matches\n`review`");
+        expect(building).toContain(`\`${reviewed}/review.md\` is the spec`);
       }),
     ),
   120_000,
@@ -4775,6 +4806,141 @@ scenario(
         expect(said(result)).toBe(OPENED.mr_url);
         expect(yield* prompts()).toHaveLength(4);
         expect(yield* asked("r-gate-judged", "review-5-1")).toContain('"scope_met": true');
+        expect(yield* asked("r-gate-judged", "review-5-1")).toContain(`Spec: ${plan}\n`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "evidence outside every root fails the Run without a fresh review no reviewer could change",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        yield* approve("r-gate-outside", []);
+        const answered = {
+          ...BUILT,
+          conclusion: "The board redraws every card on each change.",
+          evidence: ["/elsewhere/notes.md"],
+          patch: true,
+        };
+        const supported = { ...CLEAN_SYNTHESIS, supported: true };
+        yield* rig.queueOutputs([answered, supported, supported, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-gate-outside",
+          input: { plan: "why is the board slow?", ...FINISH },
+          options: { outcome: "investigation" },
+        });
+
+        expect(reasonOf(result)).toContain('evidence reference "/elsewhere/notes.md" is outside');
+        expect(yield* wasAsked("r-gate-outside", "review-5-1")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+/** The Intent `run intent set-outcome` leaves, written as an agent answers. */
+const outcomeSet = (runId: string, outcome: string) => ({
+  path: `${runDir(dir, runId)}/${INTENT_FILE}`,
+  text: Schema.encodeSync(Schema.fromJsonString(IntentSchema))(
+    amend(
+      seedIntent(runId, {}),
+      { kind: "set-outcome", outcome },
+      "human:kind",
+      "2026-10-26T00:00:00Z",
+    ),
+  ),
+});
+
+scenario(
+  "a migration changed to a feature before its gate is proved as a feature and opens its merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-kind-gate";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          { writes: [outcomeSet(runId, "feature")], output: CLEAN_SYNTHESIS },
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "migration" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* wasAsked(runId, "gate-fix-1")).toBe(false);
+        expect(yield* asked(runId, "mr")).toContain(
+          "Outcome to prove (not given means unclassified): feature\n",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a refactor changed to a feature between review rounds is reviewed and proved as a feature",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-kind-rally";
+        yield* approve(runId, ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the picker now returns every row",
+          file: "src/a.ts",
+          detail: "a refactor keeps behaviour, and this changes it on purpose",
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          {
+            ...CLEAN_SYNTHESIS,
+            verdict: "findings",
+            findings: [finding],
+            behavior_preserved: false,
+          },
+          {
+            writes: [outcomeSet(runId, "feature")],
+            output: {
+              verdict: "clean",
+              fixed: [{ title: finding.title, file: finding.file }],
+              checks: [],
+            },
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "refactor" },
+        });
+        yield* bin.restore();
+
+        const proving = "Outcome the change has to prove (not given means unclassified):";
+        expect(yield* asked(runId, "review-1")).toContain(`${proving} refactor\n`);
+        expect(yield* asked(runId, "review-2-1")).toContain(`${proving} feature\n`);
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* wasAsked(runId, "review-5-1")).toBe(false);
+        expect(yield* asked(runId, "mr")).toContain(
+          "Outcome to prove (not given means unclassified): feature\n",
+        );
       }),
     ),
   120_000,
@@ -7607,6 +7773,76 @@ scenario(
   30_000,
 );
 
+/** What a shipped Run's build is asked, read once it is written; the Run goes no further. */
+const buildAsked = (options: ShippedRun) =>
+  running(options, () =>
+    until(
+      () =>
+        FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) =>
+            fs.readFileString(`${dir}/agents/${options.runId}/build.prompt.md`),
+          ),
+          Effect.orElseSucceed(() => ""),
+        ),
+      (text) => text.includes("OUTPUT_PATH"),
+    ),
+  );
+
+scenario(
+  "an investigation from text is told its own source and outcome, and no other",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        yield* approve("r-impl-told", ["unit"]);
+
+        const building = yield* buildAsked({
+          entry: shipped("implement"),
+          runId: "r-impl-told",
+          input: { plan: "why is the board slow?", ...FINISH },
+          options: { outcome: "investigation" },
+        });
+        expect(building).toContain(`${dir}/runs/r-impl-told/plan/INVESTIGATION.md`);
+        expect(building).not.toContain("migrate-up");
+        expect(building).not.toContain("get_issue");
+      }),
+    ),
+  60_000,
+);
+
+scenario(
+  "a plan directory with no outcome kind is told only its checks have to pass",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "" }]);
+        yield* approve("r-impl-plain", ["unit"]);
+
+        const building = yield* buildAsked({
+          entry: shipped("implement"),
+          runId: "r-impl-plain",
+          input: { plan, ...FINISH },
+        });
+        expect(building).toContain(`\`${plan}/SPEC.md\` is the spec`);
+        expect(building).not.toContain("get_issue");
+        expect(building).toContain("only the checks have to pass");
+        for (const instruction of [
+          "the agreed scope was met",
+          "reproduce it first",
+          "behaviour is identical",
+          "INVESTIGATION.md",
+          "Instructions nobody ran",
+          "migrate-up",
+        ])
+          expect(building).not.toContain(instruction);
+      }),
+    ),
+  60_000,
+);
+
 /**
  * A host with no Helle to ask. The claim is a service this machine has no credentials
  * for; what the workflow does with it — take it before anything shared, give it back once
@@ -8796,6 +9032,107 @@ const agentPush = (
 
 /** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Object.values(model.replies ?? {}).flat();
+
+/** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */
+const ownCheck = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs
+        .makeDirectory(evidenceDir(dir, runId), { recursive: true })
+        .pipe(
+          Effect.andThen(
+            fs.writeFileString(
+              `${evidenceDir(dir, runId)}/approved.json`,
+              asApproved([{ ...counting("check", `${rig.root}/check-runs`), ci: "test" }]),
+            ),
+          ),
+        ),
+    ),
+    Effect.orDie,
+  );
+
+scenario(
+  "a Release whose check is left to CI's test job is asked its go once the job passed at the head, never running the check",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head } = yield* releasable("github", {
+          jobs: [{ name: "test", state: "passed" }],
+        });
+        const runId = "r-release-own-check";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.github.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(yield* runsOf(`${rig.root}/check-runs`)).toBe(0);
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({
+          name: "check",
+          result: "pass",
+          end: { head_sha: head },
+          job: { name: "test" },
+        });
+      }),
+    ),
+  120_000,
+);
+
+for (const [state, jobs] of [
+  ["failing", [{ name: "test", state: "failed", retried: "failed" }]],
+  ["not reported", []],
+] as const)
+  scenario(
+    `a Release whose check is left to CI's test job is not asked its go while the job is ${state}`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head } = yield* releasable("github", { jobs });
+          const runId = `r-release-own-check-${jobs.length}`;
+          yield* ownCheck(runId);
+          yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
+          const why = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: RELEASING.github.target },
+              host: releaseHost(),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const why = yield* until(
+                  () => parkedWhy(runId),
+                  (why) => why !== "",
+                );
+                expect((yield* run.asked).filter((row) => row.decision.startsWith("go-"))).toEqual(
+                  [],
+                );
+                return why;
+              }),
+          );
+          yield* bin.restore();
+          expect(why).toContain(
+            `check is left to CI and unproved: job test on ${head.slice(0, 12)} is ${state === "failing" ? "failed" : "not in its pipeline"}`,
+          );
+          expect(yield* runsOf(`${rig.root}/check-runs`)).toBe(0);
+          expect(yield* ciRecords(runId)).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
 
 for (const name of ["gitlab", "github"] as const) {
   const { mr, url, target } = RELEASING[name];

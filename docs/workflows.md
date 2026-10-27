@@ -40,8 +40,9 @@ cannot be built then fails with why, rather than asking again.
 
 **What happens:** a planner reads the goal and repository, asks only when a missing
 decision changes the work, then writes `SPEC.md` and one ticket per slice into the run's
-`plan/` directory. There is no mandatory interview, summary approval, or manual skill
-handoff. Plans never enter the repository
+`plan/` directory. A design artifact the work follows is copied into `plan/design/`, and the
+spec and tickets name that copy before its URL, so the build reads the copy. There is no
+mandatory interview, summary approval, or manual skill handoff. Plans never enter the repository
 ([ADR-0002](adr/0002-plan-artefacts-live-in-the-run-directory.md)).
 
 A criterion is one the ticket's absence would make false, never a text search. Before a
@@ -85,7 +86,10 @@ newest finished `plan` runs for this repo and a Linear issue id in the branch na
 candidate is taken as the answer; none or several bring up a menu of them plus **Type it…**,
 which accepts a Linear id or URL, a path to a plan directory, or a plain description of the
 work. What was resolved is recorded with its kind, and the build prompt reads both
-`{{inputs.plan}}` and `{{inputs.plan_kind}}` (`plan-dir`, `linear`, `review` or `text`).
+`{{inputs.plan}}` and `{{inputs.plan_kind}}` (`plan-dir`, `linear`, `review`, `followup` or
+`text`). It carries only that kind's instructions, its `## source.<kind>` section of
+[`implement.md`](../workflows/implement.md), and only the outcome's, its
+`## outcome.<kind>` section; a Run with no outcome kind is told only its checks have to pass.
 `review` is what a run chained from a review carries: the findings are the tickets. For
 `linear` and `text` the implementer writes the spec and a task list into the run's `plan/`
 before it builds, so every run leaves the same audit trail.
@@ -102,8 +106,9 @@ empty, the default, asks (see **Ends:**). A start nobody attends passes `finish`
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the `<name>` of a `branch:<base>...<name>` target you gave, else
-a new `<your GitLab login>/<task>` from `--input task=`, the plan directory's own name, or
-the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
+a new `<your GitLab login>/<task>` from `--input task=`, else, given another Run's own
+plan directory, the branch that Run's Task is on until its merge request lands, else a new
+one from the plan directory's own name, or the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 
 **What happens:** one implementer agent builds, a commit per ticket. It reviews what it
 built with the same pass `review` runs — one complete review — and loops on the findings for
@@ -518,7 +523,8 @@ they follow the reviewers.
 included, and a check Collie leaves to CI is waited on there. A failure goes to a fix
 round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. Four rounds in a
 row that leave a check failing, or one that changes nothing, park the Run with why;
-resuming it runs the checks again.
+resuming it runs the checks again. Collie's own `check` is left to CI's `test` job, so a
+Release of Collie is proved by that job at its head, never by a local `bun run check`.
 
 Once ready, it asks **`go-<n>`**, naming the head and who approved it: **Release** or
 **Finish** for a package. For an application it offers **Stage the merge request** where

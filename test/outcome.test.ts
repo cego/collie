@@ -6,6 +6,7 @@ import { expect, test } from "bun:test";
 import {
   checkGaps,
   evidenceGaps,
+  evidenceRoots,
   endsWithoutPatch,
   baseFailuresOf,
   baselinesOwed,
@@ -14,6 +15,7 @@ import {
   KINDS,
   noCheckNamed,
   recheckOwed,
+  refInside,
   renderEvidence,
   wholeRunsOwed,
   renderRecordedChecks,
@@ -399,6 +401,22 @@ test("an investigation is a conclusion with references that hold it up, and may 
     "the conclusion is supported by no evidence references",
     "the review did not report supported: true for the conclusion",
   ]);
+});
+
+test("a build of another Run's plan may cite that Run's files, and nothing beside them", () => {
+  const state = "/home/mk/.local/state/collie";
+  const roots = evidenceRoots(`${state}/runs/run-b`, "/work/app", `${state}/runs/run-a/plan`);
+
+  expect(refInside(roots, `${state}/runs/run-a/handoffs/investigation.md`)).toBe(true);
+  expect(refInside(roots, `${state}/runs/run-c/handoffs/investigation.md`)).toBe(false);
+  expect(refInside(roots, "/home/mk/notes/investigation.md")).toBe(false);
+  // A plan directory that is no Run's own lends nothing beside it.
+  expect(
+    refInside(
+      evidenceRoots(`${state}/runs/run-b`, "/work/app", "/home/mk/tasks/picker"),
+      "/home/mk/tasks/notes.md",
+    ),
+  ).toBe(false);
 });
 
 test("documentation is proved by running what it documents", () => {

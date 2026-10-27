@@ -42,6 +42,8 @@ export const IntentSchema = Schema.Struct({
   version: Schema.Int,
   run: Schema.String,
   goal: Schema.NullOr(Schema.String),
+  /** The outcome kind the Run is held to, where it was changed after admission; null clears it. */
+  outcome: Schema.optionalKey(Schema.NullOr(Schema.String)),
   constraints: Schema.Array(ConstraintSchema),
   authority: AuthoritySchema,
   parent: Schema.NullOr(
@@ -119,9 +121,15 @@ export function constraintId(text: string): string {
 
 export type Change =
   | { readonly kind: "set-goal"; readonly goal: string | null }
+  | { readonly kind: "set-outcome"; readonly outcome: string | null }
   | { readonly kind: "add-constraint"; readonly constraint: Omit<Constraint, "since"> }
   | { readonly kind: "remove-constraint"; readonly id: string }
   | { readonly kind: "authority"; readonly patch: Partial<Authority> };
+
+/** The outcome change a front door's word asks for: `unspecified` clears the kind. */
+export function outcomeChange(word: string): Change {
+  return { kind: "set-outcome", outcome: word === "unspecified" ? null : word };
+}
 
 /** The authority change granting `name` this command, or withdrawing it where there is none. */
 export function verificationGrant(
@@ -140,6 +148,8 @@ function describe(change: Change): string {
   switch (change.kind) {
     case "set-goal":
       return `goal set to ${change.goal === null ? "nothing" : JSON.stringify(change.goal)}`;
+    case "set-outcome":
+      return change.outcome === null ? "outcome cleared" : `outcome set to ${change.outcome}`;
     case "add-constraint":
       return `constraint ${change.constraint.id} added (${change.constraint.severity})`;
     case "remove-constraint":
@@ -155,6 +165,8 @@ function applied(intent: Intent, change: Change, version: number): Intent | null
   switch (change.kind) {
     case "set-goal":
       return intent.goal === change.goal ? null : { ...intent, goal: change.goal };
+    case "set-outcome":
+      return intent.outcome === change.outcome ? null : { ...intent, outcome: change.outcome };
     case "add-constraint": {
       const constraint = { ...change.constraint, since: version };
       const without = intent.constraints.filter((c) => c.id !== constraint.id);
@@ -189,6 +201,16 @@ export function amend(
     version,
     history: [...intent.history, { version, at, by, ...voice, change: describe(change) }],
   };
+}
+
+/** A Run's launch options, with the outcome kind its Intent was last set to where it was. */
+export function withOutcome(
+  options: Readonly<Record<string, string>>,
+  intent: Intent | null,
+): Readonly<Record<string, string>> {
+  if (intent?.outcome === undefined) return options;
+  const { outcome: _admitted, ...rest } = options;
+  return intent.outcome === null ? rest : { ...rest, outcome: intent.outcome };
 }
 
 /** Who an amendment from the Run's own plan is by; every other author's removal stands. */
@@ -306,6 +328,7 @@ const REQUIREMENT_HEADING = new RegExp(
   "i",
 );
 const OBJECTIVE_HEADING = new RegExp(String.raw`^#+\s*${NUMBER}Objective\b`, "i");
+const SOLUTION_HEADING = new RegExp(String.raw`^#+\s*${NUMBER}Solution\b`, "i");
 const HEADING = /^#+\s/;
 const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
 const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
@@ -313,7 +336,7 @@ const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
 /**
  * What a plan asks for, read deterministically: bullets under a heading whose text
  * matches, wrapped and nested lines included, and the first paragraph under `## Objective`
- * as the goal. Heading match
+ * as the goal, else under `## Solution`, the heading to-spec writes. Heading match
  * only — no model, no inference — because this is evidence a human can check against
  * the file, and because a plan may not grant authority (SPEC §5). The return type is
  * how that is enforced: there is nowhere here to put a grant.
@@ -321,9 +344,7 @@ const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
 export function extractRequirements(text: string, file: string) {
   const lines = text.split("\n");
   const constraints: Array<Omit<Constraint, "since">> = [];
-  let goal: string | null = null;
   let heading: string | null = null;
-  let objective: string[] | null = null;
   let bullet: { indent: number; parts: string[]; line: number } | null = null;
   const flush = () => {
     if (bullet === null || heading === null) return;
@@ -342,16 +363,8 @@ export function extractRequirements(text: string, file: string) {
   for (const [index, line] of lines.entries()) {
     if (HEADING.test(line) || line.trim() === "") flush();
     if (HEADING.test(line)) {
-      if (objective !== null && objective.length > 0) goal = objective.join(" ");
-      objective = OBJECTIVE_HEADING.test(line) ? [] : null;
       const match = REQUIREMENT_HEADING.exec(line);
       heading = match ? match[1]! : null;
-      continue;
-    }
-    if (objective !== null && goal === null) {
-      if (line.trim() === "") {
-        if (objective.length > 0) goal = objective.join(" ");
-      } else objective.push(line.trim());
       continue;
     }
     if (heading === null || line.trim() === "") continue;
@@ -372,8 +385,20 @@ export function extractRequirements(text: string, file: string) {
     if (item !== null) bullet = { indent, parts: [item[2]!], line: index + 1 };
   }
   flush();
-  if (goal === null && objective !== null && objective.length > 0) goal = objective.join(" ");
+  const goal =
+    firstParagraphUnder(lines, OBJECTIVE_HEADING) ?? firstParagraphUnder(lines, SOLUTION_HEADING);
   return { goal, constraints };
+}
+
+function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp): string | null {
+  const start = lines.findIndex((line) => heading.test(line));
+  if (start < 0) return null;
+  const paragraph: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (HEADING.test(line) || (line.trim() === "" && paragraph.length > 0)) break;
+    if (line.trim() !== "") paragraph.push(line.trim());
+  }
+  return paragraph.length > 0 ? paragraph.join(" ") : null;
 }
 
 /** Where a workspace keeps what every Run it starts begins with. */

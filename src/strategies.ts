@@ -93,6 +93,10 @@ function kindOf(strategy: InputStrategy, name: string, where: Settled): string {
 export const workSourceOf = (where: Settled) =>
   settledBy(where, "work-source") ?? settledBy(where, "plan-dir");
 
+/** The Run whose own plan directory this path is, and null where it is none. */
+export const planRunOf = (value: string): string | null =>
+  /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
+
 /** The change this Run is reviewing, and null for a workflow that reviews nothing. */
 export const diffTargetOf = (where: Settled) => settledBy(where, "diff-target");
 

@@ -21,6 +21,7 @@ import type { RunFacts } from "../src/runs";
 import { runFacts } from "./support/records";
 import { renovateClonesSweeper, settlingOf, sweep, worktreesSweeper } from "../src/cleanup";
 import { NOTHING_SETTLING, onBranch, type Settling } from "../src/worktree";
+import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 import { processOf } from "../src/processes";
@@ -608,6 +609,21 @@ test("a plan directory Collie itself pointed at names no branch; the run's own n
       expect(
         yield* plan({ plan_kind: "plan-dir", plan: "/home/mk/tasks/global-board" }),
       ).toMatchObject({ branch: `${LOGIN}/global-board`, source: "from plan" });
+    }),
+  ));
+
+test("a Run's own plan directory typed by hand names no branch either", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      expect(
+        yield* plan(
+          { plan_kind: "plan-dir", plan: `${rig.root}/state/runs/run-x/plan` },
+          undefined,
+          { name: "add-a-version-flag", sources: { plan: "typed" } },
+        ),
+      ).toMatchObject({ branch: `${LOGIN}/add-a-version-flag`, source: "from the run name" });
     }),
   ));
 
@@ -2589,6 +2605,35 @@ test("a stopped run keeps the checkout a resume carries on in, until its work la
       yield* mergedMr();
       // Judged afresh, past the verdict the last round left standing.
       expect((yield* sweeper().judge).remove.map((item) => item.target)).toEqual([at]);
+    }),
+  ));
+
+test("a stopped run whose check still runs keeps its checkout, though its work landed", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const at = yield* collieWorktree("wt", { state: "stopped" });
+      yield* settledGit();
+      yield* mergedMr();
+      yield* fs.makeDirectory(runningChecksDir(rig.stateDir), { recursive: true });
+      yield* fs.writeFileString(
+        `${runningChecksDir(rig.stateDir)}/run-wt@1-a.json`,
+        encodeCheckRecord({
+          id: "run-wt@1-a",
+          run: "run-wt",
+          name: "check",
+          by: "collie",
+          leader: { pid: 4242, started: "1", group: 4242 },
+          host: { pid: 4241, started: "1" },
+          started: "2026-10-26T00:00:00.000Z",
+        }),
+      );
+
+      const judged = yield* sweeper().judge;
+      expect(judged.remove).toEqual([]);
+      expect(judged.keep).toEqual([
+        { kind: "worktree", target: at, reason: "its check is still running in it" },
+      ]);
     }),
   ));
 

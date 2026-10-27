@@ -503,9 +503,14 @@ they came. Everything else is new work, and gets a new branch called
 
 4. `--input task=<slug>`, which is also what `plan` and `architecture` forward when you
    choose **Implement now**, and what a fan-out gives every repository run.
-5. The plan directory's own name, for a run given a plan directory.
-6. A slug of the work itself — the description, or the issue id.
-7. Otherwise a slug of the run's own name.
+5. For a run given another Run's own plan directory (`<state>/runs/<id>/plan`), the branch
+   that Run's Task was placed on, used as it is and cut from its remote tip, so the run
+   joins that Task. Not once its merge request has merged or closed: the run's own name
+   then names a fresh branch.
+6. The plan directory's own name, for a run given a plan directory that is no Run's own.
+7. A slug of the work itself — the description, or the issue id. Never a Run's own plan
+   directory, whose path names nothing.
+8. Otherwise a slug of the run's own name.
 
 The login is the checkout's forge's (ADR-0050 D5). On GitLab it is `GITLAB_USER_LOGIN`
 where the environment sets it, and otherwise whoever `glab` is logged in as for this
@@ -848,8 +853,10 @@ collie --json run stop <run-id> [--request-id <id>]
 collie --json run resume <run-id> [--request-id <id>]
 ```
 
-`stop` parks the run where it is — at its next boundary, or inside the wait it is in — and
-closes its agents' panes, and those of the Runs it started, which is what stops them; the
+`stop` parks the run where it is — at its next boundary, or inside the wait it is in. It
+enters no further Step, files or comments on no issue, and ends a check the host or one of
+its agents is running, with that check's processes; a resume runs the host's check again.
+It closes its agents' panes, and those of the Runs it started, which is what stops them; the
 workspace keeps its own tab. Only the process each launch recorded is closed, never another
 under the same name, and a pane that will not close fails the stop and names the agent
 still running. `resume`
@@ -857,7 +864,11 @@ asks the host to pick a suspended run up again. It re-enters the workflow's curr
 and reuses every Activity already done, so completed work and its Outputs are kept and
 never redone, and an agent still live is reattached to rather than started a second
 time; one a stop closed is started again with the prompt it had, once its predecessor is
-Quiet — otherwise the run parks again, saying which server may still be writing. The host
+Quiet — otherwise the run parks again, saying which server may still be writing. A launch
+that cannot say whether its agent started or was given its work — herdr refused or timed out
+the start, could not list its agents, or the step's prompt did not go out — parks the same
+way, naming the prompt file, since a resume lists herdr's agents again and takes up the
+agent or starts it. The host
 registers the modules as they are now, then clears the stop before waking work. A
 restored module is picked up without restarting the host.
 
@@ -896,6 +907,7 @@ collie --json run start implement --input plan=./plans/steering \
 
 collie --json run intent show <run-id>
 collie --json run intent set-goal <run-id> "<goal>" [--request-id <id>]
+collie --json run intent set-outcome <run-id> feature
 collie --json run intent add-constraint <run-id> "<text>" --severity block
 collie --json run intent remove-constraint <run-id> <constraint-id>
 collie --json run intent authority <run-id> auto_correct=true --propagate
@@ -915,6 +927,11 @@ Run on a worktree of its own, its `plan/SPEC.md`, written by its planner, is rea
 way at every work boundary: new bullets are added, dropped ones are removed, and a
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —
 not a plan, not the repository, not a prompt.
+
+`set-outcome` changes the [outcome](#outcomes) a live Run is held to: `feature`, `bug`,
+`refactor`, `investigation`, `docs` or `migration`, or `unspecified` to clear it. Any other
+word is refused with `invalid_input`, and so is a Run whose workflow always proves one kind.
+Chat makes the same change with `update_intent`.
 
 `--severity` pairs with the `--constraint` in the same position; a constraint given
 without one is `warn`. A `block` constraint stops work; a `warn` one is reported.
@@ -1263,6 +1280,14 @@ What kind of result a run has to prove, and so what evidence closes it:
 | `docs`          | the documented commands, run as written, each with a passing verification                                                                                   |
 | `migration`     | `migrate-up` and `migrate-down` (or `rollback`) both passing                                                                                                |
 
+A reference inside the run is under its own directory or its checkout, or, for a run given
+another Run's own plan directory, under that Run's directory, where its handoffs are.
+
+Only a reviewer can move one kind of gap: the review's own verdict, `scope_met` for a
+feature, `behavior_preserved` for a refactor, `supported` for an investigation, `accurate`
+for docs and `compatible` for a migration. A check that has not passed, or a reference
+outside the run, is not a reviewer's to change.
+
 A text search proves none of the rows above: a pass of `grep`, `egrep`, `fgrep`, `rg`, `ag`,
 `ack` or `git grep`, also as the first word of a `sh -c` or `bash -c` script, shows the text
 is there, not that anything works. A promised check, `regression`, documented command or
@@ -1295,8 +1320,8 @@ Nor is a check that failed on a tree run again on it after a gate fix that left 
 it was: the round is read from the records already there, and the proof's whole `recheck`
 is only for a check whose failures named no tests and that has had none on that tree
 (ADR-0034, amended 2026-10-19). A changed tree or set of checks also gets fresh proof while
-completed build Activities are retained. Missing reviewer evidence gets a fresh review;
-if it still cannot prove the outcome, the Run fails with the gaps named and a follow-up
+completed build Activities are retained. A missing review verdict gets a fresh review, and no other gap does;
+if the outcome is still unproved, the Run fails with the gaps named and a follow-up
 can repair the work; implement offers one after success or failure on a branch. Apart from
 that disputed gate fix, the merge request is reached only once the outcome is proved. Only the latest
 record of a check's exact command on that tree counts, whoever asked for it, so a
@@ -1321,7 +1346,10 @@ merge.
 
 `plan` settles the outcome during its interview and forwards it, so a chained build is not
 asked again. A value that is not one of these is refused at the front door rather than
-discovered at the gate.
+discovered at the gate. A wrong one is corrected with `collie run intent set-outcome`
+while the Run is live: each review round, each gate pass and the merge request read the
+kind as it stands then, and the merge request names the kind the Run was finally held to.
+A dispute never changes the kind by itself.
 
 `plan` and `review` runs have a kind of their own that nobody chooses — `plan` proves it
 wrote tickets (`issues_dir` in its Output), `review` that it wrote a summary a human can
@@ -1562,6 +1590,10 @@ commit.
   }
 ]
 ```
+
+Collie's own `.collie/verify.json` leaves its one check, `check` (`bun run check`), to CI's
+`test` job, which runs that script: its implement Runs and Releases wait for the job rather
+than run the suite again.
 
 A file that is there and does not decode is an error naming it, never an empty set, and
 the start is refused as `invalid_input`, so a typo is never quietly replaced by an agent's

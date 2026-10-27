@@ -21,6 +21,7 @@ import type { PluginEnv } from "./env";
 import {
   answerRun,
   carriedResult,
+  changeIntentRun,
   controlRun,
   followUpRun,
   grantRun,
@@ -58,6 +59,7 @@ import {
   describeDefaults,
   defaultsPath,
   EMPTY_DEFAULTS,
+  outcomeChange,
   parseConstraint,
   readDefaults,
   readIntent,
@@ -224,6 +226,18 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("update_intent", (action, by, env) =>
     Effect.gen(function* () {
       const dir = runDir(env.stateDir, action.run);
+      if (action.change === "set-outcome") {
+        const changed = yield* changeIntentRun(env, {
+          runId: action.run,
+          change: outcomeChange(action.patch),
+          request: by.requestId,
+          door: by,
+          expected: action.base_version,
+        });
+        return changed.ok
+          ? { state: "applied" as const, note: `intent v${changed.value.version}` }
+          : failed(changed.error.message);
+      }
       // The version check and the write under one lock: read outside it, two
       // confirmations both pass the check and the later rename erases the earlier.
       const next = yield* withDirLock(

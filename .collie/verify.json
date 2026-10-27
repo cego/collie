@@ -1,0 +1,9 @@
+[
+  {
+    "name": "check",
+    "executable": "bun",
+    "argv": ["run", "check"],
+    "cwd": "worktree",
+    "ci": "test"
+  }
+]

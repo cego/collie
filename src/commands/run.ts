@@ -36,6 +36,7 @@ import {
   defaultsPath,
   describeDefaults,
   authorityPatch,
+  outcomeChange,
   parseConstraint,
   readDefaults,
   verificationGrant,
@@ -1630,6 +1631,21 @@ const intentSetGoal = Command.make(
     }),
 ).pipe(Command.withDescription("Set what a Run is for"));
 
+const intentSetOutcome = Command.make(
+  "set-outcome",
+  {
+    runId: runIdArg,
+    kind: Argument.String("kind").pipe(
+      Argument.withDescription(
+        "feature, bug, refactor, investigation, docs or migration; unspecified clears it",
+      ),
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ runId, kind, requestId }) =>
+    intentChange("run-intent-outcome", runId, requestId, () => outcomeChange(kind)),
+).pipe(Command.withDescription("Change the outcome kind a Run is held to"));
+
 const intentAdd = Command.make(
   "add-constraint",
   {
@@ -1881,6 +1897,7 @@ const runIntent = Command.make("intent").pipe(
   Command.withSubcommands([
     intentShow,
     intentSetGoal,
+    intentSetOutcome,
     intentAdd,
     intentRemove,
     intentAuthority,

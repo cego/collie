@@ -105,6 +105,8 @@ export interface HarnessAdapter extends HarnessModels {
    * arguments it cannot encode for the shell, so this takes a path, not the text.
    */
   personaArgs?(personaFile: string): string[];
+  /** Present when the harness can be given a directory beyond the one it starts in. */
+  dirArgs?(dir: string): string[];
   /** Present when the harness lets a Step ask for a reasoning effort level. */
   effortArgs?(effort: string): string[];
   /**
@@ -157,6 +159,7 @@ export const HARNESSES: Harnesses = {
       "check your background shells with `/bashes`, read or kill any that will not finish (`BashOutput`, `KillShell`), and continue from there.",
     modelArgs: (model) => ["--model", model],
     personaArgs: (file) => ["--append-system-prompt-file", file],
+    dirArgs: (dir) => ["--add-dir", dir],
     effortArgs: (effort) => ["--effort", effort],
     permissionArgs: {
       auto: ["--permission-mode", "auto"],

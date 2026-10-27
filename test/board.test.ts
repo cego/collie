@@ -47,6 +47,7 @@ import {
   type Verification,
 } from "../src/verify";
 import { checkSentence, followLog } from "../src/checks";
+import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
 import { toldIn, toldLine, type Delivery } from "../src/steering";
@@ -922,6 +923,87 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
       // An idle agent and nothing written for an hour is what quiet is.
       expect(view(idle.id).state).toBe("quiet");
       expect(view(idle.id).sentence).toBe("Building, but silent for 1 hour.");
+    }),
+  ));
+
+test("a stopped Run whose check still runs is working, and stopped once the check is gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* madeRun(dir, { id: "r-stopped", task: "task-1", state: "stopped" });
+      const record = `${runningChecksDir(dir)}/r-stopped@1-a.json`;
+      yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true });
+      yield* fs.writeFileString(
+        record,
+        encodeCheckRecord({
+          id: "r-stopped@1-a",
+          run: run.id,
+          name: "unit",
+          pass: "gate",
+          by: "collie",
+          leader: { pid: 4242, started: "1", group: 4242 },
+          host: { pid: 4241, started: "1" },
+          started: "2026-09-14T10:03:00Z",
+        }),
+      );
+
+      const [checking] = yield* board(env, [run]);
+      expect(checking!.state).toBe("active");
+      expect(sectionOf(checking!)).toBe("working");
+      expect(checking!.sentence).toBe("Running unit on the branch, 2 min.");
+
+      yield* fs.remove(record);
+      const [stopped] = yield* board(env, [run]);
+      expect(stopped!.state).toBe("stopped");
+    }),
+  ));
+
+test("a check still running for an older Run of a Task keeps the Task working, even out of History", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const newer = yield* madeRun(dir, {
+        id: "r-newer",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-12T09:00:00Z",
+        finished: "2026-09-12T09:30:00Z",
+      });
+      const older = yield* madeRun(dir, {
+        id: "r-older",
+        task: "task-1",
+        state: "stopped",
+        created: "2026-09-12T08:00:00Z",
+        finished: "2026-09-12T08:30:00Z",
+      });
+      yield* recordDisposition(newer.dir, {
+        at: "2026-09-12T10:00:00Z",
+        by: "mk",
+        kind: "merged",
+        ref: "cego/collie!43",
+        note: null,
+      });
+      yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true });
+      yield* fs.writeFileString(
+        `${runningChecksDir(dir)}/r-older@1-a.json`,
+        encodeCheckRecord({
+          id: "r-older@1-a",
+          run: older.id,
+          name: "unit",
+          pass: "gate",
+          by: "collie",
+          leader: { pid: 4242, started: "1", group: 4242 },
+          host: { pid: 4241, started: "1" },
+          started: "2026-09-14T10:03:00Z",
+        }),
+      );
+
+      const [card] = yield* board(env, [newer, older]);
+      expect(card?.state).toBe("active");
+      expect(sectionOf(card!)).toBe("working");
+      expect(card!.sentence).toContain("Running unit");
     }),
   ));
 

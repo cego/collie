@@ -338,8 +338,10 @@ const verdict =
   launch that waits for memory spends none of it either: the budget starts once the agent
   is launched. Past the budget the Run parks saying how many minutes it sat idle, and Collie
   keeps collecting: an Output written later clears the park and the step goes on, with no
-  resume. An agent that has gone by the end of another idle budget is started again. A stop
-  still ends the wait.
+  resume. An agent that has gone by the end of another idle budget is started again. Gone is
+  an agent herdr no longer lists, or one it still lists but refuses as not active, as it
+  does when the agent's process died with its Machine; that one's pane is closed first, so
+  the new agent can take its name. A stop still ends the wait.
 - **`cwd` is where the host placed the Run** unless you name another checkout.
 - **`role`** defaults to the operation's name. The role is injected as a persona, and where
   `personas/<role>.md` exists in the project, on this machine or in the installation, that
@@ -688,6 +690,8 @@ it.
 `place.options` is the other half of the launch. The names in `RESERVED_INPUTS` are the
 host's, so they are never in your payload — a caller asking for extra review axes or naming
 an earlier Run to compare against is doing it there, and this is where you read it.
+`outcome` is the one that can change while the Run is live, with `run intent set-outcome`:
+read it again, inside an `Activity`, wherever the kind decides something.
 
 `host.post` puts a file on the merge request a Run was pointed at, as one note Collie sends
 rather than an agent writes out again, through the merge request's own forge. With
@@ -1369,7 +1373,8 @@ const gaps = evidenceGapsOf({
 `checkGapsOf` takes the same question and answers only the gaps a verification on this
 tree could close: a check that failed, never ran, or passed on an earlier tree. Those are
 what a fix may be handed. A reviewer's judgement and an Output's claim are not moved by
-running anything, so a fix handed one spends a session and changes nothing.
+running anything, so a fix handed one spends a session and changes nothing. `reviewGapsOf` answers only the gaps a reviewer's verdict could close, such as
+`scope_met`: a fresh review is worth paying for only while one of those remains.
 
 Both read each check through `checkProof`, which you can call yourself. It gives a check's
 proof on the tree in `evidence`: `passed`, `failed`, `unstable`, `earlier` (it passed only

@@ -663,6 +663,39 @@ test("a Run that finishes with a semantic constraint asks for its one judgement"
     }),
   ));
 
+test("a branch past the cap is judged once, at the finish, and each boundary says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* repository();
+      yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
+      const files: string[] = [];
+      for (let n = 0; n <= MAX_FILES; n += 1) {
+        files.push(`src/f${n}.ts`);
+        yield* fs.writeFileString(`${dir}/src/f${n}.ts`, `${n}\n`);
+      }
+      yield* exec(["git", "add", ...files], { cwd: dir });
+      yield* intended("r1", [SMALL]);
+      const calls = `${rig.root}/judgements`;
+      yield* evaluatorAnswering(
+        `echo asked >> ${calls}\ncat > /dev/null\necho '{"result":{"reports":[]}}'`,
+      );
+      yield* session(
+        Effect.gen(function* () {
+          const oversight = yield* Oversight;
+          for (const where of ["build-1", "build-2", "build-3"])
+            yield* oversight.drift("r1", where, "boundary");
+          yield* oversight.drift("r1", "finish", "finish");
+        }),
+        { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root },
+      );
+      const asked = yield* fs.readFileString(calls).pipe(Effect.orElseSucceed(() => ""));
+      expect(asked.split("\n").filter((line) => line === "asked")).toHaveLength(1);
+      const log = yield* fs.readFileString(`${runDir(dir, "r1")}/log.txt`);
+      expect(log).toContain("not judged at build-2: evidence past the cap; judged at the finish");
+    }),
+  ));
+
 const SRC_ONLY: Constraint = {
   id: "src-only",
   kind: "rule",
@@ -688,6 +721,7 @@ const watchedAt = (runId: string, held = false, worktree: string | null = null):
   herd: null,
   family: [runId],
   dirOf: (id) => runDir(dir, id),
+  cwdOf: () => Effect.succeed(dir),
 });
 
 /** An agent to correct, whose sender records what it was handed. */
@@ -935,6 +969,10 @@ test("a Run with relatives stands for the cross-run check, and one leaving unans
           ),
         );
       const parent = { ...watchedAt("r1"), herd: key, family: ["r1", "r2"] };
+      // Work to judge, so a check is owed for it.
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/agents/r2`, { recursive: true });
+      yield* fs.writeFileString(`${dir}/agents/r2/build.json`, '{"verdict":"clean"}');
 
       // Nobody can judge it here, and a boundary is not the moment to say it is owed.
       yield* standForElection(parent, "boundary before build", false, null);
@@ -976,6 +1014,29 @@ const cardedWork = (runId: string, files: Readonly<Record<string, string>>) =>
     yield* git(["commit", "-qm", `${runId}'s work`]);
     yield* writeCard(watchedAt(runId), { kind: "slice", step: "build", claims: [] });
     yield* git(["checkout", "-q", "-"]);
+  });
+
+/** A repository of its own at `path`, one commit of `files` past its default branch. */
+const repositoryAt = (path: string, files: Readonly<Record<string, string>>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(path, { recursive: true });
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.email", "t@example.com"],
+      ["config", "user.name", "t"],
+      ["commit", "-q", "--allow-empty", "-m", "first"],
+      ["update-ref", "refs/remotes/origin/main", "HEAD"],
+    ])
+      yield* git(args, path);
+    for (const [name, text] of Object.entries(files)) {
+      yield* fs.makeDirectory(`${path}/${name.slice(0, name.lastIndexOf("/") + 1)}`, {
+        recursive: true,
+      });
+      yield* fs.writeFileString(`${path}/${name}`, text);
+    }
+    yield* git(["add", ...Object.keys(files)], path);
+    yield* git(["commit", "-qm", "work"], path);
   });
 
 /** A judge that keeps the pack it was given and answers with `reports`. */
@@ -1020,10 +1081,25 @@ const reportOn = (run: string, constraint: string, evidence: ReadonlyArray<objec
 const under = (pack: string, runId: string) =>
   pack.split(/^(?=run: )/m).find((section) => section.startsWith(`run: ${runId}\n`)) ?? "";
 
-const judgedAcross = (family: ReadonlyArray<string>, deps: JudgementDeps) =>
+/** `r1` judging `family`, each Run read in its entry of `checkouts`, else the host's directory. */
+const judgedAcross = (
+  family: ReadonlyArray<string>,
+  deps: JudgementDeps,
+  checkouts: Readonly<Record<string, string>> = {},
+) =>
   Effect.gen(function* () {
     const key = (yield* herdOf(`${rig.root}/herd.sock`))!;
-    yield* standForElection({ ...watchedAt("r1"), herd: key, family }, "boundary", false, deps);
+    yield* standForElection(
+      {
+        ...watchedAt("r1"),
+        herd: key,
+        family,
+        cwdOf: (id) => Effect.succeed(checkouts[id] ?? dir),
+      },
+      "boundary",
+      false,
+      deps,
+    );
     const fs = yield* FileSystem.FileSystem;
     return {
       pack: yield* fs.readFileString(`${rig.root}/pack.txt`),
@@ -1058,22 +1134,7 @@ test("the cross-run judge reads each related Run's work, and files only what cit
         yield* fs.writeFileString(`${dir}/agents/r3/plan.json`, '{"verdict":"planned"}');
         // A card at a commit this repository does not have: a Run of another one.
         const elsewhere = `${rig.root}/elsewhere`;
-        yield* fs.makeDirectory(elsewhere, { recursive: true });
-        for (const args of [
-          ["init", "-q"],
-          [
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "x",
-          ],
-        ])
-          yield* git(args, elsewhere);
+        yield* repositoryAt(elsewhere, { "docs/r4.md": "r4's own\n" });
         yield* writeCard(
           { ...watchedAt("r4"), cwd: elsewhere },
           { kind: "slice", step: "build", claims: [] },
@@ -1091,7 +1152,9 @@ test("the cross-run judge reads each related Run's work, and files only what cit
           // A file another Run changed.
           reportOn("r1", "r1-only", cited),
         ]);
-        const { pack, log } = yield* judgedAcross(["r1", "r2", "r3", "r4"], deps);
+        const { pack, log } = yield* judgedAcross(["r1", "r2", "r3", "r4"], deps, {
+          r4: elsewhere,
+        });
 
         expect(pack).toContain(
           "A constraint read from the plan narrows the goal it was cut from: the goal is what was asked, not work done, and it is never evidence of drift.",
@@ -1111,7 +1174,8 @@ test("the cross-run judge reads each related Run's work, and files only what cit
         const r3 = under(pack, "r3");
         expect(r3).toContain("work: none yet (no card)");
         expect(r3).toContain("--- output plan");
-        expect(under(pack, "r4")).toContain("diff: could not be read: ");
+        expect(under(pack, "r4")).toContain("--- docs/r4.md\n");
+        expect(under(pack, "r4")).toContain("+r4's own");
 
         const filed = currentReports(yield* readDrift(runDir(dir, "r2")));
         expect(filed.map((report) => report.evidence)).toEqual([
@@ -1128,7 +1192,89 @@ test("the cross-run judge reads each related Run's work, and files only what cit
         expect(currentReports(yield* readDrift(runDir(dir, "r1")))).toEqual([]);
         expect(log).toContain("2 report(s) filed");
         expect(log).toContain("r3: no card");
-        expect(log).toMatch(/r4: diff could not be read: /);
+        expect(log).not.toContain("r4:");
+      }),
+    ),
+  ));
+
+test("a related Run in another repository is read in its own, wherever the judging Run works", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* intended("r1", [R1_ONLY]);
+        yield* intended("r2", [SMALL]);
+        const other = `${rig.root}/other`;
+        yield* repositoryAt(other, { "src/b.ts": "export const b = 2;\n" });
+        yield* writeCard(
+          { ...watchedAt("r2"), cwd: other },
+          { kind: "slice", step: "build", claims: [] },
+        );
+        const deps = yield* crossRunJudge([
+          reportOn("r2", "small", [{ kind: "diff", path: `${other}/src/b.ts` }]),
+        ]);
+        const { pack } = yield* judgedAcross(["r1", "r2"], deps, { r2: other });
+
+        expect(under(pack, "r2")).toContain("--- src/b.ts\n");
+        expect(under(pack, "r2")).toContain("+export const b = 2;");
+        expect(
+          currentReports(yield* readDrift(runDir(dir, "r2"))).map((report) => report.evidence),
+        ).toEqual([[{ kind: "diff", path: "src/b.ts" }]]);
+      }),
+    ),
+  ));
+
+test("a related Run whose own checkout lacks its commit is said to be unread, in git's words", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* repository();
+        yield* intended("r1", [R1_ONLY]);
+        yield* intended("r2", [SMALL]);
+        const other = `${rig.root}/other`;
+        yield* repositoryAt(other, { "src/b.ts": "export const b = 2;\n" });
+        yield* writeCard(
+          { ...watchedAt("r2"), cwd: other },
+          { kind: "slice", step: "build", claims: [] },
+        );
+        // Something to judge, so the judge is asked.
+        yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
+        yield* fs.writeFileString(`${dir}/agents/r1/plan.json`, '{"verdict":"planned"}');
+        const deps = yield* crossRunJudge([]);
+        const { pack, log } = yield* judgedAcross(["r1", "r2"], deps, { r2: dir });
+
+        expect(under(pack, "r2")).toMatch(/diff: could not be read: \S/);
+        expect(log).toMatch(/r2: diff could not be read: \S/);
+      }),
+    ),
+  ));
+
+test("when no related Run's work can be shown, the judge is not asked and nothing is owed", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* intended("r1", [R1_ONLY]);
+        yield* intended("r2", [SMALL]);
+        const deps = yield* crossRunJudge([]);
+        const key = (yield* herdOf(`${rig.root}/herd.sock`))!;
+        yield* standForElection(
+          { ...watchedAt("r1"), herd: key, family: ["r1", "r2"] },
+          "finish",
+          true,
+          deps,
+        );
+
+        expect(yield* fs.exists(`${rig.root}/pack.txt`)).toBe(false);
+        expect(yield* fs.exists(`${dir}/budget.jsonl`)).toBe(false);
+        const kinds = (yield* readElections(yield* electionsPath(dir, key))).map(
+          (line) => line.kind,
+        );
+        expect(kinds).not.toContain("pending");
+        expect(kinds).not.toContain("evaluated");
+        expect(yield* fs.readFileString(`${runDir(dir, "r1")}/log.txt`)).toContain(
+          "cross-run judgement not asked at ",
+        );
       }),
     ),
   ));

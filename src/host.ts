@@ -34,6 +34,7 @@ import {
   Logger,
   Option,
   Queue,
+  Result,
   Path,
   Schedule,
   Schema,
@@ -83,6 +84,7 @@ import {
   CheckEvent,
   outputsOf,
 } from "./run-record";
+import { REQUESTABLE } from "./outcome";
 import { OutcomeRecords, outcomeRecordsOf } from "./outcomes";
 import { removedNotice, scrub, scrubJson } from "./redact";
 import { readMetrics } from "./metrics";
@@ -2111,6 +2113,9 @@ const frontDoorHandlers = (
                           )?.step
                         : undefined;
                     const fs = yield* FileSystem.FileSystem;
+                    const stopped = fs
+                      .exists(controlPath(env.stateDir, STOP, runId))
+                      .pipe(Effect.orElseSucceed(() => false));
                     const memory = yield* waitForMemory({
                       env,
                       stateDir: env.stateDir,
@@ -2120,9 +2125,7 @@ const frontDoorHandlers = (
                         whoOf(client).origin === "agent" && from?.run === runId
                           ? (from.agent ?? null)
                           : null,
-                      stopped: fs
-                        .exists(controlPath(env.stateDir, STOP, runId))
-                        .pipe(Effect.orElseSucceed(() => false)),
+                      stopped,
                       say: (sentence) => echo("stderr")(`${sentence}\n`),
                     });
                     if (memory === "stopped") {
@@ -2136,26 +2139,42 @@ const frontDoorHandlers = (
                     }
                     const started = (yield* nowIso()).replace(/[:.]/g, "-");
                     const log = `${evidenceDir(env.stateDir, runId)}/verify/${started}-${name.replace(/[^\w.-]/g, "_")}.log`;
-                    const collected = yield* collect(
-                      evidenceDir(env.stateDir, runId),
-                      {
-                        run: runId,
-                        name,
-                        executable,
-                        argv,
-                        cwd: where,
-                        by: "agent",
-                        expect,
-                        log,
-                        step: step?.step,
-                        place: step?.place,
-                      },
-                      { stdout: echo("stdout"), stderr: echo("stderr") },
-                    ).pipe(
-                      Effect.mapError(
-                        (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.why}` }),
+                    const collected = yield* Effect.raceFirst(
+                      collect(
+                        evidenceDir(env.stateDir, runId),
+                        {
+                          run: runId,
+                          name,
+                          executable,
+                          argv,
+                          cwd: where,
+                          by: "agent",
+                          expect,
+                          log,
+                          step: step?.step,
+                          place: step?.place,
+                        },
+                        { stdout: echo("stdout"), stderr: echo("stderr") },
+                      ).pipe(
+                        Effect.mapError(
+                          (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.why}` }),
+                        ),
+                        Effect.result,
                       ),
-                      Effect.result,
+                      // Ending the race ends the command's process group with its scope.
+                      stopped.pipe(
+                        Effect.repeat({
+                          until: (stop) => stop,
+                          schedule: Schedule.spaced("1 second"),
+                        }),
+                        Effect.as(
+                          Result.fail(
+                            new HostRefused({
+                              reason: `invalid_state: run ${runId} was stopped while "${name}" ran, so it was ended and recorded nothing.`,
+                            }),
+                          ),
+                        ),
+                      ),
                     );
                     if (collected._tag === "Failure") {
                       yield* Queue.fail(queue, collected.failure);
@@ -2234,7 +2253,10 @@ const frontDoorHandlers = (
               ),
             ),
           ),
-        changeIntent: ({ runId, change: given, propagate: spread, request }, { client }) => {
+        changeIntent: (
+          { runId, change: given, propagate: spread, request, expected },
+          { client },
+        ) => {
           const scrubbed =
             given.kind === "set-goal" || given.kind === "add-constraint"
               ? scrubJson(given)
@@ -2243,8 +2265,24 @@ const frontDoorHandlers = (
           return plainly(
             Effect.gen(function* () {
               const edit = Effect.gen(function* () {
-                if ((yield* registry.view(runId)) === null)
-                  return yield* new HostRefused({ reason: `No Run "${runId}".` });
+                const view = yield* registry.view(runId);
+                if (view === null) return yield* new HostRefused({ reason: `No Run "${runId}".` });
+                if (change.kind === "set-outcome") {
+                  const asked = change.outcome;
+                  if (asked !== null && !REQUESTABLE.includes(asked))
+                    return yield* new HostRefused({
+                      reason: `${REFUSED_INPUT}: "${asked}" is not an outcome; a Run is held to one of ${REQUESTABLE.join(", ")}`,
+                    });
+                  const fixed = Option.getOrNull(
+                    yield* registry
+                      .resolve({ project: view.project, id: view.workflow })
+                      .pipe(Effect.option),
+                  )?.fixedOutcome;
+                  if (fixed !== null && fixed !== undefined)
+                    return yield* new HostRefused({
+                      reason: `${REFUSED_INPUT}: "${view.workflow}" always proves ${fixed}`,
+                    });
+                }
                 const by = { ...whoOf(client), requestId: request };
                 const approved =
                   change.kind === "verification"
@@ -2265,6 +2303,10 @@ const frontDoorHandlers = (
                   Effect.gen(function* () {
                     const current = yield* readIntent(runDir(env.stateDir, runId));
                     if (current === null) return null;
+                    if (expected !== undefined && current.version !== expected)
+                      return yield* new HostRefused({
+                        reason: `the Intent is v${current.version}, not v${expected}`,
+                      });
                     const recorded =
                       change.kind === "verification"
                         ? (yield* readAudit(trail(runId))).find((one) => one.request === request)
@@ -2293,7 +2335,11 @@ const frontDoorHandlers = (
                 ).pipe(Effect.result);
                 if (updated._tag === "Failure") {
                   if (approved === undefined)
-                    return yield* new HostRefused({ reason: reason(updated.failure) });
+                    return yield* new HostRefused({
+                      reason: Schema.is(HostRefused)(updated.failure)
+                        ? updated.failure.reason
+                        : reason(updated.failure),
+                    });
                   return {
                     version: null,
                     propagated: [],

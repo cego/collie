@@ -19,8 +19,8 @@ Read the target first:
   {{base}}...HEAD` for commits this branch has that the default branch does not.
 
 The spec above is a directory when this review has one: read `SPEC.md` and the tickets
-in `issues/` and hold the change to them. When it is empty there is no spec, and the
-spec axis says exactly that.
+in `issues/` and hold the change to them. When it is not given, no spec was handed to
+this review, and the spec axis says exactly that.
 
 ## review
 

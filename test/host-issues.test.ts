@@ -601,6 +601,51 @@ for (const forge of ["github", "gitlab"] as const) {
 }
 
 test(
+  "a stopped Run files nothing, and its forge hears nothing of it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* repository(rig.projectDir, `https://${PROJECT.github}.git`);
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        try {
+          const fake = yield* forgeOnPath(bin, "github", {
+            installed: true,
+            loggedIn: [FORGE_HOST.github],
+            login: "me",
+            mrs: [],
+          });
+          forgeApi = yield* serveForges(fake);
+          const gate = `${rig.root}/gate`;
+          const answer = yield* Effect.gen(function* () {
+            const registry = yield* Registry;
+            const generation = yield* registry.load(
+              new URL("./fixtures/workflows/issues.workflow.ts", import.meta.url).pathname,
+            );
+            const run = yield* registry.start({
+              generation,
+              request: "gated",
+              project: rig.projectDir,
+              input: { operation: "file-when-open", text: gate },
+              handsOver: true,
+            });
+            yield* registry.control({ runId: run.runId, control: "stop", set: true });
+            yield* fs.writeFileString(gate, "");
+            return yield* registry.result(run.runId).pipe(Effect.result);
+          }).pipe(withMachine);
+          expect(Result.isFailure(answer)).toBe(true);
+          if (Result.isFailure(answer)) expect(answer.failure.reason).toContain("stopped");
+          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+          expect((yield* fake.model()).issues ?? []).toEqual([]);
+        } finally {
+          yield* bin.restore();
+        }
+      }),
+    ),
+  30_000,
+);
+
+test(
   "the host refuses another checkout's path and remote before filing or commenting",
   () =>
     runEffect(

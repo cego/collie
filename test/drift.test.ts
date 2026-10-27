@@ -523,6 +523,74 @@ test("a judgement whose diff git cannot read is skipped in git's words, never ju
     }),
   ));
 
+/** A Run in `worktree` whose one Output is `build`, judged with a model that cites it. */
+const judgedOnOutput = Effect.fn("DriftTest.judgedOnOutput")(function* (
+  dir: string,
+  worktree: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const agentsDir = `${dir}/agents`;
+  yield* fs.makeDirectory(agentsDir, { recursive: true });
+  yield* fs.writeFileString(`${agentsDir}/build.json`, `{"summary":"added left-pad"}`);
+  const evaluator = yield* fakeEvaluator(dir);
+  yield* evaluator.reply(
+    envelope({
+      result: {
+        reports: [
+          {
+            id: "x",
+            at: "t",
+            run: "r1",
+            intent_version: 1,
+            constraint: "no-new-deps",
+            kind: "semantic",
+            severity: "block",
+            evidence: [{ kind: "output", path: "build" }],
+            evidence_truncated: false,
+            resolution: "open",
+          },
+        ],
+      },
+    }),
+  );
+  const deps = judgementDeps(dir);
+  const out = yield* judge(deps, semanticIntent(), {
+    runDir: dir,
+    worktree,
+    agentsDir,
+    base: "HEAD",
+    at: "t0",
+  });
+  evaluator.restore();
+  expect(yield* evaluator.pack).toContain(`--- output build\n{\n  "summary": "added left-pad"\n}`);
+  expect(
+    (yield* readBudget(deps.budgetFile)).filter((line) => line.kind === "reserve"),
+  ).toHaveLength(1);
+  expect(out.judged.semantic).toBe(true);
+  expect(out.reports.map((report) => report.evidence)).toEqual([
+    [{ kind: "output", path: "build" }],
+  ]);
+});
+
+test("a Run with no checkout is judged on its Outputs, its missing diff an empty one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-judge-" });
+      yield* judgedOnOutput(dir, dir);
+    }),
+  ));
+
+test("a Run whose only work is its Outputs is judged on them, not skipped as unchanged", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* checkout("hw-judge-");
+      yield* judgedOnOutput(dir, dir);
+      const lines = yield* readDrift(dir);
+      expect(lines.filter((line) => line.kind === "skipped")).toEqual([]);
+    }),
+  ));
+
 const judgedWithNoCall = Effect.fn("DriftTest.judgedWithNoCall")(function* (
   dir: string,
   intent: Intent,

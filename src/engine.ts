@@ -85,6 +85,7 @@ import {
 import { FALLBACK_DEFAULTS, configValue, gitlabHostOf, loadDefaults, readConfig } from "./config";
 import { unlistedServers } from "./compaction";
 import { foldPreferences, preferencesFromOptions, resolveChoice } from "./harness";
+import { handoffsDir } from "./handoffs";
 import { encodeSubagents, readSubagents } from "./subagents";
 import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
@@ -140,10 +141,11 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import { mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
+import { mrLabel, mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
+import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { integrateDefault, integratedLine } from "./integrate";
-import { strategyNamed } from "./strategies";
+import { planRunOf, strategyNamed, workSourceOf } from "./strategies";
 import { Notifier, SOUND, notificationTitle, openedSubject, wanted, type Sound } from "./notify";
 import {
   Oversight,
@@ -170,6 +172,7 @@ import {
   propagate,
   readIntent,
   seedIntent,
+  withOutcome,
   writeIntent,
   type IntentSeed,
 } from "./intent";
@@ -1866,6 +1869,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
   ): string;
 
+  /** Where a reference a Run's Outputs give may point: its own directory, its checkout, and a planning Run's. */
+  export function evidenceRoots(own: string, cwd: string, workSource: string): string[];
+
   /**
    * Every check this Run's journal holds, latest of each and its baseline, for a reviewer to
    * read; then each check left to CI, with its job's state where the Run has a merge request.
@@ -1907,6 +1913,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * handed. A reviewer's judgement and an Output's claim are not moved by running anything.
    */
   export function checkGapsOf(
+    options: Parameters<typeof evidenceGapsOf>[0],
+  ): ReadonlyArray<string>;
+  /** The gaps among those a fresh review could close: what is worth paying a reviewer for. */
+  export function reviewGapsOf(
     options: Parameters<typeof evidenceGapsOf>[0],
   ): ReadonlyArray<string>;
 
@@ -2634,10 +2644,6 @@ export const evidenceDir = (dir: string, runId: string): string => `${dir}/evide
  */
 export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
 
-/** The Run whose own plan directory this Input value is, and null where it is none. */
-const planRunOf = (value: string): string | null =>
-  /(?:^|\/)runs\/([^/]+)\/plan\/?$/.exec(value)?.[1] ?? null;
-
 /**
  * A Run, then the Runs it came from: its parent and the Run whose plan it builds. Stops at
  * a Run the store has no row for, and at a cycle.
@@ -2964,6 +2970,10 @@ export const hostLayer = (options: {
         Effect.provideContext(effect, services);
       const set = (control: string, runId: string) =>
         fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
+      const untilStopped = (runId: string) =>
+        set(STOP, runId).pipe(
+          Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+        );
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
       yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
@@ -3118,11 +3128,20 @@ export const hostLayer = (options: {
                   Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
                 );
               });
-            return yield* (
-              asked.at === "default-base"
+            // A stop ends the check and its processes; the Run parks, and a resume runs it again.
+            const ran = yield* Effect.raceFirst(
+              (asked.at === "default-base"
                 ? atDefaultBase(asked.cwd, away, verified)
                 : verified(null)
+              ).pipe(Effect.map(Option.some)),
+              untilStopped(asked.runId).pipe(Effect.as(Option.none<Verification>())),
             ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
+            if (Option.isSome(ran)) return ran.value;
+            const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+            if (Option.isSome(instance)) return yield* Workflow.suspend(instance.value);
+            return yield* new WorkflowError({
+              reason: `${spec.name} did not finish: the Run was stopped while it ran`,
+            });
           }),
         );
       const placing = options.placing
@@ -3227,6 +3246,13 @@ export const hostLayer = (options: {
           });
           return { cwd: checkout.cwd, branch: checkout.branch ?? "" };
         }).pipe(Effect.provideContext(bun), under);
+      /** Refuses what a Run would say outside Collie once it is stopped. */
+      const unstopped = (runId: string, what: string) =>
+        Effect.flatMap(set(STOP, runId), (stopped) =>
+          stopped
+            ? Effect.fail(new WorkflowError({ reason: `${runId} is stopped, so it ${what}` }))
+            : Effect.void,
+        );
       const issueCheckout = Effect.fn("Host.issueCheckout")(function* (runId: string) {
         const row = yield* store.run(runId);
         if (row === null) return yield* new WorkflowError({ reason: `there is no Run ${runId}` });
@@ -3462,6 +3488,7 @@ export const hostLayer = (options: {
         fileIssue: (asked) =>
           under(
             Effect.gen(function* () {
+              yield* unstopped(asked.runId, "files no issue");
               const here = yield* issueCheckout(asked.runId);
               yield* checkIssueText(here, `${asked.title}\n${asked.body}`);
               const filed = yield* here.forge.fileIssue(
@@ -3478,6 +3505,7 @@ export const hostLayer = (options: {
         commentIssue: (asked) =>
           under(
             Effect.gen(function* () {
+              yield* unstopped(asked.runId, "comments on no issue");
               const here = yield* issueCheckout(asked.runId);
               yield* checkIssueText(here, asked.body);
               const commented = yield* here.forge.commentIssue(
@@ -3509,6 +3537,7 @@ export const hostLayer = (options: {
                     ? Effect.succeed(null)
                     : decodeStrings(row.options ?? "{}").pipe(
                         Effect.orElseSucceed((): Record<string, string> => ({})),
+                        Effect.flatMap((admitted) => optionsNow(dir, runId, admitted)),
                         Effect.map((options) => ({
                           options,
                           task: row.task,
@@ -3525,7 +3554,7 @@ export const hostLayer = (options: {
                 Effect.tap((admitted) =>
                   admitted === null
                     ? Effect.void
-                    : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
+                    : fs.makeDirectory(handoffsDir(runDir(dir, runId)), { recursive: true }),
                 ),
                 Effect.map((admitted) => ({
                   cwd: admitted?.placed.cwd ?? dir,
@@ -3771,8 +3800,7 @@ export const hostLayer = (options: {
                 };
               const own = yield* treeOf(yield* store.run(asked.runId), asked.runId, dir);
               // A stop ends the wait: the workflow suspends on it, as it does on an agent's.
-              const stopped = set(STOP, asked.runId).pipe(
-                Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+              const stopped = untilStopped(asked.runId).pipe(
                 Effect.as({
                   unproved: `${spec.name} is left to CI and unproved: the Run was stopped while job ${spec.ci} was read`,
                   state: null,
@@ -4162,6 +4190,20 @@ export const hostLayer = (options: {
           Effect.orElseSucceed(() => null),
         );
       });
+      const checkoutOf = (row: RunRow | null) =>
+        Effect.gen(function* () {
+          const placed =
+            row === null
+              ? null
+              : placedOf(
+                  row,
+                  yield* decodeStrings(row.options ?? "{}").pipe(
+                    Effect.orElseSucceed((): Record<string, string> => ({})),
+                  ),
+                );
+          const worktree = placed?.worktree?.path ?? null;
+          return { worktree, cwd: worktree ?? placed?.cwd ?? dir };
+        });
       /** A Run as a card sees it: where it works, and where its records are. */
       const watched = (runId: string): Effect.Effect<Watched> =>
         Effect.gen(function* () {
@@ -4173,29 +4215,25 @@ export const hostLayer = (options: {
                   Effect.provideContext(bun),
                   Effect.orElseSucceed(() => null),
                 );
-          const placed =
-            row === null
-              ? null
-              : placedOf(
-                  row,
-                  yield* decodeStrings(row.options ?? "{}").pipe(
-                    Effect.orElseSucceed((): Record<string, string> => ({})),
-                  ),
-                );
-          const worktree = placed?.worktree?.path ?? null;
+          const { worktree, cwd } = yield* checkoutOf(row);
           return {
             runId,
             stateDir: dir,
             runDir: runDir(dir, runId),
             evidenceDir: evidenceDir(dir, runId),
             agentsDir: `${dir}/agents/${runId}`,
-            cwd: worktree ?? placed?.cwd ?? dir,
+            cwd,
             worktree,
             mr: yield* mergeRequestOf(fs, dir, runId),
             asking: (yield* store.asked(runId)).some((one) => one.answer === null),
             held: yield* set(HOLD, runId),
             family: row === null ? [runId] : familyOf(yield* store.runs, row),
             dirOf: (id: string) => runDir(dir, id),
+            cwdOf: (id: string) =>
+              store.run(id).pipe(
+                Effect.flatMap(checkoutOf),
+                Effect.map((one) => one.cwd),
+              ),
             herd: task?.herd ?? (yield* hostHerd),
           };
         });
@@ -4785,6 +4823,12 @@ const workingPlace = (row: RunRow): Placed => {
 };
 
 /** Where a Run works: as the host placed it, or for a row from before that, as it started. */
+const optionsNow = (dir: string, runId: string, options: Readonly<Record<string, string>>) =>
+  readIntent(runDir(dir, runId)).pipe(
+    Effect.map((intent) => withOutcome(options, intent)),
+    Effect.orElseSucceed(() => options),
+  );
+
 const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
   Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
     cwd: options.workspace?.startsWith("/") ? options.workspace : row.project,
@@ -5662,6 +5706,25 @@ const makeRegistry: (
   });
 
   /**
+   * The branch the Runs of this plan Run's lineage were placed on, and null where none was
+   * or its merge request has merged or closed, so its work there is done.
+   */
+  const plannedOn = Effect.fn("Engine.plannedOn")(function* (planRun: string, runId: string) {
+    const states = yield* readMrStates(dir).pipe(Effect.orElseSucceed(() => new Map()));
+    let branch: string | null = null;
+    for (const row of yield* store.runs) {
+      const on = row.run === runId || unplaced(row) ? null : placedOf(row, {}).branch;
+      if (on === null || (branch !== null && on !== branch)) continue;
+      if (!(yield* lineageIn(store)(row.run)).includes(planRun)) continue;
+      branch = on;
+      const mr = yield* mergeRequestOf(fs, dir, row.run);
+      const state = mr === null ? undefined : states.get(mrLabel(mr));
+      if (state !== undefined && state !== "open") return null;
+    }
+    return branch;
+  });
+
+  /**
    * Where a Run will work, settled before it exists. A workflow that declares a checkout is
    * cut one from the checkout it starts from, and one that cannot be is refused here, while
    * there is nothing to clean up. A fresh Task's workspace is opened now, on that checkout,
@@ -5716,6 +5779,10 @@ const makeRegistry: (
           ? yield* reviewedTarget(inputs[source] ?? "")
           : null;
       if (reviewed !== null) inputs[REVIEWED] = reviewed;
+      const planRun = planRunOf(
+        workSourceOf({ inputs, strategies: generation.hints })?.value ?? "",
+      );
+      const taskBranch = planRun === null ? null : yield* plannedOn(planRun, ask.runId);
       if (
         generation.checkout === "branch" &&
         (yield* repositoryName(runShell, from).pipe(Effect.mapError(failed))) === null
@@ -5738,6 +5805,7 @@ const makeRegistry: (
         sources: ask.provenance,
         openLabel: ask.taskLabel ?? null,
         explicit: ask.options.branch ?? null,
+        taskBranch,
         branchBase: ask.branchBase,
         login: placing.env.gitlabLogin,
         githubLogin: placing.env.githubLogin,
@@ -6367,6 +6435,8 @@ const makeRegistry: (
       ),
       options: yield* decodeStrings(row.options ?? "{}").pipe(
         Effect.orElseSucceed((): Record<string, string> => ({})),
+        Effect.flatMap((options) => optionsNow(dir, row.run, options)),
+        Effect.provideContext(bun),
       ),
     };
     const { cwd, branch, workspace, worktree } = placedOf(row, admitted.options);
@@ -6763,6 +6833,8 @@ const makeRegistry: (
     const generation = yield* resolve({ project: row.project, id: row.workflow });
     const options = yield* decodeStrings(row.options ?? "{}").pipe(
       Effect.orElseSucceed((): Record<string, string> => ({})),
+      Effect.flatMap((admitted) => optionsNow(dir, runId, admitted)),
+      Effect.provideContext(bun),
     );
     const found = yield* routed(runId);
     const state = pollStatus(

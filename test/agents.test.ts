@@ -695,6 +695,26 @@ test("a reused agent that is gone before it was given its work is started again"
     }),
   ));
 
+test("a reused agent herdr still lists but no longer runs is started again in place of its pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.addAgent(agentFor("r1"), "1-9");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "started again" }]);
+      const herdr = new FakeHerdr(
+        rig.pluginEnv({
+          FAKE_HERDR_PROMPT_ERROR: "agent_not_ready",
+          FAKE_HERDR_PROMPT_ERROR_TIMES: "1",
+          FAKE_HERDR_PROMPT_ERROR_MESSAGE: `agent ${agentFor("r1")} is not an active named agent`,
+          FAKE_HERDR_NAME_TAKEN: "1",
+        }),
+      );
+      const result = yield* session(started("r1"), { herdr });
+      expect(result._tag === "Success" && result.success.note).toBe("started again");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+    }),
+  ));
+
 const cardsOf = (runId: string) =>
   readCards(runDir(dir, runId)).pipe(
     Effect.orDie,
@@ -922,6 +942,66 @@ test(
         expect(result._tag === "Success" && result.success.note).toBe("revived");
         expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
         expect(yield* starts).toBe(2);
+      }),
+    ),
+  120_000,
+);
+
+/** herdr still listing an agent whose process has gone, once `dead`, until one is started. */
+class ListsItDead extends FakeHerdr {
+  dead = false;
+  override agentStatus(target: string) {
+    return this.dead
+      ? Effect.fail(
+          new HerdrError({
+            message: "herdr agent get",
+            detail: `agent ${target} is not an active named agent`,
+            code: "agent_not_ready",
+            answered: true,
+          }),
+        )
+      : super.agentStatus(target);
+  }
+  override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
+    this.dead = false;
+    return super.agentStart(...args);
+  }
+}
+
+test(
+  "an agent herdr still lists but no longer runs while it is collected is started again with its work",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([null]);
+        const herdr = new ListsItDead(rig.pluginEnv({ FAKE_HERDR_NAME_TAKEN: "1" }));
+        const starts = rig.cmds().pipe(
+          Effect.orDie,
+          Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start").length),
+        );
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* pastTheBudget;
+            yield* until(
+              steps("r1").pipe(
+                Effect.provideService(Path.Path, yield* Path.Path),
+                Effect.map(
+                  (found) =>
+                    found.length > 0 && found.every((one) => one.delivery.state === "acknowledged"),
+                ),
+              ),
+            );
+            herdr.dead = true;
+            yield* until(starts.pipe(Effect.map((count) => count === 2)));
+            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
+            return yield* Fiber.join(fiber);
+          }),
+          { herdr, collectMs: 400 },
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("revived");
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
       }),
     ),
   120_000,
@@ -1724,6 +1804,27 @@ test("the agent is started on the operator's harness, model and permissions, wit
       expect(permissionModeOf(args)).toBe("auto");
       const persona = args[args.indexOf("--append-system-prompt-file") + 1] ?? "";
       expect(yield* read(persona)).toContain("You are the reviewer.");
+    }),
+  ));
+
+test("a Claude agent is given its Run's directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const args = launchArgs(yield* rig.calls());
+      expect(args).toContain("--add-dir");
+      expect(args[args.indexOf("--add-dir") + 1]).toBe(runDir(dir, "r1"));
+    }),
+  ));
+
+test("a Codex agent is given no directory to add", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { ...claudeOut, fallbacks: Effect.succeed(["codex"]) });
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+      expect(launchArgs(yield* rig.calls())).not.toContain("--add-dir");
     }),
   ));
 
@@ -2794,35 +2895,53 @@ test("an agent blocked during startup is waited for, not taken for a failed star
     }),
   ));
 
-test("a start herdr refused says what herdr said", () =>
+/** The run has parked or failed: either way its step has let go of the work. */
+const settled = (runId: string): Reached =>
+  Effect.gen(function* () {
+    const engine = yield* WorkflowEngine.WorkflowEngine;
+    const id = yield* work.executionId({ runId, input: { skip: false } });
+    const { status } = pollStatus(yield* engine.poll(work, id), "agent-work");
+    return status === "suspended" || status === "failed";
+  });
+
+const parkedOn = (failing: string) =>
+  Effect.gen(function* () {
+    yield* interrupted("r1", settled("r1"), {
+      herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL: failing })),
+    });
+    expect(yield* statusNow("r1")).toBe("suspended");
+    return yield* read(controlPath(dir, PARKED, "r1"));
+  });
+
+test("a start herdr refused parks, saying what herdr said", () =>
   runEffect(
     Effect.gen(function* () {
-      const result = yield* session(started("r1"), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent start":"claude exited: no API key"}` }),
-        ),
-      });
-      expect(result._tag).toBe("Failure");
-      expect(result._tag === "Failure" ? result.failure.reason : "").toContain(
-        "claude exited: no API key",
-      );
+      const why = yield* parkedOn(`{"agent start":"claude exited: no API key"}`);
+      expect(why).toContain("claude exited: no API key");
+      expect(why).toContain(promptPath("r1"));
     }),
   ));
 
-test("a herdr that cannot say what it has blocks the work rather than starting an agent", () =>
+test("a herdr that cannot say what it has parks the work rather than starting an agent", () =>
   runEffect(
     Effect.gen(function* () {
-      const result = yield* session(started("r1"), {
-        herdr: new FakeHerdr(
-          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent list":"herdr is not answering"}` }),
-        ),
-      });
-      expect(result._tag).toBe("Failure");
-      const reason = result._tag === "Failure" ? result.failure.reason : "";
-      expect(reason).toContain("herdr cannot say which agents it has");
+      const why = yield* parkedOn(`{"agent list":"herdr is not answering"}`);
+      expect(why).toContain("herdr cannot say which agents it has");
+      expect(why).toContain("herdr is not answering");
       // What uncertainty must never be rounded down to.
-      expect(reason).toContain("Nothing here says the agent did no work.");
+      expect(why).toContain("Nothing here says the agent did no work.");
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(0);
+    }),
+  ));
+
+test("a step whose work was never sent parks, naming the file its work is in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const why = yield* parkedOn(`{"agent prompt":"herdr lost the connection"}`);
+      expect(why).toContain("was not given its work");
+      expect(why).toContain("herdr lost the connection");
+      expect(why).toContain(promptPath("r1"));
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
     }),
   ));
 
@@ -3038,6 +3157,30 @@ test("a Run built from another Run's plan has that Run in its lineage, however i
       const host = yield* Host;
       expect((yield* host.place("run-c")).lineage).toEqual(["run-c", "run-i", "run-p"]);
       expect((yield* host.place("run-o")).lineage).toEqual(["run-o"]);
+    }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
+  ));
+
+test("a placed Run has a handoffs directory before any agent of it is launched", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit({
+        request: "req-run-h",
+        run: "run-h",
+        workflow: "w",
+        project: dir,
+        input: {},
+        provenance: {},
+        options: {},
+        generation: "g",
+        execution: "exec-run-h",
+        task: null,
+        parent: null,
+      });
+      const place = yield* (yield* Host).place("run-h");
+      const info = yield* (yield* FileSystem.FileSystem).stat(`${place.dir}/handoffs`);
+      expect(info.type).toBe("Directory");
+      expect(yield* rig.calls()).toEqual([]);
     }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie),
   ));
 

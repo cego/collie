@@ -3,11 +3,15 @@ import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import { frontDoor, socketOf } from "../src/host";
 import { readLaunches } from "../src/launches";
 import { everyRegistered } from "../src/registry";
+import { deliveriesOf } from "../src/steering";
 import { collie, proves } from "./support/world";
 import { until } from "./support/host";
 
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const runIdOf = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }));
+const herdrCall = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) })),
+);
 
 // A launch is recorded before its prompt is written, so the prompt is what is waited on.
 const promptOf = (state: string, runId: string, operation: string) =>
@@ -223,6 +227,54 @@ test(
             (yield* collie(world, ["run", "withdraw-note", runId, after.notes![0]!.id])).envelope
               .ok,
           ).toBe(false);
+        }),
+      ["step-ahead.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a steer sent while a just-launched agent's step is still going out reaches it after the step",
+  () =>
+    proves(
+      "collie-step-steer-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const outputs = `${world.home}/outputs.json`;
+          yield* fs.writeFileString(outputs, encode([null, null]));
+          // herdr refuses the step's first prompt as a busy pane, so it is retried later.
+          const start = yield* collie(
+            world,
+            ["run", "start", "step-ahead", "--input", "goal=steer"],
+            {
+              FAKE_HERDR_OUTPUTS: outputs,
+              FAKE_HERDR_PROMPT_ERROR: "agent_blocked",
+              FAKE_HERDR_PROMPT_ERROR_TIMES: "1",
+            },
+          );
+          const { runId } = runIdOf(start.envelope.data);
+          yield* until(
+            () => deliveriesOf(world.state, runId),
+            (all) => all.some((one) => one.delivery.state === "deferred"),
+          );
+          const told = yield* collie(world, ["run", "steer", runId, "Check the race first."]);
+          expect(told.envelope).toMatchObject({ ok: true });
+
+          const prompts = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!))
+            .trim()
+            .split("\n")
+            .map((line) => herdrCall(line))
+            .filter((call) => call.cmd === "agent prompt")
+            .map((call) => (call.argv[3]?.includes("Check the race first.") ? "steer" : "step"));
+          // The first step prompt is the one refused.
+          expect(prompts).toEqual(["step", "step", "steer"]);
+          const first = (yield* readLaunches(world.state, runId))[0]!;
+          yield* fs.writeFileString(first.output, encode("done"));
+          yield* until(
+            () => readLaunches(world.state, runId),
+            (rows) => rows.some((one) => one.operation === "b"),
+          );
         }),
       ["step-ahead.workflow.ts"],
     ),

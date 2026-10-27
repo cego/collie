@@ -51,6 +51,7 @@ import {
   REQUESTABLE,
   checkGaps,
   evidenceGaps,
+  reviewGaps,
   isOutcome,
   refInside,
   type Outcome,
@@ -203,6 +204,7 @@ export { renderApproved } from "./verify-spec";
 export {
   baseFailuresOf,
   baselinesOwed,
+  evidenceRoots,
   flakesOf,
   isOutcome,
   recheckOwed,
@@ -374,6 +376,11 @@ export function evidenceGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
  */
 export function checkGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
   return checkGaps(options.kind, collectedOf(options));
+}
+
+/** The gaps among those a fresh review could close: what is worth paying a reviewer for. */
+export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+  return reviewGaps(options.kind, collectedOf(options));
 }
 
 export interface EvidenceAsk {
@@ -1306,7 +1313,8 @@ export const step = (declared: StepDeclaration): Step => {
         name: `step.${key}.enter`,
         execute: host.step(runId, { kind: "enter", key, step: meta, place }),
       });
-      if (yield* host.held(runId)) return yield* Workflow.suspend(yield* WorkflowInstance);
+      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId)))
+        return yield* Workflow.suspend(yield* WorkflowInstance);
       const done = yield* Effect.provideService(work, CurrentStep, {
         step: meta.id,
         place,

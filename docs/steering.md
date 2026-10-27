@@ -160,6 +160,12 @@ is alive and its prompt is written, so `run show` says so and `collie run resume
 prompt to that agent. A human's steer is sent once and told the refusal, since they are
 waiting on the answer.
 
+A step's prompt or repair also waits out another sender holding the agent's ledger — a
+transaction already open on it in the host, or its lock held by another process — on the
+same backoff, and parks once that has lasted ten minutes. A steer to an agent whose step
+is still being launched or given waits until that step's prompt has gone out, so the work
+reaches the agent first.
+
 ## Who a steer reaches, and what it says came of it
 
 A steer, a review comment, chat's `deliver` and a correction that name no agent reach the
@@ -311,7 +317,10 @@ next starts, and a judgement before each piece of work and at the finish. What t
 [finishes](#finishing) the same way whatever its workflow, and related Runs are
 [checked against each other](#cross-run-checks). Before each check in a Run on a worktree of
 its own, the constraints in its `plan/SPEC.md` are brought into its Intent, and one anyone
-else removed stays removed ([ADR-0036](adr/0036-a-runs-own-plan-bounds-it.md)). Two kinds, kept apart on purpose.
+else removed stays removed ([ADR-0036](adr/0036-a-runs-own-plan-bounds-it.md)). A Run started
+from a plan takes its goal from the spec: the first paragraph under `## Objective`, else under
+`## Solution`, the heading to-spec writes. The goal is context for the judgement; it grants
+nothing and is not a constraint. Two kinds, kept apart on purpose.
 
 A **rule** constraint is a fact Collie can establish by itself: which files changed,
 which branch it is on, what a step's Output field says, what a named verification exited
@@ -321,13 +330,17 @@ boundary, and at `finish` — a fact that costs nothing to check should never be
 A **semantic** constraint is a judgement, so it costs money and can be wrong. It is made
 at boundaries and at `finish` only, and against **bounded actual evidence**: the real
 unified diff of the files the constraint names, capped at 200 lines per file and 20 files,
-with the truncation recorded on the report. A summary of a change would be a second thing
+with the truncation recorded on the report, and the Run's Outputs under the same caps and
+redaction the [cross-run check](#cross-run-checks) uses. Evidence past the cap is not judged
+at a boundary, since each call would judge the same cut-off part: the Run log says `not judged
+at <where>: evidence past the cap; judged at the finish`, nothing is recorded as skipped, and
+the finish judges it once. A summary of a change would be a second thing
 to be wrong about. Files whose _names_ look like credentials — `.env`, `*.pem`, anything
 with `token` or `secret` in it — are listed by name with `<redacted>` rather than quoted.
 The judgement is told that a constraint read from the plan narrows the goal it was cut
 from: the goal is what was asked, never evidence of drift. A report is filed only when it
-cites a file whose diff the judgement was shown, and it keeps that file as the diff named
-it; one citing only the goal, plan text, a commit or a file it was not shown is dropped
+cites a file whose diff or an Output the judgement was shown, and it keeps that file as the
+diff named it; one citing only the goal, plan text, a commit or a file it was not shown is dropped
 ([ADR-0036](adr/0036-a-runs-own-plan-bounds-it.md), amended 2026-10-19).
 
 The evidence is the change since the Run left the default branch, committed or not:
@@ -345,13 +358,15 @@ The rule that keeps this honest: **nothing passes on an absence**. A verificatio
 ran is a breach, not a pass. A judgement Collie could not make — no evaluator, a call that
 timed out or answered outside its schema — is recorded as `skipped` with the reason, so a
 card can say why it says nothing rather than reading as clean. So is a judgement with no
-change to judge: where the diff it would read holds no file, a report could cite nothing,
-so no call is made and the reason is `no change to judge`. A card names each reason
+change to judge: where the diff it would read holds no file and the Run has no Output, a
+report could cite nothing, so no call is made and the reason is `no change to judge`. A card names each reason
 once, however many boundaries it was skipped at, and a judgement that is made later answers
 the judgements skipped before it; one that fails afterwards takes nothing back. A skipped rule check is not answered by a judgement. A `claude --help` that
 fails or prints nothing is such a reason, said with its exit code and stderr, never read as
 a CLI missing every flag, and a `git diff` that fails is a reason too, never an empty
-change: a judgement is skipped in git's words, and a rule check is recorded as skipped and
+change: a judgement is skipped in git's words. The one exception is a Run with no checkout at
+all, such as a plan in a plain directory: its diff is empty and it is judged on its Outputs,
+or, with none, skipped in git's words. A rule check git fails is recorded as skipped and
 clears no open report: a tree git could not read is not one the work came back from. What
 every call cost is written to the Herd's `budget.jsonl` as usage; no count of them is ever
 a reason to skip the next.
@@ -490,14 +505,18 @@ tells the winner its snapshot is behind — it judges again, a bounded number of
 
 The judge is told, as a Run's own judgement is, that plan constraints narrow the goal, and
 is given each Run's work beside its constraints, as data to judge: the diff from where
-the commit of its newest card left the default branch, read in the judging Run's
-checkout, and its Outputs (`<operation>.json` in its agents directory, never the
+the commit of its newest card left the default branch, read in that Run's own checkout
+(its worktree, else the checkout it was placed in), so a Run of another repository shows
+its own work, and its Outputs (`<operation>.json` in its agents directory, never the
 `.launch.json`, `.mcp.json` or `.settings.json` beside them), under the caps and redaction
 above — an Output whose name looks like a credential is named with `<redacted>` — and marked `TRUNCATED` where any of it was cut. Where a Run's work cannot be read
 the pack says why and the judgement goes on with what it can read: `work: none yet (no
-card)`, `diff: could not be read: <git's first line>` for a commit this checkout does not
+card)`, `diff: could not be read: <git's first line>` for a commit its checkout does not
 have, or `diff: no committed change yet`; its Outputs are shown either way, and the log line
-of the judgement names each Run whose diff it could not show.
+of the judgement names each Run whose diff it could not show. Where no Run has a file of
+its diff or an Output to show, the model is not asked: the log says `cross-run judgement
+not asked at <when>: no related Run's work can be shown`, and nothing is written down as
+owed.
 
 A report is kept only when it names a Run in the pack, one of that Run's own constraints,
 and cites that Run's work as the pack showed it: a file of its diff or one of its Outputs.
