@@ -1225,7 +1225,6 @@ test(
   120_000,
 );
 
-/** HEAD of the checkout at `at`. */
 const headOf = (at: string) =>
   exec(["git", "rev-parse", "HEAD"], { cwd: at }).pipe(Effect.map((done) => done.stdout.trim()));
 
@@ -1238,7 +1237,6 @@ const logOf = (runId: string) =>
 const committing = (cwd: string, ...args: string[]) =>
   exec(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd });
 
-/** The project pushed to an `origin` of its own, as a repository Collie works on has. */
 const withOrigin = Effect.gen(function* () {
   const origin = `${rig.root}/origin.git`;
   yield* committing(rig.root, "init", "--quiet", "--bare", "-b", "master", origin);
