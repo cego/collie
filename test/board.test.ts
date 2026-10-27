@@ -565,7 +565,7 @@ test("a Task's Runs are one card, and a Run with no Task is its own", () =>
     }),
   ));
 
-test("a finished Run that left nothing to file says what it reported, as its own claim", () =>
+test("a Run that ended by itself with a report states its status, then quotes the report as its own", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
@@ -574,12 +574,13 @@ test("a finished Run that left nothing to file says what it reported, as its own
         workflow: "odd-job",
         task: "task-1",
         state: "succeeded",
-        summary: "Upgraded vm-mk's install to 0.45.1.",
+        summary: "two blockers remain",
       });
 
       const [view] = yield* board(env, [chore]);
 
-      expect(view!.sentence).toBe("Finished; it says: “Upgraded vm-mk's install to 0.45.1.”");
+      expect(view!.sentence).toBe("Completed. It reported: “two blockers remain”");
+      expect(view!.sentence).not.toStartWith("Finished;");
     }),
   ));
 

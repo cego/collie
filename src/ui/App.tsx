@@ -119,6 +119,8 @@ export function App(props: AppProps) {
       id,
       on: view === null ? null : { task: view.id, run: view.run, name: view.name },
     });
+    // Opening a record is seeing it.
+    if (view?.unseen === true) props.dispatch({ _tag: "Acknowledge", runId: view.run });
   });
 
   // A new record opens on Summary with the keyboard back on the board: which tab the last

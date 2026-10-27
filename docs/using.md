@@ -713,6 +713,12 @@ counts the week's endings while the fold counts the rest. **Finished** is work t
 land, such as a review, or it ended with nothing to file — as one line, `3 finished today,
 1 failed`, until you click it open; anything older than a day is behind `older…`, which
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
+An **Unseen** card — a Run that ended by itself with a report and nothing to land, which
+nobody has opened since — is drawn above that line, marked `● unseen`, and still counted in
+it. Its sentence states how the Run ended and then quotes the report as the Run's own:
+`Completed. It reported: “two blockers remain”`. Opening its record, or its **Acknowledge**
+button, records it seen once for the whole Flock, on every board and Desktop, and it goes back
+behind the line.
 
 Collie learns a merge by itself, whether or not a pane is open: the host asks the merge
 request's own forge, through that forge's adapter — GitLab with `glab`, GitHub with `gh` —
@@ -1093,7 +1099,9 @@ Machine it reaches — on one board. It lives in `desktop/` and is one more fron
 the same board: it reads each host's stream and builds nothing of its own. The sections and
 the header sentence are counted across the Flock. Once there is more than one Machine, each
 card names its Machine, and its Herd too when that Machine runs more than one herdr
-session.
+session. An Unseen card is drawn above the collapsed Finished list with an **Unseen** badge
+and an **Acknowledge** button; opening its record or pressing Acknowledge tells its Machine it
+was seen, which clears it on every Desktop and board.
 
 Each card's **Flow** strip sits under its sentence: the leading Run's Steps, a gap,
 then the release. The glyphs show their states and the label names the current Step.

@@ -1189,6 +1189,8 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
         label: `Mark ${action.disposition}`,
         command: { _tag: "RecordDisposition", runId, kind: action.disposition, ref: action.ref },
       };
+    case "acknowledge":
+      return { key: "", label: "Acknowledge", command: { _tag: "Acknowledge", runId } };
   }
 }
 

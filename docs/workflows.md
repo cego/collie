@@ -807,7 +807,7 @@ Where it changed code and nothing names the run's checks, it names them with
 root — and Collie runs the named checks there when the run ends.
 
 **Ends:** when the agent writes its Output. Its `summary` is the run's result and what the
-card says, as `Finished; it says: “…”` — a claim, shown as one. A `blocked` reason fails the run with that reason. There
+card says, as `Completed. It reported: “…”` — its status, then its claim, shown as one. A `blocked` reason fails the run with that reason. There
 is no menu, and the agent takes steering after the run has ended.
 
 Its Flow forecasts one Step, Task, containing the generalist's work.

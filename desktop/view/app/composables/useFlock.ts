@@ -4,6 +4,7 @@
 import { AsyncResult, Atom, useAtomValue } from "@effect/atom-vue";
 import { Clock, Schedule, Stream } from "effect";
 import {
+  foldFinished,
   foldWaiting,
   headerSentence,
   type Section,
@@ -67,6 +68,10 @@ export const useFlock = () => {
         }) satisfies Record<Section, ReadonlyArray<PlacedTask>>,
     ),
     header: computed(() => headerSentence(tasks.value, now.value)),
+    finished: computed(() => {
+      const { unseen, seen } = foldFinished(sections.value.finished);
+      return { unseen: placed(unseen), seen: placed(seen) };
+    }),
     waiting: computed(() => {
       const { recent, older } = foldWaiting(sections.value.waiting, now.value);
       return { recent: placed(recent), older: placed(older) };

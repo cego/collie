@@ -412,7 +412,7 @@ function doneSentence(
     if (mr === null)
       return summary === null || summary.trim() === ""
         ? "Finished; nothing merged yet."
-        : `Finished; it says: “${summary.trim().replace(/\s+/g, " ")}”`;
+        : `Completed. It reported: “${summary.trim().replace(/\s+/g, " ")}”`;
     if (mrState === "closed") {
       const ref = readMrRef(mr);
       const noun = ref === null ? "merge request" : mrWords(ref).noun;

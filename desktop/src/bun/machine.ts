@@ -1187,6 +1187,8 @@ export const act = (
         return door
           .dispose({ runId: action.runId, kind: action.kind, ref: action.ref, note: null, request })
           .pipe(Effect.as(`Marked ${action.kind}`));
+      case "Seen":
+        return door.seen({ runId: action.runId, request }).pipe(Effect.as("Seen"));
       case "Steer":
         return door
           .steerAbout({

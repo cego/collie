@@ -2036,7 +2036,8 @@ export type CardAction =
   | { readonly kind: "follow-up" }
   | { readonly kind: "hold"; readonly set: boolean }
   | { readonly kind: "stop" }
-  | { readonly kind: "dispose"; readonly disposition: DispositionKind; readonly ref: string };
+  | { readonly kind: "dispose"; readonly disposition: DispositionKind; readonly ref: string }
+  | { readonly kind: "acknowledge" };
 
 /** `collie!151` or `collie#30` rather than the whole URL: a disposition's ref ends up in the card's sentence. */
 const dispose = (view: TaskView, disposition: DispositionKind): CardAction => {
@@ -2081,12 +2082,14 @@ export function cardActions(view: TaskView): CardAction[] {
 
 /**
  * The one action that ends a card's wait, drawn first on it. Working cards go to their
- * tab; waiting cards get the action that lands or retires the work; a finished or
- * decision card has none — its buttons are the decision's own, or the menu's.
+ * tab; waiting cards get the action that lands or retires the work; an unseen report gets
+ * Acknowledge; any other finished or decision card has none — its buttons are the
+ * decision's own, or the menu's.
  */
 export function primaryAction(view: TaskView): CardAction | null {
   if (view.decision !== null) return null;
   if (view.state === "active" || view.state === "quiet") return { kind: "go-to-tab" };
+  if (view.unseen === true) return { kind: "acknowledge" };
   if (view.landed) return null;
   // Whatever the plan's module offers first, under its own title; none, no button.
   if (view.planReady) return view.offer === null ? null : { kind: "offer", offer: view.offer };
@@ -2166,6 +2169,14 @@ export interface Sections {
 export function foldWaiting(waiting: ReadonlyArray<TaskView>, now: number) {
   const old = (view: TaskView) => !view.ready && (view.ended ?? view.at) < now - WAIT_FOLD_MS;
   return { recent: waiting.filter((view) => !old(view)), older: waiting.filter(old) };
+}
+
+/** Finished, split by whether a report in it is still unseen: those are drawn outside the collapsed list. */
+export function foldFinished(finished: ReadonlyArray<TaskView>) {
+  return {
+    unseen: finished.filter((view) => view.unseen === true),
+    seen: finished.filter((view) => view.unseen !== true),
+  };
 }
 
 /** What a search is matched against: what a human remembers about a Task, and no ids. */

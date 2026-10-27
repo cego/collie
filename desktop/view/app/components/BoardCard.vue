@@ -12,7 +12,7 @@ import {
 } from "../../../../src/board-model";
 import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
-import type { Gesture } from "../../../src/shared/board-clicks";
+import { type Gesture, seenBy } from "../../../src/shared/board-clicks";
 import { cardQuestion, openQuestions } from "../../../src/shared/pending-answer";
 import { cardFlow } from "../../../src/shared/flow-strip";
 
@@ -162,6 +162,13 @@ const doing = (action: CardAction, primary: boolean) => {
         label: `Mark ${action.disposition}`,
         press: () => act({ _tag: "Dispose", runId, kind: action.disposition, ref: action.ref }),
       };
+    case "acknowledge":
+      return {
+        label: "Acknowledge",
+        press: () => {
+          for (const seen of seenBy(props)) act(seen.action);
+        },
+      };
   }
 };
 
@@ -205,6 +212,9 @@ const menu = computed(() =>
             {{ task.name }}
           </button>
           <div class="flex shrink-0 items-center gap-1">
+            <UBadge v-if="task.unseen" color="info" variant="soft" data-testid="unseen">
+              Unseen
+            </UBadge>
             <UBadge :color="state.color" variant="subtle" data-testid="state">
               {{ state.label }}
             </UBadge>
