@@ -9190,7 +9190,6 @@ for (const [state, jobs] of [
     120_000,
   );
 
-/** The Run left its checkout step, and assess was the next it entered. */
 const checkedOutThenAssessed = (runId: string) =>
   Effect.gen(function* () {
     const lines = yield* readStepLines(runDir(dir, runId));
@@ -12076,6 +12075,37 @@ for (const name of ["gitlab", "github"] as const) {
             ["Roll stage back", "done"],
           ]);
           yield* checkedOutThenAssessed(runId);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: a path held at the merge request's branch is passed over, and the Run's log says whose it is`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { bin, forge, model } = yield* stageOn();
+          yield* exec(["git", "worktree", "remove", "--force", `${rig.root}/reviewed`], {
+            cwd: rig.projectDir,
+          });
+          const held = `${rig.root}/.herdr/worktrees/project/feature`;
+          yield* fs.makeDirectory(held, { recursive: true });
+          yield* fs.writeFileString(`${held}/notes.txt`, "mine\n");
+          yield* forge.set({
+            ...model,
+            mrs: model.mrs.map((one) => ({ ...one, state: "closed" })),
+          });
+          const runId = `r-stage-held-${name}`;
+
+          yield* ran(options(runId));
+          yield* bin.restore();
+
+          expect(yield* runLog(runId)).toContain(
+            `passing over ${held} is a checkout that does not say which repository it belongs to`,
+          );
+          expect(yield* fs.readFileString(`${held}/notes.txt`)).toBe("mine\n");
         }),
       ),
     120_000,

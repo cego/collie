@@ -3237,6 +3237,8 @@ export const hostLayer = (options: {
           }
           const checkout = made.success;
           if (checkout.refused !== null) return { refused: checkout.refused };
+          if (checkout.note !== "")
+            yield* appendLog(runDir(dir, runId), checkout.note).pipe(Effect.orDie);
           yield* store.place(runId, {
             checkout: encodePlaced({
               ...placed,
@@ -5864,6 +5866,8 @@ const makeRegistry: (
           reason: `"${generation.id}" could not be given a checkout: ${checkout.refused}`,
         });
       }
+      if (checkout.note !== "")
+        yield* appendLog(runDir(dir, ask.runId), checkout.note).pipe(Effect.orDie);
       const own = checkout.worktree?.managed_by === "herdr" ? checkout.workspaceId : null;
       opened = own === null ? null : { id: own, label: checkout.workspaceLabel };
       placed = {
