@@ -1654,6 +1654,14 @@ its time.
 - **A test can go red.** Break `src/` the way its name says and watch it fail before relying
   on it. A test that cannot fail, or whose every failure another test already has, is
   deleted.
+- **A run is one baseline scenario.** Each scenario runs in one of `SHARES` shares, a hash
+  of its name, and each share is two files: `baseline-NN` as shipped and
+  `baseline-unrelated-NN` under unrelated ids. Handing all of them to a serial
+  `bun test -t` took 8–11 minutes for one scenario (#233). `bun run scenario "<pattern>"`
+  (`tools/scenario.ts`) matches the pattern as `-t` does, against each pass's full test
+  names, and runs only the files holding a match through `bun run test`, with
+  `--parallel=<files>`. A pattern matching no scenario runs nothing and exits non-zero. For
+  more than a few other files, run `bun test --parallel=N <files>`.
 - **A test is flaky.** Measure it with `bun test --rerun-each N <file>`, narrowed with
   `-t "<name>"`, run through `collie verify` under the Machine's own load. Each run of the
   file gets a fresh root, `TMPDIR`, `HOME` and marker from the preload, and is checked and

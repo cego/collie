@@ -160,7 +160,10 @@ binary still starts.
 While you iterate, run what covers what you touched, each through `collie verify`:
 
 - `bun run typecheck`;
-- `bun test <files>`, which runs the sources and takes no suite lock;
+- `bun test <files>`, which runs the sources and takes no suite lock, and
+  `bun test --parallel=N <files>` for more than a few;
+- `bun run scenario "<pattern>"` for baseline scenarios: it runs only the shard files whose
+  scenarios match, in parallel, never all of them;
 - never the whole suite (`bun run test`, `bun run check`): that is the gate's, which runs
   the Run's Checks on the final tree. Given one of the Run's Checks, `collie verify` runs
   nothing: it answers with that Check's latest record on the tree, or refuses with
