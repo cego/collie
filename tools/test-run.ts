@@ -98,15 +98,46 @@ export const timingFlags = (targeted: boolean, timings: string, seed: string) =>
     ? Effect.map(exists(timings), (there) => [`--timings=${there ? timings : seed}`])
     : Effect.succeed([`--timings=${timings}`, "--update-timings"]);
 
-export const startsSummary = (starts: string) => {
-  const lines = starts.split("\n").filter((line) => line !== "");
+const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
   const counts = new Map<string, number>();
   for (const line of lines) counts.set(line, (counts.get(line) ?? 0) + 1);
-  const largest = [...counts]
+  return [...counts]
     .toSorted(([a, x], [b, y]) => y - x || a.localeCompare(b))
-    .slice(0, 10)
-    .map(([source, count]) => `${String(count).padStart(7)}  ${source}`);
-  return [`test: ${lines.length} processes started`, ...largest];
+    .slice(0, top)
+    .map(([line, count]) => ({
+      line,
+      text: `${" ".repeat(indent)}${String(count).padStart(7)}  ${line}`,
+    }));
+};
+
+export const startsSummary = (starts: string) => {
+  const lines = starts
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line): [string, string?] => {
+      const [source = "", file] = line.split("\t");
+      return [source, file];
+    });
+  const byFile = Map.groupBy(lines, ([, file]) => file);
+  const files = ranked(
+    lines.flatMap(([, file]) => file ?? []),
+    10,
+  ).flatMap(({ line, text }) => [
+    text,
+    ...ranked(
+      byFile.get(line)!.map(([source]) => source),
+      3,
+      5,
+    ).map(({ text }) => text),
+  ]);
+  return [
+    `test: ${lines.length} processes started`,
+    ...ranked(
+      lines.map(([source]) => source),
+      10,
+    ).map(({ text }) => text),
+    ...(files.length === 0 ? [] : ["test: processes started by file", ...files]),
+  ];
 };
 
 export interface Pressure {

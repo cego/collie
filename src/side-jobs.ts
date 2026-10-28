@@ -8,7 +8,7 @@ import { gitlabHostOf, loadDefaults } from "./config";
 import { currentReports, readDrift } from "./drift";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
-import { liveHerds } from "./herds";
+import { SESSIONS_EVERY, liveHerds, type LiveHerd } from "./herds";
 import { homeDeps, restateHome, type HomeDeps } from "./home";
 import { landingNow } from "./landing";
 import { settleMerges, type MrPanels } from "./merges";
@@ -88,7 +88,7 @@ const disposed = Effect.fn("SideJobs.disposed")(function* (runs: ReadonlyArray<R
 /** Each Herd's News from its own Runs; a Run whose Task records no Herd is the host's own Herd's. */
 const news = Effect.fn("SideJobs.news")(function* (
   env: PluginEnv,
-  herdr: Herdr,
+  sessions: ReadonlyArray<LiveHerd>,
   runs: ReadonlyArray<RunFacts>,
   views: ReadonlyArray<TaskView>,
   done: ReadonlyMap<string, Reopened>,
@@ -99,7 +99,7 @@ const news = Effect.fn("SideJobs.news")(function* (
     (yield* listTasks(env.stateDir)).map((task) => [task.id, task.herd ?? null]),
   );
   const own = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
-  for (const { herd } of yield* liveHerds(herdr, env)) {
+  for (const { herd } of sessions) {
     if (herd === null) continue;
     const mine = runs.filter(
       (run) => ((run.task === null ? null : herdOfTask.get(run.task)) ?? own) === herd,
@@ -175,52 +175,54 @@ export const sideJobs = <E, R>(opts: {
   const workedOn = new Set<string>();
   /** Reopened Runs whose agent has since finished; the said journal keeps each to one item. */
   const finishedTold = new Map<string, Reopened>();
-  return Effect.all(
-    [
-      every(
-        MERGES_EVERY,
-        Effect.gen(function* () {
-          const { runs, views } = yield* opts.board;
-          yield* settleMerges({
-            stateDir: env.stateDir,
-            cwd: env.cwd,
-            run: shell,
-            views,
-            runs,
-            record: opts.record,
-            stop: opts.stop,
-            gitlabHost: yield* gitlabHostOf(env),
-            now: yield* Clock.currentTimeMillis,
-            checked,
-            states,
-            panels: opts.panels,
-            making: landingNow,
-          });
-        }),
-      ),
-      every(
-        LOOK_EVERY,
-        Effect.gen(function* () {
-          const { runs, views } = yield* opts.board;
-          for (const [run, done] of idleAgain(views, workedOn)) finishedTold.set(run, done);
-          yield* news(env, herdr, runs, views, finishedTold);
-          yield* keepDiffs(runs, kept);
-        }),
-      ),
-      sweepEvery(env.stateDir, opts.sweepers),
-      keepHomesTokened(
-        env.stateDir,
-        liveHerds(herdr, env).pipe(
-          Effect.map((sessions) =>
-            sessions.flatMap((session) =>
-              session.herd === null
-                ? []
-                : [{ key: session.herd, deps: homeDeps(session.herdr, () => Effect.void) }],
+  return Effect.flatMap(Effect.cachedWithTTL(liveHerds(herdr, env), SESSIONS_EVERY), (herds) =>
+    Effect.all(
+      [
+        every(
+          MERGES_EVERY,
+          Effect.gen(function* () {
+            const { runs, views } = yield* opts.board;
+            yield* settleMerges({
+              stateDir: env.stateDir,
+              cwd: env.cwd,
+              run: shell,
+              views,
+              runs,
+              record: opts.record,
+              stop: opts.stop,
+              gitlabHost: yield* gitlabHostOf(env),
+              now: yield* Clock.currentTimeMillis,
+              checked,
+              states,
+              panels: opts.panels,
+              making: landingNow,
+            });
+          }),
+        ),
+        every(
+          LOOK_EVERY,
+          Effect.gen(function* () {
+            const { runs, views } = yield* opts.board;
+            for (const [run, done] of idleAgain(views, workedOn)) finishedTold.set(run, done);
+            yield* news(env, yield* herds, runs, views, finishedTold);
+            yield* keepDiffs(runs, kept);
+          }),
+        ),
+        sweepEvery(env.stateDir, opts.sweepers),
+        keepHomesTokened(
+          env.stateDir,
+          herds.pipe(
+            Effect.map((sessions) =>
+              sessions.flatMap((session) =>
+                session.herd === null
+                  ? []
+                  : [{ key: session.herd, deps: homeDeps(session.herdr, () => Effect.void) }],
+              ),
             ),
           ),
         ),
-      ),
-    ],
-    { concurrency: "unbounded", discard: true },
+      ],
+      { concurrency: "unbounded", discard: true },
+    ),
   );
 };

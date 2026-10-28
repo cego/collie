@@ -260,4 +260,64 @@ describe("the start-of-suite sweep", () => {
         expect(orphan.signalCode).toBe("SIGKILL");
       }).pipe(Effect.scoped),
     ));
+
+  test("a process read while it execs is found once its new program has its environment", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
+        const pid = `${proc}/4242`;
+        // proc(5) fields 3 on; 51, env_end, is 0 until execve has written the environment.
+        const stat = (envEnd: string) =>
+          `4242 (sh) R 1 4242 4242 0 -1 4194304${" 0".repeat(41)} ${envEnd} 0\n`;
+        yield* fs.makeDirectory(pid);
+        yield* fs.writeFileString(`${pid}/stat`, stat("0"));
+        yield* fs.writeFileString(`${pid}/environ`, "");
+        yield* fs.writeFileString(`${pid}/cmdline`, "");
+        yield* fs.writeFileString(`${pid}/stat.next`, stat("140730872492009"));
+        yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
+        yield* fs.writeFileString(`${pid}/cmdline.next`, "sleep\x0063\0");
+        const exec = Bun.spawn([
+          "sh",
+          "-c",
+          "sleep 0.3; cd $0; mv cmdline.next cmdline; mv environ.next environ; mv stat.next stat",
+          pid,
+        ]);
+        yield* Effect.addFinalizer(() => Effect.promise(() => exec.exited));
+
+        expect(marked("/root-a", {}, proc)).toEqual([{ pid: 4242, command: "sleep 63" }]);
+      }).pipe(Effect.scoped),
+    ));
+
+  test("a process whose exec finishes between its empty environment read and its stat read is read again", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
+        const pid = `${proc}/4242`;
+        yield* fs.makeDirectory(pid);
+        yield* fs.writeFileString(`${pid}/cmdline`, "sleep\x0063\0");
+        yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
+        yield* fs.writeFileString(
+          `${pid}/stat.next`,
+          `4242 (sleep) S 1 4242 4242 0 -1 4194304${" 0".repeat(41)} 140730872492009 0\n`,
+        );
+        // FIFOs order the reads: environ reads empty, the exec finishes, then stat is read.
+        yield* exec(["mkfifo", `${pid}/environ`, `${pid}/stat`]);
+        const execs = Bun.spawn([
+          "sh",
+          "-c",
+          "cd $0; : > environ; mv environ.next environ; cat stat.next > stat",
+          pid,
+        ]);
+        yield* Effect.addFinalizer(() =>
+          Effect.promise(() => {
+            execs.kill();
+            return execs.exited;
+          }),
+        );
+
+        expect(marked("/root-a", {}, proc)).toEqual([{ pid: 4242, command: "sleep 63" }]);
+      }).pipe(Effect.scoped),
+    ));
 });

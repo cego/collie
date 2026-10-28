@@ -815,6 +815,11 @@ pinned to one exact version, rather than through `gh` or `glab`
 
 - The CI job reads a check left to CI is proved by: `job`, `baseJob`, `retryJob` and
   `runStatus`. Each sends the REST requests its CLI sent, a merge request's head included.
+  On GitHub a job's id is its Actions run and job, `<run>/<job>`, read from the check
+  run's URL. `retryJob` reruns that run's failed jobs (`rerun-failed-jobs`), and `jobLog`
+  is `gh run view <run> --log-failed`. A gate job, such as Collie's own `test`, needs the
+  jobs that ran the work: rerunning only the gate re-reads the same failed results, and its
+  own log shows none of the failing tests.
 - The merge request reads: `details`, the panel, and `forBranch` and `fromBranch`, a
   branch's merge requests. GitHub's `details` is one GraphQL query for every field `gh pr
   view --json` asked for, its check contexts paged; GitLab's reads the merge request, its
@@ -1436,8 +1441,8 @@ Tests live in `test/`, with a fake herdr and shared fixtures under `test/support
 `herdr.ts` is the only boundary, an end-to-end test drives the real engine against that
 fake.
 
-`check` runs formatting, lint, and type checking in parallel, then tests after all three
-pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
+`check` runs `check:static`, which is formatting, lint, and type checking in parallel, then
+tests after all three pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
 
 Root tests import Desktop modules and libraries, so install both sets of dependencies
@@ -1540,8 +1545,25 @@ Bun records file durations in `.scratch/test-timings.json` and uses them to sche
 files first next time. When that file is absent, the runner seeds it from the measured
 durations in `tools/test-timings.json`, so a fresh checkout starts its longest files first
 too. Refresh that seed from a successful complete run when the suite changes substantially.
-CI caches only scheduling data, never test results. Missing or stale entries cannot skip
-a test; deleting the scratch file restores the seed. Quiet-agent tests
+Missing or stale entries cannot skip a test; deleting the scratch file restores the seed.
+
+CI runs `bun run check` in two halves. The `static` job runs `bun run check:static`
+(format check, lint and typecheck), then the build, smoke and contract check. The `suite`
+job is a matrix of three shards, each running `bun run test --shard=i/3` on a runner of its
+own. Bun splits the files by their recorded durations, and no shard restores a timings
+cache: each balances on the committed seed alone, so all three split a commit's files
+alike, and every file runs in exactly one. The required `test` job needs both, runs even
+when one of them failed, and fails unless each succeeded.
+
+`bun run test --shard=2/3` reproduces shard 2 locally. It is a whole suite, so it takes the
+suite's lock and share, and agents do not run it. To split as CI did, delete
+`.scratch/test-timings.json` first, so the runner starts from the seed, and again after,
+since the run leaves only its shard's files in it.
+
+Each shard uploads the timings it updated as the artifact `test-timings-shard-<i>`. Bun
+rewrites that file with only the files it ran, so each holds its own shard's durations. To
+refresh the seed, download the three from one green run (`gh run download <run-id> -p
+'test-timings-shard-*'`) and merge their `files` into `tools/test-timings.json`. Quiet-agent tests
 use a controlled Effect clock so machine load cannot consume their nudge windows. A test
 whose work waits out timers runs under `fastForward` (`test/support/effect.ts`): a test
 clock a fiber of its own keeps moving many times faster than the wall's, from the wall's
@@ -1572,7 +1594,10 @@ its time.
   whole suite asks for all the rest, so whole suites run one at a time. A targeted run asks
   for 2, and a `--parallel=N` before any `--` asks for N. A run gets no more than its kind's
   share, and says so when it gets fewer than it asked for. On vm-mk that is 12 workers for a
-  whole suite out of 16. Where the rest would be under 2, as on two or three cores, every
+  whole suite out of 16. Each of CI's suite shards sets a budget of 6 on its 4-core runner,
+  giving it 4 workers. Two thirds of 4 cores is a budget of 2, and a budget of 4 would still keep
+  2 for targeted runs, which never run on a dedicated runner. At 4 workers the suite ran in
+  692 s, against 1,003 s at 2. More workers than cores there is unmeasured. Where the rest would be under 2, as on two or three cores, every
   run takes from the whole budget in turn. Waiters are admitted in the order they arrived.
   A wait names who it is behind once, then says every 30 s how long it has waited. The store
   is `collie-test-budget-<uid>` under the temporary directory, changed under
@@ -1612,16 +1637,28 @@ its time.
   again. `bun run test` sets `COLLIE_TEST_STARTS` to a fresh file, and the compiled
   `collie` and each call of the fake herdr and fake forge append a line naming themselves
   and what they were asked, such as `herdr agent list` or `collie host` (`src/starts.ts`);
-  a fake's line is written by the test process that answers it. The suite
-  ends with `test: <N> processes started` and the ten largest sources. The count leaves
-  out what never reaches those entry points: `collie` running as bun under `BUN_BE_BUN`,
+  a fake's line is written by the test process that answers it. Before each test the
+  preload sets `COLLIE_TEST_FILE` to the file running, every process the test starts
+  inherits it, and each line ends with a tab and that file. The suite ends with
+  `test: <N> processes started` and the ten largest sources, then the ten files that
+  started the most, each with its three largest sources. The count leaves out what never
+  reaches those entry points: `collie` running as bun under `BUN_BE_BUN`,
   real `git`, `ps` and `sleep`, the `sh` shims and stubs, and the fake `ssh` and the
   master it keeps. It first showed `herdr session list` as the largest source, at 3,970 of
   11,125: every board build read the sessions again, and a build then followed every write
   under the state directory. A host's board now reads them once a minute, as often as its
   event watch does (`SESSIONS_EVERY` in `src/herds.ts`), so a session that starts later
-  is on the board within that minute. A sweep still reads them fresh: cleanup must never
-  judge a newer session's agents gone.
+  is on the board within that minute, and News and the Homes' restating read them as
+  often. A sweep still reads them fresh: cleanup must never judge a newer session's agents
+  gone. Attributed by file, the board's builds were then most of the `agent list` and
+  `pane list` starts: a write or a Run recorded built the board again, and each build read
+  herdr's agents and panes, though neither moves an agent. A build now reads them again only
+  after herdr's own event or the board's 5 s tick (`herdrMoved` in `src/host.ts`), and a Run's
+  drawer takes the agents the board last read, rather than reading herdr itself. `run show`
+  still reads herdr, since the board can be up to a tick behind on an agent herdr has
+  dropped, and its reading becomes the board's: a drawer opened after it draws what it said.
+  The event watch opens its socket before it lists the agents it subscribes to, so a session
+  it cannot watch is not listed every 5 s for nothing.
 - **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
   needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
   and a fixed sleep is too long on an idle machine and too short on a busy one. Work that

@@ -17,12 +17,19 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { BoardMessage, PaneAt, PROTOCOL, TaskView, type BoardSnapshot } from "../src/board-model";
+import {
+  BoardMessage,
+  type Flow,
+  PaneAt,
+  PROTOCOL,
+  TaskView,
+  type BoardSnapshot,
+} from "../src/board-model";
 import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
-import { BUILD, boardWrites, drawerWrites, frontDoor, socketOf } from "../src/host";
+import { BUILD, boardWrites, connect, drawerWrites, frontDoor, socketOf } from "../src/host";
 import { handoffsIn } from "../src/handoffs";
 import { followDetail } from "../src/run-detail";
 import { foundationLayer } from "../src/engine";
@@ -191,6 +198,156 @@ test(
           expect(ageless(second?.tasks)).toEqual(ageless(first?.tasks));
         }),
       ["plain.workflow.ts"],
+    ),
+  120_000,
+);
+
+const readsOnlyOnTicks = (drawer: boolean) =>
+  proves(
+    "collie-board-reading-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* writeTask(world.state, {
+          id: "task-1",
+          workspace: "w1",
+          label: "project | Plain",
+          cwd: world.project,
+          created_at: "2026-10-01T09:00:00Z",
+        }).pipe(Effect.orDie);
+        const started = yield* collie(world, [
+          "run",
+          "start",
+          "plain",
+          "--task",
+          "task-1",
+          "--input",
+          "note=hi",
+        ]);
+        const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+          started.envelope.data,
+        );
+        expect((yield* collie(world, ["run", "wait", runId])).envelope.ok).toBe(true);
+        yield* until(
+          () => firstSnapshot(world.state),
+          (snapshot) => snapshot?.tasks[0]?.state === "done",
+        );
+        const record = (yield* readTask(world.state, "task-1").pipe(Effect.orDie))!;
+        const door = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
+        if (drawer) {
+          const opened = yield* Deferred.make<void>();
+          yield* door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+            Stream.tap(() => Deferred.succeed(opened, undefined)),
+            Stream.runDrain,
+            Effect.ignore,
+            Effect.forkScoped,
+          );
+          yield* Deferred.await(opened);
+        }
+        const log = `${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl`;
+        const lists = Effect.map(
+          Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)),
+          (text) =>
+            text.split("\n").filter((line) => /"cmd":"(agent|pane) list"/.test(line)).length,
+        ).pipe(Effect.orDie);
+        const before = yield* lists;
+        const since = yield* Clock.currentTimeMillis;
+        for (const name of ["One", "Two", "Three", "Four", "Five", "Six"]) {
+          const shown = yield* door.board().pipe(
+            Stream.filter((message) =>
+              message._tag === "Snapshot"
+                ? message.tasks.some((one) => one.name === name)
+                : message._tag === "Upsert" && message.task.name === name,
+            ),
+            Stream.runHead,
+            Effect.forkScoped,
+          );
+          yield* writeTask(world.state, { ...record, label: `project | ${name}` }).pipe(
+            Effect.orDie,
+          );
+          expect((yield* Fiber.join(shown).pipe(Effect.timeout("20 seconds")))._tag).toBe("Some");
+        }
+        const ticks = Math.ceil(((yield* Clock.currentTimeMillis) - since) / 5000);
+        expect((yield* lists) - before).toBeLessThanOrEqual(2 * ticks);
+        yield* stopHost(world.state);
+      }),
+    ["plain.workflow.ts"],
+  );
+
+test(
+  "a write under the state directory rebuilds the board on herdr's last reading of its agents",
+  () => readsOnlyOnTicks(false),
+  120_000,
+);
+
+test(
+  "a Run's open drawer follows the board's reading of herdr, and reads none of its own",
+  () => readsOnlyOnTicks(true),
+  120_000,
+);
+
+const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const Herd = Schema.fromJsonString(
+  Schema.StructWithRest(
+    Schema.Struct({
+      agents: Schema.Array(
+        Schema.StructWithRest(Schema.Struct({ name: Schema.String }), [
+          Schema.Record(Schema.String, Schema.Json),
+        ]),
+      ),
+    }),
+    [Schema.Record(Schema.String, Schema.Json)],
+  ),
+);
+
+/** The actions a Run's Flow offers on the node of the agent named `agent`. */
+const actionsOf = (flow: Flow | null | undefined, agent: string) =>
+  flow?.lanes
+    .flatMap((lane) => lane.nodes.flatMap((node) => [node, ...node.runs]))
+    .find((one) => one.agent === agent)?.actions;
+
+test(
+  "run show says whether a Run's agent is alive as herdr lists it now, and a drawer opened after it draws the same",
+  () =>
+    proves(
+      "collie-show-alive-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const outputs = `${world.home}/outputs.json`;
+          yield* fs.writeFileString(outputs, asJson([{ verdict: "done" }]));
+          const started = yield* collie(
+            world,
+            ["run", "start", "attended", "--input", "work=the link"],
+            { FAKE_HERDR_OUTPUTS: outputs },
+          );
+          const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+            started.envelope.data,
+          );
+          const agent = `${runId}-build-r1`;
+          const client = yield* connect(world.state);
+          const shown = () =>
+            Effect.map(client.shown({ runId }), (one) => actionsOf(one?.flow, agent));
+          const door = yield* frontDoor(socketOf(world.state));
+          const drawn = () =>
+            door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+              Stream.runHead,
+              Effect.map((one) => actionsOf(Option.getOrNull(one)?.flow, agent)),
+            );
+          yield* until(shown, (actions) => actions?.includes("tell") === true);
+          yield* until(drawn, (actions) => actions?.includes("tell") === true);
+
+          const state = `${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl.state.json`;
+          const herd = Schema.decodeUnknownSync(Herd)(yield* fs.readFileString(state));
+          yield* fs.writeFileString(
+            state,
+            asJson({ ...herd, agents: herd.agents.filter((one) => one.name !== agent) }),
+          );
+
+          expect(yield* shown()).not.toContain("tell");
+          expect(yield* drawn()).not.toContain("tell");
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["attended.workflow.ts"],
     ),
   120_000,
 );

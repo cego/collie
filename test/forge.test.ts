@@ -47,6 +47,9 @@ const model = (forge: MrForge, over: Partial<ForgeModel> = {}): ForgeModel => ({
 
 const ref = (forge: MrForge) => ({ project: PROJECT[forge], iid: "30" });
 
+/** A job's id as its forge gives it: GitHub's names the Actions run of merge request 30. */
+const jobId = (forge: MrForge, job: number) => (forge === "github" ? `4030/${job}` : String(job));
+
 const against = <A>(
   forge: MrForge,
   start: ForgeModel,
@@ -1681,7 +1684,7 @@ for (const name of ["gitlab", "github"] as const) {
         };
         const url =
           name === "github"
-            ? "https://github.com/owner/repo/runs/2"
+            ? "https://github.com/owner/repo/actions/runs/4030/job/2"
             : "https://gitlab.example.com/group/app/-/jobs/2";
         for (const state of [
           "passed",
@@ -1698,7 +1701,7 @@ for (const name of ["gitlab", "github"] as const) {
                 { name: "nuxi-typecheck", state },
               ],
             }),
-          ).toEqual({ ok: true, head: HEAD, state, url, id: "2", merge: null });
+          ).toEqual({ ok: true, head: HEAD, state, url, id: jobId(name, 2), merge: null });
         expect(yield* read({ jobs: [{ name: "lint", state: "passed" }] })).toEqual({
           ok: true,
           head: HEAD,
@@ -1756,17 +1759,19 @@ for (const name of ["gitlab", "github"] as const) {
     return runEffect(
       Effect.gen(function* () {
         const job = () => forge.job(ref(name), "nuxi-typecheck", "/w", fake.run);
-        expect(yield* job()).toMatchObject({ state: "failed", id: "1" });
-        expect(yield* forge.retryJob(ref(name), "1", "/w", fake.run)).toEqual({
+        expect(yield* job()).toMatchObject({ state: "failed", id: jobId(name, 1) });
+        expect(yield* forge.retryJob(ref(name), jobId(name, 1), "/w", fake.run)).toEqual({
           ok: true,
           reason: "",
         });
-        expect(yield* job()).toMatchObject({ state: "passed", id: "101" });
-        expect((yield* forge.retryJob(ref(name), "9", "/w", fake.run)).ok).toBe(false);
-        expect(forge.jobLog(ref(name), "1")).toBe(
+        expect(yield* job()).toMatchObject({ state: "passed", id: jobId(name, 101) });
+        expect(
+          (yield* forge.retryJob(ref(name), name === "github" ? "9/9" : "9", "/w", fake.run)).ok,
+        ).toBe(false);
+        expect(forge.jobLog(ref(name), jobId(name, 1))).toBe(
           name === "gitlab"
             ? "glab ci trace 1 --repo gitlab.example.com/group/app"
-            : "gh run view --job 1 --log --repo owner/repo",
+            : "gh run view 4030 --log-failed --repo owner/repo",
         );
       }).pipe(Effect.provide(fake.layer)),
     );
@@ -2639,7 +2644,7 @@ for (const name of ["gitlab", "github"] as const) {
     baseJob: (fake: Fake) =>
       Effect.map(forge.baseJob(ref(name), "nuxi-typecheck", "/w", fake.run), (read) => read.ok),
     retryJob: (fake: Fake) =>
-      Effect.map(forge.retryJob(ref(name), "1", "/w", fake.run), (read) => read.ok),
+      Effect.map(forge.retryJob(ref(name), jobId(name, 1), "/w", fake.run), (read) => read.ok),
     runStatus: (fake: Fake) =>
       Effect.map(forge.runStatus(URLS[name].run, "/w", fake.run), (status) => status !== null),
     details: (fake: Fake) =>
@@ -2725,7 +2730,7 @@ for (const name of ["gitlab", "github"] as const) {
           yield* job(fake);
           fake.set({ ...fake.model(), token: "rotated" });
           fake.requests.length = 0;
-          expect(yield* forge.retryJob(ref(name), "1", "/w", fake.run)).toEqual({
+          expect(yield* forge.retryJob(ref(name), jobId(name, 1), "/w", fake.run)).toEqual({
             ok: true,
             reason: "",
           });
@@ -2742,7 +2747,7 @@ for (const name of ["gitlab", "github"] as const) {
       const fake = jobbed({ httpFault: { status: 502 } });
       return runEffect(
         Effect.gen(function* () {
-          const retried = yield* forge.retryJob(ref(name), "1", "/w", fake.run);
+          const retried = yield* forge.retryJob(ref(name), jobId(name, 1), "/w", fake.run);
           expect(retried.ok).toBe(false);
           expect(retried.reason).toContain("502");
           expect(fake.requests).toHaveLength(1);
@@ -3187,4 +3192,57 @@ describe("GitLab's OAuth login over HTTP", () => {
       }).pipe(Effect.provide(fake.layer)),
     );
   });
+});
+
+const gated = () =>
+  fakeForge(
+    "github",
+    model("github", {
+      mrs: [
+        mr("github", {
+          jobs: [
+            { name: "suite (1)", state: "failed", retried: "passed" },
+            { name: "suite (2)", state: "passed" },
+            { name: "test", state: "failed", retried: "passed" },
+          ],
+        }),
+      ],
+    }),
+  );
+
+const gateId = (fake: ReturnType<typeof gated>) =>
+  Effect.map(FORGES.github.job(ref("github"), "test", "/w", fake.run), (read) =>
+    read.ok && read.id !== null ? read.id : "unread",
+  );
+
+test("a failed GitHub gate job is retried by rerunning its workflow run's failed jobs", () => {
+  const github = FORGES.github;
+  const fake = gated();
+  return runEffect(
+    Effect.gen(function* () {
+      const job = (name: string) => github.job(ref("github"), name, "/w", fake.run);
+      expect(yield* github.retryJob(ref("github"), yield* gateId(fake), "/w", fake.run)).toEqual({
+        ok: true,
+        reason: "",
+      });
+      expect(yield* job("suite (1)")).toMatchObject({ state: "passed" });
+      expect(yield* job("test")).toMatchObject({ state: "passed" });
+      expect(
+        fake.requests
+          .filter((one) => one.method === "POST")
+          .map((one) => new URL(one.url).pathname),
+      ).toEqual(["/repos/owner/repo/actions/runs/4030/rerun-failed-jobs"]);
+    }).pipe(Effect.provide(fake.layer)),
+  );
+});
+
+test("a failed GitHub job's log command prints its workflow run's failed jobs", () => {
+  const fake = gated();
+  return runEffect(
+    Effect.gen(function* () {
+      expect(FORGES.github.jobLog(ref("github"), yield* gateId(fake))).toBe(
+        "gh run view 4030 --log-failed --repo owner/repo",
+      );
+    }).pipe(Effect.provide(fake.layer)),
+  );
 });

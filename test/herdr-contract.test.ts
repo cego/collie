@@ -80,7 +80,9 @@ const calls = {
     herdr.paneReportMetadata("1-2", { collie_home: "abc123" }, 86_400_000),
   "popup.close": (herdr: Herdr) => herdr.popupClose(),
   "events.subscribe": (herdr: Herdr) =>
-    herdr.waitForEvent([...PANE_EVENTS, { type: "pane.agent_status_changed", pane_id: "1-2" }]),
+    herdr.waitForEvent(
+      Effect.succeed([...PANE_EVENTS, { type: "pane.agent_status_changed", pane_id: "1-2" }]),
+    ),
 } satisfies Record<SocketMethod, (herdr: Herdr) => Effect.Effect<void, HerdrError, BunServices>>;
 
 /** What each call sent down a herdr socket. */

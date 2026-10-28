@@ -6,30 +6,62 @@ on:
     branches: [master]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  test:
+  static:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4"
-      # A rolling key: a fixed one would never save the timings back after the first run.
-      - uses: actions/cache@v6
-        with:
-          path: .scratch/test-timings.json
-          key: test-timings-${{ github.run_id }}
-          restore-keys: test-timings-
       - run: bun install --frozen-lockfile
       - run: bun install --frozen-lockfile
         working-directory: desktop
-      # The same script contributors run, so the local gate and CI cannot drift.
-      - run: bun run check
+      - run: bun run check:static
       # `bun test` runs the sources; this runs the compiled entrypoint and JSON envelope.
       - run: bun run build
       - run: bun run smoke
       # Proves the committed snapshot is what the pinned herdr really prints.
       - run: bun run contract:check
+
+  # No timings cache: every shard balances on the committed seed, so they partition alike.
+  suite:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: desktop
+      - run: bun run test --shard=${{ matrix.shard }}/3
+        # 4 workers: a dedicated runner needs no reserve for targeted runs (budget ADR, D2).
+        env:
+          COLLIE_TEST_BUDGET: 6
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-timings-shard-${{ matrix.shard }}
+          path: .scratch/test-timings.json
+          include-hidden-files: true
+
+  # The required check. Never skipped, which a required check would read as passing.
+  test:
+    needs: [static, suite]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "static: ${{ needs.static.result }}, suite: ${{ needs.suite.result }}"
+          test "${{ needs.static.result }}" = success && test "${{ needs.suite.result }}" = success
 
   # The runner built and smoked on a Mac, and the installers' signature check run with the
   # Mac's own LibreSSL. Not the whole suite: a Mac-only defect past these is when to add it.
