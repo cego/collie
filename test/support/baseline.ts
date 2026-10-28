@@ -14569,6 +14569,7 @@ const cycling = (
   runId: string,
   turns: ReadonlyArray<Schema.Json>,
   argv: ReadonlyArray<string> = [],
+  discovered: Schema.Json = TUNE_DISCOVERED,
 ) =>
   Effect.gen(function* () {
     const commit = yield* harnessCommit({ "bench/bench.sh": CYCLE_BENCH });
@@ -14578,7 +14579,7 @@ const cycling = (
       cwd: rig.projectDir,
     }).pipe(Effect.orDie);
     yield* rig.queueOutputs([
-      TUNE_DISCOVERED,
+      discovered,
       tunePlan(commit, [STEADY_PRIMARY, SIZE_GUARDRAIL], null, argv),
       ...turns,
     ]);
@@ -15205,6 +15206,331 @@ scenario(
         expect(reasonOf(result)).toContain(refusal);
         expect((yield* forge.model()).merges ?? []).toEqual([]);
       }),
+    ),
+  120_000,
+);
+
+const POOLING = {
+  title: "Pool the search client's connections",
+  repository: "group/search-client",
+  team: "Search",
+  links: ["https://gitlab.example.com/group/search-client/-/issues/3"],
+  journey: "search",
+  change: "reuse one connection per process instead of one per query",
+  estimated_impact: "about 20 ms off p95 search latency",
+  criteria: ["the bench opens one connection per process"],
+  relation: "the local change prepares statements; this cuts the connect time left",
+};
+const FTS = {
+  title: "Ship sqlite with FTS5",
+  repository: "group/sqlite-build",
+  links: [],
+  journey: "search",
+  change: "build sqlite with the FTS5 extension",
+  estimated_impact: "full-text search without a table scan",
+  criteria: ["FTS5 is loadable from the built library"],
+  relation: "the local change cannot avoid the scan without it",
+};
+const KNOWN = {
+  title: "Cache the tokenizer's tables",
+  repository: "group/tokenizer",
+  team: "Search",
+  links: [],
+  journey: "search",
+  change: "load the tables once per process",
+  estimated_impact: "a few ms per query",
+  criteria: ["one load per process"],
+  relation: "independent of the local change",
+  existing: "https://linear.app/acme/issue/PERF-9",
+};
+
+/** A Claude Code with a Linear MCP server, as the rig's home tells it, while `body` runs. */
+const withLinear = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    FileSystem.FileSystem.pipe(
+      Effect.flatMap((fs) =>
+        fs.writeFileString(
+          `${rig.root}/.claude.json`,
+          '{"mcpServers": {"linear-server": {"url": "https://mcp.linear.app/mcp"}}}',
+        ),
+      ),
+      Effect.orDie,
+    ),
+    () => body,
+    () =>
+      FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.remove(`${rig.root}/.claude.json`, { force: true })),
+        Effect.orDie,
+      ),
+  );
+
+/** The fake Linear: one line per issue, its URL then the marker it carries. */
+const tracker = () => `${rig.root}/tracker`;
+const emptyTracker = () =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.writeFileString(tracker(), "")),
+    Effect.orDie,
+  );
+const trackerLines = () =>
+  Effect.map(readText(tracker()).pipe(Effect.orDie), (text) =>
+    text.split("\n").filter((line) => line !== ""),
+  );
+const MARKED =
+  'marker=$(grep -o \'collie:external-[0-9a-f]*\' "$PROMPT_PATH" | head -n 1); [ -n "$marker" ]';
+/** A search of the fake tracker for the marker its prompt carries. */
+const SEARCHED = () => ({
+  writes: [],
+  sh: `${MARKED} && url=$(grep -F "$marker" '${tracker()}' | cut -d ' ' -f 1) && if [ -n "$url" ]; then printf '{"marked": "%s", "matching": []}' "$url"; else printf '{"marked": null, "matching": []}'; fi > "$OUTPUT_PATH"`,
+  output: null,
+});
+const ISSUE = "https://linear.app/acme/issue/PERF-1";
+/** One issue filed in the fake tracker, carrying the marker its prompt gave. */
+const FILED = () => ({
+  writes: [],
+  sh: `${MARKED} && echo "${ISSUE} $marker" >> '${tracker()}'`,
+  output: { url: ISSUE },
+});
+
+const withExternal = (
+  turn: ReturnType<typeof tried>,
+  external: ReadonlyArray<Schema.Json>,
+): Schema.Json => ({ ...turn, output: { ...turn.output, external } });
+
+/** Each search, create and recheck an external finding's Post asked for, in order. */
+const externalPrompts = (runId: string) =>
+  Effect.map(prompts(), (all) =>
+    all.flatMap((one) => {
+      const named = new RegExp(
+        `/${runId}/(external-[0-9a-f]+-(?:search|create|recheck)(?:-\\d+)?)\\.prompt\\.md`,
+      ).exec(one);
+      return named === null ? [] : [named[1]!];
+    }),
+  );
+
+type Asked = { decision: string; prompt: string; options: string; answer: string | null };
+/** The first open question that is none of `seen`. */
+const nextAsked = (asked: Effect.Effect<ReadonlyArray<Asked>>, seen: ReadonlyArray<string>) =>
+  until(
+    () => asked,
+    (rows) => rows.some((row) => row.answer === null && !seen.includes(row.decision)),
+  ).pipe(
+    Effect.map((rows) => rows.find((row) => row.answer === null && !seen.includes(row.decision))!),
+  );
+const openOf = (rows: ReadonlyArray<Asked>) => rows.filter((row) => row.answer === null);
+
+scenario(
+  "a tune-up puts each external finding to the human one at a time as Ignore or Post, files a Post once with its marker, and proves the same outcome whatever is answered",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          const runId = "r-tune-external";
+          const { bin } = yield* tuneForge;
+          yield* emptyTracker();
+          yield* cycling(
+            runId,
+            [withExternal(fasterTo(3), [KNOWN]), TUNE_REVIEWED, OPENED, SEARCHED(), FILED()],
+            [],
+            { ...TUNE_DISCOVERED, external: [POOLING, FTS] },
+          );
+          const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } };
+          const driving = yield* driven(options, (run) =>
+            Effect.gen(function* () {
+              const pooling = yield* nextAsked(run.asked, []);
+              expect(openOf(yield* run.asked).map((row) => row.decision)).toEqual([
+                pooling.decision,
+              ]);
+              expect(pooling.prompt).toContain(POOLING.title);
+              expect(optionsOf([pooling], pooling.decision)).toEqual(["Ignore", "Post"]);
+              yield* run.answer(pooling.decision, "Post");
+              const team = yield* nextAsked(run.asked, [pooling.decision]);
+              expect(team.prompt).toContain(FTS.title);
+              expect(optionsOf([team], team.decision)).toEqual([]);
+              yield* run.answer(team.decision, "Platform");
+              const fts = yield* nextAsked(run.asked, [pooling.decision, team.decision]);
+              expect(fts.prompt).toContain(FTS.title);
+              expect(optionsOf([fts], fts.decision)).toEqual(["Ignore", "Post"]);
+              yield* run.answer(fts.decision, "Ignore");
+              return {
+                status: yield* ended(run.status),
+                pooling: pooling.decision,
+                fts: fts.decision,
+                asked: yield* run.asked,
+              };
+            }),
+          );
+          yield* bin.restore();
+          const { pooling, fts } = driving;
+          expect(outcomeText(driving.status)).toBe(OPENED.mr_url);
+          expect(driving.asked.some((row) => row.prompt.includes(KNOWN.title))).toBe(false);
+          expect(yield* externalPrompts(runId)).toEqual([`${pooling}-search`, `${pooling}-create`]);
+          expect(yield* asked(runId, `${pooling}-create`)).toContain(`collie:${pooling}`);
+          expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${pooling}`]);
+          const log = yield* runLog(runId);
+          const proved = log.indexOf("performance proved on");
+          expect(proved).toBeGreaterThan(-1);
+          for (const decided of [
+            `external ${pooling}: posted ${ISSUE}`,
+            `external ${fts}: ignored`,
+            `: existing ${KNOWN.existing}`,
+          ])
+            expect(log.indexOf(decided)).toBeGreaterThan(proved);
+          const report = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-external.md`);
+          for (const one of [POOLING, FTS, KNOWN]) {
+            expect(report).toContain(one.title);
+            expect(report).toContain(one.estimated_impact);
+          }
+          expect(report).toContain(KNOWN.existing);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+/** A tune-up that ends on its noisy calibration, with Discover's `external` findings. */
+const noisyWith = (external: ReadonlyArray<Schema.Json>, turns: ReadonlyArray<Schema.Json> = []) =>
+  Effect.gen(function* () {
+    const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+    yield* emptyTracker();
+    yield* rig.queueOutputs([
+      { ...TUNE_DISCOVERED, external },
+      tunePlan(commit, [NOISY_PRIMARY]),
+      ...turns,
+    ]);
+  });
+
+scenario(
+  "a tune-up host restarted after an external finding's Post filed its issue but before the Output was collected searches again and files no second issue",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          const runId = "r-tune-filed";
+          yield* noisyWith([POOLING], [SEARCHED(), { ...FILED(), output: null }, SEARCHED()]);
+          const options = { entry: shipped("tune-up"), runId, input: {} };
+          const key = yield* driven(options, (run) =>
+            Effect.gen(function* () {
+              const pooling = yield* nextAsked(run.asked, []);
+              yield* run.answer(pooling.decision, "Post");
+              yield* until(trackerLines, (lines) => lines.length === 1);
+              return pooling.decision;
+            }),
+          );
+          const status = yield* driven({ ...options, restarted: true }, (run) => ended(run.status));
+          expect(status.status).toBe("complete");
+          expect(yield* externalPrompts(runId)).toEqual([
+            `${key}-search`,
+            `${key}-create`,
+            `${key}-recheck`,
+          ]);
+          expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${key}`]);
+          expect(yield* runLog(runId)).toContain(`external ${key}: posted ${ISSUE}`);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up host restarted after an external finding's Post launched its create but before it filed asks the finding again, and creates nothing without a second Post",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          const runId = "r-tune-unfiled";
+          yield* noisyWith([POOLING], [SEARCHED(), { writes: [], output: null }, SEARCHED()]);
+          const options = { entry: shipped("tune-up"), runId, input: {} };
+          const key = yield* driven(options, (run) =>
+            Effect.gen(function* () {
+              const pooling = yield* nextAsked(run.asked, []);
+              yield* run.answer(pooling.decision, "Post");
+              yield* until(
+                () => wasAsked(runId, `${pooling.decision}-create`),
+                (launched) => launched,
+              );
+              return pooling.decision;
+            }),
+          );
+          const status = yield* driven({ ...options, restarted: true }, (run) =>
+            Effect.gen(function* () {
+              const again = yield* nextAsked(run.asked, [key]);
+              expect(again.prompt).toContain("may have filed");
+              expect(again.prompt).toContain(POOLING.title);
+              expect(optionsOf([again], again.decision)).toEqual(["Ignore", "Post"]);
+              expect(yield* externalPrompts(runId)).toEqual([
+                `${key}-search`,
+                `${key}-create`,
+                `${key}-recheck`,
+              ]);
+              yield* run.answer(again.decision, "Ignore");
+              return yield* ended(run.status);
+            }),
+          );
+          expect(status.status).toBe("complete");
+          expect(yield* externalPrompts(runId)).toEqual([
+            `${key}-search`,
+            `${key}-create`,
+            `${key}-recheck`,
+          ]);
+          expect(yield* trackerLines()).toEqual([]);
+          expect(yield* runLog(runId)).toContain(`external ${key}: ignored`);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up with no Linear MCP keeps its external report and asks nothing, saying why",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-no-linear";
+        yield* noisyWith([POOLING]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Success");
+        expect(yield* questions(runId)).toEqual([]);
+        const file = `${runDir(dir, runId)}/handoffs/tune-up-external.md`;
+        expect(yield* readText(file)).toContain(POOLING.title);
+        expect(yield* runLog(runId)).toContain(`${file} not asked: no Linear MCP server`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up with external report writes its external report and asks nothing",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          yield* noisyWith([POOLING]);
+          expect((yield* tunedUp("r-tune-report", { external: "report" }))._tag).toBe("Success");
+          expect(yield* questions("r-tune-report")).toEqual([]);
+          expect(
+            yield* readText(`${runDir(dir, "r-tune-report")}/handoffs/tune-up-external.md`),
+          ).toContain(POOLING.title);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up with external off writes no external report",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          yield* noisyWith([POOLING]);
+          expect((yield* tunedUp("r-tune-off", { external: "off" }))._tag).toBe("Success");
+          expect(yield* questions("r-tune-off")).toEqual([]);
+          const fs = yield* FileSystem.FileSystem;
+          expect(
+            yield* fs.exists(`${runDir(dir, "r-tune-off")}/handoffs/tune-up-external.md`),
+          ).toBe(false);
+        }),
+      ),
     ),
   120_000,
 );

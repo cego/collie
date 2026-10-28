@@ -1068,6 +1068,24 @@ other checkout, or a URL, is refused at the start.
    kept, the checks and the review, the opportunities left, what to monitor after
    deploying, and, collapsed, every sample of the `final` Measurement, the frozen plan,
    every plan and `final` Measurement, the commands to reproduce it and the Run id.
+8. **External report**, at whichever end the Run reaches, after the merge request or with
+   its findings alone. Discover and each Cycle hand on what only another repository could
+   change, and Collie writes each to `handoffs/tune-up-external.md`: the owning repository
+   and team where known, evidence links, the journey, the change it needs, its estimated
+   impact apart from anything measured, acceptance criteria and how it relates to the local
+   change. Each is keyed by a digest of its repository and change, the same in any Run.
+   With `external` at `ask`, each finding is put to you one at a time, with `Ignore` and
+   `Post` only, its question showing the finding. A finding with no known team asks for the
+   team in your own words first. Post has the tuner search Linear, read-only, for the issue
+   carrying the key's marker and for open issues asking for the same change, and file one
+   issue carrying the marker only where it found none. A finding that already matched an
+   issue when it was found is recorded as `existing` and not asked. Your answer and the
+   issue's URL go in the Run's log. A host restarted while an issue was being filed never
+   files blind: it searches again, records the issue it finds, and otherwise asks again,
+   saying an earlier Post may have filed it. With no Linear MCP server in Claude Code, the
+   report is written, nothing is asked, and the log says why. `report` writes the report
+   and asks nothing, and `off` writes none. None of it counts toward a Measurement, the
+   outcome or the merge request's readiness.
 
 **Ends:** with `handoffs/tune-up-findings.md` in its Run directory, and with a merge request
 only where `performance` is proved: a `final` Measurement of the delivered head against the
@@ -1085,8 +1103,8 @@ request fails the Run with the forge's reason. A harness commit touching a path 
 harness paths, a base that cannot be built, or a calibration that ends without a verdict
 fails the Run, naming the paths or the tree.
 
-**Never:** load against production, which it only reads, bounded; auto-merge; a deploy; or
-a change to another repository.
+**Never:** load against production, which it only reads, bounded; auto-merge; a deploy; a
+change to another repository; or an issue filed without your Post.
 
 Its Flow forecasts Discover, Harness, Calibrate, Cycles, Integrate, Review, Checks, Merge
 request and External report.

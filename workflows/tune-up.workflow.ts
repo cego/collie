@@ -8,6 +8,8 @@
 // a Run that keeps none ends back on its base tree with its findings. What was kept is
 // measured again against the merge base its merge request targets, reviewed in the shared
 // rally and delivered through the shared gate; a gain that does not survive is dropped.
+// Whatever only another repository could change is written to a report, and each finding is
+// put to the human as Ignore or Post to Linear; none of it counts toward the outcome.
 //
 // The Markdown beside this file is the content: what each step is asked.
 
@@ -21,6 +23,7 @@ import {
   Run,
   WorkflowError,
   agentWork,
+  ask,
   contentOf,
   defineWorkflow,
   endsWithoutPatchOf,
@@ -34,7 +37,7 @@ import {
   type Measurement,
   type SynthesisReport,
 } from "collie";
-import { Array as Arr, Clock, Duration, Effect, FileSystem, Option, Schema } from "effect";
+import { Array as Arr, Clock, Duration, Effect, FileSystem, Hash, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./tune-up.md" with { type: "text" };
 import { IMPLEMENTER, REVIEWER, ROUNDS, rally, reviewPass, reviewRound } from "./reviewing.ts";
@@ -91,6 +94,19 @@ const prompts = {
     why: text,
   }),
   merge: content.template("merge", { ...Told, conflict: text }),
+  externalSearch: content.template("external-search", {
+    ...Told,
+    finding: text,
+    marker: text,
+    repository: text,
+    team: text,
+  }),
+  externalCreate: content.template("external-create", {
+    ...Told,
+    finding: text,
+    marker: text,
+    team: text,
+  }),
   drop: content.template("drop", {
     ...Told,
     base: Schema.Struct({ merge: text, tree: text }),
@@ -161,6 +177,34 @@ const Opportunity = Schema.Struct({
   }),
 });
 
+/** An improvement only another repository can make, handed on and never assumed done. */
+const External = Schema.Struct({
+  title: text,
+  repository: text.annotate({ description: "the repository that would change" }),
+  team: Schema.optionalKey(text.annotate({ description: "the team that owns it, where known" })),
+  links: Schema.Array(text).annotate({
+    description: "evidence links, with any credential or personal data taken out",
+  }),
+  journey: text,
+  change: text.annotate({ description: "the dependency or API change it needs" }),
+  estimated_impact: text.annotate({
+    description: "what you estimate it would gain; nothing external is measured",
+  }),
+  criteria: Schema.NonEmptyArray(text).annotate({ description: "its acceptance criteria" }),
+  relation: text.annotate({ description: "how it relates to this Run's local change" }),
+  existing: Schema.optionalKey(
+    text.annotate({ description: "the URL of an issue already asking for it, where one is" }),
+  ),
+});
+type External = typeof External.Type;
+const Handed = {
+  external: Schema.optionalKey(
+    Schema.Array(External).annotate({
+      description: "improvements only another repository could make",
+    }),
+  ),
+};
+
 /** What Discover is held to: nothing ranked without a source behind it. */
 const Discovered = Schema.Struct({
   stack: Schema.NonEmptyArray(text),
@@ -178,7 +222,7 @@ const Discovered = Schema.Struct({
   }),
   research: Schema.NonEmptyArray(Research),
   opportunities: Schema.Array(Opportunity).annotate({ description: "ranked, best first" }),
-  external: Schema.Array(Schema.Struct({ title: text, repository: text, change: text })),
+  external: Schema.Array(External),
 });
 type Discovered = typeof Discovered.Type;
 
@@ -237,16 +281,39 @@ const Tried = Schema.Union([
     opportunity: text,
     change: text,
     commits: Schema.NonEmptyArray(text),
+    ...Handed,
   }),
   Schema.Struct({
     result: Schema.Literal("exhausted"),
     why: text.annotate({ description: "why no measured opportunity is left" }),
+    ...Handed,
   }),
   Schema.Struct({
     result: Schema.Literal("unsafe"),
     tradeoff: text.annotate({ description: "what every change left would give up for speed" }),
+    ...Handed,
   }),
 ]);
+
+/** What a search of Linear for an external finding found. */
+const Searched = Schema.Struct({
+  marked: Schema.NullOr(text).annotate({
+    description: "the issue carrying the marker, by URL, or null",
+  }),
+  matching: Schema.Array(text).annotate({
+    description: "open issues asking for the same change, by URL",
+  }),
+});
+type Searched = typeof Searched.Type;
+
+const Filed = Schema.Struct({
+  url: Schema.NullOr(text).annotate({
+    description: "the issue you filed, or null where Linear refused",
+  }),
+  refused: Schema.optionalKey(
+    text.annotate({ description: "Linear's own words, where it refused" }),
+  ),
+});
 
 interface Cycled {
   readonly n: number;
@@ -268,6 +335,8 @@ const Snapshot = Schema.Struct({ head_sha: text, fingerprint: text });
 
 const TUNER = "tune";
 const MERGE_TRIES = 2;
+const IGNORE = "Ignore";
+const POST = "Post";
 
 const discover = step({
   id: "discover",
@@ -455,17 +524,34 @@ const reportOf = (options: {
     ...(options.cycles.length === 0
       ? []
       : ["", "## Cycles (measured)", "", ...options.cycles.map((one) => `- ${cycleLine(one)}`)]),
-    ...(found.external.length === 0
-      ? []
-      : [
-          "",
-          "## External candidates",
-          "",
-          ...found.external.map((one) => `- ${one.repository}: ${one.title}: ${one.change}`),
-        ]),
     "",
   ].join("\n");
 };
+
+/** Stable across Runs, so a later Run's search finds the issue an earlier one filed. */
+const keyOf = (one: External) =>
+  `external-${(Hash.string(`${one.repository}\n${one.change}`) >>> 0).toString(16).padStart(8, "0")}`;
+const markerOf = (key: string) => `collie:${key}`;
+
+/** One external finding as the human reads it, in the report and in its question. */
+const previewOf = (one: External, key: string) =>
+  redact(
+    [
+      `### ${one.title}`,
+      "",
+      `- Repository: ${one.repository}`,
+      `- Team: ${one.team ?? "unknown"}`,
+      `- Journey: ${one.journey}`,
+      `- Change needed: ${one.change}`,
+      `- Estimated impact, not measured: ${one.estimated_impact}`,
+      `- How it relates to the local change: ${one.relation}`,
+      `- Evidence: ${one.links.join(", ") || "none"}`,
+      ...(one.existing === undefined ? [] : [`- Existing issue: ${one.existing}`]),
+      "- Acceptance criteria:",
+      ...one.criteria.map((criterion) => `  - ${criterion}`),
+      `- Key: ${key}, carried by its issue as ${markerOf(key)}`,
+    ].join("\n"),
+  );
 
 const median = (values: ReadonlyArray<number>) => {
   const sorted = values.toSorted((a, b) => a - b);
@@ -892,9 +978,147 @@ export default defineWorkflow({
             ),
           ),
         });
+      const handed: External[] = [...found.external];
+      const recorded = (name: string, line: string) =>
+        Activity.make({ name, success: Schema.Void, execute: host.record(runId, line) });
+      /** One finding settled: recorded as existing, ignored, or posted once to Linear. */
+      const settle = (key: string, one: External) =>
+        Effect.gen(function* () {
+          const decided = `${key}.decided`;
+          if (one.existing !== undefined)
+            return yield* recorded(decided, `external ${key}: existing ${one.existing}`);
+          const finding = previewOf(one, key);
+          const team =
+            one.team ??
+            (yield* ask({
+              name: `${key}-team`,
+              prompt: `${finding}\n\nWhich Linear team owns ${one.repository}?`,
+            }));
+          const posting = { ...told, finding, marker: markerOf(key), team };
+          const search = (operation: string) =>
+            agentWork({
+              operation,
+              agent: TUNER,
+              role: "tuner",
+              instructions: prompts.externalSearch,
+              input: { ...posting, repository: one.repository },
+              output: Searched,
+            });
+          const foundIn = (searched: Searched, filedHere: boolean) =>
+            searched.marked !== null
+              ? `external ${key}: ${filedHere ? "posted" : "existing"} ${searched.marked}`
+              : searched.matching.length > 0
+                ? `external ${key}: existing ${searched.matching.join(", ")}`
+                : null;
+          const launches = `${place.dir}/external`;
+          const marked = (operation: string, state: string) =>
+            Activity.make({
+              name: `${operation}.${state}`,
+              success: Schema.Void,
+              error: WorkflowError,
+              execute: Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem;
+                yield* fs.makeDirectory(launches, { recursive: true });
+                yield* fs.writeFileString(`${launches}/${operation}`, state);
+              }).pipe(Effect.mapError((cause) => new WorkflowError({ reason: cause.message }))),
+            });
+          let again = false;
+          for (let n = 1; ; n++) {
+            const named = (base: string) => (n === 1 ? base : `${base}-${n}`);
+            const chosen = yield* ask({
+              name: named(key),
+              prompt: again
+                ? `An earlier Post of this finding may have filed it: a search found no issue carrying ${markerOf(key)}, so Post files one now.\n\n${finding}`
+                : finding,
+              options: [IGNORE, POST],
+            });
+            if (chosen !== POST) return yield* recorded(decided, `external ${key}: ignored`);
+            const known = foundIn(yield* search(named(`${key}-search`)), false);
+            if (known !== null) return yield* recorded(decided, known);
+            const creating = named(`${key}-create`);
+            // Read on every replay: a create launched whose Output was never collected is
+            // never collected now, since a new agent given its prompt could file twice.
+            const state = yield* FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) => fs.readFileString(`${launches}/${creating}`)),
+              Effect.orElseSucceed(() => ""),
+            );
+            if (state !== "launched") {
+              yield* marked(creating, "launched");
+              const filed = yield* agentWork({
+                operation: creating,
+                agent: TUNER,
+                role: "tuner",
+                instructions: prompts.externalCreate,
+                input: posting,
+                output: Filed,
+              });
+              yield* marked(creating, "collected");
+              return yield* recorded(
+                decided,
+                filed.url === null
+                  ? `external ${key}: not filed: ${filed.refused ?? "Linear refused it"}`
+                  : `external ${key}: posted ${filed.url}`,
+              );
+            }
+            const refound = foundIn(yield* search(named(`${key}-recheck`)), true);
+            if (refound !== null) return yield* recorded(decided, refound);
+            again = true;
+          }
+        });
+      /** The Run's end, after what only another repository could change is handed on. */
+      const handOn = (ending: string) =>
+        Effect.gen(function* () {
+          const keyed = Arr.dedupeWith(
+            handed.map((one) => ({ key: keyOf(one), one })),
+            (one, other) => one.key === other.key,
+          );
+          if (budget.external === "off" || keyed.length === 0) return ending;
+          yield* externalReport(
+            Effect.gen(function* () {
+              const file = `${place.dir}/handoffs/tune-up-external.md`;
+              yield* Activity.make({
+                name: "external.report",
+                success: Schema.Void,
+                error: WorkflowError,
+                execute: Effect.gen(function* () {
+                  const fs = yield* FileSystem.FileSystem;
+                  yield* fs.makeDirectory(`${place.dir}/handoffs`, { recursive: true });
+                  yield* fs.writeFileString(
+                    file,
+                    [
+                      `# Tune-up external findings: ${runId}`,
+                      "",
+                      "Improvements only another repository can make. None is assumed done: no Measurement, outcome or merge readiness counts on any of them.",
+                      "",
+                      ...keyed.flatMap(({ key, one }) => [previewOf(one, key), ""]),
+                    ].join("\n"),
+                  );
+                }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new WorkflowError({
+                        reason: `the external report could not be written: ${cause.message}`,
+                      }),
+                  ),
+                ),
+              });
+              if (budget.external === "report")
+                return yield* recorded("external.unasked", `${file}: written, nothing asked`);
+              const linear = yield* Activity.make({
+                name: "external.linear",
+                success: Schema.Struct({ reachable: Schema.Boolean, detail: text }),
+                execute: host.linear(cwd),
+              });
+              if (!linear.reachable)
+                return yield* recorded("external.unasked", `${file} not asked: ${linear.detail}`);
+              for (const { key, one } of keyed) yield* settle(key, one);
+            }),
+          );
+          return ending;
+        });
       if (!calibrated) {
         const report = yield* findings("findings", ending);
-        return `${report}: ${ending}`;
+        return yield* handOn(`${report}: ${ending}`);
       }
 
       const wall =
@@ -987,6 +1211,7 @@ export default defineWorkflow({
             output: Tried,
           }),
         );
+        handed.push(...(tried.external ?? []));
         if (tried.result !== "changed")
           stopped =
             tried.result === "exhausted"
@@ -1051,7 +1276,7 @@ export default defineWorkflow({
       if (kept.length === 0) {
         const done = `${stop}; no Cycle was kept, so the Run is back on its base tree`;
         const report = yield* findings("findings", done);
-        return `${report}: ${done}`;
+        return yield* handOn(`${report}: ${done}`);
       }
       const findingsOf = (name: string, ending: string) =>
         Effect.map(findings(name, ending), (report) => `${report}: ${ending}`);
@@ -1237,7 +1462,7 @@ export default defineWorkflow({
           return { measured, why, original };
         }),
       );
-      if (proved.why !== null) return yield* dropped(proved.measured, proved.why);
+      if (proved.why !== null) return yield* handOn(yield* dropped(proved.measured, proved.why));
       yield* findings("findings.integrated", `${stop}; kept ${kept.join(", ")}`);
 
       const reviewedOn: Array<typeof Snapshot.Type> = [];
@@ -1278,7 +1503,7 @@ export default defineWorkflow({
       let latest = { reviewed: rallied.reviewed, on };
       const last = yield* measureFinal;
       const gone = lost(last);
-      if (gone !== null) return yield* dropped(last, gone);
+      if (gone !== null) return yield* handOn(yield* dropped(last, gone));
 
       let bodies = 0;
       const writeBody = Effect.suspend(() => {
@@ -1373,7 +1598,7 @@ export default defineWorkflow({
             return latest;
           }),
       });
-      if (delivered.nothing !== undefined) return delivered.nothing;
+      if (delivered.nothing !== undefined) return yield* handOn(delivered.nothing);
       const gaps = yield* Activity.make({
         name: "outcome",
         success: Schema.Struct({ head: text, gaps: Schema.Array(text) }),
@@ -1404,6 +1629,7 @@ export default defineWorkflow({
             Effect.asVoid(host.note({ runId, cwd, body: redact(why) })),
           ),
         });
+        yield* handOn(why);
         return yield* new WorkflowError({ reason: `Outcome unproved on ${gaps.head}: ${why}` });
       }
       yield* findings("findings.delivered", `performance proved on ${gaps.head}; ${delivered.mr}`);
@@ -1412,6 +1638,6 @@ export default defineWorkflow({
         success: Schema.Void,
         execute: host.record(runId, `performance proved on ${gaps.head}: ${delivered.mr}`),
       });
-      return delivered.mr;
+      return yield* handOn(delivered.mr);
     }),
 });

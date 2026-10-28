@@ -720,6 +720,11 @@ they have set none. What a workflow must not hard-code — which team it files i
 where this installation keeps its logs — is asked for here rather than written into its
 prose, so the same workflow is usable by somebody else.
 
+`host.linear(cwd)` answers whether an agent Claude Code runs in `cwd` has a Linear MCP
+server, read as `collie doctor` reads it, with `detail` saying where it is or why not. Read
+it inside an Activity where the workflow branches on it: `tune-up` asks nothing it would
+need Linear to act on where it is `reachable: false`.
+
 `host.mr({ cwd, target?, source? })` is whether a merge request can be opened from here and
 what it would carry, on the checkout's own forge (or the target's, where it names one):
 the assignee — `<forge>.assignee` from the user's config, else that forge's login — the

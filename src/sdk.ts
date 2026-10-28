@@ -825,6 +825,14 @@ export interface HostApi {
    */
   readonly config: (dotted: string) => Effect.Effect<string>;
   /**
+   * Whether an agent Claude Code runs in `cwd` has a Linear MCP server, read as `collie
+   * doctor` reads it, with where it is or why not. Read it inside an Activity of the
+   * workflow's own where it branches on it.
+   */
+  readonly linear: (
+    cwd: string,
+  ) => Effect.Effect<{ readonly reachable: boolean; readonly detail: string }>;
+  /**
    * Whether a merge request can be opened from this checkout, and what it would carry —
    * the configured assignee, the repository's own template, the issues this branch
    * answers. One question rather than two: a step that cannot reach its forge has nothing to

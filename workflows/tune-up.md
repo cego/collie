@@ -25,8 +25,12 @@ The project is the checkout you are in. What the human asked to focus on, if any
    record what you searched.
 5. Rank the opportunities, best first. Mark each `measured`, `telemetry` or `hypothesis`, and
    cite the research links, telemetry sources or Measurement ids it rests on.
-6. List the improvements only another repository could make as candidate external findings.
-   Never change another repository.
+6. List the improvements only another repository could make under `external`: the owning
+   repository and team where you know it, evidence links with any credential or personal
+   data taken out, the journey, the change it needs, your estimate of its impact, its
+   acceptance criteria and how it relates to a change here. Where Linear is within reach,
+   search it read-only, and give an issue already asking for the same change as `existing`.
+   Never change another repository, and file nothing.
 
 Change nothing in the checkout.
 
@@ -86,6 +90,9 @@ Where no measured opportunity is left, answer `exhausted` with why. Where every 
 would give up behaviour, safety or correctness for speed, answer `unsafe` with that
 tradeoff. Either way, change nothing.
 
+Whatever you answer, list an improvement you found that only another repository could make
+under `external`, as Discover does. Never change that repository, and file nothing.
+
 ## revert
 
 Cycle {{cycle.n}} is not kept: {{why}}
@@ -93,6 +100,32 @@ Cycle {{cycle.n}} is not kept: {{why}}
 Reset this branch to {{cycle.start}}, the commit the Cycle started on, with
 `git reset --hard {{cycle.start}}`. That removes this Cycle's commits and nothing older. Push
 nothing. Collie then checks that the checkout's head and files are that tree again.
+
+## external-search
+
+Search Linear, read-only, with its MCP server, for this finding, which only another repository
+can act on. Create, edit and comment on nothing.
+
+{{finding}}
+
+1. Find the issue whose description carries `{{marker}}`, exactly, in any team. Answer it as
+   `marked`, by its URL, or `null` where there is none.
+2. Find the open issues of team {{team}} that ask for the same change in {{repository}}.
+   Answer each as `matching`, by its URL, or none.
+
+## external-create
+
+The human chose to post this finding to Linear, and a search just found no issue carrying its
+marker. File exactly one issue for it with the Linear MCP server, in team {{team}}.
+
+{{finding}}
+
+- Title: the finding's title.
+- Description: the finding as above, then `{{marker}}` exactly, on a line of its own, so a
+  later search finds this issue rather than filing another.
+
+Create it once. Where Linear refuses, do not try again: answer `url` as `null` with Linear's
+own words under `refused`. Otherwise answer the issue's URL.
 
 ## merge
 

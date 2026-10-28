@@ -248,7 +248,10 @@ const SessionsJson = Schema.fromJsonString(
 const FailuresJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const QueuedOutputJson = Schema.Union([Schema.String, Schema.Null, Schema.JsonObject]);
 const QueueJson = Schema.fromJsonString(Schema.Array(QueuedOutputJson));
-/** A queued entry for an agent that writes files, then runs `sh` beside the queue, before its Output. */
+/**
+ * A queued entry for an agent that writes files, then runs `sh` beside the queue, before its
+ * Output. `sh` is told its prompt in `PROMPT_PATH`, and may write its Output to `OUTPUT_PATH`.
+ */
 const Scripted = Schema.Struct({
   writes: Schema.Array(Schema.Struct({ path: Schema.String, text: Schema.String })),
   sh: Schema.optionalKey(Schema.String),
@@ -497,7 +500,10 @@ function handle(
           yield* fs.writeFileString(one.path, one.text);
         }
         if (scripted?.sh !== undefined) {
-          const ran = yield* exec(["sh", "-c", scripted.sh], { cwd: path.dirname(queuePath) });
+          const ran = yield* exec(["sh", "-c", scripted.sh], {
+            cwd: path.dirname(queuePath),
+            env: { ...process.env, OUTPUT_PATH: match[1]!.trim(), PROMPT_PATH: ref?.[1] ?? "" },
+          });
           if (ran.exitCode !== 0) return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
         }
         const output = scripted === null ? next : scripted.output;

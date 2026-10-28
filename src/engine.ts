@@ -214,6 +214,7 @@ import {
 import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
+import { probeLinearMcp } from "./optional";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
 import { listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
@@ -803,6 +804,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
     /** One value from the operator's own configuration, by dotted name, as text; empty for none. */
     readonly config: (dotted: string) => Effect.Effect<string>;
+    /** Whether an agent Claude Code runs in cwd has a Linear MCP server, and where or why not. */
+    readonly linear: (cwd: string) => Effect.Effect<{ readonly reachable: boolean; readonly detail: string }>;
     /** Whether a merge request can be opened from here, and what it would carry. */
     readonly mr: (options: {
       readonly cwd: string;
@@ -4040,6 +4043,14 @@ export const hostLayer = (options: {
                   : "";
               }),
               Effect.orElseSucceed(() => ""),
+            ),
+          ),
+        linear: (cwd) =>
+          placing.pipe(
+            Effect.flatMap(({ env }) => under(probeLinearMcp({ ...env, cwd }))),
+            Effect.map((probe) => ({ reachable: probe.state === "ok", detail: probe.detail })),
+            Effect.catch((cause) =>
+              Effect.succeed({ reachable: false, detail: `unreadable: ${cause.message}` }),
             ),
           ),
         mr: (asked) =>
