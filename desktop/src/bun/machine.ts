@@ -13,10 +13,12 @@ import {
   Exit,
   Layer,
   Option,
+  Predicate,
   Queue,
   Ref,
   Semaphore,
   Schema,
+  SchemaIssue,
   Scope,
   Stream,
 } from "effect";
@@ -61,6 +63,8 @@ import { type MachineUsage, UPGRADE_SAID } from "../shared/usage";
 import { type MachineSchedules, SCHEDULES_UPGRADE_SAID } from "../shared/schedules";
 import { CLEANUP_UPGRADE_SAID, type CleanupListing } from "../shared/machine-cleanup";
 import type { ScheduleChange } from "../../../src/schedule-model";
+import type { ActionSchema } from "../../../src/actions";
+import type { Mutable } from "effect/Types";
 import { moveSchedule, type ScheduleDoor } from "../../../src/schedule-move";
 import { CHILD_CWD, childEnv } from "./login-env";
 import { backoff } from "../shared/retrying";
@@ -1077,9 +1081,12 @@ const refusal = (request?: string) => (error: Refused) =>
 
 export type Reached = Pick<Doors, "machine" | "desktop">;
 
+const formatIssue = SchemaIssue.makeFormatterDefault();
+
 /**
- * A call over a Machine's door, its refusal said, and its door closing under it a failure
- * naming the Machine. The caller's own interrupt is not caught.
+ * A call over a Machine's door, its refusal said, and its door closing under it or its
+ * payload or reply not fitting the call a failure naming the Machine. The caller's own
+ * interrupt is not caught.
  */
 const over = <A, R>(
   { machine }: Reached,
@@ -1088,16 +1095,25 @@ const over = <A, R>(
 ): Effect.Effect<A, ActionFailed, R> =>
   call.pipe(
     Effect.mapError(refusal(request)),
-    Effect.catchCause((cause) =>
-      Cause.hasInterruptsOnly(cause)
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause))
+        return Effect.fail(
+          new ActionFailed({
+            request,
+            reason: `${machine.name}'s connection was renewed before this finished`,
+          }),
+        );
+      const misfit = cause.reasons.find(Cause.isDieReason)?.defect;
+      // The RPC client dies on a misfit, its schema issue as the defect's cause.
+      return Predicate.isError(misfit) && SchemaIssue.isIssue(misfit.cause)
         ? Effect.fail(
             new ActionFailed({
               request,
-              reason: `${machine.name}'s connection was renewed before this finished`,
+              reason: `The call to ${machine.name} did not fit its schema: ${formatIssue(misfit.cause).replace(/\s+/g, " ")}`,
             }),
           )
-        : Effect.failCause(cause),
-    ),
+        : Effect.failCause(cause);
+    }),
   );
 
 /** A steer the host carried no further, with what it said about it. */
@@ -1209,30 +1225,26 @@ export const act = (
         return door
           .withdrawNote({ runId: action.runId, note: action.note, request })
           .pipe(Effect.as("Note removed"));
-      case "Deliver":
-        return door
-          .act({
-            actions: [
-              {
-                kind: "deliver",
-                run: action.runId,
-                ...addressOf(action),
-                text: action.text,
-                step: action.step,
-              },
-            ],
-            request,
-          })
-          .pipe(
-            Effect.flatMap(([done]) =>
-              done?.state === "applied"
-                ? Effect.succeed(done.note || "Sent")
-                : Effect.fail<Unsteered>({
-                    _tag: "Unsteered",
-                    message: done?.note || "the host said nothing about it",
-                  }),
-            ),
-          );
+      case "Deliver": {
+        const deliver: Mutable<Extract<typeof ActionSchema.Encoded, { kind: "deliver" }>> = {
+          kind: "deliver",
+          run: action.runId,
+          ...addressOf(action),
+          text: action.text,
+        };
+        // JSON has no undefined: an absent step is left out.
+        if (action.step !== undefined) deliver.step = action.step;
+        return door.act({ actions: [deliver], request }).pipe(
+          Effect.flatMap(([done]) =>
+            done?.state === "applied"
+              ? Effect.succeed(done.note || "Sent")
+              : Effect.fail<Unsteered>({
+                  _tag: "Unsteered",
+                  message: done?.note || "the host said nothing about it",
+                }),
+          ),
+        );
+      }
       case "FollowUp":
         return door.followUp({ runId: action.runId, text: action.text, request }).pipe(
           Effect.map(freshly),
