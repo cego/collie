@@ -1746,7 +1746,8 @@ its record keeps as `plan_reason`. A key left out takes its default.
   host's own size at the fork as its floor.
 - **`warmup`** samples per side are recorded and never judged, and **`samples`** per side
   (at least 2) are.
-- **`limit`**: seconds one sample, all its commands together, or one tree's prepare may take.
+- **`limit`**: seconds one sample, all its commands together, or one tree's prepare may take,
+  the host's time to record and start each command included.
 - **`threshold`** and **`tolerance`**: percents, as in [Outcomes](#outcomes).
 
 The host then samples alternately, A B B A …, base first, after the warmup. With each sample
@@ -1771,7 +1772,8 @@ wait, or a Measurement already sampling, with `invalid_state`, and records nothi
 
 Each command runs as one of the Run's checks does, recorded under the host's state directory,
 so a host that dies mid-sample leaves no benchmark running: the next host, and the next
-Measurement before it samples, ends what one left. A base tree is used again only while it
+Measurement before it samples, ends what one left. A host that stops mid-sample ends its
+benchmark and records nothing of it, so the next host measures that comparison afresh. A base tree is used again only while it
 holds exactly the harness commits over `--base` and no tracked file changed; otherwise it is
 made again.
 
@@ -1780,8 +1782,8 @@ A Measurement ends without a verdict when:
 - a sample, or prepare, outlives `limit` (`TimedOut`);
 - a command, or prepare, exits non-zero (`Failed`, naming the tree and keeping its output);
 - a non-warmup sample has no reading of a declared metric (`Unjudged`, naming it);
-- either tree's commit or fingerprint changed while it was measured (`Unjudged`, naming the
-  tree).
+- either tree's commit or fingerprint changed after prepare or after any sample, even where a
+  later sample put it back (`Unjudged`, naming the tree).
 
 Each record goes to the Run's `measurements.jsonl` in its evidence directory. Under
 `--json`, the envelope's `data` is `{ "measurement": <the record>, "ran": <bool> }`:
