@@ -21,6 +21,7 @@ import {
   IntegrationSchema,
   MeasurementSchema,
   Run,
+  SynthesisSchema,
   WorkflowError,
   agentWork,
   ask,
@@ -1513,6 +1514,43 @@ export default defineWorkflow({
       const gone = lost(last);
       if (gone !== null) return yield* handOn(yield* dropped(last, gone));
 
+      const bodyNow = Effect.gen(function* () {
+        const evidence = yield* host.evidence(runId, cwd);
+        const taken = (evidence.measurements ?? []).filter((one) => one.pass === "final");
+        const final = taken.findLast((one) => one.base.commit === evidence.mergeBase);
+        if (final === undefined)
+          return yield* new WorkflowError({
+            reason: "no `final` Measurement against the merge base to write the merge request from",
+          });
+        const fs = yield* FileSystem.FileSystem;
+        const planFile = `${place.dir}/handoffs/tune-up-plan.json`;
+        yield* fs.writeFileString(
+          planFile,
+          Schema.encodeSync(Schema.fromJsonString(Planned.fields.plan))(plan),
+        );
+        const body = bodyOf({
+          runId,
+          final,
+          original: proved.original,
+          finals: taken,
+          plans: reasons,
+          planFile,
+          written,
+          found,
+          cycles: cycled,
+          evidence: renderEvidence(evidence),
+          review: latest.reviewed,
+        });
+        yield* fs.writeFileString(delivering.body, body);
+        return body;
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new WorkflowError({
+              reason: `the merge request body could not be written: ${cause.message}`,
+            }),
+        ),
+      );
       let bodies = 0;
       const writeBody = Effect.suspend(() => {
         bodies += 1;
@@ -1520,47 +1558,17 @@ export default defineWorkflow({
           name: `merge-request-body.${bodies}`,
           success: text,
           error: WorkflowError,
-          execute: Effect.gen(function* () {
-            const evidence = yield* host.evidence(runId, cwd);
-            const taken = (evidence.measurements ?? []).filter((one) => one.pass === "final");
-            const final = taken.findLast((one) => one.base.commit === evidence.mergeBase);
-            if (final === undefined)
-              return yield* new WorkflowError({
-                reason:
-                  "no `final` Measurement against the merge base to write the merge request from",
-              });
-            const fs = yield* FileSystem.FileSystem;
-            const planFile = `${place.dir}/handoffs/tune-up-plan.json`;
-            yield* fs.writeFileString(
-              planFile,
-              Schema.encodeSync(Schema.fromJsonString(Planned.fields.plan))(plan),
-            );
-            const body = bodyOf({
-              runId,
-              final,
-              original: proved.original,
-              finals: taken,
-              plans: reasons,
-              planFile,
-              written,
-              found,
-              cycles: cycled,
-              evidence: renderEvidence(evidence),
-              review: latest.reviewed,
-            });
-            yield* fs.writeFileString(delivering.body, body);
-            return body;
-          }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new WorkflowError({
-                  reason: `the merge request body could not be written: ${cause.message}`,
-                }),
-            ),
-          ),
+          execute: bodyNow,
         });
       });
       yield* writeBody;
+
+      // Taken inside delivery's proof Activity, which a replay skips, so it is kept to be read back.
+      const proofReview = `${place.dir}/proof-review.json`;
+      const ProofReview = Schema.fromJsonString(
+        Schema.Struct({ reviewed: SynthesisSchema, on: Snapshot }),
+      );
+      let ciMoved = false;
 
       const delivered = yield* deliver({
         cwd,
@@ -1580,11 +1588,22 @@ export default defineWorkflow({
         unsettled: [],
         integrate: integrated,
         review: Effect.succeed((answered: string) =>
-          Effect.map(reviewOf("proof.", answered), (one) => one.reviewed),
+          Effect.gen(function* () {
+            latest = yield* reviewOf("proof.", answered);
+            yield* FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) =>
+                fs.writeFileString(proofReview, Schema.encodeSync(ProofReview)(latest)),
+              ),
+              Effect.orDie,
+            );
+            yield* bodyNow;
+            return latest.reviewed;
+          }),
         ),
         moved: ({ pass, round }) =>
           Effect.gen(function* () {
             const fix = `${pass}-fix-${round}`;
+            if (pass === "ci") ciMoved = true;
             // The gate runs its own checks again after its fix; a CI fix's tree has none yet.
             if (pass === "ci") yield* failingChecks(`${fix}.checks`);
             // A gate fix's review is already the gate's work; a CI fix's is a review round of its own.
@@ -1599,7 +1618,7 @@ export default defineWorkflow({
                   host.note({
                     runId,
                     cwd,
-                    body: `${fix} moved the head; measured again:\n\n${body.split("\n### ")[0]}`,
+                    body: `${fix} moved the head; measured again:\n\n${body}`,
                   }),
                 ),
               });
@@ -1607,6 +1626,14 @@ export default defineWorkflow({
           }),
       });
       if (delivered.nothing !== undefined) return yield* handOn(delivered.nothing);
+      if (!ciMoved) {
+        const kept = yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) => fs.readFileString(proofReview)),
+          Effect.flatMap(Schema.decodeUnknownEffect(ProofReview)),
+          Effect.option,
+        );
+        if (Option.isSome(kept)) latest = kept.value;
+      }
       const gaps = yield* Activity.make({
         name: "outcome",
         success: Schema.Struct({ head: text, gaps: Schema.Array(text) }),

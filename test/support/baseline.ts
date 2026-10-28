@@ -15107,6 +15107,11 @@ scenario(
         expect(verdictsOf(measured[1]!)).toEqual(["bench.count gain", "bench.size no-change"]);
         expect(yield* wasAsked(runId, "ci-fix-1.review-1")).toBe(true);
         expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
+        // The merge request is told the whole replacement evidence, not only its table.
+        const noted = (yield* ciNotes(forge)).join("\n");
+        expect(noted).toContain(`Samples of \`final\` Measurement ${measured[1]!.id}`);
+        expect(noted).toContain(head);
+        expect(noted).toContain("#### Reproduce");
       }),
     ),
   120_000,
@@ -15177,6 +15182,54 @@ scenario(
         expect(measured).toHaveLength(2);
         expect(measured[1]!.candidate.head_sha).toBe(yield* headOf());
         expect(measured[0]!.candidate.head_sha).not.toBe(measured[1]!.candidate.head_sha);
+      }),
+    ),
+  120_000,
+);
+
+/** A review with a blocker of its own, and the fix that commits `note` for it, naming the CI check. */
+const blockedThenFixed = (round: number): ReadonlyArray<Schema.Json> => {
+  const title = `round ${round}: search drops a result`;
+  return [
+    {
+      ...TUNE_REVIEWED,
+      verdict: "findings",
+      findings: [{ severity: "blocker", title, file: "count" }],
+    },
+    {
+      writes: [],
+      sh: inCheckout(`echo ${round} > note && git add note && git commit -qm fix-${round}`),
+      output: { ...GATE_FIX, fixed: [{ title, file: "count" }], checks: [{ name: "nuxi" }] },
+    },
+  ];
+};
+
+scenario(
+  "a tune-up whose last rally fix lands after the last review proves its outcome on the fresh review delivery took",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-fresh";
+        const { bin, forge } = yield* tuneForge;
+        const write = forge.holding(
+          ciOn("OPENED_AT", { name: "nuxi-job", state: "passed" }, "passed"),
+        );
+        yield* cycling(runId, [
+          fasterTo(3),
+          ...[1, 2, 3, 4].flatMap(blockedThenFixed),
+          TUNE_REVIEWED,
+          {
+            writes: [write],
+            sh: `sed -i "s/OPENED_AT/$(git -C '${rig.projectDir}' rev-parse HEAD)/" '${write.path}'`,
+            output: OPENED_CI,
+          },
+        ]);
+        yield* leftToCi(runId, ["nuxi"]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(yield* wasAsked(runId, "proof.review-1")).toBe(true);
+        expect(said(result)).toBe(CI_MR);
+        expect(yield* runLog(runId)).toContain(`performance proved on ${yield* headOf()}`);
       }),
     ),
   120_000,
