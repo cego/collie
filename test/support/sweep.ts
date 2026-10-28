@@ -94,6 +94,8 @@ export const marked = (
         Bun.sleepSync(1);
         read = environ();
       }
+      // The exec may have finished between the empty read and the stat read.
+      if (read === "") read = environ();
       const env = `\0${read}\0`;
       if (!want.every((binding) => env.includes(binding))) return [];
       const command = readFileSync(`${proc}/${name}/cmdline`, "utf8").split("\0").join(" ").trim();

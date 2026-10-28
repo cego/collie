@@ -288,4 +288,36 @@ describe("the start-of-suite sweep", () => {
         expect(marked("/root-a", {}, proc)).toEqual([{ pid: 4242, command: "sleep 63" }]);
       }).pipe(Effect.scoped),
     ));
+
+  test("a process whose exec finishes between its empty environment read and its stat read is read again", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
+        const pid = `${proc}/4242`;
+        yield* fs.makeDirectory(pid);
+        yield* fs.writeFileString(`${pid}/cmdline`, "sleep\x0063\0");
+        yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
+        yield* fs.writeFileString(
+          `${pid}/stat.next`,
+          `4242 (sleep) S 1 4242 4242 0 -1 4194304${" 0".repeat(41)} 140730872492009 0\n`,
+        );
+        // FIFOs order the reads: environ reads empty, the exec finishes, then stat is read.
+        Bun.spawnSync(["mkfifo", `${pid}/environ`, `${pid}/stat`]);
+        const exec = Bun.spawn([
+          "sh",
+          "-c",
+          "cd $0; : > environ; mv environ.next environ; cat stat.next > stat",
+          pid,
+        ]);
+        yield* Effect.addFinalizer(() =>
+          Effect.promise(() => {
+            exec.kill();
+            return exec.exited;
+          }),
+        );
+
+        expect(marked("/root-a", {}, proc)).toEqual([{ pid: 4242, command: "sleep 63" }]);
+      }).pipe(Effect.scoped),
+    ));
 });
