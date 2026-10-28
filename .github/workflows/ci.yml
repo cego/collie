@@ -6,13 +6,11 @@ on:
     branches: [master]
   pull_request:
 
-# A newer push to a pull request cancels its older run; each master commit keeps its own.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # `bun run check`, split: its static half here, its suite in the shards.
   static:
     runs-on: ubuntu-latest
     steps:

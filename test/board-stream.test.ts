@@ -195,11 +195,6 @@ test(
   120_000,
 );
 
-/**
- * Renames a finished Run's Task six times, each waited for on the board, and holds the host to
- * reading herdr's agents and panes only on its 5 s tick; `drawer` keeps the Run's detail
- * followed throughout.
- */
 const readsOnlyOnTicks = (drawer: boolean) =>
   proves(
     "collie-board-reading-",

@@ -587,7 +587,6 @@ class NotYet<A> {
   constructor(readonly value: A) {}
 }
 
-/** The end of the log of the host this test's state directory has, where it has one. */
 const hostLogEnd = Effect.gen(function* () {
   const log = `${yield* Config.String("HERDR_PLUGIN_STATE_DIR").pipe(Config.withDefault(""))}/host.log`;
   const text = yield* Effect.tryPromise(() => Bun.file(log).text());

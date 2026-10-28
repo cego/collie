@@ -98,7 +98,6 @@ export const timingFlags = (targeted: boolean, timings: string, seed: string) =>
     ? Effect.map(exists(timings), (there) => [`--timings=${there ? timings : seed}`])
     : Effect.succeed([`--timings=${timings}`, "--update-timings"]);
 
-/** The `top` commonest of `lines`, each as a count and the line, after `indent` spaces. */
 const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
   const counts = new Map<string, number>();
   for (const line of lines) counts.set(line, (counts.get(line) ?? 0) + 1);

@@ -679,7 +679,6 @@ const pipelineIdOf = (mr: FakeMr) => Number(mr.iid) * 100;
 const jobsOf = (jobs: ReadonlyArray<FakeJob>, from: number) =>
   jobs.map((job, at) => ({ ...job, id: job.id ?? from + at + 1 }));
 
-/** The Actions run a merge request's jobs are in. */
 const actionsRun = (mr: FakeMr | undefined) => 4000 + Number(mr?.iid ?? 0);
 
 /** The merge request a project's job `id` is on its head pipeline of. */
