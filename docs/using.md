@@ -413,6 +413,21 @@ from the repository and the title from the work itself. There is no naming promp
 alias list to maintain, and nothing remembered between herdr sessions: your live labels
 are the vocabulary, read each time.
 
+The title is what the work is about, never only the workflow that does it: two `plan`
+runs with different goals are two differently named tasks. The namer is shown the most
+descriptive input the start was given — whatever it is called, and wherever the caller put
+it — and the `--goal` it was started with. A plan handed over by its directory is read for
+its spec's first heading, so `implement` on a plan is named for what the plan builds,
+not "Implement plan". An answer that says nothing a different task of the same workflow
+would not also say — "Plan new work", "Implement plan" — is not taken; the work's own first
+sentence, in a few words, is. A Schedule's run is named the same way, with the Schedule's
+own name as its goal, and a child run that is work of its own is named from the input it
+was launched with.
+
+A title you give names the task as you wrote it: `collie run start --title`, or the
+`title` of a start chat or an agent makes for you. A title that says nothing — "Plan new
+work" — is not taken over the work's own words.
+
 Those labels are data. They go to the namer as a list of what things are called, under a
 prompt that says so, and what comes back is two short strings that can only become a
 label — never a path, an agent name or a command.
@@ -425,7 +440,11 @@ workspace herdr reopens rather than creates keeps whatever it is already called.
 A name is decided once, when the task is made. Continuing a task never renames it, and
 neither does a replayed start. **Rename anything and Collie leaves it alone from then
 on** — a task workspace, a run's tab, an agent's pane: once the label is not one Collie
-wrote, Collie stops writing it, through every later update and every continuation.
+wrote, Collie stops writing it, through every later update and every continuation. The one
+exception is a name that said only the workflow — "Plan new work", "Implement plan" — given
+before names had to say what the work is: when the host starts, each such task still
+carrying the label Collie wrote is renamed for its first run's work, on its workspace and
+on the board. Its branch, checkout and runs are left as they are.
 
 Tabs and panes inside a task workspace do not repeat the task: the workspace already
 says what the work is, so the tab spends its width on the workflow and the step —
@@ -434,7 +453,7 @@ fan-out keeps its own name, because several of them share one task workspace.
 
 Where the namer cannot be asked — no herdr session to account the call against, or no
 `claude` that takes the flags the isolation depends on — the task is still named, from
-your live prefix and the work's own short name. Starting work never waits on a name.
+your live prefix and the first sentence of the work. Starting work never waits on a name.
 
 ## What a run does to your repository
 
@@ -2728,7 +2747,8 @@ something or parks until you act (`needs-you`), or records a merge request it op
 (`mr-opened`); when a card is something you could go and try (`slice-ready`); and when
 Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
 (`drift-unresolved`) — each once per run and thing, however often the work is replayed or
-its host restarts.
+its host restarts Its title is the repository and what the task is called —
+`collie · Offer banner fix finished` — or the run's id where it belongs to no task.
 
 `max_iterations`, `handoff_timeout_ms` and `quiet_ms` are still read and shown under
 Settings, but a run of a workflow module consults none of them: `implement` carries its own

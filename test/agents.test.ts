@@ -60,14 +60,16 @@ import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
-import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
+import { appendLine, deliveriesOf, herdOf, readLedger, reconcile } from "../src/steering";
 import { readLaunches } from "../src/launches";
 import { Store } from "../src/store";
 import type { AuditLine } from "../src/audit";
-import { readTask, writeTask } from "../src/task";
+import { readTask, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
-import { HerdrError } from "../src/herdr";
+import { Herdr, HerdrError } from "../src/herdr";
+import { retitleGenericTasks } from "../src/tasknames";
+import { runFacts } from "./support/records";
 import { agentName, shellQuote } from "../src/naming";
 import {
   controlDir,
@@ -4492,7 +4494,11 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
     Effect.gen(function* () {
       const env = rig.pluginEnv();
       // Named and nothing more: the host opens it once it knows the checkout it is rooted at.
-      const fresh = yield* taskFor(env, { mode: "new" }, { workflow: "implement", named: "ENG-7" });
+      const fresh = yield* taskFor(
+        env,
+        { mode: "new" },
+        { workflow: "implement", inputs: { issue: "ENG-7" } },
+      );
       expect(fresh._tag === "Ok" && fresh.task).toBeNull();
       expect(fresh._tag === "Ok" ? fresh.label : null).toEqual(expect.any(String));
       expect(yield* rig.cmds()).not.toContain("workspace create");
@@ -4509,7 +4515,7 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       const again = yield* taskFor(
         env,
         { mode: "continue", task },
-        { workflow: "review", named: "" },
+        { workflow: "review", inputs: {} },
       );
       expect(again._tag === "Ok" && again.task).toEqual(task);
       expect(again._tag === "Ok" ? again.label : "").toBeNull();
@@ -4519,25 +4525,212 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       const reopening = yield* taskFor(
         env,
         { mode: "continue", task: closed },
-        { workflow: "review", named: "" },
+        { workflow: "review", inputs: {} },
       );
       expect(reopening._tag === "Ok" && reopening.task).toEqual(closed);
 
       // Outside herdr there is nowhere to open one, and a Run that starts no agent needs none.
       const outside = { ...env, workspaceId: null, socketPath: null };
-      const none = yield* taskFor(outside, { mode: "new" }, { workflow: "tally", named: "" });
+      const none = yield* taskFor(outside, { mode: "new" }, { workflow: "tally", inputs: {} });
       expect(none._tag === "Ok" && none.task).toBeNull();
       expect(none._tag === "Ok" ? none.label : "").toBeNull();
       expect(yield* rig.cmds()).not.toContain("workspace create");
     }),
   ));
 
+test("two goals started with one workflow are two Tasks named for their goals, not the workflow", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const fs = yield* FileSystem.FileSystem;
+      const labelOf = (about: Parameters<typeof taskFor>[2]) =>
+        taskFor(env, { mode: "new" }, about).pipe(
+          Effect.map((placed) => (placed._tag === "Ok" ? placed.label : null)),
+        );
+      // `then` written first, as a chat writes it: the goal is still what the Task is about.
+      const tuneUp = yield* labelOf({
+        workflow: "plan",
+        inputs: { then: "", goal: "Design Tune-up performance workflow" },
+      });
+      const lookup = yield* labelOf({
+        workflow: "plan",
+        inputs: { then: "", goal: "Migrate pending-payment lookup to promotion-service" },
+      });
+      expect(tuneUp).toContain("Design Tune-up performance workflow");
+      expect(lookup).toContain("Migrate pending-payment lookup to promotion-service");
+      const plan = `${rig.root}/runs/run-1/plan`;
+      yield* fs.makeDirectory(plan, { recursive: true });
+      yield* fs.writeFileString(`${plan}/SPEC.md`, "# Spec: Stop the stale offer banner\n");
+      expect(yield* labelOf({ workflow: "implement", inputs: { plan, then: "" } })).toContain(
+        "Stop the stale offer banner",
+      );
+      expect(
+        yield* labelOf({ workflow: "general", inputs: {}, goal: "Audit last week's runs" }),
+      ).toContain("Audit last week's runs");
+    }),
+  ));
+
+test("a title the human gave names the Task, and one that says nothing is not taken", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const labelOf = (title: string) =>
+        taskFor(
+          env,
+          { mode: "new" },
+          { workflow: "plan", inputs: { goal: "Plan the offer banner fix" }, title },
+        ).pipe(Effect.map((placed) => (placed._tag === "Ok" ? placed.label : null)));
+      expect(yield* labelOf("Offer banner, second attempt")).toEndWith(
+        " | Offer banner, second attempt",
+      );
+      expect(yield* labelOf("Plan new work")).toEndWith(" | Plan the offer banner fix");
+    }),
+  ));
+
+test("a Task Collie named for its workflow alone is renamed for its work, and one a human renamed is not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const fs = yield* FileSystem.FileSystem;
+      const plan = `${rig.root}/runs/run-9/plan`;
+      yield* fs.makeDirectory(plan, { recursive: true });
+      yield* fs.writeFileString(`${plan}/SPEC.md`, "# Spec: Stop the stale offer banner\n");
+      yield* rig.addWorkspace("wP", "Collie | Plan new work", rig.projectDir);
+      yield* rig.addWorkspace("wH", "Offer banner, by hand", rig.projectDir);
+      yield* rig.addWorkspace("wN", "Collie | Passkey bridge race", rig.projectDir);
+      const kept = (id: string, workspace: string, label: string) =>
+        writeTask(env.stateDir, {
+          id,
+          workspace,
+          label,
+          cwd: rig.projectDir,
+          created_at: "2026-10-26T00:00:00.000Z",
+        });
+      yield* kept("task-p", "wP", "Collie | Plan new work");
+      yield* kept("task-h", "wH", "Collie | Plan new work");
+      yield* kept("task-g", "wGone", "Collie | Implement plan");
+      yield* kept("task-n", "wN", "Collie | Passkey bridge race");
+      yield* kept("task-c", "wGone", "Collie | Implement plan");
+      const goal = { then: "", goal: "Design Tune-up performance workflow" };
+      const runs = [
+        runFacts({ id: "r-p", workflow: "plan", task: "task-p", settled: { inputs: goal } }),
+        runFacts({
+          id: "r-p.implement",
+          task: "task-p",
+          parent: "r-p",
+          created: "2026-09-15T10:00:00Z",
+          settled: { inputs: { plan } },
+        }),
+        runFacts({ id: "r-h", workflow: "plan", task: "task-h", settled: { inputs: goal } }),
+        runFacts({ id: "r-g", task: "task-g", settled: { inputs: { plan, then: "" } } }),
+        runFacts({ id: "r-n", workflow: "plan", task: "task-n", settled: { inputs: goal } }),
+        // Started with a Task of its own, the founding Run of task-c is still a child.
+        runFacts({
+          id: "r-x.implement",
+          task: "task-c",
+          parent: "r-x",
+          settled: { inputs: { plan } },
+        }),
+      ];
+
+      yield* retitleGenericTasks(env, new Herdr(env), runs);
+
+      const label = (id: string) =>
+        readTask(env.stateDir, id).pipe(Effect.map((task) => task?.label));
+      const live = new Map(
+        (yield* new Herdr(env).workspaceList()).map((one) => [one.workspaceId, one.label]),
+      );
+      expect(yield* label("task-p")).toBe("Collie | Design Tune-up performance workflow");
+      expect(live.get("wP")).toBe("Collie | Design Tune-up performance workflow");
+      expect(yield* label("task-g")).toBe("Collie | Stop the stale offer banner");
+      expect(yield* label("task-c")).toBe("Collie | Stop the stale offer banner");
+      expect(yield* label("task-h")).toBe("Collie | Plan new work");
+      expect(live.get("wH")).toBe("Offer banner, by hand");
+      expect(yield* label("task-n")).toBe("Collie | Passkey bridge race");
+      expect(live.get("wN")).toBe("Collie | Passkey bridge race");
+    }),
+  ));
+
+test("a Task's workspace is looked for in its own Herd, where a workspace of the same id is another's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const fs = yield* FileSystem.FileSystem;
+      const other = `${rig.root}/other.sock`;
+      yield* fs.writeFileString(
+        `${rig.logPath}.sessions.json`,
+        encodeJson([
+          { name: "main", socket_path: rig.socketPath },
+          { name: "other", socket_path: other },
+        ]),
+      );
+      yield* rig.addWorkspace(
+        "w1",
+        "Collie | Plan new work",
+        rig.projectDir,
+        false,
+        rig.socketPath,
+      );
+      yield* rig.addWorkspace("w1", "Offer banner, by hand", rig.projectDir, false, other);
+      yield* writeTask(env.stateDir, {
+        id: "task-o",
+        workspace: "w1",
+        label: "Collie | Plan new work",
+        cwd: rig.projectDir,
+        herd: yield* herdOf(other),
+        created_at: "2026-10-26T00:00:00.000Z",
+      });
+      const goal = { goal: "Design Tune-up performance workflow" };
+
+      yield* retitleGenericTasks(env, new Herdr(env), [
+        runFacts({ id: "r-o", workflow: "plan", task: "task-o", settled: { inputs: goal } }),
+      ]);
+
+      expect((yield* readTask(env.stateDir, "task-o"))?.label).toBe("Collie | Plan new work");
+      const main = yield* new Herdr(env).workspaceList();
+      expect(main.map((one) => one.label)).toEqual(["Collie | Plan new work"]);
+    }),
+  ));
+
+test(
+  "a Task's label is renamed under its lock, never over a Run holding it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const env = rig.pluginEnv();
+        yield* writeTask(env.stateDir, {
+          id: "task-p",
+          workspace: "wGone",
+          label: "Collie | Plan new work",
+          cwd: rig.projectDir,
+          created_at: "2026-10-26T00:00:00.000Z",
+        });
+        const runs = [
+          runFacts({
+            id: "r-p",
+            workflow: "plan",
+            task: "task-p",
+            settled: { inputs: { goal: "Design Tune-up performance workflow" } },
+          }),
+        ];
+        const label = readTask(env.stateDir, "task-p").pipe(Effect.map((task) => task?.label));
+
+        yield* withTaskLock(env.stateDir, "task-p", retitleGenericTasks(env, new Herdr(env), runs));
+        expect(yield* label).toBe("Collie | Plan new work");
+
+        yield* retitleGenericTasks(env, new Herdr(env), runs);
+        expect(yield* label).toBe("Collie | Design Tune-up performance workflow");
+      }),
+    ),
+  30_000,
+);
+
 test("a start kept here is the workspace it was started from: its Task, or a new one kept there", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.addWorkspace("wH", "Monorepo | Mine", rig.projectDir);
       const env = { ...rig.pluginEnv(), workspaceId: "wH" };
-      const about = { workflow: "implement", named: "FRO-343" };
+      const about = { workflow: "implement", inputs: { plan: "FRO-343" } };
 
       const made = yield* taskFor(env, { mode: "here" }, about);
       const task = made._tag === "Ok" ? made.task : null;

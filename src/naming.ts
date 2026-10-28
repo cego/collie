@@ -228,6 +228,12 @@ export function taskWorkspaceLabel(name: { project: string; title: string }): st
     .join(" | ");
 }
 
+/** `Task workspaces` from `Collie | Task workspaces`: what the work is, without its project. */
+export function taskTitleOf(label: string): string {
+  const at = label.indexOf(" | ");
+  return at < 0 ? label : label.slice(at + 3);
+}
+
 /**
  * A label as herdr may be given it: one line, no control characters, no runs of space.
  * Names reach here from the model and from the user's own live labels, and both are
