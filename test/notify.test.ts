@@ -12,6 +12,7 @@ import { Children, Host } from "../src/sdk";
 import { foundationLayer, loadEntry } from "../src/engine";
 import { Store } from "../src/store";
 import { fixtures, until } from "./support/host";
+import { writeTask } from "../src/task";
 
 test("every kind names the repo and the run, and none of them is a bare slug", () => {
   // One herdr session runs several checkouts, so `review-mr-123 needs you` does not
@@ -153,6 +154,45 @@ test("a merge request recorded says it was opened, naming it", () =>
       );
       expect(toasts).toEqual([
         "done|host · r1 opened !42|https://gitlab.example/acme/app/-/merge_requests/42",
+      ]);
+    }),
+  ));
+
+test("a Run's toast names the Task it is part of by what it is called, never by its id", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeTask(dir, {
+        id: "task-7",
+        workspace: "w7",
+        label: "Collie | Offer banner fix",
+        cwd: dir,
+        created_at: "2026-10-28T09:00:00Z",
+      });
+      yield* session(
+        Effect.gen(function* () {
+          const store = yield* Store;
+          yield* store.admit({
+            request: "req-r1",
+            run: "r1",
+            workflow: "implement",
+            project: dir,
+            input: {},
+            provenance: {},
+            options: {},
+            generation: "g",
+            execution: "exec-r1",
+            task: "task-7",
+            parent: null,
+            placing: `{"from":"${dir}","taskLabel":null}`,
+          });
+          yield* (yield* Host).mergeRequest(
+            "r1",
+            "https://gitlab.example/acme/app/-/merge_requests/42",
+          );
+        }),
+      );
+      expect(toasts).toEqual([
+        "done|host · Offer banner fix opened !42|https://gitlab.example/acme/app/-/merge_requests/42",
       ]);
     }),
   ));

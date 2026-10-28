@@ -119,6 +119,8 @@ interface FakeWorkspace {
   /** As on a pane: what `workspace.report_metadata` attached. */
   tokens?: Record<string, string>;
   focused?: boolean;
+  /** As on a pane: the socket of the one session that lists it; unset, every session does. */
+  session?: string | null;
 }
 
 interface FakeWorktree {
@@ -201,6 +203,7 @@ const FakeWorkspaceSchema = Schema.Struct({
   /** As on a pane: what `workspace.report_metadata` attached, which is what owns a Home. */
   tokens: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   focused: Schema.optionalKey(Schema.Boolean),
+  session: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 const FakeWorktreeSchema = Schema.Struct({
   path: Schema.String,
@@ -735,14 +738,25 @@ function handle(
         if (tab) tab.label = argv[3] ?? tab.label;
         break;
       }
+      case "workspace rename": {
+        const socket = yield* envString("HERDR_SOCKET_PATH");
+        const workspace = state.workspaces.find(
+          (w) => w.workspace_id === argv[2] && (w.session ?? socket) === socket,
+        );
+        if (workspace) workspace.label = argv[3] ?? workspace.label;
+        break;
+      }
       case "workspace list": {
         const held = yield* tokensFor("workspaces");
+        const socket = yield* envString("HERDR_SOCKET_PATH");
         result = {
           type: "workspace_list",
-          workspaces: state.workspaces.map((w) => ({
-            ...w,
-            tokens: { ...w.tokens, ...held[w.workspace_id] },
-          })),
+          workspaces: state.workspaces
+            .filter((w) => (w.session ?? socket) === socket)
+            .map((w) => ({
+              ...w,
+              tokens: { ...w.tokens, ...held[w.workspace_id] },
+            })),
         };
         break;
       }

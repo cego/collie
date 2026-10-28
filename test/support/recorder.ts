@@ -345,12 +345,19 @@ export class Rig {
    * A workspace herdr has. None by default: `workspace list` answers with an empty
    * session, so only a test about several workspaces has to say what is in one.
    */
-  addWorkspace(workspaceId: string, label: string, cwd?: string, focused = false) {
+  addWorkspace(
+    workspaceId: string,
+    label: string,
+    cwd?: string,
+    focused = false,
+    session?: string,
+  ) {
     return this.appendState("workspaces", {
       workspace_id: workspaceId,
       label,
       cwd: cwd ?? null,
       focused,
+      session: session ?? null,
     });
   }
 

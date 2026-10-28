@@ -31,7 +31,9 @@ Answer only in the JSON schema you were given, and nothing else.
 - **`title`** says what this particular piece of work is, in a handful of words a person
   would recognise a week later. It is a description, not an identifier: no slugs, no
   branch names, no hyphenated-run-ids, and never the first few words of the request cut
-  off mid-sentence.
+  off mid-sentence. Name the objective the data gives — what `named after` and `goal` say
+  is being done — never the workflow alone: "Plan new work", "Implement plan" or
+  "Self-improve workflow" would be true of every piece of work that workflow runs.
 - The two are different things. `project` is what this work has in common with the
   person's other work; `title` is what tells it apart from the rest. Do not repeat the
   project inside the title.
