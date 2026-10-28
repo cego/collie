@@ -97,9 +97,20 @@ under `external`, as Discover does. Never change that repository, and file nothi
 
 Cycle {{cycle.n}} is not kept: {{why}}
 
-Reset this branch to {{cycle.start}}, the commit the Cycle started on, with
-`git reset --hard {{cycle.start}}`. That removes this Cycle's commits and nothing older. Push
-nothing. Collie then checks that the checkout's head and files are that tree again.
+Take back this Cycle's own commits, {{cycle.commits}}, and nothing else: the branch goes back
+to {{cycle.start}}, the commit the Cycle started on. First read
+`git log --format=%H {{cycle.start}}..HEAD`; where it lists a commit that is not this
+Cycle's, run nothing. Otherwise run exactly this:
+
+```sh
+git merge-base --is-ancestor {{cycle.end}} HEAD && git merge-base --is-ancestor HEAD {{cycle.end}} && git reset --keep {{cycle.start}}
+```
+
+The first two stop it where anyone committed after {{cycle.end}}, where Collie decided to
+revert. `--keep` keeps uncommitted work, yours or anyone's, and refuses where it would be
+lost. Where any of it fails, change nothing more and push nothing: Collie then checks the
+checkout's head and files against the Cycle's start and fails the Run naming both trees, and
+nothing is lost.
 
 ## external-search
 
@@ -143,15 +154,17 @@ or abort it, and push nothing. Touch neither the harness paths nor another repos
 The change this Run kept does not hold its gain against {{base.merge}}, the commit its merge
 request would merge into: {{why}}
 
-Drop it. Make this checkout's files exactly the base tree Collie measured, {{base.tree}},
-which is {{base.merge}} with the harness commits applied, and commit that on this branch:
+Drop it. Make this checkout's committed files exactly the base tree Collie measured,
+{{base.tree}}, which is {{base.merge}} with the harness commits applied, and commit that on
+this branch. Run exactly this:
 
 ```sh
-git read-tree -u --reset {{base.tree}}
-git commit -m "Drop the tune-up's change: no final gain"
+git diff --cached --quiet && git diff --binary HEAD {{base.tree}} | git apply --index && git commit -m "Drop the tune-up's change: no final gain"
 ```
 
-Push nothing. Collie then checks that the checkout's files are that tree again.
+It changes only the files the drop needs, and refuses where something is already staged or
+one of them has uncommitted work, so no work of anyone else's is lost. Where it fails, change
+nothing more. Push nothing. Collie then checks that the checkout's files are that tree again.
 
 ## review
 

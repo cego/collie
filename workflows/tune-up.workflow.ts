@@ -1,17 +1,6 @@
 // Make a repository measurably faster, proved by the host's Measurement rather than by an
-// agent's timings (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement).
-//
-// Discover reads the project, Harness commits a benchmark harness and writes its plan, and
-// Calibrate has the host measure the base against itself to learn this Machine's noise
-// floor. Where that rules out proof the Run ends with its findings and no merge request.
-// Otherwise each Cycle tries one change, kept only where the host measures it a gain, and
-// a Run that keeps none ends back on its base tree with its findings. What was kept is
-// measured again against the merge base its merge request targets, reviewed in the shared
-// rally and delivered through the shared gate; a gain that does not survive is dropped.
-// Whatever only another repository could change is written to a report, and each finding is
-// put to the human as Ignore or Post to Linear; none of it counts toward the outcome.
-//
-// The Markdown beside this file is the content: what each step is asked.
+// agent's timings (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement). What only
+// another repository could change is put to the human and never counts toward the outcome.
 
 import {
   Agents,
@@ -91,7 +80,7 @@ const prompts = {
   }),
   revert: content.template("revert", {
     ...Told,
-    cycle: Schema.Struct({ n: text, start: text }),
+    cycle: Schema.Struct({ n: text, start: text, end: text, commits: text }),
     why: text,
   }),
   merge: content.template("merge", { ...Told, conflict: text }),
@@ -857,7 +846,6 @@ export default defineWorkflow({
         }),
       );
 
-      // Each plan is its own record before anything is measured by it.
       let plans = 0;
       const reasons: string[] = [];
       const recordPlan = (plan: Plan, reason: string) =>
@@ -1232,19 +1220,28 @@ export default defineWorkflow({
         const kept = judged.why === null;
         if (!kept) {
           const why = judged.why ?? "";
-          const moved = yield* Activity.make({
+          const movedTo = yield* Activity.make({
             name: `cycle-${n}.moved`,
-            success: Schema.Boolean,
-            execute: Effect.map(treeNow, (now) => !sameTree(now, start)),
+            success: Schema.NullOr(text),
+            execute: Effect.map(treeNow, (now) => (sameTree(now, start) ? null : now.head)),
           });
-          if (moved)
+          if (movedTo !== null)
             yield* cycles(
               agentWork({
                 operation: `cycle-${n}-revert`,
                 agent: TUNER,
                 role: "tuner",
                 instructions: prompts.revert,
-                input: { ...told, cycle: { n: String(n), start: start.head }, why },
+                input: {
+                  ...told,
+                  cycle: {
+                    n: String(n),
+                    start: start.head,
+                    end: movedTo,
+                    commits: tried.result === "changed" ? tried.commits.join(", ") : "none",
+                  },
+                  why,
+                },
               }),
             );
           yield* Activity.make({

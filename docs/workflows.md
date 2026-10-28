@@ -1034,10 +1034,11 @@ other checkout, or a URL, is refused at the start.
    opportunities and every earlier Cycle's result, and commits one change on the Run's
    branch. Collie runs the Run's checks, all but those left to CI, and measures the
    checkout against the tree the Cycle started on. The Cycle is kept only where those checks pass,
-   the primary metric shows a `gain` and every guardrail holds. Otherwise the tuner resets
-   the branch to the Cycle's starting commit, and Collie checks that the head and files are
-   that tree again before anything else; a revert that leaves another tree fails the Run,
-   naming both. The findings are rewritten after each Cycle. A reverted Cycle, or one that
+   the primary metric shows a `gain` and every guardrail holds. Otherwise the tuner takes
+   back only that Cycle's commits, with `git reset --keep` to its starting commit, and does
+   nothing where a commit landed after the Cycle or uncommitted work would be lost. Collie
+   then checks that the head and files are that tree again before anything else; a revert
+   that leaves another tree fails the Run, naming both, rather than lose anyone's work. The findings are rewritten after each Cycle. A reverted Cycle, or one that
    changed nothing, still counts, and a restarted host resumes in the Cycle it was in.
 
    The Cycles stop early, with the reason in the Run's log and its findings, when the tuner
@@ -1096,7 +1097,8 @@ a guardrail not held, there is no merge request and the Run is not failed. Its r
 that file and why it ended: `proof unavailable`, naming each metric, why the Cycles stopped,
 or the `final` Measurement's verdict. The Run is then back on its base tree: with no kept
 Cycle the branch already is, and a change that lost its gain is dropped back to the base
-tree at the latest merge base, which Collie checks from the trees. A fix after the merge
+tree at the latest merge base, in a commit that changes only the files it needs and keeps
+uncommitted work, which Collie checks from the trees. A fix after the merge
 request is open that loses the gain or a reviewer's verdict fails the Run, saying the merge
 request is not ready and why, on the merge request too. A forge that refuses the merge
 request fails the Run with the forge's reason. A harness commit touching a path outside its

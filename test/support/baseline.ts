@@ -14561,7 +14561,7 @@ const FASTER = () => tried("echo 3 > count && git add count");
 const FASTER_BUT_LARGER = () => tried("echo 3 > count && echo 200 > size && git add count size");
 const FASTER_BUT_JITTERY = () => tried("echo 3 > count && touch jitter && git add count jitter");
 const FASTER_BUT_BROKEN = () => tried("echo 3 > count && touch broken && git add count broken");
-const RESET = () => ({ writes: [], sh: inCheckout("git reset -q --hard HEAD~1"), output: "reset" });
+const RESET = () => asTold("true", "reset");
 const EXHAUSTED = { result: "exhausted", why: "every ranked opportunity has been tried" };
 
 /** A tune-up that calibrates, then answers each Cycle's prompt with the next of `turns`. */
@@ -14723,6 +14723,71 @@ scenario(
         expect(reasonOf(result)).toContain(started["1"]!.head);
         expect(reasonOf(result)).toContain(now.head);
         expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+      }),
+    ),
+  120_000,
+);
+
+/** After `before`, what the fenced `sh` block of the agent's own prompt says, run in the checkout; it answers whatever that did. */
+const asTold = (before: string, output: Schema.Json) => ({
+  writes: [],
+  sh: inCheckout(
+    `${before} && sed -n '/^\`\`\`sh$/,/^\`\`\`$/p' "$PROMPT_PATH" | sed '1d;$d' | sh; true`,
+  ),
+  output,
+});
+
+scenario(
+  "a tune-up revert keeps uncommitted work it did not make, and fails the Run naming both trees rather than lose it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-dirty-revert";
+        yield* cycling(runId, [NO_CHANGE(), asTold("echo '# mine' >> bench/bench.sh", "reset")]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(yield* readText(`${rig.projectDir}/bench/bench.sh`)).toEndWith("# mine\n");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain((yield* cycleTrees(runId)).started["1"]!.head);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up revert takes back nothing once another commit lands after its Cycle, and fails the Run naming both trees",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-foreign-revert";
+        yield* cycling(runId, [
+          NO_CHANGE(),
+          asTold("echo theirs > theirs && git add theirs && git commit -qm theirs", "reset"),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(yield* readText(`${rig.projectDir}/theirs`)).toBe("theirs\n");
+        expect(yield* readText(`${rig.projectDir}/notes`)).toBe("note\n");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain((yield* cycleTrees(runId)).started["1"]!.head);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up drop keeps uncommitted work it did not make",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-dirty-drop";
+        yield* cycling(runId, [
+          fasterWhileUpstreamPushes(3, "fixed"),
+          asTold("echo '# mine' >> bench/bench.sh", "dropped"),
+        ]);
+        yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(yield* wasAsked(runId, "drop")).toBe(true);
+        expect(yield* readText(`${rig.projectDir}/bench/bench.sh`)).toEndWith("# mine\n");
+        const [final] = yield* finals(runId);
+        expect(yield* checkoutTree()).toBe(final!.base.content);
       }),
     ),
   120_000,
