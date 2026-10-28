@@ -571,3 +571,38 @@ test(
     ),
   60_000,
 );
+
+test(
+  "implement started to prove performance is refused at the front door, naming the kinds it may be asked for",
+  () =>
+    hosted("hw-intent-performance-", ({ world }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const shipped = `${import.meta.dir}/../workflows`;
+        for (const name of [
+          "implement.workflow.ts",
+          "implement.md",
+          "reviewing.ts",
+          "review.md",
+          "delivering.ts",
+        ])
+          yield* fs.copyFile(`${shipped}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const refused = yield* client
+          .start({
+            project: world.project,
+            id: "implement",
+            request: "performance",
+            input: { plan: "make it faster" },
+            options: { outcome: "performance" },
+          })
+          .pipe(Effect.flip);
+        expect(String(refused.reason)).toStartWith("invalid_input:");
+        expect(String(refused.reason)).toContain('"performance"');
+        expect(String(refused.reason)).toContain(
+          "feature, bug, refactor, investigation, docs, migration",
+        );
+      }),
+    ),
+  60_000,
+);

@@ -1290,22 +1290,34 @@ collie run start implement --input plan=<source> --input outcome=bug
 
 What kind of result a run has to prove, and so what evidence closes it:
 
-| `outcome`       | What closes it, beyond the run's checks passing on the final tree                                                                                           |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| _(empty)_       | nothing more. Unclassified work is not a feature by default.                                                                                                |
-| `feature`       | the tickets it built are named, every check a ticket's `**Checks:**` line promised has a passing verification, and the review says the agreed scope was met |
-| `bug`           | one `regression` command, the same executable and arguments, recorded with `--expect fail` on a tree before the fix and passing after it                    |
-| `refactor`      | the review says behaviour was preserved                                                                                                                     |
-| `investigation` | a conclusion, references inside the run, and whether there is a patch at all                                                                                |
-| `docs`          | the documented commands, run as written, each with a passing verification                                                                                   |
-| `migration`     | `migrate-up` and `migrate-down` (or `rollback`) both passing                                                                                                |
+| `outcome`       | What closes it, beyond the run's checks passing on the final tree                                                                                                                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| _(empty)_       | nothing more. Unclassified work is not a feature by default.                                                                                                                                                                                                  |
+| `feature`       | the tickets it built are named, every check a ticket's `**Checks:**` line promised has a passing verification, and the review says the agreed scope was met                                                                                                   |
+| `bug`           | one `regression` command, the same executable and arguments, recorded with `--expect fail` on a tree before the fix and passing after it                                                                                                                      |
+| `refactor`      | the review says behaviour was preserved                                                                                                                                                                                                                       |
+| `investigation` | a conclusion, references inside the run, and whether there is a patch at all                                                                                                                                                                                  |
+| `docs`          | the documented commands, run as written, each with a passing verification                                                                                                                                                                                     |
+| `migration`     | `migrate-up` and `migrate-down` (or `rollback`) both passing                                                                                                                                                                                                  |
+| `performance`   | a [`final` Measurement](#measure) of the current tree against the merge base its merge request targets, a `gain` on the primary metric with every guardrail held, and the review says behaviour was preserved and the measurement is valid, of that same tree |
+
+`performance` is fixed by a workflow and never asked for: starting `implement` with
+`outcome=performance` is refused naming the kinds it may be asked for. A guardrail counts as
+held only where its verdict is not `inconclusive` either. A `performance` Run whose tree is
+its latest base tree again, every change reverted or dropped, ends without a patch and with
+its findings, not failed; that is read from the trees (the Git tree its `HEAD` names and its
+fingerprint against the latest Measurement's base tree), never from an Output. Its card and
+`collie run show` name its latest `final` Measurement with its verdicts, and so does the
+evidence a merge request is written from.
 
 A reference inside the run is under its own directory or its checkout, or, for a run given
 another Run's own plan directory, under that Run's directory, where its handoffs are.
 
 Only a reviewer can move one kind of gap: the review's own verdict, `scope_met` for a
 feature, `behavior_preserved` for a refactor, `supported` for an investigation, `accurate`
-for docs and `compatible` for a migration. A check that has not passed, or a reference
+for docs, `compatible` for a migration, and both `behavior_preserved` and
+`measurement_valid` for performance. Performance's two count only from a review of the tree
+in front of the gate, which the workflow records beside the review (`reviewedOn`). A check that has not passed, or a reference
 outside the run, is not a reviewer's to change.
 
 A text search proves none of the rows above: a pass of `grep`, `egrep`, `fgrep`, `rg`, `ag`,

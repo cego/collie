@@ -516,6 +516,7 @@ const runShow = Command.make(
               ...(memory === null ? [] : [`  ${memory}`]),
               ...(machine === null ? [] : [`  on ${machine}`]),
               `  in ${view.cwd}${view.provenance["workspace"] === INFERRED ? " (inferred)" : ""}`,
+              ...(view.measurement ? [`  proves ${view.outcome}; ${view.measurement}`] : []),
               ...Object.entries(view.input).map(
                 ([name, value]) =>
                   `  ${name} = ${textOf(value)} (${view.provenance[name] ?? GIVEN})`,

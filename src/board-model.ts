@@ -856,6 +856,8 @@ export const RunDetail = Schema.Struct({
     obstacle: Schema.NullOr(Schema.String),
     next: Schema.NullOr(Schema.String),
     delivered: Schema.NullOr(Schema.String),
+    /** A performance Run's latest `final` Measurement, or null. Absent from an older host. */
+    measurement: Schema.optional(Schema.NullOr(Schema.String)),
     metrics: Metrics,
   }),
   /** When this Run finished, so the merge-request panel can say what moved since. */

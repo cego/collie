@@ -15,6 +15,7 @@ import {
   passed,
   ranOneTest,
   sameCommand,
+  TOO_LARGE,
   type CheckCommand,
   type FailedTest,
   type Snapshot,
@@ -23,6 +24,7 @@ import {
 import { isString, isBoolean } from "./schema";
 import { planRunOf } from "./strategies";
 import { isYamlMap, type YamlValue } from "./yaml";
+import { finalMeasurementLine, type Measurement } from "./measurement-model";
 
 /**
  * The kinds of result a Run can be for. `unspecified` is the default and is deliberately
@@ -40,10 +42,11 @@ export const KINDS = [
   "migration",
   "review",
   "plan",
+  "performance",
 ] as const;
 export type Outcome = (typeof KINDS)[number];
 
-/** The kinds a human may ask an `implement` Run for. `review` and `plan` are fixed. */
+/** The kinds a human may ask an `implement` Run for. `review`, `plan` and `performance` are fixed. */
 export const REQUESTABLE: ReadonlyArray<string> = [
   "feature",
   "bug",
@@ -82,6 +85,14 @@ export interface Collected {
    * agent that wrote the change could vouch for it, which is the thing being prevented.
    */
   readonly reviewed: ReadonlySet<string>;
+  /** The tree each of those reviewed, where it was recorded. */
+  readonly reviewedOn?: ReadonlyMap<string, Snapshot>;
+  /** The Run's Measurements, oldest first. */
+  readonly measurements?: ReadonlyArray<Measurement>;
+  /** Where this checkout leaves the default branch a merge request targets; null where it has none. */
+  readonly mergeBase?: string | null;
+  /** The Git tree HEAD names. */
+  readonly content?: string;
   /** Whether a reference points inside this Run's own directory or checkout. */
   readonly insideRun: (ref: string) => boolean;
   /** The plan's tickets and the verification names each promised, for a feature. */
@@ -423,8 +434,8 @@ export function reviewGaps(kind: Outcome, got: Collected): string[] {
     .map((gap) => gap.text);
 }
 
-/** Who can close a gap: a verification, a reviewer, or nobody short of new work. */
-type GapCloser = "check" | "review" | "claim";
+/** Who can close a gap: a verification, a reviewer, a new Measurement, or nobody short of new work. */
+type GapCloser = "check" | "review" | "measure" | "claim";
 
 function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapCloser }> {
   const gaps: Array<{ text: string; by: GapCloser }> = [];
@@ -548,34 +559,108 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
         claim("the review has no summary a human can read");
       break;
     }
+    case "performance": {
+      for (const text of finalMeasurementGaps(got)) gaps.push({ text, by: "measure" });
+      for (const key of ["behavior_preserved", "measurement_valid"]) {
+        if (reviewerSaysOfThisTree(got, key)) continue;
+        gaps.push({
+          text: reviewerSays(got, key)
+            ? `${key}: true was reported by a review that was not of this tree`
+            : `the review did not report ${key}: true`,
+          by: "review",
+        });
+      }
+      break;
+    }
+  }
+  return gaps;
+}
+
+const isFinal = (tree: Snapshot, final: Snapshot) =>
+  tree.fingerprint !== TOO_LARGE &&
+  tree.head_sha === final.head_sha &&
+  tree.fingerprint === final.fingerprint;
+
+function reviewerSaysOfThisTree(got: Collected, key: string): boolean {
+  for (const [id, output] of got.outputs) {
+    const tree = got.reviewedOn?.get(id);
+    if (!got.reviewed.has(id) || tree === undefined || !isFinal(tree, got.final)) continue;
+    if (isYamlMap(output) && key in output) return output[key] === true;
+  }
+  return false;
+}
+
+function finalMeasurementGaps(got: Collected): string[] {
+  const finals = (got.measurements ?? []).filter((one) => one.pass === "final");
+  const here = finals.filter((one) => isFinal(one.candidate, got.final));
+  const proving = here.findLast((one) => one.base.commit === got.mergeBase);
+  if (finals.length === 0) return ["no `final` Measurement was taken, so no gain is proved"];
+  if (here.length === 0)
+    return [`the latest \`final\` Measurement, ${finals.at(-1)!.id}, was taken on an earlier tree`];
+  if (proving === undefined) {
+    const last = here.at(-1)!;
+    return [
+      got.mergeBase === null || got.mergeBase === undefined
+        ? `the \`final\` Measurement ${last.id} cannot be held to a merge base: this checkout has none with the default branch`
+        : `the \`final\` Measurement ${last.id} was taken against ${last.base.commit}, not the merge base ${got.mergeBase}`,
+    ];
+  }
+  const result = proving.result;
+  if (result._tag !== "Judged")
+    return [`the \`final\` Measurement ${proving.id} has no verdict: it ended ${result._tag}`];
+  const verdictOf = (metric: string) => result.verdicts.find((one) => one.metric === metric);
+  const gaps: string[] = [];
+  for (const metric of proving.plan.metrics) {
+    const judged = verdictOf(metric.name);
+    const verdict = judged?.verdict ?? "no verdict";
+    if (metric.role === "primary") {
+      if (verdict !== "gain")
+        gaps.push(
+          `the \`final\` Measurement ${proving.id} shows ${metric.name} ${verdict}, not a gain`,
+        );
+    } else if (judged === undefined || !judged.held || verdict === "inconclusive")
+      gaps.push(
+        `guardrail ${metric.name} is not held in the \`final\` Measurement ${proving.id} (${verdict})`,
+      );
   }
   return gaps;
 }
 
 /**
- * Whether an investigation is finished without a patch, which is a real outcome and not a
- * failure: it has a conclusion, references that hold it up, and nothing left to merge.
+ * Whether the Run is finished without a patch, which is a real outcome and not a failure.
+ * An investigation says so beside a conclusion and references that hold it up; a
+ * performance Run is so when its tree is its latest base tree again, whatever it says.
  */
 export function endsWithoutPatch(kind: Outcome, got: Collected): boolean {
-  if (kind !== "investigation") return false;
-  return anyField(got, "patch") === false;
+  if (kind === "investigation") return anyField(got, "patch") === false;
+  if (kind !== "performance") return false;
+  const base = got.measurements?.at(-1)?.base;
+  return (
+    base !== undefined &&
+    base.fingerprint !== TOO_LARGE &&
+    base.content !== "" &&
+    base.content === got.content &&
+    base.fingerprint === got.final.fingerprint
+  );
 }
 
 /** What the `mr` prompt says was actually proved, and by whom. */
-export function renderEvidence(got: Pick<Collected, "verifications" | "final">): string {
+export function renderEvidence(
+  got: Pick<Collected, "verifications" | "final" | "measurements">,
+): string {
   const latest = new Map<string, Verification>();
   for (const v of got.verifications) if (!ranOneTest(v)) latest.set(`${v.name}:${v.by}`, v);
-  if (latest.size === 0) return "(nothing was verified)";
-  return [...latest.values()]
-    .map((v) => {
-      const stale =
-        v.end.head_sha === got.final.head_sha && v.end.fingerprint === got.final.fingerprint
-          ? ""
-          : " (on an earlier tree)";
-      const expected = v.expect === "fail" ? ", expected to fail" : "";
-      return `- ${v.name}: ${v.result} (by ${v.by}${expected})${stale}`;
-    })
-    .join("\n");
+  const measured = finalMeasurementLine(got.measurements ?? []);
+  const lines = [...latest.values()].map((v) => {
+    const stale =
+      v.end.head_sha === got.final.head_sha && v.end.fingerprint === got.final.fingerprint
+        ? ""
+        : " (on an earlier tree)";
+    const expected = v.expect === "fail" ? ", expected to fail" : "";
+    return `- ${v.name}: ${v.result} (by ${v.by}${expected})${stale}`;
+  });
+  if (measured !== null) lines.push(`- ${measured}`);
+  return lines.length === 0 ? "(nothing was verified)" : lines.join("\n");
 }
 
 /** A check left to CI as a reviewer is told of it, with its job's state where the Run has a merge request. */

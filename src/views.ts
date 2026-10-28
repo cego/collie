@@ -41,6 +41,8 @@ import { diffOf, PLAN_DIR, planDirOf } from "./run-detail";
 import { orderedTickets, REPO_LINE } from "./plan";
 import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
+import { readMeasurements } from "./measurement";
+import { finalMeasurementLine, type Measurement } from "./measurement-model";
 import { readLogTail } from "./run-log";
 import { readAudit, startedBy } from "./audit";
 
@@ -413,6 +415,7 @@ export const NO_RUN_OUTCOME: RunDetail["outcome"] = {
   obstacle: null,
   next: null,
   delivered: null,
+  measurement: null,
   metrics: metricsOf([], ""),
 };
 
@@ -508,6 +511,14 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       // opinion about what to do — one classification, however it is asked for.
       next: attention.actions[0] ?? null,
       delivered: dispositionOf(latest(yield* readDispositions(run.dir))),
+      measurement:
+        run.outcome === "performance"
+          ? finalMeasurementLine(
+              yield* readMeasurements(run.evidence).pipe(
+                Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
+              ),
+            )
+          : null,
       metrics: metricsOf(yield* readMetrics(run.evidence), run.created),
     },
     tail: opts.tail

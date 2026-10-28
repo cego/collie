@@ -22,7 +22,7 @@ import { waitForMemory } from "./memory-wait";
 import { shell } from "./mr";
 import { machineName } from "./peers";
 import { nowIso } from "./time";
-import { environmentOf, fingerprint, resolveExecutable, TOO_LARGE } from "./verify";
+import { contentOf, environmentOf, fingerprint, resolveExecutable, TOO_LARGE } from "./verify";
 
 const MeasurementLine = Schema.fromJsonString(MeasurementJson);
 
@@ -94,7 +94,13 @@ const lockfilesOf = (root: string) =>
 const treeAt = (cwd: string) =>
   Effect.gen(function* () {
     const { head_sha, fingerprint: print } = yield* fingerprint(cwd);
-    return { cwd, head_sha, fingerprint: print, lockfiles: yield* lockfilesOf(cwd) };
+    return {
+      cwd,
+      head_sha,
+      fingerprint: print,
+      content: yield* contentOf(cwd),
+      lockfiles: yield* lockfilesOf(cwd),
+    };
   });
 
 /** Each path a harness commit touches outside the plan's harness paths. */

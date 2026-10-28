@@ -4,6 +4,7 @@
 import { Effect, FileSystem, Schema, SchemaGetter } from "effect";
 import { isNumber, isString } from "./schema";
 import { checkProof } from "./check-proof";
+import type { Measurement } from "./measurement-model";
 import type { CheckCommand, Snapshot, Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 
@@ -89,6 +90,8 @@ export interface ReviewOutput {
   supported?: boolean;
   accurate?: boolean;
   compatible?: boolean;
+  /** Beside `behavior_preserved`, for a performance change: the benchmark measures what it claims. */
+  measurement_valid?: boolean;
 }
 
 /** The one review that comes out of several, and the file a human reads it in. */
@@ -131,6 +134,7 @@ const JUDGEMENTS = {
   supported: Schema.optionalKey(Schema.Boolean),
   accurate: Schema.optionalKey(Schema.Boolean),
   compatible: Schema.optionalKey(Schema.Boolean),
+  measurement_valid: Schema.optionalKey(Schema.Boolean),
 };
 
 export const ReviewOutputSchema = Schema.Struct({
@@ -696,6 +700,12 @@ export interface CheckEvidence {
   readonly final: Snapshot;
   /** The Run's checks' commands as they resolve here, so a record is read as the check it ran. */
   readonly commands?: ReadonlyArray<CheckCommand>;
+  /** The Run's Measurements, oldest first. */
+  readonly measurements?: ReadonlyArray<Measurement>;
+  /** Where this checkout leaves the default branch a merge request targets; null where it has none. */
+  readonly mergeBase?: string | null;
+  /** The Git tree HEAD names, to compare with a Measurement's base tree. */
+  readonly content?: string;
 }
 
 /**

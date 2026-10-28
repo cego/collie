@@ -50,6 +50,8 @@ const Tree = Schema.Struct({
   cwd: Schema.String,
   head_sha: Schema.String,
   fingerprint: Schema.String,
+  /** The Git tree HEAD names: equal on two checkouts of the same files at different commits. */
+  content: Schema.String,
   /** Each dependency lockfile at the tree's root, by its digest. */
   lockfiles: Schema.Record(Schema.String, Schema.String),
 });
@@ -119,6 +121,29 @@ export const MeasurementSchema = Schema.Struct({
 export type Measurement = typeof MeasurementSchema.Type;
 /** Keeps an infinite ratio, which plain JSON writes as null. */
 export const MeasurementJson = Schema.toCodecJson(MeasurementSchema);
+
+/** A Measurement's verdicts, or how it ended without one, as one phrase. */
+export const summaryOf = (measurement: Measurement) => {
+  const result = measurement.result;
+  switch (result._tag) {
+    case "Judged":
+      return result.verdicts
+        .map((one) => `${one.metric} ${one.verdict} (ratio ${one.ratio.toFixed(3)})`)
+        .join(", ");
+    case "TimedOut":
+      return `timed out in ${result.stage} on the ${result.tree} tree (${result.command})`;
+    case "Failed":
+      return `${result.stage} failed on the ${result.tree} tree (${result.command}, exit ${result.exit})`;
+    case "Unjudged":
+      return `not judged: ${result.reason}`;
+  }
+};
+
+/** The latest `final` Measurement, named with its verdicts; null before one. */
+export const finalMeasurementLine = (measurements: ReadonlyArray<Measurement>) => {
+  const last = measurements.findLast((one) => one.pass === "final");
+  return last === undefined ? null : `final Measurement ${last.id}: ${summaryOf(last)}`;
+};
 
 /** What `measure` streams to a front door: what it waits on, then its one record. */
 export const MeasureEvent = Schema.Union([

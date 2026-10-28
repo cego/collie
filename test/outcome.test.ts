@@ -19,9 +19,13 @@ import {
   renderEvidence,
   wholeRunsOwed,
   renderRecordedChecks,
+  REQUESTABLE,
+  reviewGaps,
 } from "../src/outcome";
 import type { Collected, Outcome } from "../src/outcome";
-import type { Verification } from "../src/verify";
+import type { Measurement } from "../src/measurement-model";
+import type { Judgement } from "../src/measurement-verdict";
+import type { Snapshot, Verification } from "../src/verify";
 import type { VerifySpec } from "../src/verify-spec";
 import type { YamlValue } from "../src/yaml";
 
@@ -70,6 +74,7 @@ const JUDGEMENTS = new Set([
   "supported",
   "accurate",
   "compatible",
+  "measurement_valid",
 ]);
 
 /** A Run whose implementer and reviewer each wrote the fields that are theirs to write. */
@@ -926,4 +931,248 @@ test("a recheck is owed once on a tree, by a check that failed there naming no t
     recheckOwed(collected({ verifications: [failedWhole, rechecked], commands: regranted })),
   ).toEqual(["tests"]);
   expect(recheckOwed(collected({ verifications: gateThenReruns([QUICK], []) }))).toEqual([]);
+});
+
+const MERGE_BASE = "merge-base-2";
+/** The base tree: the merge base with the harness applied, as Git names its content. */
+const BASE_TREE = { head_sha: "base-head", fingerprint: "clean", content: "content-base" };
+
+type Verdict = Judgement["verdict"];
+
+function measured(over: {
+  readonly id?: string;
+  readonly pass?: string;
+  readonly candidate?: Snapshot;
+  readonly base?: { readonly commit: string; readonly content: string };
+  readonly primary?: Verdict;
+  readonly guardrail?: { readonly verdict: Verdict; readonly held: boolean };
+  readonly result?: Measurement["result"];
+}): Measurement {
+  const judged = (metric: string, verdict: Verdict, held: boolean): Judgement => ({
+    metric,
+    ratio: 0.8,
+    interval: [0.75, 0.85],
+    verdict,
+    held,
+  });
+  const guardrail = over.guardrail ?? { verdict: "no-change", held: true };
+  const tree = { cwd: "/repo", lockfiles: {} };
+  return {
+    id: over.id ?? "r1-measurement-1",
+    run: "r1",
+    pass: over.pass ?? "final",
+    machine: "m1",
+    plan: {
+      harness: { commits: ["h1"], paths: ["bench"] },
+      prepare: null,
+      commands: [{ name: "bench", executable: "sh", argv: ["bench/run.sh"] }],
+      metrics: [
+        { name: "bench.wall_ms", direction: "lower", role: "primary" },
+        { name: "bench.peak_kb", direction: "lower", role: "guardrail" },
+      ],
+      warmup: 1,
+      samples: 10,
+      limit: 600,
+      threshold: 5,
+      tolerance: 2,
+    },
+    plan_digest: "d1",
+    base: {
+      ...tree,
+      ...BASE_TREE,
+      commit: over.base?.commit ?? MERGE_BASE,
+      content: over.base?.content ?? BASE_TREE.content,
+    },
+    candidate: { ...tree, ...(over.candidate ?? FINAL), content: "content-candidate" },
+    environment: {},
+    waited: { memory: false, machine: [] },
+    prepare: [],
+    samples: [],
+    result: over.result ?? {
+      _tag: "Judged",
+      verdicts: [
+        judged("bench.wall_ms", over.primary ?? "gain", true),
+        judged("bench.peak_kb", guardrail.verdict, guardrail.held),
+      ],
+    },
+    started: "2026-10-28T10:00:00.000Z",
+    at: "2026-10-28T10:05:00.000Z",
+  };
+}
+
+/** A performance Run with every piece of its proof in place, each of which a test takes away. */
+const performing = (
+  over: {
+    readonly measurements?: ReadonlyArray<Measurement>;
+    readonly fields?: Record<string, YamlValue>;
+    /** The tree the review was of; null where none is recorded for it. */
+    readonly reviewedAt?: Snapshot | null;
+  } & Partial<Collected> = {},
+) => {
+  const { measurements, fields, reviewedAt = FINAL, ...rest } = over;
+  return withOutput(fields ?? { behavior_preserved: true, measurement_valid: true }, {
+    measurements: measurements ?? [measured({})],
+    mergeBase: MERGE_BASE,
+    content: "content-candidate",
+    reviewedOn: new Map(reviewedAt === null ? [] : [["review", reviewedAt]]),
+    ...rest,
+  });
+};
+
+test("performance closes on a final gain on this tree against the merge base, held guardrails, its checks and a review of this tree", () => {
+  expect(evidenceGaps("performance", performing())).toEqual([]);
+  expect(REQUESTABLE).not.toContain("performance");
+});
+
+test("each piece of a performance Run's proof, taken away alone, is a gap naming it", () => {
+  const alone = (got: Collected) => {
+    const gaps = evidenceGaps("performance", got);
+    expect(gaps).toHaveLength(1);
+    return gaps[0];
+  };
+  const cycleGain = measured({ pass: "cycle 1" });
+  expect(alone(performing({ measurements: [cycleGain] }))).toContain("no `final` Measurement");
+  expect(alone(performing({ measurements: [measured({ candidate: EARLIER })] }))).toContain(
+    "on an earlier tree",
+  );
+  const elsewhere = alone(
+    performing({ measurements: [measured({ base: { commit: "merge-base-1", content: "c" } })] }),
+  );
+  expect(elsewhere).toContain("merge-base-1");
+  expect(elsewhere).toContain(MERGE_BASE);
+  expect(alone(performing({ measurements: [measured({ primary: "no-change" })] }))).toContain(
+    "bench.wall_ms no-change",
+  );
+  expect(alone(performing({ measurements: [measured({ primary: "inconclusive" })] }))).toContain(
+    "bench.wall_ms inconclusive",
+  );
+  expect(
+    alone(
+      performing({
+        measurements: [measured({ guardrail: { verdict: "regression", held: false } })],
+      }),
+    ),
+  ).toContain("guardrail bench.peak_kb");
+  // Within tolerance on its worse bound, and still not shown safe.
+  expect(
+    alone(
+      performing({
+        measurements: [measured({ guardrail: { verdict: "inconclusive", held: true } })],
+      }),
+    ),
+  ).toContain("guardrail bench.peak_kb");
+  expect(alone(performing({ verifications: [] }))).toBe("tests was never run");
+  expect(alone(performing({ fields: { measurement_valid: true } }))).toContain(
+    "behavior_preserved",
+  );
+  expect(
+    alone(
+      performing({
+        outputs: new Map<string, YamlValue>([
+          ["build", { measurement_valid: true }],
+          ["review", { behavior_preserved: true }],
+        ]),
+      }),
+    ),
+  ).toContain("measurement_valid");
+  // Of an earlier tree, or of none recorded: each verdict is a gap of its own.
+  for (const reviewedAt of [EARLIER, null]) {
+    const gaps = evidenceGaps("performance", performing({ reviewedAt }));
+    expect(gaps).toEqual([
+      expect.stringContaining("behavior_preserved"),
+      expect.stringContaining("measurement_valid"),
+    ]);
+    for (const gap of gaps) expect(gap).toContain("not of this tree");
+  }
+  expect(
+    alone(
+      performing({
+        measurements: [
+          measured({
+            result: { _tag: "TimedOut", tree: "base", stage: "sample", command: "bench" },
+          }),
+        ],
+      }),
+    ),
+  ).toContain("no verdict");
+});
+
+test("a later final Measurement on this tree against the merge base is the one that counts", () => {
+  const before = measured({ id: "m1", candidate: EARLIER });
+  const now = measured({ id: "m2" });
+  expect(evidenceGaps("performance", performing({ measurements: [before, now] }))).toEqual([]);
+  expect(
+    evidenceGaps(
+      "performance",
+      performing({ measurements: [now, measured({ id: "m3", primary: "no-change" })] }),
+    ),
+  ).toEqual([expect.stringContaining("m3")]);
+});
+
+test("a performance gap is a fresh review's to close only where it is a reviewer's verdict", () => {
+  const unmeasured = performing({ measurements: [] });
+  expect(checkGaps("performance", unmeasured)).toEqual([]);
+  expect(reviewGaps("performance", unmeasured)).toEqual([]);
+  expect(reviewGaps("performance", performing({ reviewedAt: EARLIER }))).toHaveLength(2);
+  expect(checkGaps("performance", performing({ verifications: [] }))).toEqual([
+    "tests was never run",
+  ]);
+});
+
+test("a performance Run back at its latest base tree ends without a patch, read from the trees and not its Output", () => {
+  const cycleGain = measured({
+    id: "m1",
+    pass: "cycle 1",
+    base: { commit: "mb-1", content: "c1" },
+  });
+  const reverted = measured({
+    id: "m2",
+    pass: "cycle 2",
+    primary: "no-change",
+    base: { commit: "mb-1", content: "c2" },
+  });
+  const back = (content: string, fields: Record<string, YamlValue> = {}) =>
+    performing({
+      measurements: [cycleGain, reverted],
+      content,
+      final: { head_sha: "reset", fingerprint: BASE_TREE.fingerprint },
+      fields,
+    });
+  expect(endsWithoutPatch("performance", back("c2"))).toBe(true);
+  // An earlier base tree is not where the Run stands now.
+  expect(endsWithoutPatch("performance", back("c1"))).toBe(false);
+  expect(endsWithoutPatch("performance", back("c3", { patch: false }))).toBe(false);
+  // Uncommitted changes on the base's content are a change.
+  expect(
+    endsWithoutPatch(
+      "performance",
+      performing({
+        measurements: [cycleGain, reverted],
+        content: "c2",
+        final: { head_sha: "reset", fingerprint: "dirty" },
+      }),
+    ),
+  ).toBe(false);
+  expect(endsWithoutPatch("performance", performing({ measurements: [], content: "c2" }))).toBe(
+    false,
+  );
+});
+
+test("the evidence a merge request is written from names the latest final Measurement and its verdicts", () => {
+  const rendered = renderEvidence({
+    verifications: [record({ name: "tests" })],
+    final: FINAL,
+    measurements: [
+      measured({ id: "m1", pass: "cycle 1", primary: "regression" }),
+      measured({ id: "m2" }),
+    ],
+  });
+  expect(rendered).toContain("- tests: pass");
+  expect(rendered).toContain("final Measurement m2: bench.wall_ms gain (ratio 0.800)");
+  expect(rendered).not.toContain("m1");
+  expect(
+    renderEvidence({ verifications: [], final: FINAL, measurements: [measured({ id: "m3" })] }),
+  ).toBe(
+    "- final Measurement m3: bench.wall_ms gain (ratio 0.800), bench.peak_kb no-change (ratio 0.800)",
+  );
 });

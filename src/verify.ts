@@ -66,6 +66,12 @@ const git = (args: string[], cwd: string) => shell("git", args, cwd);
 export const fingerprint = (cwd: string) =>
   Effect.map(treeOf(cwd), ({ head_sha, fingerprint }) => ({ head_sha, fingerprint }));
 
+/** The Git tree HEAD names: the same files at two commits are the same content. Empty before a first commit. */
+export const contentOf = (cwd: string) =>
+  Effect.map(git(["rev-parse", "HEAD^{tree}"], cwd), (got) =>
+    got.code === 0 ? got.stdout.trim() : "",
+  );
+
 /** `git status --porcelain=v2 --branch -z`'s headers, and the entries after them. */
 const statusParts = (stdout: string) => {
   const headers = new Map<string, string>();

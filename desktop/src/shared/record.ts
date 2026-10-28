@@ -179,18 +179,20 @@ export type SummarySection =
   | { readonly section: "inputs"; readonly inputs: RunDetail["inputs"] }
   | { readonly section: "replies"; readonly replies: NonNullable<RunDetail["replies"]> };
 
-const saysSomething = ({ kind, gaps, obstacle, next, delivered }: Outcome) =>
-  gaps.length > 0 || [kind, obstacle, next, delivered].some((said) => said !== null);
+const saysSomething = ({ kind, gaps, obstacle, next, delivered, measurement }: Outcome) =>
+  gaps.length > 0 ||
+  [kind, obstacle, next, delivered, measurement ?? null].some((said) => said !== null);
 
 /** In order, each left out when it has nothing to say; the status always says something. */
 export const summaryOf = (detail: SummaryFacts): ReadonlyArray<SummarySection> => {
   const { kind, gaps, obstacle, next, delivered } = detail.outcome;
+  const measurement = detail.outcome.measurement ?? null;
   const { category, explanation } = detail.attention;
   return [
     { section: "status", status: detail.status },
     ...(category === "none" ? [] : [{ section: "attention", category, explanation } as const]),
     ...(saysSomething(detail.outcome)
-      ? [{ section: "outcome", kind, gaps, obstacle, next, delivered } as const]
+      ? [{ section: "outcome", kind, gaps, obstacle, next, delivered, measurement } as const]
       : []),
     ...(detail.inputs.length === 0 ? [] : [{ section: "inputs", inputs: detail.inputs } as const]),
     ...(detail.replies === undefined || detail.replies.length === 0

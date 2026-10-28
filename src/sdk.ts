@@ -28,7 +28,7 @@ import {
   SchemaRepresentation,
 } from "effect";
 import type { CheckEvidence } from "./output";
-import type { FailedTest, Verification } from "./verify";
+import type { FailedTest, Snapshot, Verification } from "./verify";
 import type { Issue, IssueRef } from "./forge/issues";
 export type { Issue, IssueRef } from "./forge/issues";
 import type { Report } from "./report";
@@ -50,6 +50,7 @@ import {
   KINDS,
   REQUESTABLE,
   checkGaps,
+  endsWithoutPatch,
   evidenceGaps,
   reviewGaps,
   isOutcome,
@@ -391,6 +392,14 @@ export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
   return reviewGaps(options.kind, collectedOf(options));
 }
 
+/**
+ * Whether the Run is done with no patch to deliver, which is an outcome and not a failure:
+ * an investigation that says so, or a performance Run whose tree is its latest base tree again.
+ */
+export function endsWithoutPatchOf(options: EvidenceAsk): boolean {
+  return endsWithoutPatch(options.kind, collectedOf(options));
+}
+
 export interface EvidenceAsk {
   readonly kind: Outcome;
   readonly evidence: CheckEvidence;
@@ -399,6 +408,8 @@ export interface EvidenceAsk {
   readonly outputs: Readonly<Record<string, Schema.Json>>;
   /** Which of those are a reviewer's judgement rather than the implementer's claim. */
   readonly reviewed: ReadonlyArray<string>;
+  /** The tree each of those reviewed. A `performance` verdict counts only from a review of the tree in front of it. */
+  readonly reviewedOn?: Readonly<Record<string, Snapshot>>;
   /** The directories this Run owns, which a reference it gives has to point inside. */
   readonly roots: ReadonlyArray<string>;
   readonly tickets: ReadonlyArray<{
@@ -414,6 +425,10 @@ const collectedOf = (options: EvidenceAsk) => ({
   commands: options.evidence.commands,
   outputs: new Map(Object.entries(options.outputs)),
   reviewed: new Set(options.reviewed),
+  reviewedOn: new Map(Object.entries(options.reviewedOn ?? {})),
+  measurements: options.evidence.measurements,
+  mergeBase: options.evidence.mergeBase,
+  content: options.evidence.content,
   insideRun: (ref: string) => refInside(options.roots, ref),
   tickets: options.tickets,
 });

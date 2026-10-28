@@ -92,7 +92,8 @@ import { encodeSubagents, readSubagents } from "./subagents";
 import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
-import { measure } from "./measurement";
+import { measure, readMeasurements } from "./measurement";
+import { finalMeasurementLine, type Measurement } from "./measurement-model";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { gitDirOf, publicationCheckouts, throughAliases, remoteOf } from "./issue-privacy";
 import {
@@ -186,7 +187,7 @@ import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
-import { isOutcome } from "./outcome";
+import { isOutcome, REQUESTABLE } from "./outcome";
 import { Store, storeLayer, type Admission, type RunRow, type StoreApi } from "./store";
 import {
   Answered,
@@ -252,6 +253,7 @@ import {
   encodeVerifying,
   fingerprint,
   insideRun,
+  contentOf,
   ranCommand,
   readVerifications,
   recordFor,
@@ -395,6 +397,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly ci?: string;
     }>;
+    /** The Run's Measurements, oldest first. */
+    readonly measurements?: ReadonlyArray<Measurement>;
+    /** Where this checkout leaves the default branch a merge request targets; null where it has none. */
+    readonly mergeBase?: string | null;
+    /** The Git tree HEAD names, to compare with a Measurement's base tree. */
+    readonly content?: string;
   }
 
   /** A Run as the host admitted it: where it works, where its work belongs, what it was given. */
@@ -465,6 +473,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly cwd: string;
     readonly head_sha: string;
     readonly fingerprint: string;
+    /** The Git tree HEAD names: equal on two checkouts of the same files at different commits. */
+    readonly content: string;
     readonly lockfiles: Readonly<Record<string, string>>;
   }
   /** A Measurement as the host recorded it: every sample, and a verdict per metric where it was judged. */
@@ -1511,7 +1521,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   export type Outcome =
     | "unspecified" | "feature" | "bug" | "refactor" | "investigation"
-    | "docs" | "migration" | "review" | "plan";
+    | "docs" | "migration" | "review" | "plan" | "performance";
 
   export type OutcomeContract =
     | { readonly fixed: Outcome; readonly selectable?: undefined }
@@ -1594,6 +1604,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     supported?: boolean;
     accurate?: boolean;
     compatible?: boolean;
+    /** Beside \`behavior_preserved\`, for a performance change: the benchmark measures what it claims. */
+    measurement_valid?: boolean;
   }
 
   export interface ReviewOutput extends Judgement {
@@ -1970,9 +1982,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function renderApproved(approved: ReadonlyArray<VerifySpec>): string;
 
   /** What was actually collected, and by whom, for a merge request to say what it proved. */
-  export function renderEvidence(
-    got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
-  ): string;
+  export function renderEvidence(got: {
+    readonly verifications: ReadonlyArray<Verification>;
+    readonly final: Snapshot;
+    /** The latest \`final\` of these is named with its verdicts. */
+    readonly measurements?: ReadonlyArray<Measurement>;
+  }): string;
 
   /** Where a reference a Run's Outputs give may point: its own directory, its checkout, and a planning Run's. */
   export function evidenceRoots(own: string, cwd: string, workSource: string): string[];
@@ -2006,6 +2021,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly outputs: Readonly<Record<string, unknown>>;
     /** Which of those are a reviewer's judgement rather than the implementer's claim. */
     readonly reviewed: ReadonlyArray<string>;
+    /** The tree each of those reviewed. A \`performance\` verdict counts only from a review of the tree in front of it. */
+    readonly reviewedOn?: Readonly<Record<string, Snapshot>>;
     /** The directories this Run owns, which a reference it gives has to point inside. */
     readonly roots: ReadonlyArray<string>;
     readonly tickets: ReadonlyArray<{
@@ -2024,6 +2041,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function reviewGapsOf(
     options: Parameters<typeof evidenceGapsOf>[0],
   ): ReadonlyArray<string>;
+  /**
+   * Whether the Run is done with no patch to deliver, which is an outcome and not a failure:
+   * an investigation that says so, or a performance Run whose tree is its latest base tree again.
+   */
+  export function endsWithoutPatchOf(options: Parameters<typeof evidenceGapsOf>[0]): boolean;
 
   /**
    * A Check's proof on this tree: passed, failed, unstable, passed only on an earlier tree, or
@@ -3033,6 +3055,17 @@ const passAsked = (asked: Parameters<Sdk.HostApi["verify"]>[0]): CheckPass => {
   return { pass: asked.pass ?? "check" };
 };
 
+/** The default branch, and where HEAD leaves it, preferring its remote; null for either it lacks. */
+const mergeBaseOf = (cwd: string) =>
+  Effect.gen(function* () {
+    const branch = yield* defaultBase(runShell, cwd);
+    if (branch === null) return { branch, commit: null };
+    const git = (...args: string[]) => runShell("git", args, cwd);
+    const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
+    const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
+    return { branch, commit: merged.code === 0 ? merged.stdout.trim() : null };
+  });
+
 /**
  * Runs `body` with the checkout at its merge-base with the default branch, then puts it
  * back. A checkout with changes of its own is refused: they would travel to the base.
@@ -3050,18 +3083,16 @@ const atDefaultBase = <A, R>(
     if ((yield* git("status", "--porcelain")).stdout.trim() !== "") {
       return yield* refuse("the checkout has changes of its own");
     }
-    const branch = yield* defaultBase(runShell, cwd);
+    const { branch, commit } = yield* mergeBaseOf(cwd);
     if (branch === null) return yield* refuse("no default branch");
-    const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
-    const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
-    if (merged.code !== 0) return yield* refuse(`no merge-base with ${branch}`);
+    if (commit === null) return yield* refuse(`no merge-base with ${branch}`);
     const head = (yield* git("rev-parse", "HEAD")).stdout.trim();
     const named = yield* git("symbolic-ref", "-q", "--short", "HEAD");
     const back = named.code === 0 ? named.stdout.trim() : head;
     yield* fs.writeFileString(away, back).pipe(Effect.orDie);
-    if ((yield* git("checkout", "-q", "--detach", merged.stdout.trim())).code !== 0) {
+    if ((yield* git("checkout", "-q", "--detach", commit)).code !== 0) {
       yield* fs.remove(away).pipe(Effect.ignore);
-      return yield* refuse(`${merged.stdout.trim()} could not be checked out`);
+      return yield* refuse(`${commit} could not be checked out`);
     }
     return yield* body(branch).pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
   });
@@ -3865,6 +3896,11 @@ export const hostLayer = (options: {
                 commands: Effect.forEach(yield* approvedOf(dir, runId), (spec) =>
                   commandOf({ ...own, cwd }, spec),
                 ),
+                measurements: readMeasurements(evidenceDir(dir, runId)).pipe(
+                  Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
+                ),
+                mergeBase: Effect.map(mergeBaseOf(cwd), ({ commit }) => commit),
+                content: contentOf(cwd),
               });
             }),
           ).pipe(Effect.orDie),
@@ -4874,6 +4910,11 @@ const refuseOptions = (
       `"${generation.id}" always proves ${fixed}, so it cannot be asked for ${asked}`,
     );
   }
+  if (fixed === null && asked !== UNSPECIFIED && !REQUESTABLE.includes(asked)) {
+    return refusedInput(
+      `"${asked}" is not an outcome a Run can be asked for; one of ${REQUESTABLE.join(", ")}`,
+    );
+  }
   return Effect.void;
 };
 
@@ -5280,6 +5321,8 @@ export const RunView = Schema.Struct({
   wakes: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** The Subscription its work waits on to reset, or null; absent from an older host. */
   usage: Schema.optionalKey(Schema.NullOr(UsageWaitSchema)),
+  /** A performance Run's latest \`final\` Measurement, or null; absent from an older host. */
+  measurement: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type RunView = typeof RunView.Type;
 
@@ -6712,6 +6755,15 @@ const makeRegistry: (
       landing: yield* readLanding(runDir(dir, row.run)).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
       ),
+      measurement:
+        outcome === "performance"
+          ? finalMeasurementLine(
+              yield* readMeasurements(evidenceDir(dir, row.run)).pipe(
+                Effect.provideService(FileSystem.FileSystem, fs),
+                Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
+              ),
+            )
+          : null,
     };
     // Not registered here is not a verdict on the work: the rows are all still there,
     // and what is missing is the module, named so somebody can put it back.

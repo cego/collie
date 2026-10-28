@@ -1339,7 +1339,7 @@ is no flag to ask for it.
 
 `host.approved(runId)` is the Run's checks as they stand now, for a prompt to name what the
 work will be held to — `renderApproved` writes it out — and
-`renderEvidence(host.evidence(...))` is what was actually collected and by whom, for a
+`renderEvidence(host.evidence(...))` is what was actually collected and by whom, with the latest `final` Measurement, for a
 merge request to say what it proved. `renderRecordedChecks` writes the same journal for a
 reviewer — the latest of each check, by whom, whether on the tree in front of it, when,
 whether the same command was seen failing on an earlier tree, and the baseline — so a review reads what was run rather than running it again. The list can grow while the Run works, since an
@@ -1375,6 +1375,17 @@ tree could close: a check that failed, never ran, or passed on an earlier tree. 
 what a fix may be handed. A reviewer's judgement and an Output's claim are not moved by
 running anything, so a fix handed one spends a session and changes nothing. `reviewGapsOf` answers only the gaps a reviewer's verdict could close, such as
 `scope_met`: a fresh review is worth paying for only while one of those remains.
+
+For `performance`, `host.evidence` also carries the Run's Measurements, the merge base of
+`cwd` with the default branch and the Git tree its `HEAD` names, and the gaps read them: a
+`final` Measurement of this tree against that merge base, a primary `gain` and every
+guardrail held. A Measurement gap is neither a check's nor a review's: only a new `final`
+Measurement closes it. Its two reviewer verdicts count only from a review of this tree, so
+pass `reviewedOn`, the tree each reviewed step's Output was written on
+(`{ synthesize: evidence.final }`, read before the review). `endsWithoutPatchOf` takes the
+same question and says whether the Run is done with nothing to deliver: an investigation
+whose Output says `patch: false`, or a performance Run whose tree is its latest base tree
+again, whatever its Output says.
 
 Both read each check through `checkProof`, which you can call yourself. It gives a check's
 proof on the tree in `evidence`: `passed`, `failed`, `unstable`, `earlier` (it passed only

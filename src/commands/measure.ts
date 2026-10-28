@@ -3,7 +3,7 @@ import { Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import { measureRun, refusal } from "../lifecycle";
 import { FrontDoor, HostRefused } from "../board-model";
-import { MeasurementJson, type Measurement } from "../measurement-model";
+import { MeasurementJson, summaryOf, type Measurement } from "../measurement-model";
 import { answering, cliDoor } from "./shared";
 
 /**
@@ -112,19 +112,3 @@ export const measure = Command.make(
     },
   ]),
 );
-
-const summaryOf = (measurement: Measurement) => {
-  const result = measurement.result;
-  switch (result._tag) {
-    case "Judged":
-      return result.verdicts
-        .map((one) => `${one.metric} ${one.verdict} (ratio ${one.ratio.toFixed(3)})`)
-        .join(", ");
-    case "TimedOut":
-      return `timed out in ${result.stage} on the ${result.tree} tree (${result.command})`;
-    case "Failed":
-      return `${result.stage} failed on the ${result.tree} tree (${result.command}, exit ${result.exit})`;
-    case "Unjudged":
-      return `not judged: ${result.reason}`;
-  }
-};

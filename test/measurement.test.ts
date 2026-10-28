@@ -22,6 +22,17 @@ const Shown = Schema.Struct({
   run: Schema.Struct({ awaiting: Schema.NullOr(Schema.Struct({ on: Schema.String })) }),
   memory: Schema.NullOr(Schema.String),
 });
+/** What the `measured` fixture answers: its Measurement, and the outcome table's reading as `performance`. */
+const Read = Schema.fromJsonString(
+  Schema.Struct({
+    id: Schema.String,
+    withoutPatch: Schema.Boolean,
+    gaps: Schema.Array(Schema.String),
+  }),
+);
+const Proves = Schema.Struct({
+  run: Schema.Struct({ outcome: Schema.String, measurement: Schema.NullOr(Schema.String) }),
+});
 const Answered = Schema.Struct({
   ran: Schema.Boolean,
   measurement: Schema.Struct({ id: Schema.String }),
@@ -184,7 +195,11 @@ test(
           const status = Schema.decodeUnknownSync(Waited)(finished.envelope.data).run.status;
           expect(status.status).toBe("complete");
           const [fromWorkflow] = yield* recorded(world, workflowRun);
-          expect(fromWorkflow?.id).toBe(status.value);
+          const read = Schema.decodeUnknownSync(Read)(status.value);
+          expect(fromWorkflow?.id).toBe(read.id);
+          // The host's evidence carries the Measurements: a product change is no tree to end on.
+          expect(read.withoutPatch).toBe(false);
+          expect(read.gaps).toContainEqual(expect.stringContaining("no `final` Measurement"));
           const same = (one: Measurement) => ({
             keys: Object.keys(one).sort(),
             pass: one.pass,
@@ -213,6 +228,39 @@ test(
           expect(verdictOf((yield* recorded(world, runId)).at(-1)!, "bench.counter")).toBe(
             "no-change",
           );
+
+          // Back at the base tree's content, a `final` Measurement reads as no patch, judged
+          // against the merge base the host found rather than the base it was asked for.
+          yield* exec(["git", "branch", "-M", "master"], { cwd: world.project });
+          const back = (yield* exec(["git", "rev-parse", "HEAD"], {
+            cwd: world.project,
+          })).stdout.trim();
+          const again = yield* collie(world, [
+            "run",
+            "start",
+            "measured",
+            "--input",
+            `base=${base}`,
+            "--input",
+            `plan=${encode(plan)}`,
+            "--input",
+            "pass=final",
+          ]);
+          const againRun = Schema.decodeUnknownSync(Started)(again.envelope.data).runId;
+          const reread = Schema.decodeUnknownSync(Read)(
+            Schema.decodeUnknownSync(Waited)(
+              (yield* collie(world, ["run", "wait", againRun])).envelope.data,
+            ).run.status.value,
+          );
+          expect(reread.withoutPatch).toBe(true);
+          expect(reread.gaps).toContainEqual(expect.stringContaining(`not the merge base ${back}`));
+          const shown = (yield* collie(world, ["run", "show", againRun])).envelope.data;
+          expect(Schema.decodeUnknownSync(Proves)(shown).run).toEqual({
+            outcome: "performance",
+            measurement: expect.stringContaining(
+              `final Measurement ${reread.id}: bench.counter no-change`,
+            ),
+          });
 
           // Its base tree goes with the Run, once a sweep finds nothing needs it.
           const trees = `${world.state}/measurements/trees/${runId}`;
