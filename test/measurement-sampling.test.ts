@@ -2,9 +2,9 @@
 // that moved under it, a plan changed without a reason, and a benchmark a dead host left.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, Fiber, FileSystem, Option } from "effect";
 import { CheckProcesses, hostCheckProcesses } from "../src/check-processes";
-import { measure, type MeasureAsk } from "../src/measurement";
+import { measure, readMeasurements, type MeasureAsk } from "../src/measurement";
 import type { BenchmarkPlan, Measurement } from "../src/measurement-model";
 import { stillRunning, startedOf } from "../src/processes";
 import { exec } from "./support/command";
@@ -37,13 +37,21 @@ const project = Effect.gen(function* () {
     "bench/claims.sh",
     'sleep 0.2; echo \'{"wall_ms": 0, "cpu_ms": 0, "peak_kb": 0, "counter": 1}\'\n',
   );
-  // Prints no counter on its third run, counted in the file it names.
   yield* write(
     "bench/gaps.sh",
     'echo run >> "$1"\nif [ $(wc -l < "$1") -ne 3 ]; then echo \'{"counter": 1}\'; fi\n',
   );
   yield* write("bench/slow.sh", "sleep 0.6; echo '{\"counter\": 1}'\n");
-  yield* write("bench/touches.sh", "echo more >> value; echo '{\"counter\": 1}'\n");
+  yield* write("bench/inflates.sh", "echo 100 > value\n");
+  yield* write(
+    "bench/restores.sh",
+    'echo "{\\"counter\\": $(cat value)}"; git checkout -q -- value\n',
+  );
+  yield* write(
+    "bench/toggles.sh",
+    'if [ "$(cat value)" = 100 ]; then git checkout -q -- value; else echo 100 > value; fi\necho \'{"counter": 1}\'\n',
+  );
+  yield* write("bench/holds.sh", 'echo $$ > "$1"; while :; do sleep 0.1; done\n');
   const harness = yield* commit("harness");
   yield* write("value", "7\n");
   yield* commit("product");
@@ -154,7 +162,7 @@ test(
 );
 
 test(
-  "a benchmark that changes the trees it samples leaves the Measurement unjudged, naming both",
+  "a tree its prepare changes is unjudged, even where its samples restore it",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -162,12 +170,101 @@ test(
         const measured = yield* measuring(root, {
           base,
           cwd: repo,
-          plan: planOf(harness, sh("touches.sh")),
+          plan: planOf(harness, sh("restores.sh"), {
+            prepare: { executable: "sh", argv: ["bench/inflates.sh"] },
+          }),
         });
         expect(resultOf(measured)).toEqual({
           _tag: "Unjudged",
           reason: expect.stringMatching(/base and candidate trees changed/),
         });
+        expect(measured.samples).toEqual([]);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a tree one sample changes is unjudged, even where a later sample restores it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, repo, base, harness } = yield* project;
+        const measured = yield* measuring(root, {
+          base,
+          cwd: repo,
+          plan: planOf(harness, sh("toggles.sh")),
+        });
+        expect(resultOf(measured)).toEqual({
+          _tag: "Unjudged",
+          reason: expect.stringMatching(/base tree changed/),
+        });
+        expect(measured.samples).toHaveLength(1);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "the time limit counts the time its benchmark takes to be recorded and spawned",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, repo, base, harness } = yield* project;
+        const plain = yield* CheckProcesses;
+        const measured = yield* measuring(root, {
+          base,
+          cwd: repo,
+          plan: planOf(harness, sh("bench.sh"), { limit: 0.3 }),
+        }).pipe(
+          Effect.provideService(CheckProcesses, {
+            ...plain,
+            adopt: (check, spawn, say) =>
+              Effect.delay(plain.adopt(check, spawn, say), "500 millis"),
+          }),
+        );
+        expect(resultOf(measured)).toEqual({
+          _tag: "TimedOut",
+          tree: "base",
+          stage: "sample",
+          command: "bench",
+        });
+      }),
+    ),
+  30_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a benchmark its host ends as it stops records nothing, so the next host measures afresh",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { root, repo, base, harness } = yield* project;
+        const state = `${root}/state`;
+        yield* fs.makeDirectory(state, { recursive: true });
+        const checks = yield* hostCheckProcesses({
+          dir: state,
+          installation: "measurement-shutdown-test-installation",
+          sweep: false,
+        });
+        const pidFile = `${root}/held.pid`;
+        const running = yield* Effect.forkScoped(
+          measuring(root, {
+            base,
+            cwd: repo,
+            plan: planOf(harness, sh("holds.sh", pidFile)),
+          }).pipe(Effect.provideService(CheckProcesses, checks)),
+        );
+        yield* until(
+          () => fs.readFileString(pidFile).pipe(Effect.orElseSucceed(() => "")),
+          (text) => text.trim() !== "",
+        );
+        yield* checks.endAll;
+        expect(
+          Option.isNone(yield* Fiber.join(running).pipe(Effect.timeoutOption("2 seconds"))),
+        ).toBe(true);
+        expect(yield* readMeasurements(`${root}/evidence`)).toEqual([]);
       }),
     ),
   30_000,
@@ -258,7 +355,6 @@ test.skipIf(process.platform !== "linux")(
         const left = { pid, started: (yield* startedOf(pid)) ?? "" };
 
         const next = yield* hostCheckProcesses({ dir: state, installation, sweep: false });
-        // Fails any sample taken while the one left behind still runs.
         const alone: Plan["commands"] = [
           {
             name: "bench",

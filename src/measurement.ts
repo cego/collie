@@ -3,7 +3,18 @@
 // D1, D2 and D4). `collie measure` and `host.measure` both come here.
 
 import { loadavg } from "node:os";
-import { Clock, Data, Effect, FileSystem, Option, Path, Schedule, Schema, Stream } from "effect";
+import {
+  Clock,
+  Data,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { AwaitingJson } from "./awaiting";
 import { CheckProcesses, type CheckOf } from "./check-processes";
@@ -156,7 +167,6 @@ const baseTree = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = `${baseTreesDir(stateDir, runId)}/${digestOf([commit, ...harness].join("\n"))}`;
-    // Exactly the harness commits over `commit`, and no tracked file changed since.
     const complete = Effect.gen(function* () {
       if (!(yield* fs.exists(dir))) return false;
       const above = yield* git(["rev-list", "--count", `${commit}..HEAD`], dir);
@@ -214,18 +224,20 @@ type Ended =
 /**
  * One command, recorded as the host's checks are and its process group ended whichever way it
  * leaves; no shell between. Spawned here rather than by the checks, for its CPU time and peak.
+ * Timed out where `deadline`, in epoch ms, passes before it exits, its recording included.
  */
 const runOnce = (
   check: CheckOf,
   command: { readonly executable: string; readonly argv: ReadonlyArray<string> },
   cwd: string,
-  seconds: number,
+  deadline: number,
 ) =>
   Effect.gen(function* () {
-    if (seconds <= 0) return { _tag: "TimedOut" } satisfies Ended;
+    const timedOut: Ended = { _tag: "TimedOut" };
+    if ((yield* Clock.currentTimeMillis) >= deadline) return timedOut;
     const checks = yield* CheckProcesses;
     const began = yield* Clock.currentTimeNanos;
-    const spawned = yield* checks
+    const adopted = yield* checks
       .adopt(check, (markers) =>
         Effect.sync(() =>
           Bun.spawn([command.executable, ...command.argv], {
@@ -240,7 +252,8 @@ const runOnce = (
       )
       .pipe(Effect.mapError((cause) => new MeasureRefused({ why: cause.why })));
     // This host began to end before it spawned.
-    if (spawned === null) return yield* Effect.interrupt;
+    if (adopted === null) return yield* Effect.interrupt;
+    const spawned = adopted.handle;
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         try {
@@ -250,7 +263,8 @@ const runOnce = (
         }
       }),
     );
-    return yield* Effect.all(
+    const left = deadline - (yield* Clock.currentTimeMillis);
+    const collecting = Effect.all(
       [
         tailOf(spawned.stdout, LINE_BYTES),
         tailOf(spawned.stderr, OUTPUT_BYTES),
@@ -274,9 +288,11 @@ const runOnce = (
           };
         }),
       ),
-      Effect.timeoutOption(`${seconds} seconds`),
-      Effect.map(Option.getOrElse((): Ended => ({ _tag: "TimedOut" }))),
+      Effect.timeoutOption(Duration.millis(left)),
+      Effect.map(Option.getOrElse(() => timedOut)),
     );
+    // A check its host ended as it stops never answers, so no failure is recorded of it.
+    return yield* adopted.collected(left <= 0 ? Effect.succeed(timedOut) : collecting);
   }).pipe(Effect.scoped);
 
 /** The named numbers of a command's last stdout line, where it is one JSON object. */
@@ -533,6 +549,20 @@ const taking = Effect.fn("Measurement.taking")(function* (
       return { measurement, ran: true };
     });
 
+  const moved = Effect.gen(function* () {
+    const trees: Array<string> = [];
+    for (const [tree, was] of [
+      ["base", base],
+      ["candidate", candidate],
+    ] as const) {
+      const now = yield* fingerprint(was.cwd);
+      if (now.head_sha !== was.head_sha || now.fingerprint !== was.fingerprint) trees.push(tree);
+    }
+    return trees.length === 0
+      ? null
+      : `the ${trees.join(" and ")} ${trees.length > 1 ? "trees" : "tree"} changed while ${trees.length > 1 ? "they were" : "it was"} measured, so no reading is of the tree recorded`;
+  });
+
   const work = Effect.gen(function* () {
     if (plan.prepare !== null)
       for (const tree of ["base", "candidate"] as const) {
@@ -540,7 +570,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
           { ...checkOf, name: `${MEASURING}prepare` },
           plan.prepare,
           roots[tree],
-          plan.limit,
+          (yield* Clock.currentTimeMillis) + plan.limit * 1000,
         );
         const command = [plan.prepare.executable, ...plan.prepare.argv].join(" ");
         if (ended._tag === "TimedOut")
@@ -556,6 +586,8 @@ const taking = Effect.fn("Measurement.taking")(function* (
             output: ended.output,
           });
       }
+    const prepareMoved = yield* moved;
+    if (prepareMoved !== null) return yield* record({ _tag: "Unjudged", reason: prepareMoved });
     const order = [
       ...sampleOrder(plan.warmup).map((tree) => ({ tree, warmup: true })),
       ...sampleOrder(plan.samples).map((tree) => ({ tree, warmup: false })),
@@ -577,7 +609,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
           { ...checkOf, name: `${MEASURING}${command.name}` },
           command,
           roots[tree],
-          (deadline - (yield* Clock.currentTimeMillis)) / 1000,
+          deadline,
         );
         if (ended._tag === "TimedOut")
           return yield* record({ _tag: "TimedOut", tree, stage: "sample", command: command.name });
@@ -607,20 +639,9 @@ const taking = Effect.fn("Measurement.taking")(function* (
             : null,
         at,
       });
+      const sampleMoved = yield* moved;
+      if (sampleMoved !== null) return yield* record({ _tag: "Unjudged", reason: sampleMoved });
     }
-    const moved: Array<string> = [];
-    for (const [tree, was] of [
-      ["base", base],
-      ["candidate", candidate],
-    ] as const) {
-      const now = yield* fingerprint(was.cwd);
-      if (now.head_sha !== was.head_sha || now.fingerprint !== was.fingerprint) moved.push(tree);
-    }
-    if (moved.length > 0)
-      return yield* record({
-        _tag: "Unjudged",
-        reason: `the ${moved.join(" and ")} ${moved.length > 1 ? "trees" : "tree"} changed while ${moved.length > 1 ? "they were" : "it was"} measured, so no reading is of the tree recorded`,
-      });
     const judged = yield* Effect.forEach(plan.metrics, (metric) => {
       const judgedSamples = samples.filter((one) => !one.warmup);
       const gap = judgedSamples.find((one) => one.readings[metric.name] === undefined);

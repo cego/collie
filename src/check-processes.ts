@@ -52,6 +52,12 @@ export interface RunningCheck {
   readonly collected: <A, E, R>(collecting: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
+/** A process the caller spawned, recorded as a check's. */
+export interface AdoptedCheck<H> {
+  readonly handle: H;
+  readonly collected: RunningCheck["collected"];
+}
+
 /** A check a host recorded or marked in this state directory that no host is collecting. */
 export interface Leftover {
   readonly id: string;
@@ -94,7 +100,7 @@ export interface CheckProcessesApi {
     check: CheckOf,
     spawn: (markers: Readonly<Record<string, string>>) => Effect.Effect<H>,
     say?: (line: string) => Effect.Effect<void>,
-  ) => Effect.Effect<H | null, CheckRefused, Scope.Scope>;
+  ) => Effect.Effect<AdoptedCheck<H> | null, CheckRefused, Scope.Scope>;
   /** Marks every check this host is collecting ended, then sends each, and each still being spawned, SIGTERM. */
   readonly endAll: Effect.Effect<ReadonlyArray<CheckOf>>;
   /** SIGKILL to whatever of every check is left, and to one still being spawned; its record goes once it is gone. */
@@ -163,7 +169,8 @@ const unrecorded: CheckProcessesApi = {
       exit: Effect.map(handle.exitCode, Number),
       collected: (collecting) => collecting,
     })),
-  adopt: (_check, spawn) => spawn({}),
+  adopt: (_check, spawn) =>
+    Effect.map(spawn({}), (handle) => ({ handle, collected: (collecting) => collecting })),
   endAll: Effect.succeed([]),
   killEnded: Effect.void,
   collecting: Effect.succeed([]),
@@ -550,6 +557,18 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       );
     }).pipe(Effect.provideContext(services));
 
+  const collectedOf =
+    (entry: Collecting): RunningCheck["collected"] =>
+    (collecting) =>
+      collecting.pipe(
+        Effect.exit,
+        Effect.flatMap((exit) => {
+          if (entry.ended) return Effect.never;
+          entry.settled = true;
+          return exit;
+        }),
+      );
+
   const run: CheckProcessesApi["run"] = (check, command, say = () => Effect.void) =>
     begin(
       check,
@@ -564,21 +583,17 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           stdout: handle.stdout,
           stderr: handle.stderr,
           exit: Effect.map(handle.exitCode, Number),
-          collected: (collecting) =>
-            collecting.pipe(
-              Effect.exit,
-              Effect.flatMap((exit) => {
-                if (entry.ended) return Effect.never;
-                entry.settled = true;
-                return exit;
-              }),
-            ),
+          collected: collectedOf(entry),
         };
       }),
     );
 
   const adopt: CheckProcessesApi["adopt"] = (check, spawn, say = () => Effect.void) =>
-    begin(check, spawn, say).pipe(Effect.map((begun) => (begun === null ? null : begun.handle)));
+    begin(check, spawn, say).pipe(
+      Effect.map((begun) =>
+        begun === null ? null : { handle: begun.handle, collected: collectedOf(begun.entry) },
+      ),
+    );
 
   const endAll = Effect.gen(function* () {
     stopping = true;
