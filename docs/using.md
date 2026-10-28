@@ -440,7 +440,11 @@ workspace herdr reopens rather than creates keeps whatever it is already called.
 A name is decided once, when the task is made. Continuing a task never renames it, and
 neither does a replayed start. **Rename anything and Collie leaves it alone from then
 on** — a task workspace, a run's tab, an agent's pane: once the label is not one Collie
-wrote, Collie stops writing it, through every later update and every continuation.
+wrote, Collie stops writing it, through every later update and every continuation. The one
+exception is a name that said only the workflow — "Plan new work", "Implement plan" — given
+before names had to say what the work is: when the host starts, each such task still
+carrying the label Collie wrote is renamed for its first run's work, on its workspace and
+on the board. Its branch, checkout and runs are left as they are.
 
 Tabs and panes inside a task workspace do not repeat the task: the workspace already
 says what the work is, so the tab spends its width on the workflow and the step —

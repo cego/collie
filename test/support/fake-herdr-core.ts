@@ -735,6 +735,11 @@ function handle(
         if (tab) tab.label = argv[3] ?? tab.label;
         break;
       }
+      case "workspace rename": {
+        const workspace = state.workspaces.find((w) => w.workspace_id === argv[2]);
+        if (workspace) workspace.label = argv[3] ?? workspace.label;
+        break;
+      }
       case "workspace list": {
         const held = yield* tokensFor("workspaces");
         result = {

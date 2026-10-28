@@ -183,7 +183,7 @@ test("a Run's toast names the Task it is part of by what it is called, never by 
             execution: "exec-r1",
             task: "task-7",
             parent: null,
-            placing: JSON.stringify({ from: dir, taskLabel: null }),
+            placing: `{"from":"${dir}","taskLabel":null}`,
           });
           yield* (yield* Host).mergeRequest(
             "r1",

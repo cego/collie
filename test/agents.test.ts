@@ -67,7 +67,9 @@ import type { AuditLine } from "../src/audit";
 import { readTask, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
-import { HerdrError } from "../src/herdr";
+import { Herdr, HerdrError } from "../src/herdr";
+import { retitleGenericTasks } from "../src/tasknames";
+import { runFacts } from "./support/records";
 import { agentName, shellQuote } from "../src/naming";
 import {
   controlDir,
@@ -4584,6 +4586,64 @@ test("a title the human gave names the Task, and one that says nothing is not ta
         " | Offer banner, second attempt",
       );
       expect(yield* labelOf("Plan new work")).toEndWith(" | Plan the offer banner fix");
+    }),
+  ));
+
+test("a Task Collie named for its workflow alone is renamed for its work, and one a human renamed is not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const fs = yield* FileSystem.FileSystem;
+      const plan = `${rig.root}/runs/run-9/plan`;
+      yield* fs.makeDirectory(plan, { recursive: true });
+      yield* fs.writeFileString(`${plan}/SPEC.md`, "# Spec: Stop the stale offer banner\n");
+      yield* rig.addWorkspace("wP", "Collie | Plan new work", rig.projectDir);
+      yield* rig.addWorkspace("wH", "Offer banner, by hand", rig.projectDir);
+      yield* rig.addWorkspace("wN", "Collie | Passkey bridge race", rig.projectDir);
+      const kept = (id: string, workspace: string, label: string) =>
+        writeTask(env.stateDir, {
+          id,
+          workspace,
+          label,
+          cwd: rig.projectDir,
+          created_at: "2026-10-26T00:00:00.000Z",
+        });
+      yield* kept("task-p", "wP", "Collie | Plan new work");
+      yield* kept("task-h", "wH", "Collie | Plan new work");
+      yield* kept("task-g", "wGone", "Collie | Implement plan");
+      yield* kept("task-n", "wN", "Collie | Passkey bridge race");
+      const goal = { then: "", goal: "Design Tune-up performance workflow" };
+      const runs = [
+        runFacts({ id: "r-p", workflow: "plan", task: "task-p", settled: { inputs: goal } }),
+        runFacts({
+          id: "r-p.implement",
+          task: "task-p",
+          parent: "r-p",
+          created: "2026-09-15T10:00:00Z",
+          settled: { inputs: { plan } },
+        }),
+        runFacts({ id: "r-h", workflow: "plan", task: "task-h", settled: { inputs: goal } }),
+        runFacts({ id: "r-g", task: "task-g", settled: { inputs: { plan, then: "" } } }),
+        runFacts({ id: "r-n", workflow: "plan", task: "task-n", settled: { inputs: goal } }),
+      ];
+
+      yield* retitleGenericTasks(env, new Herdr(env), runs);
+
+      const label = (id: string) =>
+        readTask(env.stateDir, id).pipe(Effect.map((task) => task?.label));
+      const live = new Map(
+        (yield* new Herdr(env).workspaceList()).map((one) => [one.workspaceId, one.label]),
+      );
+      // Still the label Collie wrote: renamed, on the record and on the workspace alike.
+      expect(yield* label("task-p")).toBe("Collie | Design Tune-up performance workflow");
+      expect(live.get("wP")).toBe("Collie | Design Tune-up performance workflow");
+      // A workspace herdr no longer has is renamed on the record, from the plan it built.
+      expect(yield* label("task-g")).toBe("Collie | Stop the stale offer banner");
+      // A human's rename, and a name that already says what the work is, stand.
+      expect(yield* label("task-h")).toBe("Collie | Plan new work");
+      expect(live.get("wH")).toBe("Offer banner, by hand");
+      expect(yield* label("task-n")).toBe("Collie | Passkey bridge race");
+      expect(live.get("wN")).toBe("Collie | Passkey bridge race");
     }),
   ));
 

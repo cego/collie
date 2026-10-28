@@ -9,11 +9,13 @@
 // answers in a two-string schema with nothing in it that acts, and what comes back is a
 // display label — never a path component, an agent name or a command.
 
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { askOnce, budgetedDeps, type BudgetedDeps, type TaskName } from "./evaluator";
 import { Herdr, type PaneInfo, type TabInfo, type WorkspaceInfo } from "./herdr";
 import { oneLine, taskWorkspaceLabel } from "./naming";
+import type { RunFacts } from "./runs";
+import { listTasks, writeTask } from "./task";
 
 /** The names this person already has, as herdr reports them. Read-only context. */
 export interface LiveNames {
@@ -161,10 +163,12 @@ export function isGenericTitle(title: string, workflow: string): boolean {
     .every((word) => word === "" || said(word) || said(word.replace(/s$/, "")));
 }
 
+const isText = Schema.is(Schema.String);
+
 /** The most descriptive Input a start was given, whatever it is called or where it came. */
-export function workNamedIn(inputs: Readonly<Record<string, unknown>>): string {
+export function workNamedIn(inputs: Readonly<Record<string, Schema.Json>>): string {
   return Object.values(inputs)
-    .flatMap((value) => (typeof value === "string" ? [value.trim()] : []))
+    .flatMap((value) => (isText(value) ? [value.trim()] : []))
     .reduce((longest, value) => (value.length > longest.length ? value : longest), "");
 }
 
@@ -302,7 +306,7 @@ const liveNames = Effect.fn("tasknames.liveNames")(function* (herdr: Herdr, ever
 export interface StartAbout {
   readonly workflow: string;
   /** Every Input the start was given, by name. */
-  readonly inputs: Readonly<Record<string, unknown>>;
+  readonly inputs: Readonly<Record<string, Schema.Json>>;
   /** What the human said it is for, where they said anything. */
   readonly goal?: string | null | undefined;
   /** What the human called it, which names it unless it says nothing. */
@@ -330,4 +334,47 @@ export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
   if (title !== "" && !isGenericTitle(title, about.workflow))
     return taskWorkspaceLabel({ project: fallbackName(context, live).project, title });
   return taskWorkspaceLabel(yield* nameTask(naming, context, live));
+});
+
+/**
+ * Renames each Task whose title names only its workflow, from its first Run's Inputs and
+ * without asking a model — only where the label is still the one Collie wrote: on a live
+ * workspace that still carries it, or on the record of one herdr no longer has.
+ */
+export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(function* (
+  env: PluginEnv,
+  herdr: Herdr,
+  runs: ReadonlyArray<RunFacts>,
+) {
+  const listed = yield* herdr.workspaceList().pipe(Effect.option);
+  // Unread, a workspace a human renamed is indistinguishable from one that is gone.
+  if (listed._tag === "None") return;
+  const live = new Map(listed.value.map((one) => [one.workspaceId, one.label]));
+  for (const task of yield* listTasks(env.stateDir)) {
+    const [, project, title] = PREFIXED.exec(task.label) ?? [];
+    const first = runs
+      .filter((run) => run.task === task.id && run.parent === null)
+      .sort((one, other) => one.created.localeCompare(other.created))[0];
+    if (project === undefined || title === undefined || first === undefined) continue;
+    if (!isGenericTitle(title, first.workflow)) continue;
+    const showing = live.get(task.workspace);
+    if (showing !== undefined && showing !== task.label) continue;
+    const named = fallbackName(
+      {
+        workflow: first.workflow,
+        named: yield* objectiveOf(workNamedIn(first.settled.inputs)),
+        short: "",
+        goal: null,
+        cwd: task.cwd,
+      },
+      { workspaces: [], tabs: [], panes: [] },
+    );
+    if (isGenericTitle(named.title, first.workflow)) continue;
+    const label = `${project} | ${named.title}`;
+    if (showing !== undefined) {
+      const renamed = yield* herdr.workspaceRename(task.workspace, label).pipe(Effect.option);
+      if (renamed._tag === "None") continue;
+    }
+    yield* writeTask(env.stateDir, { ...task, label });
+  }
 });

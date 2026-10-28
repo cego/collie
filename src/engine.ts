@@ -6258,7 +6258,7 @@ const makeRegistry: (
             { ...placing.env, cwd: from },
             {
               workflow: generation.id,
-              inputs: launch === undefined ? {} : { [launch]: settled.input[launch] },
+              inputs: launch === undefined ? {} : { [launch]: settled.input[launch] ?? null },
             },
             options?.namesTasks === true,
           ).pipe(

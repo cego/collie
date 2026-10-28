@@ -773,6 +773,10 @@ export class Herdr {
     return this.cli(["tab", "rename", tabId, label]).pipe(Effect.asVoid);
   }
 
+  workspaceRename(workspaceId: string, label: string): HerdrEffect<void> {
+    return this.cli(["workspace", "rename", workspaceId, label]).pipe(Effect.asVoid);
+  }
+
   workspaceList(): HerdrEffect<WorkspaceInfo[]> {
     return this.cli(["workspace", "list"]).pipe(Effect.flatMap(decodeWorkspaceList));
   }

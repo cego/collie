@@ -134,10 +134,12 @@ test(
 const taskLabelOf = (world: World, runId: string) => {
   const db = new Database(`${world.state}/host.db`, { readonly: true });
   try {
-    const row = db.query("select placing from collie_runs where run = ?").get(runId) as {
-      placing: string | null;
-    } | null;
-    return (JSON.parse(row?.placing ?? "{}") as { taskLabel?: string | null }).taskLabel;
+    const row = Schema.decodeUnknownSync(Schema.Struct({ placing: Schema.String }))(
+      db.query("select placing from collie_runs where run = ?").get(runId),
+    );
+    return Schema.decodeUnknownSync(
+      Schema.fromJsonString(Schema.Struct({ taskLabel: Schema.NullOr(Schema.String) })),
+    )(row.placing).taskLabel;
   } finally {
     db.close();
   }
