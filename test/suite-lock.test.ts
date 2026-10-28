@@ -6,6 +6,7 @@ import { inTurn } from "../tools/suite-lock";
 import {
   binDirectory,
   isTargeted,
+  prepareTimings,
   pressureAt,
   report,
   requestOf,
@@ -182,6 +183,53 @@ test("a targeted run reads the timings and never updates them", () =>
       expect(yield* timingFlags(true, timings, seed)).toEqual([`--timings=${seed}`]);
       yield* fs.writeFileString(timings, "{}");
       expect(yield* timingFlags(true, timings, seed)).toEqual([`--timings=${timings}`]);
+    }).pipe(Effect.scoped),
+  ));
+
+const recorded = `{"version":1,"files":{"test/suite-lock.test.ts":1234,"test/deleted-long-ago.test.ts":293830}}`;
+const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+test("a whole suite forgets the timings of a deleted test file and keeps the rest", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "suite-timings-" });
+      const timings = `${dir}/test-timings.json`;
+      yield* fs.writeFileString(timings, recorded);
+      yield* prepareTimings(false, timings, `${dir}/seed.json`);
+      expect(parseJson(yield* fs.readFileString(timings))).toEqual({
+        version: 1,
+        files: { "test/suite-lock.test.ts": 1234 },
+      });
+    }).pipe(Effect.scoped),
+  ));
+
+test("a targeted run leaves the timings exactly as they were", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "suite-timings-" });
+      const timings = `${dir}/test-timings.json`;
+      yield* fs.writeFileString(timings, recorded);
+      yield* prepareTimings(true, timings, `${dir}/seed.json`);
+      expect(yield* fs.readFileString(timings)).toBe(recorded);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a whole suite with no timings starts from the seed, without its deleted files", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "suite-timings-" });
+      const timings = `${dir}/scratch/test-timings.json`;
+      const seed = `${dir}/seed.json`;
+      yield* fs.writeFileString(seed, recorded);
+      yield* prepareTimings(false, timings, seed);
+      expect(parseJson(yield* fs.readFileString(timings))).toEqual({
+        version: 1,
+        files: { "test/suite-lock.test.ts": 1234 },
+      });
+      expect(yield* fs.readFileString(seed)).toBe(recorded);
     }).pipe(Effect.scoped),
   ));
 

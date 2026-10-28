@@ -1539,7 +1539,11 @@ never part of the suite. Run it when a persona or a review step's instructions c
 Bun records file durations in `.scratch/test-timings.json` and uses them to schedule slow
 files first next time. When that file is absent, the runner seeds it from the measured
 durations in `tools/test-timings.json`, so a fresh checkout starts its longest files first
-too. Refresh that seed from a successful complete run when the suite changes substantially.
+too. Bun's merge keeps every file it ever timed, so before a whole suite runs, the runner
+drops the entries for test files that no longer exist (`prepareTimings` in
+`tools/test-run.ts`); otherwise the report would name a deleted file as the longest. A
+targeted run leaves the file alone. Refresh that seed from a successful complete run when
+the suite changes substantially.
 CI caches only scheduling data, never test results. Missing or stale entries cannot skip
 a test; deleting the scratch file restores the seed. Quiet-agent tests
 use a controlled Effect clock so machine load cannot consume their nudge windows. A test
