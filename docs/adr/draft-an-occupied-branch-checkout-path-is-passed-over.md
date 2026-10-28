@@ -74,8 +74,13 @@ works in the checkout of the Run that started it, and cuts nothing, when all of 
   after a restart. It clears the record only when the result returns: a suspended child is
   still awaited;
 - that Run has a checkout of its own, not the project it was started in;
-- the checkout is clean and at the merge request's head;
+- the checkout is clean and at the merge request's head, fetched from the remote first;
 - no agent is working there. A herdr that will not say counts as one.
+
+Only a Run that asks for its starter's checkout is given it. The checkout is on the
+starter's branch, not the merge request's, so Stage asks because it commits and pushes
+nothing, and Release and a review's fix round, which commit and push to the reviewed
+branch, always cut their own.
 
 Otherwise the checkout is resolved as above, and the log says why the starting Run's was not
 used. A parent that awaits nothing, such as one whose card started the Stage, keeps its

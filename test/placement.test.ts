@@ -2941,7 +2941,7 @@ const cutsOf = () =>
 const startWith = (
   generation: Generation,
   request: string,
-  input: Readonly<Record<string, string>>,
+  input: Readonly<Record<string, Schema.Json>>,
   parent: string | null = null,
 ) =>
   Registry.pipe(
@@ -2986,6 +2986,39 @@ test(
         expect(yield* fs.readFileString(`${dir()}/runs/${view?.runId}.stage-1/log.txt`)).toContain(
           `working in ${parent}, Run ${view?.runId}'s checkout`,
         );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a child its parent awaits that does not ask for its starter's checkout cuts its own",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* git("branch", "feature");
+        const view = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [awaits] = yield* loaded(registry, [
+              `${fixtures}/awaits-checkout.workflow.ts`,
+              `${fixtures}/checks-out.workflow.ts`,
+            ]);
+            const started = yield* startWith(awaits!, "r1", {
+              work: "Ship the picker",
+              mr: REVIEWED,
+              child: "checks-out",
+              inStarter: false,
+            });
+            return yield* finished(started.runId);
+          }),
+        );
+
+        const parent = view?.cwd ?? "";
+        expect(view?.status).toEqual({
+          status: "complete",
+          value: `${parent} ${rig.root}/.herdr/worktrees/project/feature`,
+        });
       }),
     ),
   120_000,

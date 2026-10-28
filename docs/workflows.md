@@ -776,7 +776,8 @@ again is decided this way after a refused reviewed checkout, so Release's
 **Its [Flow](../CONTEXT.md)** forecasts **Checkout**, **Assess**, **Helle claim**, **Stage**,
 **Test on stage** and **Roll stage back**. A Stage that `implement`'s **What next?** started
 works in that Run's checkout while implement is blocked on it alone, and the checkout is clean, at the merge request's
-head and has no working agent. Otherwise it gets one of its own, and its log says which and why. A checkout Collie cannot give fails the Run on
+head as the remote has it now and has no working agent. Otherwise it gets one of its own, and its log says which and why.
+Release never takes implement's checkout: it commits and pushes to the merge request's branch, which that checkout is not on. A checkout Collie cannot give fails the Run on
 **Checkout**, with why. Stage and Test on stage have a run per staging, a moved head
 adding one to Stage alone. Leave it on stage ends with Roll stage back not run.
 

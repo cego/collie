@@ -702,11 +702,18 @@ export interface HostApi {
    * `place` answers with it from then on, and every verification is bound to it
    * (ADR-0054). The one git already has, else one cut from the branch; asking again
    * answers from the record. Take it inside an Activity, so a replay does not cut again.
+   * `inStarter` lets it work in the checkout of the Run that started it and waits on it
+   * alone, where that checkout is clean, at the branch's head and idle: only for work
+   * that commits and pushes nothing, since that checkout's branch is the starter's own.
    */
-  readonly checkoutReviewed: (runId: string) => Effect.Effect<ReviewedCheckout>;
+  readonly checkoutReviewed: (
+    runId: string,
+    opts?: { readonly inStarter?: boolean },
+  ) => Effect.Effect<ReviewedCheckout>;
   /**
    * Where Run `failed` had its reviewed checkout refused, why another on `target`, a merge
-   * request or diff target, that this Run starts and waits on would still be refused now,
+   * request or diff target, that this Run starts and waits on, taking it with `inStarter`,
+   * would still be refused now,
    * in `checkoutReviewed`'s words. Null where it would not be, or where `failed`'s checkout
    * was never refused. It cuts and records nothing. Take it inside an Activity, so a
    * replay answers the same.

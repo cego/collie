@@ -674,12 +674,17 @@ as the Run's own, so read `place` again after it rather than keeping `place.cwd`
 `{ cwd, branch }`, or `{ refused }` in the resolver's own words where the target has no
 branch to work on; asking again answers from the record. Take it inside an `Activity`, so a
 replay does not cut a second checkout. Shipped `review` takes it before its own fixer starts.
+`host.checkoutReviewed(runId, { inStarter: true })` may instead work in the checkout of the
+Run that started this one, while that Run waits on it alone and its checkout is clean, at
+the branch's head as the remote has it now, and idle. That checkout's branch is the
+starter's, so only work that commits and pushes nothing asks for it: shipped `stage` does,
+and `release` and `review`'s fix rounds do not.
 `host.reviewedBranch(runId)` answers `{ branch }`, or the `{ refused }` the checkout would
 give, by the same resolution, and cuts and records nothing; shipped `review` asks it before
 its first menu, so a fix that cannot run is not offered.
 `host.reviewedRefusal(runId, failed, target)` answers, where Run `failed`'s reviewed
-checkout was refused, why another on `target` that this Run starts and waits on would still
-be refused, or null; shipped `implement` asks it before offering Stage again. A failed Run
+checkout was refused, why another on `target` that this Run starts and waits on, taking it
+with `inStarter`, would still be refused, or null; shipped `implement` asks it before offering Stage again. A failed Run
 whose reviewed checkout was refused has each follow-up that starts its own workflow listed
 as unavailable while the same resolution would still refuse.
 

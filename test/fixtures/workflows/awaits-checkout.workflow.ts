@@ -10,6 +10,7 @@ export default defineWorkflow({
     work: Schema.String,
     mr: Schema.String,
     child: Schema.Literals(["checks-out", "asks"]),
+    inStarter: Schema.optionalKey(Schema.Boolean),
   }),
   hints: { work: "goal" },
   output: Schema.String,
@@ -19,7 +20,11 @@ export default defineWorkflow({
       const children = yield* Children;
       const child = yield* children.start(
         input.child === "checks-out"
-          ? { invocation: "stage-1", workflow: "checks-out", input: { mr: input.mr } }
+          ? {
+              invocation: "stage-1",
+              workflow: "checks-out",
+              input: { mr: input.mr, inStarter: input.inStarter ?? true },
+            }
           : { invocation: "asks-1", workflow: "asks", input: { goal: input.work } },
       );
       const said = yield* children.result(child);

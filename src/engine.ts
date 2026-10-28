@@ -660,8 +660,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly place: (runId: string) => Effect.Effect<Place>;
     /** Whether the branch this Run's diff target names can be established; cuts and records nothing. */
     readonly reviewedBranch: (runId: string) => Effect.Effect<ReviewedBranch>;
-    /** The checkout of the branch this Run's diff target names, recorded as the Run's own. */
-    readonly checkoutReviewed: (runId: string) => Effect.Effect<ReviewedCheckout>;
+    /** The checkout of the branch this Run's diff target names, recorded as the Run's own; \`inStarter\` may take the waiting starter's. */
+    readonly checkoutReviewed: (
+      runId: string,
+      opts?: { readonly inStarter?: boolean },
+    ) => Effect.Effect<ReviewedCheckout>;
     /** Where \`failed\`'s reviewed checkout was refused, why another on \`target\` this Run waits on still would be, or null; cuts nothing. */
     readonly reviewedRefusal: (
       runId: string,
@@ -3352,7 +3355,7 @@ export const hostLayer = (options: {
             : {};
         });
       /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
-      const checkoutReviewed = (runId: string) =>
+      const checkoutReviewed = (runId: string, opts?: { readonly inStarter?: boolean }) =>
         Effect.gen(function* () {
           const asked = yield* reviewing(runId);
           if (asked.refused !== undefined) return { refused: asked.refused };
@@ -3360,10 +3363,11 @@ export const hostLayer = (options: {
           if (placed.worktree !== null) {
             return { cwd: placed.cwd, branch: placed.branch ?? placed.worktree.branch };
           }
+          const starting = opts?.inStarter === true ? yield* startingCheckout(row) : {};
           const made = yield* Effect.result(
             checkoutFor(herdr, {
               ...asked.ask,
-              ...(yield* startingCheckout(row)),
+              ...starting,
               stateDir: env.stateDir,
               workflow: row.workflow,
               checkout: "branch",
