@@ -879,6 +879,11 @@ Every other shipped step clears nothing.
   build gets is the review you would run standalone. It is an import, not a lookup:
   overriding `review` in your layer leaves `implement`'s review as it was, and a fork of
   `implement` imports the pass it wants.
+- `implement` imports its delivery the same way (`workflows/delivering.ts`): the gate and
+  its fixes, the merge request, and CI's proof of the checks left to it, with CI's fixes.
+  It takes the outcome kind, the prompts and the merge request's Output from the workflow
+  that calls it, and a step to run after a gate or CI fix moves the tree; `implement`
+  passes none.
 - `plan` → `architecture`, for a plan whose tickets need architectural decisions, started
   with the plan's own goal. It is a Choice a human takes, not a pass every build makes.
 - `review` → `implement`, from **Fix findings in a full implement run**. See
