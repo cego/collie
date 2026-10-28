@@ -109,7 +109,7 @@ test("a fixer is told its verdict counts only what it left unresolved; a reviewe
   expect(jsonSchemaFor(FixOutputSchema).document).toMatchObject({
     properties: {
       verdict: {
-        description: expect.stringMatching(/unresolved.*`fixed`.*`disputed`.*`clean`/),
+        description: expect.stringMatching(/unresolved.*"fixed".*"disputed".*"clean"/),
       },
     },
   });
