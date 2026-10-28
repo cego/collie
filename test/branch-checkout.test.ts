@@ -500,7 +500,7 @@ test.each([
     at: "origin/master",
     dirty: false,
     status: "idle",
-    why: `it is not at origin/${BRANCH}`,
+    why: `it is not at ${BRANCH}'s head on origin`,
   },
   {
     held: "a live agent",
@@ -546,7 +546,7 @@ test("a Stage started by a Run whose checkout is at a head the remote has since 
 
       expect(checkout.cwd).toBe(first);
       expect(checkout.note).toContain(
-        `not working in ${started}, Run run-implement's checkout: it is not at origin/${BRANCH}`,
+        `not working in ${started}, Run run-implement's checkout: it is not at ${BRANCH}'s head on origin`,
       );
     }),
   ));
@@ -572,6 +572,69 @@ test("whether a Stage's checkout would be refused asks the remote's head before 
       });
 
       expect(refused).toContain(`no worktree for ${BRANCH}: `);
+      expect(refused).toContain("free one of them and retry");
+    }),
+  ));
+
+/** Clone A knows the branch only as a local branch, and fetches nothing but master. */
+const localOnly = () =>
+  Effect.gen(function* () {
+    yield* git(cloneA, "branch", "-q", BRANCH, `origin/${BRANCH}`);
+    yield* git(
+      cloneA,
+      "config",
+      "remote.origin.fetch",
+      "+refs/heads/master:refs/remotes/origin/master",
+    );
+    yield* git(cloneA, "update-ref", "-d", `refs/remotes/origin/${BRANCH}`);
+  });
+
+test("a Stage on a branch its repository holds only locally asks the remote's head before working in the starting Run's checkout", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const started = yield* startedAt(`origin/${BRANCH}`);
+      yield* localOnly();
+      yield* advancedElsewhere();
+
+      const checkout = yield* checkoutFor(herdrWith([agentIn(started, "idle")]), {
+        cwd: cloneA,
+        stateDir: rig.stateDir,
+        name: "run-x",
+        workflow: "stage",
+        checkout: "branch",
+        inputs: {},
+        taskBranch: BRANCH,
+        starting: { run: "run-implement", cwd: started },
+      });
+
+      expect(checkout.cwd).toBe(first);
+      expect(checkout.note).toContain(
+        `not working in ${started}, Run run-implement's checkout: it is not at ${BRANCH}'s head on origin`,
+      );
+    }),
+  ));
+
+test("whether a Stage on a branch held only locally would be refused asks the remote's head before counting on the starting Run's", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const started = yield* startedAt(`origin/${BRANCH}`);
+      yield* localOnly();
+      yield* advancedElsewhere();
+      for (const held of [first, `${first}-2`, `${first}-3`]) {
+        yield* fs.makeDirectory(held, { recursive: true });
+        yield* fs.writeFileString(`${held}/kept`, "kept\n");
+      }
+
+      const refused = yield* checkoutRefusal(herdrWith([]), {
+        cwd: cloneA,
+        name: "run-x",
+        inputs: {},
+        taskBranch: BRANCH,
+        recordedBy: () => Effect.succeed(null),
+        starting: { run: "run-implement", cwd: started },
+      });
+
       expect(refused).toContain("free one of them and retry");
     }),
   ));

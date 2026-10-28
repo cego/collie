@@ -74,7 +74,8 @@ works in the checkout of the Run that started it, and cuts nothing, when all of 
   after a restart. It clears the record only when the result returns: a suspended child is
   still awaited;
 - that Run has a checkout of its own, not the project it was started in;
-- the checkout is clean and at the merge request's head, fetched from the remote first;
+- the checkout is clean and at the merge request's head as the remote reports it now, not as
+  the repository last fetched it or holds it as a local branch;
 - no agent is working there. A herdr that will not say counts as one.
 
 Only a Run that asks for its starter's checkout is given it. The checkout is on the

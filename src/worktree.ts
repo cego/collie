@@ -1067,28 +1067,37 @@ export interface Checkout {
   branchSource: BranchSource | null;
 }
 
-/** Why a Run may not work in another's checkout `cwd` instead of cutting one at `base`, or null. */
+/**
+ * Why a Run may not work in another's checkout `cwd` instead of cutting one of `branch`
+ * at `base`, or null.
+ */
 const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
   herdr: Herdr,
   cwd: string,
+  branch: string,
   base: { readonly ref: string; readonly in: string },
 ) {
   const status = yield* shell("git", ["status", "--porcelain"], cwd);
   if (status.code !== 0) return "git could not read it";
   if (status.stdout.trim() !== "") return "it has uncommitted changes";
-  // The remote's head now, not whatever this checkout last fetched.
-  if (base.ref.startsWith("origin/")) {
-    const fetched = yield* shell(
-      "git",
-      ["fetch", "--quiet", "origin", base.ref.slice("origin/".length)],
-      base.in,
-    );
-    if (fetched.code !== 0) return `${base.ref} could not be fetched`;
-  }
   const head = yield* shell("git", ["rev-parse", "HEAD"], cwd);
-  const wanted = yield* shell("git", ["rev-parse", `${base.ref}^{commit}`], base.in);
-  if (head.code !== 0 || wanted.code !== 0 || head.stdout.trim() !== wanted.stdout.trim())
-    return `it is not at ${base.ref}`;
+  if (head.code !== 0) return "git could not read it";
+  const hasOrigin = (yield* shell("git", ["remote", "get-url", "origin"], base.in)).code === 0;
+  // The remote's head now, whatever this repository last fetched or holds locally.
+  const remote = hasOrigin
+    ? yield* shell("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], base.in)
+    : null;
+  // Exit 2 is a remote without the branch: then, as with no remote, the work is only `base`.
+  if (remote !== null && remote.code !== 0 && remote.code !== 2)
+    return `origin would not say where ${branch} is`;
+  const wanted =
+    remote?.code === 0
+      ? { at: remote.stdout.split("\t")[0], name: `${branch}'s head on origin` }
+      : {
+          at: (yield* shell("git", ["rev-parse", `${base.ref}^{commit}`], base.in)).stdout.trim(),
+          name: base.ref,
+        };
+  if (head.stdout.trim() !== wanted.at) return `it is not at ${wanted.name}`;
   const panes = yield* Effect.result(herdr.paneList());
   if (panes._tag === "Failure") return "herdr would not say which agents work in it";
   for (const pane of panes.success) {
@@ -1214,13 +1223,13 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   let notTaken = "";
   if (opts.starting !== undefined) {
     const { run, cwd } = opts.starting;
-    const why = yield* whyNotWorkIn(herdr, cwd, { ref: plan.base, in: opts.cwd });
+    const why = yield* whyNotWorkIn(herdr, cwd, plan.branch, { ref: plan.base, in: opts.cwd });
     const whose = `${cwd}, Run ${run}'s checkout`;
     if (why === null)
       return {
         ...here,
         cwd,
-        note: `working in ${whose}: it is clean, at ${plan.base}, and no agent is working in it`,
+        note: `working in ${whose}: it is clean, at ${plan.branch}'s head, and no agent is working in it`,
       } satisfies Checkout;
     notTaken = `not working in ${whose}: ${why}; `;
   }
@@ -1308,7 +1317,10 @@ export const checkoutRefusal = Effect.fn("worktree.checkoutRefusal")(function* (
   if (plan.refused) return plan.refused;
   if (
     opts.starting !== undefined &&
-    (yield* whyNotWorkIn(herdr, opts.starting.cwd, { ref: plan.base, in: opts.cwd })) === null
+    (yield* whyNotWorkIn(herdr, opts.starting.cwd, plan.branch, {
+      ref: plan.base,
+      in: opts.cwd,
+    })) === null
   )
     return null;
   const listing = yield* gitWorktrees(shell, opts.cwd);
