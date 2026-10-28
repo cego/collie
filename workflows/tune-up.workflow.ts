@@ -100,6 +100,8 @@ const prompts = {
   drop: content.template("drop", {
     ...Told,
     base: Schema.Struct({ merge: text, tree: text }),
+    head: text,
+    commits: text,
     why: text,
   }),
   fix: content.template("fix", {
@@ -944,6 +946,7 @@ export default defineWorkflow({
       yield* host.record(runId, ending);
 
       const cycled: Cycled[] = [];
+      const keptCommits: Array<string> = [];
       const findings = (name: string, ending: string) =>
         Activity.make({
           name,
@@ -1218,6 +1221,7 @@ export default defineWorkflow({
             ? yield* judging(n, start.head)
             : { why: stopped, measurement: null };
         const kept = judged.why === null;
+        if (kept && tried.result === "changed") keptCommits.push(...tried.commits);
         if (!kept) {
           const why = judged.why ?? "";
           const movedTo = yield* Activity.make({
@@ -1394,15 +1398,14 @@ export default defineWorkflow({
       const lost = (measured: Measurement) => notKept(plan, [], measured);
       const dropped = (measured: Measurement, why: string) =>
         Effect.gen(function* () {
-          const moved = yield* Activity.make({
+          const movedTo = yield* Activity.make({
             name: "drop.moved",
-            success: Schema.Boolean,
-            execute: Effect.map(
-              host.evidence(runId, cwd),
-              (got) => got.content !== measured.base.content,
+            success: Schema.NullOr(text),
+            execute: Effect.map(host.evidence(runId, cwd), (got) =>
+              got.content === measured.base.content ? null : got.final.head_sha,
             ),
           });
-          if (moved)
+          if (movedTo !== null)
             yield* integrate(
               agentWork({
                 operation: "drop",
@@ -1412,6 +1415,8 @@ export default defineWorkflow({
                 input: {
                   ...told,
                   base: { merge: measured.base.commit, tree: measured.base.head_sha },
+                  head: movedTo,
+                  commits: [...plan.harness.commits, ...keptCommits].join(", "),
                   why,
                 },
               }),

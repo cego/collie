@@ -156,15 +156,20 @@ request would merge into: {{why}}
 
 Drop it. Make this checkout's committed files exactly the base tree Collie measured,
 {{base.tree}}, which is {{base.merge}} with the harness commits applied, and commit that on
-this branch. Run exactly this:
+this branch. Take back only this Run's own work: first read
+`git log --no-merges --format=%H {{base.merge}}..HEAD`; where it lists a commit that is
+neither one of {{commits}} nor a fix this Run's reviews asked of you, run nothing. Otherwise
+run exactly this:
 
 ```sh
-git diff --cached --quiet && git diff --binary HEAD {{base.tree}} | git apply --index && git commit -m "Drop the tune-up's change: no final gain"
+git merge-base --is-ancestor {{head}} HEAD && git merge-base --is-ancestor HEAD {{head}} && git diff --cached --quiet && git diff --binary HEAD {{base.tree}} | git apply --index && git commit -m "Drop the tune-up's change: no final gain"
 ```
 
-It changes only the files the drop needs, and refuses where something is already staged or
-one of them has uncommitted work, so no work of anyone else's is lost. Where it fails, change
-nothing more. Push nothing. Collie then checks that the checkout's files are that tree again.
+The first two stop it where anyone committed after {{head}}, where Collie decided to drop. It
+changes only the files the drop needs, and refuses where something is already staged or one
+of them has uncommitted work, so no work of anyone else's is lost. Where it fails, change
+nothing more. Push nothing. Collie then checks that the checkout's files are that tree again,
+and otherwise fails the Run naming both trees.
 
 ## review
 

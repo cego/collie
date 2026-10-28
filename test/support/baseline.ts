@@ -14794,6 +14794,27 @@ scenario(
 );
 
 scenario(
+  "a tune-up drop takes back nothing once another commit lands, and fails the Run naming both trees",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-foreign-drop";
+        yield* cycling(runId, [
+          fasterWhileUpstreamPushes(3, "fixed"),
+          asTold("echo theirs > theirs && git add theirs && git commit -qm theirs", "dropped"),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(yield* wasAsked(runId, "drop")).toBe(true);
+        expect(yield* readText(`${rig.projectDir}/theirs`)).toBe("theirs\n");
+        expect(result._tag).toBe("Failure");
+        const [final] = yield* finals(runId);
+        expect(reasonOf(result)).toContain(final!.base.head_sha);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a tune-up tuner that has no opportunity left stops the Run with that reason, before its cycles are spent",
   () =>
     runEffect(
@@ -15252,7 +15273,6 @@ scenario(
   120_000,
 );
 
-/** A review with a blocker of its own, and the fix that commits `note` for it, naming the CI check. */
 const blockedThenFixed = (round: number): ReadonlyArray<Schema.Json> => {
   const title = `round ${round}: search drops a result`;
   return [

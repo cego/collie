@@ -1097,8 +1097,9 @@ a guardrail not held, there is no merge request and the Run is not failed. Its r
 that file and why it ended: `proof unavailable`, naming each metric, why the Cycles stopped,
 or the `final` Measurement's verdict. The Run is then back on its base tree: with no kept
 Cycle the branch already is, and a change that lost its gain is dropped back to the base
-tree at the latest merge base, in a commit that changes only the files it needs and keeps
-uncommitted work, which Collie checks from the trees. A fix after the merge
+tree at the latest merge base, in a commit that changes only the files it needs, keeps
+uncommitted work, and takes back nothing once a commit not the Run's own is on the branch,
+which Collie checks from the trees, failing the Run naming both where the drop did not land. A fix after the merge
 request is open that loses the gain or a reviewer's verdict fails the Run, saying the merge
 request is not ready and why, on the merge request too. A forge that refuses the merge
 request fails the Run with the forge's reason. A harness commit touching a path outside its
