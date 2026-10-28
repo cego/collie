@@ -301,6 +301,13 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 before and after. A result whose snapshots differ is `unstable`, never `pass`. An agent's
 statement about tests is a **claim**, and is shown as one.
 
+**Measurement** — The host's comparison of a base tree and a candidate tree on one Machine.
+It is a Run's declared benchmark commands, sampled alternately on each tree for a fixed
+budget, with every raw sample, command, tree, environment and Machine load kept. It ends in
+a verdict per metric: `gain`, `no-change`, `regression` or `inconclusive`. An agent's
+timings are a **claim**; only a Measurement proves a `performance` outcome
+(ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement).
+
 **Card** — Collie's record of one slice of work: what was asked for, what changed,
 what backs it, and what nobody checked. Its **readiness** — `claimed`, `inspect-ready`,
 `verified` — says how far the evidence goes and no further.
@@ -558,6 +565,19 @@ when it ends, with that Run's merge request links and outcomes. A Run binds to i
 startup and writes to that issue for the rest of its life, however long it waits in Helle
 and whatever cycle it rolls into. Updates are read-modify-write and never rewrite a line
 the Run did not add, because several Runs append to one description.
+
+**Tune-up Run** — One execution of the `tune-up` Workflow: one repository made measurably
+faster than a pinned base, over at most `cycles` **Cycles**, without giving up behaviour.
+It opens one merge request only where its accumulated change, measured against the merge
+base that merge request targets, shows a gain; otherwise it finishes with its findings and
+no merge request. It is bounded by its Cycles and an optional wall-time limit; what it
+spends is recorded as usage and never caps it.
+
+**Cycle** — One hypothesis tried in a **Tune-up Run**: prioritised, made as one bounded
+change, verified for correctness and measured, then kept or reverted (only the Run's own
+changes), with its findings updated. A reverted or no-op Cycle still counts, and a restart
+or resume never gives one back. Not an agent's turn, a plan's dependency cycle or a
+Linear cycle.
 
 **Renovated with exceptions** — How a Renovate Run ends when every merge request is
 accounted for and the release succeeded, but one or more updates were deferred with the
