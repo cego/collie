@@ -8,6 +8,7 @@ import {
   cleanName,
   establishedProject,
   fallbackName,
+  isGenericTitle,
   namePack,
   objectiveOf,
   repositoryOf,
@@ -157,16 +158,36 @@ test("a plan directory is named by what its spec says, not by its path", () =>
         `${plan}/SPEC.md`,
         "# Spec: Migrate pending-payment lookup to promotion-service\n\nWhy.\n",
       );
-      expect(yield* objectiveOf(plan)).toBe("Migrate pending-payment lookup to promotion-service");
+      expect(yield* objectiveOf(plan, "/")).toBe(
+        "Migrate pending-payment lookup to promotion-service",
+      );
       // A heading that only says it is a spec is not the objective; the work source is.
       yield* fs.writeFileString(
         `${plan}/01-ticket.md`,
         "# Spec\n\nWork source (text): Fix the stuck release step\n",
       );
-      expect(yield* objectiveOf(`${plan}/01-ticket.md`)).toBe("Fix the stuck release step");
-      // Words are words, and a path that is not there names nothing better than itself.
-      expect(yield* objectiveOf("Fix the release step")).toBe("Fix the release step");
-      expect(yield* objectiveOf(`${plan}/gone`)).toBe(`${plan}/gone`);
+      expect(yield* objectiveOf(`${plan}/01-ticket.md`, "/")).toBe("Fix the stuck release step");
+      yield* fs.writeFileString(
+        `${plan}/02-ticket.md`,
+        "---\nowner: dana\n---\n<!-- drafted by hand -->\nWhy this matters.\n\n## Retry the payout export\n",
+      );
+      expect(yield* objectiveOf(`${plan}/02-ticket.md`, "/")).toBe("Retry the payout export");
+      expect(yield* objectiveOf("Fix the release step", plan)).toBe("Fix the release step");
+      expect(yield* objectiveOf(`${plan}/gone`, "/")).toBe(`${plan}/gone`);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a plan given relative to its project, or with a space in its path, is read all the same", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* fs.makeTempDirectoryScoped();
+      yield* fs.makeDirectory(`${project}/plan`);
+      yield* fs.writeFileString(`${project}/plan/SPEC.md`, "# Stop the stale offer banner\n");
+      yield* fs.makeDirectory(`${project}/plans/feature name`, { recursive: true });
+      yield* fs.writeFileString(`${project}/plans/feature name/SPEC.md`, "# Retry the payout\n");
+      expect(yield* objectiveOf("./plan", project)).toBe("Stop the stale offer banner");
+      expect(yield* objectiveOf(`${project}/plans/feature name`, "/")).toBe("Retry the payout");
     }).pipe(Effect.scoped),
   ));
 
@@ -187,10 +208,15 @@ test("an answer that names only the workflow is not a name, and the work's own w
   expect(
     cleanName({ project: "Collie", title: "Self-improve workflow" }, improving, nothing).title,
   ).toBe("Machine");
-  // An answer that says which piece of work this is stands, short as it is.
   expect(cleanName({ project: "Collie", title: "Review MR !865" }, tuneUp, nothing).title).toBe(
     "Review MR !865",
   );
+});
+
+test("a title in any script says what it says; only filler and the workflow's own words are generic", () => {
+  expect(isGenericTitle("修复支付超时", "plan")).toBe(false);
+  expect(isGenericTitle("Ретрай выплат", "plan")).toBe(false);
+  expect(isGenericTitle("Plan new work", "plan")).toBe(true);
 });
 
 test("the stand-in is the work's first sentence in a few words, never a URL or a dangling word", () => {
@@ -204,6 +230,5 @@ test("the stand-in is the work's first sentence in a few words, never a URL or a
   expect(
     titled("Link https://gitlab.example/acme/app/-/merge_requests/390 to its Linear issue"),
   ).toBe("Link to its Linear issue");
-  // A slug or a path is still read as the phrase it stands for.
   expect(titled("/home/dana/work/collie/tasks/task-workspaces")).toBe("Task workspaces");
 });

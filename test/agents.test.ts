@@ -60,11 +60,11 @@ import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
-import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
+import { appendLine, deliveriesOf, herdOf, readLedger, reconcile } from "../src/steering";
 import { readLaunches } from "../src/launches";
 import { Store } from "../src/store";
 import type { AuditLine } from "../src/audit";
-import { readTask, writeTask } from "../src/task";
+import { readTask, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { Herdr, HerdrError } from "../src/herdr";
@@ -4558,14 +4558,12 @@ test("two goals started with one workflow are two Tasks named for their goals, n
       });
       expect(tuneUp).toContain("Design Tune-up performance workflow");
       expect(lookup).toContain("Migrate pending-payment lookup to promotion-service");
-      // A plan handed over by its directory is named by what its spec is about.
       const plan = `${rig.root}/runs/run-1/plan`;
       yield* fs.makeDirectory(plan, { recursive: true });
       yield* fs.writeFileString(`${plan}/SPEC.md`, "# Spec: Stop the stale offer banner\n");
       expect(yield* labelOf({ workflow: "implement", inputs: { plan, then: "" } })).toContain(
         "Stop the stale offer banner",
       );
-      // With nothing descriptive in the Inputs, the goal it was launched with names it.
       expect(
         yield* labelOf({ workflow: "general", inputs: {}, goal: "Audit last week's runs" }),
       ).toContain("Audit last week's runs");
@@ -4612,6 +4610,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
       yield* kept("task-h", "wH", "Collie | Plan new work");
       yield* kept("task-g", "wGone", "Collie | Implement plan");
       yield* kept("task-n", "wN", "Collie | Passkey bridge race");
+      yield* kept("task-c", "wGone", "Collie | Implement plan");
       const goal = { then: "", goal: "Design Tune-up performance workflow" };
       const runs = [
         runFacts({ id: "r-p", workflow: "plan", task: "task-p", settled: { inputs: goal } }),
@@ -4625,6 +4624,13 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
         runFacts({ id: "r-h", workflow: "plan", task: "task-h", settled: { inputs: goal } }),
         runFacts({ id: "r-g", task: "task-g", settled: { inputs: { plan, then: "" } } }),
         runFacts({ id: "r-n", workflow: "plan", task: "task-n", settled: { inputs: goal } }),
+        // Started with a Task of its own, the founding Run of task-c is still a child.
+        runFacts({
+          id: "r-x.implement",
+          task: "task-c",
+          parent: "r-x",
+          settled: { inputs: { plan } },
+        }),
       ];
 
       yield* retitleGenericTasks(env, new Herdr(env), runs);
@@ -4634,18 +4640,90 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
       const live = new Map(
         (yield* new Herdr(env).workspaceList()).map((one) => [one.workspaceId, one.label]),
       );
-      // Still the label Collie wrote: renamed, on the record and on the workspace alike.
       expect(yield* label("task-p")).toBe("Collie | Design Tune-up performance workflow");
       expect(live.get("wP")).toBe("Collie | Design Tune-up performance workflow");
-      // A workspace herdr no longer has is renamed on the record, from the plan it built.
       expect(yield* label("task-g")).toBe("Collie | Stop the stale offer banner");
-      // A human's rename, and a name that already says what the work is, stand.
+      expect(yield* label("task-c")).toBe("Collie | Stop the stale offer banner");
       expect(yield* label("task-h")).toBe("Collie | Plan new work");
       expect(live.get("wH")).toBe("Offer banner, by hand");
       expect(yield* label("task-n")).toBe("Collie | Passkey bridge race");
       expect(live.get("wN")).toBe("Collie | Passkey bridge race");
     }),
   ));
+
+test("a Task's workspace is looked for in its own Herd, where a workspace of the same id is another's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const fs = yield* FileSystem.FileSystem;
+      const other = `${rig.root}/other.sock`;
+      yield* fs.writeFileString(
+        `${rig.logPath}.sessions.json`,
+        encodeJson([
+          { name: "main", socket_path: rig.socketPath },
+          { name: "other", socket_path: other },
+        ]),
+      );
+      yield* rig.addWorkspace(
+        "w1",
+        "Collie | Plan new work",
+        rig.projectDir,
+        false,
+        rig.socketPath,
+      );
+      yield* rig.addWorkspace("w1", "Offer banner, by hand", rig.projectDir, false, other);
+      yield* writeTask(env.stateDir, {
+        id: "task-o",
+        workspace: "w1",
+        label: "Collie | Plan new work",
+        cwd: rig.projectDir,
+        herd: yield* herdOf(other),
+        created_at: "2026-10-26T00:00:00.000Z",
+      });
+      const goal = { goal: "Design Tune-up performance workflow" };
+
+      yield* retitleGenericTasks(env, new Herdr(env), [
+        runFacts({ id: "r-o", workflow: "plan", task: "task-o", settled: { inputs: goal } }),
+      ]);
+
+      expect((yield* readTask(env.stateDir, "task-o"))?.label).toBe("Collie | Plan new work");
+      const main = yield* new Herdr(env).workspaceList();
+      expect(main.map((one) => one.label)).toEqual(["Collie | Plan new work"]);
+    }),
+  ));
+
+test(
+  "a Task's label is renamed under its lock, never over a Run holding it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const env = rig.pluginEnv();
+        yield* writeTask(env.stateDir, {
+          id: "task-p",
+          workspace: "wGone",
+          label: "Collie | Plan new work",
+          cwd: rig.projectDir,
+          created_at: "2026-10-26T00:00:00.000Z",
+        });
+        const runs = [
+          runFacts({
+            id: "r-p",
+            workflow: "plan",
+            task: "task-p",
+            settled: { inputs: { goal: "Design Tune-up performance workflow" } },
+          }),
+        ];
+        const label = readTask(env.stateDir, "task-p").pipe(Effect.map((task) => task?.label));
+
+        yield* withTaskLock(env.stateDir, "task-p", retitleGenericTasks(env, new Herdr(env), runs));
+        expect(yield* label).toBe("Collie | Plan new work");
+
+        yield* retitleGenericTasks(env, new Herdr(env), runs);
+        expect(yield* label).toBe("Collie | Design Tune-up performance workflow");
+      }),
+    ),
+  30_000,
+);
 
 test("a start kept here is the workspace it was started from: its Task, or a new one kept there", () =>
   runEffect(

@@ -13,9 +13,10 @@ import { Effect, FileSystem, Path, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { askOnce, budgetedDeps, type BudgetedDeps, type TaskName } from "./evaluator";
 import { Herdr, type PaneInfo, type TabInfo, type WorkspaceInfo } from "./herdr";
+import { liveHerds } from "./herds";
 import { oneLine, taskWorkspaceLabel } from "./naming";
 import type { RunFacts } from "./runs";
-import { listTasks, writeTask } from "./task";
+import { listTasks, readTask, withTaskLock, writeTask } from "./task";
 
 /** The names this person already has, as herdr reports them. Read-only context. */
 export interface LiveNames {
@@ -156,10 +157,10 @@ const FILLER = new Set([
  */
 export function isGenericTitle(title: string, workflow: string): boolean {
   const said = (word: string) => FILLER.has(word) || own.has(word);
-  const own = new Set(workflow.toLowerCase().split(/[^a-z0-9]+/));
+  const own = new Set(workflow.toLowerCase().split(/[^\p{L}\p{N}]+/u));
   return title
     .toLowerCase()
-    .split(/[^a-z0-9]+/)
+    .split(/[^\p{L}\p{N}]+/u)
     .every((word) => word === "" || said(word) || said(word.replace(/s$/, "")));
 }
 
@@ -176,29 +177,26 @@ export function workNamedIn(inputs: Readonly<Record<string, Schema.Json>>): stri
 const SPEC_LABEL = /^(spec|work source)\b[^:]*(:\s*|$)/i;
 
 /**
- * What a plan handed over by its path is about: its spec's first heading, or a Markdown
- * file's. Anything that is not such a path is already words and is returned as given.
+ * What a plan handed over by its path, absolute or from `cwd`, is about: the first heading
+ * or Work source line of its spec, or of a Markdown file. Anything else is returned as given.
  */
-export const objectiveOf = Effect.fn("tasknames.objectiveOf")(function* (named: string) {
+export const objectiveOf = Effect.fn("tasknames.objectiveOf")(function* (
+  named: string,
+  cwd: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (!path.isAbsolute(named) || /\s/.test(named)) return named;
-  const info = yield* fs.stat(named).pipe(Effect.option);
+  if (named.trim() === "" || named.includes("\n")) return named;
+  const at = path.resolve(cwd, named);
+  const info = yield* fs.stat(at).pipe(Effect.option);
   if (info._tag === "None") return named;
   const file =
-    info.value.type === "Directory"
-      ? path.join(named, "SPEC.md")
-      : named.endsWith(".md")
-        ? named
-        : null;
+    info.value.type === "Directory" ? path.join(at, "SPEC.md") : at.endsWith(".md") ? at : null;
   if (file === null) return named;
   const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   for (const line of text.split("\n")) {
-    const said = line
-      .replace(/^#+\s*/, "")
-      .trim()
-      .replace(SPEC_LABEL, "")
-      .trim();
+    if (!/^#+\s/.test(line) && !SPEC_LABEL.test(line)) continue;
+    const said = line.replace(/^#+/, "").trim().replace(SPEC_LABEL, "").trim();
     if (said !== "") return said;
   }
   return named;
@@ -324,7 +322,7 @@ export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
     : null;
   const context: TaskContext = {
     workflow: about.workflow,
-    named: yield* objectiveOf(workNamedIn(about.inputs)),
+    named: yield* objectiveOf(workNamedIn(about.inputs), env.cwd),
     short: "",
     goal: about.goal ?? null,
     cwd: env.cwd,
@@ -339,30 +337,35 @@ export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
 /**
  * Renames each Task whose title names only its workflow, from its first Run's Inputs and
  * without asking a model — only where the label is still the one Collie wrote: on a live
- * workspace that still carries it, or on the record of one herdr no longer has.
+ * workspace in the Task's own Herd that still carries it, or on the record of one that
+ * Herd no longer has.
  */
 export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(function* (
   env: PluginEnv,
   herdr: Herdr,
   runs: ReadonlyArray<RunFacts>,
 ) {
-  const listed = yield* herdr.workspaceList().pipe(Effect.option);
-  // Unread, a workspace a human renamed is indistinguishable from one that is gone.
-  if (listed._tag === "None") return;
-  const live = new Map(listed.value.map((one) => [one.workspaceId, one.label]));
-  for (const task of yield* listTasks(env.stateDir)) {
+  const tasks = yield* listTasks(env.stateDir);
+  const herds = yield* liveHerds(herdr, env);
+  for (const task of tasks) {
     const [, project, title] = PREFIXED.exec(task.label) ?? [];
     const first = runs
-      .filter((run) => run.task === task.id && run.parent === null)
+      .filter((run) => run.task === task.id)
       .sort((one, other) => one.created.localeCompare(other.created))[0];
     if (project === undefined || title === undefined || first === undefined) continue;
     if (!isGenericTitle(title, first.workflow)) continue;
-    const showing = live.get(task.workspace);
-    if (showing !== undefined && showing !== task.label) continue;
+    // Workspace ids are only unique within a session.
+    const herd =
+      task.herd === undefined
+        ? herds.length === 1
+          ? herds[0]
+          : undefined
+        : herds.find((one) => one.herd === task.herd);
+    if (herd === undefined) continue;
     const named = fallbackName(
       {
         workflow: first.workflow,
-        named: yield* objectiveOf(workNamedIn(first.settled.inputs)),
+        named: yield* objectiveOf(workNamedIn(first.settled.inputs), task.cwd),
         short: "",
         goal: null,
         cwd: task.cwd,
@@ -371,10 +374,25 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
     );
     if (isGenericTitle(named.title, first.workflow)) continue;
     const label = `${project} | ${named.title}`;
-    if (showing !== undefined) {
-      const renamed = yield* herdr.workspaceRename(task.workspace, label).pipe(Effect.option);
-      if (renamed._tag === "None") continue;
-    }
-    yield* writeTask(env.stateDir, { ...task, label });
+    yield* withTaskLock(
+      env.stateDir,
+      task.id,
+      Effect.gen(function* () {
+        const now = yield* readTask(env.stateDir, task.id);
+        if (now === null || now.label !== task.label) return;
+        const listed = yield* herd.herdr.workspaceList().pipe(Effect.option);
+        // Unread, a workspace a human renamed is indistinguishable from one that is gone.
+        if (listed._tag === "None") return;
+        const showing = listed.value.find((one) => one.workspaceId === now.workspace)?.label;
+        if (showing !== undefined && showing !== now.label) return;
+        if (showing !== undefined) {
+          const renamed = yield* herd.herdr
+            .workspaceRename(now.workspace, label)
+            .pipe(Effect.option);
+          if (renamed._tag === "None") return;
+        }
+        yield* writeTask(env.stateDir, { ...now, label });
+      }),
+    ).pipe(Effect.catchTag("TaskBusy", () => Effect.void));
   }
 });
