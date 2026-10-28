@@ -2743,7 +2743,8 @@ something or parks until you act (`needs-you`), or records a merge request it op
 (`mr-opened`); when a card is something you could go and try (`slice-ready`); and when
 Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
 (`drift-unresolved`) — each once per run and thing, however often the work is replayed or
-its host restarts.
+its host restarts Its title is the repository and what the task is called —
+`collie · Offer banner fix finished` — or the run's id where it belongs to no task.
 
 `max_iterations`, `handoff_timeout_ms` and `quiet_ms` are still read and shown under
 Settings, but a run of a workflow module consults none of them: `implement` carries its own

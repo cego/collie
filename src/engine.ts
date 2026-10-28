@@ -169,7 +169,7 @@ import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf } from "./steering";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
-import { reason, unsafePathComponent } from "./naming";
+import { reason, taskTitleOf, unsafePathComponent } from "./naming";
 import { freshTaskLabel } from "./tasknames";
 import { attachmentRefusal, attachmentsDir, copyInto, listAttachments } from "./attachments";
 import {
@@ -3047,8 +3047,17 @@ export const hostLayer = (options: {
                           Effect.orElseSucceed((): Record<string, string> => ({})),
                         ),
                       ).cwd;
+                const task =
+                  row?.task == null
+                    ? null
+                    : yield* readTask(dir, row.task).pipe(Effect.orElseSucceed(() => null));
                 yield* toast(
-                  notificationTitle(kind, cwd, row?.task ?? runId, about.subject),
+                  notificationTitle(
+                    kind,
+                    cwd,
+                    task === null ? runId : taskTitleOf(task.label),
+                    about.subject,
+                  ),
                   body,
                   SOUND[kind],
                 );
