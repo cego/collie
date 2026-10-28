@@ -86,6 +86,15 @@ export interface CheckProcessesApi {
     PlatformError | CheckRefused,
     Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
   >;
+  /**
+   * As `run`, for a process the caller spawns itself, with `markers` in its environment, and
+   * ends in the caller's Scope. Null where this host has begun to end, and nothing spawned.
+   */
+  readonly adopt: <H extends { readonly pid: number }>(
+    check: CheckOf,
+    spawn: (markers: Readonly<Record<string, string>>) => Effect.Effect<H>,
+    say?: (line: string) => Effect.Effect<void>,
+  ) => Effect.Effect<H | null, CheckRefused, Scope.Scope>;
   /** Marks every check this host is collecting ended, then sends each, and each still being spawned, SIGTERM. */
   readonly endAll: Effect.Effect<ReadonlyArray<CheckOf>>;
   /** SIGKILL to whatever of every check is left, and to one still being spawned; its record goes once it is gone. */
@@ -154,6 +163,7 @@ const unrecorded: CheckProcessesApi = {
       exit: Effect.map(handle.exitCode, Number),
       collected: (collecting) => collecting,
     })),
+  adopt: (_check, spawn) => spawn({}),
   endAll: Effect.succeed([]),
   killEnded: Effect.void,
   collecting: Effect.succeed([]),
@@ -479,9 +489,14 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         });
     });
 
-  const run: CheckProcessesApi["run"] = (check, command, say = () => Effect.void) =>
+  /** Spawns it marked, records its leader, and ends it with the caller's Scope; null where this host is ending. */
+  const begin = <H extends { readonly pid: number }, E>(
+    check: CheckOf,
+    spawn: (markers: Readonly<Record<string, string>>) => Effect.Effect<H, E, Scope.Scope>,
+    say: (line: string) => Effect.Effect<void>,
+  ) =>
     Effect.gen(function* () {
-      if (stopping) return endedCheck;
+      if (stopping) return null;
       const began = yield* nowIso();
       const salt = (yield* Random.next).toString(16).slice(2);
       const id = `${check.run}@${epochMs(began)}-${salt}`;
@@ -491,10 +506,10 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       // From the spawn to its finalizer, so no interruption leaves it unended.
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
-          if (stopping) return endedCheck;
+          if (stopping) return null;
           spawning.set(id, { check, ended: false, settled: false });
           const { handle, record, entry } = yield* Effect.gen(function* () {
-            const handle = yield* spawnCheck(command, {
+            const handle = yield* spawn({
               [CHECK_INSTALLATION]: installation,
               [CHECK_ID]: id,
             });
@@ -530,24 +545,40 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
             .writeFileString(`${recordPath(dir, id)}.new`, encodeCheckRecord(record))
             .pipe(Effect.andThen(fs.rename(`${recordPath(dir, id)}.new`, recordPath(dir, id))))
             .pipe(Effect.ignore);
-          return {
-            pid: handle.pid,
-            stdout: handle.stdout,
-            stderr: handle.stderr,
-            exit: Effect.map(handle.exitCode, Number),
-            collected: (collecting) =>
-              collecting.pipe(
-                Effect.exit,
-                Effect.flatMap((exit) => {
-                  if (entry.ended) return Effect.never;
-                  entry.settled = true;
-                  return exit;
-                }),
-              ),
-          };
+          return { handle, entry };
         }),
       );
     }).pipe(Effect.provideContext(services));
+
+  const run: CheckProcessesApi["run"] = (check, command, say = () => Effect.void) =>
+    begin(
+      check,
+      (markers) => spawnCheck(command, markers).pipe(Effect.provideContext(services)),
+      say,
+    ).pipe(
+      Effect.map((begun): RunningCheck => {
+        if (begun === null) return endedCheck;
+        const { handle, entry } = begun;
+        return {
+          pid: handle.pid,
+          stdout: handle.stdout,
+          stderr: handle.stderr,
+          exit: Effect.map(handle.exitCode, Number),
+          collected: (collecting) =>
+            collecting.pipe(
+              Effect.exit,
+              Effect.flatMap((exit) => {
+                if (entry.ended) return Effect.never;
+                entry.settled = true;
+                return exit;
+              }),
+            ),
+        };
+      }),
+    );
+
+  const adopt: CheckProcessesApi["adopt"] = (check, spawn, say = () => Effect.void) =>
+    begin(check, spawn, say).pipe(Effect.map((begun) => (begun === null ? null : begun.handle)));
 
   const endAll = Effect.gen(function* () {
     stopping = true;
@@ -586,6 +617,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
   return {
     run,
+    adopt,
     endAll,
     killEnded,
     collecting: Effect.sync(() => [...collecting.keys()]),

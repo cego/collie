@@ -211,6 +211,42 @@ test.skipIf(process.platform !== "linux")(
 );
 
 test.skipIf(process.platform !== "linux")(
+  "a process its caller spawned is recorded and marked as the check's, and a host after its own ends it as left",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { state, notes, checks } = yield* world;
+        yield* Effect.addFinalizer(() =>
+          fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore),
+        );
+        yield* Effect.forkScoped(
+          checks.adopt(check, (markers) =>
+            Effect.sync(() =>
+              Bun.spawn([held, notes], {
+                env: { ...process.env, ...markers },
+                stdout: "ignore",
+                stderr: "ignore",
+                detached: true,
+              }),
+            ),
+          ),
+        );
+        const ones = yield* startedIn(notes);
+        expect(yield* records(state)).toHaveLength(1);
+        const bound = yield* bindingsOf(ones[1]!.pid, [CHECK_INSTALLATION, CHECK_ID]);
+        expect(bound?.[CHECK_ID]).toStartWith("run-1@");
+
+        // The host that adopted it died: the next one on the state directory ends it.
+        yield* hostCheckProcesses({ dir: state, installation });
+        expect(yield* noneRunning(ones)).toBe(true);
+        expect(yield* records(state)).toEqual([]);
+      }),
+    ),
+  30_000,
+);
+
+test.skipIf(process.platform !== "linux")(
   "a recorded pid with another start, and another installation's check, are never signalled",
   () =>
     runEffect(
