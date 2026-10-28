@@ -63,6 +63,65 @@ stays their check.
   passed over, the remaining refusal is one a human fixes and then retries. The retry gives
   the same refusal and has no side effects.
 
+## Amendment: Stage works in the checkout of the Run blocked on it
+
+Stage started by implement's **What next?** cut a checkout of its own even when implement's
+was already at the merge request's head on a branch of another name (#220). A Stage Run now
+works in the checkout of the Run that started it, and cuts nothing, when all of these hold:
+
+- that Run is blocked awaiting this Stage's result and no other child's. The engine
+  records each child a parent awaits when the wait begins, and again when it is replayed
+  after a restart. It clears the record only when the result returns: a suspended child is
+  still awaited;
+- that Run has a checkout of its own, not the project it was started in;
+- the checkout is clean and at the merge request's head as the remote reports it now, not as
+  the repository last fetched it or holds it as a local branch;
+- no agent is working there. A herdr that will not say counts as one.
+
+Only a Run that asks for its starter's checkout is given it. The checkout is on the
+starter's branch, not the merge request's, so Stage asks because it commits and pushes
+nothing, and Release and a review's fix round, which commit and push to the reviewed
+branch, always cut their own.
+
+Otherwise the checkout is resolved as above, and the log says why the starting Run's was not
+used. A parent that awaits nothing, such as one whose card started the Stage, keeps its
+checkout to itself, because it could go on in it while Stage works there. No other Run's
+checkout is ever taken, so the rejection of a fix round's taking over another Run's working
+tree stands.
+
+## Amendment: Stage again is offered only where its checkout would get past
+
+With all three paths held, a failed Stage's card offered **Stage again**, and implement's
+**What next?** offered **Stage**. Each pick started another Stage that was refused at its
+Checkout in the same way, the pattern #197 fixed for a review's fix (#220).
+
+The checkout's resolution now has a form that cuts and records nothing: `checkoutRefusal`. It asks what a real cut asks:
+the branch, the starting Run's checkout as in the amendment above, a checkout git lists on
+the branch, and the three slots. It answers in the cut's own words. The host records that
+a Run's reviewed checkout was refused, in that Run's directory, and the record decides
+nothing by itself.
+
+- **On the card.** For a failed Run with that record, every follow-up that starts the same
+  workflow again is asked about each time the card is drawn and again when it is invoked
+  (ADR-0025). While the resolution would still refuse, the follow-up is listed as
+  unavailable with the refusal. The rule reads no workflow's id (ADR-0029), so Release's
+  **Release again** follows it too, since it takes its checkout the same way.
+- **In What next?** After a Stage child whose checkout was refused, implement asks the same
+  resolution for a Stage it would start and wait on, before asking and when **Stage** is
+  picked. While it would refuse, **Stage** is left out and the question says why. A
+  question's answers are fixed once it is asked, so **Check Stage again** takes Stage's
+  place: picking it asks again, and **Stage** is back once a path is free.
+
+Once an occupant is gone, both offer it again. A Stage or Release that failed for any other
+reason has no record and is offered again as before.
+
+This narrows the rejection above of remembering a refusal. What is remembered is only that
+the checkout was refused, never the answer. The answer is asked again each time, at the
+cost of one `git worktree list` and three path reads.
+
+The dry resolution and the real cut can still disagree when an occupant changes between
+them. The real cut refuses as before, so the cost is one failed Run.
+
 ## Consequences
 
 A second clone of a repository gets its own checkout of a branch, at a suffixed path. The

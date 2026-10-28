@@ -277,6 +277,25 @@ test("a check granted with a cwd relative to a Run at the Projects root runs in 
     }),
   ));
 
+test("a verification keeps the executable as it was asked beside the path it resolved to", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const runDir = path.join(repo, ".run");
+      const ran = yield* collect(runDir, {
+        run: "r1",
+        name: "version",
+        executable: "bun",
+        argv: ["--version"],
+        cwd: repo,
+        by: "agent",
+      });
+      const kept = (yield* readVerifications(runDir)).find((one) => one.id === ran.id);
+      expect(kept?.asked).toBe("bun");
+      expect(kept?.executable).toBe(Bun.which("bun") ?? "");
+    }),
+  ));
+
 test("an executable nothing on PATH provides is refused before anything runs", () =>
   inRepository(
     Effect.gen(function* () {

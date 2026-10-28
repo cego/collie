@@ -219,7 +219,8 @@ export default defineWorkflow({
               Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
               Schema.Struct({ refused: Schema.String }),
             ]),
-            execute: host.checkoutReviewed(runId),
+            // Stage commits and pushes nothing, so the checkout of the Run waiting on it will do.
+            execute: host.checkoutReviewed(runId, { inStarter: true }),
           });
           if ("refused" in checkout)
             return yield* fail(`${mr} has no checkout to stage from: ${checkout.refused}`);

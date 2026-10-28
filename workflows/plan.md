@@ -78,6 +78,11 @@ Tautology. Before you write a criterion that names a command, run that command t
 - where it fails there, the criterion is that the branch adds no failure over the base, and
   names the failures already present.
 
+The Run's own Checks are already the gate: the implement Run proves them on its final tree,
+and its builder may not run them. A Check is never a ticket's criterion, and is never run
+on the base to write one. A guard names only a narrower command the builder can run, such
+as the test files the ticket touches.{{checks}}
+
 A text search is never a criterion.
 
 Every ticket also carries a fifth header line, `**Repo:** <path>`, between "Blocked by"

@@ -134,7 +134,13 @@ const hosted = <A, E>(
       }),
     ),
     Effect.provide(agentsLayer({ ...hostOf(), ...agents })),
-    Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+    Effect.provide(
+      foundationLayer({
+        dir: dir(),
+        userDir: rig.userDir,
+        placing: { herdr: new FakeHerdr(env()), env: env() },
+      }),
+    ),
     Effect.scoped,
     Effect.orDie,
   );
@@ -2919,6 +2925,216 @@ test(
         expect(served.pending).toEqual(["run-left"]);
         expect((yield* Clock.currentTimeMillis) - before).toBeLessThan(30_000);
       }),
+    ),
+  120_000,
+);
+
+/** A merge request's branch, at master's one commit: the head every checkout here is cut at. */
+const REVIEWED = "branch:master...feature";
+
+const git = (...args: string[]) =>
+  exec(["git", ...args], { cwd: rig.projectDir }).pipe(Effect.map((ran) => ran.stdout.trim()));
+
+const cutsOf = () =>
+  Effect.all([git("worktree", "list", "--porcelain"), git("branch", "--format=%(refname:short)")]);
+
+const startWith = (
+  generation: Generation,
+  request: string,
+  input: Readonly<Record<string, Schema.Json>>,
+  parent: string | null = null,
+) =>
+  Registry.pipe(
+    Effect.flatMap((registry) =>
+      registry.start({ generation, request, project: rig.projectDir, input, text: {}, parent }),
+    ),
+    Effect.orDie,
+  );
+
+test(
+  "a Stage child its parent awaits works in the parent's clean checkout at the merge request's head, and cuts nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* git("branch", "feature");
+        const view = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [awaits] = yield* loaded(registry, [
+              `${fixtures}/awaits-checkout.workflow.ts`,
+              `${fixtures}/checks-out.workflow.ts`,
+            ]);
+            const started = yield* startWith(awaits!, "r1", {
+              work: "Ship the picker",
+              mr: REVIEWED,
+              child: "checks-out",
+            });
+            return yield* finished(started.runId);
+          }),
+        );
+
+        const parent = view?.cwd ?? "";
+        expect(parent).toStartWith(`${rig.root}/.herdr/worktrees/project/${LOGIN}/`);
+        expect(view?.status).toEqual({ status: "complete", value: `${parent} ${parent}` });
+        const [list, branches] = yield* cutsOf();
+        expect(list.split("\n").filter((line) => line.startsWith("worktree "))).toEqual([
+          `worktree ${rig.projectDir}`,
+          `worktree ${parent}`,
+        ]);
+        expect(branches.split("\n")).toEqual(["feature", "master", view?.branch ?? ""]);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${dir()}/runs/${view?.runId}.stage-1/log.txt`)).toContain(
+          `working in ${parent}, Run ${view?.runId}'s checkout`,
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a child its parent awaits that does not ask for its starter's checkout cuts its own",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* git("branch", "feature");
+        const view = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [awaits] = yield* loaded(registry, [
+              `${fixtures}/awaits-checkout.workflow.ts`,
+              `${fixtures}/checks-out.workflow.ts`,
+            ]);
+            const started = yield* startWith(awaits!, "r1", {
+              work: "Ship the picker",
+              mr: REVIEWED,
+              child: "checks-out",
+              inStarter: false,
+            });
+            return yield* finished(started.runId);
+          }),
+        );
+
+        const parent = view?.cwd ?? "";
+        expect(view?.status).toEqual({
+          status: "complete",
+          value: `${parent} ${rig.root}/.herdr/worktrees/project/feature`,
+        });
+      }),
+    ),
+  120_000,
+);
+
+test.each([
+  { awaits: "nothing", parent: "placed" },
+  { awaits: "another child", parent: "awaits-checkout" },
+])(
+  "a Stage whose starting Run awaits $awaits cuts its own checkout",
+  ({ parent: which }) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* git("branch", "feature");
+        const view = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [parent, checksOut] = yield* loaded(registry, [
+              `${fixtures}/${which}.workflow.ts`,
+              `${fixtures}/checks-out.workflow.ts`,
+              `${fixtures}/asks.workflow.ts`,
+            ]);
+            const work = "Ship the picker";
+            const started = yield* startWith(
+              parent!,
+              "r1",
+              which === "placed"
+                ? { work, ending: "succeed" }
+                : { work, mr: REVIEWED, child: "asks" },
+            );
+            if (which === "placed") yield* finished(started.runId);
+            else
+              yield* until(
+                () => registry.view(`${started.runId}.asks-1`),
+                (child) => child?.status.status === "suspended",
+              );
+            const stage = yield* startWith(checksOut!, "r2", { mr: REVIEWED }, started.runId);
+            return yield* finished(stage.runId);
+          }),
+        );
+
+        expect(view?.status).toEqual({
+          status: "complete",
+          value: `${rig.root}/.herdr/worktrees/project/feature`,
+        });
+      }),
+    ),
+  120_000,
+);
+
+test.each([
+  { workflow: "stage", offer: "stage-again" },
+  { workflow: "release", offer: "release-again" },
+])(
+  "a $workflow refused its checkout lists $offer as unavailable while every path is held, and as available once one is freed",
+  ({ workflow, offer }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* git("branch", "feature");
+        const first = `${rig.root}/.herdr/worktrees/project/feature`;
+        for (const slot of [first, `${first}-2`, `${first}-3`])
+          yield* fs.makeDirectory(slot, { recursive: true });
+        const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
+          made.restore(),
+        );
+        const api = yield* serveForges(
+          yield* forgeOnPath(bin, "gitlab", {
+            installed: true,
+            loggedIn: ["gitlab.example.com"],
+            login: LOGIN,
+            mrs: [
+              {
+                project: "gitlab.example.com/group/app",
+                iid: "355",
+                state: "open",
+                sourceBranch: "feature",
+              },
+            ],
+          }),
+        );
+        const unavailable = (registry: typeof Registry.Service, runId: string) =>
+          registry
+            .offers(runId)
+            .pipe(Effect.map((offers) => offers.find((one) => one.id === offer)?.unavailable));
+
+        const [held, freed] = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [refused] = yield* loaded(registry, [shipped(workflow)]);
+            const started = yield* startWith(refused!, "r1", { mr: MR_TARGET });
+            const view = yield* finished(started.runId);
+            expect(view?.status).toMatchObject({
+              status: "failed",
+              reason: expect.stringContaining("free one of them and retry"),
+            });
+            const held = yield* unavailable(registry, started.runId);
+            const picked = yield* registry
+              .invoke({ runId: started.runId, offer, input: {}, request: "r2" })
+              .pipe(Effect.flip);
+            expect(picked.reason).toContain(`does not offer "${offer}": no worktree for feature`);
+            yield* fs.remove(`${first}-3`, { recursive: true });
+            return [held, yield* unavailable(registry, started.runId)];
+          }),
+        ).pipe(
+          Effect.provide(
+            ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+          ),
+        );
+
+        const occupants = [first, `${first}-2`, `${first}-3`]
+          .map((slot) => `${slot} is a checkout that does not say which repository it belongs to`)
+          .join("; ");
+        expect(held).toBe(`no worktree for feature: ${occupants}; free one of them and retry`);
+        expect(freed).toBeNull();
+      }).pipe(Effect.scoped),
     ),
   120_000,
 );

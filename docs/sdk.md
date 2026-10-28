@@ -674,9 +674,19 @@ as the Run's own, so read `place` again after it rather than keeping `place.cwd`
 `{ cwd, branch }`, or `{ refused }` in the resolver's own words where the target has no
 branch to work on; asking again answers from the record. Take it inside an `Activity`, so a
 replay does not cut a second checkout. Shipped `review` takes it before its own fixer starts.
+`host.checkoutReviewed(runId, { inStarter: true })` may instead work in the checkout of the
+Run that started this one, while that Run waits on it alone and its checkout is clean, at
+the branch's head as the remote has it now, and idle. That checkout's branch is the
+starter's, so only work that commits and pushes nothing asks for it: shipped `stage` does,
+and `release` and `review`'s fix rounds do not.
 `host.reviewedBranch(runId)` answers `{ branch }`, or the `{ refused }` the checkout would
 give, by the same resolution, and cuts and records nothing; shipped `review` asks it before
 its first menu, so a fix that cannot run is not offered.
+`host.reviewedRefusal(runId, failed, target)` answers, where Run `failed`'s reviewed
+checkout was refused, why another on `target` that this Run starts and waits on, taking it
+with `inStarter`, would still be refused, or null; shipped `implement` asks it before offering Stage again. A failed Run
+whose reviewed checkout was refused has each follow-up that starts its own workflow listed
+as unavailable while the same resolution would still refuse.
 
 `place.dir` is where what a Run produces belongs, and where the things that read a Run look:
 a plan's tickets under `plan/issues/`, a review's prose in `review.md` and its findings in
@@ -760,6 +770,8 @@ agent starts on a skill the work cannot do without.
 
 `host.issues(runId)` lists the open issues of that Run's checkout, each with `number`,
 `title`, `body`, and `url`. The checkout's remote decides its forge.
+`host.issues(runId, numbers)` reads those issues one by one instead. Use it for issues the
+Run just filed: a forge's open listing can lag a filing by seconds.
 `host.fileIssue({ runId, title, body })` returns the filed issue's `number` and `url`.
 `host.commentIssue({ runId, number, body })` comments on one there.
 
@@ -791,6 +803,12 @@ answers the slugs Helle would not take back, which stay recorded for a later rel
 
 `host.defaultHead(cwd)` is the commit origin's default branch is at now, and fails where
 origin cannot be read; take it inside an Activity, so a replay reads the same commit.
+
+`host.nothingToLand(runId, cwd)` answers why the Run has nothing to land, where the checkout
+at `cwd` has no commits over its merge-base with the default branch (the base a
+`default-base` verify runs at) and nothing uncommitted. It records that in the Run's log and
+on its card, where it is the `nothingToLand` fact an offer's `eligible` reads. Otherwise, or
+where that base cannot be read, it answers null. Take it inside an Activity.
 
 `host.merge({ runId, cwd, head })` merges the merge request the Run recorded with
 `host.mergeRequest`, at `head`, through the forge's REST merge: never an admin merge, never
@@ -1263,6 +1281,11 @@ rally converges, stands on a dispute and runs out of rounds where these three de
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
 shipped steps are held to, not a copy of it.
 
+A review's `verdict` of `findings` means it found some. A fix's means it left some
+unresolved, each listed in `findings`. What it fixed goes in `fixed`, and what it disputes
+goes in `disputed`. With nothing left unresolved its verdict is `clean`. The fix contract's
+`verdict` carries that description, so every fix and gate-fix step is shown it.
+
 ## Proving it, rather than saying so
 
 `host.evidence(runId, cwd)` is what has been verified for your Run and what the tree is
@@ -1573,10 +1596,11 @@ shipped `implement` names in its merge request as not settled by the Run. `answe
 answer a criterion has: one to its whole wording, where a copy that dropped the criterion's
 formatting still counts, so an answer to earlier wording does not answer an amended criterion. Shipped
 `implement` hands what is unmet back to the builder before any reviewer is launched, and
-stops the work if any is still unmet after two hand-backs, so no reviewer starts on it. A
-hand-back that leaves the head and fingerprint unchanged and reports a blocking finding is
-asked about instead (`<ticket>.criteria-stalled-<n>`): `Hand back` reads the ticket again and,
-if any criterion is still unmet, hands it back with two tries fresh; `Stop` stops the work. A text work
+asks about any still unmet after two hand-backs (`<ticket>.criteria-unmet-<n>`), so no
+reviewer starts on it. A hand-back that leaves the head and fingerprint unchanged and
+reports a blocking finding is asked about sooner (`<ticket>.criteria-stalled-<n>`). To
+either, `Hand back` reads the ticket again and, if any criterion is still unmet, hands it
+back with two tries fresh; `Stop` stops the work. A text work
 source's criteria are its own checkboxes; a Linear issue's are read from `plan/SPEC.md`, the
 copy of its description the builder makes, and a copy that cannot be read stops the work. The reviewer's prompt
 shows every criterion, its answer and the builder's assumptions. A workflow that never reads

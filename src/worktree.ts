@@ -150,6 +150,8 @@ export interface CheckoutAsk extends BranchAsk {
   recordedBy?: RecordedBy;
   /** Records a roaming checkout as this Run's while its destination is still locked. */
   claimed?: (worktree: WorktreeRecord) => Effect.Effect<void>;
+  /** The checkout of the Run that started this one, given only while that Run waits on a question. */
+  starting?: { readonly run: string; readonly cwd: string };
 }
 
 /** The Run that recorded a checkout, and how a new Run takes the checkout from it. */
@@ -672,6 +674,28 @@ const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   );
 });
 
+/** The first of `first`'s three slots nothing holds, or why there is none, naming each. */
+const freeSlot = Effect.fn("worktree.freeSlot")(function* (opts: {
+  repo: string;
+  first: string;
+  listing: { readonly checkouts: ReadonlyArray<{ readonly path: string }> };
+  recordedBy?: RecordedBy | undefined;
+}) {
+  const passed: string[] = [];
+  for (const slot of [opts.first, `${opts.first}-2`, `${opts.first}-3`]) {
+    // git lists a checkout whose directory has gone, and will not add another there.
+    const taken =
+      (yield* occupant(slot)) ??
+      (opts.listing.checkouts.some((checkout) => checkout.path === slot)
+        ? { owner: opts.repo }
+        : null);
+    if (taken === null) return { at: slot, passed };
+    const recorded = opts.recordedBy === undefined ? null : yield* opts.recordedBy(slot);
+    passed.push(`${slot} is ${occupiedAs(taken.owner, recorded)}`);
+  }
+  return { at: null, refused: `${passed.join("; ")}; free one of them and retry` };
+});
+
 /** The look and the cut, which run only while this process holds the first slot's lock. */
 const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opts: {
   repo: string;
@@ -688,21 +712,9 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
   const existing = listing.checkouts.find((checkout) => checkout.branch === branch);
   if (existing) return { path: existing.path, created: false, passed: [] };
 
-  const passed: string[] = [];
-  let at: string | null = null;
-  for (const slot of [first, `${first}-2`, `${first}-3`]) {
-    // git lists a checkout whose directory has gone, and will not add another there.
-    const taken =
-      (yield* occupant(slot)) ??
-      (listing.checkouts.some((checkout) => checkout.path === slot) ? { owner: opts.repo } : null);
-    if (taken === null) {
-      at = slot;
-      break;
-    }
-    const recorded = opts.recordedBy === undefined ? null : yield* opts.recordedBy(slot);
-    passed.push(`${slot} is ${occupiedAs(taken.owner, recorded)}`);
-  }
-  if (at === null) return { refused: `${passed.join("; ")}; free one of them and retry` };
+  const slot = yield* freeSlot({ ...opts, listing });
+  if (slot.at === null) return { refused: slot.refused };
+  const { at, passed } = slot;
 
   // A branch this checkout already has is what a fix round works on.
   const known =
@@ -1056,6 +1068,48 @@ export interface Checkout {
 }
 
 /**
+ * Why a Run may not work in another's checkout `cwd` instead of cutting one of `branch`
+ * at `base`, or null.
+ */
+const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
+  herdr: Herdr,
+  cwd: string,
+  branch: string,
+  base: { readonly ref: string; readonly in: string },
+) {
+  const status = yield* shell("git", ["status", "--porcelain"], cwd);
+  if (status.code !== 0) return "git could not read it";
+  if (status.stdout.trim() !== "") return "it has uncommitted changes";
+  const head = yield* shell("git", ["rev-parse", "HEAD"], cwd);
+  if (head.code !== 0) return "git could not read it";
+  const hasOrigin = (yield* shell("git", ["remote", "get-url", "origin"], base.in)).code === 0;
+  // The remote's head now, whatever this repository last fetched or holds locally.
+  const remote = hasOrigin
+    ? yield* shell("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], base.in)
+    : null;
+  // Exit 2 is a remote without the branch: then, as with no remote, the work is only `base`.
+  if (remote !== null && remote.code !== 0 && remote.code !== 2)
+    return `origin would not say where ${branch} is`;
+  const wanted =
+    remote?.code === 0
+      ? { at: remote.stdout.split("\t")[0], name: `${branch}'s head on origin` }
+      : {
+          at: (yield* shell("git", ["rev-parse", `${base.ref}^{commit}`], base.in)).stdout.trim(),
+          name: base.ref,
+        };
+  if (head.stdout.trim() !== wanted.at) return `it is not at ${wanted.name}`;
+  const panes = yield* Effect.result(herdr.paneList());
+  if (panes._tag === "Failure") return "herdr would not say which agents work in it";
+  for (const pane of panes.success) {
+    if (!pane.agent || pane.agentStatus === "idle" || pane.agentStatus === "done") continue;
+    for (const at of [pane.cwd, pane.foregroundCwd])
+      if (at !== null && (at === cwd || at.startsWith(`${cwd}/`)))
+        return `agent ${pane.agent} in pane ${pane.paneId} is ${pane.agentStatus ?? "unknown"} in it`;
+  }
+  return null;
+});
+
+/**
  * Where this Run works. A Workflow that changes the repository owns its branch's
  * checkout; every other Workflow works in the directory it was started from.
  *
@@ -1166,6 +1220,20 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   here.task = plan.task;
   here.branchSource = plan.source;
 
+  let notTaken = "";
+  if (opts.starting !== undefined) {
+    const { run, cwd } = opts.starting;
+    const why = yield* whyNotWorkIn(herdr, cwd, plan.branch, { ref: plan.base, in: opts.cwd });
+    const whose = `${cwd}, Run ${run}'s checkout`;
+    if (why === null)
+      return {
+        ...here,
+        cwd,
+        note: `working in ${whose}: it is clean, at ${plan.branch}'s head, and no agent is working in it`,
+      } satisfies Checkout;
+    notTaken = `not working in ${whose}: ${why}; `;
+  }
+
   // Whichever manager was asked, a Run with nowhere of its own to work says so the
   // same way, naming the branch it could not be given a checkout for.
   const refuse = (why: string) =>
@@ -1230,10 +1298,41 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     ...here,
     cwd: worktree.path,
     worktree,
-    note: `${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}${
+    note: `${notTaken}${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}${
       made.passed.length === 0 ? "" : `, passing over ${made.passed.join("; ")}`
     }`,
   } satisfies Checkout;
+});
+
+/**
+ * Why `checkoutFor` would refuse a git branch checkout for `opts` now, in the same words,
+ * or null where it would not; cuts and records nothing.
+ */
+export const checkoutRefusal = Effect.fn("worktree.checkoutRefusal")(function* (
+  herdr: Herdr,
+  opts: BranchAsk & Pick<CheckoutAsk, "recordedBy" | "starting">,
+) {
+  const path = yield* Path.Path;
+  const plan = yield* branchFor(opts);
+  if (plan.refused) return plan.refused;
+  if (
+    opts.starting !== undefined &&
+    (yield* whyNotWorkIn(herdr, opts.starting.cwd, plan.branch, {
+      ref: plan.base,
+      in: opts.cwd,
+    })) === null
+  )
+    return null;
+  const listing = yield* gitWorktrees(shell, opts.cwd);
+  if (!listing) return `no worktree for ${plan.branch}: ${opts.cwd} is not a git checkout`;
+  if (listing.checkouts.some((checkout) => checkout.branch === plan.branch)) return null;
+  const first = path.join(
+    yield* herdr.worktreesDirectory(),
+    path.basename(listing.repo),
+    ...branchPath(plan.branch),
+  );
+  const slot = yield* freeSlot({ ...opts, repo: listing.repo, first, listing });
+  return slot.at === null ? `no worktree for ${plan.branch}: ${slot.refused}` : null;
 });
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,9 @@ import {
   defineWorkflow,
   formatFindings,
   planReposOf,
+  renderApproved,
   step,
+  type VerifySpec,
 } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
@@ -45,7 +47,7 @@ const planning = {
 const prompts = {
   grill: content.template("grill", planning),
   spec: content.template("spec", planning),
-  tickets: content.template("tickets", planning),
+  tickets: content.template("tickets", { ...planning, checks: text }),
   unbuildable: content.template("unbuildable", { ...planning, refusal: text }),
   secondOpinion: content.template("second-opinion", planning),
   revise: content.template("revise", { ...planning, findings: text }),
@@ -55,6 +57,9 @@ const prompts = {
   }),
   refine: content.template("refine", planning),
 };
+
+const checksOf = (approved: ReadonlyArray<VerifySpec>) =>
+  approved.length === 0 ? "" : `\n\nThis Run's Checks:\n\n${renderApproved(approved)}`;
 
 const Decided = Schema.optionalKey(Schema.Array(Schema.String)).annotate({
   description: "what we settled, one line each",
@@ -292,7 +297,7 @@ export default defineWorkflow({
           operation: "tickets",
           skill: "to-tickets",
           instructions: prompts.tickets,
-          input,
+          input: { ...input, checks: checksOf(yield* host.approved(run.id)) },
           output: PlanOutputSchema,
         }),
       );

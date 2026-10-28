@@ -34,17 +34,29 @@ export const viewerLogin = (login: ForgeLogin, cwd: string) =>
     return me.ok && me.value.trim() !== "" ? me.value : null;
   });
 
-export const listIssues = (login: ForgeLogin, project: string, cwd: string) =>
+export const listIssues = (
+  login: ForgeLogin,
+  project: string,
+  cwd: string,
+  numbers?: ReadonlyArray<number>,
+) =>
   Effect.gen(function* () {
     const http = yield* ForgeHttp;
     const listed = yield* http.ask(login, cwd, (provider, signal) =>
-      Array.fromAsync(
-        provider.threads.list(threadRepo(login, project), {
-          kind: "issue",
-          state: "open",
-          perPage: 100,
-          signal,
-        }),
+      (numbers === undefined
+        ? Array.fromAsync(
+            provider.threads.list(threadRepo(login, project), {
+              kind: "issue",
+              state: "open",
+              perPage: 100,
+              signal,
+            }),
+          )
+        : Promise.all(
+            numbers.map((number) =>
+              provider.threads.get(threadRef(login, project, String(number), "issue"), { signal }),
+            ),
+          )
       ).then((threads) => threads.map(issueOf)),
     );
     return listed.ok ? { ok: true as const, issues: listed.value } : listed;

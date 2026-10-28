@@ -129,6 +129,7 @@ import {
   type ReviewHead,
   type ReviewStanding,
 } from "./review-wait";
+import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
   autoMergingHere,
@@ -143,7 +144,7 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import { mrLabel, mrRefOf, parseMrTarget, parseMrUrl } from "./board-model";
+import { mrLabel, mrRefOf, mrWords, parseMrTarget, parseMrUrl, readMrRef } from "./board-model";
 import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
@@ -201,10 +202,12 @@ import {
   TASK_INPUT,
   branchFor,
   checkoutFor,
+  checkoutRefusal,
   defaultStart,
   repositoryName,
   workOf,
   type BranchAsk,
+  type RecordedBy,
 } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 
@@ -642,7 +645,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface HostApi {
     readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-    readonly issues: (runId: string) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+    readonly issues: (runId: string, numbers?: ReadonlyArray<number>) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
     readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string }) => Effect.Effect<IssueRef, WorkflowError>;
     readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string }) => Effect.Effect<void, WorkflowError>;
     readonly dir: string;
@@ -657,8 +660,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly place: (runId: string) => Effect.Effect<Place>;
     /** Whether the branch this Run's diff target names can be established; cuts and records nothing. */
     readonly reviewedBranch: (runId: string) => Effect.Effect<ReviewedBranch>;
-    /** The checkout of the branch this Run's diff target names, recorded as the Run's own. */
-    readonly checkoutReviewed: (runId: string) => Effect.Effect<ReviewedCheckout>;
+    /** The checkout of the branch this Run's diff target names, recorded as the Run's own; \`inStarter\` may take the waiting starter's. */
+    readonly checkoutReviewed: (
+      runId: string,
+      opts?: { readonly inStarter?: boolean },
+    ) => Effect.Effect<ReviewedCheckout>;
+    /** Where \`failed\`'s reviewed checkout was refused, why another on \`target\` this Run waits on still would be, or null; cuts nothing. */
+    readonly reviewedRefusal: (
+      runId: string,
+      failed: string,
+      target: string,
+    ) => Effect.Effect<string | null>;
     readonly held: (runId: string) => Effect.Effect<boolean>;
     readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
     readonly record: (runId: string, event: string) => Effect.Effect<void>;
@@ -779,6 +791,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly integrate: (runId: string, cwd: string) => Effect.Effect<Integration>;
     /** The commit origin's default branch is at now. Take it inside an Activity. */
     readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;
+    /**
+     * Where the checkout at cwd has no commits over its merge-base with the default branch and
+     * nothing uncommitted, records that this Run had nothing to land and answers why; else null.
+     * Take it inside an Activity.
+     */
+    readonly nothingToLand: (runId: string, cwd: string) => Effect.Effect<string | null>;
     /**
      * Merges the merge request this Run recorded at \`head\`, recording the landing first and
      * its outcome after; fails for a Run that recorded none. Take it inside an Activity.
@@ -1459,6 +1477,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly succeeded: boolean;
     readonly branch: string | null;
     readonly mrUrl: string | null;
+    /** It completed with no change to land, so there is nothing to carry on from. */
+    readonly nothingToLand?: boolean;
     readonly planIssues: number;
     readonly disposed: boolean;
     /** Findings it left for somebody to fix, which is what a fix is offered over. */
@@ -2622,6 +2642,8 @@ export const PARKED = "parked";
 export const AWAITING = "awaiting";
 /** Work waiting for a Subscription to reset; cleared once it goes on. */
 export const USAGE = "usage";
+/** A directory per parent, holding a file per child whose result it is blocked on. */
+const AWAITED = "awaited";
 
 export const UsageWaitSchema = Schema.Struct({
   account: Schema.String,
@@ -2687,6 +2709,73 @@ const decodeAskedAttachments = Schema.decodeUnknownOption(
 
 /** Where a Run keeps the merge request it opened. */
 const mergeRequestPath = (dir: string, runId: string) => mergeRequestFile(runDir(dir, runId));
+
+/** Says why a Run's reviewed checkout was refused, in the Run's directory `dir`. */
+export const checkoutRefusedFile = (dir: string) => `${dir}/checkout-refused`;
+
+/** What resolving `runId`'s reviewed branch from `cwd` asks, as a build of the review's findings is placed (ADR-0054). */
+const reviewedAsk = (
+  dir: string,
+  runId: string,
+  cwd: string,
+  target: string,
+  login: string | null,
+) => ({
+  cwd,
+  name: runId,
+  // As placement feeds a build of a review's findings: this Run is the review.
+  inputs: { [REVIEWED]: target, work: runDir(dir, runId), work_kind: "review" },
+  strategies: { [REVIEWED]: "diff-target", work: "work-source" },
+  login,
+});
+
+/** The Run that recorded the checkout at a path; a review's fix round never takes one over. */
+const recordedIn =
+  (store: StoreApi): RecordedBy =>
+  (at) =>
+    store.runs.pipe(
+      Effect.map((rows) => {
+        const one = rows.find((row) => placedOf(row, {}).worktree?.path === at);
+        return one === undefined
+          ? null
+          : {
+              run: one.run,
+              worktree: placedOf(one, {}).worktree ?? null,
+              live: Effect.succeed(null),
+              release: Effect.succeed("a review's fix round takes over nothing"),
+            };
+      }),
+    );
+
+/**
+ * Why a Run `starter` starts on `target` would have its reviewed checkout refused now, or
+ * null; cuts nothing. `awaits` says `starter` waits on it, so its own checkout may be used.
+ */
+const refusedCheckout = (o: {
+  readonly dir: string;
+  readonly store: StoreApi;
+  readonly placing: { readonly herdr: Herdr; readonly env: PluginEnv };
+  readonly starter: RunRow;
+  readonly target: string;
+  readonly awaits: boolean;
+}) =>
+  Effect.gen(function* () {
+    const launch = yield* decodeStrings(o.starter.options ?? "{}").pipe(
+      Effect.orElseSucceed((): Record<string, string> => ({})),
+    );
+    const placed = placedOf(o.starter, launch);
+    const { herdr, env } = o.placing;
+    const ask: Parameters<typeof checkoutRefusal>[1] = {
+      ...reviewedAsk(o.dir, o.starter.run, placed.cwd, o.target, env.gitlabLogin),
+      recordedBy: recordedIn(o.store),
+    };
+    if (o.awaits && placed.worktree !== null)
+      ask.starting = { run: o.starter.run, cwd: placed.cwd };
+    const refused = yield* Effect.result(checkoutRefusal(herdr, ask));
+    return refused._tag === "Failure"
+      ? `no checkout could be made: ${String(refused.failure)}`
+      : refused.success;
+  });
 
 /** The merge request a Run opened, or null where it recorded none. */
 const mergeRequestOf = (fs: FileSystem.FileSystem, dir: string, runId: string) =>
@@ -2945,6 +3034,18 @@ const passAsked = (asked: Parameters<Sdk.HostApi["verify"]>[0]): CheckPass => {
   return { pass: asked.pass ?? "check" };
 };
 
+/** Where the checkout at `cwd` leaves the default branch, or why that cannot be read. */
+const defaultMergeBase = (cwd: string) =>
+  Effect.gen(function* () {
+    const git = (...args: string[]) => runShell("git", args, cwd);
+    const branch = yield* defaultBase(runShell, cwd);
+    if (branch === null) return { found: false, why: "no default branch" } as const;
+    const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
+    const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
+    if (merged.code !== 0) return { found: false, why: `no merge-base with ${branch}` } as const;
+    return { found: true, branch, base: merged.stdout.trim() } as const;
+  });
+
 /**
  * Runs `body` with the checkout at its merge-base with the default branch, then puts it
  * back. A checkout with changes of its own is refused: they would travel to the base.
@@ -2962,18 +3063,16 @@ const atDefaultBase = <A, R>(
     if ((yield* git("status", "--porcelain")).stdout.trim() !== "") {
       return yield* refuse("the checkout has changes of its own");
     }
-    const branch = yield* defaultBase(runShell, cwd);
-    if (branch === null) return yield* refuse("no default branch");
-    const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
-    const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
-    if (merged.code !== 0) return yield* refuse(`no merge-base with ${branch}`);
+    const found = yield* defaultMergeBase(cwd);
+    if (!found.found) return yield* refuse(found.why);
+    const { branch, base } = found;
     const head = (yield* git("rev-parse", "HEAD")).stdout.trim();
     const named = yield* git("symbolic-ref", "-q", "--short", "HEAD");
     const back = named.code === 0 ? named.stdout.trim() : head;
     yield* fs.writeFileString(away, back).pipe(Effect.orDie);
-    if ((yield* git("checkout", "-q", "--detach", merged.stdout.trim())).code !== 0) {
+    if ((yield* git("checkout", "-q", "--detach", base)).code !== 0) {
       yield* fs.remove(away).pipe(Effect.ignore);
-      return yield* refuse(`${merged.stdout.trim()} could not be checked out`);
+      return yield* refuse(`${base} could not be checked out`);
     }
     return yield* body(branch).pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
   });
@@ -3223,18 +3322,7 @@ export const hostLayer = (options: {
             placed,
             herdr,
             env,
-            ask: {
-              cwd: placed.cwd,
-              name: runId,
-              // As placement feeds a build of a review's findings: this Run is the review.
-              inputs: {
-                [REVIEWED]: isText(target) ? target : "",
-                work: runDir(dir, runId),
-                work_kind: "review",
-              },
-              strategies: { [REVIEWED]: "diff-target", work: "work-source" },
-              login: env.gitlabLogin,
-            },
+            ask: reviewedAsk(dir, runId, placed.cwd, isText(target) ? target : "", env.gitlabLogin),
           };
         });
       /** The reviewed branch, or why there is none, by the checkout's own resolution; cuts nothing. */
@@ -3252,8 +3340,22 @@ export const hostLayer = (options: {
             ? { refused: plan.success.refused }
             : { branch: plan.success.branch };
         }).pipe(Effect.provideContext(bun), under);
+      /** The checkout of the Run that started `row`, while that Run is blocked on `row` alone and has one of its own. */
+      const startingCheckout = (row: RunRow) =>
+        Effect.gen(function* () {
+          const parent = row.parent === null ? null : yield* store.run(row.parent);
+          if (parent === null) return {};
+          const placed = placedOf(parent, {});
+          if (placed.worktree === null) return {};
+          const awaited = yield* fs
+            .readDirectory(controlPath(dir, AWAITED, parent.run))
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+          return awaited.length === 1 && awaited[0] === row.run
+            ? { starting: { run: parent.run, cwd: placed.cwd } }
+            : {};
+        });
       /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
-      const checkoutReviewed = (runId: string) =>
+      const checkoutReviewed = (runId: string, opts?: { readonly inStarter?: boolean }) =>
         Effect.gen(function* () {
           const asked = yield* reviewing(runId);
           if (asked.refused !== undefined) return { refused: asked.refused };
@@ -3261,34 +3363,32 @@ export const hostLayer = (options: {
           if (placed.worktree !== null) {
             return { cwd: placed.cwd, branch: placed.branch ?? placed.worktree.branch };
           }
+          const starting = opts?.inStarter === true ? yield* startingCheckout(row) : {};
           const made = yield* Effect.result(
             checkoutFor(herdr, {
               ...asked.ask,
+              ...starting,
               stateDir: env.stateDir,
               workflow: row.workflow,
               checkout: "branch",
-              recordedBy: (at) =>
-                store.runs.pipe(
-                  Effect.map((rows) => {
-                    const one = rows.find((row) => placedOf(row, {}).worktree?.path === at);
-                    // A review's fix round never takes over another Run's checkout.
-                    return one === undefined
-                      ? null
-                      : {
-                          run: one.run,
-                          worktree: placedOf(one, {}).worktree ?? null,
-                          live: Effect.succeed(null),
-                          release: Effect.succeed("a review's fix round takes over nothing"),
-                        };
-                  }),
-                ),
+              recordedBy: recordedIn(store),
             }),
           );
-          if (made._tag === "Failure") {
-            return { refused: `no checkout could be made: ${String(made.failure)}` };
-          }
+          // Recorded, so its card can ask whether another attempt would get past it.
+          const refuse = (refused: string) =>
+            fs
+              .makeDirectory(runDir(dir, runId), { recursive: true })
+              .pipe(
+                Effect.andThen(
+                  fs.writeFileString(checkoutRefusedFile(runDir(dir, runId)), `${refused}\n`),
+                ),
+                Effect.orDie,
+                Effect.as({ refused }),
+              );
+          if (made._tag === "Failure")
+            return yield* refuse(`no checkout could be made: ${String(made.failure)}`);
           const checkout = made.success;
-          if (checkout.refused !== null) return { refused: checkout.refused };
+          if (checkout.refused !== null) return yield* refuse(checkout.refused);
           if (checkout.note !== "")
             yield* appendLog(runDir(dir, runId), checkout.note).pipe(Effect.orDie);
           yield* store.place(runId, {
@@ -3532,11 +3632,11 @@ export const hostLayer = (options: {
           Effect.fail(
             new WorkflowError({ reason: "Run reporting requires the host's workflow registry" }),
           ),
-        issues: (runId) =>
+        issues: (runId, numbers) =>
           under(
             Effect.gen(function* () {
               const here = yield* issueCheckout(runId);
-              const listed = yield* here.forge.issues(here.project, here.cwd, runShell);
+              const listed = yield* here.forge.issues(here.project, here.cwd, runShell, numbers);
               if (!listed.ok) return yield* new WorkflowError({ reason: listed.reason });
               return listed.issues;
             }),
@@ -3635,6 +3735,22 @@ export const hostLayer = (options: {
           ),
         reviewedBranch,
         checkoutReviewed,
+        reviewedRefusal: (runId, failed, target) =>
+          Effect.gen(function* () {
+            if (!(yield* fs.exists(checkoutRefusedFile(runDir(dir, failed))).pipe(Effect.orDie)))
+              return null;
+            const starter = yield* store.run(runId);
+            if (starter === null) return `there is no Run ${runId}`;
+            const ref = readMrRef(target);
+            return yield* refusedCheckout({
+              dir,
+              store,
+              placing: yield* placing,
+              starter,
+              target: ref === null ? target : mrWords(ref).target,
+              awaits: true,
+            });
+          }).pipe(Effect.provideContext(bun), under),
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
         usageWait: (runId, wait) => {
@@ -4040,6 +4156,22 @@ export const hostLayer = (options: {
                 : Effect.succeed(sha);
             }),
           ),
+        nothingToLand: (runId, cwd) =>
+          under(
+            Effect.gen(function* () {
+              const git = (...args: string[]) => runShell("git", args, cwd);
+              const found = yield* defaultMergeBase(cwd);
+              if (!found.found) return null;
+              const ahead = yield* git("rev-list", "--count", `${found.base}..HEAD`);
+              if (ahead.code !== 0 || ahead.stdout.trim() !== "0") return null;
+              const status = yield* git("status", "--porcelain");
+              if (status.code !== 0 || status.stdout.trim() !== "") return null;
+              const why = `nothing to land: no commits over ${found.base.slice(0, 12)}, where this branch leaves ${found.branch}, and nothing uncommitted`;
+              yield* fs.writeFileString(nothingToLandFile(runDir(dir, runId)), `${why}\n`);
+              yield* appendLog(runDir(dir, runId), why);
+              return why;
+            }),
+          ).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.orDie),
         merge: (asked) =>
           Effect.gen(function* () {
             return yield* land({
@@ -6325,6 +6457,12 @@ const makeRegistry: (
     const payload = yield* payloadOf(found.generation.registration, row).pipe(
       Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
     );
+    const waits = row.parent === null ? null : controlPath(dir, AWAITED, row.parent);
+    const awaited = waits === null ? null : `${waits}/${child.runId}`;
+    if (waits !== null && awaited !== null)
+      yield* fs
+        .makeDirectory(waits, { recursive: true })
+        .pipe(Effect.andThen(fs.writeFileString(awaited, "")), Effect.orDie);
     // Executed on the parent's own fiber, which is what links the two: the engine
     // reads the parent's instance from here, so the child's completion wakes the
     // parent and interrupting the parent reaches the child.
@@ -6343,6 +6481,12 @@ const makeRegistry: (
             suspendedRetrySchedule: workflow.suspendedRetrySchedule,
           }),
     ).pipe(
+      // A suspension is still a wait; only a result ends it.
+      Effect.onExit((exit) =>
+        awaited === null || (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
+          ? Effect.void
+          : fs.remove(awaited, { force: true }).pipe(Effect.ignore),
+      ),
       Effect.mapError((failure) => {
         if (isWorkflowError(failure)) return failure;
         // A child's own typed failure, as its error schema writes it.
@@ -6991,6 +7135,9 @@ const makeRegistry: (
       // Where the host placed it: a branch it inferred is as much the Run's as one named.
       branch: placedOf(row, options).branch,
       mrUrl: yield* mergeRequestOf(fs, dir, runId),
+      nothingToLand: yield* fs
+        .exists(nothingToLandFile(where))
+        .pipe(Effect.orElseSucceed(() => false)),
       planIssues: yield* planIssuesIn(where),
       disposed: disposition !== null,
       openFindings: yield* openFindingsIn(where),
@@ -7031,6 +7178,27 @@ const makeRegistry: (
       for (const offer of generation.offers) {
         if (offer.kind === "follow-up") refused.set(offer.id, notYet);
       }
+    }
+    // Starting this workflow again meets the same reviewed checkout, so it is asked whether
+    // that would still be refused (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
+    const again = generation.offers.filter(
+      (offer) => offer.kind === "follow-up" && offer.workflow === SELF && !refused.has(offer.id),
+    );
+    if (
+      state.status === "failed" &&
+      again.length > 0 &&
+      facts.diffTarget !== null &&
+      (yield* fs.exists(checkoutRefusedFile(where)).pipe(Effect.orElseSucceed(() => false)))
+    ) {
+      const still = yield* refusedCheckout({
+        dir,
+        store,
+        placing,
+        starter: row,
+        target: facts.diffTarget,
+        awaits: false,
+      }).pipe(Effect.provideContext(bun));
+      if (still !== null) for (const offer of again) refused.set(offer.id, still);
     }
     return { row, generation, facts, where, refused, input };
   });

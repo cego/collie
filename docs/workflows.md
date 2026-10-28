@@ -118,12 +118,13 @@ at most four review and fix rounds. Every commit is pushed, so the reviewers rea
 rather than the state before it. Before any reviewer sees a ticket, each of its acceptance
 criteria needs an answer, and one left unanswered or not met goes back to the builder. The
 criteria are read from the ticket again before each hand-back, so a ticket the planner
-amended is judged as it reads now. A ticket goes back twice at most, unless a hand-back leaves
-the tree as it found it and reports a blocking finding: another could not move that
-blocker, so the Run asks instead. The question names the ticket, the blockers and the
-criteria still unmet. **Hand back** reads the ticket again, goes on with no builder turn if
+amended is judged as it reads now. A ticket goes back twice at most, and the Run then asks
+rather than fails: the question names the ticket and the criteria still unmet, so the
+ticket can be amended. It asks sooner when a hand-back leaves the tree as it found it and
+reports a blocking finding, since another could not move that blocker, and that question
+names the blockers too. **Hand back** reads the ticket again, goes on with no builder turn if
 nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** fails
-the Run with that reason, before any review. A ticket's `## After merge` outcomes are not criteria:
+the Run with that reason, before any review. An unattended Run waits on either question. A ticket's `## After merge` outcomes are not criteria:
 the merge request names them under **Not settled by the run**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
 reviewer blocks one the Run could have shown, and the merge request names the ticket, the
@@ -168,7 +169,12 @@ request is open and its checks left to CI are settled, the Run asks **What next?
   answers. Each Stage child is named `stage-<n>`. A failed Stage child leaves the implement
   Run asking what next, and that question names it and its reason, as in `<merge request>
   is open. stage-1 failed: <reason>. What next?`; **Release** and **Finish** still end it as
-  above and below.
+  above and below. Where that Stage's checkout was refused, the Run asks whether another
+  would still be refused, by the same resolution and cutting nothing, both before it asks
+  and when **Stage** is picked. While it would, **Stage** is left out, and the question
+  says why: `Stage is not offered: <the refusal>.` **Check Stage again** takes its place
+  and asks what next again, with **Stage** back once the refusal is gone. A Stage that
+  failed for any other reason is offered again.
 - **Finish** ends the Run with the merge request URL.
 
 `then=finish` ends at the merge request and `then=release` starts the release, without
@@ -178,8 +184,16 @@ A succeeded Run with a merge request also offers **Release** and **Stage** on it
 through `collie run action` and in chat, so it can be released or staged later; once its
 merge request has merged, or anybody recorded what became of the work, neither is offered.
 
+A Run whose gate passed with nothing to land completes without a merge request: its branch
+has no commits over where it leaves the default branch, the same base the gate's baseline
+runs at, and nothing uncommitted, as when a ticket is proved met by work already merged. The
+merge request step does not run and **What next?** is not asked. The Run ends with, and its
+log records, `nothing to land: no commits over <base>, where this branch leaves <default
+branch>, and nothing uncommitted`, and its card offers no follow-up. A branch with commits
+that cannot be pushed still fails, as below.
+
 It fails with the reason there is no merge request — a ticket stopped
-on a blocking finding, acceptance criteria still unmet or unreadable, a review that halted — and says to
+on a blocking finding, acceptance criteria unreadable or still unmet when Stop was answered, a review that halted — and says to
 continue with a follow-up Run, which **Keep going on this** starts. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. Where a failed check's
 output names the tests that failed (bun test's does), the gate reruns each of those tests
@@ -658,7 +672,9 @@ show fails the Run and keeps the claim. A failed Run offers **Release again**: b
 release; after it, the new Run takes over the failed Run's landing — never a merge someone
 made outside a Release Run — and only tags, asking to adopt the claim the failed Run kept. For an application it
 finishes the tag that already carries the merge, stage included, and asks `production`
-afresh; where production already carries the merge it asks nothing and ends.
+afresh; where production already carries the merge it asks nothing and ends. A Run whose
+checkout was refused offers **Release again** only where another would get past its
+checkout, as [Stage again](#stage) does.
 
 **Its [Flow](../CONTEXT.md)** forecasts **Checkout**, **Assess**, **Prove the head**, **Review wait**,
 **Merge go**, **Helle claim** and **Merge**, then for an application **Stage**, **Production
@@ -750,10 +766,19 @@ carries <mr> at <head>, unmerged`. A stage that fails is rolled back and proved 
 claims are given back, and the Run fails with `stage of <mr> at <head> failed: <why>; stage
 is back on what production carries`. A rollback the forge cannot show fails the Run and
 keeps the claims, including where the environments a stage attempt reached could not be
-discovered. A failed Run offers **Stage again** of the same merge request.
+discovered. A failed Run offers **Stage again** of the same merge request. Where its
+checkout was refused, the card asks the checkout's resolution again, cutting nothing, each
+time it lists the offer and when it is picked. While another attempt would be refused,
+**Stage again** is listed as unavailable with the refusal, naming each path's occupant, and
+once one is freed it is offered again. Every follow-up that starts a Run's own workflow
+again is decided this way after a refused reviewed checkout, so Release's
+**Release again** is too.
 
 **Its [Flow](../CONTEXT.md)** forecasts **Checkout**, **Assess**, **Helle claim**, **Stage**,
-**Test on stage** and **Roll stage back**. A checkout Collie cannot give fails the Run on
+**Test on stage** and **Roll stage back**. A Stage that `implement`'s **What next?** started
+works in that Run's checkout while implement is blocked on it alone, and the checkout is clean, at the merge request's
+head as the remote has it now and has no working agent. Otherwise it gets one of its own, and its log says which and why.
+Release never takes implement's checkout: it commits and pushes to the merge request's branch, which that checkout is not on. A checkout Collie cannot give fails the Run on
 **Checkout**, with why. Stage and Test on stage have a run per staging, a moved head
 adding one to Stage alone. Leave it on stage ends with Roll stage back not run.
 

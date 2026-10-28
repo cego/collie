@@ -224,6 +224,7 @@ const BUILDER = "build";
 
 const RELEASE = "Release";
 const STAGE = "Stage";
+const CHECK_STAGE = "Check Stage again";
 const FINISH = "Finish";
 const HAND_BACK = "Hand back";
 const STOP = "Stop";
@@ -350,7 +351,7 @@ export default defineWorkflow({
       title: "Keep going on this",
       workflow: "self",
       when: "always",
-      eligible: (facts) => facts.branch !== null,
+      eligible: (facts) => facts.branch !== null && facts.nothingToLand !== true,
     },
   ],
   run: ({ input: asked }) =>
@@ -662,7 +663,7 @@ export default defineWorkflow({
               return read.flatMap((one) => one.criteria);
             });
             // Each criterion answered before any reviewer is launched: one left unanswered or
-            // unmet goes back to the builder, and the work stops if it still is.
+            // unmet goes back to the builder, and the Run asks if it still is.
             let answers = boundTo(spec, build.criteria ?? []);
             const assumptions = [...(build.assumptions ?? [])];
             const commits = [...(build.commits ?? [])];
@@ -671,6 +672,7 @@ export default defineWorkflow({
             // Another hand-back on an unchanged tree cannot move a blocker, so a stall asks instead.
             let blockers: ReadonlyArray<Finding> = [];
             let stalls = 0;
+            let unmetAsks = 0;
             let stopped: string | null = null;
             const treeAt = (name: string) =>
               Activity.make({
@@ -700,7 +702,22 @@ export default defineWorkflow({
                 tries = 1;
                 continue;
               }
-              if (tries > CRITERIA_TRIES) break;
+              if (tries > CRITERIA_TRIES) {
+                unmetAsks += 1;
+                const name = `${item}.criteria-unmet-${unmetAsks}`;
+                const still = `${item}: acceptance criteria still unanswered or unmet after ${CRITERIA_TRIES} hand-backs`;
+                const chosen = yield* ask({
+                  name,
+                  prompt: `${still}.\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket, then hand it back, or stop the Run.`,
+                  options: [HAND_BACK, STOP],
+                });
+                if (chosen !== HAND_BACK) {
+                  stopped = `${still}, so no review starts: ${unmet.map((one) => one.title).join("; ")}. Stop was answered to ${name}`;
+                  break;
+                }
+                tries = 1;
+                continue;
+              }
               const before = yield* treeAt(`${item}.criteria-${turn}.before`);
               yield* restateKind;
               const answered = yield* agentWork({
@@ -741,12 +758,9 @@ export default defineWorkflow({
                 .map((one) => `${one.name}: ${one.result}`),
             };
             handed.push(done);
-            if (unmet.length > 0) {
-              const why =
-                stopped ??
-                `${item}: acceptance criteria still unanswered or unmet after ${CRITERIA_TRIES} hand-backs, so no review starts: ${unmet.map((one) => one.title).join("; ")}`;
-              yield* host.record(runId, why);
-              return yield* unbuilt(why);
+            if (stopped !== null) {
+              yield* host.record(runId, stopped);
+              return yield* unbuilt(stopped);
             }
             answeredFor.push({ item, criteria, answers, assumptions });
             for (const one of assumptions) assumed.push(`assumed in ${item}: ${one}`);
@@ -1117,6 +1131,12 @@ export default defineWorkflow({
         ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
+      const nothing = yield* Activity.make({
+        name: "nothing-to-land",
+        success: Schema.NullOr(Schema.String),
+        execute: host.nothingToLand(runId, cwd),
+      });
+      if (nothing !== null) return nothing;
       const leftToCi = checks.filter((spec) => spec.ci !== undefined);
       const mrUrl = yield* mergeRequest(
         Effect.gen(function* () {
@@ -1355,15 +1375,32 @@ const releasing = (delivered: {
       });
       if (merging !== null) return mr;
       let stageFailed = "";
+      let failedStage = "";
+      // Why another Stage would still be refused at the checkout the last one was refused
+      // at, asked again when it is offered and when it is picked.
+      const stageRefusal = (name: string) =>
+        failedStage === ""
+          ? Effect.succeed(null)
+          : Activity.make({
+              name,
+              success: Schema.NullOr(Schema.String),
+              execute: host.reviewedRefusal(runId, failedStage, mr),
+            });
       for (let n = 1; ; n++) {
+        const refused = yield* stageRefusal(`stage-refused-${n}`);
         const chosen = yield* next(
           ask({
             name: n === 1 ? "next" : `next-${n}`,
-            prompt: `${mr} is open.${stageFailed} What next?`,
-            options: [RELEASE, STAGE, FINISH],
+            prompt: `${mr} is open.${stageFailed}${
+              refused === null ? "" : ` Stage is not offered: ${refused}.`
+            } What next?`,
+            // A question's options are fixed once asked, so a freed path is noticed on a pick.
+            options: [RELEASE, refused === null ? STAGE : CHECK_STAGE, FINISH],
           }),
           { round: n },
         );
+        if (chosen === CHECK_STAGE) continue;
+        if (chosen === STAGE && (yield* stageRefusal(`stage-picked-${n}`)) !== null) continue;
         if (chosen === STAGE) {
           const children = yield* Children;
           const invocation = `stage-${n}`;
@@ -1378,6 +1415,7 @@ const releasing = (delivered: {
             }),
           );
           stageFailed = result.failed;
+          failedStage = result.failed === "" ? "" : child.runId;
           yield* host.record(runId, `${invocation}: ${result.said}`);
           continue;
         }
