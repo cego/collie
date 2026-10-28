@@ -909,7 +909,7 @@ export default defineWorkflow({
             success: MeasurementSchema,
             error: WorkflowError,
             execute: Effect.map(
-              host.measure({ runId, base, cwd, plan, pass: "calibration" }),
+              host.measure({ runId, base, cwd, plan, reason: reasons.at(-1), pass: "calibration" }),
               (answered) => answered.measurement,
             ),
           }),
@@ -1166,7 +1166,14 @@ export default defineWorkflow({
               success: MeasurementSchema,
               error: WorkflowError,
               execute: Effect.map(
-                host.measure({ runId, base, cwd, plan, pass: `cycle ${n}` }),
+                host.measure({
+                  runId,
+                  base,
+                  cwd,
+                  plan,
+                  reason: reasons.at(-1),
+                  pass: `cycle ${n}`,
+                }),
                 (answered) => answered.measurement,
               ),
             }),
@@ -1308,6 +1315,7 @@ export default defineWorkflow({
               base: mergeBase,
               cwd,
               plan,
+              reason: reasons.at(-1),
               pass: "final",
             });
             if (ran)
@@ -1455,7 +1463,7 @@ export default defineWorkflow({
                   success: MeasurementSchema,
                   error: WorkflowError,
                   execute: Effect.map(
-                    host.measure({ runId, base, cwd, plan, pass: "final" }),
+                    host.measure({ runId, base, cwd, plan, reason: reasons.at(-1), pass: "final" }),
                     (answered) => answered.measurement,
                   ),
                 });

@@ -1050,6 +1050,7 @@ function measured(over: {
       tolerance: 2,
     },
     plan_digest: "d1",
+    plan_reason: null,
     base: {
       ...tree,
       ...BASE_TREE,

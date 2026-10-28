@@ -1476,13 +1476,14 @@ for (const spec of (yield * host.approved(runId)).filter((one) => one.ci !== und
 ```
 
 A speed-up is proved by a **Measurement**, which compares two trees rather than passing one:
-`host.measure({ runId, base, cwd, plan, pass })`. The host makes a base tree at `base` with
+`host.measure({ runId, base, cwd, plan, pass, reason })`. The host makes a base tree at `base` with
 the plan's harness commits applied, samples the plan's commands on it and on `cwd`, the Run's
 own checkout, alternately after a warmup, and judges each metric. It answers
 `{ measurement, ran }`. Where these trees were already measured under this plan, the record
 answers and `ran` is `false`, so a result cannot be re-rolled. One Measurement runs on a
 Machine at a time, and none while it is Short of memory; a Stop ends the wait or the sampling
-and suspends the Run. `pass` is `calibration`, `cycle N` or `final`. The plan, the record and
+and suspends the Run. `pass` is `calibration`, `cycle N` or `final`. `reason` says why the
+plan changed, and a Run already measured under another plan is refused a new one without it. The plan, the record and
 every refusal are [`collie measure`](cli.md#measure)'s, since both go through one host
 operation. Take it inside an Activity, journaled with `MeasurementSchema`, which keeps an
 infinite ratio as JSON:

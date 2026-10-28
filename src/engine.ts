@@ -489,6 +489,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly machine: string;
     readonly plan: Required<BenchmarkPlan>;
     readonly plan_digest: string;
+    readonly plan_reason: string | null;
     readonly base: MeasuredTree & { readonly commit: string };
     readonly candidate: MeasuredTree;
     readonly environment: Readonly<Record<string, string | null>>;
@@ -889,6 +890,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly plan: BenchmarkPlan;
       /** \`calibration\`, \`cycle N\` or \`final\`. */
       readonly pass: string;
+      /** Why the plan changed: refused without one where the Run was measured under another plan. */
+      readonly reason?: string;
     }) => Effect.Effect<{ readonly measurement: Measurement; readonly ran: boolean }, WorkflowError>;
     /** The commit origin's default branch is at now. Take it inside an Activity. */
     readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;

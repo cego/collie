@@ -2280,7 +2280,7 @@ const frontDoorHandlers = (
               );
             }),
           ),
-        measure: ({ runId, base, cwd, plan, pass }, { client }) =>
+        measure: ({ runId, base, cwd, plan, pass, reason }, { client }) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const view = yield* known(runId);
@@ -2298,7 +2298,14 @@ const frontDoorHandlers = (
                     const answered = yield* measure({
                       stateDir: env.stateDir,
                       env,
-                      ask: { runId, base, cwd: where, plan, pass },
+                      ask: {
+                        runId,
+                        base,
+                        cwd: where,
+                        plan,
+                        pass,
+                        ...(reason !== undefined && { reason }),
+                      },
                       evidence: evidenceDir(env.stateDir, runId),
                       awaiting: controlPath(env.stateDir, AWAITING, runId),
                       stopped: fs
@@ -2326,7 +2333,13 @@ const frontDoorHandlers = (
                         operation: "measure",
                         request: measurement.id,
                         ...whoOf(client),
-                        asked: { base, cwd: where, plan, pass },
+                        asked: {
+                          base,
+                          cwd: where,
+                          plan,
+                          pass,
+                          ...(reason !== undefined && { reason }),
+                        },
                         result: Schema.Json,
                         value: { measurement: measurement.id, result: measurement.result._tag },
                       }).pipe(Effect.orDie);

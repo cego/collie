@@ -1495,6 +1495,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       cwd: Schema.optionalKey(Schema.String),
       plan: Schema.Json,
       pass: Schema.String,
+      reason: Schema.optionalKey(Schema.String),
     },
     success: MeasureEvent,
     error: HostRefused,

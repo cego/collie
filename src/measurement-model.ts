@@ -17,7 +17,7 @@ export const BenchmarkPlan = Schema.Struct({
   prepare: Schema.NullOr(Command).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** Each sample runs every one, in order, in the tree's root. */
   commands: Schema.NonEmptyArray(Schema.Struct({ name: Schema.String, ...Command.fields })),
-  /** `<command>.wall_ms`, `<command>.cpu_ms`, `<command>.peak_kb`, or `<command>.<key>` of its last stdout line's JSON. */
+  /** `<command>.wall_ms`, `<command>.cpu_ms`, `<command>.peak_kb`, which the host reads, or `<command>.<key>` of its last stdout line's JSON. */
   metrics: Schema.NonEmptyArray(
     Schema.Struct({
       name: Schema.String,
@@ -33,7 +33,7 @@ export const BenchmarkPlan = Schema.Struct({
     Schema.check(Schema.isGreaterThanOrEqualTo(2)),
     Schema.withDecodingDefaultKey(Effect.succeed(10)),
   ),
-  /** Seconds one command of a sample, or prepare, may take. */
+  /** Seconds one sample, all its commands, or one tree's prepare may take. */
   limit: Schema.Finite.pipe(
     Schema.check(Schema.isGreaterThan(0)),
     Schema.withDecodingDefaultKey(Effect.succeed(600)),
@@ -85,6 +85,8 @@ export const MeasurementSchema = Schema.Struct({
   machine: Schema.String,
   plan: BenchmarkPlan,
   plan_digest: Schema.String,
+  /** Why the Run's plan changed to this one; null for its first. */
+  plan_reason: Schema.NullOr(Schema.String),
   base: Schema.Struct({ commit: Schema.String, ...Tree.fields }),
   candidate: Tree,
   /** Each command's environment as a Verification records it; null where it could not be read. */

@@ -950,6 +950,8 @@ export interface HostApi {
     readonly plan: typeof BenchmarkPlan.Encoded;
     /** `calibration`, `cycle N` or `final`. */
     readonly pass: string;
+    /** Why the plan changed: refused without one where the Run was measured under another plan. */
+    readonly reason?: string;
   }) => Effect.Effect<{ readonly measurement: Measurement; readonly ran: boolean }, WorkflowError>;
   /**
    * The commit origin's default branch is at now: everything merged there so far. Take it

@@ -104,6 +104,7 @@ const measuring = (
   base: string,
   plan: Plan,
   pass = "calibration",
+  reason?: string,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -111,7 +112,18 @@ const measuring = (
     yield* fs.writeFileString(file, encode(plan)).pipe(Effect.orDie);
     return yield* collie(
       world,
-      ["measure", "--run", runId, "--base", base, "--plan", file, "--pass", pass],
+      [
+        "measure",
+        "--run",
+        runId,
+        "--base",
+        base,
+        "--plan",
+        file,
+        "--pass",
+        pass,
+        ...(reason === undefined ? [] : ["--reason", reason]),
+      ],
       extra,
     );
   });
@@ -307,15 +319,30 @@ test(
           expect((yield* linesOf(world, ran)).length).toBe(runs);
           expect(yield* recorded(world, runId)).toEqual([inconclusive!]);
 
-          const replanned = yield* measuring(world, extra, runId, base, { ...noisy, samples: 3 });
+          const replanned = yield* measuring(
+            world,
+            extra,
+            runId,
+            base,
+            { ...noisy, samples: 3 },
+            "calibration",
+            "three samples a side",
+          );
           expect(Schema.decodeUnknownSync(Answered)(replanned.envelope.data).ran).toBe(true);
           expect((yield* linesOf(world, ran)).length).toBeGreaterThan(runs);
           expect(yield* recorded(world, runId)).toHaveLength(2);
+          expect((yield* recorded(world, runId)).at(-1)?.plan_reason).toBe("three samples a side");
 
           // A sample over the plan's limit ends it without a verdict.
-          const slow = yield* measuring(world, extra, runId, base, {
-            ...planOf(harness, "gate.sh", ran, { limit: 1 }, [`${world.home}/never`]),
-          });
+          const slow = yield* measuring(
+            world,
+            extra,
+            runId,
+            base,
+            planOf(harness, "gate.sh", ran, { limit: 1 }, [`${world.home}/never`]),
+            "calibration",
+            "a gated benchmark",
+          );
           expect(slow.envelope.ok).toBe(true);
           expect((yield* recorded(world, runId)).at(-1)?.result).toEqual({
             _tag: "TimedOut",
@@ -338,13 +365,21 @@ test(
 
           // A base whose prepare fails ends it without a verdict, naming the tree.
           const before = (yield* recorded(world, runId)).length;
-          const prepared = yield* measuring(world, extra, runId, base, {
-            ...planOf(harness, "bench.sh", ran),
-            prepare: {
-              executable: "sh",
-              argv: ["-c", "echo preparing $(cat value); test $(cat value) != 10"],
+          const prepared = yield* measuring(
+            world,
+            extra,
+            runId,
+            base,
+            {
+              ...planOf(harness, "bench.sh", ran),
+              prepare: {
+                executable: "sh",
+                argv: ["-c", "echo preparing $(cat value); test $(cat value) != 10"],
+              },
             },
-          });
+            "calibration",
+            "a prepare step",
+          );
           expect(prepared.envelope.ok).toBe(true);
           const failed = (yield* recorded(world, runId)).at(-1)!;
           expect((yield* recorded(world, runId)).length).toBe(before + 1);
@@ -424,7 +459,15 @@ test(
           // Short of memory: it waits, says so, and records that it did.
           yield* memory(2);
           const short = yield* Effect.forkChild(
-            measuring(world, extra, waiter, base, planOf(harness, "bench.sh", ran)),
+            measuring(
+              world,
+              extra,
+              waiter,
+              base,
+              planOf(harness, "bench.sh", ran),
+              "calibration",
+              "an ungated benchmark",
+            ),
           );
           yield* until(
             () => memoryWaitOf(runDir(world.state, waiter)),

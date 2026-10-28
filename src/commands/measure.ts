@@ -35,8 +35,14 @@ export const measure = Command.make(
     pass: Flag.String("pass").pipe(
       Flag.withDescription("Which Measurement this is: `calibration`, `cycle N` or `final`"),
     ),
+    reason: Flag.String("reason").pipe(
+      Flag.withDescription(
+        "Why the plan changed; needed where the Run was measured under another plan",
+      ),
+      Flag.optional,
+    ),
   },
-  ({ runId, cwd, base, plan, pass }) =>
+  ({ runId, cwd, base, plan, pass, reason }) =>
     answering((env) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -54,7 +60,13 @@ export const measure = Command.make(
           );
           if (run === null)
             return err("invalid_input", "measure needs --run outside a Run's agent pane.");
-          const request = { runId: run, base, plan: decoded.value, pass };
+          const request = {
+            runId: run,
+            base,
+            plan: decoded.value,
+            pass,
+            ...Option.match(reason, { onNone: () => ({}), onSome: (why) => ({ reason: why }) }),
+          };
           const where = Option.getOrUndefined(cwd);
           const opened = yield* measureRun(
             env,

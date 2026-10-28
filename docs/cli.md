@@ -1689,7 +1689,7 @@ to change the set, or delete it to withdraw it.
 
 ```sh
 collie measure --base <commit> --plan <file> --pass calibration
-collie --json measure --run <run-id> --base <commit> --plan <file> --pass "cycle 2" [--cwd <path>]
+collie --json measure --run <run-id> --base <commit> --plan <file> --pass "cycle 2" [--cwd <path>] [--reason <why>]
 ```
 
 A **Measurement** proves a speed-up, which a Check cannot: it compares two trees of this
@@ -1702,15 +1702,17 @@ the Run's later Measurements of the same base. The **candidate** is the Run's ch
 Measurement with [`host.measure`](sdk.md#proving-it-rather-than-saying-so); both go through
 one host operation, on the Run's own Machine.
 
-| Flag     | What it does                                                                                      |
-| -------- | ------------------------------------------------------------------------------------------------- |
-| `--run`  | The Run measured. Defaults to the Run whose agent this pane is.                                   |
-| `--cwd`  | The candidate tree, inside that Run's checkout; defaults to it.                                   |
-| `--base` | The commit the base tree is made at.                                                              |
-| `--plan` | A file holding the Run's benchmark plan as JSON.                                                  |
-| `--pass` | Which Measurement this is: `calibration`, `cycle N` or `final`. Anything else is `invalid_input`. |
+| Flag       | What it does                                                                                                        |
+| ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| `--run`    | The Run measured. Defaults to the Run whose agent this pane is.                                                     |
+| `--cwd`    | The candidate tree, inside that Run's checkout; defaults to it.                                                     |
+| `--base`   | The commit the base tree is made at.                                                                                |
+| `--plan`   | A file holding the Run's benchmark plan as JSON.                                                                    |
+| `--pass`   | Which Measurement this is: `calibration`, `cycle N` or `final`. Anything else is `invalid_input`.                   |
+| `--reason` | Why the plan changed. A Run already measured under another plan refuses a new one without it, with `invalid_input`. |
 
-The plan is frozen: a changed plan is a new comparison. A key left out takes its default.
+The plan is frozen: a changed plan is a new comparison, measured only with `--reason`, which
+its record keeps as `plan_reason`. A key left out takes its default.
 
 ```json
 {
@@ -1737,12 +1739,14 @@ The plan is frozen: a changed plan is a new comparison. A key left out takes its
   between.
 - **`metrics`**: exactly one `primary`, the rest `guardrail`. For each command, the host
   reads `<command>.wall_ms`, `<command>.cpu_ms` and `<command>.peak_kb`. Where the command's
-  last stdout line is one JSON object, each number in it is `<command>.<key>` too.
+  last stdout line is one JSON object, each other number in it is `<command>.<key>` too: a
+  command cannot report the host's three readings. Of stdout, the last 64 KiB are kept, so a
+  longer last line reports nothing.
   `peak_kb` is the kernel's peak resident size for the process, which on Linux has the
   host's own size at the fork as its floor.
 - **`warmup`** samples per side are recorded and never judged, and **`samples`** per side
   (at least 2) are.
-- **`limit`**: seconds one command of a sample, or prepare, may take.
+- **`limit`**: seconds one sample, all its commands together, or one tree's prepare may take.
 - **`threshold`** and **`tolerance`**: percents, as in [Outcomes](#outcomes).
 
 The host then samples alternately, A B B A …, base first, after the warmup. With each sample
@@ -1765,11 +1769,19 @@ stderr. While the Machine is [Short of memory](using.md#short-of-memory), the Me
 waits as `collie verify` does, and records that it waited. A stop of the Run ends either
 wait, or a Measurement already sampling, with `invalid_state`, and records nothing.
 
+Each command runs as one of the Run's checks does, recorded under the host's state directory,
+so a host that dies mid-sample leaves no benchmark running: the next host, and the next
+Measurement before it samples, ends what one left. A base tree is used again only while it
+holds exactly the harness commits over `--base` and no tracked file changed; otherwise it is
+made again.
+
 A Measurement ends without a verdict when:
 
-- a command of a sample, or prepare, outlives `limit` (`TimedOut`);
+- a sample, or prepare, outlives `limit` (`TimedOut`);
 - a command, or prepare, exits non-zero (`Failed`, naming the tree and keeping its output);
-- a declared metric is missing from the samples (`Unjudged`).
+- a non-warmup sample has no reading of a declared metric (`Unjudged`, naming it);
+- either tree's commit or fingerprint changed while it was measured (`Unjudged`, naming the
+  tree).
 
 Each record goes to the Run's `measurements.jsonl` in its evidence directory. Under
 `--json`, the envelope's `data` is `{ "measurement": <the record>, "ran": <bool> }`:
@@ -1783,6 +1795,7 @@ Each record goes to the Run's `measurements.jsonl` in its evidence directory. Un
     "machine": "vm-mk",
     "plan": { "…": "the plan, with its defaults filled in" },
     "plan_digest": "949af28531ce47f8",
+    "plan_reason": null,
     "base": {
       "commit": "<sha>",
       "cwd": "…",

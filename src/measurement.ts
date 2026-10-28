@@ -3,13 +3,14 @@
 // D1, D2 and D4). `collie measure` and `host.measure` both come here.
 
 import { loadavg } from "node:os";
-import { Clock, Data, Effect, FileSystem, Option, Path, Schedule, Schema } from "effect";
+import { Clock, Data, Effect, FileSystem, Option, Path, Schedule, Schema, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { AwaitingJson } from "./awaiting";
+import { CheckProcesses, type CheckOf } from "./check-processes";
 import type { PluginEnv } from "./env";
 import { appendJournal, readJournal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
-import { judge } from "./measurement-verdict";
+import { judge, MeasurementRefused } from "./measurement-verdict";
 import {
   BenchmarkPlan,
   MeasurementJson,
@@ -44,6 +45,12 @@ const LOCKFILES = [
 ];
 
 const OUTPUT_BYTES = 4 * 1024;
+/** Of stdout, for its last line: a longer one is cut, and its metrics are missing. */
+const LINE_BYTES = 64 * 1024;
+/** What the host reads of every command, which no command's own JSON replaces. */
+const HOST_READINGS = ["wall_ms", "cpu_ms", "peak_kb"];
+/** A benchmark's process as the host's checks record it; a dead host's are ended by the next Measurement. */
+const MEASURING = "measure: ";
 
 export const measurementsDir = (stateDir: string) => `${stateDir}/measurements`;
 /** Every base tree a Run's Measurements were taken on, Cleanup's to remove. */
@@ -62,13 +69,27 @@ export interface MeasureAsk {
   readonly cwd: string;
   readonly plan: unknown;
   readonly pass: string;
+  /** Why the plan changed: needed where the Run was measured under another. */
+  readonly reason?: string;
 }
 
 type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
 
 const git = (args: ReadonlyArray<string>, cwd: string) => shell("git", [...args], cwd);
 
-const tail = (text: string) => (text.length <= OUTPUT_BYTES ? text : text.slice(-OUTPUT_BYTES));
+const tail = (text: string, bytes = OUTPUT_BYTES) =>
+  text.length <= bytes ? text : text.slice(-bytes);
+
+/** The last `bytes` of a stream, kept as it arrives rather than buffered whole. */
+const tailOf = (stream: ReadableStream<Uint8Array>, bytes: number) =>
+  Stream.fromReadableStream({ evaluate: () => stream, onError: (cause) => cause }).pipe(
+    Stream.decodeText(),
+    Stream.runFold(
+      () => "",
+      (kept: string, chunk: string) => tail(kept + chunk, bytes),
+    ),
+    Effect.orElseSucceed(() => ""),
+  );
 
 const digestOf = (text: string) => Bun.hash(text).toString(16);
 
@@ -135,11 +156,21 @@ const baseTree = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = `${baseTreesDir(stateDir, runId)}/${digestOf([commit, ...harness].join("\n"))}`;
-    const made = yield* git(["rev-parse", "HEAD"], dir).pipe(
-      Effect.map((ran) => ran.code === 0),
-      Effect.orElseSucceed(() => false),
-    );
-    if (made && (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false)))) return dir;
+    // Exactly the harness commits over `commit`, and no tracked file changed since.
+    const complete = Effect.gen(function* () {
+      if (!(yield* fs.exists(dir))) return false;
+      const above = yield* git(["rev-list", "--count", `${commit}..HEAD`], dir);
+      const on = yield* git(["merge-base", "--is-ancestor", commit, "HEAD"], dir);
+      const changed = yield* git(["status", "--porcelain", "--untracked-files=no"], dir);
+      return (
+        above.code === 0 &&
+        Number(above.stdout.trim()) === harness.length &&
+        on.code === 0 &&
+        changed.code === 0 &&
+        changed.stdout.trim() === ""
+      );
+    }).pipe(Effect.orElseSucceed(() => false));
+    if (yield* complete) return dir;
     yield* fs.remove(dir, { recursive: true, force: true }).pipe(Effect.ignore);
     yield* git(["worktree", "prune"], repository);
     yield* fs.makeDirectory(baseTreesDir(stateDir, runId), { recursive: true }).pipe(Effect.orDie);
@@ -180,33 +211,56 @@ type Ended =
     }
   | { readonly _tag: "TimedOut" };
 
-/** One command, its process group ended whichever way it leaves; no shell between. */
-const runOnce = (executable: string, argv: ReadonlyArray<string>, cwd: string, limit: number) =>
-  Effect.acquireUseRelease(
-    Effect.gen(function* () {
-      const began = yield* Clock.currentTimeNanos;
-      const child = Bun.spawn([executable, ...argv], {
-        cwd,
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-        detached: true,
-      });
-      return { began, child };
-    }),
-    ({ began, child }) =>
-      Effect.promise(() =>
-        Promise.all([
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-          child.exited,
-        ]),
-      ).pipe(
-        Effect.flatMap(([stdout, stderr, exit]) =>
-          Effect.map(Clock.currentTimeNanos, (now) => ({ stdout, stderr, exit, now })),
+/**
+ * One command, recorded as the host's checks are and its process group ended whichever way it
+ * leaves; no shell between. Spawned here rather than by the checks, for its CPU time and peak.
+ */
+const runOnce = (
+  check: CheckOf,
+  command: { readonly executable: string; readonly argv: ReadonlyArray<string> },
+  cwd: string,
+  seconds: number,
+) =>
+  Effect.gen(function* () {
+    if (seconds <= 0) return { _tag: "TimedOut" } satisfies Ended;
+    const checks = yield* CheckProcesses;
+    const began = yield* Clock.currentTimeNanos;
+    const spawned = yield* checks
+      .adopt(check, (markers) =>
+        Effect.sync(() =>
+          Bun.spawn([command.executable, ...command.argv], {
+            cwd,
+            env: { ...process.env, ...markers },
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            detached: true,
+          }),
         ),
-        Effect.map(({ stdout, stderr, exit, now }): Ended => {
-          const usage = child.resourceUsage();
+      )
+      .pipe(Effect.mapError((cause) => new MeasureRefused({ why: cause.why })));
+    // This host began to end before it spawned.
+    if (spawned === null) return yield* Effect.interrupt;
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        try {
+          process.kill(-spawned.pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }),
+    );
+    return yield* Effect.all(
+      [
+        tailOf(spawned.stdout, LINE_BYTES),
+        tailOf(spawned.stderr, OUTPUT_BYTES),
+        Effect.promise(() => spawned.exited),
+      ],
+      { concurrency: "unbounded" },
+    ).pipe(
+      Effect.flatMap(([stdout, stderr, exit]) =>
+        Effect.map(Clock.currentTimeNanos, (now): Ended => {
+          const usage = spawned.resourceUsage();
           return {
             _tag: "Exited",
             exit,
@@ -219,18 +273,11 @@ const runOnce = (executable: string, argv: ReadonlyArray<string>, cwd: string, l
             peak: Number(usage?.maxRSS ?? 0) / 1024,
           };
         }),
-        Effect.timeoutOption(`${limit} seconds`),
-        Effect.map(Option.getOrElse((): Ended => ({ _tag: "TimedOut" }))),
       ),
-    ({ child }) =>
-      Effect.sync(() => {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          // Already gone.
-        }
-      }),
-  );
+      Effect.timeoutOption(`${seconds} seconds`),
+      Effect.map(Option.getOrElse((): Ended => ({ _tag: "TimedOut" }))),
+    );
+  }).pipe(Effect.scoped);
 
 /** The named numbers of a command's last stdout line, where it is one JSON object. */
 const reportedBy = (stdout: string) => {
@@ -338,6 +385,12 @@ export const measure = Effect.fn("Measurement.measure")(function* (
   });
   const before = yield* recorded;
   if (before !== null) return { measurement: before, ran: false };
+  const reason = ask.reason?.trim() || null;
+  const earlier = yield* readMeasurements(opts.evidence).pipe(Effect.orElseSucceed(() => []));
+  if (reason === null && earlier.length > 0 && !earlier.some((one) => one.plan_digest === digest))
+    return yield* new MeasureRefused({
+      why: `run ${ask.runId} was measured under another plan; a new plan is measured only with its reason`,
+    });
 
   const waited: Waited = { memory: false, machine: [] };
   const id = `${ask.runId}-measurement-${yield* Clock.currentTimeMillis}`;
@@ -363,7 +416,27 @@ export const measure = Effect.fn("Measurement.measure")(function* (
       if (memory === "stopped") return "stopped" as const;
       waited.memory = memory === "waited";
     }
-    return yield* taking({ ...opts, plan, digest, id, commit, harness, repository, waited, path });
+    const checks = yield* CheckProcesses;
+    for (const leftover of yield* checks.left)
+      if (
+        leftover.name?.startsWith(MEASURING) &&
+        (yield* checks.endLeftover(leftover)) === "still running"
+      )
+        return yield* new MeasureRefused({
+          why: `${leftover.name} of ${leftover.run} (pid ${leftover.leader.pid}), left by an earlier host, survived SIGTERM and SIGKILL; \`collie cleanup --apply\` tries to end it again`,
+        });
+    return yield* taking({
+      ...opts,
+      plan,
+      digest,
+      reason,
+      id,
+      commit,
+      harness,
+      repository,
+      waited,
+      path,
+    });
   }).pipe(Effect.ensuring(fs.remove(holderFile).pipe(Effect.ignore)));
 
   yield* ensureLockDir(lock).pipe(Effect.orDie);
@@ -402,6 +475,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
   opts: Measuring & {
     readonly plan: BenchmarkPlan;
     readonly digest: string;
+    readonly reason: string | null;
     readonly id: string;
     readonly commit: string;
     readonly harness: ReadonlyArray<string>;
@@ -425,6 +499,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
     ...(yield* treeAt(path.join(baseRoot, path.relative(opts.repository, ask.cwd)))),
   };
   const roots = { base: base.cwd, candidate: candidate.cwd };
+  const checkOf = { run: ask.runId, pass: { pass: ask.pass }, by: "collie" } as const;
   const environment: Record<string, string | null> = {};
   for (const command of plan.commands) {
     const absolute = yield* resolveExecutable(command.executable, candidate.cwd);
@@ -441,6 +516,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
         machine: machineName(),
         plan,
         plan_digest: opts.digest,
+        plan_reason: opts.reason,
         base,
         candidate,
         environment,
@@ -461,8 +537,8 @@ const taking = Effect.fn("Measurement.taking")(function* (
     if (plan.prepare !== null)
       for (const tree of ["base", "candidate"] as const) {
         const ended = yield* runOnce(
-          plan.prepare.executable,
-          plan.prepare.argv,
+          { ...checkOf, name: `${MEASURING}prepare` },
+          plan.prepare,
           roots[tree],
           plan.limit,
         );
@@ -495,8 +571,14 @@ const taking = Effect.fn("Measurement.taking")(function* (
       const load = loadavg();
       const at = yield* nowIso();
       const readings: Record<string, number> = {};
+      const deadline = (yield* Clock.currentTimeMillis) + plan.limit * 1000;
       for (const command of plan.commands) {
-        const ended = yield* runOnce(command.executable, command.argv, roots[tree], plan.limit);
+        const ended = yield* runOnce(
+          { ...checkOf, name: `${MEASURING}${command.name}` },
+          command,
+          roots[tree],
+          (deadline - (yield* Clock.currentTimeMillis)) / 1000,
+        );
         if (ended._tag === "TimedOut")
           return yield* record({ _tag: "TimedOut", tree, stage: "sample", command: command.name });
         if (ended.exit !== 0)
@@ -508,11 +590,11 @@ const taking = Effect.fn("Measurement.taking")(function* (
             exit: ended.exit,
             output: ended.output,
           });
+        for (const [key, value] of reportedBy(ended.stdout))
+          if (!HOST_READINGS.includes(key)) readings[`${command.name}.${key}`] = value;
         readings[`${command.name}.wall_ms`] = ended.wall;
         readings[`${command.name}.cpu_ms`] = ended.cpu;
         readings[`${command.name}.peak_kb`] = ended.peak;
-        for (const [key, value] of reportedBy(ended.stdout))
-          readings[`${command.name}.${key}`] = value;
       }
       samples.push({
         tree,
@@ -526,14 +608,34 @@ const taking = Effect.fn("Measurement.taking")(function* (
         at,
       });
     }
+    const moved: Array<string> = [];
+    for (const [tree, was] of [
+      ["base", base],
+      ["candidate", candidate],
+    ] as const) {
+      const now = yield* fingerprint(was.cwd);
+      if (now.head_sha !== was.head_sha || now.fingerprint !== was.fingerprint) moved.push(tree);
+    }
+    if (moved.length > 0)
+      return yield* record({
+        _tag: "Unjudged",
+        reason: `the ${moved.join(" and ")} ${moved.length > 1 ? "trees" : "tree"} changed while ${moved.length > 1 ? "they were" : "it was"} measured, so no reading is of the tree recorded`,
+      });
     const judged = yield* Effect.forEach(plan.metrics, (metric) => {
+      const judgedSamples = samples.filter((one) => !one.warmup);
+      const gap = judgedSamples.find((one) => one.readings[metric.name] === undefined);
+      if (gap !== undefined)
+        return Effect.fail(
+          new MeasurementRefused({
+            metric: metric.name,
+            reason: `a ${gap.tree} sample at ${gap.at} has no reading of it`,
+          }),
+        );
       const of = (tree: "base" | "candidate") =>
-        samples
-          .filter((one) => !one.warmup && one.tree === tree)
-          .flatMap((one) => {
-            const value = one.readings[metric.name];
-            return value === undefined ? [] : [value];
-          });
+        judgedSamples.flatMap((one) => {
+          const value = one.readings[metric.name];
+          return one.tree === tree && value !== undefined ? [value] : [];
+        });
       return judge(
         opts.id,
         {

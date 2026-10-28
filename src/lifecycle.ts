@@ -1855,6 +1855,7 @@ export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
     cwd?: string;
     plan: Schema.Json;
     pass: string;
+    reason?: string;
   },
   door: Door,
 ) {
