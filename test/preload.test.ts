@@ -303,8 +303,8 @@ describe("the start-of-suite sweep", () => {
           `4242 (sleep) S 1 4242 4242 0 -1 4194304${" 0".repeat(41)} 140730872492009 0\n`,
         );
         // FIFOs order the reads: environ reads empty, the exec finishes, then stat is read.
-        Bun.spawnSync(["mkfifo", `${pid}/environ`, `${pid}/stat`]);
-        const exec = Bun.spawn([
+        yield* exec(["mkfifo", `${pid}/environ`, `${pid}/stat`]);
+        const execs = Bun.spawn([
           "sh",
           "-c",
           "cd $0; : > environ; mv environ.next environ; cat stat.next > stat",
@@ -312,8 +312,8 @@ describe("the start-of-suite sweep", () => {
         ]);
         yield* Effect.addFinalizer(() =>
           Effect.promise(() => {
-            exec.kill();
-            return exec.exited;
+            execs.kill();
+            return execs.exited;
           }),
         );
 
