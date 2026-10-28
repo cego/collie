@@ -1313,7 +1313,13 @@ is there, not that anything works. A promised check, `regression`, documented co
 migration step whose only pass on the tree is a text search is a gap that says so. The record
 stays in the journal, an agent may still run one for its own use, and the run's own checks,
 which are the project's configured commands, are left alone. A bug reproduced by one command
-and fixed by another is a gap naming both, so a fix knows which one to run again.
+and fixed by another is a gap naming both, each with the path its executable resolved to, so
+a fix knows which one to run again. For `bug`, the same command is the executable as it was
+asked, such as `bun`, with the same arguments in the same directory: a fail through a version
+manager's shim and a pass through the binary it points at are one command, and the
+environment each was recorded with still says which runtime ran. A record kept before the
+asked executable was compares by the path it resolved to. Whether a record ran one of the
+run's checks is still decided by the resolved path.
 
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own checks itself at the tree as it stands, reading them again at every pass, then

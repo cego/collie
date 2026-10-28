@@ -30,6 +30,8 @@ export const VerificationSchema = Schema.Struct({
   run: Schema.String,
   name: Schema.String,
   executable: Schema.String,
+  /** The executable as it was asked, before PATH resolved it; absent on records written before it was kept. */
+  asked: Schema.optionalKey(Schema.String),
   argv: Schema.Array(Schema.String),
   cwd: Schema.String,
   start: SnapshotSchema,
