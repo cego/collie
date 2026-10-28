@@ -55,14 +55,26 @@ export const kill = (pid: number) => {
   }
 };
 
+const PF_KTHREAD = 0x200000;
+
+/**
+ * Between execve's switch to the new program's memory and its writing the environment there:
+ * environ reads empty, and proc(5)'s field 51, env_end, is 0 as for no memory at all.
+ */
+const execing = (stat: string) => {
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  return fields[0] !== "Z" && (Number(fields[6]) & PF_KTHREAD) === 0 && fields[48] === "0";
+};
+
 /** Every live process whose marker is `root` and whose environment has the given bindings. */
 export const marked = (
   root: string,
   bindings: Readonly<Record<string, string>> = {},
+  proc = "/proc",
 ): ReadonlyArray<{ pid: number; command: string }> => {
   let pids: Array<string>;
   try {
-    pids = readdirSync("/proc").filter((name) => /^\d+$/.test(name));
+    pids = readdirSync(proc).filter((name) => /^\d+$/.test(name));
   } catch {
     return [];
   }
@@ -76,9 +88,15 @@ export const marked = (
     const pid = Number(name);
     if (pid === process.pid) return [];
     try {
-      const env = `\0${readFileSync(`/proc/${name}/environ`, "utf8")}\0`;
+      const environ = () => readFileSync(`${proc}/${name}/environ`, "utf8");
+      let read = environ();
+      while (read === "" && execing(readFileSync(`${proc}/${name}/stat`, "utf8"))) {
+        Bun.sleepSync(1);
+        read = environ();
+      }
+      const env = `\0${read}\0`;
       if (!want.every((binding) => env.includes(binding))) return [];
-      const command = readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").join(" ").trim();
+      const command = readFileSync(`${proc}/${name}/cmdline`, "utf8").split("\0").join(" ").trim();
       return [{ pid, command }];
     } catch {
       return [];

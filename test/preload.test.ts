@@ -260,4 +260,32 @@ describe("the start-of-suite sweep", () => {
         expect(orphan.signalCode).toBe("SIGKILL");
       }).pipe(Effect.scoped),
     ));
+
+  test("a process read while it execs is found once its new program has its environment", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
+        const pid = `${proc}/4242`;
+        // proc(5) fields 3 on; 51, env_end, is 0 until execve has written the environment.
+        const stat = (envEnd: string) =>
+          `4242 (sh) R 1 4242 4242 0 -1 4194304${" 0".repeat(41)} ${envEnd} 0\n`;
+        yield* fs.makeDirectory(pid);
+        yield* fs.writeFileString(`${pid}/stat`, stat("0"));
+        yield* fs.writeFileString(`${pid}/environ`, "");
+        yield* fs.writeFileString(`${pid}/cmdline`, "");
+        yield* fs.writeFileString(`${pid}/stat.next`, stat("140730872492009"));
+        yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
+        yield* fs.writeFileString(`${pid}/cmdline.next`, "sleep\x0063\0");
+        const exec = Bun.spawn([
+          "sh",
+          "-c",
+          "sleep 0.3; cd $0; mv cmdline.next cmdline; mv environ.next environ; mv stat.next stat",
+          pid,
+        ]);
+        yield* Effect.addFinalizer(() => Effect.promise(() => exec.exited));
+
+        expect(marked("/root-a", {}, proc)).toEqual([{ pid: 4242, command: "sleep 63" }]);
+      }).pipe(Effect.scoped),
+    ));
 });

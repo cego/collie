@@ -583,15 +583,41 @@ export const events = Effect.fn("HostTest.events")(function* (state: string, run
   return text.split("\n").filter((line) => line.length > 0);
 });
 
-/** Retries a read until what it says is what the test is waiting for. */
+class NotYet<A> {
+  constructor(readonly value: A) {}
+}
+
+/** The end of the log of the host this test's state directory has, where it has one. */
+const hostLogEnd = Effect.gen(function* () {
+  const log = `${yield* Config.String("HERDR_PLUGIN_STATE_DIR").pipe(Config.withDefault(""))}/host.log`;
+  const text = yield* Effect.tryPromise(() => Bun.file(log).text());
+  return [`end of ${log}:`, ...text.trimEnd().split("\n").slice(-40)];
+}).pipe(Effect.orElseSucceed((): Array<string> => []));
+
+/**
+ * Retries a read until what it says is what the test is waiting for. Running out names the
+ * wait, what it last read and the end of the host's log, so a one-off failure says why.
+ */
 export const until = <A, E, R>(
   read: () => Effect.Effect<A, E, R>,
   wanted: (value: A) => boolean,
 ): Effect.Effect<A, E, R> =>
   Effect.suspend(read).pipe(
     Effect.flatMap((value) =>
-      wanted(value) ? Effect.succeed(value) : Effect.fail(new Error("not yet")),
+      wanted(value) ? Effect.succeed(value) : Effect.fail(new NotYet(value)),
     ),
     Effect.retry({ times: 1_000, schedule: Schedule.spaced("20 millis") }),
-    Effect.orDie,
+    Effect.catch((last) =>
+      Effect.flatMap(hostLogEnd, (log) =>
+        Effect.die(
+          new Error(
+            [
+              `ran out waiting for ${String(wanted)} of ${String(read)}`,
+              `last read: ${Bun.inspect(last instanceof NotYet ? last.value : last)}`,
+              ...log,
+            ].join("\n"),
+          ),
+        ),
+      ),
+    ),
   );
