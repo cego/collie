@@ -1572,7 +1572,10 @@ its time.
   whole suite asks for all the rest, so whole suites run one at a time. A targeted run asks
   for 2, and a `--parallel=N` before any `--` asks for N. A run gets no more than its kind's
   share, and says so when it gets fewer than it asked for. On vm-mk that is 12 workers for a
-  whole suite out of 16. Where the rest would be under 2, as on two or three cores, every
+  whole suite out of 16. CI's `test` job sets a budget of 6 on its 4-core runner, giving its
+  suite 4 workers. Two thirds of 4 cores is a budget of 2, and a budget of 4 would still keep
+  2 for targeted runs, which never run on a dedicated runner. At 4 workers the suite ran in
+  692 s, against 1,003 s at 2. More workers than cores there is unmeasured. Where the rest would be under 2, as on two or three cores, every
   run takes from the whole budget in turn. Waiters are admitted in the order they arrived.
   A wait names who it is behind once, then says every 30 s how long it has waited. The store
   is `collie-test-budget-<uid>` under the temporary directory, changed under

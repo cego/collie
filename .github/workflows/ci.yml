@@ -6,6 +6,11 @@ on:
     branches: [master]
   pull_request:
 
+# A newer push to a pull request cancels its older run; each master commit keeps its own.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -25,6 +30,9 @@ jobs:
         working-directory: desktop
       # The same script contributors run, so the local gate and CI cannot drift.
       - run: bun run check
+        # 4 workers: a dedicated runner needs no reserve for targeted runs (budget ADR, D2).
+        env:
+          COLLIE_TEST_BUDGET: 6
       # `bun test` runs the sources; this runs the compiled entrypoint and JSON envelope.
       - run: bun run build
       - run: bun run smoke
