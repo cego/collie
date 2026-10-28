@@ -426,7 +426,6 @@ test(
   60_000,
 );
 
-/** A herdr whose panes are `panes`, as `pane list` would say. */
 const herdrWith = (panes: ReadonlyArray<PaneInfo>) =>
   new (class extends FakeHerdr {
     override paneList() {
