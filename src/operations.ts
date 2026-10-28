@@ -44,7 +44,7 @@ import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, liveCheckouts, type Asked, type RunFacts } from "./runs";
 import { newTask, taskOfWorkspace, writeTask, type TaskChoice, type TaskRecord } from "./task";
-import { freshTaskLabel } from "./tasknames";
+import { freshTaskLabel, workNamedIn, type StartAbout } from "./tasknames";
 import { readIntent, type Authority, type Intent } from "./intent";
 import {
   appendLine,
@@ -708,11 +708,7 @@ function short(result: { code: number; stdout: string }): string {
 export const taskFor = Effect.fn("operations.taskFor")(function* (
   env: PluginEnv,
   choice: TaskChoice,
-  about: {
-    readonly workflow: string;
-    /** What the work is named after, where the caller named anything. */
-    readonly named: string;
-  },
+  about: StartAbout,
 ) {
   const kept = (task: TaskRecord | null, label: string | null = null) => ({
     _tag: "Ok" as const,
@@ -742,10 +738,7 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
  * kept there, or a new one kept there. Its checkout is still cut; only the workspace a new
  * Task would have opened is not, so the Run's agents open beside whoever started it.
  */
-const taskHere = Effect.fn("operations.taskHere")(function* (
-  env: PluginEnv,
-  about: { readonly workflow: string; readonly named: string },
-) {
+const taskHere = Effect.fn("operations.taskHere")(function* (env: PluginEnv, about: StartAbout) {
   if (env.workspaceId === null)
     return {
       _tag: "Rejected" as const,
@@ -764,7 +757,7 @@ const taskHere = Effect.fn("operations.taskHere")(function* (
     workspace: env.workspaceId,
     label:
       open.find((one) => one.workspaceId === env.workspaceId)?.label ??
-      (about.named || about.workflow),
+      (workNamedIn(about.inputs) || about.workflow),
     cwd: env.cwd,
   });
   yield* writeTask(env.stateDir, task);

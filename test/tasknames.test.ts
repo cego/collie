@@ -3,16 +3,20 @@
 // namer is shown contains.
 
 import { expect, test } from "bun:test";
+import { Effect, FileSystem } from "effect";
 import {
   cleanName,
   establishedProject,
   fallbackName,
   namePack,
+  objectiveOf,
   repositoryOf,
+  workNamedIn,
   type LiveNames,
   type TaskContext,
 } from "../src/tasknames";
 import { taskWorkspaceLabel } from "../src/naming";
+import { runEffect } from "./support/effect";
 
 const nothing: LiveNames = { workspaces: [], tabs: [], panes: [] };
 
@@ -132,4 +136,74 @@ test("the repository is the directory's own name, whatever the path around it", 
   expect(repositoryOf("/home/dana/work/collie")).toBe("collie");
   expect(repositoryOf("/home/dana/work/collie/")).toBe("collie");
   expect(repositoryOf("")).toBe("");
+});
+
+test("the work a start is about is its most descriptive Input, wherever the caller put it", () => {
+  // A chat writes `then` first as often as not; an empty option is not what the work is.
+  expect(workNamedIn({ then: "", goal: "Design Tune-up performance workflow" })).toBe(
+    "Design Tune-up performance workflow",
+  );
+  expect(workNamedIn({ then: "finish", plan: "/runs/run-1/plan" })).toBe("/runs/run-1/plan");
+  expect(workNamedIn({ improvements: 3, runs: "machine" })).toBe("machine");
+  expect(workNamedIn({})).toBe("");
+});
+
+test("a plan directory is named by what its spec says, not by its path", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const plan = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(
+        `${plan}/SPEC.md`,
+        "# Spec: Migrate pending-payment lookup to promotion-service\n\nWhy.\n",
+      );
+      expect(yield* objectiveOf(plan)).toBe("Migrate pending-payment lookup to promotion-service");
+      // A heading that only says it is a spec is not the objective; the work source is.
+      yield* fs.writeFileString(
+        `${plan}/01-ticket.md`,
+        "# Spec\n\nWork source (text): Fix the stuck release step\n",
+      );
+      expect(yield* objectiveOf(`${plan}/01-ticket.md`)).toBe("Fix the stuck release step");
+      // Words are words, and a path that is not there names nothing better than itself.
+      expect(yield* objectiveOf("Fix the release step")).toBe("Fix the release step");
+      expect(yield* objectiveOf(`${plan}/gone`)).toBe(`${plan}/gone`);
+    }).pipe(Effect.scoped),
+  ));
+
+test("an answer that names only the workflow is not a name, and the work's own words are", () => {
+  const tuneUp = work({ named: "Design Tune-up performance workflow", short: "" });
+  expect(cleanName({ project: "Collie", title: "Plan new work" }, tuneUp, nothing).title).toBe(
+    "Design Tune-up performance workflow",
+  );
+  const implementing = work({
+    workflow: "implement",
+    named: "Recover run-a608 and deliver its MR",
+    short: "",
+  });
+  expect(
+    cleanName({ project: "Collie", title: "Implement plan" }, implementing, nothing).title,
+  ).toBe("Recover run-a608 and deliver its MR");
+  const improving = work({ workflow: "self-improve", named: "machine", short: "" });
+  expect(
+    cleanName({ project: "Collie", title: "Self-improve workflow" }, improving, nothing).title,
+  ).toBe("Machine");
+  // An answer that says which piece of work this is stands, short as it is.
+  expect(cleanName({ project: "Collie", title: "Review MR !865" }, tuneUp, nothing).title).toBe(
+    "Review MR !865",
+  );
+});
+
+test("the stand-in is the work's first sentence in a few words, never a URL or a dangling word", () => {
+  const titled = (named: string) => fallbackName(work({ named, short: "" }), nothing).title;
+  expect(titled("Fix generic task and Run names. Suggested title: Give every task a name")).toBe(
+    "Fix generic task and Run names",
+  );
+  expect(titled("Plan a new Collie workflow with the relaxed working name 'Tune-up'")).toBe(
+    "Plan a new Collie workflow",
+  );
+  expect(
+    titled("Link https://gitlab.example/acme/app/-/merge_requests/390 to its Linear issue"),
+  ).toBe("Link to its Linear issue");
+  // A slug or a path is still read as the phrase it stands for.
+  expect(titled("/home/dana/work/collie/tasks/task-workspaces")).toBe("Task workspaces");
 });

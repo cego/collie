@@ -458,7 +458,8 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
       );
   const placed = yield* taskFor(env, options.task, {
     workflow: options.id,
-    named: Object.values(options.input.text)[0] ?? "",
+    inputs: { ...options.input.json, ...options.input.text },
+    goal: options.intent?.goal,
   });
   if (placed._tag === "Rejected") return placed.result;
   // Resolved here, once: what this front door listed and offered is where the host roots it.

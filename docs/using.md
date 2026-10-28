@@ -413,6 +413,15 @@ from the repository and the title from the work itself. There is no naming promp
 alias list to maintain, and nothing remembered between herdr sessions: your live labels
 are the vocabulary, read each time.
 
+The title is what the work is about, never only the workflow that does it: two `plan`
+runs with different goals are two differently named tasks. The namer is shown the most
+descriptive input the start was given — whatever it is called, and wherever the caller put
+it — and the `--goal` it was started with. A plan handed over by its directory is read for
+its spec's first heading, so `implement` on a plan is named for what the plan builds,
+not "Implement plan". An answer that says nothing a different task of the same workflow
+would not also say — "Plan new work", "Implement plan" — is not taken; the work's own first
+sentence, in a few words, is.
+
 Those labels are data. They go to the namer as a list of what things are called, under a
 prompt that says so, and what comes back is two short strings that can only become a
 label — never a path, an agent name or a command.
@@ -434,7 +443,7 @@ fan-out keeps its own name, because several of them share one task workspace.
 
 Where the namer cannot be asked — no herdr session to account the call against, or no
 `claude` that takes the flags the isolation depends on — the task is still named, from
-your live prefix and the work's own short name. Starting work never waits on a name.
+your live prefix and the first sentence of the work. Starting work never waits on a name.
 
 ## What a run does to your repository
 

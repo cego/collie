@@ -4492,7 +4492,11 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
     Effect.gen(function* () {
       const env = rig.pluginEnv();
       // Named and nothing more: the host opens it once it knows the checkout it is rooted at.
-      const fresh = yield* taskFor(env, { mode: "new" }, { workflow: "implement", named: "ENG-7" });
+      const fresh = yield* taskFor(
+        env,
+        { mode: "new" },
+        { workflow: "implement", inputs: { issue: "ENG-7" } },
+      );
       expect(fresh._tag === "Ok" && fresh.task).toBeNull();
       expect(fresh._tag === "Ok" ? fresh.label : null).toEqual(expect.any(String));
       expect(yield* rig.cmds()).not.toContain("workspace create");
@@ -4509,7 +4513,7 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       const again = yield* taskFor(
         env,
         { mode: "continue", task },
-        { workflow: "review", named: "" },
+        { workflow: "review", inputs: {} },
       );
       expect(again._tag === "Ok" && again.task).toEqual(task);
       expect(again._tag === "Ok" ? again.label : "").toBeNull();
@@ -4519,16 +4523,50 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       const reopening = yield* taskFor(
         env,
         { mode: "continue", task: closed },
-        { workflow: "review", named: "" },
+        { workflow: "review", inputs: {} },
       );
       expect(reopening._tag === "Ok" && reopening.task).toEqual(closed);
 
       // Outside herdr there is nowhere to open one, and a Run that starts no agent needs none.
       const outside = { ...env, workspaceId: null, socketPath: null };
-      const none = yield* taskFor(outside, { mode: "new" }, { workflow: "tally", named: "" });
+      const none = yield* taskFor(outside, { mode: "new" }, { workflow: "tally", inputs: {} });
       expect(none._tag === "Ok" && none.task).toBeNull();
       expect(none._tag === "Ok" ? none.label : "").toBeNull();
       expect(yield* rig.cmds()).not.toContain("workspace create");
+    }),
+  ));
+
+test("two goals started with one workflow are two Tasks named for their goals, not the workflow", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const fs = yield* FileSystem.FileSystem;
+      const labelOf = (about: Parameters<typeof taskFor>[2]) =>
+        taskFor(env, { mode: "new" }, about).pipe(
+          Effect.map((placed) => (placed._tag === "Ok" ? placed.label : null)),
+        );
+      // `then` written first, as a chat writes it: the goal is still what the Task is about.
+      const tuneUp = yield* labelOf({
+        workflow: "plan",
+        inputs: { then: "", goal: "Design Tune-up performance workflow" },
+      });
+      const lookup = yield* labelOf({
+        workflow: "plan",
+        inputs: { then: "", goal: "Migrate pending-payment lookup to promotion-service" },
+      });
+      expect(tuneUp).toContain("Design Tune-up performance workflow");
+      expect(lookup).toContain("Migrate pending-payment lookup to promotion-service");
+      // A plan handed over by its directory is named by what its spec is about.
+      const plan = `${rig.root}/runs/run-1/plan`;
+      yield* fs.makeDirectory(plan, { recursive: true });
+      yield* fs.writeFileString(`${plan}/SPEC.md`, "# Spec: Stop the stale offer banner\n");
+      expect(yield* labelOf({ workflow: "implement", inputs: { plan, then: "" } })).toContain(
+        "Stop the stale offer banner",
+      );
+      // With nothing descriptive in the Inputs, the goal it was launched with names it.
+      expect(
+        yield* labelOf({ workflow: "general", inputs: {}, goal: "Audit last week's runs" }),
+      ).toContain("Audit last week's runs");
     }),
   ));
 
@@ -4537,7 +4575,7 @@ test("a start kept here is the workspace it was started from: its Task, or a new
     Effect.gen(function* () {
       yield* rig.addWorkspace("wH", "Monorepo | Mine", rig.projectDir);
       const env = { ...rig.pluginEnv(), workspaceId: "wH" };
-      const about = { workflow: "implement", named: "FRO-343" };
+      const about = { workflow: "implement", inputs: { plan: "FRO-343" } };
 
       const made = yield* taskFor(env, { mode: "here" }, about);
       const task = made._tag === "Ok" ? made.task : null;

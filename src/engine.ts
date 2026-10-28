@@ -6248,10 +6248,7 @@ const makeRegistry: (
       ask.ownTask === true && (yield* store.run(runId)) === null
         ? yield* freshTaskLabel(
             { ...placing.env, cwd: from },
-            {
-              workflow: generation.id,
-              named: isText(named) ? named : "",
-            },
+            { workflow: generation.id, inputs: { named: isText(named) ? named : "" } },
             options?.namesTasks === true,
           ).pipe(
             Effect.provideContext(bun),

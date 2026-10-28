@@ -9,7 +9,7 @@
 // answers in a two-string schema with nothing in it that acts, and what comes back is a
 // display label — never a path component, an agent name or a command.
 
-import { Effect } from "effect";
+import { Effect, FileSystem, Path } from "effect";
 import type { PluginEnv } from "./env";
 import { askOnce, budgetedDeps, type BudgetedDeps, type TaskName } from "./evaluator";
 import { Herdr, type PaneInfo, type TabInfo, type WorkspaceInfo } from "./herdr";
@@ -84,6 +84,24 @@ const names = (project: string, repo: string) =>
  */
 const FALLBACK_WORDS = 6;
 
+/** Words a title may end on only by having been cut off. */
+const DANGLING = new Set([
+  "a",
+  "an",
+  "and",
+  "at",
+  "by",
+  "for",
+  "from",
+  "in",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "with",
+]);
+
 /**
  * A name without asking anybody: the project this person already uses for this
  * repository, else the repository itself, and the work's own short name as the title.
@@ -94,16 +112,93 @@ const FALLBACK_WORDS = 6;
  */
 export function fallbackName(context: TaskContext, live: LiveNames): TaskName {
   const repo = repositoryOf(context.cwd);
-  const from = context.short || context.goal || context.named || context.workflow;
-  const words = oneLine(from.split("/").at(-1) ?? from)
-    .replace(/[-_]+/g, " ")
-    .split(" ")
-    .filter((word) => word !== "");
+  const from = oneLine(context.short || context.goal || context.named || context.workflow);
+  const words = /\s/.test(from)
+    ? (from.split(/(?<=[.!?])\s/)[0] ?? "")
+        .replace(/[.!?]$/, "")
+        .split(" ")
+        .filter((word) => word !== "" && !word.includes("://"))
+    : (from.split("/").at(-1) ?? from).split(/[-_]+/).filter((word) => word !== "");
+  const kept = words.slice(0, FALLBACK_WORDS);
+  while (kept.length > 1 && DANGLING.has(kept.at(-1)!.toLowerCase())) kept.pop();
   return {
     project: establishedProject(live, repo) ?? sentence(repo.replace(/[-_]+/g, " ")),
-    title: sentence(words.slice(0, FALLBACK_WORDS).join(" ")),
+    title: sentence(kept.join(" ")),
   };
 }
+
+/** Words that say a piece of work exists without saying which. */
+const FILLER = new Set([
+  ...DANGLING,
+  "new",
+  "work",
+  "task",
+  "run",
+  "plan",
+  "planned",
+  "planning",
+  "implement",
+  "implementation",
+  "change",
+  "changes",
+  "workflow",
+  "improvement",
+  "general",
+  "investigation",
+  "this",
+]);
+
+/**
+ * Whether a title names only the workflow it runs and words like "new work": `Plan new
+ * work` and `Implement plan` say nothing two Tasks of one workflow do not both say.
+ */
+export function isGenericTitle(title: string, workflow: string): boolean {
+  const said = (word: string) => FILLER.has(word) || own.has(word);
+  const own = new Set(workflow.toLowerCase().split(/[^a-z0-9]+/));
+  return title
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .every((word) => word === "" || said(word) || said(word.replace(/s$/, "")));
+}
+
+/** The most descriptive Input a start was given, whatever it is called or where it came. */
+export function workNamedIn(inputs: Readonly<Record<string, unknown>>): string {
+  return Object.values(inputs)
+    .flatMap((value) => (typeof value === "string" ? [value.trim()] : []))
+    .reduce((longest, value) => (value.length > longest.length ? value : longest), "");
+}
+
+/** A spec's own label, which says what the file is rather than what the work is. */
+const SPEC_LABEL = /^(spec|work source)\b[^:]*(:\s*|$)/i;
+
+/**
+ * What a plan handed over by its path is about: its spec's first heading, or a Markdown
+ * file's. Anything that is not such a path is already words and is returned as given.
+ */
+export const objectiveOf = Effect.fn("tasknames.objectiveOf")(function* (named: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (!path.isAbsolute(named) || /\s/.test(named)) return named;
+  const info = yield* fs.stat(named).pipe(Effect.option);
+  if (info._tag === "None") return named;
+  const file =
+    info.value.type === "Directory"
+      ? path.join(named, "SPEC.md")
+      : named.endsWith(".md")
+        ? named
+        : null;
+  if (file === null) return named;
+  const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  for (const line of text.split("\n")) {
+    const said = line
+      .replace(/^#+\s*/, "")
+      .trim()
+      .replace(SPEC_LABEL, "")
+      .trim();
+    if (said !== "") return said;
+  }
+  return named;
+});
 
 /** A slug read as a phrase: what a person would have written, capitalised once. */
 function sentence(text: string): string {
@@ -158,9 +253,12 @@ export function cleanName(answer: TaskName, context: TaskContext, live: LiveName
   const borrowed =
     prefixesIn(live).some((prefix) => normal(prefix) === normal(project)) &&
     !parts.some((part) => names(normal(project), part));
+  const title = oneLine(answer.title);
+  const generic =
+    isGenericTitle(title, context.workflow) && !isGenericTitle(otherwise.title, context.workflow);
   return {
     project: borrowed ? otherwise.project : project || otherwise.project,
-    title: oneLine(answer.title) || otherwise.title,
+    title: title === "" || generic ? otherwise.title : title,
   };
 }
 
@@ -200,20 +298,32 @@ const liveNames = Effect.fn("tasknames.liveNames")(function* (herdr: Herdr, ever
   } satisfies LiveNames;
 });
 
+/** What a start is about, as its caller gave it. */
+export interface StartAbout {
+  readonly workflow: string;
+  /** Every Input the start was given, by name. */
+  readonly inputs: Readonly<Record<string, unknown>>;
+  /** What the human said it is for, where they said anything. */
+  readonly goal?: string | null | undefined;
+}
+
 /** Infer a fresh Task's label from its work; `asking: false` uses the stand-in. */
 export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
   env: PluginEnv,
-  about: { readonly workflow: string; readonly named: string },
+  about: StartAbout,
   asking = true,
 ) {
   const naming = asking
     ? yield* budgetedDeps(env, "namer.md", { maxSeconds: 30, maxOutputBytes: 4 * 1024 })
     : null;
+  const context: TaskContext = {
+    workflow: about.workflow,
+    named: yield* objectiveOf(workNamedIn(about.inputs)),
+    short: "",
+    goal: about.goal ?? null,
+    cwd: env.cwd,
+  };
   return taskWorkspaceLabel(
-    yield* nameTask(
-      naming,
-      { workflow: about.workflow, named: about.named, short: "", goal: null, cwd: env.cwd },
-      yield* liveNames(new Herdr(env), naming !== null),
-    ),
+    yield* nameTask(naming, context, yield* liveNames(new Herdr(env), naming !== null)),
   );
 });
