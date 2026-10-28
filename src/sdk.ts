@@ -69,6 +69,7 @@ import {
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
 import type { Integration } from "./integrate";
+import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
 import type { FastForward, ProductionRead, RollbackRead, StageRead, TagRead } from "./releasing";
@@ -91,6 +92,12 @@ export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 export { forgeOfRef, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
+/** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */
+export {
+  MeasurementJson as MeasurementSchema,
+  type BenchmarkPlan,
+  type Measurement,
+} from "./measurement-model";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";
 /** Where a merge request's review stands for a Release Run (`HostApi.awaitReview`). */
 export {
@@ -879,6 +886,23 @@ export interface HostApi {
    * `integrated <branch>@<sha>`. Take it inside an Activity, so a replay does not merge again.
    */
   readonly integrate: (runId: string, cwd: string) => Effect.Effect<Integration>;
+  /**
+   * A Measurement of `cwd`, the Run's own checkout, against a base tree Collie makes at `base`
+   * with the plan's harness commits applied: the plan's commands sampled A B B A … after its
+   * warmup, while this Machine runs no other Measurement and is not Short of memory, and judged
+   * per metric. Where these trees were measured under this plan, that record answers and `ran`
+   * is false. A harness commit touching a path outside the plan's harness paths is refused,
+   * naming each. Take it inside an Activity, so a replay does not measure again.
+   */
+  readonly measure: (options: {
+    readonly runId: string;
+    readonly base: string;
+    readonly cwd: string;
+    /** A key left out takes its default: warmup 1, samples 10, limit 600 s, threshold 5, tolerance 2. */
+    readonly plan: typeof BenchmarkPlan.Encoded;
+    /** `calibration`, `cycle N` or `final`. */
+    readonly pass: string;
+  }) => Effect.Effect<{ readonly measurement: Measurement; readonly ran: boolean }, WorkflowError>;
   /**
    * The commit origin's default branch is at now: everything merged there so far. Take it
    * inside an Activity, so a replay reads the same commit. Fails where origin cannot be read.

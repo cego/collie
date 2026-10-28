@@ -73,6 +73,9 @@ here are in [`src/README.md`](src/README.md).
   `src/outcome.ts`, `src/verify.ts`, `src/verify-spec.ts`, `src/metrics.ts`; a check left to CI:
   [ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job](docs/adr/draft-a-check-left-to-ci-is-proved-by-its-pipeline-job.md),
   `src/check-proof.ts`, `src/ci-job.ts`, `test/ci-job.test.ts`.
+- **Measurement** → [ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](docs/adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md),
+  [`docs/cli.md`](docs/cli.md#measure), `src/measurement.ts`, `src/measurement-model.ts`,
+  `src/measurement-verdict.ts`, `test/measurement.test.ts`, `test/measurement-verdict.test.ts`.
 - **Checks Collie runs, as seen** → [ADR-0042](docs/adr/0042-a-check-collie-runs-is-seen-while-it-runs.md),
   `src/checks.ts`, `src/verify.ts`, `src/commands/run.ts`.
 - **Home chat** → [`docs/using.md`](docs/using.md#talking-to-collie-about-a-herd),

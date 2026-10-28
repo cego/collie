@@ -1430,6 +1430,28 @@ for (const spec of (yield * host.approved(runId)).filter((one) => one.ci !== und
 }
 ```
 
+A speed-up is proved by a **Measurement**, which compares two trees rather than passing one:
+`host.measure({ runId, base, cwd, plan, pass })`. The host makes a base tree at `base` with
+the plan's harness commits applied, samples the plan's commands on it and on `cwd`, the Run's
+own checkout, alternately after a warmup, and judges each metric. It answers
+`{ measurement, ran }`. Where these trees were already measured under this plan, the record
+answers and `ran` is `false`, so a result cannot be re-rolled. One Measurement runs on a
+Machine at a time, and none while it is Short of memory; a Stop ends the wait or the sampling
+and suspends the Run. `pass` is `calibration`, `cycle N` or `final`. The plan, the record and
+every refusal are [`collie measure`](cli.md#measure)'s, since both go through one host
+operation. Take it inside an Activity, journaled with `MeasurementSchema`, which keeps an
+infinite ratio as JSON:
+
+```ts
+const { measurement } =
+  yield *
+  Activity.make({
+    name: "measure-final",
+    success: Schema.Struct({ measurement: MeasurementSchema, ran: Schema.Boolean }),
+    execute: host.measure({ runId, base: mergeBase, cwd, plan, pass: "final" }),
+  });
+```
+
 [ADR-0023](adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md) is why the rally is a
 loop and why a claim is not proof.
 

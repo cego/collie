@@ -1662,6 +1662,161 @@ there unless `--replace` is given. Chat does the same with `remember_verificatio
 ([ADR-0035](adr/0035-a-repositorys-checks-are-remembered-by-its-remote.md)). Edit the file
 to change the set, or delete it to withdraw it.
 
+## Measure
+
+```sh
+collie measure --base <commit> --plan <file> --pass calibration
+collie --json measure --run <run-id> --base <commit> --plan <file> --pass "cycle 2" [--cwd <path>]
+```
+
+A **Measurement** proves a speed-up, which a Check cannot: it compares two trees of this
+Machine on many samples
+([ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md)).
+The host makes the **base tree** as a detached worktree at `--base` with the plan's harness
+commits applied, under `measurements/trees/<run>/` in its state directory, and keeps it for
+the Run's later Measurements of the same base. The **candidate** is the Run's checkout, or
+`--cwd` inside it. `--run` defaults as for `collie verify`. A workflow asks for the same
+Measurement with [`host.measure`](sdk.md#proving-it-rather-than-saying-so); both go through
+one host operation, on the Run's own Machine.
+
+| Flag     | What it does                                                                                      |
+| -------- | ------------------------------------------------------------------------------------------------- |
+| `--run`  | The Run measured. Defaults to the Run whose agent this pane is.                                   |
+| `--cwd`  | The candidate tree, inside that Run's checkout; defaults to it.                                   |
+| `--base` | The commit the base tree is made at.                                                              |
+| `--plan` | A file holding the Run's benchmark plan as JSON.                                                  |
+| `--pass` | Which Measurement this is: `calibration`, `cycle N` or `final`. Anything else is `invalid_input`. |
+
+The plan is frozen: a changed plan is a new comparison. A key left out takes its default.
+
+```json
+{
+  "harness": { "commits": ["<sha>"], "paths": ["bench"] },
+  "prepare": { "executable": "bun", "argv": ["install"] },
+  "commands": [{ "name": "api", "executable": "bun", "argv": ["bench/api.ts"] }],
+  "metrics": [
+    { "name": "api.p95", "direction": "lower", "role": "primary" },
+    { "name": "api.peak_kb", "direction": "lower", "role": "guardrail" }
+  ],
+  "warmup": 1,
+  "samples": 10,
+  "limit": 600,
+  "threshold": 5,
+  "tolerance": 2
+}
+```
+
+- **`harness`**: each commit is applied to the base tree, and must touch only `paths` (a
+  path or a directory under one). One that touches anything else refuses the Measurement
+  with `invalid_input`, naming each such path. So does one that does not apply.
+- **`prepare`**: run once in each tree, base first, before any sample. Default none.
+- **`commands`**: each sample runs every one, in order, in the tree's root, with no shell
+  between.
+- **`metrics`**: exactly one `primary`, the rest `guardrail`. For each command, the host
+  reads `<command>.wall_ms`, `<command>.cpu_ms` and `<command>.peak_kb`. Where the command's
+  last stdout line is one JSON object, each number in it is `<command>.<key>` too.
+  `peak_kb` is the kernel's peak resident size for the process, which on Linux has the
+  host's own size at the fork as its floor.
+- **`warmup`** samples per side are recorded and never judged, and **`samples`** per side
+  (at least 2) are.
+- **`limit`**: seconds one command of a sample, or prepare, may take.
+- **`threshold`** and **`tolerance`**: percents, as in [Outcomes](#outcomes).
+
+The host then samples alternately, A B B A …, base first, after the warmup. With each sample
+it keeps the Machine's 1, 5 and 15 minute load and its memory reading. It judges each metric
+by the ratio of the candidate's median to the base's, with a 95% bootstrap interval seeded
+from the Measurement's id: `gain`, `no-change`, `regression` or `inconclusive`. Each metric
+is also `held`, where the interval's worse bound is within `tolerance`.
+
+**A comparison is measured once.** A request whose base commit, candidate tree (its commit
+and fingerprint, as `collie verify` reads them) and plan match a recorded Measurement of the
+Run returns that record, runs nothing, and answers `"ran": false`. That holds whatever the
+pass and whatever the record says, an `inconclusive` one included, so a result cannot be
+re-rolled. A changed tree or a new plan is measured again, and every Measurement stays on
+the record.
+
+**One Measurement runs on a Machine at a time.** Another one waits until the Machine is
+free. While it waits, its Run's card and `collie run show` say `Waiting for this Machine:
+Measurement <id> of <run> is running on it.`, and `collie measure` prints that line to
+stderr. While the Machine is [Short of memory](using.md#short-of-memory), the Measurement
+waits as `collie verify` does, and records that it waited. A stop of the Run ends either
+wait, or a Measurement already sampling, with `invalid_state`, and records nothing.
+
+A Measurement ends without a verdict when:
+
+- a command of a sample, or prepare, outlives `limit` (`TimedOut`);
+- a command, or prepare, exits non-zero (`Failed`, naming the tree and keeping its output);
+- a declared metric is missing from the samples (`Unjudged`).
+
+Each record goes to the Run's `measurements.jsonl` in its evidence directory. Under
+`--json`, the envelope's `data` is `{ "measurement": <the record>, "ran": <bool> }`:
+
+```json
+{
+  "measurement": {
+    "id": "<run>-measurement-1793189238226",
+    "run": "<run>",
+    "pass": "calibration",
+    "machine": "vm-mk",
+    "plan": { "…": "the plan, with its defaults filled in" },
+    "plan_digest": "949af28531ce47f8",
+    "base": {
+      "commit": "<sha>",
+      "cwd": "…",
+      "head_sha": "<sha>",
+      "fingerprint": "…",
+      "lockfiles": { "bun.lock": "…" }
+    },
+    "candidate": {
+      "cwd": "…",
+      "head_sha": "<sha>",
+      "fingerprint": "…",
+      "lockfiles": { "bun.lock": "…" }
+    },
+    "environment": { "api": "<digest, as collie verify records it>" },
+    "waited": { "memory": false, "machine": [] },
+    "prepare": [{ "tree": "base", "exit": 0, "seconds": 4.2, "output": "…" }],
+    "samples": [
+      {
+        "tree": "base",
+        "warmup": true,
+        "readings": {
+          "api.wall_ms": 812.4,
+          "api.cpu_ms": 640.1,
+          "api.peak_kb": 91232,
+          "api.p95": 41
+        },
+        "load": [3.1, 2.8, 2.5],
+        "memory": { "available": 41943040000, "total": 67108864000, "pressure": 0 },
+        "at": "2026-10-28T12:07:19.029Z"
+      }
+    ],
+    "result": {
+      "_tag": "Judged",
+      "verdicts": [
+        {
+          "metric": "api.p95",
+          "ratio": 0.81,
+          "interval": [0.78, 0.84],
+          "verdict": "gain",
+          "held": true
+        }
+      ]
+    },
+    "started": "2026-10-28T12:07:18.002Z",
+    "at": "2026-10-28T12:07:41.310Z"
+  },
+  "ran": true
+}
+```
+
+`lockfiles` names each dependency lockfile at the tree's root by its digest. `waited.machine`
+names each Measurement this one waited behind. An infinite ratio or bound, from a zero
+median on the base side, is the string `"Infinity"`. A `result` that is not `Judged` is
+`{ "_tag": "TimedOut", "tree", "stage", "command" }`, `{ "_tag": "Failed", "tree", "stage",
+"command", "exit", "output" }` or `{ "_tag": "Unjudged", "reason" }`, with `stage` either
+`prepare` or `sample`. Chat runs `collie measure` as you would type it.
+
 ## Hold and release
 
 ```sh
@@ -1858,6 +2013,10 @@ neither, or marked for another state directory, is never listed. A sweep ends it
 it running, because a check's result is thrown away
 ([ADR-draft-a-check-ends-with-the-host-that-runs-it](adr/draft-a-check-ends-with-the-host-that-runs-it.md)).
 A check this host is collecting is kept, with "this host is collecting it".
+
+The `measurement-tree` kind is a base tree [`collie measure`](#measure) made, whose target
+is its directory. It is kept while its Run has not ended, and a sweep removes it with git's
+record of the worktree.
 
 ## Usage
 

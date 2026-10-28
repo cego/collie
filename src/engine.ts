@@ -92,6 +92,7 @@ import { encodeSubagents, readSubagents } from "./subagents";
 import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
+import { measure } from "./measurement";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { gitDirOf, publicationCheckouts, throughAliases, remoteOf } from "./issue-privacy";
 import {
@@ -433,6 +434,79 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly reason: string;
   }
   export const IntegrationSchema: Schema.Codec<Integration, unknown, never, never>;
+
+  /** One command a benchmark plan runs, with no shell between. */
+  export interface BenchmarkCommand {
+    readonly name: string;
+    readonly executable: string;
+    readonly argv: ReadonlyArray<string>;
+  }
+  /** A metric a plan judges: \`<command>.wall_ms\`, \`.cpu_ms\`, \`.peak_kb\`, or a key of its last stdout line's JSON. */
+  export interface BenchmarkMetric {
+    readonly name: string;
+    readonly direction: "lower" | "higher";
+    readonly role: "primary" | "guardrail";
+  }
+  /** A Run's frozen benchmark plan; a key left out takes its default. */
+  export interface BenchmarkPlan {
+    readonly harness: { readonly commits: ReadonlyArray<string>; readonly paths: ReadonlyArray<string> };
+    readonly prepare?: { readonly executable: string; readonly argv: ReadonlyArray<string> } | null;
+    readonly commands: readonly [BenchmarkCommand, ...Array<BenchmarkCommand>];
+    readonly metrics: readonly [BenchmarkMetric, ...Array<BenchmarkMetric>];
+    readonly warmup?: number;
+    readonly samples?: number;
+    /** Seconds one command of a sample, or prepare, may take. */
+    readonly limit?: number;
+    readonly threshold?: number;
+    readonly tolerance?: number;
+  }
+  /** One tree a Measurement sampled. */
+  export interface MeasuredTree {
+    readonly cwd: string;
+    readonly head_sha: string;
+    readonly fingerprint: string;
+    readonly lockfiles: Readonly<Record<string, string>>;
+  }
+  /** A Measurement as the host recorded it: every sample, and a verdict per metric where it was judged. */
+  export interface Measurement {
+    readonly id: string;
+    readonly run: string;
+    readonly pass: string;
+    readonly machine: string;
+    readonly plan: Required<BenchmarkPlan>;
+    readonly plan_digest: string;
+    readonly base: MeasuredTree & { readonly commit: string };
+    readonly candidate: MeasuredTree;
+    readonly environment: Readonly<Record<string, string | null>>;
+    readonly waited: { readonly memory: boolean; readonly machine: ReadonlyArray<string> };
+    readonly prepare: ReadonlyArray<{ readonly tree: "base" | "candidate"; readonly exit: number; readonly seconds: number; readonly output: string }>;
+    readonly samples: ReadonlyArray<{
+      readonly tree: "base" | "candidate";
+      readonly warmup: boolean;
+      readonly readings: Readonly<Record<string, number>>;
+      readonly load: ReadonlyArray<number>;
+      readonly memory: { readonly available: number; readonly total: number; readonly pressure: number | null } | null;
+      readonly at: string;
+    }>;
+    readonly result:
+      | {
+          readonly _tag: "Judged";
+          readonly verdicts: ReadonlyArray<{
+            readonly metric: string;
+            readonly ratio: number;
+            readonly interval: readonly [number, number];
+            readonly verdict: "gain" | "no-change" | "regression" | "inconclusive";
+            readonly held: boolean;
+          }>;
+        }
+      | { readonly _tag: "TimedOut"; readonly tree: "base" | "candidate"; readonly stage: "prepare" | "sample"; readonly command: string }
+      | { readonly _tag: "Failed"; readonly tree: "base" | "candidate"; readonly stage: "prepare" | "sample"; readonly command: string; readonly exit: number; readonly output: string }
+      | { readonly _tag: "Unjudged"; readonly reason: string };
+    readonly started: string;
+    readonly at: string;
+  }
+  /** Keeps an infinite ratio, which plain JSON writes as null: journal a Measurement with it. */
+  export const MeasurementSchema: Schema.Codec<Measurement, unknown, never, never>;
 
   /** What a merge at a head came to: \`MergedOutside\` is a merge this Run did not make. */
   export type MergeOutcome =
@@ -777,6 +851,20 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * \`integrated <branch>@<sha>\`. Take it inside an Activity, so a replay does not merge again.
      */
     readonly integrate: (runId: string, cwd: string) => Effect.Effect<Integration>;
+    /**
+     * A Measurement of cwd, the Run's checkout, against a base tree Collie makes at base with the
+     * plan's harness commits applied, sampled A B B A … while no other Measurement runs on this
+     * Machine and it is not Short of memory. Where these trees were measured under this plan, that
+     * record answers and ran is false. Take it inside an Activity, so a replay does not measure again.
+     */
+    readonly measure: (options: {
+      readonly runId: string;
+      readonly base: string;
+      readonly cwd: string;
+      readonly plan: BenchmarkPlan;
+      /** \`calibration\`, \`cycle N\` or \`final\`. */
+      readonly pass: string;
+    }) => Effect.Effect<{ readonly measurement: Measurement; readonly ran: boolean }, WorkflowError>;
     /** The commit origin's default branch is at now. Take it inside an Activity. */
     readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;
     /**
@@ -4016,6 +4104,34 @@ export const hostLayer = (options: {
                 Effect.provideContext(services),
               ),
             ),
+          ),
+        measure: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const own = yield* treeOf(yield* store.run(asked.runId), asked.runId, dir);
+              if (!(yield* insideRun(asked.cwd, own)))
+                return yield* new WorkflowError({
+                  reason: `"${asked.cwd}" is not inside run ${asked.runId}`,
+                });
+              const env = yield* currentEnv.pipe(Effect.option);
+              const answered = yield* measure({
+                stateDir: dir,
+                env: Option.isSome(env)
+                  ? { ...env.value, userDir: options.userDir ?? env.value.userDir }
+                  : null,
+                ask: asked,
+                evidence: evidenceDir(dir, asked.runId),
+                awaiting: controlPath(dir, AWAITING, asked.runId),
+                stopped: set(STOP, asked.runId),
+              }).pipe(Effect.mapError((cause) => new WorkflowError({ reason: cause.why })));
+              if (answered !== "stopped") return answered;
+              // A stop ends the Measurement and records nothing; the Run parks, and a resume measures again.
+              const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+              if (Option.isSome(instance)) return yield* Workflow.suspend(instance.value);
+              return yield* new WorkflowError({
+                reason: "the Measurement did not finish: the Run was stopped while it ran",
+              });
+            }),
           ),
         integrate: (runId, cwd) =>
           under(

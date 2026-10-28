@@ -1846,6 +1846,24 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
   return { ok: true as const, events: client.verify(request) };
 });
 
+/** A Measurement of the Run's checkout, asked of the host on the Run's own Machine. */
+export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
+  env: PluginEnv,
+  request: {
+    runId: string;
+    base: string;
+    cwd?: string;
+    plan: Schema.Json;
+    pass: string;
+  },
+  door: Door,
+) {
+  const found = yield* asksRun(env, request.runId, () => Effect.void, door);
+  if (!found.ok) return found;
+  const client = yield* reach(env, found.machine, door);
+  return { ok: true as const, events: client.measure(request) };
+});
+
 /**
  * The report over every Run this Machine's host has, for whichever door asks: a Run
  * whose metrics cannot be read fails it, and one whose records cannot be read is

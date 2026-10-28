@@ -8,6 +8,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
 import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
+import { MeasureEvent } from "./measurement-model";
 export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
 import { UsageReading } from "./usage-model";
@@ -1481,6 +1482,19 @@ export const FrontDoorRpcs = RpcGroup.make(
       expect: Schema.Literals(["pass", "fail"]),
     },
     success: VerifyEvent,
+    error: HostRefused,
+    stream: true,
+  }),
+  /** A Measurement of the Run's checkout against a base, or the one already recorded for them. */
+  Rpc.make("measure", {
+    payload: {
+      runId: Schema.String,
+      base: Schema.String,
+      cwd: Schema.optionalKey(Schema.String),
+      plan: Schema.Json,
+      pass: Schema.String,
+    },
+    success: MeasureEvent,
     error: HostRefused,
     stream: true,
   }),
