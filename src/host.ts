@@ -592,6 +592,7 @@ const handlers = (
       const registry = yield* Registry;
       const bun = yield* Effect.context<BunServices>();
       const pid = yield* currentPid;
+      const { aliveNow } = yield* SharedBoard;
       const recordingLinks = yield* Semaphore.make(1);
       // The installation this host belongs to, which the client that started it named.
       const env = yield* currentEnv.pipe(Effect.orDie);
@@ -784,8 +785,8 @@ const handlers = (
                 {
                   env,
                   runs: all.map((one) => factsOfView(env.stateDir, one)),
-                  alive: (yield* liveHerds(new Herdr(env), env).pipe(Effect.flatMap(agentsIn)))
-                    .alive,
+                  // One command reads once, and says what herdr lists now.
+                  alive: yield* aliveNow,
                   offers: (id) =>
                     registry.offers(id).pipe(
                       Effect.provideContext(hosted),
@@ -980,6 +981,11 @@ const hostBoard = (dir: string) =>
     // Read as often as `herdChanges` reads them: each read is a herdr process, and a build
     // runs on every write the board reads under the state directory.
     const herdsNow = yield* Effect.cachedWithTTL(liveHerds(herdr, env), SESSIONS_EVERY);
+    // A write or a Run recorded moves no agent: herdr is read again only after `herdrMoved`.
+    const [agentsNow, herdrMoved] = yield* Effect.cachedInvalidateWithTTL(
+      Effect.flatMap(herdsNow, agentsIn),
+      Duration.infinity,
+    );
     const runs = registry
       .views(null)
       .pipe(Effect.map((views) => views.map((view) => factsOfView(env.stateDir, view))));
@@ -1000,16 +1006,16 @@ const hostBoard = (dir: string) =>
         });
       }).pipe(Effect.provideContext(bun));
     /** The board, with the Runs it was built from. */
-    const listingOf = (herds: typeof herdsNow) =>
+    const listingOf = (agents: typeof agentsNow) =>
       Effect.gen(function* () {
-        const { alive, restored } = yield* Effect.flatMap(herds, agentsIn).pipe(
-          Effect.provideContext(bun),
-        );
+        const { alive, restored } = yield* agents.pipe(Effect.provideContext(bun));
         noteIdle(idle, [...alive, ...restored], yield* Clock.currentTimeMillis);
         const facts = yield* runs;
-        return { runs: facts, views: yield* boardOf(facts, alive) };
+        return { runs: facts, views: yield* boardOf(facts, alive), alive };
       });
-    const listing = listingOf(herdsNow);
+    const listing = listingOf(agentsNow);
+    const aliveOf = (agents: typeof agentsNow) =>
+      Effect.map(agents, ({ alive }) => alive).pipe(Effect.provideContext(bun));
     /** When each Task was first seen Finished, for as long as this host runs. */
     const seen = new Map<string, number>();
     const storage = yield* Effect.context<MessageStorage.MessageStorage>();
@@ -1095,7 +1101,7 @@ const hostBoard = (dir: string) =>
     /** A sweep's sweepers, each judging against a board built as it judges. */
     const sweepers = sweepersOver({
       runs,
-      views: (herds) => Effect.map(listingOf(Effect.succeed(herds)), (built) => built.views),
+      views: (herds) => Effect.map(listingOf(agentsIn(herds)), (built) => built.views),
     });
     /** The host's own stop, audited as the host's and asked once per Run. */
     const stop = (runId: string, reason: string) =>
@@ -1120,6 +1126,11 @@ const hostBoard = (dir: string) =>
       herdr,
       bun,
       listing,
+      herdrMoved,
+      /** herdr's agents as the board last read them. */
+      alive: aliveOf(agentsNow),
+      /** herdr's agents read now, which the board reads from then on. */
+      aliveNow: aliveOf(Effect.andThen(herdrMoved, agentsNow)),
       sweepers,
       sweepersOver,
       record: registry.mergeRequest,
@@ -1130,12 +1141,13 @@ const hostBoard = (dir: string) =>
 /** The board built once for this host's clients and side jobs, from when the host starts. */
 class SharedBoard extends Context.Service<
   SharedBoard,
-  Omit<Effect.Success<ReturnType<typeof hostBoard>>, "listing"> & {
+  Omit<Effect.Success<ReturnType<typeof hostBoard>>, "listing" | "herdrMoved"> & {
     /** Whatever may have moved the board. */
     readonly changed: Stream.Stream<void>;
     readonly boards: Stream.Stream<{
       readonly runs: ReadonlyArray<RunFacts>;
       readonly views: ReadonlyArray<TaskView>;
+      readonly alive: ReadonlyArray<AgentInfo>;
     }>;
     /** A listing's sweepers, judging against the latest board built. */
     readonly listed: Effect.Success<ReturnType<typeof hostBoard>>["sweepers"];
@@ -1186,7 +1198,7 @@ const sharedBoardLayer = (dir: string) =>
   Layer.effect(SharedBoard)(
     Effect.gen(function* () {
       const store = yield* Store;
-      const { listing, ...board } = yield* hostBoard(dir);
+      const { listing, herdrMoved, ...board } = yield* hostBoard(dir);
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
       // Shared, so every subscriber rides one recursive watch: setting one up walks the tree.
       const changed = yield* Stream.mergeAll(
@@ -1195,10 +1207,11 @@ const sharedBoardLayer = (dir: string) =>
             Stream.debounce("200 millis"),
             Stream.map(() => undefined),
           ),
-          Stream.tick(BOARD_TICK),
+          Stream.tick(BOARD_TICK).pipe(Stream.tap(() => herdrMoved)),
           herdChanges(board.herdr, board.env).pipe(
             Stream.provideContext(board.bun),
             Stream.catch(() => Stream.empty),
+            Stream.tap(() => herdrMoved),
           ),
           store.changes.pipe(Stream.map(() => undefined)),
         ],
@@ -2830,7 +2843,7 @@ const frontDoorHandlers = (
               {
                 env,
                 runs,
-                alive: (yield* liveHerds(herdr, env).pipe(Effect.flatMap(agentsIn))).alive,
+                alive: yield* shared.alive,
                 offers: (id) =>
                   registry.offers(id).pipe(
                     Effect.provideContext(hosted),

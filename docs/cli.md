@@ -1640,8 +1640,8 @@ the run starts from, or name the checks with `--verify` or `collie run intent ve
 ([ADR-draft-a-runs-checks-are-read-where-its-checkout-starts](adr/draft-a-runs-checks-are-read-where-its-checkout-starts.md)).
 
 Collie's own `.collie/verify.json` leaves its one check, `check` (`bun run check`), to CI's
-`test` job, which runs that script: its implement Runs and Releases wait for the job rather
-than run the suite again.
+`test` job, which passes only when the jobs running that script's two halves did: its
+implement Runs and Releases wait for the job rather than run the suite again.
 
 A file that is there and does not decode is an error naming it and the ref it was read at, never an empty set, and
 the start is refused as `invalid_input`, so a typo is never quietly replaced by an agent's

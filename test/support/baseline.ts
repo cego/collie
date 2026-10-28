@@ -11653,7 +11653,7 @@ const mrJob = (name: MrForge, job: MrJob) => {
   const id = MR_JOBS.indexOf(job) + 1;
   return name === "gitlab"
     ? `https://${PROJECT.gitlab}/-/jobs/${id}`
-    : `https://github.com/owner/repo/runs/${id}`;
+    : `https://github.com/owner/repo/actions/runs/4030/job/${id}`;
 };
 
 /** What the stage step says it played and checked, which nothing takes for proof. */
@@ -11999,7 +11999,7 @@ for (const name of ["gitlab", "github"] as const) {
     const id = MONOREPO_JOBS.indexOf(job) + 1;
     return name === "gitlab"
       ? `https://${PROJECT.gitlab}/-/jobs/${id}`
-      : `https://github.com/owner/repo/runs/${id}`;
+      : `https://github.com/owner/repo/actions/runs/4030/job/${id}`;
   };
   const MONOREPO_STAGED = {
     ...MONOREPO_ASSESSED,

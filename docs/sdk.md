@@ -1423,9 +1423,10 @@ each such check as `left to CI: proved by <job> on the merge request's head`, wi
 job's state where you read one.
 
 An unproved answer also carries `log`: the command line that prints the job's log, written
-by the forge adapter (`glab ci trace <id> --repo <project>` on GitLab, `gh run view --job
-<id> --log --repo <owner/repo>` on GitHub), so a prompt hands an agent the adapter's
-command rather than naming a CLI of its own (ADR-0050). With `settle: true` a failed job is
+by the forge adapter (`glab ci trace <id> --repo <project>` on GitLab; on GitHub `gh run
+view <run> --log-failed --repo <owner/repo>`, the failed jobs of the job's Actions run), so
+a prompt hands an agent the adapter's command rather than naming a CLI of its own
+(ADR-0050). With `settle: true` a failed job is
 settled first: the adapter reads the same job at the merge-base of the merge request's head
 and its target branch, or on the target branch's latest pipeline where that commit has
 none, and one that failed there too answers with `before: { at, url }` and is not retried.

@@ -21,6 +21,7 @@ import { exec } from "./support/command";
 import { fastForward } from "./support/effect";
 import { forgeOnPath, runOnPath, serveForges } from "./support/forge";
 import { stopHost } from "./support/host";
+import { Rig } from "./support/recorder";
 import { collie, proves } from "./support/world";
 
 const MR = "mr:gitlab.example.com/mk/project!7";
@@ -322,6 +323,25 @@ test("News and the merge watch read the host's latest board, and list no Runs of
       // Two merge looks and three News looks at least, on one build.
       expect(reads).toBeGreaterThanOrEqual(5);
       expect(listings).toBe(1);
+    }),
+  ));
+
+test("News reads which herdr sessions there are as often as the host does, not on every look", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => rig.close().pipe(Effect.orDie));
+      const env = rig.pluginEnv();
+      yield* sideJobs({
+        env,
+        herdr: new Herdr(env),
+        board: Effect.succeed({ runs: [], views: [] }),
+        panels: new Map(),
+        record: () => Effect.void,
+        stop: () => Effect.void,
+        sweepers: Effect.succeed([]),
+      }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
+      // Three News looks and the Homes' first restating, within one SESSIONS_EVERY.
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "session list")).toEqual(["session list"]);
     }),
   ));
 

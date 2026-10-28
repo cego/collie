@@ -26,6 +26,7 @@ export const suiteEnv = Config.all({
   BUN_INSTALL_CACHE_DIR: Config.String("BUN_INSTALL_CACHE_DIR").pipe(Config.withDefault("")),
   COLLIE_TEST_FAKE_FORGE: Config.String("COLLIE_TEST_FAKE_FORGE").pipe(Config.withDefault("")),
   COLLIE_TEST_STARTS: Config.String("COLLIE_TEST_STARTS").pipe(Config.withDefault("")),
+  COLLIE_TEST_FILE: Config.String("COLLIE_TEST_FILE").pipe(Config.withDefault("")),
   COLLIE_PROC: Config.String("COLLIE_PROC").pipe(Config.withDefault("")),
   COLLIE_MEMORY_EVERY: Config.String("COLLIE_MEMORY_EVERY").pipe(Config.withDefault("")),
 }).pipe(Config.map((env) => ({ ...env, ...GIT_QUIET })));

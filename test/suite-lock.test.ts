@@ -313,3 +313,32 @@ test("a suite counts the processes it started and names the ten largest sources"
   ]);
   expect(startsSummary("")).toEqual(["test: 0 processes started"]);
 });
+
+test("a suite names the files that started the most processes, with each one's leading commands", () => {
+  const record = [
+    ...Array.from({ length: 5 }, () => "herdr agent list\ttest/a.test.ts"),
+    ...Array.from({ length: 2 }, () => "herdr pane list\ttest/a.test.ts"),
+    ...Array.from({ length: 4 }, () => "herdr pane list\ttest/b.test.ts"),
+    ...Array.from({ length: 3 }, () => "collie host\ttest/b.test.ts"),
+    "herdr session list\ttest/b.test.ts",
+    "herdr session list\ttest/c.test.ts",
+    "collie host",
+  ];
+  expect(startsSummary(`${record.join("\n")}\n`)).toEqual([
+    "test: 17 processes started",
+    "      6  herdr pane list",
+    "      5  herdr agent list",
+    "      4  collie host",
+    "      2  herdr session list",
+    "test: processes started by file",
+    "      8  test/b.test.ts",
+    "           4  herdr pane list",
+    "           3  collie host",
+    "           1  herdr session list",
+    "      7  test/a.test.ts",
+    "           5  herdr agent list",
+    "           2  herdr pane list",
+    "      1  test/c.test.ts",
+    "           1  herdr session list",
+  ]);
+});

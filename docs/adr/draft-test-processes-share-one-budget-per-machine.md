@@ -41,7 +41,9 @@ one at a time, as they did under the lock. A small run never waits behind a whol
 A caller's `--parallel=N` asks for N workers. A run gets no more than its class's share,
 and its log says when it got fewer than it asked for; otherwise a request larger than the
 reserve could never start. `COLLIE_TEST_BUDGET` sets the budget's size, for an experiment
-or a Machine where two thirds is wrong. Where the rest after the reserve would be under 2, as with a budget of 2
+or a Machine where two thirds is wrong. CI's dedicated 4-core runner is one: it sets a budget of 6, giving a
+whole suite 4 workers, because no targeted run there uses a reserve, and a budget of 4 would
+still hold 2 back and leave the suite 2. Where the rest after the reserve would be under 2, as with a budget of 2
 or 3, there are no classes: every run takes from all of the budget, in arrival order across
 both kinds, and a whole suite asks for all of it. A small run waits behind a whole suite only
 on a Machine that small, and the bound still holds.

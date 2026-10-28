@@ -1074,17 +1074,22 @@ export class Herdr {
 
   /**
    * Subscribes to these events on this session's socket and resolves on the first one
-   * herdr pushes; the connection closes with it.
+   * herdr pushes; the connection closes with it. The subscriptions are read once the socket
+   * is open, so a session that cannot be watched is not read for them.
    */
-  waitForEvent(subscriptions: ReadonlyArray<HerdrParams>): HerdrEffect<void> {
+  waitForEvent<R>(
+    subscriptions: Effect.Effect<ReadonlyArray<HerdrParams>, HerdrError, R>,
+  ): Effect.Effect<void, HerdrError, BunServices | R> {
     const path = this.env.socketPath;
     if (!path) return herdrFail("cannot subscribe to herdr events", "no socket path");
     const id = `hw-${++this.seq}`;
-    const payload = `${encodeJson({ id, method: "events.subscribe", params: { subscriptions } })}\n`;
     return Effect.gen(function* () {
       const socket = yield* BunSocket.makeNet({ path });
       const pull = yield* Socket.readerString(socket);
-      yield* (yield* socket.writer).write(payload);
+      const params = { subscriptions: yield* subscriptions };
+      yield* (yield* socket.writer).write(
+        `${encodeJson({ id, method: "events.subscribe", params })}\n`,
+      );
       let buffered = "";
       let acknowledged = false;
       while (true) {
