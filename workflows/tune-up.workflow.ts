@@ -4,6 +4,8 @@
 // Discover reads the project, Harness commits a benchmark harness and writes its plan, and
 // Calibrate has the host measure the base against itself to learn this Machine's noise
 // floor. Where that rules out proof the Run ends with its findings and no merge request.
+// Otherwise each Cycle tries one change, kept only where the host measures it a gain, and
+// a Run that keeps none ends back on its base tree with its findings.
 //
 // The Markdown beside this file is the content: what each step is asked.
 
@@ -15,14 +17,16 @@ import {
   agentWork,
   contentOf,
   defineWorkflow,
+  evidenceGapsOf,
+  owedLocally,
   step,
   type Measurement,
 } from "collie";
-import { Array as Arr, Effect, FileSystem, Schema } from "effect";
+import { Array as Arr, Clock, Duration, Effect, FileSystem, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./tune-up.md" with { type: "text" };
 import { IMPLEMENTER, REVIEWER, reviewRound } from "./reviewing.ts";
-import { mergeRequest } from "./delivering.ts";
+import { Tree, mergeRequest } from "./delivering.ts";
 
 const content = contentOf(markdown);
 const text = Schema.String;
@@ -35,6 +39,12 @@ const Percent = Schema.Union([
   Schema.Finite,
   Schema.NumberFromString.check(Schema.isFinite()),
 ]).check(Schema.isGreaterThan(0));
+const isDuration = Schema.makeFilter(
+  (said: string) =>
+    said === "" ||
+    Option.isSome(Schema.decodeUnknownOption(Schema.DurationFromString)(said)) ||
+    "a duration, such as 2 hours",
+);
 
 const Told = {
   inputs: Schema.Struct({ focus: text }),
@@ -47,6 +57,18 @@ const prompts = {
     ...Told,
     discovered: text,
     budget: Schema.Struct({ samples: text, threshold: text, tolerance: text }),
+  }),
+  cycle: content.template("cycle", {
+    ...Told,
+    cycle: Schema.Struct({ n: text, of: text, start: text }),
+    opportunities: text,
+    earlier: text,
+    metrics: text,
+  }),
+  revert: content.template("revert", {
+    ...Told,
+    cycle: Schema.Struct({ n: text, start: text }),
+    why: text,
   }),
 };
 
@@ -150,6 +172,32 @@ const Planned = Schema.Struct({
 });
 type Plan = typeof Planned.Type.plan;
 
+/** What a Cycle's tuner did: one change, or why it made none. */
+const Tried = Schema.Union([
+  Schema.Struct({
+    result: Schema.Literal("changed"),
+    opportunity: text,
+    change: text,
+    commits: Schema.NonEmptyArray(text),
+  }),
+  Schema.Struct({
+    result: Schema.Literal("exhausted"),
+    why: text.annotate({ description: "why no measured opportunity is left" }),
+  }),
+  Schema.Struct({
+    result: Schema.Literal("unsafe"),
+    tradeoff: text.annotate({ description: "what every change left would give up for speed" }),
+  }),
+]);
+
+interface Cycled {
+  readonly n: number;
+  readonly tried: string;
+  readonly kept: boolean;
+  readonly why: string;
+  readonly measurement: string | null;
+}
+
 const TUNER = "tune";
 
 const discover = step({
@@ -229,6 +277,28 @@ const unjudged = (measured: Measurement, result: Unjudged) => {
   }
 };
 
+/** Why a Cycle is not kept, or null: its checks pass, its primary gains and every guardrail holds. */
+const notKept = (plan: Plan, failed: ReadonlyArray<string>, measured: Measurement) => {
+  const whys = failed.length === 0 ? [] : [`checks failed: ${failed.join(", ")}`];
+  if (measured.result._tag !== "Judged")
+    return [...whys, unjudged(measured, measured.result)].join("; ");
+  const { verdicts } = measured.result;
+  for (const metric of plan.metrics) {
+    const judged = verdicts.find((one) => one.metric === metric.name);
+    const verdict = judged?.verdict ?? "no verdict";
+    if (metric.role === "primary") {
+      if (verdict !== "gain") whys.push(`${metric.name} ${verdict}, not a gain`);
+    } else if (judged === undefined || !judged.held || verdict === "inconclusive")
+      whys.push(`guardrail ${metric.name} ${verdict}, not held`);
+  }
+  return whys.length === 0 ? null : whys.join("; ");
+};
+
+const cycleLine = (one: Cycled) =>
+  `Cycle ${one.n}, ${one.tried}: ${one.kept ? "kept" : "not kept"}: ${one.why}${
+    one.measurement === null ? "" : ` (${one.measurement})`
+  }`;
+
 const telemetryLine = (one: Discovered["telemetry"][number]) =>
   one.status === "used"
     ? `telemetry ${one.source}: used: release ${one.release}, ${one.window}, ${one.sample}, ${one.link}`
@@ -252,6 +322,7 @@ const reportOf = (options: {
   readonly ending: string;
   readonly found: Discovered;
   readonly calibrations: ReadonlyArray<Measurement>;
+  readonly cycles: ReadonlyArray<Cycled>;
 }) => {
   const { found } = options;
   const sourced = (title: string) =>
@@ -306,6 +377,9 @@ const reportOf = (options: {
     "## Calibration (measured)",
     "",
     ...options.calibrations.map((one) => `- ${one.id}: ${verdictsLine(one)}`),
+    ...(options.cycles.length === 0
+      ? []
+      : ["", "## Cycles (measured)", "", ...options.cycles.map((one) => `- ${cycleLine(one)}`)]),
     ...(found.external.length === 0
       ? []
       : [
@@ -362,10 +436,12 @@ export default defineWorkflow({
       }),
     ),
     wall_time: Schema.optionalKey(
-      text.annotate({
-        description: "A duration after which no new Cycle starts; empty is none",
-        default: "",
-      }),
+      text
+        .annotate({
+          description: "A duration after which no new Cycle starts; empty is none",
+          default: "",
+        })
+        .check(isDuration),
     ),
     external: Schema.optionalKey(
       Schema.Literals(["ask", "report", "off"]).annotate({
@@ -394,6 +470,11 @@ export default defineWorkflow({
     Effect.gen(function* () {
       const host = yield* Host;
       const runId = (yield* Run).id;
+      const started = yield* Activity.make({
+        name: "started",
+        success: Schema.Number,
+        execute: Clock.currentTimeMillis,
+      });
       const place = yield* host.place(runId);
       const cwd = place.cwd;
       const budget = {
@@ -488,6 +569,7 @@ export default defineWorkflow({
 
       const calibrations: Measurement[] = [];
       let ending: string | null = null;
+      let calibrated = false;
       for (;;) {
         const measured = yield* calibrate(
           Activity.make({
@@ -513,6 +595,7 @@ export default defineWorkflow({
         if (lost.length === 0) {
           const primary = plan.metrics.find((one) => one.role === "primary")?.name ?? "";
           ending = `calibrated on ${primary} (calibration ${measured.id})`;
+          calibrated = true;
           break;
         }
         const counters = lost.map((one) => ({
@@ -539,23 +622,205 @@ export default defineWorkflow({
       }
       yield* host.record(runId, ending);
 
-      const report = yield* Activity.make({
-        name: "findings",
-        success: text,
-        error: WorkflowError,
-        execute: Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const file = `${place.dir}/handoffs/tune-up-findings.md`;
-          yield* fs.makeDirectory(`${place.dir}/handoffs`, { recursive: true });
-          yield* fs.writeFileString(file, reportOf({ runId, ending, found, calibrations }));
-          return file;
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new WorkflowError({ reason: `the findings could not be written: ${cause.message}` }),
+      const cycled: Cycled[] = [];
+      const findings = (name: string, ending: string) =>
+        Activity.make({
+          name,
+          success: text,
+          error: WorkflowError,
+          execute: Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const file = `${place.dir}/handoffs/tune-up-findings.md`;
+            yield* fs.makeDirectory(`${place.dir}/handoffs`, { recursive: true });
+            yield* fs.writeFileString(
+              file,
+              reportOf({ runId, ending, found, calibrations, cycles: cycled }),
+            );
+            return file;
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkflowError({
+                  reason: `the findings could not be written: ${cause.message}`,
+                }),
+            ),
           ),
-        ),
+        });
+      if (!calibrated) {
+        const report = yield* findings("findings", ending);
+        return `${report}: ${ending}`;
+      }
+
+      const wall =
+        budget.wall_time === ""
+          ? null
+          : Duration.toMillis(
+              Schema.decodeUnknownSync(Schema.DurationFromString)(budget.wall_time),
+            );
+      const opportunities =
+        found.opportunities
+          .map(
+            (one, at) => `${at + 1}. ${one.title} (${one.evidence}; cites ${one.cites.join(", ")})`,
+          )
+          .join("\n") || "None ranked.";
+      const metrics = plan.metrics
+        .map((one) => `${one.name}, ${one.role}, ${one.direction} is better`)
+        .join("; ");
+      const sameTree = (one: typeof Tree.Type, other: typeof Tree.Type) =>
+        one.head === other.head && one.fingerprint === other.fingerprint;
+      const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
+        head: final.head_sha,
+        fingerprint: final.fingerprint,
+      }));
+      const judging = (n: number, base: string) =>
+        Effect.gen(function* () {
+          const failed = yield* Activity.make({
+            name: `cycle-${n}.checks`,
+            success: Schema.Array(text),
+            error: WorkflowError,
+            execute: Effect.gen(function* () {
+              const failing: string[] = [];
+              for (const spec of owedLocally(yield* host.approved(runId))) {
+                const ran = yield* host.verify({ runId, name: spec.name, cwd, pass: "gate" });
+                if (ran.result !== "pass") failing.push(spec.name);
+              }
+              return failing;
+            }),
+          });
+          const measured = yield* cycles(
+            Activity.make({
+              name: `cycle-${n}.measure`,
+              success: MeasurementSchema,
+              error: WorkflowError,
+              execute: Effect.map(
+                host.measure({ runId, base, cwd, plan, pass: `cycle ${n}` }),
+                (answered) => answered.measurement,
+              ),
+            }),
+          );
+          return { why: notKept(plan, failed, measured), measurement: measured.id };
+        });
+      let stopped: string | null = null;
+      let unkept = 0;
+      for (let n = 1; n <= budget.cycles && stopped === null; n++) {
+        const begun = yield* Activity.make({
+          name: `cycle-${n}.start`,
+          success: Schema.Struct({ spent: Schema.NullOr(text), tree: Tree }),
+          execute: Effect.gen(function* () {
+            const tree = yield* treeNow;
+            if (wall !== null && (yield* Clock.currentTimeMillis) - started >= wall)
+              return {
+                spent: `wall time ${budget.wall_time} spent ${n === 1 ? "before Cycle 1" : `after Cycle ${n - 1}`}`,
+                tree,
+              };
+            yield* host.record(runId, `cycle ${n} started on ${tree.head} ${tree.fingerprint}`);
+            return { spent: null, tree };
+          }),
+        });
+        if (begun.spent !== null) {
+          stopped = begun.spent;
+          break;
+        }
+        const start = begun.tree;
+        const tried = yield* cycles(
+          agentWork({
+            operation: `cycle-${n}`,
+            agent: TUNER,
+            role: "tuner",
+            instructions: prompts.cycle,
+            input: {
+              ...told,
+              cycle: { n: String(n), of: String(budget.cycles), start: start.head },
+              opportunities,
+              earlier: cycled.map((one) => `- ${cycleLine(one)}`).join("\n") || "None yet.",
+              metrics,
+            },
+            output: Tried,
+          }),
+        );
+        if (tried.result !== "changed")
+          stopped =
+            tried.result === "exhausted"
+              ? `no measured opportunity is left: ${tried.why}`
+              : `an unsafe tradeoff was named: ${tried.tradeoff}`;
+        const judged =
+          tried.result === "changed"
+            ? yield* judging(n, start.head)
+            : { why: stopped, measurement: null };
+        const kept = judged.why === null;
+        if (!kept) {
+          const why = judged.why ?? "";
+          const moved = yield* Activity.make({
+            name: `cycle-${n}.moved`,
+            success: Schema.Boolean,
+            execute: Effect.map(treeNow, (now) => !sameTree(now, start)),
+          });
+          if (moved)
+            yield* cycles(
+              agentWork({
+                operation: `cycle-${n}-revert`,
+                agent: TUNER,
+                role: "tuner",
+                instructions: prompts.revert,
+                input: { ...told, cycle: { n: String(n), start: start.head }, why },
+              }),
+            );
+          yield* Activity.make({
+            name: `cycle-${n}.reverted`,
+            success: Schema.Void,
+            error: WorkflowError,
+            execute: Effect.gen(function* () {
+              const now = yield* treeNow;
+              if (!sameTree(now, start))
+                return yield* new WorkflowError({
+                  reason: `cycle ${n} was reverted to ${now.head} (${now.fingerprint}), not the tree it started on, ${start.head} (${start.fingerprint})`,
+                });
+              yield* host.record(
+                runId,
+                `cycle ${n} reverted to ${now.head} ${now.fingerprint}: ${why}`,
+              );
+            }),
+          });
+        }
+        const done: Cycled = {
+          n,
+          tried:
+            tried.result === "changed" ? `${tried.opportunity}: ${tried.change}` : tried.result,
+          kept,
+          why: judged.why ?? "every guardrail held, and the primary gained",
+          measurement: judged.measurement,
+        };
+        cycled.push(done);
+        unkept = kept ? 0 : unkept + 1;
+        yield* findings(`cycle-${n}.findings`, cycleLine(done));
+        if (stopped === null && unkept >= 2) stopped = "two consecutive Cycles were not kept";
+      }
+      const stop = stopped ?? `cycles spent: ${budget.cycles} of ${budget.cycles}`;
+      const kept = cycled.filter((one) => one.kept).map((one) => `Cycle ${one.n}`);
+      yield* host.record(runId, `stopped: ${stop}`);
+      if (kept.length === 0) {
+        const done = `${stop}; no Cycle was kept, so the Run is back on its base tree`;
+        const report = yield* findings("findings", done);
+        return `${report}: ${done}`;
+      }
+      const gaps = yield* Activity.make({
+        name: "outcome",
+        success: Schema.Array(text),
+        execute: Effect.gen(function* () {
+          return evidenceGapsOf({
+            kind: "performance",
+            evidence: yield* host.evidence(runId, cwd),
+            approved: yield* host.approved(runId),
+            outputs: {},
+            reviewed: [],
+            roots: [place.dir],
+            tickets: [],
+          });
+        }),
       });
-      return `${report}: ${ending}`;
+      const report = yield* findings("findings", `${stop}; kept ${kept.join(", ")}`);
+      return yield* new WorkflowError({
+        reason: `Outcome unproved after ${kept.join(", ")}: ${gaps.join("; ")}. The findings are in ${report}.`,
+      });
     }),
 });

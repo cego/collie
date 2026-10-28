@@ -998,10 +998,11 @@ It proves the fixed `performance` outcome, which no other workflow can be asked 
 | `threshold`  | `5`                           | The smallest gain, in percent, that counts.                                              |
 | `tolerance`  | `2`                           | How far, in percent, a guardrail may worsen and still hold.                              |
 | `samples`    | `10`                          | Samples per side of each Measurement, at least 2.                                        |
-| `wall_time`  | none                          | A duration after which no new Cycle starts.                                              |
+| `wall_time`  | none                          | A duration, such as `2 hours`, after which no new Cycle starts.                          |
 | `external`   | `ask`                         | `ask` puts each external finding to you, `report` only writes them, `off` collects none. |
 
-A `cycles` of 0, 21 or 2.5 is refused at the start, before any Run exists. The Run works on
+A `cycles` of 0, 21 or 2.5, or a `wall_time` that is not a duration, is refused at the
+start, before any Run exists. The Run works on
 a branch of its own, in a worktree of the checkout it is started in, and never clones. From
 Home, a repository URL or path places it in the local checkout it names. From the CLI or
 another Run's agent, start it in the checkout you want tuned: a `repository` naming any
@@ -1029,18 +1030,35 @@ other checkout, or a URL, is refused at the start.
    comes back `inconclusive` there, or a guardrail that is not held, cannot be proved on
    this Machine. Where the plan declared a counter for it, the Run switches to the counter,
    records the switch as a new plan and calibrates again; otherwise it ends.
+4. **Cycles**, at most `cycles` of them. In each, the tuner is given the ranked
+   opportunities and every earlier Cycle's result, and commits one change on the Run's
+   branch. Collie runs the Run's checks, all but those left to CI, and measures the
+   checkout against the tree the Cycle started on. The Cycle is kept only where those checks pass,
+   the primary metric shows a `gain` and every guardrail holds. Otherwise the tuner resets
+   the branch to the Cycle's starting commit, and Collie checks that the head and files are
+   that tree again before anything else; a revert that leaves another tree fails the Run,
+   naming both. The findings are rewritten after each Cycle. A reverted Cycle, or one that
+   changed nothing, still counts, and a restarted host resumes in the Cycle it was in.
 
-**Ends:** with `handoffs/tune-up-findings.md` in its Run directory, and no merge request.
-Its result names that file and why it ended: `proof unavailable`, naming each metric, or
-calibrated on its primary metric. Neither is a failure. A harness commit touching a path
-outside its harness paths, a base that cannot be built, or a calibration that ends without
-a verdict fails the Run, naming the paths or the tree.
+   The Cycles stop early, with the reason in the Run's log and its findings, when the tuner
+   says no measured opportunity is left or names an unsafe tradeoff, when two Cycles in a
+   row are not kept, or when `wall_time` is spent. `wall_time` counts from the Run's start
+   and is read before each Cycle: it never interrupts one, and never cuts short Discover,
+   Harness or Calibrate. Spent by the end of Calibrate, it means no Cycle runs.
+
+**Ends:** with `handoffs/tune-up-findings.md` in its Run directory. Where calibration rules
+out proof, or no Cycle was kept, there is no merge request and the Run is not failed. Its
+result names that file and why it ended: `proof unavailable`, naming each metric, or why the
+Cycles stopped. A Run with no kept Cycle is back on its base tree. A Run that kept a Cycle
+fails for now, because no `final` Measurement against the merge base has proved its gain. A
+harness commit touching a path outside its harness paths, a base that cannot be built, or a
+calibration that ends without a verdict fails the Run, naming the paths or the tree.
 
 **Never:** load against production, which it only reads, bounded; auto-merge; a deploy; or
 a change to another repository.
 
 Its Flow forecasts Discover, Harness, Calibrate, Cycles, Integrate, Review, Merge request
-and External report; a Run ends after Calibrate for now.
+and External report; a Run ends after its Cycles for now.
 
 Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its
 prompts in [`workflows/tune-up.md`](../workflows/tune-up.md) and its agent's Persona in

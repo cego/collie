@@ -14401,11 +14401,12 @@ scenario(
           tunePlan(commit, [
             { ...NOISY_PRIMARY, counter: { name: "bench.count", direction: "lower" } },
           ]),
+          EXHAUSTED,
         ]);
         const result = yield* tunedUp(runId, { samples: 4 });
         expect(result._tag).toBe("Success");
         expect(said(result)).not.toContain("proof unavailable");
-        expect(said(result)).toContain("calibrated on bench.count");
+        expect(yield* runLog(runId)).toContain("calibrated on bench.count");
         expect(yield* runLog(runId)).toContain(
           "switched bench.value to its counter bench.count: bench.value is inconclusive",
         );
@@ -14519,6 +14520,321 @@ scenario(
       }),
     ),
   120_000,
+);
+
+/** `count` and `size` read from files a Cycle may commit; `size` swings while `jitter` is there. */
+const CYCLE_BENCH = [
+  "count=7; [ -f count ] && count=$(cat count)",
+  "size=100; [ -f size ] && size=$(cat size)",
+  'if [ -e jitter ]; then echo x >> "$1"; if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then size=60; else size=140; fi; fi',
+  'printf \'{"count": %s, "size": %s}\\n\' "$count" "$size"',
+  "",
+].join("\n");
+
+const SIZE_GUARDRAIL = { name: "bench.size", direction: "lower", role: "guardrail" } as const;
+
+/** `script` run in the Run's checkout, as the tuner runs it. */
+const inCheckout = (script: string) => `cd '${rig.projectDir}' && ${script}`;
+
+const tried = (script: string) => ({
+  writes: [],
+  sh: inCheckout(`${script} && git commit -qm cycle`),
+  output: {
+    result: "changed",
+    opportunity: "prepared statements",
+    change: "search prepares its statement once",
+    commits: ["HEAD"],
+  },
+});
+const NO_CHANGE = () => tried("echo note > notes && git add notes");
+const FASTER = () => tried("echo 3 > count && git add count");
+const FASTER_BUT_LARGER = () => tried("echo 3 > count && echo 200 > size && git add count size");
+const FASTER_BUT_JITTERY = () => tried("echo 3 > count && touch jitter && git add count jitter");
+const FASTER_BUT_BROKEN = () => tried("echo 3 > count && touch broken && git add count broken");
+const RESET = () => ({ writes: [], sh: inCheckout("git reset -q --hard HEAD~1"), output: "reset" });
+const EXHAUSTED = { result: "exhausted", why: "every ranked opportunity has been tried" };
+
+/** A tune-up that calibrates, then answers each Cycle's prompt with the next of `turns`. */
+const cycling = (runId: string, turns: ReadonlyArray<Schema.Json>) =>
+  Effect.gen(function* () {
+    const commit = yield* harnessCommit({ "bench/bench.sh": CYCLE_BENCH });
+    yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
+    yield* rig.queueOutputs([
+      TUNE_DISCOVERED,
+      tunePlan(commit, [STEADY_PRIMARY, SIZE_GUARDRAIL]),
+      ...turns,
+    ]);
+    return commit;
+  });
+
+/** Each Cycle's tree where the log says it started, and where it says it was reverted to. */
+const cycleTrees = (runId: string) =>
+  Effect.map(runLog(runId), (log) => {
+    const trees = (said: string) =>
+      Object.fromEntries(
+        [...log.matchAll(new RegExp(`cycle (\\d+) ${said} (\\S+) (\\S+?):?(?:\\s|$)`, "g"))].map(
+          (one) => [one[1]!, { head: one[2]!, fingerprint: one[3]! }],
+        ),
+      );
+    return { started: trees("started on"), reverted: trees("reverted to") };
+  });
+
+const cyclesMeasured = (runId: string) =>
+  Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
+    all.filter((one) => one.pass.startsWith("cycle ")),
+  );
+
+/** The tree the Run's checkout holds now, read by the test rather than the Run. */
+const checkoutNow = (runId: string) =>
+  Effect.gen(function* () {
+    const [first] = yield* cyclesMeasured(runId);
+    const now = yield* fingerprint(first!.candidate.cwd);
+    return { head: now.head_sha, fingerprint: now.fingerprint };
+  });
+
+const cyclePrompts = (runId: string) =>
+  Effect.map(prompts(), (all) =>
+    all.flatMap((one) => {
+      const named = new RegExp(`/${runId}/(cycle-\\d+(?:-revert)?)\\.prompt\\.md`).exec(one);
+      return named === null ? [] : [named[1]!];
+    }),
+  );
+
+scenario(
+  "a tune-up Cycle with no change and one whose guardrail regresses are each reverted to the tree it started on, and two in a row stop the Run with its findings",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-reverted";
+        const commit = yield* cycling(runId, [NO_CHANGE(), RESET(), FASTER_BUT_LARGER(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4 });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("two consecutive Cycles were not kept");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* cyclePrompts(runId)).toEqual([
+          "cycle-1",
+          "cycle-1-revert",
+          "cycle-2",
+          "cycle-2-revert",
+        ]);
+        const verdicts = (yield* cyclesMeasured(runId)).map((one) =>
+          one.result._tag === "Judged"
+            ? one.result.verdicts.map((judged) => `${judged.metric} ${judged.verdict}`)
+            : [],
+        );
+        expect(verdicts).toEqual([
+          ["bench.count no-change", "bench.size no-change"],
+          ["bench.count gain", "bench.size regression"],
+        ]);
+        const { started, reverted } = yield* cycleTrees(runId);
+        expect(started["1"]?.head).toBe(commit);
+        expect(reverted).toEqual(started);
+        expect(yield* checkoutNow(runId)).toEqual(started["1"]!);
+        const log = yield* runLog(runId);
+        expect(log).toContain("cycle 1 reverted to");
+        expect(log).toContain("bench.count no-change");
+        expect(log).toContain("guardrail bench.size regression");
+        const report = yield* readText(said(result).split(": ")[0]!);
+        expect(report).toContain("## Cycles");
+        expect(report).toContain("two consecutive Cycles were not kept");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up Cycle whose primary gains but whose guardrail is inconclusive is reverted",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-jittery";
+        yield* cycling(runId, [FASTER_BUT_JITTERY(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.result._tag === "Judged" && measured.result.verdicts).toEqual([
+          expect.objectContaining({ metric: "bench.count", verdict: "gain" }),
+          expect.objectContaining({ metric: "bench.size", verdict: "inconclusive" }),
+        ]);
+        const { started, reverted } = yield* cycleTrees(runId);
+        expect(reverted["1"]).toEqual(started["1"]);
+        expect(yield* runLog(runId)).toContain("guardrail bench.size inconclusive");
+        expect(said(result)).toContain("cycles spent: 1 of 1");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up Cycle whose checks fail is reverted though it measures a gain, and the Run completes with its findings",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-broken";
+        yield* cycling(runId, [FASTER_BUT_BROKEN(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.result._tag === "Judged" && measured.result.verdicts[0]?.verdict).toBe(
+          "gain",
+        );
+        const { started, reverted } = yield* cycleTrees(runId);
+        expect(reverted["1"]).toEqual(started["1"]);
+        expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
+        expect(yield* runLog(runId)).toContain("checks failed: unit");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* readText(said(result).split(": ")[0]!)).toContain("checks failed: unit");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up revert that leaves another tree fails the Run, naming both trees",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-unreverted";
+        yield* cycling(runId, [NO_CHANGE(), { ...RESET(), sh: inCheckout("true") }]);
+        const result = yield* tunedUp(runId, { samples: 4 });
+        expect(result._tag).toBe("Failure");
+        const { started } = yield* cycleTrees(runId);
+        const now = yield* checkoutNow(runId);
+        expect(now.head).not.toBe(started["1"]?.head);
+        expect(reasonOf(result)).toContain(started["1"]!.head);
+        expect(reasonOf(result)).toContain(now.head);
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up tuner that has no opportunity left stops the Run with that reason, before its cycles are spent",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-exhausted";
+        yield* cycling(runId, [EXHAUSTED]);
+        const result = yield* tunedUp(runId, { samples: 4 });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain(
+          "no measured opportunity is left: every ranked opportunity has been tried",
+        );
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1"]);
+        expect(yield* cyclesMeasured(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up host restarted in the middle of Cycle 2 resumes in Cycle 2 and runs no more than its cycles",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-restart";
+        yield* cycling(runId, [NO_CHANGE(), RESET(), FASTER(), NO_CHANGE(), RESET()]);
+        const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 3 } };
+        yield* running(options, () =>
+          until(
+            () => wasAsked(runId, "cycle-2"),
+            (asked) => asked,
+          ),
+        );
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert", "cycle-2"]);
+        const result = yield* resumed(options);
+        expect(yield* cyclePrompts(runId)).toEqual([
+          "cycle-1",
+          "cycle-1-revert",
+          "cycle-2",
+          "cycle-3",
+          "cycle-3-revert",
+        ]);
+        expect((yield* cyclesMeasured(runId)).map((one) => one.pass)).toEqual([
+          "cycle 1",
+          "cycle 2",
+          "cycle 3",
+        ]);
+        // A kept Cycle leaves a tree no final Measurement has proved yet.
+        expect(reasonOf(result)).toContain("no `final` Measurement");
+      }),
+    ),
+  120_000,
+);
+
+/** A clock two hours ahead once `marker` holds anything, as a Cycle that ran long would leave it. */
+const lateOnce = (marker: string) =>
+  Effect.map(Clock.Clock, (clock): Clock.Clock => {
+    const ahead = () => (Bun.file(marker).size > 0 ? 2 * 60 * 60 * 1000 : 0);
+    const millis = () => clock.currentTimeMillisUnsafe() + ahead();
+    const nanos = () => clock.currentTimeNanosUnsafe() + BigInt(ahead()) * 1_000_000n;
+    return {
+      currentTimeMillisUnsafe: millis,
+      currentTimeMillis: Effect.sync(millis),
+      currentTimeNanosUnsafe: nanos,
+      currentTimeNanos: Effect.sync(nanos),
+      monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: clock.monotonicTimeNanos,
+      sleep: (duration) => clock.sleep(duration),
+    };
+  });
+
+scenario(
+  "a tune-up whose wall time runs out during a Cycle finishes that Cycle and starts no other",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-late";
+        const marker = `${rig.root}/late`;
+        yield* cycling(runId, [
+          { ...NO_CHANGE(), sh: `echo late > '${marker}' && ${NO_CHANGE().sh}` },
+          RESET(),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, wall_time: "1 hour" }).pipe(
+          Effect.provideServiceEffect(Clock.Clock, lateOnce(marker)),
+        );
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("wall time 1 hour spent");
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+        expect((yield* cyclesMeasured(runId)).map((one) => one.pass)).toEqual(["cycle 1"]);
+        const { started, reverted } = yield* cycleTrees(runId);
+        expect(reverted["1"]).toEqual(started["1"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose wall time is spent by the end of Calibrate runs no Cycle and ends with its findings",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-no-time";
+        yield* cycling(runId, []);
+        const result = yield* tunedUp(runId, { samples: 4, wall_time: "1 millis" });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("wall time 1 millis spent before Cycle 1");
+        expect(yield* cyclePrompts(runId)).toEqual([]);
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* readText(said(result).split(": ")[0]!)).toContain(
+          "wall time 1 millis spent before Cycle 1",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario("tune-up refuses a wall time that is not a duration at the front door", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      const reason = yield* refusedAtStart("tune-up", { wall_time: "soon" });
+      expect(reason).toStartWith("invalid_input:");
+      expect(reason).toContain("wall_time");
+      expect(yield* refusedAtStart("tune-up", { wall_time: "2 hours" })).toBe("started");
+    }),
+  ),
 );
 
 once("tune-up declares every input with its default, and its path", () =>

@@ -58,3 +58,38 @@ What Discover found:
 The Run takes {{budget.samples}} samples per side and judges a gain of at least
 {{budget.threshold}}% against a tolerance of {{budget.tolerance}}%. The host then measures
 the base against itself to learn how noisy this Machine is.
+
+## cycle
+
+Cycle {{cycle.n}} of at most {{cycle.of}}: make one bounded change that makes this project
+faster, as commits on this branch on top of {{cycle.start}}.
+
+The opportunities Discover ranked, best first:
+
+{{opportunities}}
+
+What each earlier Cycle tried, and how the host judged it:
+
+{{earlier}}
+
+The host measures this checkout against {{cycle.start}} by these metrics: {{metrics}}. The
+Cycle is kept only where the Run's checks pass, the primary metric gains and every guardrail
+holds. Anything else is reverted, and two Cycles in a row not kept end the Run.
+
+1. Take the best opportunity no earlier Cycle has settled. Load the installed skills that fit
+   it, by name.
+2. Make one change for it and commit it on this branch. Push nothing, and touch neither the
+   harness paths nor another repository.
+3. Answer `changed` with the opportunity, the change and its commits.
+
+Where no measured opportunity is left, answer `exhausted` with why. Where every change left
+would give up behaviour, safety or correctness for speed, answer `unsafe` with that
+tradeoff. Either way, change nothing.
+
+## revert
+
+Cycle {{cycle.n}} is not kept: {{why}}
+
+Reset this branch to {{cycle.start}}, the commit the Cycle started on, with
+`git reset --hard {{cycle.start}}`. That removes this Cycle's commits and nothing older. Push
+nothing. Collie then checks that the checkout's head and files are that tree again.

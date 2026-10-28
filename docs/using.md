@@ -3349,9 +3349,15 @@ It reads the project and its telemetry, commits a benchmark harness, and has the
 measure the base against itself to learn how noisy this Machine is. On a shared, busy
 Machine a wall-clock metric can come back `inconclusive` there: have the harness declare a
 counter (instructions, allocations, queries, bytes) for it, and the Run switches to the
-counter instead of ending. Its findings are in `handoffs/tune-up-findings.md` in its Run
-directory, every statement marked measured, telemetry or hypothesis, with the research
-under the opportunity it changed.
+counter instead of ending.
+
+Then it spends its Cycles: each tries one change, kept only where your checks pass and the
+host measures a gain with no guardrail giving way, and reverted to the exact tree it started
+on otherwise. A reverted Cycle counts. `wall_time` (such as `--input wall_time="2 hours"`)
+stops new Cycles once that much time has passed since the Run started, but never stops one
+halfway. Its findings are in `handoffs/tune-up-findings.md` in its Run directory, rewritten
+after each Cycle, every statement marked measured, telemetry or hypothesis, with the
+research under the opportunity it changed.
 
 A tune-up never puts load on production, which it only reads with bounded queries, never
 auto-merges or deploys, and never changes another repository. One Measurement runs on a

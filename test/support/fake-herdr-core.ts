@@ -18,6 +18,7 @@ import {
   Semaphore,
 } from "effect";
 import { recordStart } from "../../src/starts";
+import { exec } from "./command";
 import { forwarding } from "./forwarding";
 
 const FAKE_CLIENT_VERSION = "herdr 0.9.0";
@@ -247,9 +248,10 @@ const SessionsJson = Schema.fromJsonString(
 const FailuresJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const QueuedOutputJson = Schema.Union([Schema.String, Schema.Null, Schema.JsonObject]);
 const QueueJson = Schema.fromJsonString(Schema.Array(QueuedOutputJson));
-/** A queued entry for an agent that writes files before its Output, as a grant would. */
+/** A queued entry for an agent that writes files, then runs `sh` beside the queue, before its Output. */
 const Scripted = Schema.Struct({
   writes: Schema.Array(Schema.Struct({ path: Schema.String, text: Schema.String })),
+  sh: Schema.optionalKey(Schema.String),
   output: QueuedOutputJson,
 });
 const JsonRecord = Schema.fromJsonString(Schema.Any);
@@ -493,6 +495,10 @@ function handle(
         for (const one of scripted?.writes ?? []) {
           yield* fs.makeDirectory(path.dirname(one.path), { recursive: true });
           yield* fs.writeFileString(one.path, one.text);
+        }
+        if (scripted?.sh !== undefined) {
+          const ran = yield* exec(["sh", "-c", scripted.sh], { cwd: path.dirname(queuePath) });
+          if (ran.exitCode !== 0) return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
         }
         const output = scripted === null ? next : scripted.output;
         if (output !== undefined && output !== null) {
