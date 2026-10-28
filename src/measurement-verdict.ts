@@ -5,6 +5,8 @@
 import { Data, Effect, Random, Schema } from "effect";
 
 const RESAMPLES = 4000;
+/** Below any real difference, above a ratio's rounding: 100→102 is exactly 2% worse. */
+const ROUNDING = 1e-9;
 
 export interface MetricSamples {
   readonly metric: string;
@@ -87,9 +89,9 @@ export const judge = (
     const worstGain = Math.min(gainOf(low), gainOf(high));
     const bestGain = Math.max(gainOf(low), gainOf(high));
     const verdict: Judgement["verdict"] =
-      worstGain > 0 && gainOf(ratio) >= threshold / 100
+      worstGain > 0 && gainOf(ratio) >= threshold / 100 - ROUNDING
         ? "gain"
-        : bestGain < 0 && -gainOf(ratio) > tolerance / 100
+        : bestGain < 0 && -gainOf(ratio) > tolerance / 100 + ROUNDING
           ? "regression"
           : high - low > (2 * threshold) / 100
             ? "inconclusive"
@@ -99,6 +101,6 @@ export const judge = (
       ratio,
       interval: [low, high] as const,
       verdict,
-      held: worstGain >= -tolerance / 100,
+      held: worstGain >= -tolerance / 100 - ROUNDING,
     };
   }).pipe(Random.withSeed(`${measurement}/${samples.metric}`));

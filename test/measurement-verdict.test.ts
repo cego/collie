@@ -102,6 +102,21 @@ describe("a metric's verdict", () => {
     expect(tight.held).toBe(true);
   });
 
+  test("a regression of exactly the tolerance is held, and a gain of exactly the threshold counts", () => {
+    const atTolerance = run(latency(of(100), of(102)));
+    expect(atTolerance).toMatchObject({ verdict: "no-change", held: true });
+
+    const atThreshold = run(latency(of(100), of(90)), ID, { threshold: 10, tolerance: 2 });
+    expect(atThreshold.verdict).toBe("gain");
+
+    const higherAtThreshold = run(
+      { metric: "requests/s", direction: "higher", base: of(100), candidate: of(110) },
+      ID,
+      { threshold: 10, tolerance: 2 },
+    );
+    expect(higherAtThreshold.verdict).toBe("gain");
+  });
+
   test("zero medians are defined, never divided by", () => {
     const bothZero = run(latency(of(0), of(0)));
     expect(bothZero).toMatchObject({ verdict: "no-change", held: true, ratio: 1 });
