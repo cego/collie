@@ -674,6 +674,28 @@ const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   );
 });
 
+/** The first of `first`'s three slots nothing holds, or why there is none, naming each. */
+const freeSlot = Effect.fn("worktree.freeSlot")(function* (opts: {
+  repo: string;
+  first: string;
+  listing: { readonly checkouts: ReadonlyArray<{ readonly path: string }> };
+  recordedBy?: RecordedBy | undefined;
+}) {
+  const passed: string[] = [];
+  for (const slot of [opts.first, `${opts.first}-2`, `${opts.first}-3`]) {
+    // git lists a checkout whose directory has gone, and will not add another there.
+    const taken =
+      (yield* occupant(slot)) ??
+      (opts.listing.checkouts.some((checkout) => checkout.path === slot)
+        ? { owner: opts.repo }
+        : null);
+    if (taken === null) return { at: slot, passed };
+    const recorded = opts.recordedBy === undefined ? null : yield* opts.recordedBy(slot);
+    passed.push(`${slot} is ${occupiedAs(taken.owner, recorded)}`);
+  }
+  return { at: null, refused: `${passed.join("; ")}; free one of them and retry` };
+});
+
 /** The look and the cut, which run only while this process holds the first slot's lock. */
 const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opts: {
   repo: string;
@@ -690,21 +712,9 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
   const existing = listing.checkouts.find((checkout) => checkout.branch === branch);
   if (existing) return { path: existing.path, created: false, passed: [] };
 
-  const passed: string[] = [];
-  let at: string | null = null;
-  for (const slot of [first, `${first}-2`, `${first}-3`]) {
-    // git lists a checkout whose directory has gone, and will not add another there.
-    const taken =
-      (yield* occupant(slot)) ??
-      (listing.checkouts.some((checkout) => checkout.path === slot) ? { owner: opts.repo } : null);
-    if (taken === null) {
-      at = slot;
-      break;
-    }
-    const recorded = opts.recordedBy === undefined ? null : yield* opts.recordedBy(slot);
-    passed.push(`${slot} is ${occupiedAs(taken.owner, recorded)}`);
-  }
-  if (at === null) return { refused: `${passed.join("; ")}; free one of them and retry` };
+  const slot = yield* freeSlot({ ...opts, listing });
+  if (slot.at === null) return { refused: slot.refused };
+  const { at, passed } = slot;
 
   // A branch this checkout already has is what a fix round works on.
   const known =
@@ -1274,6 +1284,34 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       made.passed.length === 0 ? "" : `, passing over ${made.passed.join("; ")}`
     }`,
   } satisfies Checkout;
+});
+
+/**
+ * Why `checkoutFor` would refuse a git branch checkout for `opts` now, in the same words,
+ * or null where it would not; cuts and records nothing.
+ */
+export const checkoutRefusal = Effect.fn("worktree.checkoutRefusal")(function* (
+  herdr: Herdr,
+  opts: BranchAsk & Pick<CheckoutAsk, "recordedBy" | "starting">,
+) {
+  const path = yield* Path.Path;
+  const plan = yield* branchFor(opts);
+  if (plan.refused) return plan.refused;
+  if (
+    opts.starting !== undefined &&
+    (yield* whyNotWorkIn(herdr, opts.starting.cwd, { ref: plan.base, in: opts.cwd })) === null
+  )
+    return null;
+  const listing = yield* gitWorktrees(shell, opts.cwd);
+  if (!listing) return `no worktree for ${plan.branch}: ${opts.cwd} is not a git checkout`;
+  if (listing.checkouts.some((checkout) => checkout.branch === plan.branch)) return null;
+  const first = path.join(
+    yield* herdr.worktreesDirectory(),
+    path.basename(listing.repo),
+    ...branchPath(plan.branch),
+  );
+  const slot = yield* freeSlot({ ...opts, repo: listing.repo, first, listing });
+  return slot.at === null ? `no worktree for ${plan.branch}: ${slot.refused}` : null;
 });
 
 // ---------------------------------------------------------------------------

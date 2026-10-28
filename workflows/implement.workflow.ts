@@ -1374,15 +1374,30 @@ const releasing = (delivered: {
       });
       if (merging !== null) return mr;
       let stageFailed = "";
+      let failedStage = "";
+      // Why another Stage would still be refused at the checkout the last one was refused
+      // at, asked again when it is offered and when it is picked.
+      const stageRefusal = (name: string) =>
+        failedStage === ""
+          ? Effect.succeed(null)
+          : Activity.make({
+              name,
+              success: Schema.NullOr(Schema.String),
+              execute: host.reviewedRefusal(runId, failedStage, mr),
+            });
       for (let n = 1; ; n++) {
+        const refused = yield* stageRefusal(`stage-refused-${n}`);
         const chosen = yield* next(
           ask({
             name: n === 1 ? "next" : `next-${n}`,
-            prompt: `${mr} is open.${stageFailed} What next?`,
-            options: [RELEASE, STAGE, FINISH],
+            prompt: `${mr} is open.${stageFailed}${
+              refused === null ? "" : ` Stage is not offered: ${refused}.`
+            } What next?`,
+            options: refused === null ? [RELEASE, STAGE, FINISH] : [RELEASE, FINISH],
           }),
           { round: n },
         );
+        if (chosen === STAGE && (yield* stageRefusal(`stage-picked-${n}`)) !== null) continue;
         if (chosen === STAGE) {
           const children = yield* Children;
           const invocation = `stage-${n}`;
@@ -1397,6 +1412,7 @@ const releasing = (delivered: {
             }),
           );
           stageFailed = result.failed;
+          failedStage = result.failed === "" ? "" : child.runId;
           yield* host.record(runId, `${invocation}: ${result.said}`);
           continue;
         }

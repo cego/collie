@@ -169,7 +169,11 @@ request is open and its checks left to CI are settled, the Run asks **What next?
   answers. Each Stage child is named `stage-<n>`. A failed Stage child leaves the implement
   Run asking what next, and that question names it and its reason, as in `<merge request>
   is open. stage-1 failed: <reason>. What next?`; **Release** and **Finish** still end it as
-  above and below.
+  above and below. Where that Stage's checkout was refused, the Run asks whether another
+  would still be refused, by the same resolution and cutting nothing, both before it asks
+  and when **Stage** is picked. While it would, **Stage** is left out, and the question
+  says why: `Stage is not offered: <the refusal>.` A Stage that failed for any other reason
+  is offered again.
 - **Finish** ends the Run with the merge request URL.
 
 `then=finish` ends at the merge request and `then=release` starts the release, without
@@ -667,7 +671,9 @@ show fails the Run and keeps the claim. A failed Run offers **Release again**: b
 release; after it, the new Run takes over the failed Run's landing — never a merge someone
 made outside a Release Run — and only tags, asking to adopt the claim the failed Run kept. For an application it
 finishes the tag that already carries the merge, stage included, and asks `production`
-afresh; where production already carries the merge it asks nothing and ends.
+afresh; where production already carries the merge it asks nothing and ends. A Run whose
+checkout was refused offers **Release again** only where another would get past its
+checkout, as [Stage again](#stage) does.
 
 **Its [Flow](../CONTEXT.md)** forecasts **Checkout**, **Assess**, **Prove the head**, **Review wait**,
 **Merge go**, **Helle claim** and **Merge**, then for an application **Stage**, **Production
@@ -759,7 +765,13 @@ carries <mr> at <head>, unmerged`. A stage that fails is rolled back and proved 
 claims are given back, and the Run fails with `stage of <mr> at <head> failed: <why>; stage
 is back on what production carries`. A rollback the forge cannot show fails the Run and
 keeps the claims, including where the environments a stage attempt reached could not be
-discovered. A failed Run offers **Stage again** of the same merge request.
+discovered. A failed Run offers **Stage again** of the same merge request. Where its
+checkout was refused, the card asks the checkout's resolution again, cutting nothing, each
+time it lists the offer and when it is picked. While another attempt would be refused,
+**Stage again** is listed as unavailable with the refusal, naming each path's occupant, and
+once one is freed it is offered again. Every follow-up that starts a Run's own workflow
+again is decided this way after a refused reviewed checkout, so Release's
+**Release again** is too.
 
 **Its [Flow](../CONTEXT.md)** forecasts **Checkout**, **Assess**, **Helle claim**, **Stage**,
 **Test on stage** and **Roll stage back**. A Stage that `implement`'s **What next?** started

@@ -677,6 +677,11 @@ replay does not cut a second checkout. Shipped `review` takes it before its own 
 `host.reviewedBranch(runId)` answers `{ branch }`, or the `{ refused }` the checkout would
 give, by the same resolution, and cuts and records nothing; shipped `review` asks it before
 its first menu, so a fix that cannot run is not offered.
+`host.reviewedRefusal(runId, failed, target)` answers, where Run `failed`'s reviewed
+checkout was refused, why another on `target` that this Run starts and waits on would still
+be refused, or null; shipped `implement` asks it before offering Stage again. A failed Run
+whose reviewed checkout was refused has each follow-up that starts its own workflow listed
+as unavailable while the same resolution would still refuse.
 
 `place.dir` is where what a Run produces belongs, and where the things that read a Run look:
 a plan's tickets under `plan/issues/`, a review's prose in `review.md` and its findings in

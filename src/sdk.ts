@@ -704,6 +704,18 @@ export interface HostApi {
    * answers from the record. Take it inside an Activity, so a replay does not cut again.
    */
   readonly checkoutReviewed: (runId: string) => Effect.Effect<ReviewedCheckout>;
+  /**
+   * Where Run `failed` had its reviewed checkout refused, why another on `target`, a merge
+   * request or diff target, that this Run starts and waits on would still be refused now,
+   * in `checkoutReviewed`'s words. Null where it would not be, or where `failed`'s checkout
+   * was never refused. It cuts and records nothing. Take it inside an Activity, so a
+   * replay answers the same.
+   */
+  readonly reviewedRefusal: (
+    runId: string,
+    failed: string,
+    target: string,
+  ) => Effect.Effect<string | null>;
   readonly held: (runId: string) => Effect.Effect<boolean>;
   readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
   readonly record: (runId: string, event: string) => Effect.Effect<void>;

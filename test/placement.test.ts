@@ -3035,3 +3035,73 @@ test.each([
     ),
   120_000,
 );
+
+test.each([
+  { workflow: "stage", offer: "stage-again" },
+  { workflow: "release", offer: "release-again" },
+])(
+  "a $workflow refused its checkout lists $offer as unavailable while every path is held, and as available once one is freed",
+  ({ workflow, offer }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* git("branch", "feature");
+        const first = `${rig.root}/.herdr/worktrees/project/feature`;
+        for (const slot of [first, `${first}-2`, `${first}-3`])
+          yield* fs.makeDirectory(slot, { recursive: true });
+        const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
+          made.restore(),
+        );
+        const api = yield* serveForges(
+          yield* forgeOnPath(bin, "gitlab", {
+            installed: true,
+            loggedIn: ["gitlab.example.com"],
+            login: LOGIN,
+            mrs: [
+              {
+                project: "gitlab.example.com/group/app",
+                iid: "355",
+                state: "open",
+                sourceBranch: "feature",
+              },
+            ],
+          }),
+        );
+        const unavailable = (registry: typeof Registry.Service, runId: string) =>
+          registry
+            .offers(runId)
+            .pipe(Effect.map((offers) => offers.find((one) => one.id === offer)?.unavailable));
+
+        const [held, freed] = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [refused] = yield* loaded(registry, [shipped(workflow)]);
+            const started = yield* startWith(refused!, "r1", { mr: MR_TARGET });
+            const view = yield* finished(started.runId);
+            expect(view?.status).toMatchObject({
+              status: "failed",
+              reason: expect.stringContaining("free one of them and retry"),
+            });
+            const held = yield* unavailable(registry, started.runId);
+            const picked = yield* registry
+              .invoke({ runId: started.runId, offer, input: {}, request: "r2" })
+              .pipe(Effect.flip);
+            expect(picked.reason).toContain(`does not offer "${offer}": no worktree for feature`);
+            yield* fs.remove(`${first}-3`, { recursive: true });
+            return [held, yield* unavailable(registry, started.runId)];
+          }),
+        ).pipe(
+          Effect.provide(
+            ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+          ),
+        );
+
+        const occupants = [first, `${first}-2`, `${first}-3`]
+          .map((slot) => `${slot} is a checkout that does not say which repository it belongs to`)
+          .join("; ");
+        expect(held).toBe(`no worktree for feature: ${occupants}; free one of them and retry`);
+        expect(freed).toBeNull();
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);

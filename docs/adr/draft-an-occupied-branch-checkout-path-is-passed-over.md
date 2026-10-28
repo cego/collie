@@ -83,6 +83,37 @@ checkout to itself, because it could go on in it while Stage works there. No oth
 checkout is ever taken, so the rejection of a fix round's taking over another Run's working
 tree stands.
 
+## Amendment: Stage again is offered only where its checkout would get past
+
+With all three paths held, a failed Stage's card offered **Stage again**, and implement's
+**What next?** offered **Stage**. Each pick started another Stage that was refused at its
+Checkout in the same way, the pattern #197 fixed for a review's fix (#220).
+
+The checkout's resolution now has a form that cuts and records nothing: `checkoutRefusal`. It asks what a real cut asks:
+the branch, the starting Run's checkout as in the amendment above, a checkout git lists on
+the branch, and the three slots. It answers in the cut's own words. The host records that
+a Run's reviewed checkout was refused, in that Run's directory, and the record decides
+nothing by itself.
+
+- **On the card.** For a failed Run with that record, every follow-up that starts the same
+  workflow again is asked about each time the card is drawn and again when it is invoked
+  (ADR-0025). While the resolution would still refuse, the follow-up is listed as
+  unavailable with the refusal. The rule reads no workflow's id (ADR-0029), so Release's
+  **Release again** follows it too, since it takes its checkout the same way.
+- **In What next?** After a Stage child whose checkout was refused, implement asks the same
+  resolution for a Stage it would start and wait on, before asking and when **Stage** is
+  picked. While it would refuse, **Stage** is left out and the question says why.
+
+Once an occupant is gone, both offer it again. A Stage or Release that failed for any other
+reason has no record and is offered again as before.
+
+This narrows the rejection above of remembering a refusal. What is remembered is only that
+the checkout was refused, never the answer. The answer is asked again each time, at the
+cost of one `git worktree list` and three path reads.
+
+The dry resolution and the real cut can still disagree when an occupant changes between
+them. The real cut refuses as before, so the cost is one failed Run.
+
 ## Consequences
 
 A second clone of a repository gets its own checkout of a branch, at a suffixed path. The

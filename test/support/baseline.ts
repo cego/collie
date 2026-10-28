@@ -88,6 +88,7 @@ import {
   PARKED,
   RunStatus,
   answerDecision,
+  checkoutRefusedFile,
   controlPath,
   declaredByModule,
   evidenceDir,
@@ -4425,6 +4426,67 @@ scenario(
         });
         expect(yield* runLog(runId)).toContain("stage-1: stage-1 failed");
         expect(started).toContainEqual(RELEASE_STARTED);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement leaves Stage out of what next, saying why, while the checkout its failed Stage was refused is still held",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-stage-held";
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [
+            {
+              project: "gitlab.example.com/group/project",
+              iid: "7",
+              state: "open",
+              sourceBranch: "feature",
+            },
+          ],
+        });
+        yield* repository();
+        yield* exec(["git", "branch", "feature"], { cwd: rig.projectDir });
+        const first = `${rig.root}/.herdr/worktrees/${rig.projectDir.split("/").pop()}/feature`;
+        for (const slot of [first, `${first}-2`, `${first}-3`])
+          yield* fs.makeDirectory(slot, { recursive: true });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        failing = new Set(["stage-1"]);
+        // What the host records where Stage's checkout is refused.
+        const stage = runDir(dir, `${runId}-stage-1`);
+        yield* fs.makeDirectory(stage, { recursive: true });
+        yield* fs.writeFileString(checkoutRefusedFile(stage), "every slot is held\n");
+        const held = [first, `${first}-2`, `${first}-3`]
+          .map((slot) => `${slot} is a checkout that does not say which repository it belongs to`)
+          .join("; ");
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "next");
+              yield* run.answer("next", "Stage");
+              const again = yield* goAsked(run.asked, "next-2");
+              expect(optionsOf([again], "next-2")).toEqual(["Release", "Finish"]);
+              expect(again.prompt).toContain(
+                `Stage is not offered: no worktree for feature: ${held}; free one of them and retry.`,
+              );
+              yield* run.answer("next-2", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("complete");
+        expect(new Set(started.map((child) => child.invocation))).toEqual(new Set(["stage-1"]));
       }),
     ),
   120_000,
