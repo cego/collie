@@ -6,6 +6,9 @@
 // renames `plan` still writes tickets. So the facts are the branch, the merge request,
 // the tickets and whatever a human or the forge has since said about them.
 
+/** Says why a Run completed with nothing to land, in the Run's directory `dir`. */
+export const nothingToLandFile = (dir: string) => `${dir}/nothing-to-land`;
+
 /** What a Run left behind, as a card reads it. */
 export interface WorkFacts {
   /** Whether it is over, whichever way it ended. */

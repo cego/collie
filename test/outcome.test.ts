@@ -330,8 +330,8 @@ test("a bug is a fail then a pass, on two different trees", () => {
   ).toEqual(["the Output does not name the verification that reproduced the bug"]);
 });
 
-/** A bug Run's `regression` failing as expected on an earlier tree, then passing, each as `[executable, ...argv]`. */
-const reproducedThenFixed = (reproducedAs: string[], fixedAs: string[]) =>
+/** A bug Run's `regression` failing as expected on an earlier tree, then passing. */
+const regressionPair = (before: Partial<Verification>, after: Partial<Verification>) =>
   withOutput(
     { reproduced: "regression" },
     {
@@ -339,16 +339,22 @@ const reproducedThenFixed = (reproducedAs: string[], fixedAs: string[]) =>
         record({ name: "tests" }),
         record({
           name: "regression",
-          executable: reproducedAs[0],
-          argv: reproducedAs.slice(1),
           expect: "fail",
           exit: 1,
           start: EARLIER,
           end: EARLIER,
+          ...before,
         }),
-        record({ name: "regression", executable: fixedAs[0], argv: fixedAs.slice(1) }),
+        record({ name: "regression", ...after }),
       ],
     },
+  );
+
+/** The same, each command as `[executable, ...argv]`. */
+const reproducedThenFixed = (reproducedAs: string[], fixedAs: string[]) =>
+  regressionPair(
+    { executable: reproducedAs[0], argv: reproducedAs.slice(1) },
+    { executable: fixedAs[0], argv: fixedAs.slice(1) },
   );
 
 test("a bug reproduced by one command and fixed by another is a gap naming both", () => {
@@ -358,13 +364,57 @@ test("a bug reproduced by one command and fixed by another is a gap naming both"
       reproducedThenFixed(["/usr/bin/false"], ["/usr/bin/bun", "test", "test/x.test.ts"]),
     ),
   ).toEqual([
-    'the bug was reproduced by "false" but the fix is proven by "bun test test/x.test.ts": one command has to fail before the fix and pass after it',
+    'the bug was reproduced by "/usr/bin/false" in /repo but the fix is proven by "/usr/bin/bun test test/x.test.ts" in /repo: one command has to fail before the fix and pass after it',
   ]);
 });
 
 test("a bug whose one command failed before the fix and passes after it has no reproduction gap", () => {
   const command = ["/usr/bin/bun", "test", "test/x.test.ts"];
   expect(checkGaps("bug", reproducedThenFixed(command, command))).toEqual([]);
+});
+
+const SHIM = "/home/u/.local/share/mise/shims/bun";
+const INSTALLED = "/home/u/.local/share/mise/installs/bun/1.4/bin/bun";
+
+test("a bug reproduced through a shim and fixed through the real binary, both asked as bun, is proved", () => {
+  const argv = ["test", "test/x.test.ts"];
+  const pair = regressionPair(
+    { asked: "bun", executable: SHIM, argv },
+    { asked: "bun", executable: INSTALLED, argv },
+  );
+  expect(checkGaps("bug", pair)).toEqual([]);
+});
+
+test("a bug asked as bun both times but with other arguments names both resolved commands", () => {
+  const pair = regressionPair(
+    { asked: "bun", executable: SHIM, argv: ["test", "test/x.test.ts"] },
+    { asked: "bun", executable: INSTALLED, argv: ["test", "test/y.test.ts"] },
+  );
+  expect(checkGaps("bug", pair)).toEqual([
+    `the bug was reproduced by "bun (${SHIM}) test test/x.test.ts" in /repo but the fix is proven by "bun (${INSTALLED}) test test/y.test.ts" in /repo: one command has to fail before the fix and pass after it`,
+  ]);
+});
+
+test("a bug whose records do not say how bun was asked compares the paths it resolved to", () => {
+  const argv = ["test", "test/x.test.ts"];
+  const pair = regressionPair({ executable: SHIM, argv }, { executable: INSTALLED, argv });
+  expect(checkGaps("bug", pair)).toEqual([
+    `the bug was reproduced by "${SHIM} test test/x.test.ts" in /repo but the fix is proven by "${INSTALLED} test test/x.test.ts" in /repo: one command has to fail before the fix and pass after it`,
+  ]);
+});
+
+test("a check's command resolved to another bun is not run by a record of bun through a shim", () => {
+  const tests = { name: "tests", executable: INSTALLED, argv: ["test"], cwd: "/repo" };
+  const shimmed = record({
+    name: "mine",
+    by: "agent",
+    asked: "bun",
+    executable: SHIM,
+    argv: ["test"],
+  });
+  expect(
+    evidenceGaps("unspecified", collected({ verifications: [shimmed], commands: [tests] })),
+  ).toEqual(["tests was never run"]);
 });
 
 test("a refactor needs the review to say behaviour survived; a green suite is not enough", () => {
@@ -571,6 +621,29 @@ test.each([
   );
   expect(rendered).toBe(
     "- x: pass (by collie), on this tree, at 2026-09-11T10:00:00.000Z; never seen failing on an earlier tree",
+  );
+});
+
+test("a check asked as bun the same way, failing through a shim before, is shown as seen failing", () => {
+  const argv = ["test", "test/x.test.ts"];
+  const rendered = renderRecordedChecks(
+    collected({
+      verifications: [
+        record({
+          name: "x",
+          asked: "bun",
+          executable: SHIM,
+          argv,
+          exit: 1,
+          result: "fail",
+          end: EARLIER,
+        }),
+        record({ name: "x", asked: "bun", executable: INSTALLED, argv }),
+      ],
+    }),
+  );
+  expect(rendered).toBe(
+    "- x: pass (by collie), on this tree, at 2026-09-11T10:00:00.000Z; seen failing on an earlier tree",
   );
 });
 

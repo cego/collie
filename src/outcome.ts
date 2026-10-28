@@ -14,7 +14,7 @@ import { checkProof, owedLocally, owesNothingHere } from "./check-proof";
 import {
   passed,
   ranOneTest,
-  sameCommand,
+  sameAsked,
   TOO_LARGE,
   type CheckCommand,
   type FailedTest,
@@ -382,7 +382,14 @@ function earlierTree(v: Verification, final: Snapshot): boolean {
   return v.end.head_sha !== final.head_sha || v.end.fingerprint !== final.fingerprint;
 }
 
-const shown = (v: Verification) => [v.executable.split("/").at(-1), ...v.argv].join(" ");
+/** A command whole, so two that differ never read the same. */
+const shown = (v: Verification) => {
+  const program =
+    v.asked === undefined || v.asked === v.executable
+      ? v.executable
+      : `${v.asked} (${v.executable})`;
+  return `"${[program, ...v.argv].join(" ")}" in ${v.cwd}`;
+};
 
 function names(value: YamlValue | undefined): string[] {
   return Array.isArray(value) ? value.filter(isString) : [];
@@ -490,9 +497,9 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
             ? onlySearched("regression")
             : "regression does not pass on the current tree, so the fix is not proven",
         );
-      else if (before.length > 0 && !before.some((v) => sameCommand(v, fixedBy)))
+      else if (before.length > 0 && !before.some((v) => sameAsked(v, fixedBy)))
         check(
-          `the bug was reproduced by "${shown(before.at(-1)!)}" but the fix is proven by "${shown(fixedBy)}": one command has to fail before the fix and pass after it`,
+          `the bug was reproduced by ${shown(before.at(-1)!)} but the fix is proven by ${shown(fixedBy)}: one command has to fail before the fix and pass after it`,
         );
       const named = anyField(got, "reproduced");
       if (!isString(named) || named.trim() === "")
@@ -692,7 +699,7 @@ export function renderRecordedChecks(
       : "on an earlier tree";
   const seenFailing = (v: Verification) =>
     got.verifications.some(
-      (one) => one.exit !== 0 && onTree(one) === "on an earlier tree" && sameCommand(one, v),
+      (one) => one.exit !== 0 && onTree(one) === "on an earlier tree" && sameAsked(one, v),
     )
       ? "seen failing on an earlier tree"
       : "never seen failing on an earlier tree";

@@ -218,6 +218,40 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    test("reads issues by number, which the open listing need not hold", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fake = fakeForge(
+            name,
+            model(name, {
+              issues: [1, 2, 3].map((number) => ({
+                project: PROJECT[name],
+                number,
+                title: `Issue ${number}`,
+                body: "Evidence",
+                state: number === 3 ? "closed" : "open",
+              })),
+            }),
+          );
+          expect(
+            yield* forge
+              .issues(PROJECT[name], "/w", fake.run, [3, 1])
+              .pipe(Effect.provide(fake.layer)),
+          ).toMatchObject({
+            ok: true,
+            issues: [
+              { number: 3, title: "Issue 3" },
+              { number: 1, title: "Issue 1" },
+            ],
+          });
+          expect(
+            (yield* forge
+              .issues(PROJECT[name], "/w", fake.run, [9])
+              .pipe(Effect.provide(fake.layer))).ok,
+          ).toBe(false);
+        }),
+      ));
+
     test("lists open issues beyond the first page", () =>
       runEffect(
         Effect.gen(function* () {

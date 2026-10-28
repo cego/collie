@@ -213,7 +213,10 @@ const spawned = (
       : { ...spec, executable: ran.executable, argv: ran.argv, cwd: ran.cwd };
   });
 
-/** The gate, the merge request and CI's proof, answering with the merge request's URL. */
+/**
+ * The gate, the merge request and CI's proof, answering with the merge request's URL, or why
+ * the branch had nothing to land.
+ */
 export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -537,6 +540,12 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       ),
     ];
     if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
+    const nothing = yield* Activity.make({
+      name: "nothing-to-land",
+      success: Schema.NullOr(Schema.String),
+      execute: host.nothingToLand(runId, cwd),
+    });
+    if (nothing !== null) return { nothing };
     const leftToCi = checks.filter((spec) => spec.ci !== undefined);
     const mrUrl = yield* mergeRequest(
       Effect.gen(function* () {
@@ -737,5 +746,5 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             ? { why: `Outcome unproved after ${ROUNDS} CI fixes`, unmoved: false }
             : null;
     }
-    return mrUrl;
+    return { mr: mrUrl };
   });

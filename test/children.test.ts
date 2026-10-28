@@ -16,7 +16,7 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
 import { readTask } from "../src/task";
-import { events, stopHost, until } from "./support/host";
+import { events, root, stopHost, until } from "./support/host";
 import { proves, save, type World } from "./support/world";
 
 /** The parent, the child, the contract they share, and which house provides it. */
@@ -531,6 +531,55 @@ test(
           yield* stopHost(world.state);
         }),
       [],
+    ),
+  300_000,
+);
+
+/** This Machine's fork of `plan`: the shipped definition spread, under the same id. */
+const SPREADING_FORK = `import { defineWorkflow } from "collie";
+import original from "../../workflows/plan.workflow.ts";
+
+export default defineWorkflow({ ...original, id: "plan" });
+`;
+
+test.each([
+  { against: "the shipped plan", fork: false },
+  { against: "a user-layer fork that spreads it", fork: true },
+])(
+  "an Improvement starts plan with then=implement against $against",
+  ({ fork }) =>
+    proves(
+      "collie-children-then-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          for (const file of ["plan.workflow.ts", "plan.md"])
+            yield* fs
+              .copyFile(`${root}workflows/${file}`, `${world.install}/workflows/${file}`)
+              .pipe(Effect.orDie);
+          if (fork)
+            yield* fs
+              .writeFileString(`${world.user}/plan.workflow.ts`, SPREADING_FORK)
+              .pipe(Effect.orDie);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const started = yield* client
+            .start({
+              project: world.project,
+              id: "improves",
+              request: "req-1",
+              input: { goal: "Fix what the day showed" },
+            })
+            .pipe(Effect.orDie);
+          const view = yield* until(
+            () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+            (one) => one?.status.status === "complete" || one?.status.status === "failed",
+          );
+          expect(view?.status).toMatchObject({ status: "complete" });
+          const child = view?.status.status === "complete" ? String(view.status.value) : "";
+          expect(yield* client.run({ runId: child }).pipe(Effect.orDie)).not.toBeNull();
+          yield* stopHost(world.state);
+        }),
+      ["improves.workflow.ts"],
     ),
   300_000,
 );

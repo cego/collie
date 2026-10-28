@@ -1238,7 +1238,7 @@ function clone<R>(
 
 export const github: Forge = {
   name: "github",
-  issues: (project, cwd) => listIssues(LOGIN, project, cwd),
+  issues: (project, cwd, _run, numbers) => listIssues(LOGIN, project, cwd, numbers),
   fileIssue: (project, title, body, cwd) => createIssue(LOGIN, project, title, body, cwd),
   commentIssue: (project, number, body, cwd) => commentIssue(LOGIN, project, number, body, cwd),
   clone,

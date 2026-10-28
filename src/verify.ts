@@ -429,6 +429,7 @@ export const collect = Effect.fn("Verify.collect")(function* (
     run: what.run,
     name: what.name,
     executable: absolute,
+    asked: what.executable,
     argv: [...what.argv],
     cwd: what.cwd,
     start,
@@ -547,6 +548,15 @@ export const sameCommand = (one: Command, other: Command) =>
   one.cwd === other.cwd &&
   one.argv.length === other.argv.length &&
   one.argv.every((word, at) => word === other.argv[at]);
+
+/**
+ * Whether two records ran the same command as it was asked, so a fail and a pass through
+ * different installs of one tool are one command; by resolved path where either does not say.
+ */
+export const sameAsked = (one: Verification, other: Verification) =>
+  one.asked === undefined || other.asked === undefined
+    ? sameCommand(one, other)
+    : sameCommand({ ...one, executable: one.asked }, { ...other, executable: other.asked });
 
 /** A check's command resolved for its Run; one whose executable is not found matches no record. */
 export type CheckCommand = Pick<Verification, "name" | "argv" | "cwd"> & {

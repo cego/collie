@@ -681,8 +681,11 @@ export interface HostApi {
   readonly dir: string;
   /** This Machine's Run report, for admissions at or after the ISO moment. */
   readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-  /** Open issues on the forge of this Run's checkout. */
-  readonly issues: (runId: string) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+  /** Open issues on the forge of this Run's checkout, or with `numbers` those issues read one by one. */
+  readonly issues: (
+    runId: string,
+    numbers?: ReadonlyArray<number>,
+  ) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
   /** Files redacted text on this Run's forge; another checkout's identity is refused. */
   readonly fileIssue: (options: {
     readonly runId: string;
@@ -721,8 +724,27 @@ export interface HostApi {
    * `place` answers with it from then on, and every verification is bound to it
    * (ADR-0054). The one git already has, else one cut from the branch; asking again
    * answers from the record. Take it inside an Activity, so a replay does not cut again.
+   * `inStarter` lets it work in the checkout of the Run that started it and waits on it
+   * alone, where that checkout is clean, at the branch's head and idle: only for work
+   * that commits and pushes nothing, since that checkout's branch is the starter's own.
    */
-  readonly checkoutReviewed: (runId: string) => Effect.Effect<ReviewedCheckout>;
+  readonly checkoutReviewed: (
+    runId: string,
+    opts?: { readonly inStarter?: boolean },
+  ) => Effect.Effect<ReviewedCheckout>;
+  /**
+   * Where Run `failed` had its reviewed checkout refused, why another on `target`, a merge
+   * request or diff target, that this Run starts and waits on, taking it with `inStarter`,
+   * would still be refused now,
+   * in `checkoutReviewed`'s words. Null where it would not be, or where `failed`'s checkout
+   * was never refused. It cuts and records nothing. Take it inside an Activity, so a
+   * replay answers the same.
+   */
+  readonly reviewedRefusal: (
+    runId: string,
+    failed: string,
+    target: string,
+  ) => Effect.Effect<string | null>;
   readonly held: (runId: string) => Effect.Effect<boolean>;
   readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
   readonly record: (runId: string, event: string) => Effect.Effect<void>;
@@ -923,6 +945,13 @@ export interface HostApi {
    * inside an Activity, so a replay reads the same commit. Fails where origin cannot be read.
    */
   readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;
+  /**
+   * Where the checkout at `cwd` has no commits over its merge-base with the default branch,
+   * the base a `default-base` verify runs at, and nothing uncommitted: records on this Run's
+   * card and in its log that it had nothing to land, and answers why. Otherwise, or where
+   * that base cannot be read, null. Take it inside an Activity.
+   */
+  readonly nothingToLand: (runId: string, cwd: string) => Effect.Effect<string | null>;
   /**
    * Merges the merge request this Run recorded at `head`, through the forge's REST merge,
    * never as an admin and never by auto-merge. The Run's landing record is written before
@@ -1541,6 +1570,8 @@ export interface ActionFacts {
   readonly succeeded: boolean;
   readonly branch: string | null;
   readonly mrUrl: string | null;
+  /** It completed with no change to land, so there is nothing to carry on from. */
+  readonly nothingToLand?: boolean;
   readonly planIssues: number;
   readonly disposed: boolean;
   /** Findings it left for somebody to fix, which is what a fix is offered over. */

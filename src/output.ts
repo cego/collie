@@ -248,7 +248,10 @@ export const afterMergeAnswers = (
   });
 
 export const FixOutputSchema = Schema.Struct({
-  verdict: VerdictSchema,
+  verdict: VerdictSchema.annotate({
+    description:
+      '"findings" only where findings are left unresolved, each listed in "findings"; what you fixed goes in "fixed" and what you dispute in "disputed", and with nothing left unresolved the verdict is "clean"',
+  }),
   findings: optionalList(FindingSchema),
   fixed: optionalList(FixedSchema),
   disputed: optionalList(FindingSchema),
