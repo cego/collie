@@ -286,7 +286,12 @@ export default defineWorkflow({
 
       const outcomes = new Map(acted.map(({ finding, outcome }) => [finding.key, outcome]));
       const starting = chosen(triaged.improvements, outcomes, bound);
-      // The issues as the forge holds them, so a goal carries only what the host let out.
+      const filedNumber = (key: string) => {
+        const outcome = outcomes.get(key);
+        return outcome?.kind === "filed" ? [outcome.number] : [];
+      };
+      // The issues as the forge holds them, so a goal carries only what the host let out. Read
+      // by number: the forge's open listing can lag the issues this Run just filed.
       const published =
         starting.length === 0
           ? Result.succeed([])
@@ -296,17 +301,16 @@ export default defineWorkflow({
                 success: Opened,
                 error: WorkflowError,
                 execute: host
-                  .issues(run.id)
+                  .issues(run.id, [
+                    ...new Set(starting.flatMap(({ keys }) => keys.flatMap(filedNumber))),
+                  ])
                   .pipe(Effect.map((issues) => issues.map((issue) => ({ ...issue, keys: [] })))),
               }),
             );
       const issuesOf = (improvement: Improvement, listed: typeof Opened.Type) =>
-        improvement.keys.flatMap((key) => {
-          const outcome = outcomes.get(key);
-          return outcome?.kind === "filed"
-            ? listed.filter(({ number }) => number === outcome.number)
-            : [];
-        });
+        improvement.keys.flatMap((key) =>
+          filedNumber(key).flatMap((number) => listed.filter((one) => one.number === number)),
+        );
       const improvements: ReadonlyArray<Ended> = yield* Effect.all(
         starting.map((improvement) =>
           improvementsStep(
@@ -315,7 +319,7 @@ export default defineWorkflow({
               const issues = issuesOf(improvement, published.success);
               if (issues.length < improvement.keys.length)
                 return yield* new WorkflowError({
-                  reason: "an issue it fixes is not among the forge's open issues",
+                  reason: "an issue it fixes could not be read back from the forge",
                 });
               const child = yield* children.start({
                 invocation: `improvement-${improvement.name}`,

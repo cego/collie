@@ -659,8 +659,11 @@ export interface HostApi {
   readonly dir: string;
   /** This Machine's Run report, for admissions at or after the ISO moment. */
   readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-  /** Open issues on the forge of this Run's checkout. */
-  readonly issues: (runId: string) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+  /** Open issues on the forge of this Run's checkout, or with `numbers` those issues read one by one. */
+  readonly issues: (
+    runId: string,
+    numbers?: ReadonlyArray<number>,
+  ) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
   /** Files redacted text on this Run's forge; another checkout's identity is refused. */
   readonly fileIssue: (options: {
     readonly runId: string;

@@ -642,7 +642,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface HostApi {
     readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-    readonly issues: (runId: string) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+    readonly issues: (runId: string, numbers?: ReadonlyArray<number>) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
     readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string }) => Effect.Effect<IssueRef, WorkflowError>;
     readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string }) => Effect.Effect<void, WorkflowError>;
     readonly dir: string;
@@ -3540,11 +3540,11 @@ export const hostLayer = (options: {
           Effect.fail(
             new WorkflowError({ reason: "Run reporting requires the host's workflow registry" }),
           ),
-        issues: (runId) =>
+        issues: (runId, numbers) =>
           under(
             Effect.gen(function* () {
               const here = yield* issueCheckout(runId);
-              const listed = yield* here.forge.issues(here.project, here.cwd, runShell);
+              const listed = yield* here.forge.issues(here.project, here.cwd, runShell, numbers);
               if (!listed.ok) return yield* new WorkflowError({ reason: listed.reason });
               return listed.issues;
             }),

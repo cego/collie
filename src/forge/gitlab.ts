@@ -1195,7 +1195,8 @@ function clone<R>(
 
 export const gitlab: Forge = {
   name: "gitlab",
-  issues: (project, cwd) => listIssues(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd),
+  issues: (project, cwd, _run, numbers) =>
+    listIssues(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd, numbers),
   fileIssue: (project, title, body, cwd) =>
     createIssue(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, title, body, cwd),
   commentIssue: (project, number, body, cwd) =>

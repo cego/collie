@@ -3270,8 +3270,10 @@ left out as "about Collie". Each finding that is left gets one "seen again" comm
 open issue it matches, or the open issue carrying its key, or is filed as a new issue on
 the forge of the checkout it runs in. Up to `improvements` groups of newly filed issues
 then start there as Improvements, each a `plan` of its own card that builds itself
-(`then=implement`) and ends at a reviewed merge request that closes its issues. Nobody is
-asked anything, and nothing is merged. `improvements=0` files without building.
+(`then=implement`) and ends at a reviewed merge request that closes its issues. Its goal
+is those issues as the forge holds them, read back by number, because the forge's open
+listing can lag issues filed seconds before. Nobody is asked anything, and nothing is
+merged. `improvements=0` files without building.
 
 It works in a worktree of its own, cut from the checkout it was started in and detached at
 `origin`'s default branch as just fetched, so a shared, dirty or stale checkout is neither

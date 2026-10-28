@@ -515,12 +515,12 @@ function issueApi(
       : json(forge === "github" ? { login: model.login } : { id: 1, username: model.login });
   const match =
     forge === "github"
-      ? /^repos\/([^/]+\/[^/]+)\/issues(?:\/(\d+)\/comments)?(?:\?.*)?$/.exec(route)
-      : /^projects\/([^/]+)\/issues(?:\/(\d+)\/notes)?(?:\?.*)?$/.exec(route);
+      ? /^repos\/([^/]+\/[^/]+)\/issues(?:\/(\d+)(\/comments)?)?(?:\?.*)?$/.exec(route)
+      : /^projects\/([^/]+)\/issues(?:\/(\d+)(\/notes)?)?(?:\?.*)?$/.exec(route);
   if (match === null) return null;
   const path = decodeURIComponent(match[1]!);
   const project = `${forge === "github" ? "github.com" : flag(args, "--hostname")}/${path}`;
-  if (flag(args, "-X") === "POST" && match[2] !== undefined) {
+  if (flag(args, "-X") === "POST" && match[2] !== undefined && match[3] !== undefined) {
     if (model.mrs.some((one) => one.project === project && one.iid === match[2])) return null;
     const noted = issueAnswer(forge, model, [
       "issue",
@@ -568,7 +568,30 @@ function issueApi(
     };
   }
   if ((flag(args, "-X") ?? "GET") !== "GET") return null;
-  if (match[2] !== undefined) return null;
+  if (match[3] !== undefined) return null;
+  if (match[2] !== undefined) {
+    const one = (model.issues ?? []).find(
+      (issue) => issue.project === project && issue.number === Number(match[2]),
+    );
+    if (one === undefined) return no();
+    return json(
+      forge === "github"
+        ? {
+            number: one.number,
+            title: one.title,
+            body: one.body,
+            state: one.state,
+            html_url: `https://${project}/issues/${one.number}`,
+          }
+        : {
+            iid: one.number,
+            title: one.title,
+            description: one.body,
+            state: one.state === "open" ? "opened" : "closed",
+            web_url: `https://${project}/-/issues/${one.number}`,
+          },
+    );
+  }
   const query = new URLSearchParams(route.split("?")[1]);
   const issues: Schema.Json[] = (model.issues ?? [])
     .filter(

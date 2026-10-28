@@ -760,6 +760,8 @@ agent starts on a skill the work cannot do without.
 
 `host.issues(runId)` lists the open issues of that Run's checkout, each with `number`,
 `title`, `body`, and `url`. The checkout's remote decides its forge.
+`host.issues(runId, numbers)` reads those issues one by one instead. Use it for issues the
+Run just filed: a forge's open listing can lag a filing by seconds.
 `host.fileIssue({ runId, title, body })` returns the filed issue's `number` and `url`.
 `host.commentIssue({ runId, number, body })` comments on one there.
 

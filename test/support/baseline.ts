@@ -13571,6 +13571,7 @@ let filed: Array<{ title: string; body: string }> = [];
 let commented: Array<{ number: number; body: string }> = [];
 let refusing = new Set<string>();
 let unlisted = false;
+let lagging = false;
 
 /** The Machine's report and this checkout's forge, as `self-improve` reads and writes them. */
 const improving: HostOverride = Layer.effect(Host)(
@@ -13606,18 +13607,20 @@ const improving: HostOverride = Layer.effect(Host)(
             measures: measuresOf([]),
           };
         }),
-      issues: () =>
-        unlisted && filed.length > 0
-          ? Effect.fail(new WorkflowError({ reason: "the forge did not answer" }))
-          : Effect.succeed([
-              ...openIssues,
-              ...filed.map(({ title, body }, at) => ({
-                number: 101 + at,
-                title,
-                body,
-                url: `https://forge.example/project/issues/${101 + at}`,
-              })),
-            ]),
+      issues: (_, numbers) => {
+        if (unlisted && filed.length > 0)
+          return Effect.fail(new WorkflowError({ reason: "the forge did not answer" }));
+        const filedIssues = filed.map(({ title, body }, at) => ({
+          number: 101 + at,
+          title,
+          body,
+          url: `https://forge.example/project/issues/${101 + at}`,
+        }));
+        const all = [...openIssues, ...filedIssues];
+        if (numbers !== undefined)
+          return Effect.succeed(all.filter(({ number }) => numbers.includes(number)));
+        return Effect.succeed(lagging ? openIssues : all);
+      },
       fileIssue: ({ title, body }) =>
         refusing.has(title)
           ? Effect.fail(new WorkflowError({ reason: "it names another checkout" }))
@@ -13654,6 +13657,7 @@ const freshDay = () => {
   commented = [];
   refusing = new Set();
   unlisted = false;
+  lagging = false;
 };
 
 const readText = (file: string) =>
@@ -13983,6 +13987,35 @@ scenario(
         expect(yield* readText(`${runDir(dir, "r-unlisted")}/summary.md`)).toContain(
           "the forge did not answer",
         );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a self-improve Improvement keyed to issues the Run just filed starts, though the forge's open listing has not caught up",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        lagging = true;
+        yield* rig.queueOutputs([
+          triaged(
+            [finding({ key: "lost-docs" }), finding({ key: "stale-docs" })],
+            [{ name: "docs", keys: ["lost-docs", "stale-docs"], why: "both docs" }],
+          ),
+        ]);
+        const result = yield* improved("r-lagging", { runs: "checkout", improvements: 1 });
+        const summary = yield* readText(`${runDir(dir, "r-lagging")}/summary.md`);
+        expect(summary).not.toContain("failed to start");
+        expect(saidBy(result)).toContain(
+          "Filed 2, commented 0, refused 0; 1 Improvements, 0 failed",
+        );
+        expect(
+          started.map(({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
+        ).toEqual([["improvement-docs", "plan", true]]);
+        expect(started[0]?.input.then).toBe("implement");
+        expect(started[0]?.input.goal).toContain("`Closes #101`, `Closes #102`");
       }),
     ),
   120_000,
