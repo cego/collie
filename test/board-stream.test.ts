@@ -195,6 +195,94 @@ test(
   120_000,
 );
 
+/**
+ * Renames a finished Run's Task six times, each waited for on the board, and holds the host to
+ * reading herdr's agents and panes only on its 5 s tick; `drawer` keeps the Run's detail
+ * followed throughout.
+ */
+const readsOnlyOnTicks = (drawer: boolean) =>
+  proves(
+    "collie-board-reading-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* writeTask(world.state, {
+          id: "task-1",
+          workspace: "w1",
+          label: "project | Plain",
+          cwd: world.project,
+          created_at: "2026-10-01T09:00:00Z",
+        }).pipe(Effect.orDie);
+        const started = yield* collie(world, [
+          "run",
+          "start",
+          "plain",
+          "--task",
+          "task-1",
+          "--input",
+          "note=hi",
+        ]);
+        const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+          started.envelope.data,
+        );
+        expect((yield* collie(world, ["run", "wait", runId])).envelope.ok).toBe(true);
+        yield* until(
+          () => firstSnapshot(world.state),
+          (snapshot) => snapshot?.tasks[0]?.state === "done",
+        );
+        const record = (yield* readTask(world.state, "task-1").pipe(Effect.orDie))!;
+        const door = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
+        if (drawer) {
+          const opened = yield* Deferred.make<void>();
+          yield* door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+            Stream.tap(() => Deferred.succeed(opened, undefined)),
+            Stream.runDrain,
+            Effect.ignore,
+            Effect.forkScoped,
+          );
+          yield* Deferred.await(opened);
+        }
+        const log = `${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl`;
+        const lists = Effect.map(
+          Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)),
+          (text) =>
+            text.split("\n").filter((line) => /"cmd":"(agent|pane) list"/.test(line)).length,
+        ).pipe(Effect.orDie);
+        const before = yield* lists;
+        const since = yield* Clock.currentTimeMillis;
+        for (const name of ["One", "Two", "Three", "Four", "Five", "Six"]) {
+          const shown = yield* door.board().pipe(
+            Stream.filter((message) =>
+              message._tag === "Snapshot"
+                ? message.tasks.some((one) => one.name === name)
+                : message._tag === "Upsert" && message.task.name === name,
+            ),
+            Stream.runHead,
+            Effect.forkScoped,
+          );
+          yield* writeTask(world.state, { ...record, label: `project | ${name}` }).pipe(
+            Effect.orDie,
+          );
+          expect((yield* Fiber.join(shown).pipe(Effect.timeout("20 seconds")))._tag).toBe("Some");
+        }
+        const ticks = Math.ceil(((yield* Clock.currentTimeMillis) - since) / 5000);
+        expect((yield* lists) - before).toBeLessThanOrEqual(2 * ticks);
+        yield* stopHost(world.state);
+      }),
+    ["plain.workflow.ts"],
+  );
+
+test(
+  "a write under the state directory rebuilds the board on herdr's last reading of its agents",
+  () => readsOnlyOnTicks(false),
+  120_000,
+);
+
+test(
+  "a Run's open drawer follows the board's reading of herdr, and reads none of its own",
+  () => readsOnlyOnTicks(true),
+  120_000,
+);
+
 test(
   "the installation id is the state directory's, through a host restart",
   () =>

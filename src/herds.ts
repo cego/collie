@@ -145,17 +145,21 @@ const restoredPanes = (session: LiveHerd, agents: ReadonlyArray<AgentInfo>) =>
 // ponytail: an event between two subscriptions is missed; the board's tick catches it.
 const changesIn = (session: LiveHerd) =>
   Stream.fromEffectRepeat(
-    Effect.gen(function* () {
-      const agents = yield* session.herdr.agentList();
-      const restored = yield* restoredPanes(session, agents);
-      yield* session.herdr.waitForEvent([
-        ...PANE_EVENTS,
-        ...[...agents, ...restored].map((one) => ({
-          type: "pane.agent_status_changed",
-          pane_id: one.paneId,
-        })),
-      ]);
-    }).pipe(Effect.retry(Schedule.spaced("5 seconds"))),
+    session.herdr
+      .waitForEvent(
+        Effect.gen(function* () {
+          const agents = yield* session.herdr.agentList();
+          const restored = yield* restoredPanes(session, agents);
+          return [
+            ...PANE_EVENTS,
+            ...[...agents, ...restored].map((one) => ({
+              type: "pane.agent_status_changed",
+              pane_id: one.paneId,
+            })),
+          ];
+        }),
+      )
+      .pipe(Effect.retry(Schedule.spaced("5 seconds"))),
   );
 
 /** How often the list of sessions is read again, so a session started later is watched. */

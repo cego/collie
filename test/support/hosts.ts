@@ -23,7 +23,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { GIT_QUIET } from "./git-quiet";
 import { alive, kill, MARKER, marked, rootBase } from "./sweep";
 import { testBunfig } from "./packages";
@@ -45,6 +45,11 @@ const makeRoot = () => {
   );
 };
 makeRoot();
+// `Bun.main` is the file running now, which in one process running several is set per test.
+const nameTestFile = () => {
+  process.env.COLLIE_TEST_FILE = relative(new URL("../..", import.meta.url).pathname, Bun.main);
+};
+nameTestFile();
 Object.assign(process.env, GIT_QUIET);
 process.env.COLLIE_HOST_WATCH_PID = String(process.pid);
 // A stopped host waits this long for its steps before exiting; well inside `settled` below,
@@ -121,6 +126,7 @@ beforeAll(() => {
 
 let before = new Set<string>();
 beforeEach(() => {
+  nameTestFile();
   before = new Set(entries());
 });
 

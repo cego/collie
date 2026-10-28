@@ -1615,16 +1615,26 @@ its time.
   again. `bun run test` sets `COLLIE_TEST_STARTS` to a fresh file, and the compiled
   `collie` and each call of the fake herdr and fake forge append a line naming themselves
   and what they were asked, such as `herdr agent list` or `collie host` (`src/starts.ts`);
-  a fake's line is written by the test process that answers it. The suite
-  ends with `test: <N> processes started` and the ten largest sources. The count leaves
-  out what never reaches those entry points: `collie` running as bun under `BUN_BE_BUN`,
+  a fake's line is written by the test process that answers it. Before each test the
+  preload sets `COLLIE_TEST_FILE` to the file running, every process the test starts
+  inherits it, and each line ends with a tab and that file. The suite ends with
+  `test: <N> processes started` and the ten largest sources, then the ten files that
+  started the most, each with its three largest sources. The count leaves out what never
+  reaches those entry points: `collie` running as bun under `BUN_BE_BUN`,
   real `git`, `ps` and `sleep`, the `sh` shims and stubs, and the fake `ssh` and the
   master it keeps. It first showed `herdr session list` as the largest source, at 3,970 of
   11,125: every board build read the sessions again, and a build then followed every write
   under the state directory. A host's board now reads them once a minute, as often as its
   event watch does (`SESSIONS_EVERY` in `src/herds.ts`), so a session that starts later
-  is on the board within that minute. A sweep still reads them fresh: cleanup must never
-  judge a newer session's agents gone.
+  is on the board within that minute, and News and the Homes' restating read them as
+  often. A sweep still reads them fresh: cleanup must never judge a newer session's agents
+  gone. Attributed by file, the board's builds were then most of the `agent list` and
+  `pane list` starts: a write or a Run recorded built the board again, and each build read
+  herdr's agents and panes, though neither moves an agent. A build now reads them again only
+  after herdr's own event or the board's 5 s tick (`herdrMoved` in `src/host.ts`), and a Run's
+  drawer takes its agents from the board built after the change it follows, rather than
+  reading herdr itself. The event watch opens its socket before it lists the agents it
+  subscribes to, so a session it cannot watch is not listed every 5 s for nothing.
 - **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
   needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
   and a fixed sleep is too long on an idle machine and too short on a busy one. Work that

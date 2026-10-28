@@ -110,6 +110,22 @@ test("a session's named agents and restored panes are read with one agent list",
     }),
   ));
 
+test("a session whose socket does not answer is not listed for a subscription it cannot make", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = { ...rig.pluginEnv(), socketPath: `${rig.stateDir}/gone.sock` };
+      const herdr = new Herdr(env);
+      yield* herdr.cli(["agent", "start", "impl-1", "--pane", "1-1"]);
+      const before = (yield* rig.cmds()).length;
+      yield* herdChanges(herdr, env).pipe(Stream.runHead, Effect.timeoutOption("1 second"));
+      expect(
+        (yield* rig.cmds())
+          .slice(before)
+          .filter((cmd) => cmd === "agent list" || cmd === "pane list"),
+      ).toEqual([]);
+    }),
+  ));
+
 test("a session herdr says nothing about is not a change", () =>
   runEffect(
     Effect.gen(function* () {
