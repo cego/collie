@@ -422,6 +422,10 @@ not "Implement plan". An answer that says nothing a different task of the same w
 would not also say — "Plan new work", "Implement plan" — is not taken; the work's own first
 sentence, in a few words, is.
 
+A title you give names the task as you wrote it: `collie run start --title`, or the
+`title` of a start chat or an agent makes for you. A title that says nothing — "Plan new
+work" — is not taken over the work's own words.
+
 Those labels are data. They go to the namer as a list of what things are called, under a
 prompt that says so, and what comes back is two short strings that can only become a
 label — never a path, an agent name or a command.

@@ -4570,6 +4570,23 @@ test("two goals started with one workflow are two Tasks named for their goals, n
     }),
   ));
 
+test("a title the human gave names the Task, and one that says nothing is not taken", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const labelOf = (title: string) =>
+        taskFor(
+          env,
+          { mode: "new" },
+          { workflow: "plan", inputs: { goal: "Plan the offer banner fix" }, title },
+        ).pipe(Effect.map((placed) => (placed._tag === "Ok" ? placed.label : null)));
+      expect(yield* labelOf("Offer banner, second attempt")).toEndWith(
+        " | Offer banner, second attempt",
+      );
+      expect(yield* labelOf("Plan new work")).toEndWith(" | Plan the offer banner fix");
+    }),
+  ));
+
 test("a start kept here is the workspace it was started from: its Task, or a new one kept there", () =>
   runEffect(
     Effect.gen(function* () {

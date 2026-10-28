@@ -305,6 +305,8 @@ export interface StartAbout {
   readonly inputs: Readonly<Record<string, unknown>>;
   /** What the human said it is for, where they said anything. */
   readonly goal?: string | null | undefined;
+  /** What the human called it, which names it unless it says nothing. */
+  readonly title?: string | undefined;
 }
 
 /** Infer a fresh Task's label from its work; `asking: false` uses the stand-in. */
@@ -323,7 +325,9 @@ export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
     goal: about.goal ?? null,
     cwd: env.cwd,
   };
-  return taskWorkspaceLabel(
-    yield* nameTask(naming, context, yield* liveNames(new Herdr(env), naming !== null)),
-  );
+  const live = yield* liveNames(new Herdr(env), naming !== null);
+  const title = oneLine(about.title ?? "");
+  if (title !== "" && !isGenericTitle(title, about.workflow))
+    return taskWorkspaceLabel({ project: fallbackName(context, live).project, title });
+  return taskWorkspaceLabel(yield* nameTask(naming, context, live));
 });
