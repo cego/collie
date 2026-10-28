@@ -101,6 +101,7 @@ import {
 } from "../../src/engine";
 import { declaredBy } from "../../src/discovery";
 import { readMeasurements } from "../../src/measurement";
+import type { Measurement } from "../../src/measurement-model";
 import { nothingToLandFile } from "../../src/standing";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
@@ -14277,11 +14278,16 @@ const tunePlan = (
   commit: string,
   metrics: ReadonlyArray<Schema.Json>,
   prepare: Schema.Json = null,
+  argv: ReadonlyArray<string> = [],
 ) => ({
   journeys: ["search"],
   cases: ["warm"],
   commands: [
-    { name: "bench", executable: "sh", argv: ["bench/bench.sh", `${rig.root}/bench-runs`] },
+    {
+      name: "bench",
+      executable: "sh",
+      argv: ["bench/bench.sh", `${rig.root}/bench-runs`, ...argv],
+    },
   ],
   prepare,
   metrics,
@@ -14522,9 +14528,13 @@ scenario(
   120_000,
 );
 
-/** `count` and `size` read from files a Cycle may commit; `size` swings while `jitter` is there. */
+/**
+ * `count` and `size` read from files a Cycle may commit; `count` is 3 wherever the default
+ * branch brought `fixed`, and `size` swings while `jitter` is there.
+ */
 const CYCLE_BENCH = [
   "count=7; [ -f count ] && count=$(cat count)",
+  "[ -f fixed ] && count=3",
   "size=100; [ -f size ] && size=$(cat size)",
   'if [ -e jitter ]; then echo x >> "$1"; if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then size=60; else size=140; fi; fi',
   'printf \'{"count": %s, "size": %s}\\n\' "$count" "$size"',
@@ -14555,13 +14565,21 @@ const RESET = () => ({ writes: [], sh: inCheckout("git reset -q --hard HEAD~1"),
 const EXHAUSTED = { result: "exhausted", why: "every ranked opportunity has been tried" };
 
 /** A tune-up that calibrates, then answers each Cycle's prompt with the next of `turns`. */
-const cycling = (runId: string, turns: ReadonlyArray<Schema.Json>) =>
+const cycling = (
+  runId: string,
+  turns: ReadonlyArray<Schema.Json>,
+  argv: ReadonlyArray<string> = [],
+) =>
   Effect.gen(function* () {
     const commit = yield* harnessCommit({ "bench/bench.sh": CYCLE_BENCH });
     yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
+    // The project the fake forge knows, for a Run that gets as far as its merge request.
+    yield* exec(["git", "remote", "set-url", "upstream", DELIVERY.gitlab.origin], {
+      cwd: rig.projectDir,
+    }).pipe(Effect.orDie);
     yield* rig.queueOutputs([
       TUNE_DISCOVERED,
-      tunePlan(commit, [STEADY_PRIMARY, SIZE_GUARDRAIL]),
+      tunePlan(commit, [STEADY_PRIMARY, SIZE_GUARDRAIL], null, argv),
       ...turns,
     ]);
     return commit;
@@ -14734,7 +14752,16 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const runId = "r-tune-restart";
-        yield* cycling(runId, [NO_CHANGE(), RESET(), FASTER(), NO_CHANGE(), RESET()]);
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [
+          NO_CHANGE(),
+          RESET(),
+          FASTER(),
+          NO_CHANGE(),
+          RESET(),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
         const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 3 } };
         yield* running(options, () =>
           until(
@@ -14756,8 +14783,8 @@ scenario(
           "cycle 2",
           "cycle 3",
         ]);
-        // A kept Cycle leaves a tree no final Measurement has proved yet.
-        expect(reasonOf(result)).toContain("no `final` Measurement");
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
       }),
     ),
   120_000,
@@ -14837,6 +14864,351 @@ scenario("tune-up refuses a wall time that is not a duration at the front door",
   ),
 );
 
+const fasterTo = (count: number) => tried(`echo ${count} > count && git add count`);
+
+/** The default branch moved by somebody else while a Cycle runs: `file` pushed to origin. */
+const upstreamPushes = (file: string) =>
+  `(git clone -q '${rig.root}/project-origin.git' '${rig.root}/upstream' && cd '${rig.root}/upstream' && echo theirs > ${file} && git add ${file} && git -c user.email=u@example.com -c user.name=u commit -qm upstream && git push -q origin HEAD)`;
+const fasterWhileUpstreamPushes = (count: number, file: string) => {
+  const turn = fasterTo(count);
+  return { ...turn, sh: `${upstreamPushes(file)} && ${turn.sh}` };
+};
+
+const TUNE_REVIEWED = {
+  verdict: "clean",
+  summary: "Search prepares its statement once; the bench runs search as people do.",
+  findings: [],
+  dropped: [],
+  fixed: [],
+  behavior_preserved: true,
+  measurement_valid: true,
+};
+
+/** The fake glab and gh on PATH, with no merge request yet. */
+const tuneForge = Effect.gen(function* () {
+  const bin = yield* FakeBin.make(`${rig.root}/bin`);
+  const forge = yield* forgeOnPath(bin, "gitlab", {
+    installed: true,
+    loggedIn: [FORGE_HOST.gitlab],
+    login: "tester",
+    mrs: [],
+  });
+  yield* forgeOnPath(bin, "github", { installed: true, loggedIn: [], login: null, mrs: [] });
+  return { bin, forge };
+});
+
+const finals = (runId: string) =>
+  Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
+    all.filter((one) => one.pass === "final"),
+  );
+
+const verdictsOf = (measured: { readonly result: Measurement["result"] }) =>
+  measured.result._tag === "Judged"
+    ? measured.result.verdicts.map(
+        (one) => `${one.metric} ${one.verdict}${one.held ? "" : ", not held"}`,
+      )
+    : [measured.result._tag];
+
+const originHead = () =>
+  Effect.map(
+    exec(["git", "--git-dir", `${rig.root}/project-origin.git`, "rev-parse", "HEAD"], {
+      cwd: rig.root,
+    }),
+    (ran) => ran.stdout.trim(),
+  );
+
+const checkoutTree = () =>
+  Effect.map(exec(["git", "rev-parse", "HEAD^{tree}"], { cwd: rig.projectDir }), (ran) =>
+    ran.stdout.trim(),
+  );
+
+const SECRET = "sk-live0123456789abcdefXYZ";
+
+scenario(
+  "a tune-up with two kept Cycles proves their tree against the merge base, has it reviewed and opens one merge request written from the Measurements",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-delivered";
+        const { bin, forge } = yield* tuneForge;
+        const commit = yield* cycling(
+          runId,
+          [fasterTo(5), fasterTo(3), TUNE_REVIEWED, OPENED],
+          [`API_TOKEN=${SECRET}`],
+        );
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 2 });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect((yield* cyclesMeasured(runId)).map(verdictsOf)).toEqual([
+          ["bench.count gain", "bench.size no-change"],
+          ["bench.count gain", "bench.size no-change"],
+        ]);
+        const [final, ...more] = yield* finals(runId);
+        expect(more).toEqual([]);
+        const head = yield* headOf();
+        expect(final!.base.commit).toBe(yield* originHead());
+        expect(final!.candidate.head_sha).toBe(head);
+        expect(verdictsOf(final!)).toEqual(["bench.count gain", "bench.size no-change"]);
+        const review = yield* asked(runId, "review-1");
+        expect(review).toContain("measurement_valid");
+        expect(review).toContain("the harness kept apart from the product");
+        expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
+        expect((yield* forge.model()).merges ?? []).toEqual([]);
+
+        const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
+        expect(yield* asked(runId, "mr")).toContain(
+          `${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`,
+        );
+        expect(body).toContain("| bench.count | primary | 7 | 3 |");
+        const [table, evidence] = body.split("<details>");
+        expect(table).toContain(final!.id);
+        for (const metric of ["bench.count", "bench.size"])
+          for (const side of ["base", "candidate"] as const) {
+            const line = evidence!
+              .split("\n")
+              .find((one) => one.startsWith(`- ${metric}, ${side}:`));
+            const listed = line!
+              .split(":")[1]!
+              .split(",")
+              .map((one) => Number(one.trim()));
+            expect(listed).toEqual(
+              final!.samples
+                .filter((one) => one.tree === side && !one.warmup)
+                .map((one) => one.readings[metric]!),
+            );
+          }
+        for (const text of [
+          "bench/bench.sh",
+          commit,
+          final!.base.commit,
+          final!.base.head_sha,
+          final!.candidate.head_sha,
+          runId,
+        ])
+          expect(evidence).toContain(text);
+        expect(body).not.toContain(SECRET);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose default branch moved during its Cycles merges it, and takes its final Measurement against the new merge base",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-moved";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(5),
+          fasterWhileUpstreamPushes(3, "upstream.txt"),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const original = yield* originHead();
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 2 });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        const moved = yield* originHead();
+        expect(moved).not.toBe(original);
+        expect(yield* runLog(runId)).toMatch(new RegExp(`integrated \\S+@${moved}`));
+        const measured = yield* finals(runId);
+        expect(measured.map((one) => one.base.commit)).toEqual([moved, original]);
+        expect(verdictsOf(measured[0]!)).toEqual(["bench.count gain", "bench.size no-change"]);
+        expect(measured.map((one) => one.candidate.head_sha)).toEqual([
+          yield* headOf(),
+          yield* headOf(),
+        ]);
+        expect(yield* readText(`${rig.projectDir}/upstream.txt`)).toBe("theirs\n");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose final Measurement is no-change once integrated drops back to its base tree, and completes with its findings and no merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-lost";
+        yield* cycling(runId, [
+          fasterWhileUpstreamPushes(3, "fixed"),
+          {
+            writes: [],
+            sh: inCheckout("git rm -q count && git commit -qm drop"),
+            output: "dropped",
+          },
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* wasAsked(runId, "drop")).toBe(true);
+        const [final, ...more] = yield* finals(runId);
+        expect(more).toEqual([]);
+        expect(final!.base.commit).toBe(yield* originHead());
+        expect(verdictsOf(final!)).toEqual(["bench.count no-change", "bench.size no-change"]);
+        expect(yield* checkoutTree()).toBe(final!.base.content);
+        expect(said(result)).toContain("bench.count no-change, not a gain");
+        expect(yield* readText(said(result).split(": ")[0]!)).toContain(final!.id);
+      }),
+    ),
+  120_000,
+);
+
+/** The merge request opened on the checkout's head, its CI job failing there and green at the base. */
+const openedFailing = (forge: {
+  readonly holding: (next: ForgeModel) => { path: string; text: string };
+}) => {
+  const write = forge.holding(ciOn("OPENED_AT", ciFailing, "passed"));
+  return {
+    writes: [write],
+    sh: `sed -i "s/OPENED_AT/$(git -C '${rig.projectDir}' rev-parse HEAD)/" '${write.path}'`,
+    output: OPENED_CI,
+  };
+};
+
+/** A CI fix that commits `count` and whose new head's job passes. */
+const ciFixedTo = (
+  forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
+  count: number,
+) => {
+  const write = forge.holding(ciOn("FIXED_AT", { name: "nuxi-job", state: "passed" }, "passed"));
+  return {
+    writes: [write],
+    sh: `${inCheckout(`echo ${count} > count && git add count && git commit -qm ci-fix`)} && sed -i "s/FIXED_AT/$(git -C '${rig.projectDir}' rev-parse HEAD)/" '${write.path}'`,
+    output: { ...GATE_FIX, fixed: [{ title: "nuxi: its CI job nuxi-job failed" }] },
+  };
+};
+
+scenario(
+  "a tune-up CI fix that changes product code is measured and reviewed again on the delivered head, and performance closes there",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-ci-fixed";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          TUNE_REVIEWED,
+          openedFailing(forge),
+          ciFixedTo(forge, 2),
+          TUNE_REVIEWED,
+        ]);
+        yield* leftToCi(runId, ["nuxi"]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const head = yield* headOf();
+        const measured = yield* finals(runId);
+        expect(measured).toHaveLength(2);
+        expect(measured[1]!.candidate.head_sha).toBe(head);
+        expect(measured[0]!.candidate.head_sha).not.toBe(head);
+        expect(verdictsOf(measured[1]!)).toEqual(["bench.count gain", "bench.size no-change"]);
+        expect(yield* wasAsked(runId, "ci-fix-1.review-1")).toBe(true);
+        expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up CI fix that loses the gain leaves its merge request not ready, and the Run fails saying so",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-ci-lost";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          TUNE_REVIEWED,
+          openedFailing(forge),
+          ciFixedTo(forge, 7),
+          TUNE_REVIEWED,
+        ]);
+        yield* leftToCi(runId, ["nuxi"]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Failure");
+        const measured = yield* finals(runId);
+        expect(verdictsOf(measured.at(-1)!)).toEqual([
+          "bench.count no-change",
+          "bench.size no-change",
+        ]);
+        expect(reasonOf(result)).toContain(`${CI_MR} is not ready`);
+        expect(reasonOf(result)).toContain("bench.count no-change, not a gain");
+        expect((yield* ciNotes(forge)).join("\n")).toContain("not ready");
+        expect((yield* forge.model()).merges ?? []).toEqual([]);
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up reviewer's blocker is fixed in the rally, and the fix gets a final Measurement of its own",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-blocked";
+        const blocker = "search drops results past the hundredth";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          {
+            ...TUNE_REVIEWED,
+            verdict: "findings",
+            findings: [{ severity: "blocker", title: blocker, file: "count" }],
+            behavior_preserved: false,
+          },
+          {
+            writes: [],
+            sh: inCheckout("echo 2 > count && git add count && git commit -qm fix"),
+            output: { ...GATE_FIX, fixed: [{ title: blocker, file: "count" }] },
+          },
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "fix-1")).toContain(blocker);
+        expect(yield* wasAsked(runId, "review-2-1")).toBe(true);
+        const measured = yield* finals(runId);
+        expect(measured).toHaveLength(2);
+        expect(measured[1]!.candidate.head_sha).toBe(yield* headOf());
+        expect(measured[0]!.candidate.head_sha).not.toBe(measured[1]!.candidate.head_sha);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose forge refuses the merge request fails with the forge's reason, and merges nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-refused";
+        const refusal = "403 Forbidden: you cannot create merge requests in group/app";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          TUNE_REVIEWED,
+          {
+            verdict: "findings",
+            findings: [{ severity: "blocker", title: `glab mr create refused: ${refusal}` }],
+            mr_url: null,
+            pushed: true,
+          },
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain(refusal);
+        expect((yield* forge.model()).merges ?? []).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
 once("tune-up declares every input with its default, and its path", () =>
   runEffect(
     Effect.gen(function* () {
@@ -14861,6 +15233,7 @@ once("tune-up declares every input with its default, and its path", () =>
         "Cycles",
         "Integrate",
         "Review",
+        "Checks",
         "Merge request",
         "External report",
       ]);

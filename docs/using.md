@@ -3359,6 +3359,13 @@ halfway. Its findings are in `handoffs/tune-up-findings.md` in its Run directory
 after each Cycle, every statement marked measured, telemetry or hypothesis, with the
 research under the opportunity it changed.
 
+What it kept is measured once more against the merge base its merge request targets, after
+merging a moved default branch, and reviewed for correctness and for whether the benchmark
+measures what it claims. Only a gain that survives both reaches a merge request, whose
+description Collie writes from the Measurements, with every sample and the commands to
+reproduce it collapsed at the end. A gain that does not survive is dropped, and the Run
+ends with its findings and no merge request.
+
 A tune-up never puts load on production, which it only reads with bounded queries, never
 auto-merges or deploys, and never changes another repository. One Measurement runs on a
 Machine at a time, and waits while the Machine is [Short of memory](#short-of-memory).

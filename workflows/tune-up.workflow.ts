@@ -5,28 +5,40 @@
 // Calibrate has the host measure the base against itself to learn this Machine's noise
 // floor. Where that rules out proof the Run ends with its findings and no merge request.
 // Otherwise each Cycle tries one change, kept only where the host measures it a gain, and
-// a Run that keeps none ends back on its base tree with its findings.
+// a Run that keeps none ends back on its base tree with its findings. What was kept is
+// measured again against the merge base its merge request targets, reviewed in the shared
+// rally and delivered through the shared gate; a gain that does not survive is dropped.
 //
 // The Markdown beside this file is the content: what each step is asked.
 
 import {
+  Agents,
+  FindingSchema,
+  FixOutputSchema,
   Host,
+  IntegrationSchema,
   MeasurementSchema,
   Run,
   WorkflowError,
   agentWork,
   contentOf,
   defineWorkflow,
+  endsWithoutPatchOf,
   evidenceGapsOf,
   owedLocally,
+  redact,
+  renderApproved,
+  renderEvidence,
   step,
+  type Integration,
   type Measurement,
+  type SynthesisReport,
 } from "collie";
 import { Array as Arr, Clock, Duration, Effect, FileSystem, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./tune-up.md" with { type: "text" };
-import { IMPLEMENTER, REVIEWER, reviewRound } from "./reviewing.ts";
-import { Tree, mergeRequest } from "./delivering.ts";
+import { IMPLEMENTER, REVIEWER, ROUNDS, rally, reviewPass, reviewRound } from "./reviewing.ts";
+import { Tree, deliver, gate, mergeRequest } from "./delivering.ts";
 
 const content = contentOf(markdown);
 const text = Schema.String;
@@ -51,6 +63,14 @@ const Told = {
   run: Schema.Struct({ dir: text, id: text }),
 };
 
+/** What every prompt from the final proof on is told, as delivery tells its own. */
+const Delivering = {
+  inputs: Schema.Struct({ focus: text, outcome: text }),
+  run: Told.run,
+  verify: text,
+  body: text,
+};
+
 const prompts = {
   discover: content.template("discover", Told),
   harness: content.template("harness", {
@@ -70,7 +90,45 @@ const prompts = {
     cycle: Schema.Struct({ n: text, start: text }),
     why: text,
   }),
+  merge: content.template("merge", { ...Told, conflict: text }),
+  drop: content.template("drop", {
+    ...Told,
+    base: Schema.Struct({ merge: text, tree: text }),
+    why: text,
+  }),
+  fix: content.template("fix", {
+    ...Delivering,
+    iteration: text,
+    max_iterations: text,
+    findings: text,
+  }),
+  ciFix: content.template("ci-fix", {
+    ...Delivering,
+    iteration: text,
+    max_iterations: text,
+    findings: text,
+  }),
+  mr: content.template("mr", {
+    ...Delivering,
+    evidence: text,
+    unreviewed: text,
+    unsettled: text,
+    mr: Schema.Struct({
+      forge: text,
+      noun: text,
+      assignee: text,
+      template: text,
+      issues: text,
+      existing: text,
+      create: text,
+      comment: text,
+    }),
+    target_repo: text,
+  }),
 };
+
+/** What a reviewer of a Tune-up judges, beside what every review is told. */
+const REVIEWING = content.sections.get("review") ?? "";
 
 const Research = Schema.Union([
   Schema.Struct({
@@ -192,13 +250,24 @@ const Tried = Schema.Union([
 
 interface Cycled {
   readonly n: number;
+  readonly opportunity: string | null;
   readonly tried: string;
   readonly kept: boolean;
   readonly why: string;
   readonly measurement: string | null;
 }
 
+const Opened = Schema.Struct({
+  verdict: Schema.Literals(["clean", "findings"]),
+  findings: Schema.optionalKey(Schema.Array(FindingSchema)),
+  mr_url: Schema.optionalKey(Schema.NullOr(text)),
+  pushed: Schema.Boolean,
+});
+
+const Snapshot = Schema.Struct({ head_sha: text, fingerprint: text });
+
 const TUNER = "tune";
+const MERGE_TRIES = 2;
 
 const discover = step({
   id: "discover",
@@ -293,6 +362,12 @@ const notKept = (plan: Plan, failed: ReadonlyArray<string>, measured: Measuremen
   }
   return whys.length === 0 ? null : whys.join("; ");
 };
+
+/** What stopped an integration, as the tuner is told it. */
+const stoppedBy = (merged: Integration) =>
+  merged.status === "conflicted"
+    ? `Collie merged ${merged.ref} (${merged.sha}) into this branch, and the merge stopped on conflicts in: ${merged.files.join(", ")}.`
+    : `Collie could not merge ${merged.ref} (${merged.sha}) into this branch: ${merged.reason}.`;
 
 const cycleLine = (one: Cycled) =>
   `Cycle ${one.n}, ${one.tried}: ${one.kept ? "kept" : "not kept"}: ${one.why}${
@@ -392,6 +467,174 @@ const reportOf = (options: {
   ].join("\n");
 };
 
+const median = (values: ReadonlyArray<number>) => {
+  const sorted = values.toSorted((a, b) => a - b);
+  const middle = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+};
+
+/** One side's judged samples of one metric, in the order they were taken. */
+const readingsOf = (measured: Measurement, metric: string, side: "base" | "candidate") =>
+  measured.samples.flatMap((one) => {
+    const value = one.readings[metric];
+    return one.tree !== side || one.warmup || value === undefined ? [] : [value];
+  });
+
+const commandLine = (command: {
+  readonly executable: string;
+  readonly argv: ReadonlyArray<string>;
+}) => [command.executable, ...command.argv].join(" ");
+
+const tableOf = (measured: Measurement) => [
+  "| Metric | Role | Base | Candidate | Ratio | 95% interval | Verdict |",
+  "| --- | --- | --- | --- | --- | --- | --- |",
+  ...measured.plan.metrics.map((metric) => {
+    const judged =
+      measured.result._tag === "Judged"
+        ? measured.result.verdicts.find((one) => one.metric === metric.name)
+        : undefined;
+    const sides = (["base", "candidate"] as const).map((side) =>
+      String(median(readingsOf(measured, metric.name, side))),
+    );
+    return judged === undefined
+      ? `| ${metric.name} | ${metric.role} | ${sides.join(" | ")} | | | ${verdictsLine(measured)} |`
+      : `| ${metric.name} | ${metric.role} | ${sides.join(" | ")} | ${judged.ratio.toFixed(3)} | [${judged.interval.map((bound) => bound.toFixed(3)).join(", ")}] | ${judged.verdict}${judged.held ? "" : ", not held"} |`;
+  }),
+];
+
+/**
+ * The merge request's description, written from the host's Measurements rather than from
+ * an agent's numbers, with every credential-shaped value taken out.
+ */
+const bodyOf = (got: {
+  readonly runId: string;
+  readonly final: Measurement;
+  readonly original: Measurement | null;
+  readonly finals: ReadonlyArray<Measurement>;
+  readonly plans: ReadonlyArray<string>;
+  readonly planFile: string;
+  readonly written: typeof Harnessed.Type;
+  readonly found: Discovered;
+  readonly cycles: ReadonlyArray<Cycled>;
+  readonly evidence: string;
+  readonly review: SynthesisReport;
+}) => {
+  const { final, found } = got;
+  const plan = final.plan;
+  const primary = plan.metrics.find((one) => one.role === "primary")?.name ?? "";
+  const guardrails = plan.metrics.filter((one) => one.role === "guardrail");
+  const verdictOf = (metric: string) =>
+    final.result._tag === "Judged"
+      ? final.result.verdicts.find((one) => one.metric === metric)
+      : undefined;
+  const kept = new Set(
+    got.cycles.flatMap((one) => (one.kept && one.opportunity !== null ? [one.opportunity] : [])),
+  );
+  const left = found.opportunities.filter((one) => !kept.has(one.title));
+  const said = (field: "behavior_preserved" | "measurement_valid") =>
+    `${field}: ${got.review[field] === true}`;
+  return redact(
+    [
+      `## Tune-up: ${primary} ${verdictOf(primary)?.verdict ?? "unjudged"} against the merge base`,
+      "",
+      `The host's \`final\` Measurement ${final.id}, on ${final.machine}, compares ${final.base.commit} with the harness applied against this branch at ${final.candidate.head_sha}.`,
+      "",
+      ...tableOf(final),
+      ...(got.original === null
+        ? []
+        : [
+            "",
+            `Against the base the Run started from, ${got.original.base.commit} (\`final\` Measurement ${got.original.id}):`,
+            "",
+            ...tableOf(got.original),
+          ]),
+      "",
+      "### Commands and harness",
+      "",
+      ...plan.commands.map((one) => `- ${one.name}: \`${commandLine(one)}\``),
+      ...(plan.prepare === null
+        ? []
+        : [`- Prepared once per tree: \`${commandLine(plan.prepare)}\``]),
+      `- Harness commits ${plan.harness.commits.join(", ")}, touching only ${plan.harness.paths.join(", ")}`,
+      "",
+      "### Regressions and tradeoffs",
+      "",
+      ...guardrails.map((one) => {
+        const judged = verdictOf(one.name);
+        return `- Guardrail ${one.name}: ${judged === undefined ? "unjudged" : `${judged.verdict}, ${judged.held ? "held" : "not held"}, worse bound ${judged.interval[one.direction === "lower" ? 1 : 0].toFixed(3)}`}`;
+      }),
+      ...got.cycles.filter((one) => !one.kept).map((one) => `- Not kept: ${cycleLine(one)}`),
+      "",
+      "### Tests and review",
+      "",
+      got.evidence,
+      `- Review: ${said("behavior_preserved")}, ${said("measurement_valid")}. ${got.review.summary}`,
+      "",
+      "### Opportunities left",
+      "",
+      ...(left.length === 0
+        ? ["- None ranked."]
+        : left.map((one) => `- ${one.title} (${one.evidence})`)),
+      "",
+      "### What to monitor after deploying",
+      "",
+      ...found.journeys.flatMap((journey) =>
+        journey.objectives.map(
+          (one) =>
+            `- ${journey.name}: ${one.metric}${one.target === undefined ? "" : ` (${one.target})`}, because ${one.why}`,
+        ),
+      ),
+      "",
+      "<details>",
+      "<summary>Evidence to audit and reproduce</summary>",
+      "",
+      `#### Samples of \`final\` Measurement ${final.id}`,
+      "",
+      ...plan.metrics.flatMap((metric) =>
+        (["base", "candidate"] as const).map(
+          (side) => `- ${metric.name}, ${side}: ${readingsOf(final, metric.name, side).join(", ")}`,
+        ),
+      ),
+      "",
+      "#### The frozen plan",
+      "",
+      `- Journeys ${got.written.journeys.join(", ")}; cases ${got.written.cases.join(", ") || "none"}`,
+      ...plan.commands.map((one) => `- Command ${one.name}: \`${commandLine(one)}\``),
+      `- Warmup ${plan.warmup}, ${plan.samples} samples per side, threshold ${plan.threshold}%, tolerance ${plan.tolerance}%`,
+      ...Object.entries(final.environment).map(
+        ([command, environment]) => `- Environment of ${command}: ${environment ?? "unread"}`,
+      ),
+      ...(["base", "candidate"] as const).map((side) => {
+        const lockfiles = Object.entries(final[side].lockfiles);
+        return `- Lockfiles of the ${side}: ${lockfiles.map(([file, digest]) => `${file} ${digest}`).join(", ") || "none"}`;
+      }),
+      `- Harness commits ${plan.harness.commits.join(", ")}, under ${plan.harness.paths.join(", ")}`,
+      `- Base: ${final.base.commit}, with the harness at ${final.base.head_sha}`,
+      `- Candidate: ${final.candidate.head_sha}`,
+      "",
+      "#### Every plan and every `final` Measurement",
+      "",
+      ...got.plans.map((reason, at) => `- Plan ${at + 1}: ${reason}`),
+      ...got.finals.map(
+        (one) =>
+          `- ${one.id}: ${one.base.commit} against ${one.candidate.head_sha}: ${verdictsLine(one)}`,
+      ),
+      "",
+      "#### Reproduce",
+      "",
+      "```sh",
+      `git checkout ${final.candidate.head_sha}`,
+      `collie measure --run ${got.runId} --base ${final.base.commit} --plan ${got.planFile} --pass final`,
+      "```",
+      "",
+      `The full record is kept with Run ${got.runId}.`,
+      "",
+      "</details>",
+      "",
+    ].join("\n"),
+  );
+};
+
 export default defineWorkflow({
   id: "tune-up",
   title: "tune-up — make a repository measurably faster",
@@ -461,6 +704,7 @@ export default defineWorkflow({
     cycles,
     integrate,
     reviewRound,
+    gate,
     mergeRequest,
     externalReport,
   ],
@@ -528,9 +772,11 @@ export default defineWorkflow({
 
       // Each plan is its own record before anything is measured by it.
       let plans = 0;
+      const reasons: string[] = [];
       const recordPlan = (plan: Plan, reason: string) =>
         Effect.gen(function* () {
           plans += 1;
+          reasons.push(reason);
           const planned = yield* Activity.make({
             name: `plan.${plans}`,
             success: Planned,
@@ -672,21 +918,24 @@ export default defineWorkflow({
         head: final.head_sha,
         fingerprint: final.fingerprint,
       }));
+      // Checks left to CI are proved by its pipeline, not here.
+      const failingChecks = (name: string) =>
+        Activity.make({
+          name,
+          success: Schema.Array(text),
+          error: WorkflowError,
+          execute: Effect.gen(function* () {
+            const failing: string[] = [];
+            for (const spec of owedLocally(yield* host.approved(runId))) {
+              const ran = yield* host.verify({ runId, name: spec.name, cwd, pass: "gate" });
+              if (ran.result !== "pass") failing.push(spec.name);
+            }
+            return failing;
+          }),
+        });
       const judging = (n: number, base: string) =>
         Effect.gen(function* () {
-          const failed = yield* Activity.make({
-            name: `cycle-${n}.checks`,
-            success: Schema.Array(text),
-            error: WorkflowError,
-            execute: Effect.gen(function* () {
-              const failing: string[] = [];
-              for (const spec of owedLocally(yield* host.approved(runId))) {
-                const ran = yield* host.verify({ runId, name: spec.name, cwd, pass: "gate" });
-                if (ran.result !== "pass") failing.push(spec.name);
-              }
-              return failing;
-            }),
-          });
+          const failed = yield* failingChecks(`cycle-${n}.checks`);
           const measured = yield* cycles(
             Activity.make({
               name: `cycle-${n}.measure`,
@@ -784,6 +1033,7 @@ export default defineWorkflow({
         }
         const done: Cycled = {
           n,
+          opportunity: tried.result === "changed" ? tried.opportunity : null,
           tried:
             tried.result === "changed" ? `${tried.opportunity}: ${tried.change}` : tried.result,
           kept,
@@ -803,24 +1053,365 @@ export default defineWorkflow({
         const report = yield* findings("findings", done);
         return `${report}: ${done}`;
       }
+      const findingsOf = (name: string, ending: string) =>
+        Effect.map(findings(name, ending), (report) => `${report}: ${ending}`);
+
+      const agents = yield* Agents;
+      const checksNow = Effect.map(host.approved(runId), renderApproved);
+      const report = `${place.dir}/handoffs/tune-up-findings.md`;
+      const delivering = {
+        inputs: { focus: told.inputs.focus, outcome: "performance" },
+        run: told.run,
+        verify: yield* checksNow,
+        body: `${place.dir}/handoffs/tune-up-merge-request.md`,
+      };
+      let finals = 0;
+      const measureFinal = Effect.suspend(() => {
+        finals += 1;
+        return Activity.make({
+          name: `final.${finals}`,
+          success: MeasurementSchema,
+          error: WorkflowError,
+          execute: Effect.gen(function* () {
+            const { mergeBase } = yield* host.evidence(runId, cwd);
+            if (mergeBase === null || mergeBase === undefined)
+              return yield* new WorkflowError({
+                reason: `${cwd} has no merge base with its default branch to measure against`,
+              });
+            const { measurement, ran } = yield* host.measure({
+              runId,
+              base: mergeBase,
+              cwd,
+              plan,
+              pass: "final",
+            });
+            if (ran)
+              yield* host.record(
+                runId,
+                `final Measurement ${measurement.id} of ${measurement.candidate.head_sha} against ${mergeBase}: ${verdictsLine(measurement)}`,
+              );
+            return measurement;
+          }),
+        });
+      });
+      let integrations = 0;
+      let reviewBase = "";
+      const integrated = (operation: string) =>
+        Effect.gen(function* () {
+          const integrateNow = Effect.suspend(() => {
+            integrations += 1;
+            return Activity.make({
+              name: `integrate.${integrations}`,
+              success: IntegrationSchema,
+              execute: host.integrate(runId, cwd),
+            });
+          });
+          const settled = (done: Integration) =>
+            done.status === "unchanged" || done.status === "merged";
+          let merged = yield* integrateNow;
+          for (
+            let tries = 1;
+            tries <= MERGE_TRIES && merged.status !== "unavailable" && !settled(merged);
+            tries++
+          ) {
+            yield* agentWork({
+              operation: tries === 1 ? operation : `${operation}-${tries}`,
+              agent: TUNER,
+              role: "tuner",
+              instructions: prompts.merge,
+              input: { ...told, conflict: stoppedBy(merged) },
+            });
+            merged = yield* integrateNow;
+          }
+          if (!settled(merged))
+            return yield* new WorkflowError({
+              reason: `${merged.ref || merged.branch || "the default branch"} is not integrated, so the Run stops: ${stoppedBy(merged)}`,
+            });
+          if (merged.sha !== "") reviewBase = merged.sha;
+          return { ...merged, base: reviewBase };
+        });
+      let reviewed = 0;
+      const reviewedTree = Effect.suspend(() => {
+        reviewed += 1;
+        return Activity.make({
+          name: `reviewed-on.${reviewed}`,
+          success: Snapshot,
+          execute: Effect.map(host.evidence(runId, cwd), ({ final }) => final),
+        });
+      });
+      const reviewOf = (prefix: string, answered: string) =>
+        Effect.gen(function* () {
+          yield* measureFinal;
+          const on = yield* reviewedTree;
+          const synthesis = yield* reviewPass({
+            target: "",
+            plan: report,
+            proves: "performance",
+            previous: `${place.dir}/review.md`,
+            answered,
+            risks: "",
+            criteria: "",
+            base: reviewBase,
+            at: 1,
+            of: 1,
+            disputed: [],
+            prefix,
+            obstacle: REVIEWING,
+          });
+          return { reviewed: synthesis, on };
+        });
+      const lost = (measured: Measurement) => notKept(plan, [], measured);
+      const dropped = (measured: Measurement, why: string) =>
+        Effect.gen(function* () {
+          const moved = yield* Activity.make({
+            name: "drop.moved",
+            success: Schema.Boolean,
+            execute: Effect.map(
+              host.evidence(runId, cwd),
+              (got) => got.content !== measured.base.content,
+            ),
+          });
+          if (moved)
+            yield* integrate(
+              agentWork({
+                operation: "drop",
+                agent: TUNER,
+                role: "tuner",
+                instructions: prompts.drop,
+                input: {
+                  ...told,
+                  base: { merge: measured.base.commit, tree: measured.base.head_sha },
+                  why,
+                },
+              }),
+            );
+          yield* Activity.make({
+            name: "dropped",
+            success: Schema.Void,
+            error: WorkflowError,
+            execute: Effect.gen(function* () {
+              const evidence = yield* host.evidence(runId, cwd);
+              const back = endsWithoutPatchOf({
+                kind: "performance",
+                evidence,
+                approved: yield* host.approved(runId),
+                outputs: {},
+                reviewed: [],
+                roots: [place.dir],
+                tickets: [],
+              });
+              if (!back)
+                return yield* new WorkflowError({
+                  reason: `the change was dropped to ${evidence.final.head_sha} (${evidence.content ?? "no tree"}), not the base tree ${measured.base.head_sha} (${measured.base.content})`,
+                });
+              yield* host.record(
+                runId,
+                `dropped back to the base tree ${measured.base.head_sha}: ${why}`,
+              );
+            }),
+          });
+          return yield* findingsOf(
+            "findings",
+            `the final Measurement ${measured.id} against ${measured.base.commit}: ${why}; the change was dropped back to the base tree, so no merge request is opened`,
+          );
+        });
+
+      const proved = yield* integrate(
+        Effect.gen(function* () {
+          yield* integrated("merge");
+          const measured = yield* measureFinal;
+          const why = lost(measured);
+          if (why !== null) return { measured, why, original: null };
+          const original =
+            measured.base.commit === base
+              ? null
+              : yield* Activity.make({
+                  name: "final.original",
+                  success: MeasurementSchema,
+                  error: WorkflowError,
+                  execute: Effect.map(
+                    host.measure({ runId, base, cwd, plan, pass: "final" }),
+                    (answered) => answered.measurement,
+                  ),
+                });
+          return { measured, why, original };
+        }),
+      );
+      if (proved.why !== null) return yield* dropped(proved.measured, proved.why);
+      yield* findings("findings.integrated", `${stop}; kept ${kept.join(", ")}`);
+
+      const reviewedOn: Array<typeof Snapshot.Type> = [];
+      const rallied = yield* rally({
+        rounds: { n: 0 },
+        cwd,
+        plan: report,
+        proves: Effect.succeed("performance"),
+        risks: "",
+        criteria: "",
+        prefix: "",
+        obstacle: REVIEWING,
+        integrate: (operation) =>
+          Effect.gen(function* () {
+            const merged = yield* integrated(operation);
+            yield* measureFinal;
+            reviewedOn.push(yield* reviewedTree);
+            return merged;
+          }),
+        fix: ({ operation, at, findings }) =>
+          agentWork({
+            operation,
+            agent: TUNER,
+            role: "tuner",
+            instructions: prompts.fix,
+            input: {
+              ...delivering,
+              iteration: String(at),
+              max_iterations: String(ROUNDS),
+              findings,
+            },
+            output: FixOutputSchema,
+          }),
+      });
+      const on = reviewedOn.at(-1);
+      if (rallied.halted !== null || on === undefined)
+        return yield* new WorkflowError({ reason: rallied.halted ?? "the rally reviewed nothing" });
+      let latest = { reviewed: rallied.reviewed, on };
+      const last = yield* measureFinal;
+      const gone = lost(last);
+      if (gone !== null) return yield* dropped(last, gone);
+
+      let bodies = 0;
+      const writeBody = Effect.suspend(() => {
+        bodies += 1;
+        return Activity.make({
+          name: `merge-request-body.${bodies}`,
+          success: text,
+          error: WorkflowError,
+          execute: Effect.gen(function* () {
+            const evidence = yield* host.evidence(runId, cwd);
+            const taken = (evidence.measurements ?? []).filter((one) => one.pass === "final");
+            const final = taken.findLast((one) => one.base.commit === evidence.mergeBase);
+            if (final === undefined)
+              return yield* new WorkflowError({
+                reason:
+                  "no `final` Measurement against the merge base to write the merge request from",
+              });
+            const fs = yield* FileSystem.FileSystem;
+            const planFile = `${place.dir}/handoffs/tune-up-plan.json`;
+            yield* fs.writeFileString(
+              planFile,
+              Schema.encodeSync(Schema.fromJsonString(Planned.fields.plan))(plan),
+            );
+            const body = bodyOf({
+              runId,
+              final,
+              original: proved.original,
+              finals: taken,
+              plans: reasons,
+              planFile,
+              written,
+              found,
+              cycles: cycled,
+              evidence: renderEvidence(evidence),
+              review: latest.reviewed,
+            });
+            yield* fs.writeFileString(delivering.body, body);
+            return body;
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkflowError({
+                  reason: `the merge request body could not be written: ${cause.message}`,
+                }),
+            ),
+          ),
+        });
+      });
+      yield* writeBody;
+
+      const delivered = yield* deliver({
+        cwd,
+        source: { value: told.inputs.focus, kind: "text" },
+        agent: TUNER,
+        role: "tuner",
+        input: delivering,
+        checksNow,
+        prompts: { fix: prompts.fix, ciFix: prompts.ciFix, mr: prompts.mr },
+        opened: Opened,
+        outcome: Effect.succeed("performance"),
+        outcomeJournaled: Effect.succeed("performance"),
+        outputs: () => ({}),
+        tickets: [],
+        roots: [place.dir, cwd],
+        rallied: { ...rallied, on: latest.on },
+        unsettled: [],
+        integrate: integrated,
+        review: Effect.succeed((answered: string) =>
+          Effect.map(reviewOf("proof.", answered), (one) => one.reviewed),
+        ),
+        moved: ({ pass, round }) =>
+          Effect.gen(function* () {
+            const fix = `${pass}-fix-${round}`;
+            // The gate runs its own checks again after its fix; a CI fix's tree has none yet.
+            if (pass === "ci") yield* failingChecks(`${fix}.checks`);
+            // A gate fix's review is already the gate's work; a CI fix's is a review round of its own.
+            const again = reviewOf(`${fix}.`, agents.outputFor(runId, fix));
+            latest = yield* pass === "ci" ? reviewRound(again) : again;
+            const body = yield* writeBody;
+            if (pass === "ci")
+              yield* Activity.make({
+                name: `${fix}.noted`,
+                success: Schema.Void,
+                execute: Effect.asVoid(
+                  host.note({
+                    runId,
+                    cwd,
+                    body: `${fix} moved the head; measured again:\n\n${body.split("\n### ")[0]}`,
+                  }),
+                ),
+              });
+            return latest;
+          }),
+      });
+      if (delivered.nothing !== undefined) return delivered.nothing;
       const gaps = yield* Activity.make({
         name: "outcome",
-        success: Schema.Array(text),
+        success: Schema.Struct({ head: text, gaps: Schema.Array(text) }),
         execute: Effect.gen(function* () {
-          return evidenceGapsOf({
-            kind: "performance",
-            evidence: yield* host.evidence(runId, cwd),
-            approved: yield* host.approved(runId),
-            outputs: {},
-            reviewed: [],
-            roots: [place.dir],
-            tickets: [],
-          });
+          const evidence = yield* host.evidence(runId, cwd);
+          return {
+            head: evidence.final.head_sha,
+            gaps: evidenceGapsOf({
+              kind: "performance",
+              evidence,
+              approved: yield* host.approved(runId),
+              outputs: { synthesize: { ...latest.reviewed } },
+              reviewed: ["synthesize"],
+              reviewedOn: { synthesize: latest.on },
+              roots: [place.dir, cwd],
+              tickets: [],
+            }),
+          };
         }),
       });
-      const report = yield* findings("findings", `${stop}; kept ${kept.join(", ")}`);
-      return yield* new WorkflowError({
-        reason: `Outcome unproved after ${kept.join(", ")}: ${gaps.join("; ")}. The findings are in ${report}.`,
+      if (gaps.gaps.length > 0) {
+        const why = `${delivered.mr} is not ready: ${gaps.gaps.join("; ")}`;
+        yield* Activity.make({
+          name: "not-ready",
+          success: Schema.Void,
+          execute: Effect.andThen(
+            host.record(runId, why),
+            Effect.asVoid(host.note({ runId, cwd, body: redact(why) })),
+          ),
+        });
+        return yield* new WorkflowError({ reason: `Outcome unproved on ${gaps.head}: ${why}` });
+      }
+      yield* findings("findings.delivered", `performance proved on ${gaps.head}; ${delivered.mr}`);
+      yield* Activity.make({
+        name: "proved",
+        success: Schema.Void,
+        execute: host.record(runId, `performance proved on ${gaps.head}: ${delivered.mr}`),
       });
+      return delivered.mr;
     }),
 });

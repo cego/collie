@@ -228,6 +228,9 @@ export {
 /** A Check's proof on this tree, and which of a Run's Checks it runs itself. */
 export { checkProof, owedLocally, type CheckProof, type Unmatched } from "./check-proof";
 
+/** Text with every credential-shaped value replaced, before it is published. */
+export { redact } from "./redact";
+
 /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
 export { TOO_LARGE } from "./verify";
 

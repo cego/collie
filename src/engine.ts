@@ -2001,6 +2001,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** This Run's checks as a human would type them, for a prompt to name them. */
   export function renderApproved(approved: ReadonlyArray<VerifySpec>): string;
 
+  /** Text with every credential-shaped value replaced, before it is published. */
+  export function redact(text: string): string;
+
   /** What was actually collected, and by whom, for a merge request to say what it proved. */
   export function renderEvidence(got: {
     readonly verifications: ReadonlyArray<Verification>;

@@ -1277,6 +1277,10 @@ rally converges, stands on a dispute and runs out of rounds where these three de
   but disputes a blocking finding comes back `dispute_unresolved`, with the same
   `attestation` a fix that stands carries, since the human reads both.
 
+The shipped workflows' rally is one such loop, `rally` in
+[`workflows/reviewing.ts`](../workflows/reviewing.ts): `implement` and `tune-up` both call
+it, each with its own fix. A module of your own can import it the same way.
+
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
 shipped steps are held to, not a copy of it.
@@ -1363,7 +1367,8 @@ is no flag to ask for it.
 `host.approved(runId)` is the Run's checks as they stand now, for a prompt to name what the
 work will be held to — `renderApproved` writes it out — and
 `renderEvidence(host.evidence(...))` is what was actually collected and by whom, with the latest `final` Measurement, for a
-merge request to say what it proved. `renderRecordedChecks` writes the same journal for a
+merge request to say what it proved. `redact(text)` takes every credential-shaped value out
+of text you publish yourself, as Collie does before it files an issue. `renderRecordedChecks` writes the same journal for a
 reviewer — the latest of each check, by whom, whether on the tree in front of it, when,
 whether the same command was seen failing on an earlier tree, and the baseline — so a review reads what was run rather than running it again. The list can grow while the Run works, since an
 agent may name a check, so read it again where you need it — at each gate pass, inside the

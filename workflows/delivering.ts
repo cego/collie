@@ -35,6 +35,7 @@ import {
   stepFailed,
   wholeRunsOwed,
   type Finding,
+  type Snapshot,
   type SynthesisReport,
   type Template,
   type Verification,
@@ -131,6 +132,8 @@ export interface Reviewed {
   readonly disputes: ReadonlyArray<Finding>;
   /** The review that decided it, which is the one judgement the gate may read. */
   readonly reviewed: SynthesisReport;
+  /** The tree it reviewed, where that was recorded. */
+  readonly on?: Snapshot;
 }
 
 export interface Delivery<I extends Told, O extends Opened> {
@@ -172,11 +175,11 @@ export interface Delivery<I extends Told, O extends Opened> {
     WorkflowError,
     Needs
   >;
-  /** Run after a gate or CI fix that moved the tree, before readiness is read again. */
+  /** Run after a gate or CI fix that moved the tree, answering with a review of the new tree. */
   readonly moved?: (fix: {
     readonly pass: "gate" | "ci";
     readonly round: number;
-  }) => Effect.Effect<void, WorkflowError, Needs>;
+  }) => Effect.Effect<Pick<Reviewed, "reviewed" | "on">, WorkflowError, Needs>;
 }
 
 /** A fix round that changed nothing and disputed every finding: another would read the same tree. */
@@ -223,6 +226,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     const agents = yield* Agents;
     const runId = (yield* Run).id;
     const { cwd, rallied } = ask;
+    let latest: Pick<Reviewed, "reviewed" | "on"> = rallied;
     const { dir } = yield* host.place(runId);
     const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
       head: final.head_sha,
@@ -240,7 +244,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     let passed: ReadonlyArray<string> = [];
     const readGaps = Effect.fn("deliver.readGaps")(function* (
       approved: ReadonlyArray<VerifySpec>,
-      reviewed: SynthesisReport,
+      { reviewed, on }: Pick<Reviewed, "reviewed" | "on">,
     ) {
       const now = yield* ask.outcome;
       const asked = {
@@ -249,6 +253,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         approved,
         outputs: { ...ask.outputs(), synthesize: { ...reviewed } },
         reviewed: ["synthesize"],
+        reviewedOn: on === undefined ? undefined : { synthesize: on },
         roots: ask.roots,
         tickets: ask.tickets,
       };
@@ -295,7 +300,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           }
           const { final } = yield* host.evidence(runId, cwd);
           return {
-            ...(yield* readGaps(checks, rallied.reviewed)),
+            ...(yield* readGaps(checks, latest)),
             passed: now,
             tree: { head: final.head_sha, fingerprint: final.fingerprint },
           };
@@ -338,7 +343,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           fixable: Schema.Array(Schema.String),
         }),
         execute: settleTests.pipe(
-          Effect.flatMap((approved) => readGaps(approved, rallied.reviewed)),
+          Effect.flatMap((approved) => readGaps(approved, latest)),
           Effect.orDie,
         ),
       });
@@ -392,18 +397,25 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             },
             output: FixOutputSchema,
           });
+          let reviewedAgain = false;
           if (ask.moved !== undefined) {
             const after = yield* Activity.make({
               name: `gate-tree.${at}`,
               success: Tree,
               execute: treeNow,
             });
-            if (after.head !== before?.head || after.fingerprint !== before.fingerprint)
-              yield* ask.moved({ pass: "gate", round: at });
+            if (after.head !== before?.head || after.fingerprint !== before.fingerprint) {
+              latest = yield* ask.moved({ pass: "gate", round: at });
+              reviewedAgain = true;
+            }
           }
           gaps = yield* settleFailed(yield* gapsNow({ pass: "fix", round: at }, before));
           if (stalledFix(before, gaps.tree, findings, fixed))
             stalled = { at, disputed: fixed.disputed ?? [] };
+          if (reviewedAgain) {
+            unreviewed = "";
+            continue;
+          }
           const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
           unreviewed = [
             unreviewed,
@@ -428,7 +440,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           error: WorkflowError,
           execute: Effect.gen(function* () {
             const approved = yield* host.approved(runId);
-            let reviewed = rallied.reviewed;
+            let reviewed = latest;
             const disputed = new Set((stalled?.disputed ?? []).map(findingKey));
             const undisputed = (gap: string) => !disputed.has(findingKey({ title: gap }));
             const reading = Effect.suspend(() => readGaps(approved, reviewed)).pipe(
@@ -494,9 +506,12 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               const now = (yield* host.evidence(runId, cwd)).final;
               if (now.head_sha !== checked.head_sha || now.fingerprint !== checked.fingerprint)
                 yield* rely(false);
-              reviewed = yield* review(
-                fixes === 0 ? "" : agents.outputFor(runId, `gate-fix-${fixes}`),
-              );
+              reviewed = {
+                on: (yield* host.evidence(runId, cwd)).final,
+                reviewed: yield* review(
+                  fixes === 0 ? "" : agents.outputFor(runId, `gate-fix-${fixes}`),
+                ),
+              };
               missing = yield* reading;
             }
             if (missing.gaps.length > 0)
@@ -724,18 +739,20 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         });
         break;
       }
-      const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
-      yield* Activity.make({
-        name: `ci-unreviewed.${at}`,
-        success: Schema.Void,
-        execute: told(
-          `ci fix ${at} landed after the last review and was not re-reviewed: ${
-            settled.ok ? settled.attestation : settled.reasons.join("; ")
-          }`,
-        ),
-      });
       if (ask.moved !== undefined && after.head !== read.tree.head)
-        yield* ask.moved({ pass: "ci", round: at });
+        latest = yield* ask.moved({ pass: "ci", round: at });
+      else {
+        const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
+        yield* Activity.make({
+          name: `ci-unreviewed.${at}`,
+          success: Schema.Void,
+          execute: told(
+            `ci fix ${at} landed after the last review and was not re-reviewed: ${
+              settled.ok ? settled.attestation : settled.reasons.join("; ")
+            }`,
+          ),
+        });
+      }
       blocked =
         after.head === read.tree.head
           ? {

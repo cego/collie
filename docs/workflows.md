@@ -1044,21 +1044,52 @@ other checkout, or a URL, is refused at the start.
    says no measured opportunity is left or names an unsafe tradeoff, when two Cycles in a
    row are not kept, or when `wall_time` is spent. `wall_time` counts from the Run's start
    and is read before each Cycle: it never interrupts one, and never cuts short Discover,
-   Harness or Calibrate. Spent by the end of Calibrate, it means no Cycle runs.
+   Harness or Calibrate, or anything after the Cycles. Spent by the end of Calibrate, it
+   means no Cycle runs.
 
-**Ends:** with `handoffs/tune-up-findings.md` in its Run directory. Where calibration rules
-out proof, or no Cycle was kept, there is no merge request and the Run is not failed. Its
-result names that file and why it ended: `proof unavailable`, naming each metric, or why the
-Cycles stopped. A Run with no kept Cycle is back on its base tree. A Run that kept a Cycle
-fails for now, because no `final` Measurement against the merge base has proved its gain. A
-harness commit touching a path outside its harness paths, a base that cannot be built, or a
-calibration that ends without a verdict fails the Run, naming the paths or the tree.
+5. **Integrate.** With a Cycle kept, Collie merges the default branch where it has moved,
+   and the tuner settles a conflict. The host makes the base tree again at the merge base
+   the merge request will target, and takes a `final` Measurement of the branch against it.
+   Where the default branch moved, the branch is also measured against the base the Run
+   started from, for the merge request.
+6. **Review.** The shared review, with a Tune-up prompt, judges `behavior_preserved`
+   (behaviour, APIs, accessibility, reliability, security, data integrity, no weakened test
+   or disabled validation) and `measurement_valid` (realistic fixtures, no hidden caching
+   tradeoff, the harness apart from the product, no secret or personal data in what is
+   published). The tuner fixes what blocks in the same bounded rally as `implement`'s, and
+   each review round starts with a new `final` Measurement of the tree it reads.
+7. **Checks** and **Merge request**, through the delivery `implement` uses: Collie runs the
+   Run's checks on the tree, the tuner fixes what they lack, opens the merge request and
+   fixes what a check left to CI fails on its head. A gate or CI fix that moves the tree is
+   measured and reviewed again before the outcome is read. The merge request's description
+   is `handoffs/tune-up-merge-request.md`, which Collie writes from the Measurements, with
+   credential-shaped values taken out: the base and candidate table with each metric's
+   ratio and interval, the commands and harness commits, the guardrails and Cycles not
+   kept, the checks and the review, the opportunities left, what to monitor after
+   deploying, and, collapsed, every sample of the `final` Measurement, the frozen plan,
+   every plan and `final` Measurement, the commands to reproduce it and the Run id.
+
+**Ends:** with `handoffs/tune-up-findings.md` in its Run directory, and with a merge request
+only where `performance` is proved: a `final` Measurement of the delivered head against the
+merge base showing a `gain` with every guardrail held, the checks passing, and a review of
+that same tree reporting both `behavior_preserved` and `measurement_valid`. Where
+calibration rules out proof, no Cycle was kept, or the `final` Measurement shows no gain or
+a guardrail not held, there is no merge request and the Run is not failed. Its result names
+that file and why it ended: `proof unavailable`, naming each metric, why the Cycles stopped,
+or the `final` Measurement's verdict. The Run is then back on its base tree: with no kept
+Cycle the branch already is, and a change that lost its gain is dropped back to the base
+tree at the latest merge base, which Collie checks from the trees. A fix after the merge
+request is open that loses the gain or a reviewer's verdict fails the Run, saying the merge
+request is not ready and why, on the merge request too. A forge that refuses the merge
+request fails the Run with the forge's reason. A harness commit touching a path outside its
+harness paths, a base that cannot be built, or a calibration that ends without a verdict
+fails the Run, naming the paths or the tree.
 
 **Never:** load against production, which it only reads, bounded; auto-merge; a deploy; or
 a change to another repository.
 
-Its Flow forecasts Discover, Harness, Calibrate, Cycles, Integrate, Review, Merge request
-and External report; a Run ends after its Cycles for now.
+Its Flow forecasts Discover, Harness, Calibrate, Cycles, Integrate, Review, Checks, Merge
+request and External report.
 
 Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its
 prompts in [`workflows/tune-up.md`](../workflows/tune-up.md) and its agent's Persona in
