@@ -1076,6 +1076,15 @@ const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
   const status = yield* shell("git", ["status", "--porcelain"], cwd);
   if (status.code !== 0) return "git could not read it";
   if (status.stdout.trim() !== "") return "it has uncommitted changes";
+  // The remote's head now, not whatever this checkout last fetched.
+  if (base.ref.startsWith("origin/")) {
+    const fetched = yield* shell(
+      "git",
+      ["fetch", "--quiet", "origin", base.ref.slice("origin/".length)],
+      base.in,
+    );
+    if (fetched.code !== 0) return `${base.ref} could not be fetched`;
+  }
   const head = yield* shell("git", ["rev-parse", "HEAD"], cwd);
   const wanted = yield* shell("git", ["rev-parse", `${base.ref}^{commit}`], base.in);
   if (head.code !== 0 || wanted.code !== 0 || head.stdout.trim() !== wanted.stdout.trim())

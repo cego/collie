@@ -7,7 +7,7 @@ import { runOnPath } from "./support/forge";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
 import { Rig, FakeHerdr } from "./support/recorder";
-import { checkoutFor, type RecordedBy } from "../src/worktree";
+import { checkoutFor, checkoutRefusal, type RecordedBy } from "../src/worktree";
 import type { PaneInfo } from "../src/herdr";
 
 const BRANCH = "mk/run-x";
@@ -526,3 +526,52 @@ test.each([
     }),
   ),
 );
+
+/** The merge request's branch moves on the remote, from a checkout the starting Run's never fetched. */
+const advancedElsewhere = () =>
+  Effect.gen(function* () {
+    yield* git(cloneB, "switch", "-q", BRANCH);
+    yield* git(cloneB, "commit", "-qm", "pushed since", "--allow-empty");
+    yield* git(cloneB, "push", "-q", "origin", BRANCH);
+    yield* git(cloneB, "switch", "-q", "master");
+  });
+
+test("a Stage started by a Run whose checkout is at a head the remote has since moved past cuts its own", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const started = yield* startedAt(`origin/${BRANCH}`);
+      yield* advancedElsewhere();
+
+      const checkout = yield* askStarted(started, [agentIn(started, "idle")]);
+
+      expect(checkout.cwd).toBe(first);
+      expect(checkout.note).toContain(
+        `not working in ${started}, Run run-implement's checkout: it is not at origin/${BRANCH}`,
+      );
+    }),
+  ));
+
+test("whether a Stage's checkout would be refused asks the remote's head before counting on the starting Run's", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const started = yield* startedAt(`origin/${BRANCH}`);
+      yield* advancedElsewhere();
+      for (const held of [first, `${first}-2`, `${first}-3`]) {
+        yield* fs.makeDirectory(held, { recursive: true });
+        yield* fs.writeFileString(`${held}/kept`, "kept\n");
+      }
+
+      const refused = yield* checkoutRefusal(herdrWith([]), {
+        cwd: cloneA,
+        name: "run-x",
+        inputs: {},
+        explicit: BRANCH,
+        recordedBy: () => Effect.succeed(null),
+        starting: { run: "run-implement", cwd: started },
+      });
+
+      expect(refused).toContain(`no worktree for ${BRANCH}: `);
+      expect(refused).toContain("free one of them and retry");
+    }),
+  ));
