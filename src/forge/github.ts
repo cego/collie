@@ -488,11 +488,17 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       head,
       state: found.value === undefined ? "missing" : stateOf(found.value),
       url: found.value?.html_url ?? null,
-      id: found.value === undefined ? null : String(found.value.id),
+      id: actionsJob(found.value?.html_url),
       merge: null,
     };
   });
 }
+
+/** `<run>/<job>` for a check run Actions ran, else null: a gate's retry and log need its run. */
+const actionsJob = (url: string | null | undefined) => {
+  const [, run, job] = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(url ?? "") ?? [];
+  return run === undefined ? null : `${run}/${job}`;
+};
 
 /** The newest check run named `name` on `ref`, undefined for none. */
 const checkRun = (repo: string, ref: string, name: string, cwd: string) =>
@@ -908,15 +914,23 @@ function merge(
 
 function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness, never, ForgeHttp> {
   const repo = mrPath({ project: ref.project, iid: "" });
-  return Effect.map(request(LOGIN, cwd, "POST", `repos/${repo}/actions/jobs/${id}/rerun`), (ran) =>
-    ran.ok
-      ? { ok: true, reason: "" }
-      : { ok: false, reason: `could not rerun job ${id} of ${mrWords(ref).label}: ${ran.reason}` },
+  const run = runOf(id);
+  return Effect.map(
+    request(LOGIN, cwd, "POST", `repos/${repo}/actions/runs/${run}/rerun-failed-jobs`),
+    (ran) =>
+      ran.ok
+        ? { ok: true, reason: "" }
+        : {
+            ok: false,
+            reason: `could not rerun the failed jobs of run ${run} of ${mrWords(ref).label}: ${ran.reason}`,
+          },
   );
 }
 
+const runOf = (id: string) => id.split("/")[0];
+
 const jobLog = (ref: MrRef, id: string) =>
-  `gh run view --job ${id} --log --repo ${mrPath({ project: ref.project, iid: "" })}`;
+  `gh run view ${runOf(id)} --log-failed --repo ${mrPath({ project: ref.project, iid: "" })}`;
 
 /** Where GitHub looks for a pull request template, in the order it looks. */
 const TEMPLATES = [

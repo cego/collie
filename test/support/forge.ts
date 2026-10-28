@@ -320,7 +320,7 @@ interface Answer {
   readonly cloned?: string;
   readonly noted?: { readonly key: string; readonly body: string };
   readonly approved?: string;
-  readonly retried?: { readonly mr: FakeMr; readonly at: number };
+  readonly retried?: { readonly mr: FakeMr; readonly at: number | ReadonlyArray<number> };
   readonly oauth?: { readonly token: string; readonly expiry: string };
   readonly replied?: { readonly mr: FakeMr; readonly thread: string | null; readonly body: string };
   readonly merged?: {
@@ -678,6 +678,9 @@ const pipelineIdOf = (mr: FakeMr) => Number(mr.iid) * 100;
 /** A job as a forge lists it: the head pipeline's nth has id n, its base's 1000 + n, its target's 2000 + n. */
 const jobsOf = (jobs: ReadonlyArray<FakeJob>, from: number) =>
   jobs.map((job, at) => ({ ...job, id: job.id ?? from + at + 1 }));
+
+/** The Actions run a merge request's jobs are in. */
+const actionsRun = (mr: FakeMr | undefined) => 4000 + Number(mr?.iid ?? 0);
 
 /** The merge request a project's job `id` is on its head pipeline of. */
 const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: number) => {
@@ -1458,7 +1461,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
                   name: job.name,
                   head_sha: at,
                   ...GITHUB_RUN[job.state],
-                  html_url: `https://github.com/${repo}/runs/${job.id}`,
+                  html_url: `https://github.com/${repo}/actions/runs/${actionsRun(head ?? base ?? target)}/job/${job.id}`,
                 },
               ]
             : [],
@@ -1468,14 +1471,13 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       ? json([page])
       : json({ check_runs: pageOf(route, page.check_runs) });
   }
-  const rerun = /^repos\/(.+)\/actions\/jobs\/(\d+)\/rerun$/.exec(route);
+  const rerun = /^repos\/(.+)\/actions\/runs\/(\d+)\/rerun-failed-jobs$/.exec(route);
   if (rerun && args.includes("POST")) {
-    const found = headJobAt(
-      model,
-      (one) => one.project === `github.com/${rerun[1]}`,
-      Number(rerun[2]),
+    const mr = model.mrs.find(
+      (one) => one.project === `github.com/${rerun[1]}` && actionsRun(one) === Number(rerun[2]),
     );
-    return found === undefined ? no() : { ...ok(), retried: found };
+    const at = (mr?.jobs ?? []).flatMap((job, n) => (job.state === "failed" ? [n] : []));
+    return mr === undefined || at.length === 0 ? no() : { ...ok(), retried: { mr, at } };
   }
   const runJobs = /^repos\/(.+)\/actions\/runs\/(\d+)\/jobs/.exec(route);
   if (runJobs) {
@@ -1710,7 +1712,7 @@ export function answer(
           : {
               ...one,
               jobs: (one.jobs ?? []).map((job, n) =>
-                n === at
+                [at].flat().includes(n)
                   ? { ...job, state: job.retried ?? job.state, id: (job.id ?? n + 1) + 100 }
                   : job,
               ),
