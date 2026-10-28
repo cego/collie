@@ -224,6 +224,12 @@ const SHARE_SETTINGS = {
 /** Fix rounds in a row before a failing head parks the Run, as implement's gate fixes. */
 const ROUNDS = 4;
 
+const checkingOut = step({
+  id: "checkout",
+  title: "Checkout",
+  description: "The merge request's branch, checked out for this Run to work in.",
+  kind: "check",
+});
 const assess = step({
   id: "assess",
   title: "Assess",
@@ -370,7 +376,18 @@ export default defineWorkflow({
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER } },
   hints: { mr: "diff-target" },
-  path: [assess, proveHead, reviewWait, mergeGo, claim, merge, stage, productionGo, playProduction],
+  path: [
+    checkingOut,
+    assess,
+    proveHead,
+    reviewWait,
+    mergeGo,
+    claim,
+    merge,
+    stage,
+    productionGo,
+    playProduction,
+  ],
   // A failed release is released again: before its merge as any Run, after it by taking
   // the landing over, and through the adopt question where it kept the claim.
   followUps: [
@@ -401,17 +418,21 @@ export default defineWorkflow({
       if (ref === null || mr === null)
         return yield* fail(`${asked.mr || "an empty mr"} is not a merge request this Run can find`);
       yield* host.mergeRequest(runId, mr);
-      const checkout = yield* Activity.make({
-        name: "checkout",
-        success: Schema.Union([
-          Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
-          Schema.Struct({ refused: Schema.String }),
-        ]),
-        execute: host.checkoutReviewed(runId),
-      });
-      if ("refused" in checkout)
-        return yield* fail(`${mr} has no checkout to release from: ${checkout.refused}`);
-      const cwd = checkout.cwd;
+      const { cwd } = yield* checkingOut(
+        Effect.gen(function* () {
+          const checkout = yield* Activity.make({
+            name: "checkout",
+            success: Schema.Union([
+              Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
+              Schema.Struct({ refused: Schema.String }),
+            ]),
+            execute: host.checkoutReviewed(runId),
+          });
+          if ("refused" in checkout)
+            return yield* fail(`${mr} has no checkout to release from: ${checkout.refused}`);
+          return checkout;
+        }),
+      );
       const place = yield* host.place(runId);
       const forge = forgeOfRef(ref);
       const steps = RELEASE_ON[forge];

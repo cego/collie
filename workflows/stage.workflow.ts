@@ -131,6 +131,12 @@ const UNCLAIMED = {
   finish: "Finish",
 } as const;
 
+const checkingOut = step({
+  id: "checkout",
+  title: "Checkout",
+  description: "The merge request's branch, checked out for this Run to work in.",
+  kind: "check",
+});
 const assess = step({
   id: "assess",
   title: "Assess",
@@ -177,7 +183,7 @@ export default defineWorkflow({
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER } },
   hints: { mr: "diff-target" },
-  path: [assess, helleClaim, putOnStage, testing, rollBack],
+  path: [checkingOut, assess, helleClaim, putOnStage, testing, rollBack],
   followUps: [
     {
       id: "stage-again",
@@ -205,17 +211,21 @@ export default defineWorkflow({
       if (ref === null || mr === null)
         return yield* fail(`${asked.mr || "an empty mr"} is not a merge request this Run can find`);
       yield* host.mergeRequest(runId, mr);
-      const checkout = yield* Activity.make({
-        name: "checkout",
-        success: Schema.Union([
-          Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
-          Schema.Struct({ refused: Schema.String }),
-        ]),
-        execute: host.checkoutReviewed(runId),
-      });
-      if ("refused" in checkout)
-        return yield* fail(`${mr} has no checkout to stage from: ${checkout.refused}`);
-      const cwd = checkout.cwd;
+      const { cwd } = yield* checkingOut(
+        Effect.gen(function* () {
+          const checkout = yield* Activity.make({
+            name: "checkout",
+            success: Schema.Union([
+              Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
+              Schema.Struct({ refused: Schema.String }),
+            ]),
+            execute: host.checkoutReviewed(runId),
+          });
+          if ("refused" in checkout)
+            return yield* fail(`${mr} has no checkout to stage from: ${checkout.refused}`);
+          return checkout;
+        }),
+      );
       const place = yield* host.place(runId);
       const steps = STAGE_ON[forgeOfRef(ref)];
       const url = `https://${ref.project ?? ""}`;

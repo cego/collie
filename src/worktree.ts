@@ -9,7 +9,7 @@
 // the checkout instead. A record says which it was, because that is who takes the
 // checkout away again.
 
-import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import {
   herdrFailureReason,
@@ -630,8 +630,10 @@ export const repositoryName = Effect.fn("worktree.repositoryName")(function* (
 /**
  * The checkout for a branch, made with git. The one the branch already has where it has
  * one — git allows no second worktree on a checked-out branch, and a fix round has to
- * land where the reviewed work already is — and otherwise a new one at the path herdr
- * would have chosen.
+ * land where the reviewed work already is — and otherwise a new one at the first free
+ * slot of the path herdr would have chosen. Anything else at a slot, such as another
+ * clone's checkout of the same name, is left as it is and passed over
+ * (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
  */
 const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   cwd: string;
@@ -639,29 +641,85 @@ const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   base?: string | undefined;
   /** Where a new checkout goes, which is where herdr would have put it. */
   worktrees: string;
+  stateDir: string;
+  recordedBy?: RecordedBy | undefined;
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
 }) {
   const path = yield* Path.Path;
   const { run, branch } = opts;
   const listing = yield* gitWorktrees(run, opts.cwd);
   if (!listing) return { refused: `${opts.cwd} is not a git checkout` };
-  const existing = listing.checkouts.find((checkout) => checkout.branch === branch);
-  if (existing) return { path: existing.path, created: false };
+  // Even a listed checkout waits for the lock: git lists one before it has filled it.
+  const first = path.join(opts.worktrees, path.basename(listing.repo), ...branchPath(branch));
+  return yield* withLock(
+    destinationLock(opts.stateDir, first),
+    Effect.succeed({ refused: `${first} is being checked out by another Run starting now` }),
+    cutBranchCheckout({ ...opts, repo: listing.repo, first }),
+    Duration.minutes(2),
+  );
+});
 
-  const at = path.join(opts.worktrees, path.basename(listing.repo), ...branchPath(branch));
-  // `-b` only for a branch that does not exist yet: git refuses to create one twice,
-  // and a branch this checkout already has is what a fix round works on.
+/** The look and the cut, which run only while this process holds the first slot's lock. */
+const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opts: {
+  repo: string;
+  first: string;
+  branch: string;
+  base?: string | undefined;
+  recordedBy?: RecordedBy | undefined;
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+}) {
+  const { run, branch, first } = opts;
+  // Again, under the lock: a Run that waited here reuses what the one before it cut.
+  const listing = yield* gitWorktrees(run, opts.repo);
+  if (!listing) return { refused: `${opts.repo} is not a git checkout` };
+  const existing = listing.checkouts.find((checkout) => checkout.branch === branch);
+  if (existing) return { path: existing.path, created: false, passed: [] };
+
+  const passed: string[] = [];
+  let at: string | null = null;
+  for (const slot of [first, `${first}-2`, `${first}-3`]) {
+    // git lists a checkout whose directory has gone, and will not add another there.
+    const taken =
+      (yield* occupant(slot)) ??
+      (listing.checkouts.some((checkout) => checkout.path === slot) ? { owner: opts.repo } : null);
+    if (taken === null) {
+      at = slot;
+      break;
+    }
+    const recorded = opts.recordedBy === undefined ? null : yield* opts.recordedBy(slot);
+    passed.push(`${slot} is ${occupiedAs(taken.owner, recorded)}`);
+  }
+  if (at === null) return { refused: `${passed.join("; ")}; free one of them and retry` };
+
+  // A branch this checkout already has is what a fix round works on.
   const known =
-    (yield* run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], listing.repo))
+    (yield* run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], opts.repo))
       .code === 0;
-  const args = known
-    ? ["worktree", "add", at, branch]
-    : ["worktree", "add", at, "-b", branch, ...(opts.base ? [opts.base] : [])];
-  const added = yield* run("git", args, listing.repo);
+  let start = "";
+  if (!known) {
+    const base = opts.base || "HEAD";
+    const resolved = yield* run(
+      "git",
+      ["rev-parse", "--verify", "--quiet", `${base}^{commit}`],
+      opts.repo,
+    );
+    if (resolved.code !== 0) return { refused: `${base} is not a commit` };
+    start = resolved.stdout.trim();
+    // Made here rather than by `worktree add -b`, which fails the same way whether or not
+    // it made the branch: `git branch` refuses one somebody else made since the look.
+    const made = yield* run("git", ["branch", branch, start], opts.repo);
+    if (made.code !== 0) return { refused: whatItSaid(made) || `git would not make ${branch}` };
+    // What `-b` would have tracked.
+    if (opts.base?.startsWith("origin/"))
+      yield* run("git", ["branch", "--set-upstream-to", opts.base, branch], opts.repo);
+  }
+  const added = yield* run("git", ["worktree", "add", at, branch], opts.repo);
   if (added.code !== 0) {
+    // Deleted only while still where it was made, so nobody else's branch goes with it.
+    if (!known) yield* run("git", ["update-ref", "-d", `refs/heads/${branch}`, start], opts.repo);
     return { refused: whatItSaid(added) || `git would not add a worktree at ${at}` };
   }
-  return { path: at, created: true };
+  return { path: at, created: true, passed };
 });
 
 /**
@@ -758,7 +816,10 @@ const madeAt = Effect.fn("worktree.madeAt")(function* (worktreePath: string) {
  */
 const occupant = Effect.fn("worktree.occupant")(function* (at: string) {
   const fs = yield* FileSystem.FileSystem;
-  const there = yield* fs.exists(at).pipe(Effect.catch(() => Effect.succeed(true)));
+  // A symlink holds the path even where its target has gone, and `exists` follows it.
+  const there =
+    Option.isSome(yield* fs.readLink(at).pipe(Effect.option)) ||
+    (yield* fs.exists(at).pipe(Effect.catch(() => Effect.succeed(true))));
   if (!there) return null;
   const marker = yield* fs
     .readFileString(`${at}/.git`)
@@ -1138,6 +1199,8 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     branch: plan.branch,
     base: plan.base,
     worktrees: yield* herdr.worktreesDirectory(),
+    stateDir: opts.stateDir,
+    recordedBy: opts.recordedBy,
     run: shell,
   });
   if (made.refused !== undefined) return refuse(made.refused);
@@ -1159,7 +1222,9 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     ...here,
     cwd: worktree.path,
     worktree,
-    note: `${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}`,
+    note: `${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}${
+      made.passed.length === 0 ? "" : `, passing over ${made.passed.join("; ")}`
+    }`,
   } satisfies Checkout;
 });
 

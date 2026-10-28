@@ -528,6 +528,42 @@ test(
 );
 
 test(
+  "a start whose branch's checkout path is held works one slot along, and its log says whose the path is",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const held = worktreeOf("add-a-picker");
+        yield* fs.makeDirectory(held, { recursive: true });
+        yield* fs.writeFileString(`${held}/notes.txt`, "mine\n");
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const started = yield* start(builds!, {
+              request: "r1",
+              text: { work: "Add a picker" },
+              taskLabel: "Project | Picker",
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            return {
+              run: yield* finished(started.success.runId),
+              log: yield* fs.readFileString(`${dir()}/runs/${started.success.runId}/log.txt`),
+            };
+          }),
+        );
+
+        expect(seen.run?.cwd).toBe(`${held}-2`);
+        const passing = `passing over ${held} is a checkout that does not say which repository it belongs to`;
+        expect(seen.log.split(passing)).toHaveLength(2);
+        expect(yield* fs.readFileString(`${held}/notes.txt`)).toBe("mine\n");
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a stopped Run on a branch offers no follow-up, since it could be resumed in that checkout",
   () =>
     runEffect(

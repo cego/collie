@@ -3238,6 +3238,8 @@ export const hostLayer = (options: {
           }
           const checkout = made.success;
           if (checkout.refused !== null) return { refused: checkout.refused };
+          if (checkout.note !== "")
+            yield* appendLog(runDir(dir, runId), checkout.note).pipe(Effect.orDie);
           yield* store.place(runId, {
             checkout: encodePlaced({
               ...placed,
