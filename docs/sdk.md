@@ -1263,6 +1263,11 @@ rally converges, stands on a dispute and runs out of rounds where these three de
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
 shipped steps are held to, not a copy of it.
 
+A review's `verdict` of `findings` means it found some. A fix's means it left some
+unresolved, each listed in `findings`. What it fixed goes in `fixed`, and what it disputes
+goes in `disputed`. With nothing left unresolved its verdict is `clean`. The fix contract's
+`verdict` carries that description, so every fix and gate-fix step is shown it.
+
 ## Proving it, rather than saying so
 
 `host.evidence(runId, cwd)` is what has been verified for your Run and what the tree is

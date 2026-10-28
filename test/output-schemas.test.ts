@@ -24,6 +24,7 @@ import {
   type Parsed,
 } from "../src/output";
 import { YamlValueJsonSchema } from "../src/yaml";
+import { jsonSchemaFor } from "../src/sdk";
 
 type Readable = Schema.Codec<unknown, unknown, never, never>;
 
@@ -102,6 +103,21 @@ test("a fix report reads the same through the shared schema and the parser", () 
     (text) => parseFixOutput(Schema.decodeUnknownSync(YamlValueJsonSchema)(text), "fix.json"),
     FIXES,
   );
+});
+
+test("a fixer is told its verdict counts only what it left unresolved; a reviewer is not", () => {
+  expect(jsonSchemaFor(FixOutputSchema).document).toMatchObject({
+    properties: {
+      verdict: {
+        description: expect.stringMatching(/unresolved.*`fixed`.*`disputed`.*`clean`/),
+      },
+    },
+  });
+  expect(jsonSchemaFor(ReviewOutputSchema).document).not.toHaveProperty([
+    "properties",
+    "verdict",
+    "description",
+  ]);
 });
 
 test("the optional judgement fields survive the schema, and the values come back whole", () => {

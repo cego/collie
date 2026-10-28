@@ -907,6 +907,51 @@ scenario(
 );
 
 scenario(
+  "a planner is told its Run's Checks are the gate, never a ticket's criterion, and which they are",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+        yield* approve("r-plan-checks", ["check"]);
+        yield* parked({
+          entry: shipped("plan"),
+          runId: "r-plan-checks",
+          input: GOAL,
+          decision: "next-1",
+        });
+
+        const told = (yield* asked("r-plan-checks", "tickets")).replace(/\s+/g, " ");
+        expect(told).toContain("The Run's own Checks are already the gate");
+        expect(told).toContain("never a ticket's criterion");
+        expect(told).toContain(`This Run's Checks: - check: true (in ${rig.projectDir})`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a planner whose Run has no Checks is told the gate's rule without a list",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+        yield* parked({
+          entry: shipped("plan"),
+          runId: "r-plan-no-checks",
+          input: GOAL,
+          decision: "next-1",
+        });
+
+        const told = (yield* asked("r-plan-no-checks", "tickets")).replace(/\s+/g, " ");
+        expect(told).toContain("The Run's own Checks are already the gate");
+        expect(told).toContain("never a ticket's criterion");
+        expect(told).not.toContain("This Run's Checks:");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "implement now builds the tickets, under the name and the kind the interview settled",
   () =>
     runEffect(
