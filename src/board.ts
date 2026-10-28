@@ -40,7 +40,7 @@ import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
 import { readForge, readMrStates } from "./merges";
-import { filed, standingOf } from "./standing";
+import { filed, nothingToLandFile, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { shell } from "./mr";
 import type {
@@ -849,10 +849,26 @@ export function mrOf(run: RunFacts): string | null {
   return run.mr ?? (isMrTarget(target) ? target : null);
 }
 
+/** The branch a Run left to land: none where it recorded it had nothing to land. */
+const branchOwed = Effect.fn("Board.branchOwed")(function* (run: RunFacts) {
+  if (run.branch === null) return null;
+  const fs = yield* FileSystem.FileSystem;
+  const nothing = yield* fs
+    .exists(nothingToLandFile(run.dir))
+    .pipe(Effect.orElseSucceed(() => false));
+  return nothing ? null : run.branch;
+});
+
 /** Whether none of these Runs left anything anyone has to file. */
 const nothingToFile = Effect.fn("Board.nothingToFile")(function* (runs: ReadonlyArray<RunFacts>) {
   for (const run of runs)
-    if (filed({ branch: run.branch, mr: mrOf(run), planIssues: yield* planIssuesIn(run.dir) }))
+    if (
+      filed({
+        branch: yield* branchOwed(run),
+        mr: mrOf(run),
+        planIssues: yield* planIssuesIn(run.dir),
+      })
+    )
       return false;
   return true;
 });
@@ -1096,10 +1112,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // What the Task left behind: the tickets are whichever of its Runs wrote any.
         let issues = 0;
         for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
+        let owed: string | null = null;
+        for (const run of runs) owed ??= yield* branchOwed(run);
         const { planReady, landed } = standingOf({
           settled: settledNow,
           succeeded: status === "succeeded",
-          branch,
+          branch: owed,
           mr,
           mrLanded: mrState !== null && LANDED_STATES.has(mrState),
           planIssues: issues,

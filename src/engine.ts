@@ -129,6 +129,7 @@ import {
   type ReviewHead,
   type ReviewStanding,
 } from "./review-wait";
+import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
   autoMergingHere,
@@ -2705,9 +2706,6 @@ const decodeAskedAttachments = Schema.decodeUnknownOption(
 
 /** Where a Run keeps the merge request it opened. */
 const mergeRequestPath = (dir: string, runId: string) => mergeRequestFile(runDir(dir, runId));
-
-/** Says why a Run completed with nothing to land, in the Run's directory `dir`. */
-export const nothingToLandFile = (dir: string) => `${dir}/nothing-to-land`;
 
 /** Says why a Run's reviewed checkout was refused, in the Run's directory `dir`. */
 export const checkoutRefusedFile = (dir: string) => `${dir}/checkout-refused`;

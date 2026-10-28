@@ -94,10 +94,10 @@ import {
   evidenceDir,
   foundationLayer,
   loadEntry,
-  nothingToLandFile,
   pollStatus,
   runDir,
 } from "../../src/engine";
+import { nothingToLandFile } from "../../src/standing";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";

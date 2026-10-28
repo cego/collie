@@ -26,6 +26,7 @@ import {
 } from "../src/board-model";
 import { encodeStepLine, STEPS_FILE, type StepLine, type StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
+import { nothingToLandFile } from "../src/standing";
 import {
   Answered,
   Controlled,
@@ -1193,6 +1194,32 @@ test("a Run that ended with nothing to file is finished, not waiting", () =>
       expect(sectionOf(by("t-bare"))).toBe("finished");
       expect(by("t-branch").landed).toBe(false);
       expect(sectionOf(by("t-branch"))).toBe("waiting");
+    }),
+  ));
+
+test("a Run that recorded it had nothing to land is finished, while another Run's branch still waits", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, env } = yield* scratch();
+      const succeeded = (id: string, task: string) =>
+        madeRun(dir, { id, task, state: "succeeded", branch: `mk/${id}` });
+      const nothing = yield* succeeded("r-nothing", "t-nothing");
+      yield* fs.writeFileString(nothingToLandFile(nothing.dir), "nothing to land\n");
+      const shared = yield* succeeded("r-shared", "t-shared");
+      yield* fs.writeFileString(nothingToLandFile(shared.dir), "nothing to land\n");
+      const runs = [
+        nothing,
+        yield* succeeded("r-something", "t-something"),
+        shared,
+        yield* succeeded("r-other", "t-shared"),
+      ];
+
+      const views = yield* board(env, runs);
+      const by = (task: string) => views.find((view) => view.id === task)!;
+      expect(sectionOf(by("t-nothing"))).toBe("finished");
+      expect(sectionOf(by("t-something"))).toBe("waiting");
+      expect(sectionOf(by("t-shared"))).toBe("waiting");
     }),
   ));
 
