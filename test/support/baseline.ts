@@ -48,7 +48,7 @@ import {
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
-import type { ForgeHttp } from "../../src/forge/http";
+import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
 import { mrLabel, mrTarget, type FlowLane, type MrForge } from "../../src/board-model";
 import { laneFor } from "../../src/flow-read";
@@ -87,6 +87,7 @@ import {
   HOLD,
   PARKED,
   RunStatus,
+  Registry,
   answerDecision,
   controlPath,
   declaredByModule,
@@ -94,8 +95,11 @@ import {
   foundationLayer,
   loadEntry,
   pollStatus,
+  registryLayer,
   runDir,
 } from "../../src/engine";
+import { declaredBy } from "../../src/discovery";
+import { readMeasurements } from "../../src/measurement";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
@@ -120,6 +124,7 @@ const UNRELATED = {
   general: "odd-job",
   "self-improve": "look-back",
   stage: "try-it-out",
+  "tune-up": "make-haste",
 } as const;
 type Shipped = keyof typeof UNRELATED;
 
@@ -424,6 +429,7 @@ const undeclaredWork = () =>
           "general",
           "investigate",
           "self-improve",
+          "tune-up",
         ] as const
       ).map(shipped),
     );
@@ -13592,6 +13598,11 @@ scenario(
   120_000,
 );
 
+const DefaultOf = Schema.Struct({ default: Schema.Json });
+/** The default a drawn input schema declares, or null for none. */
+const schemaDefault = (drawn: Schema.Json | null) =>
+  Option.getOrNull(Schema.decodeUnknownOption(DefaultOf)(drawn))?.default ?? null;
+
 const agentPrompts = () =>
   rig.calls().pipe(Effect.map((calls) => calls.filter((call) => call.cmd === "agent prompt")));
 
@@ -13893,6 +13904,346 @@ scenario(
       }),
     ),
   120_000,
+);
+
+/** One harness commit of `files` over what origin has, as Harness leaves the branch; its sha. */
+const harnessCommit = (files: Readonly<Record<string, string>>) =>
+  Effect.gen(function* () {
+    yield* repository();
+    const fs = yield* FileSystem.FileSystem;
+    for (const [name, text] of Object.entries(files)) {
+      const at = `${rig.projectDir}/${name}`;
+      yield* fs.makeDirectory(at.slice(0, at.lastIndexOf("/")), { recursive: true });
+      yield* fs.writeFileString(at, text);
+    }
+    yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
+    yield* exec(["git", "commit", "-qm", "harness"], { cwd: rig.projectDir });
+    return yield* headOf();
+  }).pipe(Effect.orDie);
+
+/** A steady `count` of 7, and a `value` of 5 or 15 by how often it has run. */
+const NOISY_BENCH = [
+  'echo x >> "$1"',
+  'if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then v=5; else v=15; fi',
+  'printf \'{"value": %s, "count": 7}\\n\' "$v"',
+  "",
+].join("\n");
+
+const TUNE_DISCOVERED = {
+  stack: ["bun", "sqlite"],
+  skills: ["performance-optimization"],
+  journeys: [
+    { name: "search", objectives: [{ metric: "p95 latency", why: "people wait on every search" }] },
+  ],
+  telemetry: [
+    { source: "APM", status: "unavailable", reason: "no APM access from this Machine" },
+    { source: "Kibana logs", status: "unavailable", reason: "no Kibana credentials here" },
+  ],
+  research: [
+    {
+      kind: "documentation",
+      title: "bun:sqlite",
+      link: "https://bun.sh/docs/api/sqlite",
+      opportunity: "prepared statements",
+      effect: "raised",
+    },
+    {
+      kind: "prior-work",
+      title: "Slow search",
+      link: "https://gitlab.example.com/group/project/-/issues/7",
+      opportunity: "an index on name",
+      effect: "ruled out",
+    },
+  ],
+  opportunities: [
+    {
+      title: "prepared statements",
+      evidence: "hypothesis",
+      cites: ["https://bun.sh/docs/api/sqlite"],
+    },
+  ],
+  external: [],
+};
+
+const tunePlan = (
+  commit: string,
+  metrics: ReadonlyArray<Schema.Json>,
+  prepare: Schema.Json = null,
+) => ({
+  journeys: ["search"],
+  cases: ["warm"],
+  commands: [
+    { name: "bench", executable: "sh", argv: ["bench/bench.sh", `${rig.root}/bench-runs`] },
+  ],
+  prepare,
+  metrics,
+  warmup: 1,
+  harness: { commits: [commit], paths: ["bench"] },
+});
+
+const NOISY_PRIMARY = { name: "bench.value", direction: "lower", role: "primary" } as const;
+const STEADY_PRIMARY = { name: "bench.count", direction: "lower", role: "primary" } as const;
+
+const tunedUp = (runId: string, input: Readonly<Record<string, Schema.Json>> = {}) =>
+  ran({ entry: shipped("tune-up"), runId, input });
+
+const calibrations = (runId: string) =>
+  Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
+    all.filter((one) => one.pass === "calibration"),
+  );
+
+/** How a start of `id` with these words is refused, checked as a front door checks one. */
+const refusedAtStart = (id: Shipped, text: Readonly<Record<string, string>>) =>
+  session(
+    Effect.gen(function* () {
+      const registry = yield* Registry;
+      const generation = yield* registry.load(shipped(id));
+      return yield* registry
+        .check({ generation, request: `r-${id}-checked`, project: rig.projectDir, input: {}, text })
+        .pipe(Effect.match({ onFailure: (refused) => refused.reason, onSuccess: () => "started" }));
+    }).pipe(
+      Effect.provide(registryLayer(dir, { placing: foundation().placing, userDir: rig.userDir })),
+      Effect.provide(forgeHttpLayer),
+      Effect.provide(BunServices.layer),
+    ),
+  );
+
+scenario(
+  "tune-up refuses cycles of 0, 21 and 2.5 at the front door, before any Run starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        for (const cycles of ["0", "21", "2.5"]) {
+          const reason = yield* refusedAtStart("tune-up", { cycles });
+          expect([cycles, reason.startsWith("invalid_input:"), reason]).toEqual([
+            cycles,
+            true,
+            expect.stringContaining("cycles"),
+          ]);
+        }
+        expect(yield* refusedAtStart("tune-up", { cycles: "20" })).toBe("started");
+        expect(yield* session(Effect.flatMap(Store, (store) => store.runs))).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "tune-up refuses a repository other than the checkout it is started in, and never clones one",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        const elsewhere = `${rig.root}/elsewhere`;
+        yield* exec(["git", "init", "-q", elsewhere], { cwd: rig.root });
+        for (const named of [elsewhere, "https://gitlab.example.com/group/other.git"]) {
+          const reason = yield* refusedAtStart("tune-up", { repository: named });
+          expect(reason).toStartWith("invalid_input:");
+          expect(reason).toContain(named);
+          expect(reason).toContain("from Home");
+        }
+        expect(yield* refusedAtStart("tune-up", { repository: rig.projectDir })).toBe("started");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose base is too noisy against itself, with no counter, completes with its findings and no merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-noisy";
+        yield* rig.queueOutputs([TUNE_DISCOVERED, tunePlan(commit, [NOISY_PRIMARY])]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("proof unavailable: bench.value is inconclusive");
+        expect(yield* persona(runId, "discover")).toContain("tuner");
+        const log = yield* runLog(runId);
+        expect(log).toContain("cycles 5");
+        expect(log).toContain("proof unavailable: bench.value is inconclusive");
+        // Every telemetry source Discover could not use, with why.
+        expect(log).toContain("telemetry APM: unavailable: no APM access from this Machine");
+        expect(log).toContain("telemetry Kibana logs: unavailable: no Kibana credentials here");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        const [calibration, ...more] = yield* calibrations(runId);
+        expect(more).toEqual([]);
+        // Base against base: the base tree is the merge base with the harness on it.
+        expect(calibration!.candidate.content).toBe(calibration!.base.content);
+        expect(calibration!.base.commit).toBe(yield* revParse(`${commit}~1`));
+        expect(calibration!.plan.samples).toBe(10);
+        const report = yield* readText(said(result).split(": ")[0]!);
+        expect(report).toContain("no APM access from this Machine");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose primary is too noisy but declared a counter for it calibrates again on the counter, and records the switch",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-counter";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [
+            { ...NOISY_PRIMARY, counter: { name: "bench.count", direction: "lower" } },
+          ]),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4 });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).not.toContain("proof unavailable");
+        expect(said(result)).toContain("calibrated on bench.count");
+        expect(yield* runLog(runId)).toContain(
+          "switched bench.value to its counter bench.count: bench.value is inconclusive",
+        );
+        const [first, second] = yield* calibrations(runId);
+        expect(first!.plan.metrics.map((one) => one.name)).toEqual(["bench.value"]);
+        expect(second!.plan.metrics).toEqual([STEADY_PRIMARY]);
+        expect(second!.plan.samples).toBe(4);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose guardrail is not held against itself, with no counter for it, ends naming that guardrail",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-guardrail";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [STEADY_PRIMARY, { ...NOISY_PRIMARY, role: "guardrail" }]),
+        ]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain(
+          "proof unavailable: guardrail bench.value is not held against itself",
+        );
+        expect(said(result)).not.toContain("bench.count");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+for (const [what, unusable] of [
+  ["no research", { ...TUNE_DISCOVERED, research: [] }],
+  [
+    "an opportunity citing nothing",
+    {
+      ...TUNE_DISCOVERED,
+      opportunities: [{ ...TUNE_DISCOVERED.opportunities[0]!, cites: [] }],
+    },
+  ],
+] as const)
+  scenario(
+    `a tune-up Discover Output with ${what} is refused and repaired, and its research is recorded under the opportunity it changed`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+          const runId = "r-tune-research";
+          yield* rig.queueOutputs([unusable, TUNE_DISCOVERED, tunePlan(commit, [NOISY_PRIMARY])]);
+          const result = yield* tunedUp(runId);
+          expect(result._tag).toBe("Success");
+          expect(yield* agentPrompts()).toHaveLength(3);
+          const log = yield* runLog(runId);
+          expect(log).toContain(
+            "research https://bun.sh/docs/api/sqlite raised prepared statements",
+          );
+          expect(log).toContain(
+            "research https://gitlab.example.com/group/project/-/issues/7 ruled out an index on name",
+          );
+          const report = yield* readText(said(result).split(": ")[0]!);
+          // Each source on the line under the opportunity it changed.
+          const lines = report.split("\n");
+          const under = (opportunity: string) =>
+            lines[lines.findIndex((line) => line.includes(opportunity)) + 1];
+          expect(under("prepared statements")).toContain("raised by");
+          expect(under("prepared statements")).toContain("https://bun.sh/docs/api/sqlite");
+          expect(under("an index on name")).toContain("ruled out by");
+          expect(under("an index on name")).toContain(
+            "https://gitlab.example.com/group/project/-/issues/7",
+          );
+        }),
+      ),
+    120_000,
+  );
+
+scenario(
+  "a tune-up harness commit touching a path outside the harness fails the Run, naming it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH, README: "faster\n" });
+        yield* rig.queueOutputs([TUNE_DISCOVERED, tunePlan(commit, [STEADY_PRIMARY])]);
+        const result = yield* tunedUp("r-tune-stray");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("README");
+        expect(reasonOf(result)).not.toContain("bench/bench.sh");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose base cannot be built fails the Run, naming the tree",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [STEADY_PRIMARY], { executable: "sh", argv: ["-c", "exit 3"] }),
+        ]);
+        const result = yield* tunedUp("r-tune-unbuildable");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain(
+          `the base tree at ${yield* revParse(`${commit}~1`)} could not be built`,
+        );
+      }),
+    ),
+  120_000,
+);
+
+once("tune-up declares every input with its default, and its path", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const entry = yield* loadEntry(shipped("tune-up"));
+      const defaults = Object.fromEntries(
+        declaredBy(entry).map((one) => [one.name, schemaDefault(one.schema)]),
+      );
+      expect(defaults).toEqual({
+        repository: "",
+        focus: "",
+        cycles: 5,
+        threshold: 5,
+        tolerance: 2,
+        samples: 10,
+        wall_time: "",
+        external: "ask",
+      });
+      expect(entry.metadata?.path?.map((one) => one.title)).toEqual([
+        "Discover",
+        "Harness",
+        "Calibrate",
+        "Cycles",
+        "Integrate",
+        "Review",
+        "Merge request",
+        "External report",
+      ]);
+      expect(entry.metadata?.checkout).toBe("branch");
+      expect(entry.metadata?.outcome).toEqual({ fixed: "performance" });
+    }),
+  ),
 );
 
 /**

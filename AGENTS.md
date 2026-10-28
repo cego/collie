@@ -76,6 +76,8 @@ here are in [`src/README.md`](src/README.md).
 - **Measurement** → [ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](docs/adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md),
   [`docs/cli.md`](docs/cli.md#measure), `src/measurement.ts`, `src/measurement-model.ts`,
   `src/measurement-verdict.ts`, `test/measurement.test.ts`, `test/measurement-verdict.test.ts`.
+  The `tune-up` Workflow → [`docs/workflows.md`](docs/workflows.md#tune-up),
+  `workflows/tune-up.workflow.ts`, `personas/tuner.md`, `test/support/baseline.ts`.
 - **Checks Collie runs, as seen** → [ADR-0042](docs/adr/0042-a-check-collie-runs-is-seen-while-it-runs.md),
   `src/checks.ts`, `src/verify.ts`, `src/commands/run.ts`.
 - **Home chat** → [`docs/using.md`](docs/using.md#talking-to-collie-about-a-herd),

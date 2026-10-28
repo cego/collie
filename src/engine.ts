@@ -5699,11 +5699,38 @@ const makeRegistry: (
    * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
    * that shape; any other is refused here, before anything exists.
    */
+  /**
+   * A branch Run works in the checkout it is started in, which only Home places by a
+   * repository's URL or path; a repository naming any other is refused, never ignored.
+   */
+  const refuseElsewhere = Effect.fn("Engine.refuseElsewhere")(function* (
+    generation: Generation,
+    settled: Settled,
+    cwd: string,
+  ) {
+    const field = fieldWith(generation.hints, "repository");
+    const value = field === undefined ? undefined : settled.input[field];
+    if (generation.checkout !== "branch" || !isText(value) || value.trim() === "") return;
+    const named = value.trim();
+    const top = (at: string) =>
+      runShell("git", ["rev-parse", "--show-toplevel"], at).pipe(
+        Effect.map((said) => (said.code === 0 ? said.stdout.trim() : null)),
+        Effect.orElseSucceed(() => null),
+        Effect.provideContext(bun),
+      );
+    const there = named.startsWith("/") ? yield* top(named) : null;
+    if (there !== null && there === (yield* top(cwd))) return;
+    return yield* refusedInput(
+      `"${field}" names ${named}, and a ${generation.id} Run works in the checkout it is started in, ${cwd}, and never clones: start it in that checkout, or from Home, which places it there`,
+    );
+  });
+
   const settleTargets = Effect.fn("Engine.settleTargets")(function* (
     generation: Generation,
     settled: Settled,
     cwd: string,
   ) {
+    yield* refuseElsewhere(generation, settled, cwd);
     const field = fieldWith(generation.hints, "diff-target");
     const value = field === undefined ? undefined : settled.input[field];
     if (field === undefined || !isText(value) || value.trim() === "") return settled;

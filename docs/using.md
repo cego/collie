@@ -3329,6 +3329,32 @@ it, and `retro` reads `writing-for-agents` itself. A Machine without it fails th
 naming the repair, before any agent starts and before anything is filed. The Workflow's
 Markdown adapts `retro` to the day's Runs, and wins where the two differ.
 
+## Tune-up
+
+`tune-up` makes a repository measurably faster, and keeps nothing it cannot prove
+([`docs/workflows.md`](workflows.md#tune-up) has its inputs and steps):
+
+```sh
+collie run start tune-up --input focus="search" --input cycles=5
+```
+
+Start it in the checkout you want tuned. From Home, a repository URL or path places it in
+the local checkout that names it; a tune-up never clones, and from the CLI a `repository`
+naming another checkout is refused at the start. `cycles` must be a whole number from 1 to
+20, and defaults to 5.
+
+It reads the project and its telemetry, commits a benchmark harness, and has the host
+measure the base against itself to learn how noisy this Machine is. On a shared, busy
+Machine a wall-clock metric can come back `inconclusive` there: have the harness declare a
+counter (instructions, allocations, queries, bytes) for it, and the Run switches to the
+counter instead of ending. Its findings are in `handoffs/tune-up-findings.md` in its Run
+directory, every statement marked measured, telemetry or hypothesis, with the research
+under the opportunity it changed.
+
+A tune-up never puts load on production, which it only reads with bounded queries, never
+auto-merges or deploys, and never changes another repository. One Measurement runs on a
+Machine at a time, and waits while the Machine is [Short of memory](#short-of-memory).
+
 ## Cleanup
 
 Collie removes what it made once nothing needs it, and only what it can show it made

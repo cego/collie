@@ -162,8 +162,9 @@ workflow an older Collie left in your layer is neither listed nor run; `collie d
 it.
 
 `workflow show <id>` gives the module's public id, the layer and file it came from, each
-input with its strategy and its schema, the names the host settles beside your input, the
-schemas of its result and its failure, and what its definition declares, under `metadata`:
+input with its strategy and its schema (a `default` there is what an input left out takes),
+the names the host settles beside your input, the schemas of its result and its failure,
+and what its definition declares, under `metadata`, its `path` of Steps among it:
 
 ```json
 {
@@ -186,7 +187,11 @@ schemas of its result and its failure, and what its definition declares, under `
       "options": [{ "name": "branch", "meaning": "Branch selection for mutating work, …" }],
       "success": { "schema": { "type": "string" }, "limits": [] },
       "error": { "schema": { "$ref": "#/$defs/WorkflowErrorEncoded" }, "limits": [] },
-      "metadata": { "hints": { "plan": "work-source" }, "selectable": ["feature", "…"] },
+      "metadata": {
+        "hints": { "plan": "work-source" },
+        "selectable": ["feature", "…"],
+        "path": [{ "id": "build", "title": "Build" }, "…"]
+      },
       "broken": null
     }
   }

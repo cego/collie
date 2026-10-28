@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships ten workflows. This page is the "which one do I want" level: what each is
+Collie ships eleven workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -11,7 +11,9 @@ For what a Workflow, an operation, a Choice or a Run _is_, see [`CONTEXT.md`](..
 ## Choosing one
 
 A task that is not planning, building a change to a merge request, reviewing, releasing
-or staging one, renovating or an architecture survey is `general`'s, never `implement` or `plan` stretched to fit.
+or staging one, renovating, making a repository faster or an architecture survey is
+`general`'s, never `implement` or `plan` stretched to fit. Making a repository faster is
+`tune-up`'s, never `implement` asked to: only `tune-up` proves the `performance` outcome.
 
 ## How inputs reach a run
 
@@ -953,3 +955,68 @@ named improvement, each starting a plan in its own Task.
 
 Module: [`workflows/self-improve.workflow.ts`](../workflows/self-improve.workflow.ts),
 with its prompt in [`workflows/self-improve.md`](../workflows/self-improve.md).
+
+## `tune-up`
+
+**For:** making a repository measurably faster without giving up behaviour, proved by the
+host's Measurements and never by an agent's own timings
+([ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md)).
+It proves the fixed `performance` outcome, which no other workflow can be asked for.
+
+**Inputs**, each optional:
+
+| Input        | Default                       | What it is                                                                               |
+| ------------ | ----------------------------- | ---------------------------------------------------------------------------------------- |
+| `repository` | the checkout it is started in | The checkout to tune. See below.                                                         |
+| `focus`      | empty, the whole              | A journey, endpoint or page to spend the Cycles on.                                      |
+| `cycles`     | `5`                           | How many Cycles at most, a whole number from 1 to 20. A reverted Cycle counts.           |
+| `threshold`  | `5`                           | The smallest gain, in percent, that counts.                                              |
+| `tolerance`  | `2`                           | How far, in percent, a guardrail may worsen and still hold.                              |
+| `samples`    | `10`                          | Samples per side of each Measurement, at least 2.                                        |
+| `wall_time`  | none                          | A duration after which no new Cycle starts.                                              |
+| `external`   | `ask`                         | `ask` puts each external finding to you, `report` only writes them, `off` collects none. |
+
+A `cycles` of 0, 21 or 2.5 is refused at the start, before any Run exists. The Run works on
+a branch of its own, in a worktree of the checkout it is started in, and never clones. From
+Home, a repository URL or path places it in the local checkout it names. From the CLI or
+another Run's agent, start it in the checkout you want tuned: a `repository` naming any
+other checkout, or a URL, is refused at the start.
+
+**What happens:**
+
+1. **Discover.** A `tuner` agent reads the stack, loads the installed skills that fit it,
+   and writes down the journeys that matter with their objectives. It records each
+   telemetry source it tried as used, with release, window, sample and a sanitised link, or
+   unavailable, with why. It records the documentation and prior work it read, each with
+   the opportunity it raised, lowered or ruled out, or what it searched where it found
+   nothing. It ranks the opportunities, each marked measured, telemetry or hypothesis and
+   citing what it rests on. An Output with no research, or an opportunity citing nothing,
+   is refused and repaired. Each telemetry source and research link is written to the
+   Run's log.
+2. **Harness.** The tuner commits a benchmark harness on commits of its own, touching only
+   the harness paths it declares, and writes the benchmark plan: journeys, cases, commands,
+   prepare, metrics with direction and role, warmup, and for a metric this Machine may be
+   too noisy to prove, a low-variance counter of the same work. The Run's `samples`,
+   `threshold` and `tolerance` complete it. The plan is recorded before anything is
+   measured by it, and a later change is a new plan with its reason.
+3. **Calibrate.** The host measures the base, the merge base with the harness commits on
+   it, against the Run's own checkout, which holds nothing else yet. A primary metric that
+   comes back `inconclusive` there, or a guardrail that is not held, cannot be proved on
+   this Machine. Where the plan declared a counter for it, the Run switches to the counter,
+   records the switch as a new plan and calibrates again; otherwise it ends.
+
+**Ends:** with `handoffs/tune-up-findings.md` in its Run directory, and no merge request.
+Its result names that file and why it ended: `proof unavailable`, naming each metric, or
+calibrated on its primary metric. Neither is a failure. A harness commit touching a path
+outside its harness paths, a base that cannot be built, or a calibration that ends without
+a verdict fails the Run, naming the paths or the tree.
+
+**Never:** load against production, which it only reads, bounded; auto-merge; a deploy; or
+a change to another repository.
+
+Its Flow forecasts Discover, Harness, Calibrate, Cycles, Integrate, Review, Merge request
+and External report; a Run ends after Calibrate for now.
+
+Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its
+prompts in [`workflows/tune-up.md`](../workflows/tune-up.md) and its agent's Persona in
+[`personas/tuner.md`](../personas/tuner.md).

@@ -1732,6 +1732,7 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema
     selectable: [...(metadata?.outcome?.selectable ?? [])],
     checkout: metadata?.checkout ?? null,
     closes: metadata?.closes ?? null,
+    path: (metadata?.path ?? []).map((one) => ({ id: one.id, title: one.title })),
     followUps: (metadata?.followUps ?? []).map((offer) => ({
       id: offer.id,
       title: offer.title,
