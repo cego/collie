@@ -243,6 +243,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--task <id>`     | Continue that Task instead of starting a new one, as `task list` prints it. |
 | `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.       |
 | `--here`          | Keep the Run in this workspace, as its Task, instead of opening one.        |
+| `--title <t>`     | What a new Task is called, instead of a name inferred from the work.        |
 | `--verify <json>` | Repeatable. A check Collie may run to prove it, as one `verify.json` entry. |
 | `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
 | `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |

@@ -416,6 +416,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         input,
         options: launch,
         task: action.here === true ? { mode: "here" } : { mode: "new" },
+        title: action.title,
         verify: action.verify,
         attachments: action.attachments,
       });

@@ -237,6 +237,7 @@ import {
   type Voice,
 } from "./proposals";
 import { carryOut, carryOutAsked, followUpField } from "./run-actions";
+import { retitleGenericTasks } from "./tasknames";
 import { VerifySpecSchema } from "./verify-spec";
 import { everyRegistered } from "./registry";
 import { listTasks, readTask } from "./task";
@@ -1221,6 +1222,14 @@ const sideJobsLayer = (panels: MrPanels) =>
       yield* Effect.forkScoped(
         sideJobs({ env, herdr, board, panels, record, stop, sweepers }).pipe(
           Effect.provideContext(bun),
+        ),
+      );
+      // Once per host: Tasks named before a name had to say what the work is.
+      yield* Effect.forkScoped(
+        board.pipe(
+          Effect.flatMap(({ runs }) => retitleGenericTasks(env, herdr, runs)),
+          Effect.provideContext(bun),
+          Effect.ignore,
         ),
       );
     }),

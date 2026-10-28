@@ -101,6 +101,8 @@ export const ActionSchema = Schema.Union([
      * worktree: what someone asking from a workspace usually means by "start it here".
      */
     here: Schema.optionalKey(Schema.Boolean),
+    /** What its new Task is called, where the human named it; inferred from the work otherwise. */
+    title: Schema.optionalKey(Schema.String),
     /** Checks Collie may run to prove it, over the project's and the user's verify.json. */
     verify: Schema.optionalKey(Schema.Array(VerifySpecSchema)),
     attachments: Schema.optionalKey(Attachments),

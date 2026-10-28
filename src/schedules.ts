@@ -304,7 +304,7 @@ export const schedulesLayer = (options: {
           options: where.options,
           taskLabel: yield* freshTaskLabel(
             { ...env, cwd: where.project },
-            { workflow: start.workflow, named: Object.values(where.text)[0] ?? "" },
+            { workflow: start.workflow, inputs: where.text, goal: by.name.replace(/[-_]+/g, " ") },
           ),
           verify: start.verify,
           handsOver: true,

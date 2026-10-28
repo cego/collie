@@ -9,11 +9,14 @@
 // answers in a two-string schema with nothing in it that acts, and what comes back is a
 // display label — never a path component, an agent name or a command.
 
-import { Effect } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { askOnce, budgetedDeps, type BudgetedDeps, type TaskName } from "./evaluator";
 import { Herdr, type PaneInfo, type TabInfo, type WorkspaceInfo } from "./herdr";
+import { liveHerds } from "./herds";
 import { oneLine, taskWorkspaceLabel } from "./naming";
+import type { RunFacts } from "./runs";
+import { listTasks, readTask, withTaskLock, writeTask } from "./task";
 
 /** The names this person already has, as herdr reports them. Read-only context. */
 export interface LiveNames {
@@ -84,6 +87,24 @@ const names = (project: string, repo: string) =>
  */
 const FALLBACK_WORDS = 6;
 
+/** Words a title may end on only by having been cut off. */
+const DANGLING = new Set([
+  "a",
+  "an",
+  "and",
+  "at",
+  "by",
+  "for",
+  "from",
+  "in",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "with",
+]);
+
 /**
  * A name without asking anybody: the project this person already uses for this
  * repository, else the repository itself, and the work's own short name as the title.
@@ -94,16 +115,92 @@ const FALLBACK_WORDS = 6;
  */
 export function fallbackName(context: TaskContext, live: LiveNames): TaskName {
   const repo = repositoryOf(context.cwd);
-  const from = context.short || context.goal || context.named || context.workflow;
-  const words = oneLine(from.split("/").at(-1) ?? from)
-    .replace(/[-_]+/g, " ")
-    .split(" ")
-    .filter((word) => word !== "");
+  const from = oneLine(context.short || context.goal || context.named || context.workflow);
+  const words = /\s/.test(from)
+    ? (from.split(/(?<=[.!?])\s/)[0] ?? "")
+        .replace(/[.!?]$/, "")
+        .split(" ")
+        .filter((word) => word !== "" && !word.includes("://"))
+    : (from.split("/").at(-1) ?? from).split(/[-_]+/).filter((word) => word !== "");
+  const kept = words.slice(0, FALLBACK_WORDS);
+  while (kept.length > 1 && DANGLING.has(kept.at(-1)!.toLowerCase())) kept.pop();
   return {
     project: establishedProject(live, repo) ?? sentence(repo.replace(/[-_]+/g, " ")),
-    title: sentence(words.slice(0, FALLBACK_WORDS).join(" ")),
+    title: sentence(kept.join(" ")),
   };
 }
+
+/** Words that say a piece of work exists without saying which. */
+const FILLER = new Set([
+  ...DANGLING,
+  "new",
+  "work",
+  "task",
+  "run",
+  "plan",
+  "planned",
+  "planning",
+  "implement",
+  "implementation",
+  "change",
+  "changes",
+  "workflow",
+  "improvement",
+  "general",
+  "investigation",
+  "this",
+]);
+
+/**
+ * Whether a title names only the workflow it runs and words like "new work": `Plan new
+ * work` and `Implement plan` say nothing two Tasks of one workflow do not both say.
+ */
+export function isGenericTitle(title: string, workflow: string): boolean {
+  const said = (word: string) => FILLER.has(word) || own.has(word);
+  const own = new Set(workflow.toLowerCase().split(/[^\p{L}\p{N}]+/u));
+  return title
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .every((word) => word === "" || said(word) || said(word.replace(/s$/, "")));
+}
+
+const isText = Schema.is(Schema.String);
+
+/** The most descriptive Input a start was given, whatever it is called or where it came. */
+export function workNamedIn(inputs: Readonly<Record<string, Schema.Json>>): string {
+  return Object.values(inputs)
+    .flatMap((value) => (isText(value) ? [value.trim()] : []))
+    .reduce((longest, value) => (value.length > longest.length ? value : longest), "");
+}
+
+/** A spec's own label, which says what the file is rather than what the work is. */
+const SPEC_LABEL = /^(spec|work source)\b[^:]*(:\s*|$)/i;
+
+/**
+ * What a plan handed over by its path, absolute or from `cwd`, is about: the first heading
+ * or Work source line of its spec, or of a Markdown file. Anything else is returned as given.
+ */
+export const objectiveOf = Effect.fn("tasknames.objectiveOf")(function* (
+  named: string,
+  cwd: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (named.trim() === "" || named.includes("\n")) return named;
+  const at = path.resolve(cwd, named);
+  const info = yield* fs.stat(at).pipe(Effect.option);
+  if (info._tag === "None") return named;
+  const file =
+    info.value.type === "Directory" ? path.join(at, "SPEC.md") : at.endsWith(".md") ? at : null;
+  if (file === null) return named;
+  const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  for (const line of text.split("\n")) {
+    if (!/^#+\s/.test(line) && !SPEC_LABEL.test(line)) continue;
+    const said = line.replace(/^#+/, "").trim().replace(SPEC_LABEL, "").trim();
+    if (said !== "") return said;
+  }
+  return named;
+});
 
 /** A slug read as a phrase: what a person would have written, capitalised once. */
 function sentence(text: string): string {
@@ -158,9 +255,12 @@ export function cleanName(answer: TaskName, context: TaskContext, live: LiveName
   const borrowed =
     prefixesIn(live).some((prefix) => normal(prefix) === normal(project)) &&
     !parts.some((part) => names(normal(project), part));
+  const title = oneLine(answer.title);
+  const generic =
+    isGenericTitle(title, context.workflow) && !isGenericTitle(otherwise.title, context.workflow);
   return {
     project: borrowed ? otherwise.project : project || otherwise.project,
-    title: oneLine(answer.title) || otherwise.title,
+    title: title === "" || generic ? otherwise.title : title,
   };
 }
 
@@ -200,20 +300,99 @@ const liveNames = Effect.fn("tasknames.liveNames")(function* (herdr: Herdr, ever
   } satisfies LiveNames;
 });
 
+/** What a start is about, as its caller gave it. */
+export interface StartAbout {
+  readonly workflow: string;
+  /** Every Input the start was given, by name. */
+  readonly inputs: Readonly<Record<string, Schema.Json>>;
+  /** What the human said it is for, where they said anything. */
+  readonly goal?: string | null | undefined;
+  /** What the human called it, which names it unless it says nothing. */
+  readonly title?: string | undefined;
+}
+
 /** Infer a fresh Task's label from its work; `asking: false` uses the stand-in. */
 export const freshTaskLabel = Effect.fn("tasknames.freshTaskLabel")(function* (
   env: PluginEnv,
-  about: { readonly workflow: string; readonly named: string },
+  about: StartAbout,
   asking = true,
 ) {
   const naming = asking
     ? yield* budgetedDeps(env, "namer.md", { maxSeconds: 30, maxOutputBytes: 4 * 1024 })
     : null;
-  return taskWorkspaceLabel(
-    yield* nameTask(
-      naming,
-      { workflow: about.workflow, named: about.named, short: "", goal: null, cwd: env.cwd },
-      yield* liveNames(new Herdr(env), naming !== null),
-    ),
-  );
+  const context: TaskContext = {
+    workflow: about.workflow,
+    named: yield* objectiveOf(workNamedIn(about.inputs), env.cwd),
+    short: "",
+    goal: about.goal ?? null,
+    cwd: env.cwd,
+  };
+  const live = yield* liveNames(new Herdr(env), naming !== null);
+  const title = oneLine(about.title ?? "");
+  if (title !== "" && !isGenericTitle(title, about.workflow))
+    return taskWorkspaceLabel({ project: fallbackName(context, live).project, title });
+  return taskWorkspaceLabel(yield* nameTask(naming, context, live));
+});
+
+/**
+ * Renames each Task whose title names only its workflow, from its first Run's Inputs and
+ * without asking a model — only where the label is still the one Collie wrote: on a live
+ * workspace in the Task's own Herd that still carries it, or on the record of one that
+ * Herd no longer has.
+ */
+export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(function* (
+  env: PluginEnv,
+  herdr: Herdr,
+  runs: ReadonlyArray<RunFacts>,
+) {
+  const tasks = yield* listTasks(env.stateDir);
+  const herds = yield* liveHerds(herdr, env);
+  for (const task of tasks) {
+    const [, project, title] = PREFIXED.exec(task.label) ?? [];
+    const first = runs
+      .filter((run) => run.task === task.id)
+      .sort((one, other) => one.created.localeCompare(other.created))[0];
+    if (project === undefined || title === undefined || first === undefined) continue;
+    if (!isGenericTitle(title, first.workflow)) continue;
+    // Workspace ids are only unique within a session.
+    const herd =
+      task.herd === undefined
+        ? herds.length === 1
+          ? herds[0]
+          : undefined
+        : herds.find((one) => one.herd === task.herd);
+    if (herd === undefined) continue;
+    const named = fallbackName(
+      {
+        workflow: first.workflow,
+        named: yield* objectiveOf(workNamedIn(first.settled.inputs), task.cwd),
+        short: "",
+        goal: null,
+        cwd: task.cwd,
+      },
+      { workspaces: [], tabs: [], panes: [] },
+    );
+    if (isGenericTitle(named.title, first.workflow)) continue;
+    const label = `${project} | ${named.title}`;
+    yield* withTaskLock(
+      env.stateDir,
+      task.id,
+      Effect.gen(function* () {
+        const now = yield* readTask(env.stateDir, task.id);
+        if (now === null || now.label !== task.label) return;
+        const listed = yield* herd.herdr.workspaceList().pipe(Effect.option);
+        // Unread, a workspace a human renamed is indistinguishable from one that is gone.
+        if (listed._tag === "None") return;
+        const showing = listed.value.find((one) => one.workspaceId === now.workspace)?.label;
+        if (showing !== undefined && showing !== now.label) return;
+        if (showing !== undefined) {
+          const renamed = yield* herd.herdr
+            .workspaceRename(now.workspace, label)
+            .pipe(Effect.option);
+          if (renamed._tag === "None") return;
+        }
+        yield* writeTask(env.stateDir, { ...now, label });
+      }),
+    ).pipe(Effect.catchTag("TaskBusy", () => Effect.void));
+  }
 });

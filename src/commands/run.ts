@@ -222,6 +222,10 @@ const runStart = Command.make(
       Flag.withDescription("What this Run is for, in the human's own words"),
       Flag.optional,
     ),
+    title: Flag.String("title").pipe(
+      Flag.withDescription("What a new Task is called; inferred from the work otherwise"),
+      Flag.optional,
+    ),
     constraint: Flag.String("constraint").pipe(
       Flag.withDescription(
         "What the work must respect, repeatable; `rule:<kind>:<args>` for one Collie checks",
@@ -275,6 +279,7 @@ const runStart = Command.make(
     inputsJson,
     decide,
     goal,
+    title,
     constraint,
     severity,
     task: taskId,
@@ -345,6 +350,7 @@ const runStart = Command.make(
                   intent: Option.isSome(goal)
                     ? { goal: goal.value, constraints: named.constraints }
                     : { constraints: named.constraints },
+                  title: Option.getOrUndefined(title),
                   verify: given.specs.length > 0 ? given.specs : undefined,
                   attachments: yield* absolute(attach),
                 });
