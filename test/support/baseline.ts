@@ -2996,19 +2996,25 @@ scenario(
         ]);
         yield* approve("r-unmet", ["unit"]);
         yield* rig.queueOutputs([BUILT, BUILT, BUILT]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-unmet",
-          input: { plan, ...FINISH },
-        });
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-unmet", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              expect(yield* stallAsked(run, "01-first.md.criteria-unmet-1")).toHaveLength(1);
+              yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
         yield* bin.restore();
 
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain(
+        expect(status.status).toBe("failed");
+        const why = outcomeText(status);
+        expect(why).toContain(
           "01-first.md: acceptance criteria still unanswered or unmet after 2 hand-backs, so no review starts",
         );
-        expect(reasonOf(result)).toContain("**Named.** Each one is named in the log.");
-        expect(reasonOf(result)).toContain("Continue with a follow-up Run to finish delivery.");
+        expect(why).toContain("**Named.** Each one is named in the log.");
+        expect(why).toContain("Continue with a follow-up Run to finish delivery.");
+        expect(why).toContain("Stop was answered");
         const sent = (yield* prompts()).join("\n");
         expect(sent).toContain("01-first.md.criteria-2.prompt.md");
         expect(sent).not.toContain("review-1");
@@ -3427,8 +3433,16 @@ scenario(
   120_000,
 );
 
+const NAMED_NOT_MET = {
+  ...BUILT,
+  criteria: [
+    { criterion: "**Counted.** Every registry is counted once.", met: "test/count.test.ts" },
+    { criterion: "**Named.** Each one is named in the log.", met: "not met: the log has no names" },
+  ],
+};
+
 scenario(
-  "a criterion still answered not met after every hand-back fails the Run before any review",
+  "a criterion still answered not met after every hand-back asks to hand back or stop, and Stop fails the Run before any review",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -3440,36 +3454,92 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-not-met", ["unit"]);
-        const notMet = {
-          ...BUILT,
-          criteria: [
-            {
-              criterion: "**Counted.** Every registry is counted once.",
-              met: "test/count.test.ts",
-            },
-            {
-              criterion: "**Named.** Each one is named in the log.",
-              met: "not met: the log has no names",
-            },
-          ],
-        };
-        yield* rig.queueOutputs([notMet, notMet, notMet]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-not-met",
-          input: { plan, ...FINISH },
-        });
+        yield* rig.queueOutputs([NAMED_NOT_MET, NAMED_NOT_MET, NAMED_NOT_MET]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-not-met", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "01-first.md.criteria-unmet-1");
+              expect(rows).toHaveLength(1);
+              expect(rows[0]!.prompt).toContain("01-first.md");
+              expect(rows[0]!.prompt).toContain(
+                "acceptance criterion not met: **Named.** Each one is named in the log.",
+              );
+              expect(optionsOf(rows, "01-first.md.criteria-unmet-1")).toEqual([
+                "Hand back",
+                "Stop",
+              ]);
+              expect((yield* prompts()).join("\n")).not.toContain("review-1");
+              yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
         yield* bin.restore();
 
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain(
+        expect(status.status).toBe("failed");
+        expect(outcomeText(status)).toContain(
           "acceptance criterion not met: **Named.** Each one is named in the log.",
         );
         const sent = (yield* prompts()).join("\n");
         expect(sent).toContain("01-first.md.criteria-2.prompt.md");
+        expect(sent).not.toContain("01-first.md.criteria-3.prompt.md");
         expect(sent).not.toContain("review-1");
         expect(sent).not.toContain("02-second.md.prompt.md");
         expect(sent).not.toContain("mr.prompt.md");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a ticket amended while unmet criteria are asked about, then handed back, goes on to review as it reads now",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", body: CRITERIA },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-unmet-amended", ["unit"]);
+        yield* rig.queueOutputs([
+          NAMED_NOT_MET,
+          NAMED_NOT_MET,
+          NAMED_NOT_MET,
+          { ...BUILT, criteria: [{ criterion: AMENDED, met: "src/audit.ts" }] },
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId: "r-unmet-amended", input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              expect(yield* stallAsked(run, "01-first.md.criteria-unmet-1")).toHaveLength(1);
+              const ticket = `${plan}/issues/01-first.md`;
+              yield* fs.writeFileString(
+                ticket,
+                (yield* fs.readFileString(ticket)).replace(
+                  "named in the log",
+                  "named in the audit log",
+                ),
+              );
+              yield* run.answer("01-first.md.criteria-unmet-1", "Hand back");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-unmet-amended", "01-first.md.criteria-3")).toContain(
+          `acceptance criterion not answered: ${AMENDED}`,
+        );
+        expect(yield* asked("r-unmet-amended", "review-1")).toContain(
+          `- ${AMENDED}\n  → src/audit.ts`,
+        );
       }),
     ),
   120_000,
@@ -3617,7 +3687,11 @@ scenario(
           { entry: shipped("implement"), runId: "r-unmeasured", input: { plan, ...FINISH } },
           (run) =>
             Effect.gen(function* () {
-              expect(yield* stallAsked(run, "01-first.md.criteria-stalled-1")).toHaveLength(0);
+              expect(yield* stallAsked(run, "01-first.md.criteria-unmet-1")).toHaveLength(1);
+              expect(
+                (yield* run.asked).filter((row) => row.decision.includes("criteria-stalled")),
+              ).toHaveLength(0);
+              yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
               return yield* ended(run.status);
             }),
         );
@@ -5066,7 +5140,7 @@ scenario(
           BUILT,
           BUILT,
         ]);
-        yield* ran({
+        yield* stalled({
           entry: shipped("implement"),
           runId,
           input: { plan, ...FINISH },
@@ -5104,7 +5178,7 @@ scenario(
           BUILT,
           BUILT,
         ]);
-        yield* ran({
+        yield* stalled({
           entry: shipped("implement"),
           runId,
           input: { plan, ...FINISH },

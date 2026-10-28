@@ -662,7 +662,7 @@ export default defineWorkflow({
               return read.flatMap((one) => one.criteria);
             });
             // Each criterion answered before any reviewer is launched: one left unanswered or
-            // unmet goes back to the builder, and the work stops if it still is.
+            // unmet goes back to the builder, and the Run asks if it still is.
             let answers = boundTo(spec, build.criteria ?? []);
             const assumptions = [...(build.assumptions ?? [])];
             const commits = [...(build.commits ?? [])];
@@ -671,6 +671,7 @@ export default defineWorkflow({
             // Another hand-back on an unchanged tree cannot move a blocker, so a stall asks instead.
             let blockers: ReadonlyArray<Finding> = [];
             let stalls = 0;
+            let unmetAsks = 0;
             let stopped: string | null = null;
             const treeAt = (name: string) =>
               Activity.make({
@@ -700,7 +701,22 @@ export default defineWorkflow({
                 tries = 1;
                 continue;
               }
-              if (tries > CRITERIA_TRIES) break;
+              if (tries > CRITERIA_TRIES) {
+                unmetAsks += 1;
+                const name = `${item}.criteria-unmet-${unmetAsks}`;
+                const still = `${item}: acceptance criteria still unanswered or unmet after ${CRITERIA_TRIES} hand-backs`;
+                const chosen = yield* ask({
+                  name,
+                  prompt: `${still}.\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket, then hand it back, or stop the Run.`,
+                  options: [HAND_BACK, STOP],
+                });
+                if (chosen !== HAND_BACK) {
+                  stopped = `${still}, so no review starts: ${unmet.map((one) => one.title).join("; ")}. Stop was answered to ${name}`;
+                  break;
+                }
+                tries = 1;
+                continue;
+              }
               const before = yield* treeAt(`${item}.criteria-${turn}.before`);
               yield* restateKind;
               const answered = yield* agentWork({
@@ -741,12 +757,9 @@ export default defineWorkflow({
                 .map((one) => `${one.name}: ${one.result}`),
             };
             handed.push(done);
-            if (unmet.length > 0) {
-              const why =
-                stopped ??
-                `${item}: acceptance criteria still unanswered or unmet after ${CRITERIA_TRIES} hand-backs, so no review starts: ${unmet.map((one) => one.title).join("; ")}`;
-              yield* host.record(runId, why);
-              return yield* unbuilt(why);
+            if (stopped !== null) {
+              yield* host.record(runId, stopped);
+              return yield* unbuilt(stopped);
             }
             answeredFor.push({ item, criteria, answers, assumptions });
             for (const one of assumptions) assumed.push(`assumed in ${item}: ${one}`);

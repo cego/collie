@@ -31,8 +31,9 @@ request names it, with the ticket's `## After merge` outcomes, under **Not settl
 run**. This covers a Run built from a Linear spec or from text as well, which has no planner
 to amend a ticket.
 
-**D4. A criterion still `not met` after the hand-backs still fails the Run**, as every
-other stop short of the merge request does.
+**D4. A criterion still `not met` after the hand-backs asks to hand it back or stop.** The
+ticket can be amended before a hand-back; `Stop` fails the Run, as every other stop short of
+the merge request does.
 
 ## Consequences
 

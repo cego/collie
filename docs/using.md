@@ -2486,8 +2486,8 @@ believes it is done.
 **Each acceptance criterion answered.** A ticket's checkboxes under its Acceptance criteria
 heading are its acceptance criteria. The builder's Output says how each is met, by the test
 or the file that shows it, or why it is not. One left unanswered or not met goes back to the
-builder before any reviewer starts, and what is still unmet after two tries is a blocking
-finding in the review.
+builder before any reviewer starts. What is still unmet after two tries is asked about:
+amend the ticket and hand it back, or stop the Run.
 
 ## Reviewing someone else's merge request
 
