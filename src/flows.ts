@@ -50,6 +50,7 @@ import {
   controlRun,
   declineProposed,
   disposeRun,
+  seeRun,
   followBoard,
   followUpRun,
   followRunDetail,
@@ -1462,6 +1463,15 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         request: yield* newRequestId(),
       });
       return done.ok ? statusLine(run.state, done.value) : done.error.message;
+    }
+
+    case "Acknowledge": {
+      const done = yield* seeRun(env, {
+        door: "board",
+        runId: command.runId,
+        request: yield* newRequestId(),
+      });
+      return done.ok ? `${command.runId} seen` : done.error.message;
     }
 
     case "EditSetting":

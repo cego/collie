@@ -11,7 +11,7 @@ import { Data, DateTime, Duration, Effect, FileSystem, Path, Schema } from "effe
 import type { Action, ActionKind } from "./actions";
 import { ActionSchema } from "./actions";
 import { appendJournal, readJournal } from "./journal";
-import { ensureLockDir, withLock } from "./lock";
+import { READ_WRITE_LOCK_BUDGET, ensureLockDir, withLock } from "./lock";
 import { herdDir } from "./steering";
 import { nowIso, epochMs } from "./time";
 
@@ -142,7 +142,12 @@ export class ProposalsBusy extends Data.TaggedError("ProposalsBusy")<{ file: str
 function withProposalsLock<A, E, R>(file: string, effect: Effect.Effect<A, E, R>) {
   return Effect.gen(function* () {
     yield* ensureLockDir(file);
-    return yield* withLock(`${file}.lock`, Effect.fail(new ProposalsBusy({ file })), effect);
+    return yield* withLock(
+      `${file}.lock`,
+      Effect.fail(new ProposalsBusy({ file })),
+      effect,
+      READ_WRITE_LOCK_BUDGET,
+    );
   });
 }
 

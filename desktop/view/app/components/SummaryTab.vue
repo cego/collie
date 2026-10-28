@@ -42,6 +42,25 @@ const sections = computed(() => summaryOf(props.detail));
           <RichMarkdown :text="shown.delivered" />
         </template>
       </section>
+      <section v-else-if="shown.section === 'replies'" data-testid="summary-replies">
+        <h3 class="font-semibold">Replies to reviewers</h3>
+        <div
+          v-for="reply in shown.replies"
+          :key="reply.comment + reply.at"
+          class="flex flex-col gap-1"
+        >
+          <p class="flex justify-between gap-2">
+            <a :href="reply.comment" class="min-w-0 wrap-anywhere">{{ reply.comment }}</a>
+            <UBadge
+              v-if="reply.kind"
+              variant="subtle"
+              :color="reply.kind === 'disputed' ? 'warning' : 'neutral'"
+              :label="reply.kind"
+            />
+          </p>
+          <RichMarkdown :text="reply.body" />
+        </div>
+      </section>
       <section v-else data-testid="summary-inputs">
         <h3 class="font-semibold">Inputs</h3>
         <p v-for="input in shown.inputs" :key="input.name" class="flex justify-between gap-2">

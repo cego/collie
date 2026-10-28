@@ -18,7 +18,9 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { hostname } from "node:os";
 import { readEnv, type PluginEnv } from "../src/env";
-import { readIntent } from "../src/intent";
+import { amend, readIntent, writeIntentHeld } from "../src/intent";
+import { withLock } from "../src/lock";
+import { nowIso } from "../src/time";
 import { changeSchedule, runView, scheduleListing } from "../src/lifecycle";
 import { listRuns } from "../src/runs";
 import { latest, readDispositions } from "../src/disposition";
@@ -381,6 +383,55 @@ test("of two outcome changes made on the same Intent version at once, only one a
       expect((yield* readIntent(run.dir))?.version).toBe(2);
     }),
   ));
+
+test(
+  "an outcome change that waits out a long-held Intent lock is refused for its version, not as busy",
+  () =>
+    inWorld(
+      Effect.gen(function* () {
+        const run = yield* aRun("add a picker");
+        const journal = yield* proposalsPath(stateDir, KEY);
+        const pending = yield* withLock(
+          `${run.dir}/run.json.lock`,
+          Effect.die("the Run's lock was already taken"),
+          Effect.gen(function* () {
+            const change = yield* call("collie_propose", {
+              interpretation: "change the kind",
+              actions: [
+                {
+                  kind: "update_intent",
+                  run: run.id,
+                  change: "set-outcome",
+                  patch: "bug",
+                  base_version: 1,
+                },
+              ],
+            }).pipe(Effect.forkScoped);
+            yield* until(
+              () => readProposals(journal),
+              (lines) => lines.some((line) => line.kind === "step" && line.state === "started"),
+            );
+            yield* Effect.sleep("3 seconds");
+            const intent = yield* readIntent(run.dir);
+            if (intent === null) return yield* Effect.die("the Run has no Intent");
+            yield* writeIntentHeld(
+              run.dir,
+              amend(
+                intent,
+                { kind: "set-goal", goal: "a wider picker" },
+                "human:test",
+                yield* nowIso(),
+              ),
+            );
+            return change;
+          }),
+        );
+        expect(yield* Fiber.join(pending)).toContain("the Intent is v2, not v1");
+        expect((yield* readIntent(run.dir))?.goal).toBe("a wider picker");
+      }),
+    ),
+  60_000,
+);
 
 test("retrying a chat request returns its receipt instead of applying it again", () =>
   inWorld(

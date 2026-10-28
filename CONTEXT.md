@@ -175,7 +175,8 @@ setting, apart from this one.
 
 **News** — What Collie noticed and the conversation has not been told: the approved
 triggers only — terminal outcomes, halts, pending Choices, evidence gaps, repeated-failure
-obstacles and unresolved drift. Written from the Run's own record with no model in the
+obstacles, unresolved drift and a reply a Run posted disputing a reviewer's comment, one
+per comment. Written from the Run's own record with no model in the
 path, so an unchanged Herd costs nothing; deduplicated by causal key, bounded into one
 batch that says what it left out. Each Herd keeps one journal of it, and every
 conversation keeps its own receipts on it, recorded by the host: what one conversation
@@ -435,6 +436,12 @@ is **Finished**, the board's last section, as long as none of its Runs is still 
 asking or stalled and none of its agents is working. Finished is what **Cleanup** waits
 for before it closes anything of a Task.
 
+**Unseen** — A **Finished** Task's leading Run that ended by itself with something to
+report and that nobody has opened or acknowledged yet. The Run's host records **seen** once
+for the whole Flock. Opening the Run's record or acknowledging it records it, and reading
+the Run does not. An unseen card stays Finished but is drawn outside the collapsed list
+until it is seen (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
+
 **Held** — A Task whose Runs are under a **Hold**, drawn as a `⏸` line under its sentence
 and lifted by a human.
 
@@ -626,7 +633,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back. A Run nobody classified is `unspecified` and proves only its **Checks** — never a feature by default.
 
-**Checks** — The commands Collie runs itself to prove one Run. Each is an executable and its arguments, bound argument for argument and run in a tree the Run owns, and nobody approves them. They are the ones given with the start (`run start --verify`, or chat's `start` with `verify`), else `.collie/verify.json` in the project, else the checks remembered for the checkout's remote (`~/.collie/user/verify/<host>/<path>.json`, written by `run intent remember` or chat's `remember_verification`), else `~/.collie/user/verify.json`. The first found is taken whole and kept with the Run: in its Intent's `run_verification`, or in the host's record for a workflow module's Run. Where none of those has any, the Run's own agent names them from what the repository says proves its work, before it builds, and Collie records and runs them without asking. Anyone (a human, chat, or the Run's agent) adds or withdraws a check on a live Run with `run intent verification` (chat's `set_verification`). The gate reads them at every pass. Nobody is asked to approve one, and no start is refused for want of one. A Run whose agent still names none after its gate fixes is held unproved, as a failing check is (ADR-0055). An agent may `collie verify` anything but the Run's own Checks, which only the gate runs: given one, `collie verify` answers with its latest record on the tree, or refuses and names the gate, for a human as for an agent (ADR-draft-a-runs-checks-are-run-by-its-gate). A check may be **left to CI**: its entry names, as `ci`, the merge request pipeline job that proves it. Nobody runs it locally, the gate skips it, and once the merge request is open the Run waits for that job on the merge request's head commit; a failed job is a fix round like a failed check (ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job). Formerly the "approved set"; code still calls them `approved`.
+**Checks** — The commands Collie runs itself to prove one Run. Each is an executable and its arguments, bound argument for argument and run in a tree the Run owns, and nobody approves them. They are the ones given with the start (`run start --verify`, or chat's `start` with `verify`), else the project's `.collie/verify.json` as the Run's base has it, the ref a checkout for it is cut from, whatever the checkout it was started in holds (ADR-draft-a-runs-checks-are-read-where-its-checkout-starts), else the checks remembered for the checkout's remote (`~/.collie/user/verify/<host>/<path>.json`, written by `run intent remember` or chat's `remember_verification`), else `~/.collie/user/verify.json`. The first found is taken whole and kept with the Run: in its Intent's `run_verification`, or in the host's record for a workflow module's Run. Where none of those has any, the Run's own agent names them from what the repository says proves its work, before it builds, and Collie records and runs them without asking. Anyone (a human, chat, or the Run's agent) adds or withdraws a check on a live Run with `run intent verification` (chat's `set_verification`). The gate reads them at every pass. Nobody is asked to approve one, and no start is refused for want of one. A Run whose agent still names none after its gate fixes is held unproved, as a failing check is (ADR-0055). An agent may `collie verify` anything but the Run's own Checks, which only the gate runs: given one, `collie verify` answers with its latest record on the tree, or refuses and names the gate, for a human as for an agent (ADR-draft-a-runs-checks-are-run-by-its-gate). A check may be **left to CI**: its entry names, as `ci`, the merge request pipeline job that proves it. Nobody runs it locally, the gate skips it, and once the merge request is open the Run waits for that job on the merge request's head commit; a failed job is a fix round like a failed check (ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job). Formerly the "approved set"; code still calls them `approved`.
 
 **Evidence** — A Verification collected at a revision: a command Collie ran, or a pipeline job Collie read from the forge on that commit for a check left to CI. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 

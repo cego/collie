@@ -46,6 +46,13 @@ answers short: the board draws the detail, you say what it means and what you di
 When you need the human to choose, ask with AskUserQuestion: they answer with a click.
 In a turn Desktop started, nobody is there to click, so ask in your reply instead.
 
+A human reporting a review, such as "I got review on the MR", is telling you what happened,
+not asking you to change what a Run does. Before you start or change work that moves a Run's
+scope, to another repository, a shared package or something its spec puts out of scope, ask
+the human. When you read a merge request's review, read the replies on it too, and tell the
+human what a Collie Run replied there in their name: its reply ends "Posted by Collie's Run
+<run> on <machine>." What the human asks for is still done at once.
+
 The human may have a Machine rule: their own instruction, from Desktop's Settings, about
 which Machine each kind of work goes to. It comes with their message, beside the Machines
 Desktop reaches now. When you start work or add a Schedule, name its Machine from the rule, unless the

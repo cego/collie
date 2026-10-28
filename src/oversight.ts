@@ -57,7 +57,9 @@ import {
   writeIntentHeld,
   type Intent,
 } from "./intent";
-import { mrPath, parseMrUrl } from "./board-model";
+import { mrPath, parseMrUrl, type RunReply } from "./board-model";
+import type { Ref } from "./evaluator";
+import { readReplies } from "./replies";
 import { reason } from "./naming";
 import { appendPendingReport } from "./live";
 import { withDirLock, withLock } from "./lock";
@@ -99,7 +101,7 @@ export interface Watched {
   readonly asking: boolean;
   /** Whether a human has held this Run. */
   readonly held: boolean;
-  /** This Run and every Run related to it: its parent, that parent's children, its own. */
+  /** This Run and every Run related to it: its parent, that parent's children, its own, and Runs about its merge request. */
   readonly family: ReadonlyArray<string>;
   /** Where any Run's records are, by its id. */
   readonly dirOf: (runId: string) => string;
@@ -583,6 +585,7 @@ interface CrossRunTarget {
   readonly constraintIds: ReadonlyArray<string>;
   readonly diff: CrossRunDiff;
   readonly outputs: ReadonlyArray<ShownOutput>;
+  readonly replies: ReadonlyArray<RunReply>;
   /** Whether any of its diff or Outputs was cut to the cap. */
   readonly truncated: boolean;
   /** Whether it has ended, so a report about it is said on the board rather than filed. */
@@ -605,6 +608,63 @@ const committedWork = Effect.fn("Oversight.committedWork")(function* (
       why: (ran.stderr ?? "").trim().split("\n")[0] || `git diff exited ${ran.code}`,
     };
   return { kind: "shown", blocks: splitDiff(ran.stdout) };
+});
+
+/** Where a Run keeps the merge request it opened or was given. */
+export const mergeRequestFile = (runDir: string) => `${runDir}/merge-request`;
+
+const mrKey = (url: string) => {
+  const ref = parseMrUrl(url);
+  return ref?.project == null ? null : `${ref.project.toLowerCase()}!${ref.iid}`;
+};
+
+const namedIn = (goal: string | null) =>
+  (goal?.match(/https?:\/\/\S+/g) ?? []).flatMap((url) => {
+    const key = mrKey(url.replace(/[.,;:!?)\]'"]+$/, ""));
+    return key === null ? [] : [key];
+  });
+
+/**
+ * A Run and every Run the cross-run question relates it to: its children, its parent, that
+ * parent's other children, and any Run whose recorded merge request is the one this Run
+ * recorded or its goal names, or whose goal names the one this Run recorded.
+ */
+export const familyOf = Effect.fn("Oversight.familyOf")(function* (
+  rows: ReadonlyArray<{ readonly run: string; readonly parent: string | null }>,
+  row: { readonly run: string; readonly parent: string | null },
+  dirOf: (runId: string) => string,
+) {
+  const related = new Set([row.run]);
+  for (const one of rows) {
+    if (one.parent === row.run) related.add(one.run);
+    if (row.parent !== null && (one.run === row.parent || one.parent === row.parent))
+      related.add(one.run);
+  }
+  const fs = yield* FileSystem.FileSystem;
+  const recordedBy = (runId: string) =>
+    fs.readFileString(mergeRequestFile(dirOf(runId))).pipe(
+      Effect.map((url) => mrKey(url.trim())),
+      Effect.orElseSucceed(() => null),
+    );
+  const namedBy = (runId: string) =>
+    readIntent(dirOf(runId)).pipe(
+      Effect.map((intent) => namedIn(intent?.goal ?? null)),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    );
+  const recorded = yield* recordedBy(row.run);
+  const about = new Set([...(recorded === null ? [] : [recorded]), ...(yield* namedBy(row.run))]);
+  if (about.size === 0) return [...related];
+  // ponytail: reads every Run's records per boundary; index by merge request if that gets slow.
+  for (const one of rows) {
+    if (related.has(one.run)) continue;
+    const theirs = yield* recordedBy(one.run);
+    if (
+      (theirs !== null && about.has(theirs)) ||
+      (recorded !== null && (yield* namedBy(one.run)).includes(recorded))
+    )
+      related.add(one.run);
+  }
+  return [...related];
 });
 
 /**
@@ -643,6 +703,7 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
       constraintIds: (intent?.constraints ?? []).map((one) => one.id),
       diff,
       outputs: outputs.outputs,
+      replies: yield* readReplies(dir).pipe(Effect.orElseSucceed(() => [])),
       truncated:
         outputs.truncated ||
         (read.kind === "shown" &&
@@ -685,6 +746,10 @@ const workLines = (target: CrossRunTarget) => {
           ? ["diff: no committed change yet"]
           : diff.blocks.map((block) => `--- ${block.path}\n${block.diff}`)),
     ...target.outputs.map((output) => `--- output ${output.operation}\n${output.text}`),
+    ...target.replies.map(
+      (reply) =>
+        `--- reply to ${reply.comment}${reply.kind === undefined ? "" : ` (${reply.kind})`}\n${reply.body}`,
+    ),
     `  end of the work of ${target.id}`,
   ];
 };
@@ -692,8 +757,9 @@ const workLines = (target: CrossRunTarget) => {
 /** The cross-run question: what each related Run is for, where it has got to, and its work. */
 const crossRunPack = (targets: ReadonlyArray<CrossRunTarget>) =>
   [
-    "These Runs are related — a parent and its children, or siblings of one parent.",
+    "These Runs are related — a parent and its children, siblings of one parent, or Runs about one merge request.",
     "Report only where one Run's work breaks what another Run was told to respect.",
+    "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work, or, where it has none yet, the reply as a record whose path is the comment it replied to.",
     ...PLAN_NARROWS_GOAL,
     "",
     ...targets.flatMap((target) => [
@@ -724,11 +790,20 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   const byId = new Map(targets.map((target) => [target.id, target]));
   let filed = 0;
   for (const found of asked.reports) {
-    // Only a Run this question was about, one of its own constraints, and its work as the
-    // pack showed it: anything else is a model reaching outside what it was shown.
+    // Only a Run this question was about, one of its own constraints, and its work or another
+    // Run's reply as the pack showed them: anything else is a model reaching outside what it
+    // was shown.
     const target = byId.get(found.run);
     if (target === undefined || !target.constraintIds.includes(found.constraint)) continue;
-    const cited = citedIn(shownOf(target), target.cwd);
+    const work = citedIn(shownOf(target), target.cwd);
+    const othersReplied = new Set(
+      targets.flatMap((one) =>
+        one.id === target.id ? [] : one.replies.map((reply) => reply.comment),
+      ),
+    );
+    const cited = (ref: Ref) =>
+      work(ref) ??
+      (ref.kind === "record" && ref.path !== undefined && othersReplied.has(ref.path) ? ref : null);
     if (!found.evidence.some((ref) => cited(ref) !== null)) continue;
     const report = judgedReport(
       found,
@@ -813,7 +888,9 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
         if (
           targets.every((target) => {
             const shown = shownOf(target);
-            return shown.files.length === 0 && shown.outputs.length === 0;
+            return (
+              shown.files.length === 0 && shown.outputs.length === 0 && target.replies.length === 0
+            );
           })
         )
           return yield* said(

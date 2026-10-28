@@ -89,9 +89,9 @@ export const rememberedFile = (userDir: string, project: string): string | null 
     : `${userDir}/verify/${project}.json`;
 
 /**
- * The checks for a Run starting here: the project's file if there is one, else the
- * one remembered for its repository's remote, else the user's, else nothing. First found
- * wins **whole** — the layers are not merged, because a
+ * The checks for a Run starting here: the project's file if there is one, as the Run's
+ * base has it where it has one, else the one remembered for its repository's remote, else
+ * the user's, else nothing. First found wins **whole** — the layers are not merged, because a
  * project that lists its own three commands has said what this repository's verifications
  * are, and quietly adding the user's global ones to them would run commands in a
  * repository neither file names together.
@@ -104,17 +104,28 @@ export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (laye
   readonly cwd: string;
   readonly userDir: string;
   readonly project?: string | null;
+  /** The project's file as the Run's base ref has it, read instead of the working tree's. */
+  readonly base?: { readonly ref: string; readonly text: string | null };
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const onDisk = (file: string) => ({
+    file,
+    text: fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(null))),
+  });
   const remembered = layers.project ? rememberedFile(layers.userDir, layers.project) : null;
   const files = [
-    path.join(layers.cwd, PROJECT_FILE),
-    ...(remembered === null ? [] : [remembered]),
-    path.join(layers.userDir, USER_FILE),
+    layers.base === undefined
+      ? onDisk(path.join(layers.cwd, PROJECT_FILE))
+      : {
+          file: `${path.join(layers.cwd, PROJECT_FILE)} at ${layers.base.ref}`,
+          text: Effect.succeed(layers.base.text),
+        },
+    ...(remembered === null ? [] : [onDisk(remembered)]),
+    onDisk(path.join(layers.userDir, USER_FILE)),
   ];
-  for (const file of files) {
-    const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(null)));
+  for (const { file, text: reading } of files) {
+    const text = yield* reading;
     if (text === null) continue;
     const decoded = yield* Schema.decodeUnknownEffect(ApprovedJson)(text.trim()).pipe(
       Effect.result,

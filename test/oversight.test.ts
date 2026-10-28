@@ -15,6 +15,7 @@ import { foundationLayer, loadEntry, runDir, type Herd } from "../src/engine";
 import {
   Oversight,
   checkDrift,
+  familyOf,
   ruleFacts,
   standForElection,
   writeCard,
@@ -47,7 +48,8 @@ import {
   type Authority,
   type Constraint,
 } from "../src/intent";
-import type { Store } from "../src/store";
+import { Store } from "../src/store";
+import { recordReply } from "../src/replies";
 import { fixtures } from "./support/host";
 import { loggedGit } from "./support/bin";
 
@@ -1364,6 +1366,159 @@ test("a related Run's work cut to the cap is said to be, and so is what is filed
         expect(currentReports(yield* readDrift(runDir(dir, "r2")))).toMatchObject([
           { evidence: cited, evidence_truncated: true },
         ]);
+      }),
+    ),
+  ));
+
+const MR_223 = "https://gitlab.example.com/cego/support-backoffice/-/merge_requests/223";
+
+/** `runId` admitted in a Task and a repository of its own, its goal `goal`, and the merge request it recorded. */
+const admitted = (runId: string, goal: string | null, recorded: string | null) =>
+  Effect.gen(function* () {
+    const store = yield* Store;
+    yield* store.admit({
+      request: `req-${runId}`,
+      run: runId,
+      workflow: "w",
+      project: `${rig.root}/repo-${runId}`,
+      input: {},
+      provenance: {},
+      options: {},
+      generation: "g",
+      execution: `exec-${runId}`,
+      task: `task-${runId}`,
+      parent: null,
+    });
+    const at = runDir(dir, runId);
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(at, { recursive: true });
+    yield* writeIntent(
+      at,
+      seedIntent(runId, { goal, constraints: [{ ...SMALL, id: `${runId}-c` }] }),
+    );
+    if (recorded !== null) yield* fs.writeFileString(`${at}/merge-request`, `${recorded}\n`);
+  });
+
+const familiesOf = (runIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const rows = yield* (yield* Store).runs;
+    const families: Record<string, ReadonlyArray<string>> = {};
+    for (const id of runIds)
+      families[id] = [
+        ...(yield* familyOf(
+          rows,
+          rows.find((row) => row.run === id)!,
+          (one) => runDir(dir, one),
+        )),
+      ].sort();
+    return families;
+  });
+
+test("Runs in other Tasks and repositories about one merge request are judged together, with the replies one posted there", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const families = yield* session(
+          Effect.gen(function* () {
+            yield* admitted("r1", "Answer the review on !223", MR_223);
+            yield* admitted(
+              "r2",
+              `Move the backoffice work into core, as asked on ${MR_223}.`,
+              null,
+            );
+            return yield* familiesOf(["r1", "r2"]);
+          }),
+        );
+        expect(families).toEqual({ r1: ["r1", "r2"], r2: ["r1", "r2"] });
+
+        yield* recordReply(runDir(dir, "r1"), {
+          at: "2026-10-20T10:00:00Z",
+          mr: MR_223,
+          comment: `${MR_223}#note_1`,
+          kind: "disputed",
+          body: "Not changed: moving this into core is the human's call.\n\nPosted by Collie's Run r1 on vm-mk.",
+        });
+        const core = `${rig.root}/repo-r2`;
+        yield* repositoryAt(core, { "src/core.ts": "export const moved = true;\n" });
+        yield* writeCard(
+          { ...watchedAt("r2"), cwd: core },
+          { kind: "slice", step: "build", claims: [] },
+        );
+        const deps = yield* crossRunJudge([]);
+        const { pack } = yield* judgedAcross(["r1", "r2"], deps, { r2: core });
+
+        expect(under(pack, "r1")).toContain(
+          `--- reply to ${MR_223}#note_1 (disputed)\nNot changed: moving this into core is the human's call.`,
+        );
+      }),
+    ),
+  ));
+
+test("a Run about another merge request, or about none, is not judged with them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const families = yield* session(
+        Effect.gen(function* () {
+          yield* admitted("r1", null, MR_223);
+          yield* admitted("r2", `Fix ${MR_223}`, null);
+          yield* admitted("r3", null, MR_223.replace("/223", "/224"));
+          yield* admitted("r4", "Move the backoffice work into core", null);
+          yield* admitted("r5", `Fix ${MR_223.replace("/223", "/224")}`, null);
+          return yield* familiesOf(["r1", "r3", "r4", "r5"]);
+        }),
+      );
+      expect(families).toEqual({
+        r1: ["r1", "r2"],
+        r3: ["r3", "r5"],
+        r4: ["r4"],
+        r5: ["r3", "r5"],
+      });
+    }),
+  ));
+
+test("the cross-run judge is told a Run contradicting what another posted on their merge request is drift", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* intended("r1", [R1_ONLY]);
+        yield* intended("r2", [SMALL]);
+        yield* repository();
+        yield* git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        yield* cardedWork("r2", { "src/a.ts": "export const a = 1;\n" });
+        const { pack } = yield* judgedAcross(["r1", "r2"], yield* crossRunJudge([]));
+
+        expect(pack.replace(/\s+/g, " ")).toContain(
+          "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work, or, where it has none yet, the reply as a record whose path is the comment it replied to.",
+        );
+      }),
+    ),
+  ));
+
+test("a Run with no work yet whose goal contradicts another Run's reply on their merge request is reported, citing the reply", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* intended("r1", [R1_ONLY]);
+        yield* intended("r2", [SMALL]);
+        const note = `${MR_223}#note_1`;
+        yield* recordReply(runDir(dir, "r1"), {
+          at: "2026-10-20T10:00:00Z",
+          mr: MR_223,
+          comment: note,
+          kind: "disputed",
+          body: "Not changed: moving this into core is the human's call.",
+        });
+        const reply = [{ kind: "record" as const, path: note }];
+        const deps = yield* crossRunJudge([
+          reportOn("r2", "small", reply),
+          reportOn("r1", "r1-only", reply),
+        ]);
+        yield* judgedAcross(["r1", "r2"], deps);
+
+        expect(currentReports(yield* readDrift(runDir(dir, "r2")))).toMatchObject([
+          { constraint: "small", evidence: reply },
+        ]);
+        expect(currentReports(yield* readDrift(runDir(dir, "r1")))).toEqual([]);
       }),
     ),
   ));

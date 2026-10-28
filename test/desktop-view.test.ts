@@ -5,8 +5,13 @@ import { expect, test } from "bun:test";
 import { Effect, Layer, Schema, Stream } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcServer from "effect/rpc/RpcServer";
-import { headerSentence, sectionsOf } from "../src/board-model";
-import { afterGesture, type BoardState } from "../desktop/src/shared/board-clicks";
+import { foldFinished, headerSentence, primaryAction, sectionsOf } from "../src/board-model";
+import {
+  afterGesture,
+  type BoardState,
+  seenBy,
+  seenOnOpening,
+} from "../desktop/src/shared/board-clicks";
 import {
   type Channel,
   clientProtocol,
@@ -292,6 +297,26 @@ test("the sections and the header sentence count every Machine's Tasks", () => {
   );
   expect(sectionsOf(tasks, "").needs.map((one) => one.id)).toEqual(["t-ask", "t-vm"]);
   expect(headerSentence(tasks).text).toBe("2 tasks are waiting on you. 1 working.");
+});
+
+const unseenDone = task({
+  id: "t-unseen",
+  name: "Report",
+  state: "done",
+  unseen: true,
+  run: "r-u",
+});
+const seenDone = task({ id: "t-seen", name: "Read", state: "done", unseen: false, run: "r-s" });
+
+test("an Unseen Finished Task is drawn outside the collapsed list, a seen one only inside, and Finished counts both", () => {
+  const { tasks, placedOf } = flockCards(
+    [snapshot(pc, [seenDone]), snapshot(vm, [unseenDone])].reduce(applyItem, EMPTY_FLOCK),
+  );
+  const { finished } = sectionsOf(tasks, "");
+  const { unseen, seen } = foldFinished(finished);
+  expect(unseen.map((one) => placedOf(one).key)).toEqual(["inst-vm:t-unseen"]);
+  expect(seen.map((one) => placedOf(one).key)).toEqual(["inst-pc:t-seen"]);
+  expect(finished).toHaveLength(2);
 });
 
 const lostVm = (state: "unreachable" | "sso" | "no-collie", at = 1_000): FlockItem => ({
@@ -808,6 +833,40 @@ test("a click or double-click on the background lets the card go, unless a page 
     expect(afterGesture(picked, { kind, landed: background })).toEqual(none);
     expect(afterGesture(reading, { kind, landed: background })).toEqual(reading);
   }
+});
+
+test("opening an Unseen Run's record sends its Machine one seen, and opening any other record sends none", () => {
+  const cards = new Map([
+    ["inst-vm:t-unseen", { installation: "inst-vm", task: unseenDone }],
+    ["inst-pc:t-seen", { installation: "inst-pc", task: seenDone }],
+  ]);
+  const cardOf = (key: string) => cards.get(key);
+  const opening = (key: string, gesture: "double-click" | "name") => {
+    const after = afterGesture(
+      none,
+      gesture === "name" ? { kind: "name", card: key } : { kind: gesture, landed: card(key) },
+    );
+    return seenOnOpening(none, after, cardOf);
+  };
+  const seen = [{ installation: "inst-vm", action: { _tag: "Seen" as const, runId: "r-u" } }];
+  expect(opening("inst-vm:t-unseen", "double-click")).toEqual(seen);
+  expect(opening("inst-vm:t-unseen", "name")).toEqual(seen);
+  expect(opening("inst-pc:t-seen", "double-click")).toEqual([]);
+  expect(opening("inst-pc:t-seen", "name")).toEqual([]);
+  // A click selects without opening, and a record already open is not opened again.
+  const selected = afterGesture(none, { kind: "click", landed: card("inst-vm:t-unseen") });
+  expect(seenOnOpening(none, selected, cardOf)).toEqual([]);
+  const open = { selected: "inst-vm:t-unseen", page: "inst-vm:t-unseen" };
+  expect(seenOnOpening(open, open, cardOf)).toEqual([]);
+});
+
+test("Acknowledge is an Unseen card's own action, and sends its Machine one seen", () => {
+  expect(primaryAction(unseenDone)).toEqual({ kind: "acknowledge" });
+  expect(primaryAction(seenDone)).toBeNull();
+  expect(seenBy({ installation: "inst-vm", task: unseenDone })).toEqual([
+    { installation: "inst-vm", action: { _tag: "Seen", runId: "r-u" } },
+  ]);
+  expect(seenBy({ installation: "inst-pc", task: seenDone })).toEqual([]);
 });
 
 test("a double-click on a card selects it and opens its record", () => {

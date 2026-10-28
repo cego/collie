@@ -40,6 +40,7 @@ import {
 } from "../src/board-model";
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
+import { markSeenSince, recordSeen } from "../src/seen";
 import {
   appendVerification,
   encodeVerifying,
@@ -564,7 +565,7 @@ test("a Task's Runs are one card, and a Run with no Task is its own", () =>
     }),
   ));
 
-test("a finished Run that left nothing to file says what it reported, as its own claim", () =>
+test("a Run that ended by itself with a report states its status, then quotes the report as its own", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
@@ -573,12 +574,13 @@ test("a finished Run that left nothing to file says what it reported, as its own
         workflow: "odd-job",
         task: "task-1",
         state: "succeeded",
-        summary: "Upgraded vm-mk's install to 0.45.1.",
+        summary: "two blockers remain",
       });
 
       const [view] = yield* board(env, [chore]);
 
-      expect(view!.sentence).toBe("Finished; it says: “Upgraded vm-mk's install to 0.45.1.”");
+      expect(view!.sentence).toBe("Completed. It reported: “two blockers remain”");
+      expect(view!.sentence).not.toStartWith("Finished;");
     }),
   ));
 
@@ -1091,6 +1093,82 @@ test("a Run whose work shipped by hand says so, without its status being edited"
       expect(card!.sentence).toBe(
         "Stopped: the tests never went green. Merged as cego/collie!43 1 hour ago.",
       );
+    }),
+  ));
+
+test("a Finished Task's report is unseen until someone sees it, and stays Finished either way", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      yield* markSeenSince(dir, "2026-09-14T09:00:00Z");
+      const reported = {
+        task: "task-1",
+        state: "succeeded",
+        summary: "two blockers remain",
+        created: "2026-09-14T09:10:00Z",
+        finished: "2026-09-14T10:00:00Z",
+      } as const;
+      const unseen = (run: RunFacts) =>
+        Effect.map(board(env, [run]), ([view]) => [view!.unseen ?? false, sectionOf(view!)]);
+
+      expect(yield* unseen(yield* madeRun(dir, { ...reported, id: "r-new" }))).toEqual([
+        true,
+        "finished",
+      ]);
+      const disposed = yield* madeRun(dir, { ...reported, id: "r-disposed" });
+      yield* recordDisposition(disposed.dir, {
+        at: "2026-09-14T10:01:00Z",
+        by: "mk",
+        kind: "abandoned",
+        ref: "",
+        note: null,
+      });
+      expect(yield* unseen(disposed)).toEqual([false, "finished"]);
+      expect(
+        yield* unseen(yield* madeRun(dir, { ...reported, id: "r-quiet", summary: "" })),
+      ).toEqual([false, "finished"]);
+      const seen = yield* madeRun(dir, { ...reported, id: "r-seen" });
+      yield* recordSeen(seen.dir, { at: "2026-09-14T10:02:00Z", by: "human:ack-1" });
+      expect(yield* unseen(seen)).toEqual([false, "finished"]);
+      expect(
+        yield* unseen(
+          yield* madeRun(dir, {
+            ...reported,
+            id: "r-old",
+            created: "2026-09-14T08:00:00Z",
+            finished: "2026-09-14T08:30:00Z",
+          }),
+        ),
+      ).toEqual([false, "finished"]);
+      expect(
+        yield* unseen(yield* madeRun(dir, { ...reported, id: "r-branch", branch: "mk/fix" })),
+      ).toEqual([false, "waiting"]);
+    }),
+  ));
+
+test("an unseen report is still drawn a day later, and a seen one goes to History", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      yield* markSeenSince(dir, "2026-09-14T09:00:00Z");
+      const reported = {
+        task: "task-1",
+        state: "succeeded",
+        summary: "two blockers remain",
+        created: "2026-09-14T09:10:00Z",
+        finished: "2026-09-14T10:00:00Z",
+      } as const;
+      const later = { now: epochMs("2026-09-16T10:00:00Z") };
+
+      const [unseen] = yield* board(
+        env,
+        [yield* madeRun(dir, { ...reported, id: "r-unseen" })],
+        later,
+      );
+      expect(unseen?.unseen).toBe(true);
+      const seen = yield* madeRun(dir, { ...reported, id: "r-seen" });
+      yield* recordSeen(seen.dir, { at: "2026-09-14T10:02:00Z", by: "human:ack-1" });
+      expect(yield* board(env, [seen], later)).toEqual([]);
     }),
   ));
 

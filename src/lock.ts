@@ -209,10 +209,20 @@ export const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: strin
 });
 
 /**
+ * How long a read-and-write lock is waited for: a loser waits out the winner, under load,
+ * and then reads what it wrote instead of being told the lock was busy.
+ */
+export const READ_WRITE_LOCK_BUDGET = Duration.seconds(30);
+
+/**
  * One directory's own lock, held for the length of one write. Every writer of a Run's
  * files takes it, so two amendments that both read the same version cannot both write.
  */
-export function withDirLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) {
+export function withDirLock<A, E, R>(
+  dir: string,
+  effect: Effect.Effect<A, E, R>,
+  budget: Duration.Duration = READ_WRITE_LOCK_BUDGET,
+) {
   return Effect.gen(function* () {
     const path = yield* Path.Path;
     const lock = path.join(dir, "run.json.lock");
@@ -220,6 +230,7 @@ export function withDirLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>
       lock,
       Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`)),
       effect,
+      budget,
     );
   });
 }

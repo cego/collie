@@ -55,6 +55,8 @@ import { laneFor } from "../../src/flow-read";
 import type { RunState } from "../../src/runs";
 import { runFacts } from "./records";
 import { readLaunches } from "../../src/launches";
+import { readReplies } from "../../src/replies";
+import { disputesIn } from "../../src/proactive";
 import { AwaitingJson } from "../../src/awaiting";
 import { installFakeSkills } from "./defs";
 import { Agents, agentsLayer, type AgentHost } from "../../src/agents";
@@ -145,6 +147,14 @@ let started: ChildAsk[] = [];
 /** The invocations whose child ends in failure. */
 let failing = new Set<string>();
 let childWaits = new Map<string, Deferred.Deferred<void>>();
+/** A held invocation, and the invocation whose start it waits for. */
+let startsAfter = new Map<string, string>();
+let startSignals = new Map<string, Deferred.Deferred<void>>();
+const startSignal = (invocation: string) => {
+  const signal = startSignals.get(invocation) ?? Deferred.makeUnsafe<void>();
+  startSignals.set(invocation, signal);
+  return signal;
+};
 let renamed = false;
 
 /** The public id a shipped workflow is run under in this pass. */
@@ -188,7 +198,10 @@ const children = Layer.succeed(Children)(
   Children.of({
     start: (ask) =>
       Effect.gen(function* () {
+        const after = startsAfter.get(ask.invocation);
+        if (after !== undefined) yield* Deferred.await(startSignal(after));
         started.push(ask);
+        yield* Deferred.succeed(startSignal(ask.invocation), undefined);
         const parent = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
         return {
           runId: `${parent}-${ask.invocation}`,
@@ -4983,6 +4996,84 @@ scenario(
   120_000,
 );
 
+const STATED = "Outcome to prove (not given means unclassified):";
+const PROVES_BUG = "A bug: reproduce it first.";
+const PROVES_MIGRATION = "A migration: prove it goes both ways";
+
+scenario(
+  "a migration changed to a bug while its first ticket is built prompts the next ticket as a bug",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        // The second ticket's criteria are left unanswered, so the Run stops after its build.
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit", body: CRITERIA },
+        ]);
+        const runId = "r-kind-build";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          { writes: [outcomeSet(runId, "bug")], output: BUILT },
+          BUILT,
+          BUILT,
+          BUILT,
+        ]);
+        yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "migration" },
+        });
+        yield* bin.restore();
+
+        const first = yield* asked(runId, "01-first.md");
+        expect(first).toContain(`${STATED} migration\n`);
+        expect(first).toContain(PROVES_MIGRATION);
+        const second = yield* asked(runId, "02-second.md");
+        expect(second).toContain(`${STATED} bug\n`);
+        expect(second).toContain(PROVES_BUG);
+        expect(second).not.toContain(PROVES_MIGRATION);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a kind changed by a build whose criteria are unmet is the kind its criteria hand-back states",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-only.md", title: "the only one", checks: "unit", body: CRITERIA },
+        ]);
+        const runId = "r-kind-criteria";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          { writes: [outcomeSet(runId, "bug")], output: BUILT },
+          BUILT,
+          BUILT,
+        ]);
+        yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "migration" },
+        });
+        yield* bin.restore();
+
+        expect(yield* asked(runId, "build")).toContain(`${STATED} migration\n`);
+        expect(yield* asked(runId, "build.criteria-1")).toContain(`${STATED} bug\n`);
+      }),
+    ),
+  120_000,
+);
+
 scenario(
   "an outcome still missing after a fresh judgement fails instead of completing",
   () =>
@@ -9089,6 +9180,8 @@ const POSTED = { posted: true, link: "https://example.slack.com/archives/C01/p17
 /** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Object.values(model.replies ?? {}).flat();
 
+const signed = (runId: string) => `\n\nPosted by Collie's Run ${runId} on ${hostname()}.`;
+
 /** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */
 const ownCheck = (runId: string) =>
   FileSystem.FileSystem.pipe(
@@ -9142,6 +9235,72 @@ scenario(
           end: { head_sha: head },
           job: { name: "test" },
         });
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a Release whose check is left to CI's test job is not asked its go on a job that passed before its head moved, and is asked once it passes at the new head",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        // The Release reads the job again on a fast clock; the test waits on the wall's.
+        const wall = yield* Clock.Clock;
+        const onWall = <A, E, R>(wait: Effect.Effect<A, E, R>) =>
+          Effect.provideService(wait, Clock.Clock, wall);
+        const { bin, forge, head, reviewed } = yield* releasable("gitlab", {
+          jobs: [{ name: "test", state: "passed" }],
+        });
+        const before = yield* revParse(`${head}^`, reviewed);
+        const passed = yield* forge.model();
+        yield* forge.set({
+          ...passed,
+          ancestry: { [before]: [] },
+          mrs: passed.mrs.map((one) => ({ ...one, pipelineAt: before })),
+        });
+        const runId = "r-release-own-check-moved";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        const asked = yield* fastForward(
+          driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: RELEASING.gitlab.target },
+              host: releaseHost(),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () =>
+                    FileSystem.FileSystem.pipe(
+                      Effect.flatMap((fs) => fs.readFileString(`${runDir(dir, runId)}/log.txt`)),
+                      Effect.orElseSucceed(() => ""),
+                    ),
+                  (log) => log.includes(`ci: waiting on job test for check on ${head}`),
+                );
+                expect((yield* run.asked).filter((row) => row.decision.startsWith("go-"))).toEqual(
+                  [],
+                );
+                const now = yield* forge.model();
+                yield* forge.set({
+                  ...now,
+                  mrs: now.mrs.map(({ pipelineAt: _, ...one }) => one),
+                });
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                yield* ended(run.status);
+                return yield* run.asked;
+              }).pipe(onWall),
+          ),
+        );
+        yield* bin.restore();
+        expect(asked.filter((row) => row.decision.startsWith("go-"))).toHaveLength(1);
+        expect(yield* runsOf(`${rig.root}/check-runs`)).toBe(0);
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({ name: "check", result: "pass", end: { head_sha: head } });
       }),
     ),
   120_000,
@@ -9847,10 +10006,19 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          expect(repliesOf(model).map((one) => one.body)).toEqual([
-            `${commentUrl(name, 41)}\n\nFixed in \`${fix.slice(0, 8)}\`: renamed it`,
-            `${commentUrl(name, 42)}\n\nNot changed: a map costs more here`,
+          const fixed = `${commentUrl(name, 41)}\n\nFixed in \`${fix.slice(0, 8)}\`: renamed it${signed(runId)}`;
+          const disputed = `${commentUrl(name, 42)}\n\nNot changed: a map costs more here${signed(runId)}`;
+          expect(repliesOf(model).map((one) => one.body)).toEqual([fixed, disputed]);
+          const recorded = yield* readReplies(runDir(dir, runId));
+          expect(
+            recorded.map(({ comment, kind, body, mr: on }) => ({ comment, kind, body, on })),
+          ).toEqual([
+            { comment: commentUrl(name, 41), kind: "fixed", body: fixed, on: mr },
+            { comment: commentUrl(name, 42), kind: "disputed", body: disputed, on: mr },
           ]);
+          expect(
+            (yield* disputesIn([{ id: runId, dir: runDir(dir, runId) }])).map((one) => one.key),
+          ).toEqual([`${runId}:disputed:${commentUrl(name, 42)}`]);
           const answering = yield* asked(runId, "answer-1");
           expect(answering).toContain(commentUrl(name, 41));
           expect(answering).toContain("please rename this");
@@ -9865,6 +10033,176 @@ for (const name of ["gitlab", "github"] as const) {
           );
           expect(proved).toEqual([head, fix]);
           expect((yield* prompts()).filter((one) => one.includes("/answer-"))).toHaveLength(1);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: the host's reply is signed with the Run and its Machine, and a second reply to the comment is already`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const comment = { id: 46, author: "bob", at: "2026-10-20T11:00:00Z", body: "rename it" };
+          const { bin, forge } = yield* releasable(name, { comments: [comment] });
+          const runId = `r-signed-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const said = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              const asked = {
+                runId,
+                cwd: rig.projectDir,
+                comment: "46",
+                body: `${commentUrl(name, 46)}\n\nNot changed: the name is the domain's`,
+                kind: "disputed" as const,
+              };
+              return [yield* host.reply(asked), yield* host.reply(asked)];
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(said).toEqual(["posted", "already"]);
+          expect(repliesOf(model).map((one) => one.body)).toEqual([
+            `${commentUrl(name, 46)}\n\nNot changed: the name is the domain's${signed(runId)}`,
+          ]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a reply the forge took before its record was written is recorded on the next try`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const comment = { id: 47, author: "bob", at: "2026-10-20T11:00:00Z", body: "rename it" };
+          const { bin, forge } = yield* releasable(name, { comments: [comment] });
+          const runId = `r-lost-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const asked = {
+            runId,
+            cwd: rig.projectDir,
+            comment: "47",
+            body: `${commentUrl(name, 47)}\n\nNot changed: the name is the domain's`,
+            kind: "disputed" as const,
+          };
+          const said = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              const first = yield* host.reply(asked);
+              yield* fs.remove(`${runDir(dir, runId)}/replies.jsonl`);
+              return [first, yield* host.reply(asked), yield* host.reply(asked)];
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(said).toEqual(["posted", "already", "already"]);
+          const body = `${commentUrl(name, 47)}\n\nNot changed: the name is the domain's${signed(runId)}`;
+          expect(repliesOf(model).map((one) => one.body)).toEqual([body]);
+          expect(
+            (yield* readReplies(runDir(dir, runId))).map(({ comment, kind, body, mr: on }) => ({
+              comment,
+              kind,
+              body,
+              on,
+            })),
+          ).toEqual([{ comment: commentUrl(name, 47), kind: "disputed", body, on: mr }]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a lost reply in a thread is recorded as the one posted after its comment, not an earlier one`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const thread = name === "gitlab" ? "d48" : "48";
+          const where = { thread, file: "src/app.ts", line: 3 };
+          const { bin, forge } = yield* releasable(name, {
+            comments: [
+              { id: 48, author: "bob", at: "2026-10-20T10:00:00Z", body: "rename it", ...where },
+              { id: 49, author: "bob", at: "2026-10-20T12:00:00Z", body: "and this", ...where },
+            ],
+          });
+          const runId = `r-lost-thread-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const ask = (comment: string, body: string) => ({
+            runId,
+            cwd: rig.projectDir,
+            comment,
+            body,
+            kind: "disputed" as const,
+          });
+          const at = (now: string) =>
+            Effect.flatMap(forge.model(), (model) => forge.set({ ...model, now }));
+          const said = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              yield* at("2026-10-20T11:00:00Z");
+              const first = yield* host.reply(ask("48", "Not changed: the name is the domain's"));
+              yield* at("2026-10-20T13:00:00Z");
+              const second = yield* host.reply(ask("49", "Not changed: this one too"));
+              yield* fs.remove(`${runDir(dir, runId)}/replies.jsonl`);
+              return [first, second, yield* host.reply(ask("49", "Not changed: this one too"))];
+            }),
+          );
+          yield* bin.restore();
+          expect(said).toEqual(["posted", "posted", "already"]);
+          expect((yield* readReplies(runDir(dir, runId))).map((one) => one.body)).toEqual([
+            `Not changed: this one too${signed(runId)}`,
+          ]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a reply to a comment whose address starts with another's is not recorded for that other`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* releasable(name, {
+            comments: [
+              { id: 52, author: "bob", at: "2026-10-20T10:00:00Z", body: "rename it" },
+              { id: 520, author: "bob", at: "2026-10-20T10:30:00Z", body: "and this" },
+              {
+                id: 53,
+                author: "tester",
+                at: "2026-10-20T11:00:00Z",
+                body: `${commentUrl(name, 52)} renamed by hand`,
+              },
+            ],
+          });
+          const runId = `r-prefix-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const ask = (id: number) => ({
+            runId,
+            cwd: rig.projectDir,
+            comment: String(id),
+            body: `${commentUrl(name, id)}\n\nNot changed: the name is the domain's`,
+            kind: "disputed" as const,
+          });
+          const said = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              return [yield* host.reply(ask(520)), yield* host.reply(ask(52))];
+            }),
+          );
+          yield* bin.restore();
+          expect(said).toEqual(["posted", "already"]);
+          expect((yield* readReplies(runDir(dir, runId))).map((one) => one.comment)).toEqual([
+            commentUrl(name, 520),
+          ]);
         }),
       ),
     120_000,
@@ -9989,8 +10327,8 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(repliesOf(model).map((one) => one.body)).toEqual([
-            `${commentUrl(name, 61)}\n\nNot changed: not 61`,
-            `${commentUrl(name, 62)}\n\nNot changed: not 62`,
+            `${commentUrl(name, 61)}\n\nNot changed: not 61${signed(runId)}`,
+            `${commentUrl(name, 62)}\n\nNot changed: not 62${signed(runId)}`,
           ]);
         }),
       ),
@@ -13396,96 +13734,112 @@ scenario(
   120_000,
 );
 
-scenario(
-  "a day's findings are filed or commented, all-new Improvements start, and the summary says so",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        freshDay();
-        openIssues = [
-          { number: 7, title: "Reads are slow", body: "Slow.", url: "https://x/issues/7" },
-          {
-            number: 8,
-            title: "Checks unwired",
-            body: `Unwired.\n\n${markerOf("unwired-checks")}`,
-            url: "https://x/issues/8",
-          },
-        ];
-        refusing = new Set(["Project refused-text"]);
-        failing = new Set(["improvement-second"]);
-        yield* rig.queueOutputs([
-          triaged(
-            [
-              finding({
-                key: "host-crash",
-                category: "defect",
-                runs: ["r-a"],
-                body: `Leaked ${LEAKED} in its log.`,
-              }),
-              finding({ key: "once", runs: ["r-a"] }),
-              finding({ key: "costly-reads", category: "tool-economy" }),
-              finding({ key: "slow-reads", runs: ["r-a"], issue: 7 }),
-              finding({ key: "unwired-checks", category: "automated-checks", runs: ["r-a"] }),
-              finding({ key: "refused-text" }),
-              finding({ key: "third", severity: "low" }),
-            ],
-            [
-              { name: "first", keys: ["host-crash"], why: "one crash" },
-              { name: "with-open", keys: ["third", "slow-reads"], why: "related" },
-              { name: "second", keys: ["costly-reads"], why: "one read" },
-              { name: "beyond", keys: ["third"], why: "over the bound" },
-            ],
-          ),
-        ]);
+const aDay = () =>
+  runEffect(
+    Effect.gen(function* () {
+      freshDay();
+      openIssues = [
+        { number: 7, title: "Reads are slow", body: "Slow.", url: "https://x/issues/7" },
+        {
+          number: 8,
+          title: "Checks unwired",
+          body: `Unwired.\n\n${markerOf("unwired-checks")}`,
+          url: "https://x/issues/8",
+        },
+      ];
+      refusing = new Set(["Project refused-text"]);
+      failing = new Set(["improvement-second"]);
+      yield* rig.queueOutputs([
+        triaged(
+          [
+            finding({
+              key: "host-crash",
+              category: "defect",
+              runs: ["r-a"],
+              body: `Leaked ${LEAKED} in its log.`,
+            }),
+            finding({ key: "once", runs: ["r-a"] }),
+            finding({ key: "costly-reads", category: "tool-economy" }),
+            finding({ key: "slow-reads", runs: ["r-a"], issue: 7 }),
+            finding({ key: "unwired-checks", category: "automated-checks", runs: ["r-a"] }),
+            finding({ key: "refused-text" }),
+            finding({ key: "third", severity: "low" }),
+          ],
+          [
+            { name: "first", keys: ["host-crash"], why: "one crash" },
+            { name: "with-open", keys: ["third", "slow-reads"], why: "related" },
+            { name: "second", keys: ["costly-reads"], why: "one read" },
+            { name: "beyond", keys: ["third"], why: "over the bound" },
+          ],
+        ),
+      ]);
 
-        const result = yield* improved("r-day", { runs: "machine", improvements: 2 });
+      const result = yield* improved("r-day", { runs: "machine", improvements: 2 });
 
-        expect(saidBy(result)).toContain(
-          "Filed 3, commented 2, refused 1; 2 Improvements, 1 failed",
-        );
-        const retro = `${rig.root}/.agents/skills/retro/SKILL.md`;
-        const prompt = yield* readText(`${dir}/agents/r-day/triage.prompt.md`);
-        expect(prompt).toContain(`read \`${retro}\` and follow it`);
-        expect(prompt).toContain("this page wins");
-        const persona = yield* readText(`${dir}/agents/r-day/triage.persona.md`);
-        expect(persona).toContain("retrospective");
-        expect(persona).toContain(`read \`${retro}\` and follow it`);
+      expect(saidBy(result)).toContain("Filed 3, commented 2, refused 1; 2 Improvements, 1 failed");
+      const retro = `${rig.root}/.agents/skills/retro/SKILL.md`;
+      const prompt = yield* readText(`${dir}/agents/r-day/triage.prompt.md`);
+      expect(prompt).toContain(`read \`${retro}\` and follow it`);
+      expect(prompt).toContain("this page wins");
+      const persona = yield* readText(`${dir}/agents/r-day/triage.persona.md`);
+      expect(persona).toContain("retrospective");
+      expect(persona).toContain(`read \`${retro}\` and follow it`);
 
-        expect(filed.map(({ title }) => title)).toEqual([
-          "Project host-crash",
-          "Project costly-reads",
-          "Project third",
-        ]);
-        expect(filed[0]?.body).toEndWith(
-          `${markerOf("host-crash")}\n\nFiled by Collie's self-improve Run r-day on ${hostname()}.`,
-        );
-        expect(commented.map(({ number }) => number)).toEqual([7, 8]);
-        expect(commented[0]?.body).toStartWith("Seen again in r-a ");
+      expect(filed.map(({ title }) => title)).toEqual([
+        "Project host-crash",
+        "Project costly-reads",
+        "Project third",
+      ]);
+      expect(filed[0]?.body).toEndWith(
+        `${markerOf("host-crash")}\n\nFiled by Collie's self-improve Run r-day on ${hostname()}.`,
+      );
+      expect(commented.map(({ number }) => number)).toEqual([7, 8]);
+      expect(commented[0]?.body).toStartWith("Seen again in r-a ");
 
-        expect(
+      expect(started).toHaveLength(2);
+      expect(
+        new Set(
           started.map(({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
-        ).toEqual([
+        ),
+      ).toEqual(
+        new Set([
           ["improvement-first", "plan", true],
           ["improvement-second", "plan", true],
-        ]);
-        expect(started[0]?.input.then).toBe("implement");
-        expect(started[0]?.input.goal).toContain("`Closes #101`");
-        expect(started[0]?.input.goal).toContain("Leaked <github token> in its log.");
-        expect(asJson(started)).not.toContain(LEAKED);
-        expect(started[1]?.input.goal).toContain("`Closes #102`");
+        ]),
+      );
+      const first = started.find(({ invocation }) => invocation === "improvement-first");
+      const second = started.find(({ invocation }) => invocation === "improvement-second");
+      expect(first?.input.then).toBe("implement");
+      expect(first?.input.goal).toContain("`Closes #101`");
+      expect(first?.input.goal).toContain("Leaked <github token> in its log.");
+      expect(asJson(started)).not.toContain(LEAKED);
+      expect(second?.input.goal).toContain("`Closes #102`");
 
-        const summary = yield* readText(`${runDir(dir, "r-day")}/summary.md`);
-        expect(summary.indexOf("### defect")).toBeLessThan(summary.indexOf("### tool-economy"));
-        expect(summary).toContain("refused, it names another checkout");
-        expect(summary).toContain("commented #7");
-        expect(summary).toContain("r-day-improvement-second, failed: improvement-second failed");
-        expect(summary).toContain("Project once: seen once");
-        expect(summary).toContain("a service nobody here runs");
+      const summary = yield* readText(`${runDir(dir, "r-day")}/summary.md`);
+      expect(summary.indexOf("### defect")).toBeLessThan(summary.indexOf("### tool-economy"));
+      expect(summary).toContain("refused, it names another checkout");
+      expect(summary).toContain("commented #7");
+      expect(summary).toContain("r-day-improvement-second, failed: improvement-second failed");
+      expect(summary).toContain("Project once: seen once");
+      expect(summary).toContain("a service nobody here runs");
 
-        yield* improved("r-day", { runs: "machine", improvements: 2 });
-        expect([filed.length, commented.length, started.length]).toEqual([3, 2, 2]);
-      }),
-    ),
+      yield* improved("r-day", { runs: "machine", improvements: 2 });
+      expect([filed.length, commented.length, started.length]).toEqual([3, 2, 2]);
+    }),
+  );
+
+scenario(
+  "a day's findings are filed or commented, all-new Improvements start, and the summary says so",
+  aDay,
+  120_000,
+);
+
+scenario(
+  "a day's Improvements are each read by name, whichever starts first",
+  () => {
+    startsAfter = new Map([["improvement-first", "improvement-second"]]);
+    return aDay();
+  },
   120_000,
 );
 
@@ -13771,6 +14125,8 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
         failing = new Set();
         modules = new Map();
         childWaits = new Map();
+        startsAfter = new Map();
+        startSignals = new Map();
         yield* fs.makeDirectory(dir, { recursive: true });
         yield* fs.makeDirectory(rig.projectDir, { recursive: true });
         // The skills the shipped personas and steps name, installed where this machine

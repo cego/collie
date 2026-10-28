@@ -260,6 +260,7 @@ export const DesktopAction = Schema.Union([
     kind: Schema.Literals(["merged", "abandoned", "superseded"]),
     ref: Schema.String,
   }),
+  Schema.TaggedStruct("Seen", { runId: Schema.String }),
   Schema.TaggedStruct("Steer", { runId: Schema.String, text: Schema.String }),
   /**
    * Said word for word, as review comments are (ADR-0051): to `agent`, or to the role `to`

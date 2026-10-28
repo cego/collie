@@ -9,6 +9,7 @@ import {
   CHECK_ID,
   CHECK_INSTALLATION,
   CheckProcesses,
+  encodeCheckRecord,
   endAllWithin,
   endCheck,
   hostCheckProcesses,
@@ -16,7 +17,14 @@ import {
   runningChecksDir,
   type LeftoverEnd,
 } from "../src/check-processes";
-import { bindingsOf, commandOf, readsSessions, startedOf, stillRunning } from "../src/processes";
+import {
+  bindingsOf,
+  commandOf,
+  groupOf,
+  readsSessions,
+  startedOf,
+  stillRunning,
+} from "../src/processes";
 import { collect, readVerifications } from "../src/verify";
 import { runEffect } from "./support/effect";
 import { startDetached } from "./support/command";
@@ -981,46 +989,106 @@ test(
   10_000,
 );
 
+/**
+ * Check `held` of pass `gate` of run-1, left running and recorded by host 4242, for a kill
+ * that signals nothing; let go and waited for once the test is done. Gives back its leader.
+ */
+const survivingLeftover = (state: string, notes: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* leftBehind(notes, { installation, id: "run-1@1-left" });
+    const left = yield* startedIn(notes);
+    yield* Effect.addFinalizer(() =>
+      fs
+        .writeFileString(`${notes}/release`, "")
+        .pipe(Effect.andThen(until(() => noneRunning(left), Boolean)), Effect.ignore),
+    );
+    const leader = left[0]!;
+    yield* fs.makeDirectory(runningChecksDir(state), { recursive: true });
+    yield* fs.writeFileString(
+      `${runningChecksDir(state)}/run-1@1-left.json`,
+      encodeCheckRecord({
+        id: "run-1@1-left",
+        run: "run-1",
+        name: "held",
+        pass: "gate",
+        by: "collie",
+        leader: {
+          pid: leader.pid,
+          started: leader.started,
+          group: (yield* groupOf(leader.pid)) ?? leader.pid,
+        },
+        host: { pid: 4242, started: "2" },
+        started: "1970-01-01T00:00:00.001Z",
+      }),
+    );
+    return leader;
+  });
+
 test.skipIf(process.platform !== "linux")(
-  "a check of a Run does not start while a leftover of that Run survives being ended",
+  "a check of a Run is refused, naming the leftover of that Run that survives its one end, which is announced first",
   () =>
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const refused = new Set<number>();
-        const outcomes: LeftoverEnd[] = [];
-        const { notes, checks } = yield* worldWith({
-          kill: (target, name) => {
-            if (refused.has(Math.abs(target))) throw refusal();
-            process.kill(target, name);
-          },
-          onRun: (_leftover, outcome) => Effect.sync(() => outcomes.push(outcome)),
+        const events: string[] = [];
+        const { state, notes, checks } = yield* worldWith({
+          kill: (_target, name) => void events.push(`kill ${name}`),
         });
-        yield* Effect.addFinalizer(() =>
-          fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore),
-        );
-        yield* leftBehind(notes, { installation, id: "run-1@1-left" });
-        const left = yield* startedIn(notes);
-        for (const { pid } of left) refused.add(pid);
+        const leader = yield* survivingLeftover(state, notes);
 
-        const exit = yield* runHeld(checks, notes);
-        yield* until(
-          () => Effect.succeed(outcomes),
-          (seen) => seen.includes("still running"),
-        );
-        refused.clear();
-        yield* until(
-          () => fs.readFileString(`${notes}/starts`),
-          (text) => text.trim().split("\n").length === 2,
-        );
+        const refused = yield* Effect.scoped(
+          checks.run(check, { executable: held, argv: [notes], cwd: notes }, (line) =>
+            Effect.sync(() => void events.push(line)),
+          ),
+        ).pipe(Effect.flip, Effect.timeout("15 seconds"));
 
-        expect(yield* noneRunning(left)).toBe(true);
-        expect(yield* fs.exists(`${notes}/overlaps`)).toBe(false);
-        yield* fs.writeFileString(`${notes}/release`, "");
-        expect(yield* Fiber.join(exit)).toBe(0);
+        expect(refused._tag).toBe("CheckRefused");
+        const why = refused._tag === "CheckRefused" ? refused.why : "";
+        expect(why).toContain("check held (pass gate) of run-1");
+        expect(why).toContain(`pid ${leader.pid}`);
+        const announced = events.findIndex((one) => one.includes(`pid ${leader.pid}`));
+        expect(announced).toBe(0);
+        expect(events[0]).toContain("check held (pass gate) of run-1");
+        expect(events[0]).toContain("host 4242");
+        expect(events.indexOf("kill SIGTERM")).toBeGreaterThan(announced);
+        expect((yield* fs.readFileString(`${notes}/starts`)).trim().split("\n")).toHaveLength(1);
       }),
     ),
-  60_000,
+  30_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a verify of a Run whose leftover survives its end is refused, naming the check, its pid and how to try again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, state, notes, checks } = yield* worldWith({ kill: () => {} });
+        const leader = yield* survivingLeftover(state, notes);
+        const said: string[] = [];
+
+        const refused = yield* collect(
+          `${root}/evidence`,
+          { ...check, executable: held, argv: [notes], cwd: notes },
+          {
+            stdout: () => Effect.void,
+            stderr: () => Effect.void,
+            said: (line) => Effect.sync(() => void said.push(line)),
+          },
+        ).pipe(
+          Effect.provideService(CheckProcesses, checks),
+          Effect.flip,
+          Effect.timeout("15 seconds"),
+        );
+
+        expect(refused.why).toContain(`check held (pass gate) of run-1 (pid ${leader.pid})`);
+        expect(refused.why).toContain("`collie cleanup --apply`");
+        expect(refused.state).toBe(true);
+        expect(said).toHaveLength(1);
+        expect(said[0]).toContain(`(pid ${leader.pid})`);
+      }),
+    ),
+  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(

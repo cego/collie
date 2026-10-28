@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { SECTIONS } from "../../../../src/board-model";
 import { NOT_LIVE } from "../../../src/shared/flock";
-import { afterGesture, escapeOn, type Gesture, landedOn } from "../../../src/shared/board-clicks";
+import {
+  afterGesture,
+  escapeOn,
+  type Gesture,
+  landedOn,
+  seenOnOpening,
+} from "../../../src/shared/board-clicks";
 import { CHAT_WIDTH, chatWidth, chatWidthMax } from "../../../src/shared/chat-width";
 import type { Level } from "../../../src/shared/usage";
 import { updatesAtom } from "../flock";
@@ -17,6 +23,7 @@ const {
   sections,
   header,
   waiting,
+  finished,
   placedBy,
   placedAt,
 } = useFlock();
@@ -79,10 +86,13 @@ const gesture = (done: Gesture, tab: string | null = null) => {
       });
   }
   if (after.page === before.page) return;
+  for (const { installation, action } of seenOnOpening(before, after, placedBy))
+    void run(installation, action);
   if (after.page === null) back();
   else showRecord(after.page, tab);
 };
 provide("gesture", gesture);
+const { run } = useActions();
 const toast = useToast();
 useRecordOpener().opensRecords((about) => {
   const card = placedAt(about.machine, about.task);
@@ -317,12 +327,15 @@ watch(update, (now) => {
                 :data-testid="section"
                 class="flex flex-col gap-2"
               >
-                <details v-if="section === 'finished'">
-                  <summary class="cursor-pointer text-sm font-semibold text-muted">
-                    {{ label }} · {{ sections.finished.length }}
-                  </summary>
-                  <BoardGrid :tasks="sections.finished" class="mt-2" />
-                </details>
+                <template v-if="section === 'finished'">
+                  <BoardGrid v-if="finished.unseen.length > 0" :tasks="finished.unseen" />
+                  <details>
+                    <summary class="cursor-pointer text-sm font-semibold text-muted">
+                      {{ label }} · {{ sections.finished.length }}
+                    </summary>
+                    <BoardGrid :tasks="finished.seen" class="mt-2" />
+                  </details>
+                </template>
                 <template v-else>
                   <h2
                     class="text-sm font-semibold"

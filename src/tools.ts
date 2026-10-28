@@ -41,6 +41,7 @@ import {
   declineProposed,
   actAsked,
   disposeRun,
+  seeRun,
   proposeActions,
   runViews,
   isSettled,
@@ -288,6 +289,12 @@ const settle = Effect.fn("Tools.settle")(function* (
   action: Settle,
   request: string,
 ) {
+  if (action.kind === "seen") {
+    const done = yield* seeRun(env, { door, runId: action.run, request });
+    return done.ok
+      ? { kind: action.kind, state: "applied", note: `seen by ${done.value.by}` }
+      : { kind: action.kind, state: "failed", note: done.error.message };
+  }
   if (action.kind === "disposition") {
     const found = yield* asksRun(
       env,

@@ -10,8 +10,12 @@ import { stopRun } from "../src/flows";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { foundationLayer, runDir } from "../src/engine";
 import { Host } from "../src/sdk";
+import { everyRegistered } from "../src/registry";
+import { readSeen } from "../src/seen";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
+
+const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** Who the Run's agents are told started it, read once its host has stopped. */
 const startedOf = (state: string, runId: string) =>
@@ -317,6 +321,76 @@ test(
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["proof.workflow.ts", "helper.ts", "notes.md"],
+    ),
+  120_000,
+);
+
+test(
+  "seen from the command line is the CLI's, and from an agent's collie_do the agent's",
+  () =>
+    proves(
+      "collie-actor-seen-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const outputs = `${world.home}/outputs.json`;
+          yield* fs.writeFileString(outputs, '[{"verdict":"done"}]');
+          const attended = yield* collie(
+            world,
+            ["run", "start", "attended", "--input", "work=seen"],
+            {
+              FAKE_HERDR_OUTPUTS: outputs,
+            },
+          );
+          const byAgent = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+            attended.envelope.data,
+          ).runId;
+          // Connected after the start, so the host is the one the CLI spawned with the Outputs.
+          const host = yield* connect(world.state);
+          yield* until(
+            () => host.run({ runId: byAgent }),
+            (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+          );
+          const agent = (yield* everyRegistered(world.state)).find(
+            (entry) => entry.runId === byAgent,
+          )!;
+          const { runId: byCli } = yield* host.start({
+            project: world.project,
+            id: "plain",
+            request: "start-cli",
+            input: { note: "seen" },
+          });
+          const asAgent = yield* collie(
+            world,
+            [
+              "tools",
+              "call",
+              "collie_do",
+              "--input",
+              asJson({ actions: [{ kind: "seen", run: byAgent }] }),
+            ],
+            { COLLIE_RUN: byAgent, COLLIE_AGENT: agent.agent },
+          );
+          expect(asAgent.envelope.data).toMatchObject({
+            text: expect.stringContaining("seen: applied"),
+          });
+          expect(
+            (yield* collie(world, ["run", "seen", byCli, "--request-id", "seen-cli"])).envelope.ok,
+          ).toBe(true);
+
+          const seenBy = (runId: string) =>
+            Effect.map(readSeen(runDir(world.state, runId)), (lines) => lines.map((one) => one.by));
+          expect(yield* seenBy(byAgent)).toEqual([expect.stringMatching(/^agent:/)]);
+          expect(
+            (yield* readAudit(runDir(world.state, byAgent))).find(
+              (line) => line.operation === "seen",
+            )?.actor,
+          ).toMatchObject({ origin: "agent", from: { run: byAgent, agent: agent.agent } });
+          expect(yield* seenBy(byCli)).toEqual(["cli:seen-cli"]);
+          expect(yield* audited(world.state, byCli)).toContainEqual(["seen", "cli", "seen-cli"]);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      ["attended.workflow.ts", "plain.workflow.ts"],
     ),
   120_000,
 );

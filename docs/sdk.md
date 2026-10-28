@@ -1274,8 +1274,8 @@ tree.
 `host.verify({ runId, name, cwd })` runs one of your Run's checks, in the directory the
 check names, resolved from `cwd` — which has to be the Run's own checkout — and records
 what it did. The checks are what the Run started with (`--verify`, else
-`.collie/verify.json`, else the checks remembered for its remote, else the user's
-`verify.json`; a follow-up started from a card starts with its parent's), plus whatever
+`.collie/verify.json` as the Run's base has it, else the checks remembered for its remote,
+else the user's `verify.json`; a follow-up started from a card starts with its parent's), plus whatever
 anyone has named since with `collie run intent verification`
 or chat's `set_verification`, the Run's own agent included. Nobody approves them
 ([ADR-0055](adr/0055-a-run-never-asks-to-run-its-checks.md)). A name not among them is

@@ -362,6 +362,64 @@ test("Finished opens to cards and closes again", () =>
     }),
   ));
 
+const UNSEEN = task({
+  id: "t-u",
+  name: "Audit the herd",
+  state: "done",
+  sentence: "Completed. It reported: “two blockers remain”",
+  unseen: true,
+  run: "r-u",
+});
+const SEEN = task({
+  id: "t-s",
+  name: "Tidy the docs",
+  state: "done",
+  sentence: "Finished; nothing merged yet.",
+  unseen: false,
+  run: "r-s",
+});
+
+test("an Unseen Finished Task is drawn above the collapsed Finished line, marked, and a seen one is not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ tasks: [UNSEEN, SEEN] }));
+      const said = app.said();
+      expect(said).toContain("2 finished today");
+      expect(said).toContain("Audit the herd");
+      expect(said).toContain("unseen");
+      expect(said).not.toContain("Tidy the docs");
+      expect(app.lineOf("Audit the herd")).toBeLessThan(app.lineOf("2 finished today"));
+    }),
+  ));
+
+test("opening an Unseen Task's record acknowledges its Run once, and opening a seen one does not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ tasks: [UNSEEN, SEEN] }));
+      yield* app.click(6, app.lineOf("Audit the herd"));
+      expect(app.commands.filter((c) => c._tag === "Acknowledge")).toEqual([
+        { _tag: "Acknowledge", runId: "r-u" },
+      ]);
+
+      yield* app.escape;
+      yield* app.click(4, app.lineOf("2 finished today"));
+      yield* app.click(6, app.lineOf("Tidy the docs"));
+      expect(app.commands.filter((c) => c._tag === "Acknowledge")).toHaveLength(1);
+    }),
+  ));
+
+test("Acknowledge on an Unseen card acknowledges its Run once, without opening its record", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ tasks: [UNSEEN] }));
+      yield* app.clickOn("Acknowledge");
+      expect(app.commands.filter((c) => c._tag === "Acknowledge")).toEqual([
+        { _tag: "Acknowledge", runId: "r-u" },
+      ]);
+      expect(app.said()).not.toContain("INTENT");
+    }),
+  ));
+
 test("earlier work is reachable on a day nothing finished", () =>
   runEffect(
     Effect.gen(function* () {

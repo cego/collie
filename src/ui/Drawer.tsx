@@ -44,6 +44,7 @@ import { dispositionsFor, menuFor, type Command, type MenuItem } from "./state";
 import { styledMarkdown } from "./markdown";
 import { C, stateGlyph, stepGlyph } from "./sections";
 import { handoffsDir } from "../handoffs";
+import { replyLine } from "../replies";
 
 /** How many of a running check's last lines the Summary shows. */
 const DRAWER_LINES = 8;
@@ -187,6 +188,12 @@ export function Drawer(props: DrawerProps) {
       mark: "•",
       right: `${file.bytes} bytes`,
     }));
+
+  const replied = (): Line[] =>
+    (props.detail?.replies ?? []).flatMap((reply) => [
+      { text: replyLine(reply), mark: reply.kind === "disputed" ? "!" : "•" },
+      ...reply.body.split("\n").map((text) => ({ text: `  ${text}`, mark: " ", fg: C.muted })),
+    ]);
 
   const branch = (): Line[] => [
     { text: props.view.branch ?? "no branch of its own", mark: "⎇", markFg: C.dim },
@@ -336,6 +343,9 @@ export function Drawer(props: DrawerProps) {
           </Show>
           <Show when={handedOn().length > 0}>
             <Section title="handoffs" lines={handedOn()} />
+          </Show>
+          <Show when={replied().length > 0}>
+            <Section title="replies" lines={replied()} />
           </Show>
           <Section title="steps" lines={steps()} />
           <Section title="agents" lines={agents()} />

@@ -6,6 +6,7 @@ import { For, Show, type JSX } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { agentCount, finishedLabel, whereItIs, workingLabel, waitingLabel } from "../board";
 import {
+  foldFinished,
   foldWaiting,
   sectionOf,
   type Decision,
@@ -119,6 +120,7 @@ export function Board(props: BoardProps) {
       props.sections.finished.length ===
     0;
   const waiting = () => foldWaiting(props.sections.waiting, props.now);
+  const finished = () => foldFinished(props.sections.finished);
   // What is behind the Finished line: today's cards, and this checkout's earlier runs —
   // the ones already read as much as the ones still to ask for.
   const earlier = () =>
@@ -213,6 +215,19 @@ export function Board(props: BoardProps) {
             today's problems for the top of the board. */}
         <Show when={earlier()}>
           <box style={{ flexDirection: "column", paddingTop: 1, flexShrink: 0 }}>
+            <Show when={finished().unseen.length > 0}>
+              <Grid
+                views={finished().unseen}
+                columns={props.columns}
+                width={props.width - 2 * SIDE}
+                open={props.open}
+                onOpen={props.onOpen}
+                onMenu={props.onMenu}
+                onAct={props.onAct}
+                decide={props.decide}
+                batch={props.batch}
+              />
+            </Show>
             <text
               fg={C.dim}
               attributes={TextAttributes.BOLD}
@@ -226,7 +241,7 @@ export function Board(props: BoardProps) {
             </text>
             <Show when={props.finishedOpen}>
               <Grid
-                views={props.sections.finished}
+                views={finished().seen}
                 columns={props.columns}
                 width={props.width - 2 * SIDE}
                 open={props.open}
@@ -513,6 +528,10 @@ function Card(props: {
       </box>
 
       <text fg={sentenceColour(props.view)}>{props.view.sentence}</text>
+
+      <Show when={props.view.unseen === true}>
+        <text fg={C.blue}>● unseen</text>
+      </Show>
 
       <Show when={props.view.decision}>
         <Deciding decision={props.view.decision!} decide={props.decide} />

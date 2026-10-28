@@ -323,6 +323,8 @@ export const TaskView = Schema.Struct({
    * Finished rather than Waiting on you.
    */
   landed: Schema.Boolean,
+  /** Its leading Run reported something nobody has seen yet; absent from an older host. */
+  unseen: Schema.optionalKey(Schema.Boolean),
   /** When the leading Run ended, or null while it has not. Orders Waiting on you. */
   ended: Schema.NullOr(Schema.Number),
   /** What the forge last said about the merge request, where Collie has asked. */
@@ -783,6 +785,17 @@ export const Flow = Schema.Struct({
 export type Flow = typeof Flow.Type;
 
 /** Everything the detail panel shows for the selected Run. */
+/** A reply a Run posted to a reviewer's comment, as posted. `kind` is absent where the workflow gave none. */
+export const RunReply = Schema.Struct({
+  at: Schema.String,
+  mr: Schema.String,
+  /** The comment's URL. */
+  comment: Schema.String,
+  kind: Schema.optionalKey(Schema.Literals(["fixed", "disputed"])),
+  body: Schema.String,
+});
+export type RunReply = typeof RunReply.Type;
+
 export const RunDetail = Schema.Struct({
   id: Schema.String,
   requestedBy: Schema.optional(RequestedBy),
@@ -856,6 +869,8 @@ export const RunDetail = Schema.Struct({
   handoffFiles: Schema.optional(Schema.Array(EvidenceFile)),
   /** Absent from a host older than attachments. */
   attachments: Schema.optional(Schema.Array(AttachmentFile)),
+  /** The replies it posted to reviewers. Absent from an older host. */
+  replies: Schema.optional(Schema.Array(RunReply)),
   /** Null for a Run with no branch or no checkout left to compare. */
   diff: Schema.NullOr(RunDiff),
   /** Every agent the Run started, in launch order. Absent from an older host. */
@@ -1079,6 +1094,10 @@ export const Disposition = Schema.Struct({
   note: Schema.NullOr(Schema.String),
 });
 export type Disposition = typeof Disposition.Type;
+
+/** Someone opened or acknowledged a finished Run, once for the Flock. */
+export const Seen = Schema.Struct({ at: Schema.String, by: Schema.String });
+export type Seen = typeof Seen.Type;
 
 /** One action of a confirmed proposal, and what came of it. */
 export const StepResult = Schema.Struct({
@@ -1511,6 +1530,12 @@ export const FrontDoorRpcs = RpcGroup.make(
       request: Schema.String,
     },
     success: Disposition,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /** A finished Run opened or acknowledged; the first such line, however often it is asked. */
+  Rpc.make("seen", {
+    payload: { runId: Schema.String, request: Schema.String },
+    success: Seen,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /** Free words about one Run, which the evaluator turns into actions carried out now. */
@@ -2011,7 +2036,8 @@ export type CardAction =
   | { readonly kind: "follow-up" }
   | { readonly kind: "hold"; readonly set: boolean }
   | { readonly kind: "stop" }
-  | { readonly kind: "dispose"; readonly disposition: DispositionKind; readonly ref: string };
+  | { readonly kind: "dispose"; readonly disposition: DispositionKind; readonly ref: string }
+  | { readonly kind: "acknowledge" };
 
 /** `collie!151` or `collie#30` rather than the whole URL: a disposition's ref ends up in the card's sentence. */
 const dispose = (view: TaskView, disposition: DispositionKind): CardAction => {
@@ -2056,12 +2082,14 @@ export function cardActions(view: TaskView): CardAction[] {
 
 /**
  * The one action that ends a card's wait, drawn first on it. Working cards go to their
- * tab; waiting cards get the action that lands or retires the work; a finished or
- * decision card has none — its buttons are the decision's own, or the menu's.
+ * tab; waiting cards get the action that lands or retires the work; an unseen report gets
+ * Acknowledge; any other finished or decision card has none — its buttons are the
+ * decision's own, or the menu's.
  */
 export function primaryAction(view: TaskView): CardAction | null {
   if (view.decision !== null) return null;
   if (view.state === "active" || view.state === "quiet") return { kind: "go-to-tab" };
+  if (view.unseen === true) return { kind: "acknowledge" };
   if (view.landed) return null;
   // Whatever the plan's module offers first, under its own title; none, no button.
   if (view.planReady) return view.offer === null ? null : { kind: "offer", offer: view.offer };
@@ -2141,6 +2169,14 @@ export interface Sections {
 export function foldWaiting(waiting: ReadonlyArray<TaskView>, now: number) {
   const old = (view: TaskView) => !view.ready && (view.ended ?? view.at) < now - WAIT_FOLD_MS;
   return { recent: waiting.filter((view) => !old(view)), older: waiting.filter(old) };
+}
+
+/** Finished, split by whether a report in it is still unseen: those are drawn outside the collapsed list. */
+export function foldFinished(finished: ReadonlyArray<TaskView>) {
+  return {
+    unseen: finished.filter((view) => view.unseen === true),
+    seen: finished.filter((view) => view.unseen !== true),
+  };
 }
 
 /** What a search is matched against: what a human remembers about a Task, and no ids. */

@@ -32,7 +32,10 @@ have run.
 
 ## Decision
 
-**D1. Where a Run's checks come from.** The order and the files are unchanged: `--verify`
+**D1. Where a Run's checks come from.** (Amended by
+[ADR-draft-a-runs-checks-are-read-where-its-checkout-starts](draft-a-runs-checks-are-read-where-its-checkout-starts.md):
+the project's file is read at the Run's base, not from the checkout it was started in.)
+The order and the files are unchanged: `--verify`
 (chat's `start.verify`), else `.collie/verify.json`, else the checks remembered for the
 remote, else `~/.collie/user/verify.json`. The first one found is taken whole. When none
 of them has any, the Run's own agent names them. `implement`'s builder does this first,

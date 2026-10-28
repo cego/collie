@@ -12,6 +12,7 @@ import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
+import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { planIssuesIn, planReposOf } from "./plan";
 import { diffTargetOf } from "./strategies";
@@ -411,7 +412,7 @@ function doneSentence(
     if (mr === null)
       return summary === null || summary.trim() === ""
         ? "Finished; nothing merged yet."
-        : `Finished; it says: “${summary.trim().replace(/\s+/g, " ")}”`;
+        : `Completed. It reported: “${summary.trim().replace(/\s+/g, " ")}”`;
     if (mrState === "closed") {
       const ref = readMrRef(mr);
       const noun = ref === null ? "merge request" : mrWords(ref).noun;
@@ -797,9 +798,9 @@ const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 
 /**
  * When anything in this directory was last written, as `touchedDirAt` measures it but
- * without the files Collie writes about a Run from outside: a disposition, the diff kept
- * for its drawer and the trail of who asked for what are bookkeeping, and must not make
- * a dead Run look alive or ended just now.
+ * without the files Collie writes about a Run from outside: a disposition, who saw it, the
+ * diff kept for its drawer and the trail of who asked for what are bookkeeping, and must not
+ * make a dead Run look alive or ended just now.
  */
 const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -820,7 +821,7 @@ const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
       .readDirectory(path.join(dir, name))
       .pipe(Effect.catch(() => Effect.succeed([])));
     for (const entry of inside) {
-      if (entry === "disposition.jsonl") continue;
+      if (entry === "disposition.jsonl" || entry === "seen.jsonl") continue;
       newest = Math.max(newest, yield* at(path.join(dir, name, entry)));
     }
   }
@@ -921,6 +922,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const forge = opts.forge ?? (yield* readForge(stateDir));
+  const since = yield* seenSince(stateDir);
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
   const records = yield* recordsIn(stateDir);
   const markers = yield* markersOf(all, records);
@@ -980,18 +982,31 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // is still going, and the card must say so.
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
         const checking = everyRun.filter((run) => checked.has(run.id));
+        const leader = leaderOf(runs);
+        const unseenReport = (run: RunFacts) =>
+          disposition === null &&
+          run.state === "succeeded" &&
+          (run.summary ?? "") !== "" &&
+          since !== null &&
+          endedAt(run) > since
+            ? Effect.map(
+                readSeen(run.dir).pipe(Effect.orElseSucceed(() => [])),
+                (lines) => lines.length === 0,
+              )
+            : Effect.succeed(false);
         // Finished work older than a day is History's, behind `older…` — landed work only:
-        // an unmerged branch from last week is still waiting on you, however old.
+        // an unmerged branch from last week is still waiting on you, however old, and so is
+        // a report nobody has seen.
         if (
           opts.only === undefined &&
           checking.length === 0 &&
           runs.every((run) => over(run, runs)) &&
           last < now - FINISHED_FOR_MS &&
           pending.length === 0 &&
-          (disposition !== null || (yield* nothingToFile(runs)))
+          (disposition !== null || (yield* nothingToFile(runs))) &&
+          !(yield* unseenReport(leader))
         )
           return null;
-        const leader = leaderOf(runs);
         const agents = agentsOf(everyRun, registered, live);
         const waits = new Map(
           yield* Effect.forEach(everyRun, (run) =>
@@ -1140,6 +1155,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           mergeable: forged?.mergeable ?? null,
         });
         const finishedAt = settledNow ? endedAt(leader) : 0;
+        const unseen = landed && state === "done" && (yield* unseenReport(leader));
         // Only a ready plan's first action is an offer; asking every card would ask every refresh.
         const offer = planReady ? primaryOf(yield* offersOfRun(leader.id)) : null;
         const holders = new Map<string, string | null>();
@@ -1259,6 +1275,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                 ? disposition.kind
                 : `${disposition.kind} ${disposition.ref}`,
           landed,
+          unseen,
           ended: finishedAt > 0 ? finishedAt : null,
           mrState,
           checks,

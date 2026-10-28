@@ -19,7 +19,8 @@ import { Effect, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import { runTitle } from "./naming";
 import { settled, type RunFacts } from "./runs";
-import type { Reopened, Significance, TaskView } from "./board-model";
+import { mrLabel, type Reopened, type Significance, type TaskView } from "./board-model";
+import { readReplies } from "./replies";
 
 const SaidSchema = Schema.Struct({ at: Schema.String, key: Schema.String });
 const SaidJson = Schema.fromJsonString(SaidSchema);
@@ -71,7 +72,7 @@ export function eventsIn(
 
 /**
  * The keys of every event whose cause still holds, including those a more pressing one
- * masks. A finished Run's outcome holds until its work has a disposition.
+ * masks. A finished Run's outcome holds until its work has a disposition or it is seen.
  */
 export function holding(
   runs: ReadonlyArray<RunFacts>,
@@ -106,6 +107,26 @@ function reopenedOf(run: RunFacts, done: ReadonlyMap<string, Reopened>): Event[]
     },
   ];
 }
+
+/**
+ * A reply that disputed a reviewer, once per comment: the human hears what was said in
+ * their name before they find it on the merge request.
+ */
+export const disputesIn = Effect.fn("Proactive.disputesIn")(function* (
+  runs: ReadonlyArray<Pick<RunFacts, "id" | "dir">>,
+) {
+  const out: Event[] = [];
+  for (const run of runs)
+    for (const reply of yield* readReplies(run.dir).pipe(Effect.orElseSucceed(() => [])))
+      if (reply.kind === "disputed")
+        out.push({
+          run: run.id,
+          key: `${run.id}:disputed:${reply.comment}`,
+          significance: "consequential",
+          text: `Run ${run.id} replied for you on ${mrLabel(reply.mr)}, disputing ${reply.comment}:\n${reply.body}\nShould it stand?`,
+        });
+  return out;
+});
 
 /** Everything worth saying about one Run, most pressing first. */
 function causesOf(

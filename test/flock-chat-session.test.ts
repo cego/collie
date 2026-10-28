@@ -357,3 +357,16 @@ test("the system prompt names this computer's tools as the harness's own, and as
   expect(prompt).not.toContain("Bash");
   expect(prompt).toContain("ask with AskUserQuestion");
 });
+
+test("the system prompt has the chat take a reported review as a report, ask before moving a Run's scope, and read what Runs replied", () => {
+  const prompt = options.systemPrompt.replace(/\s+/g, " ");
+  expect(prompt).toContain(
+    `A human reporting a review, such as "I got review on the MR", is telling you what happened, not asking you to change what a Run does.`,
+  );
+  expect(prompt).toContain(
+    "Before you start or change work that moves a Run's scope, to another repository, a shared package or something its spec puts out of scope, ask the human.",
+  );
+  expect(prompt).toContain(
+    `When you read a merge request's review, read the replies on it too, and tell the human what a Collie Run replied there in their name: its reply ends "Posted by Collie's Run <run> on <machine>."`,
+  );
+});

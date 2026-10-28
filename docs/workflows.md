@@ -145,8 +145,10 @@ more: unclassified work is not a feature by default, and asking
 documentation for a feature's evidence would ask for tickets that do not exist.
 
 **Checks.** A run is held to the checks it started with: `--verify`, else the project's
-`.collie/verify.json`, else the ones remembered for its remote, else the user's
-`verify.json`. Where none of those names any, the builder names the repository's checks
+`.collie/verify.json` as the run's base has it, else the ones remembered for its remote, else
+the user's `verify.json`. The base is the ref a checkout for the run is cut from, so a
+checkout that is behind, ahead or has uncommitted edits does not decide them
+([ADR-draft-a-runs-checks-are-read-where-its-checkout-starts](adr/draft-a-runs-checks-are-read-where-its-checkout-starts.md)). Where none of those names any, the builder names the repository's checks
 before it changes anything, from its `package.json` scripts, a Makefile or its CI config,
 each with `collie run intent verification`. Nobody approves them, and the merge request
 lists each with its command ([ADR-0055](adr/0055-a-run-never-asks-to-run-its-checks.md)).
@@ -271,8 +273,8 @@ starts one Run of itself per repository, each from that repository's checkout un
 root, each with the shared plan directory, `then=finish`, its own `repo` and every other
 option it was started with — `risks`, `outcome` — and all on one branch name: the `branch` you gave,
 else `<login>/<task>`, else one named after the Run that fanned out, so the sibling merge
-requests are findable by it. Each is held to its own checkout's `.collie/verify.json`, else
-the checks remembered for its remote, else the ones its builder names. See [Repo run](../CONTEXT.md) for the term.
+requests are findable by it. Each is held to its own repository's `.collie/verify.json` at that
+repository's base, else the checks remembered for its remote, else the ones its builder names. See [Repo run](../CONTEXT.md) for the term.
 
 They start in **waves**. A repository's run starts once every repository its tickets are
 blocked by has been built; repositories that block nothing start together. Ticket order
@@ -517,8 +519,12 @@ new external comment, or a reply in a thread after Collie's, starts a comment ro
 `answer-<n>`: the agent checks each against the code, fixes what holds test first and
 pushes with a plain push, and disputes what it judges wrong, with a reason. Collie then
 replies to each comment on the forge, linking it: "Fixed in `<sha>`: …" once the merge
-request's head carries that commit, or "Not changed: …" with the reason. It never
-resolves a thread, and a restart never posts a reply twice. A comment a round left out,
+request's head carries that commit, or "Not changed: …" with the reason. Each reply ends
+with a line naming the Run and its Machine ("Posted by Collie's Run … on …"), so a reviewer
+can tell it from your own words though it is posted as your login. The host records every
+reply on the Run, where `collie run show`, the drawer and Desktop's record list it, and a
+reply that disputes a comment reaches the board and chat as News; nothing waits for you. It
+never resolves a thread, and a restart never posts a reply twice. A comment a round left out,
 or whose commit the head does not carry, goes to the next round, and a round that
 answers none of its comments parks the Run, naming them. Comment rounds are not bounded:
 they follow the reviewers.
@@ -804,7 +810,7 @@ Where it changed code and nothing names the run's checks, it names them with
 root — and Collie runs the named checks there when the run ends.
 
 **Ends:** when the agent writes its Output. Its `summary` is the run's result and what the
-card says, as `Finished; it says: “…”` — a claim, shown as one. A `blocked` reason fails the run with that reason. There
+card says, as `Completed. It reported: “…”` — its status, then its claim, shown as one. A `blocked` reason fails the run with that reason. There
 is no menu, and the agent takes steering after the run has ended.
 
 Its Flow forecasts one Step, Task, containing the generalist's work.

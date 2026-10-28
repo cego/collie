@@ -42,6 +42,24 @@ export const afterGesture = (state: BoardState, gesture: Gesture): BoardState =>
   }
 };
 
+export interface SeenCard {
+  readonly installation: string;
+  readonly task: { readonly run: string; readonly unseen?: boolean };
+}
+
+/** The `seen` a card's Machine is sent, where what its Run reported is still unseen. */
+export const seenBy = (card: SeenCard | undefined) =>
+  card?.task.unseen === true
+    ? [{ installation: card.installation, action: { _tag: "Seen", runId: card.task.run } as const }]
+    : [];
+
+/** Opening a record is seeing it; a record already open, or any other page, sends nothing. */
+export const seenOnOpening = (
+  before: BoardState,
+  after: BoardState,
+  cardOf: (key: string) => SeenCard | undefined,
+) => (after.page === null || after.page === before.page ? [] : seenBy(cardOf(after.page)));
+
 interface Found {
   readonly getAttribute: (name: string) => string | null;
   readonly hasAttribute: (name: string) => boolean;

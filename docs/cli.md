@@ -633,7 +633,9 @@ A Run is watched from the host's own stream: every update
 is the whole current state rather than a change to apply, so a `wait` started long after
 the work — or resumed after the last one was interrupted — reads where the Run is instead
 of waiting for a notification that has already been and gone. `run show` lists the handoff notes the Run's agents left under its `handoffs/` directory,
-by path (`data.handoffs`). It names the module file the Run is on, and a
+by path (`data.handoffs`), and the replies it posted to reviewers, each with when, the merge
+request, the comment's URL, whether it was `fixed` or `disputed`, and its body as posted
+(`data.replies`). It names the module file the Run is on, and a
 Run whose module has been deleted still reads, pending, with that file named: its history
 is Collie's rows, and none of them went anywhere. `run list` shows those Runs beside the
 rest; where the host will not start it says so and still lists the others.
@@ -1214,6 +1216,23 @@ readable. The most recent one is what `run show` reports.
 This is integrated here and not yet on the board: the Home's rows and Live region do not
 read it, so a Run whose work shipped still reads as a plain failure there.
 
+## Acknowledging a finished Run
+
+```sh
+collie --json run seen <run-id>
+```
+
+A Finished Task whose leading Run succeeded by itself with a summary, and has no
+disposition, is [Unseen](../CONTEXT.md) until someone opens or acknowledges it. `run seen`
+acknowledges it: the Run's host records who and when once, in the Run's own record beside
+its disposition, and every board in the Flock reads it from there. Asking again, under the
+same request id or another, records nothing new and answers with the first record. The
+board, a herdr action and an agent's `collie_do` `seen` go through the same operation.
+
+Reading a Run records nothing: `run show`, `collie_run` and the Flock chat's turn about it
+leave it unseen. A Run that ended before its host first started recording seen counts as
+seen; that host writes the moment into its state directory, as `seen-since`, once.
+
 ## What a finished Run offers next
 
 ```sh
@@ -1347,8 +1366,8 @@ merge.
 `plan` settles the outcome during its interview and forwards it, so a chained build is not
 asked again. A value that is not one of these is refused at the front door rather than
 discovered at the gate. A wrong one is corrected with `collie run intent set-outcome`
-while the Run is live: each review round, each gate pass and the merge request read the
-kind as it stands then, and the merge request names the kind the Run was finally held to.
+while the Run is live: each build and criteria turn, each review round, each gate pass and
+the merge request read the kind as it stands then, and the merge request names the kind the Run was finally held to.
 A dispute never changes the kind by itself.
 
 `plan` and `review` runs have a kind of their own that nobody chooses — `plan` proves it
@@ -1526,6 +1545,14 @@ and a human's `collie verify` waits as an agent's does. A stop of the Run ends t
 with `invalid_state`, and the command never runs. While a verify an agent asked for waits,
 that agent's Output budget does not run.
 
+Before the command starts, a check of the same Run that an earlier host left running is
+ended: `collie verify` first prints `check <name> (pass <pass>) of <run> (pid <pid>), left
+running by host <pid> (started <time>): ending it before this check starts`. One that is
+still running after its SIGTERM and SIGKILL refuses the verify with `invalid_state`, naming
+the check and its pid; `collie cleanup --apply` tries to end it again and reports what is
+left. Once the command is spawned, it prints `"<name>" started, pid <pid>`: a wait after
+that line is the command's own. Each of these lines is also written to the Run's log.
+
 `--expect fail` is how a bug is proved to exist. A regression test that exits non-zero on
 the tree before the fix is the evidence, so that record is a `pass`; the same command
 succeeding is the reproduction failing, not the bug being fixed. Stability comes first
@@ -1547,7 +1574,7 @@ So an agent may end its turn waiting on a verify, and on nothing else in the bac
 An agent may `collie verify` anything but this run's own
 [checks](../CONTEXT.md), which only the gate runs; Collie runs only those, matched argument for argument, and nobody approves them
 ([ADR-0055](adr/0055-a-run-never-asks-to-run-its-checks.md)). They are settled when the run starts — the `--verify`
-entries given with it, else `.collie/verify.json` in the project, else the checks remembered
+entries given with it, else the project's `.collie/verify.json` at the run's base, else the checks remembered
 for the checkout's remote (`~/.collie/user/verify/<host>/<path>.json`, by `origin`, then
 `upstream`), else `~/.collie/user/verify.json`, whichever is found first and taken whole — and copied into the run's Intent as its `run_verification` list. Editing the file afterwards changes the next run and never a
 running one. Where none of those has any, the run starts anyway and its agent names them
@@ -1591,14 +1618,22 @@ commit.
 ]
 ```
 
+The base is the ref a checkout for the run is cut from: the remote branch it works on, else
+the remote's default branch, else the local one. It is read the same way for a run that has
+no checkout of its own, such as `plan`, and the run it starts inherits what it read. Only a
+repository with none of those refs reads its working tree. So an uncommitted edit to the
+file, or a checkout behind its remote, does not reach a new run: push the edit to the branch
+the run starts from, or name the checks with `--verify` or `collie run intent verification`
+([ADR-draft-a-runs-checks-are-read-where-its-checkout-starts](adr/draft-a-runs-checks-are-read-where-its-checkout-starts.md)).
+
 Collie's own `.collie/verify.json` leaves its one check, `check` (`bun run check`), to CI's
 `test` job, which runs that script: its implement Runs and Releases wait for the job rather
 than run the suite again.
 
-A file that is there and does not decode is an error naming it, never an empty set, and
+A file that is there and does not decode is an error naming it and the ref it was read at, never an empty set, and
 the start is refused as `invalid_input`, so a typo is never quietly replaced by an agent's
 choice. So is `--verify` given to a plan that spans repositories: each repository is held to
-its own `.collie/verify.json` or remembered checks. No start is refused for having no
+its own `.collie/verify.json` at its own base, or remembered checks. No start is refused for having no
 checks.
 
 ```sh
@@ -2387,7 +2422,7 @@ records it `read`, `sent` or `uncertain` for that conversation alone. Given `key
 over every pending item and records only those keys: what Desktop's Flock chat actually
 gave the model, out of a batch it put together across Machines. Actions travel as
 JSON and the host decodes them. `collie confirm`, `decline`, `steer`, `run disposition`,
-`proposal reconcile`, `run deliveries --reconcile` and `chat news --sent`, the board and
+`run seen`, `proposal reconcile`, `run deliveries --reconcile` and `chat news --sent`, the board and
 chat's tools all go through these, so the host is the only writer of what they record
 ([ADR-0040](adr/0040-the-host-is-the-only-writer.md)).
 

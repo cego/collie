@@ -818,6 +818,32 @@ test(
         expect(failing.stderr).toContain("the reason it failed");
         expect(failing.envelope.ok).toBe(true);
 
+        // Once the command runs, a wait is its own: verify says so, with the pid it runs as.
+        const announced = yield* collie(world, [
+          "verify",
+          "--run",
+          started.runId,
+          "--name",
+          "pid-of",
+          "--",
+          "sh",
+          "-c",
+          "echo $$",
+        ]);
+        const printed = Schema.decodeUnknownSync(
+          Schema.Struct({
+            verification: Schema.Struct({ tail: Schema.Struct({ stdout: Schema.String }) }),
+          }),
+        )(announced.envelope.data).verification.tail.stdout.trim();
+        expect(printed).toMatch(/^\d+$/);
+        const line = `"pid-of" started, pid ${printed}`;
+        expect(announced.stderr).toContain(line);
+        expect(
+          yield* fs
+            .readFileString(`${world.state}/runs/${started.runId}/log.txt`)
+            .pipe(Effect.orDie),
+        ).toContain(line);
+
         // A Run nobody started is still nobody's, whichever store was asked.
         const nowhere = yield* collie(world, ["verify", "--run", "run-nobody", "--", "true"]);
         expect(nowhere.envelope.ok).toBe(false);

@@ -167,6 +167,8 @@ import {
   Flow,
   Controlled,
   Disposition,
+  RunReply,
+  Seen,
   FrontDoorRpcs,
   HostRefused,
   NewsBatch,
@@ -197,6 +199,8 @@ import {
 } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition } from "./disposition";
+import { markSeenSince, readSeen, recordSeen } from "./seen";
+import { readReplies } from "./replies";
 import {
   NEWS_TRAIL,
   newsPath,
@@ -350,6 +354,8 @@ const RunShown = Schema.Struct({
   handoffs: Schema.optionalKey(
     Schema.Array(Schema.Struct({ path: Schema.String, bytes: Schema.Int })),
   ),
+  /** The replies it posted to reviewers. Absent from an older host. */
+  replies: Schema.optionalKey(Schema.Array(RunReply)),
   /** What of it waits for memory, as the card says it. Absent from an older host. */
   memory: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** The same Flow as its details carry. Absent from an older host. */
@@ -766,6 +772,7 @@ const handlers = (
                 path: `${handoffsDir(runDir(dir, runId))}/${file.name}`,
                 bytes: file.bytes,
               })),
+              replies: yield* readReplies(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
               memory: yield* Effect.map(memoryWaitOf(runDir(dir, runId)), (wait) =>
                 wait === null ? null : waitLine(wait),
               ),
@@ -1275,6 +1282,8 @@ const frontDoorHandlers = (
       // Trimming rewrites the trail through one temporary file, so one read records at a time.
       const recordingUsage = yield* Semaphore.make(1);
       const recordingShell = yield* Semaphore.make(1);
+      // Two doors acknowledging at once still leave one seen line.
+      const seeing = yield* Semaphore.make(1);
       // Every drawer on a finished Run shares one read of its plan until a file of it changes.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans: PlanCache = new Map();
@@ -2186,10 +2195,22 @@ const frontDoorHandlers = (
                           step: step?.step,
                           place: step?.place,
                         },
-                        { stdout: echo("stdout"), stderr: echo("stderr") },
+                        {
+                          stdout: echo("stdout"),
+                          stderr: echo("stderr"),
+                          said: (line) =>
+                            echo("stderr")(`${line}\n`).pipe(
+                              Effect.andThen(appendLog(runDir(env.stateDir, runId), line)),
+                              Effect.ignore,
+                              Effect.provideService(FileSystem.FileSystem, fs),
+                            ),
+                        },
                       ).pipe(
                         Effect.mapError(
-                          (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.why}` }),
+                          (cause) =>
+                            new HostRefused({
+                              reason: `${cause.state ? "invalid_state" : REFUSED_INPUT}: ${cause.why}`,
+                            }),
                         ),
                         Effect.result,
                       ),
@@ -2527,6 +2548,28 @@ const frontDoorHandlers = (
             ),
             plainly,
           ),
+        seen: ({ runId, request }, { client }) =>
+          known(runId).pipe(
+            Effect.andThen(
+              seeing.withPermits(1)(
+                once(
+                  trail(runId),
+                  { operation: "seen", request, ...whoOf(client), asked: {}, result: Seen },
+                  Effect.gen(function* () {
+                    const [first] = yield* readSeen(trail(runId));
+                    if (first !== undefined) return first;
+                    const line = {
+                      at: yield* nowIso(),
+                      by: actorName({ ...whoOf(client), requestId: request }),
+                    };
+                    yield* recordSeen(trail(runId), line);
+                    return line;
+                  }),
+                ),
+              ),
+            ),
+            plainly,
+          ),
         focus: ({ runId, agent, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
@@ -2833,6 +2876,7 @@ export const serve = (named: string): Effect.Effect<void, never, BunServices | S
         // No process can carry an id this host has yet to make.
         const fresh = !(yield* fs.exists(`${dir}/installation`));
         const installation = yield* installationOf(dir);
+        yield* markSeenSince(dir, yield* nowIso());
         const checks = yield* hostCheckProcesses({
           dir,
           installation,
