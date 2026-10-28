@@ -3,6 +3,7 @@
 // (`COLLIE_HOST_SCHEDULE_SECONDS`), so an occurrence is seconds away rather than a minute.
 
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { hostname } from "node:os";
 import { Clock, Effect, Fiber, FileSystem, Schema } from "effect";
 import { readAudit } from "../src/audit";
@@ -123,6 +124,49 @@ test(
           expect((yield* listed(world)).schedules).toEqual([]);
           const shown = yield* collie(world, ["run", "show", first.run]);
           expect(shown.envelope).toMatchObject({ ok: true });
+        }),
+      MODULES,
+    ),
+  120_000,
+);
+
+/** The label a Run's start chose for the Task it opens, as the host recorded it. */
+const taskLabelOf = (world: World, runId: string) => {
+  const db = new Database(`${world.state}/host.db`, { readonly: true });
+  try {
+    const row = db.query("select placing from collie_runs where run = ?").get(runId) as {
+      placing: string | null;
+    } | null;
+    return (JSON.parse(row?.placing ?? "{}") as { taskLabel?: string | null }).taskLabel;
+  } finally {
+    db.close();
+  }
+};
+
+test(
+  "a scheduled Run's Task is named for the Schedule's work, not its first Input",
+  () =>
+    proves(
+      "collie-schedule-names-",
+      (world) =>
+        Effect.gen(function* () {
+          yield* schedule(world, [
+            "add",
+            "offer-banner-nightly",
+            "hello",
+            "--cron",
+            "*/2 * * * * *",
+            "--input",
+            "name=world",
+            "--workspace",
+            world.project,
+          ]);
+          const fired = yield* until(
+            () => scheduled(world, "offer-banner-nightly"),
+            (runs) => runs.length >= 1,
+          );
+          yield* schedule(world, ["remove", "offer-banner-nightly"]);
+          expect(taskLabelOf(world, fired[0]!.run)).toEndWith(" | Offer banner nightly");
         }),
       MODULES,
     ),

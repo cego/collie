@@ -6242,13 +6242,15 @@ const makeRegistry: (
     const launch = Object.entries(generation.hints).find(([, strategy]) =>
       EXCLUSIVE_STRATEGIES.includes(strategy),
     )?.[0];
-    const named = launch === undefined ? "" : settled.input[launch];
     // An admitted child's saved placement also covers replay and crash recovery.
     const taskLabel =
       ask.ownTask === true && (yield* store.run(runId)) === null
         ? yield* freshTaskLabel(
             { ...placing.env, cwd: from },
-            { workflow: generation.id, inputs: { named: isText(named) ? named : "" } },
+            {
+              workflow: generation.id,
+              inputs: launch === undefined ? {} : { [launch]: settled.input[launch] },
+            },
             options?.namesTasks === true,
           ).pipe(
             Effect.provideContext(bun),

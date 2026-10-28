@@ -420,7 +420,9 @@ it — and the `--goal` it was started with. A plan handed over by its directory
 its spec's first heading, so `implement` on a plan is named for what the plan builds,
 not "Implement plan". An answer that says nothing a different task of the same workflow
 would not also say — "Plan new work", "Implement plan" — is not taken; the work's own first
-sentence, in a few words, is.
+sentence, in a few words, is. A Schedule's run is named the same way, with the Schedule's
+own name as its goal, and a child run that is work of its own is named from the input it
+was launched with.
 
 A title you give names the task as you wrote it: `collie run start --title`, or the
 `title` of a start chat or an agent makes for you. A title that says nothing — "Plan new
