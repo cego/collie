@@ -306,7 +306,7 @@ const actionsOf = (flow: Flow | null | undefined, agent: string) =>
     .find((one) => one.agent === agent)?.actions;
 
 test(
-  "run show says whether a Run's agent is alive as herdr lists it now, not as the board last read it",
+  "run show says whether a Run's agent is alive as herdr lists it now, and a drawer opened after it draws the same",
   () =>
     proves(
       "collie-show-alive-",
@@ -327,7 +327,14 @@ test(
           const client = yield* connect(world.state);
           const shown = () =>
             Effect.map(client.shown({ runId }), (one) => actionsOf(one?.flow, agent));
+          const door = yield* frontDoor(socketOf(world.state));
+          const drawn = () =>
+            door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+              Stream.runHead,
+              Effect.map((one) => actionsOf(Option.getOrNull(one)?.flow, agent)),
+            );
           yield* until(shown, (actions) => actions?.includes("tell") === true);
+          yield* until(drawn, (actions) => actions?.includes("tell") === true);
 
           const state = `${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl.state.json`;
           const herd = Schema.decodeUnknownSync(Herd)(yield* fs.readFileString(state));
@@ -337,6 +344,7 @@ test(
           );
 
           expect(yield* shown()).not.toContain("tell");
+          expect(yield* drawn()).not.toContain("tell");
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["attended.workflow.ts"],

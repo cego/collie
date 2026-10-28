@@ -1654,10 +1654,11 @@ its time.
   `pane list` starts: a write or a Run recorded built the board again, and each build read
   herdr's agents and panes, though neither moves an agent. A build now reads them again only
   after herdr's own event or the board's 5 s tick (`herdrMoved` in `src/host.ts`), and a Run's
-  drawer takes its agents from the board built after the change it follows, rather than
-  reading herdr itself. `run show` still reads herdr: one command is one read, and the board
-  can be up to a tick behind on an agent herdr has dropped. The event watch opens its socket before it lists the agents it
-  subscribes to, so a session it cannot watch is not listed every 5 s for nothing.
+  drawer takes the agents the board last read, rather than reading herdr itself. `run show`
+  still reads herdr, since the board can be up to a tick behind on an agent herdr has
+  dropped, and its reading becomes the board's: a drawer opened after it draws what it said.
+  The event watch opens its socket before it lists the agents it subscribes to, so a session
+  it cannot watch is not listed every 5 s for nothing.
 - **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
   needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
   and a fixed sleep is too long on an idle machine and too short on a busy one. Work that

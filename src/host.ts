@@ -589,6 +589,7 @@ const handlers = (
       const registry = yield* Registry;
       const bun = yield* Effect.context<BunServices>();
       const pid = yield* currentPid;
+      const { aliveNow } = yield* SharedBoard;
       const recordingLinks = yield* Semaphore.make(1);
       // The installation this host belongs to, which the client that started it named.
       const env = yield* currentEnv.pipe(Effect.orDie);
@@ -782,8 +783,7 @@ const handlers = (
                   env,
                   runs: all.map((one) => factsOfView(env.stateDir, one)),
                   // One command reads once, and says what herdr lists now.
-                  alive: (yield* liveHerds(new Herdr(env), env).pipe(Effect.flatMap(agentsIn)))
-                    .alive,
+                  alive: yield* aliveNow,
                   offers: (id) =>
                     registry.offers(id).pipe(
                       Effect.provideContext(hosted),
@@ -1011,6 +1011,8 @@ const hostBoard = (dir: string) =>
         return { runs: facts, views: yield* boardOf(facts, alive), alive };
       });
     const listing = listingOf(agentsNow);
+    const aliveOf = (agents: typeof agentsNow) =>
+      Effect.map(agents, ({ alive }) => alive).pipe(Effect.provideContext(bun));
     /** When each Task was first seen Finished, for as long as this host runs. */
     const seen = new Map<string, number>();
     const storage = yield* Effect.context<MessageStorage.MessageStorage>();
@@ -1121,6 +1123,10 @@ const hostBoard = (dir: string) =>
       bun,
       listing,
       herdrMoved,
+      /** herdr's agents as the board last read them. */
+      alive: aliveOf(agentsNow),
+      /** herdr's agents read now, which the board reads from then on. */
+      aliveNow: aliveOf(Effect.andThen(herdrMoved, agentsNow)),
       sweepers,
       sweepersOver,
       record: registry.mergeRequest,
@@ -1143,12 +1149,6 @@ class SharedBoard extends Context.Service<
     readonly listed: Effect.Success<ReturnType<typeof hostBoard>>["sweepers"];
   }
 >()("collie/SharedBoard") {}
-
-/** The agents of the first board built after the latest change: herdr as the board reads it. */
-const aliveOnBoard = (boards: Effect.Success<typeof SharedBoard>["boards"]) =>
-  Effect.map(Stream.runHead(boards), (built) =>
-    Option.match(built, { onNone: () => [], onSome: (one) => one.alive }),
-  );
 
 /** What the host writes for itself, by its path under the state directory, which no build reads. */
 const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
@@ -2782,7 +2782,7 @@ const frontDoorHandlers = (
               {
                 env,
                 runs,
-                alive: yield* aliveOnBoard(shared.boards),
+                alive: yield* shared.alive,
                 offers: (id) =>
                   registry.offers(id).pipe(
                     Effect.provideContext(hosted),
