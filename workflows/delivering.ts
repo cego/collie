@@ -152,7 +152,7 @@ export interface Delivery<I extends Told, O extends Opened> {
   /** The same, journaled, as the merge request is told it. */
   readonly outcomeJournaled: Effect.Effect<string, never, Needs>;
   /** The Outputs the outcome is read from, beside the review's `synthesize`. */
-  readonly outputs: () => Readonly<Record<string, Schema.Json>>;
+  readonly outputs: () => Parameters<typeof evidenceGapsOf>[0]["outputs"];
   readonly tickets: ReadonlyArray<{
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
