@@ -107,7 +107,9 @@ nothing by itself.
   **Release again** follows it too, since it takes its checkout the same way.
 - **In What next?** After a Stage child whose checkout was refused, implement asks the same
   resolution for a Stage it would start and wait on, before asking and when **Stage** is
-  picked. While it would refuse, **Stage** is left out and the question says why.
+  picked. While it would refuse, **Stage** is left out and the question says why. A
+  question's answers are fixed once it is asked, so **Check Stage again** takes Stage's
+  place: picking it asks again, and **Stage** is back once a path is free.
 
 Once an occupant is gone, both offer it again. A Stage or Release that failed for any other
 reason has no record and is offered again as before.

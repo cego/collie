@@ -172,8 +172,9 @@ request is open and its checks left to CI are settled, the Run asks **What next?
   above and below. Where that Stage's checkout was refused, the Run asks whether another
   would still be refused, by the same resolution and cutting nothing, both before it asks
   and when **Stage** is picked. While it would, **Stage** is left out, and the question
-  says why: `Stage is not offered: <the refusal>.` A Stage that failed for any other reason
-  is offered again.
+  says why: `Stage is not offered: <the refusal>.` **Check Stage again** takes its place
+  and asks what next again, with **Stage** back once the refusal is gone. A Stage that
+  failed for any other reason is offered again.
 - **Finish** ends the Run with the merge request URL.
 
 `then=finish` ends at the merge request and `then=release` starts the release, without

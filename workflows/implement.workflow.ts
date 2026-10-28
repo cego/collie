@@ -224,6 +224,7 @@ const BUILDER = "build";
 
 const RELEASE = "Release";
 const STAGE = "Stage";
+const CHECK_STAGE = "Check Stage again";
 const FINISH = "Finish";
 const HAND_BACK = "Hand back";
 const STOP = "Stop";
@@ -1393,10 +1394,12 @@ const releasing = (delivered: {
             prompt: `${mr} is open.${stageFailed}${
               refused === null ? "" : ` Stage is not offered: ${refused}.`
             } What next?`,
-            options: refused === null ? [RELEASE, STAGE, FINISH] : [RELEASE, FINISH],
+            // A question's options are fixed once asked, so a freed path is noticed on a pick.
+            options: [RELEASE, refused === null ? STAGE : CHECK_STAGE, FINISH],
           }),
           { round: n },
         );
+        if (chosen === CHECK_STAGE) continue;
         if (chosen === STAGE && (yield* stageRefusal(`stage-picked-${n}`)) !== null) continue;
         if (chosen === STAGE) {
           const children = yield* Children;

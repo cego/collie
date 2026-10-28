@@ -4432,7 +4432,7 @@ scenario(
 );
 
 scenario(
-  "implement leaves Stage out of what next, saying why, while the checkout its failed Stage was refused is still held",
+  "implement leaves Stage out of what next, saying why, while the checkout its failed Stage was refused is still held, and offers it again once a path is freed",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -4475,11 +4475,20 @@ scenario(
               yield* goAsked(run.asked, "next");
               yield* run.answer("next", "Stage");
               const again = yield* goAsked(run.asked, "next-2");
-              expect(optionsOf([again], "next-2")).toEqual(["Release", "Finish"]);
+              expect(optionsOf([again], "next-2")).toEqual([
+                "Release",
+                "Check Stage again",
+                "Finish",
+              ]);
               expect(again.prompt).toContain(
                 `Stage is not offered: no worktree for feature: ${held}; free one of them and retry.`,
               );
-              yield* run.answer("next-2", "Finish");
+              yield* fs.remove(`${first}-3`, { recursive: true });
+              yield* run.answer("next-2", "Check Stage again");
+              const freed = yield* goAsked(run.asked, "next-3");
+              expect(optionsOf([freed], "next-3")).toEqual(["Release", "Stage", "Finish"]);
+              expect(freed.prompt).not.toContain("Stage is not offered");
+              yield* run.answer("next-3", "Finish");
               return yield* ended(run.status);
             }),
         );
