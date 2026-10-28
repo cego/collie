@@ -754,7 +754,9 @@ keeps the claims, including where the environments a stage attempt reached could
 discovered. A failed Run offers **Stage again** of the same merge request.
 
 **Its [Flow](../CONTEXT.md)** forecasts **Checkout**, **Assess**, **Helle claim**, **Stage**,
-**Test on stage** and **Roll stage back**. A checkout Collie cannot give fails the Run on
+**Test on stage** and **Roll stage back**. A Stage that `implement`'s **What next?** started
+works in that Run's checkout while implement is blocked on it alone, and the checkout is clean, at the merge request's
+head and has no working agent. Otherwise it gets one of its own, and its log says which and why. A checkout Collie cannot give fails the Run on
 **Checkout**, with why. Stage and Test on stage have a run per staging, a moved head
 adding one to Stage alone. Leave it on stage ends with Roll stage back not run.
 

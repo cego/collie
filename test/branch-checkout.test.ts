@@ -8,6 +8,7 @@ import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { checkoutFor, type RecordedBy } from "../src/worktree";
+import type { PaneInfo } from "../src/herdr";
 
 const BRANCH = "mk/run-x";
 
@@ -423,4 +424,106 @@ test(
       }),
     ),
   60_000,
+);
+
+/** A herdr whose panes are `panes`, as `pane list` would say. */
+const herdrWith = (panes: ReadonlyArray<PaneInfo>) =>
+  new (class extends FakeHerdr {
+    override paneList() {
+      return Effect.succeed([...panes]);
+    }
+  })(rig.pluginEnv());
+
+/** The starting Run's checkout: clone A's, on a branch of its own name, at `at`. */
+const startedAt = (at: string) =>
+  Effect.gen(function* () {
+    const checkout = `${rig.root}/.herdr/worktrees/monorepo/implement`;
+    yield* git(cloneA, "fetch", "-q", "origin");
+    yield* git(cloneA, "worktree", "add", "-q", "-b", "mk/implement", checkout, at);
+    return checkout;
+  });
+
+const askStarted = (checkout: string, panes: ReadonlyArray<PaneInfo> = []) =>
+  checkoutFor(herdrWith(panes), {
+    cwd: cloneA,
+    stateDir: rig.stateDir,
+    name: "run-x",
+    workflow: "stage",
+    checkout: "branch",
+    inputs: {},
+    explicit: BRANCH,
+    starting: { run: "run-implement", cwd: checkout },
+  });
+
+const cutsOf = (repo: string) =>
+  Effect.all([git(repo, "worktree", "list", "--porcelain"), git(repo, "branch", "--list")]);
+
+const agentIn = (cwd: string, agentStatus: string): PaneInfo => ({
+  paneId: "1-1",
+  tabId: "1:1",
+  label: null,
+  agent: "claude",
+  agentStatus,
+  workspaceId: null,
+  cwd,
+  foregroundCwd: null,
+  tokens: {},
+  terminalId: null,
+  agentSession: null,
+});
+
+test("a Stage started by a Run whose checkout is clean, at the merge request's head and idle works in it, and cuts nothing", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const started = yield* startedAt(`origin/${BRANCH}`);
+      const before = yield* cutsOf(cloneA);
+
+      const checkout = yield* askStarted(started, [agentIn(started, "idle")]);
+
+      expect(checkout.refused).toBeNull();
+      expect(checkout.cwd).toBe(started);
+      expect(checkout.worktree).toBeNull();
+      expect(checkout.note).toContain(`working in ${started}, Run run-implement's checkout`);
+      expect(yield* cutsOf(cloneA)).toEqual(before);
+    }),
+  ));
+
+test.each([
+  {
+    held: "uncommitted changes",
+    at: `origin/${BRANCH}`,
+    dirty: true,
+    status: "idle",
+    why: "it has uncommitted changes",
+  },
+  {
+    held: "another commit",
+    at: "origin/master",
+    dirty: false,
+    status: "idle",
+    why: `it is not at origin/${BRANCH}`,
+  },
+  {
+    held: "a live agent",
+    at: `origin/${BRANCH}`,
+    dirty: false,
+    status: "working",
+    why: "agent claude in pane 1-1 is working in it",
+  },
+])("a Stage started by a Run whose checkout has $held cuts its own", ({ at, dirty, status, why }) =>
+  runOnPath(
+    Effect.gen(function* () {
+      const started = yield* startedAt(at);
+      if (dirty) yield* (yield* FileSystem.FileSystem).writeFileString(`${started}/wip`, "half\n");
+
+      const checkout = yield* askStarted(started, [agentIn(started, status)]);
+
+      expect(checkout.refused).toBeNull();
+      expect(checkout.cwd).toBe(first);
+      expect(yield* git(first, "branch", "--show-current")).toBe(BRANCH);
+      expect(checkout.note).toContain(
+        `not working in ${started}, Run run-implement's checkout: ${why}`,
+      );
+    }),
+  ),
 );

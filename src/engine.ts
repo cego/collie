@@ -2622,6 +2622,8 @@ export const PARKED = "parked";
 export const AWAITING = "awaiting";
 /** Work waiting for a Subscription to reset; cleared once it goes on. */
 export const USAGE = "usage";
+/** A directory per parent, holding a file per child whose result it is blocked on. */
+const AWAITED = "awaited";
 
 export const UsageWaitSchema = Schema.Struct({
   account: Schema.String,
@@ -3243,6 +3245,20 @@ export const hostLayer = (options: {
             ? { refused: plan.success.refused }
             : { branch: plan.success.branch };
         }).pipe(Effect.provideContext(bun), under);
+      /** The checkout of the Run that started `row`, while that Run is blocked on `row` alone and has one of its own. */
+      const startingCheckout = (row: RunRow) =>
+        Effect.gen(function* () {
+          const parent = row.parent === null ? null : yield* store.run(row.parent);
+          if (parent === null) return {};
+          const placed = placedOf(parent, {});
+          if (placed.worktree === null) return {};
+          const awaited = yield* fs
+            .readDirectory(controlPath(dir, AWAITED, parent.run))
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+          return awaited.length === 1 && awaited[0] === row.run
+            ? { starting: { run: parent.run, cwd: placed.cwd } }
+            : {};
+        });
       /** The reviewed branch's checkout, found or cut as a build of the review's findings is (ADR-0054). */
       const checkoutReviewed = (runId: string) =>
         Effect.gen(function* () {
@@ -3255,6 +3271,7 @@ export const hostLayer = (options: {
           const made = yield* Effect.result(
             checkoutFor(herdr, {
               ...asked.ask,
+              ...(yield* startingCheckout(row)),
               stateDir: env.stateDir,
               workflow: row.workflow,
               checkout: "branch",
@@ -6317,6 +6334,12 @@ const makeRegistry: (
     const payload = yield* payloadOf(found.generation.registration, row).pipe(
       Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
     );
+    const waits = row.parent === null ? null : controlPath(dir, AWAITED, row.parent);
+    const awaited = waits === null ? null : `${waits}/${child.runId}`;
+    if (waits !== null && awaited !== null)
+      yield* fs
+        .makeDirectory(waits, { recursive: true })
+        .pipe(Effect.andThen(fs.writeFileString(awaited, "")), Effect.orDie);
     // Executed on the parent's own fiber, which is what links the two: the engine
     // reads the parent's instance from here, so the child's completion wakes the
     // parent and interrupting the parent reaches the child.
@@ -6335,6 +6358,12 @@ const makeRegistry: (
             suspendedRetrySchedule: workflow.suspendedRetrySchedule,
           }),
     ).pipe(
+      // A suspension is still a wait; only a result ends it.
+      Effect.onExit((exit) =>
+        awaited === null || (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
+          ? Effect.void
+          : fs.remove(awaited, { force: true }).pipe(Effect.ignore),
+      ),
       Effect.mapError((failure) => {
         if (isWorkflowError(failure)) return failure;
         // A child's own typed failure, as its error schema writes it.

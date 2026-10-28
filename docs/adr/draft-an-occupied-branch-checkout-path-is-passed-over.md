@@ -63,6 +63,26 @@ stays their check.
   passed over, the remaining refusal is one a human fixes and then retries. The retry gives
   the same refusal and has no side effects.
 
+## Amendment: Stage works in the checkout of the Run blocked on it
+
+Stage started by implement's **What next?** cut a checkout of its own even when implement's
+was already at the merge request's head on a branch of another name (#220). A Stage Run now
+works in the checkout of the Run that started it, and cuts nothing, when all of these hold:
+
+- that Run is blocked awaiting this Stage's result and no other child's. The engine
+  records each child a parent awaits when the wait begins, and again when it is replayed
+  after a restart. It clears the record only when the result returns: a suspended child is
+  still awaited;
+- that Run has a checkout of its own, not the project it was started in;
+- the checkout is clean and at the merge request's head;
+- no agent is working there. A herdr that will not say counts as one.
+
+Otherwise the checkout is resolved as above, and the log says why the starting Run's was not
+used. A parent that awaits nothing, such as one whose card started the Stage, keeps its
+checkout to itself, because it could go on in it while Stage works there. No other Run's
+checkout is ever taken, so the rejection of a fix round's taking over another Run's working
+tree stands.
+
 ## Consequences
 
 A second clone of a repository gets its own checkout of a branch, at a suffixed path. The

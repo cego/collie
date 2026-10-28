@@ -150,6 +150,8 @@ export interface CheckoutAsk extends BranchAsk {
   recordedBy?: RecordedBy;
   /** Records a roaming checkout as this Run's while its destination is still locked. */
   claimed?: (worktree: WorktreeRecord) => Effect.Effect<void>;
+  /** The checkout of the Run that started this one, given only while that Run waits on a question. */
+  starting?: { readonly run: string; readonly cwd: string };
 }
 
 /** The Run that recorded a checkout, and how a new Run takes the checkout from it. */
@@ -1055,6 +1057,30 @@ export interface Checkout {
   branchSource: BranchSource | null;
 }
 
+/** Why a Run may not work in another's checkout `cwd` instead of cutting one at `base`, or null. */
+const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
+  herdr: Herdr,
+  cwd: string,
+  base: { readonly ref: string; readonly in: string },
+) {
+  const status = yield* shell("git", ["status", "--porcelain"], cwd);
+  if (status.code !== 0) return "git could not read it";
+  if (status.stdout.trim() !== "") return "it has uncommitted changes";
+  const head = yield* shell("git", ["rev-parse", "HEAD"], cwd);
+  const wanted = yield* shell("git", ["rev-parse", `${base.ref}^{commit}`], base.in);
+  if (head.code !== 0 || wanted.code !== 0 || head.stdout.trim() !== wanted.stdout.trim())
+    return `it is not at ${base.ref}`;
+  const panes = yield* Effect.result(herdr.paneList());
+  if (panes._tag === "Failure") return "herdr would not say which agents work in it";
+  for (const pane of panes.success) {
+    if (!pane.agent || pane.agentStatus === "idle" || pane.agentStatus === "done") continue;
+    for (const at of [pane.cwd, pane.foregroundCwd])
+      if (at !== null && (at === cwd || at.startsWith(`${cwd}/`)))
+        return `agent ${pane.agent} in pane ${pane.paneId} is ${pane.agentStatus ?? "unknown"} in it`;
+  }
+  return null;
+});
+
 /**
  * Where this Run works. A Workflow that changes the repository owns its branch's
  * checkout; every other Workflow works in the directory it was started from.
@@ -1166,6 +1192,20 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   here.task = plan.task;
   here.branchSource = plan.source;
 
+  let notTaken = "";
+  if (opts.starting !== undefined) {
+    const { run, cwd } = opts.starting;
+    const why = yield* whyNotWorkIn(herdr, cwd, { ref: plan.base, in: opts.cwd });
+    const whose = `${cwd}, Run ${run}'s checkout`;
+    if (why === null)
+      return {
+        ...here,
+        cwd,
+        note: `working in ${whose}: it is clean, at ${plan.base}, and no agent is working in it`,
+      } satisfies Checkout;
+    notTaken = `not working in ${whose}: ${why}; `;
+  }
+
   // Whichever manager was asked, a Run with nowhere of its own to work says so the
   // same way, naming the branch it could not be given a checkout for.
   const refuse = (why: string) =>
@@ -1230,7 +1270,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     ...here,
     cwd: worktree.path,
     worktree,
-    note: `${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}${
+    note: `${notTaken}${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}${
       made.passed.length === 0 ? "" : `, passing over ${made.passed.join("; ")}`
     }`,
   } satisfies Checkout;
