@@ -93,6 +93,7 @@ import {
   evidenceDir,
   foundationLayer,
   loadEntry,
+  nothingToLandFile,
   pollStatus,
   runDir,
 } from "../../src/engine";
@@ -2647,10 +2648,10 @@ const noMergeRequests = Effect.acquireRelease(
 );
 
 /**
- * A real repository with a GitLab remote. What binds a verification is the tree it ran
- * on, and a directory git knows nothing about has no tree to move.
+ * A real repository with a GitLab remote, level with its default branch. What binds a
+ * verification is the tree it ran on, and a directory git knows nothing about has no tree to move.
  */
-const repository = () =>
+const levelRepository = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const made = yield* preparedRepository;
@@ -2694,13 +2695,17 @@ const preparedRepository = Effect.gen(function* () {
   return made;
 }).pipe(Effect.orDie);
 
-/** That repository with a commit the default branch does not have, so its base is another tree. */
-const ahead = () =>
-  repository().pipe(
+/**
+ * That repository with a commit the default branch does not have, so its base is another
+ * tree and a Run on it has work to land.
+ */
+const repository = () =>
+  levelRepository().pipe(
     Effect.andThen(
       exec(["git", "commit", "-qm", "the change", "--allow-empty"], { cwd: rig.projectDir }),
     ),
   );
+const ahead = repository;
 
 /** A real repository whose `feature` branch has a checkout of its own, as a reviewed branch does. */
 const reviewedBranch = () =>
@@ -7696,6 +7701,85 @@ scenario(
 );
 
 scenario(
+  "implement completes with nothing to land when its ticket is met with no commits and nothing uncommitted",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* levelRepository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-nothing-to-land";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([{ ...BUILT, commits: [] }, CLEAN_SYNTHESIS, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toStartWith("nothing to land: no commits over ");
+        expect(yield* runLog(runId)).toContain(said(result));
+        // The build and its review, and no merge request.
+        expect(yield* prompts()).toHaveLength(2);
+        const fs = yield* FileSystem.FileSystem;
+        const declared = yield* loadEntry(shipped("implement")).pipe(
+          Effect.map((described) => declaredByModule(described.metadata)),
+          Effect.orDie,
+        );
+        const facts: ActionFacts = {
+          outcome: "unspecified",
+          succeeded: true,
+          branch: "the-only-one",
+          mrUrl: null,
+          nothingToLand: yield* fs.exists(nothingToLandFile(runDir(dir, runId))),
+          planIssues: 0,
+          disposed: false,
+          openFindings: 0,
+          diffTarget: null,
+          claim: null,
+        };
+        expect(offersFrom(declared, facts)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement opens its merge request for uncommitted changes on a branch with no commits",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* levelRepository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-uncommitted";
+        yield* approve(runId, ["unit"]);
+        // Left by the review, after the last merge of the default branch would have refused it.
+        yield* rig.queueOutputs([
+          { ...BUILT, commits: [] },
+          {
+            writes: [{ path: `${rig.projectDir}/left.txt`, text: "uncommitted\n" }],
+            output: CLEAN_SYNTHESIS,
+          },
+          OPENED,
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* runLog(runId)).not.toContain("nothing to land");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "unavailable merge request handling suspends and resumes without rebuilding",
   () =>
     runEffect(
@@ -8141,7 +8225,8 @@ const renovatable = () =>
     );
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     yield* noGitlabMrs(bin);
-    yield* repository();
+    // A renovation works on the default branch itself.
+    yield* levelRepository();
     return bin;
   });
 

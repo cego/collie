@@ -179,6 +179,14 @@ A succeeded Run with a merge request also offers **Release** and **Stage** on it
 through `collie run action` and in chat, so it can be released or staged later; once its
 merge request has merged, or anybody recorded what became of the work, neither is offered.
 
+A Run whose gate passed with nothing to land completes without a merge request: its branch
+has no commits over where it leaves the default branch, the same base the gate's baseline
+runs at, and nothing uncommitted, as when a ticket is proved met by work already merged. The
+merge request step does not run and **What next?** is not asked. The Run ends with, and its
+log records, `nothing to land: no commits over <base>, where this branch leaves <default
+branch>, and nothing uncommitted`, and its card offers no follow-up. A branch with commits
+that cannot be pushed still fails, as below.
+
 It fails with the reason there is no merge request — a ticket stopped
 on a blocking finding, acceptance criteria unreadable or still unmet when Stop was answered, a review that halted — and says to
 continue with a follow-up Run, which **Keep going on this** starts. Nobody is asked along

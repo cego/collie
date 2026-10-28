@@ -780,6 +780,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** The commit origin's default branch is at now. Take it inside an Activity. */
     readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;
     /**
+     * Where the checkout at cwd has no commits over its merge-base with the default branch and
+     * nothing uncommitted, records that this Run had nothing to land and answers why; else null.
+     * Take it inside an Activity.
+     */
+    readonly nothingToLand: (runId: string, cwd: string) => Effect.Effect<string | null>;
+    /**
      * Merges the merge request this Run recorded at \`head\`, recording the landing first and
      * its outcome after; fails for a Run that recorded none. Take it inside an Activity.
      */
@@ -1459,6 +1465,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly succeeded: boolean;
     readonly branch: string | null;
     readonly mrUrl: string | null;
+    /** It completed with no change to land, so there is nothing to carry on from. */
+    readonly nothingToLand?: boolean;
     readonly planIssues: number;
     readonly disposed: boolean;
     /** Findings it left for somebody to fix, which is what a fix is offered over. */
@@ -2690,6 +2698,9 @@ const decodeAskedAttachments = Schema.decodeUnknownOption(
 /** Where a Run keeps the merge request it opened. */
 const mergeRequestPath = (dir: string, runId: string) => mergeRequestFile(runDir(dir, runId));
 
+/** Says why a Run completed with nothing to land, in the Run's directory `dir`. */
+export const nothingToLandFile = (dir: string) => `${dir}/nothing-to-land`;
+
 /** The merge request a Run opened, or null where it recorded none. */
 const mergeRequestOf = (fs: FileSystem.FileSystem, dir: string, runId: string) =>
   fs.readFileString(mergeRequestPath(dir, runId)).pipe(
@@ -2947,6 +2958,18 @@ const passAsked = (asked: Parameters<Sdk.HostApi["verify"]>[0]): CheckPass => {
   return { pass: asked.pass ?? "check" };
 };
 
+/** Where the checkout at `cwd` leaves the default branch, or why that cannot be read. */
+const defaultMergeBase = (cwd: string) =>
+  Effect.gen(function* () {
+    const git = (...args: string[]) => runShell("git", args, cwd);
+    const branch = yield* defaultBase(runShell, cwd);
+    if (branch === null) return { found: false, why: "no default branch" } as const;
+    const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
+    const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
+    if (merged.code !== 0) return { found: false, why: `no merge-base with ${branch}` } as const;
+    return { found: true, branch, base: merged.stdout.trim() } as const;
+  });
+
 /**
  * Runs `body` with the checkout at its merge-base with the default branch, then puts it
  * back. A checkout with changes of its own is refused: they would travel to the base.
@@ -2964,18 +2987,16 @@ const atDefaultBase = <A, R>(
     if ((yield* git("status", "--porcelain")).stdout.trim() !== "") {
       return yield* refuse("the checkout has changes of its own");
     }
-    const branch = yield* defaultBase(runShell, cwd);
-    if (branch === null) return yield* refuse("no default branch");
-    const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
-    const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
-    if (merged.code !== 0) return yield* refuse(`no merge-base with ${branch}`);
+    const found = yield* defaultMergeBase(cwd);
+    if (!found.found) return yield* refuse(found.why);
+    const { branch, base } = found;
     const head = (yield* git("rev-parse", "HEAD")).stdout.trim();
     const named = yield* git("symbolic-ref", "-q", "--short", "HEAD");
     const back = named.code === 0 ? named.stdout.trim() : head;
     yield* fs.writeFileString(away, back).pipe(Effect.orDie);
-    if ((yield* git("checkout", "-q", "--detach", merged.stdout.trim())).code !== 0) {
+    if ((yield* git("checkout", "-q", "--detach", base)).code !== 0) {
       yield* fs.remove(away).pipe(Effect.ignore);
-      return yield* refuse(`${merged.stdout.trim()} could not be checked out`);
+      return yield* refuse(`${base} could not be checked out`);
     }
     return yield* body(branch).pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
   });
@@ -4048,6 +4069,22 @@ export const hostLayer = (options: {
                 : Effect.succeed(sha);
             }),
           ),
+        nothingToLand: (runId, cwd) =>
+          under(
+            Effect.gen(function* () {
+              const git = (...args: string[]) => runShell("git", args, cwd);
+              const found = yield* defaultMergeBase(cwd);
+              if (!found.found) return null;
+              const ahead = yield* git("rev-list", "--count", `${found.base}..HEAD`);
+              if (ahead.code !== 0 || ahead.stdout.trim() !== "0") return null;
+              const status = yield* git("status", "--porcelain");
+              if (status.code !== 0 || status.stdout.trim() !== "") return null;
+              const why = `nothing to land: no commits over ${found.base.slice(0, 12)}, where this branch leaves ${found.branch}, and nothing uncommitted`;
+              yield* fs.writeFileString(nothingToLandFile(runDir(dir, runId)), `${why}\n`);
+              yield* appendLog(runDir(dir, runId), why);
+              return why;
+            }),
+          ).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.orDie),
         merge: (asked) =>
           Effect.gen(function* () {
             return yield* land({
@@ -7012,6 +7049,9 @@ const makeRegistry: (
       // Where the host placed it: a branch it inferred is as much the Run's as one named.
       branch: placedOf(row, options).branch,
       mrUrl: yield* mergeRequestOf(fs, dir, runId),
+      nothingToLand: yield* fs
+        .exists(nothingToLandFile(where))
+        .pipe(Effect.orElseSucceed(() => false)),
       planIssues: yield* planIssuesIn(where),
       disposed: disposition !== null,
       openFindings: yield* openFindingsIn(where),

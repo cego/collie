@@ -794,6 +794,12 @@ answers the slugs Helle would not take back, which stay recorded for a later rel
 `host.defaultHead(cwd)` is the commit origin's default branch is at now, and fails where
 origin cannot be read; take it inside an Activity, so a replay reads the same commit.
 
+`host.nothingToLand(runId, cwd)` answers why the Run has nothing to land, where the checkout
+at `cwd` has no commits over its merge-base with the default branch (the base a
+`default-base` verify runs at) and nothing uncommitted. It records that in the Run's log and
+on its card, where it is the `nothingToLand` fact an offer's `eligible` reads. Otherwise, or
+where that base cannot be read, it answers null. Take it inside an Activity.
+
 `host.merge({ runId, cwd, head })` merges the merge request the Run recorded with
 `host.mergeRequest`, at `head`, through the forge's REST merge: never an admin merge, never
 auto-merge. It fails with `WorkflowError` for a Run that recorded none. Before the forge is

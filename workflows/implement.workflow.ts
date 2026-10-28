@@ -350,7 +350,7 @@ export default defineWorkflow({
       title: "Keep going on this",
       workflow: "self",
       when: "always",
-      eligible: (facts) => facts.branch !== null,
+      eligible: (facts) => facts.branch !== null && facts.nothingToLand !== true,
     },
   ],
   run: ({ input: asked }) =>
@@ -1130,6 +1130,12 @@ export default defineWorkflow({
         ),
       ];
       if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${unsettled.join("; ")}`);
+      const nothing = yield* Activity.make({
+        name: "nothing-to-land",
+        success: Schema.NullOr(Schema.String),
+        execute: host.nothingToLand(runId, cwd),
+      });
+      if (nothing !== null) return nothing;
       const leftToCi = checks.filter((spec) => spec.ci !== undefined);
       const mrUrl = yield* mergeRequest(
         Effect.gen(function* () {

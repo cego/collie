@@ -888,6 +888,13 @@ export interface HostApi {
    */
   readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;
   /**
+   * Where the checkout at `cwd` has no commits over its merge-base with the default branch,
+   * the base a `default-base` verify runs at, and nothing uncommitted: records on this Run's
+   * card and in its log that it had nothing to land, and answers why. Otherwise, or where
+   * that base cannot be read, null. Take it inside an Activity.
+   */
+  readonly nothingToLand: (runId: string, cwd: string) => Effect.Effect<string | null>;
+  /**
    * Merges the merge request this Run recorded at `head`, through the forge's REST merge,
    * never as an admin and never by auto-merge. The Run's landing record is written before
    * the forge is asked and says after what came of it; the merge watch reads it to leave this
@@ -1505,6 +1512,8 @@ export interface ActionFacts {
   readonly succeeded: boolean;
   readonly branch: string | null;
   readonly mrUrl: string | null;
+  /** It completed with no change to land, so there is nothing to carry on from. */
+  readonly nothingToLand?: boolean;
   readonly planIssues: number;
   readonly disposed: boolean;
   /** Findings it left for somebody to fix, which is what a fix is offered over. */
