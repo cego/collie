@@ -4,7 +4,8 @@
 
 import { expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Crypto, Effect, FileSystem, Schema, type Scope } from "effect";
+import { Config, Crypto, Effect, FileSystem, Option, Schema, type Scope } from "effect";
+import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
 import { readEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
@@ -14,8 +15,10 @@ import { DELIVERY_TOKEN } from "../src/dispatcher";
 import { runDir } from "../src/engine";
 import { attachFiles, type FlowPrompts } from "../src/flows";
 import { appendLine, deliveriesOf, ledgerPath, readLedger } from "../src/steering";
+import { capabilitiesOf } from "../src/steering-caps";
 import { Herdr } from "../src/herdr";
-import { stopHost, until } from "./support/host";
+import { suiteEnv } from "./support/effect";
+import { root, stopHost, until } from "./support/host";
 import { hosted, hostedRun } from "./support/hosted";
 import { collie, proves, type World } from "./support/world";
 
@@ -262,6 +265,74 @@ test(
         });
         expect(desktopLong.kept).toBe(`${"é".repeat(5_000)}\n  kept as typed  `);
         expect(desktopLong.lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "review comments Desktop sends reach the chosen live agent, signed as the human in Desktop, once per request",
+  () =>
+    steerable("collie-finished-comments-", (world) =>
+      Effect.gen(function* () {
+        // Desktop delivers `now`, which the host sends only to a claude it knows is new enough.
+        const fs = yield* FileSystem.FileSystem;
+        const bin = `${world.home}/bin`;
+        yield* fs.makeDirectory(bin, { recursive: true }).pipe(Effect.orDie);
+        const floor = capabilitiesOf("claude")!.now.version_floor;
+        yield* fs
+          .writeFileString(
+            `${bin}/claude`,
+            `#!/bin/sh\n[ "$1" = --version ] && echo ${floor} && exit 0\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
+            { mode: 0o755 },
+          )
+          .pipe(Effect.orDie);
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const before = Bun.env.PATH;
+            Bun.env.PATH = `${bin}:${before ?? ""}`;
+            return before;
+          }),
+          (before) => Effect.sync(() => void (Bun.env.PATH = before)),
+        );
+        const { runId, agent } = yield* finishedWithAgent(world);
+        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+        const command = Option.isSome(binary)
+          ? [binary.value]
+          : [process.execPath, `${root}src/main.ts`];
+        const desktop = yield* openBridge(bridgeCommand(command, "mk-pc"), {
+          PATH: "/usr/bin:/bin",
+          HOME: world.home,
+          HERDR_PLUGIN_ROOT: world.install,
+          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          COLLIE_HOST: encode(command),
+          ...(yield* suiteEnv),
+          HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
+          FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+        });
+        const comments =
+          "1 review comment from the human in Desktop.\n\n1. the plan's `SPEC.md`\n> the picker\n\nCall it the chooser";
+        const reached = { machine: { profile: "local", name: "mk-pc" }, desktop };
+        const comment = { _tag: "Deliver", runId, agent: agent.name, text: comments } as const;
+        yield* act(reached, "desktop-comments-1", comment).pipe(Effect.orDie);
+        yield* act(reached, "desktop-comments-1", comment).pipe(Effect.orDie);
+
+        const steered = (yield* deliveriesOf(world.state, runId)).filter(
+          (one) => one.delivery.cause.kind === "steer",
+        );
+        expect(steered).toHaveLength(1);
+        const typed = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie))
+          .split("\n")
+          .filter((line) => line !== "")
+          .map((line) => Schema.decodeUnknownSync(CallLine)(line))
+          .filter((call) => call.cmd === "agent prompt" && call.argv[2] === agent.name)
+          .at(-1)?.argv[3];
+        const lines = (typed ?? "").split("\n");
+        expect(lines[0]).toStartWith(`${DELIVERY_TOKEN}${steered[0]!.delivery.id}`);
+        expect(lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
+        const file = /^Their message is in (\S+)\./.exec(lines[2] ?? "")?.[1];
+        expect(yield* fs.readFileString(file!).pipe(Effect.orDie)).toBe(comments);
       }),
     ),
   120_000,
