@@ -237,32 +237,47 @@ const runOnce = (
     if ((yield* Clock.currentTimeMillis) >= deadline) return timedOut;
     const checks = yield* CheckProcesses;
     const began = yield* Clock.currentTimeNanos;
+    let group: number | undefined;
+    let expired = false;
+    const end = () => {
+      try {
+        if (group !== undefined) process.kill(-group, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    };
+    yield* Effect.addFinalizer(() => Effect.sync(end));
+    // Adoption cannot be interrupted once it spawns, so its deadline ends the command beside it.
+    yield* Effect.forkScoped(
+      Effect.sleep(Duration.millis(deadline - (yield* Clock.currentTimeMillis))).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            expired = true;
+            end();
+          }),
+        ),
+      ),
+    );
     const adopted = yield* checks
       .adopt(check, (markers) =>
-        Effect.sync(() =>
-          Bun.spawn([command.executable, ...command.argv], {
+        Effect.sync(() => {
+          const spawned = Bun.spawn([command.executable, ...command.argv], {
             cwd,
             env: { ...process.env, ...markers },
             stdin: "ignore",
             stdout: "pipe",
             stderr: "pipe",
             detached: true,
-          }),
-        ),
+          });
+          group = spawned.pid;
+          if (expired) end();
+          return spawned;
+        }),
       )
       .pipe(Effect.mapError((cause) => new MeasureRefused({ why: cause.why })));
     // This host began to end before it spawned.
     if (adopted === null) return yield* Effect.interrupt;
     const spawned = adopted.handle;
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        try {
-          process.kill(-spawned.pid, "SIGKILL");
-        } catch {
-          // Already gone.
-        }
-      }),
-    );
     const left = deadline - (yield* Clock.currentTimeMillis);
     const collecting = Effect.all(
       [
@@ -289,10 +304,10 @@ const runOnce = (
         }),
       ),
       Effect.timeoutOption(Duration.millis(left)),
-      Effect.map(Option.getOrElse(() => timedOut)),
+      Effect.map((ended) => (expired ? timedOut : Option.getOrElse(ended, () => timedOut))),
     );
     // A check its host ended as it stops never answers, so no failure is recorded of it.
-    return yield* adopted.collected(left <= 0 ? Effect.succeed(timedOut) : collecting);
+    return yield* adopted.collected(left <= 0 || expired ? Effect.succeed(timedOut) : collecting);
   }).pipe(Effect.scoped);
 
 /** The named numbers of a command's last stdout line, where it is one JSON object. */

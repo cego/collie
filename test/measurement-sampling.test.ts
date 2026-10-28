@@ -51,6 +51,7 @@ const project = Effect.gen(function* () {
     "bench/toggles.sh",
     'if [ "$(cat value)" = 100 ]; then git checkout -q -- value; else echo 100 > value; fi\necho \'{"counter": 1}\'\n',
   );
+  yield* write("bench/marks.sh", 'sleep 0.6; echo late > "$1"\n');
   yield* write("bench/holds.sh", 'echo $$ > "$1"; while :; do sleep 0.1; done\n');
   const harness = yield* commit("harness");
   yield* write("value", "7\n");
@@ -229,6 +230,33 @@ test(
           stage: "sample",
           command: "bench",
         });
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a benchmark still being recorded is ended at its time limit, so it does nothing after",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { root, repo, base, harness } = yield* project;
+        const plain = yield* CheckProcesses;
+        const marker = `${root}/late`;
+        const measured = yield* measuring(root, {
+          base,
+          cwd: repo,
+          plan: planOf(harness, sh("marks.sh", marker), { limit: 0.3 }),
+        }).pipe(
+          Effect.provideService(CheckProcesses, {
+            ...plain,
+            adopt: (check, spawn, say) =>
+              plain.adopt(check, spawn, say).pipe(Effect.tap(() => Effect.sleep("900 millis"))),
+          }),
+        );
+        expect(resultOf(measured)).toMatchObject({ _tag: "TimedOut", tree: "base" });
+        expect(yield* fs.exists(marker)).toBe(false);
       }),
     ),
   30_000,

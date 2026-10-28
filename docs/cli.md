@@ -1747,7 +1747,8 @@ its record keeps as `plan_reason`. A key left out takes its default.
 - **`warmup`** samples per side are recorded and never judged, and **`samples`** per side
   (at least 2) are.
 - **`limit`**: seconds one sample, all its commands together, or one tree's prepare may take,
-  the host's time to record and start each command included.
+  the host's time to record and start each command included. A command still running at
+  the limit is ended then, even while the host is still recording it.
 - **`threshold`** and **`tolerance`**: percents, as in [Outcomes](#outcomes).
 
 The host then samples alternately, A B B A …, base first, after the warmup. With each sample
