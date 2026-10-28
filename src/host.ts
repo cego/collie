@@ -587,7 +587,6 @@ const handlers = (
   HostRpcs.toLayer(
     Effect.gen(function* () {
       const registry = yield* Registry;
-      const { boards } = yield* SharedBoard;
       const bun = yield* Effect.context<BunServices>();
       const pid = yield* currentPid;
       const recordingLinks = yield* Semaphore.make(1);
@@ -782,7 +781,9 @@ const handlers = (
                 {
                   env,
                   runs: all.map((one) => factsOfView(env.stateDir, one)),
-                  alive: yield* aliveOnBoard(boards),
+                  // One command reads once, and says what herdr lists now.
+                  alive: (yield* liveHerds(new Herdr(env), env).pipe(Effect.flatMap(agentsIn)))
+                    .alive,
                   offers: (id) =>
                     registry.offers(id).pipe(
                       Effect.provideContext(hosted),

@@ -1655,7 +1655,8 @@ its time.
   herdr's agents and panes, though neither moves an agent. A build now reads them again only
   after herdr's own event or the board's 5 s tick (`herdrMoved` in `src/host.ts`), and a Run's
   drawer takes its agents from the board built after the change it follows, rather than
-  reading herdr itself. The event watch opens its socket before it lists the agents it
+  reading herdr itself. `run show` still reads herdr: one command is one read, and the board
+  can be up to a tick behind on an agent herdr has dropped. The event watch opens its socket before it lists the agents it
   subscribes to, so a session it cannot watch is not listed every 5 s for nothing.
 - **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
   needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
