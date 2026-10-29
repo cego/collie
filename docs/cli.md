@@ -893,6 +893,8 @@ waking it could only redo answered Steps or give back a claim. It stays stopped,
 the refusal says so in every front door. A stopped Run whose merge request is open, closed
 unmerged or absent resumes as before.
 Repeating the same request returns its recorded result; a fresh request judges the Run again.
+A stop, hold or resume the host has taken finishes even when its caller stops waiting, and
+the same request asked while it runs gets that one result.
 Delivery reconciliation remains explicit: `not-sent` permits one resend, while `sent` waits
 for Output. An unresolved delivery stays uncertain.
 

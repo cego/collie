@@ -117,6 +117,8 @@ here are in [`src/README.md`](src/README.md).
   [`docs/sdk.md`](docs/sdk.md#having-an-agent-do-the-work), `src/agents.ts`, `test/agents.test.ts`.
 - **Controls** (decision, hold, stop) → [ADR-0021](docs/adr/0021-one-host-answers-for-a-run.md),
   [`docs/cli.md`](docs/cli.md#answering-holding-and-steering-one), `src/lifecycle.ts`, `test/control.test.ts`;
+  a control outliving its caller: [ADR-draft-an-admitted-control-runs-to-its-end](docs/adr/draft-an-admitted-control-runs-to-its-end.md),
+  `auditedControl` in `src/host.ts`;
   stopping an agent: [ADR-0059](docs/adr/0059-a-stopped-agent-is-stopped-where-its-turn-runs.md),
   `stopAgent` in `src/compaction.ts`, `endAgent` in `src/agent-end.ts`, `src/processes.ts`,
   `test/codex-stop.test.ts`, `test/agent-end.test.ts`.
