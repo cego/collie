@@ -73,7 +73,7 @@ const claimLock = Effect.fn("claimLock")(function* (lock: string) {
 
 /** The one acquisition policy: recover stale claims and wait out brief live contention. */
 const acquireLock = Effect.fn("acquireLock")(function* (
-  lock: string,
+  claim: ReturnType<typeof claimLock>,
   claims: number | Duration.Duration,
 ) {
   const until = Duration.isDuration(claims)
@@ -82,7 +82,7 @@ const acquireLock = Effect.fn("acquireLock")(function* (
   const nextClaimInTime = Clock.currentTimeMillis.pipe(
     Effect.map((now) => now + LOCK_CLAIM_SPACING_MS < until),
   );
-  return yield* claimLock(lock).pipe(
+  return yield* claim.pipe(
     Effect.flatMap((claimed) =>
       claimed ? Effect.succeed(true) : Effect.fail(new LockContended()),
     ),
@@ -97,9 +97,10 @@ const acquireLock = Effect.fn("acquireLock")(function* (
 
 /**
  * Runs `effect` while this process holds `lock`, and hands the lock back whichever way it
- * leaves. `Effect.ensuring`, not try/finally: a typed failure unwinds past a generator's
- * finally without entering it, and the lock would outlive the caller. `contended` is what
- * the caller gets instead when the lock is somebody else's.
+ * leaves. `contended` is what the caller gets instead when the lock is somebody else's.
+ * Each claim is uninterruptible and records itself as held, and the release is attached
+ * before the first claim: an interruption between the two would leave the lock to a fiber
+ * that is gone. The wait between claims stays interruptible.
  */
 export const withLock = <A, E, R, A2, E2, R2>(
   lock: string,
@@ -108,9 +109,24 @@ export const withLock = <A, E, R, A2, E2, R2>(
   /** How many claims to make, or for how long, for a caller that can wait longer than a second. */
   claims: number | Duration.Duration = LOCK_CLAIM_RETRIES,
 ) =>
-  Effect.gen(function* () {
-    if (!(yield* acquireLock(lock, claims))) return yield* contended;
-    return yield* effect.pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+  Effect.suspend(() => {
+    let held = false;
+    const claim = claimLock(lock).pipe(
+      Effect.tap((claimed) =>
+        Effect.sync(() => {
+          held = claimed;
+        }),
+      ),
+      Effect.uninterruptible,
+    );
+    return acquireLock(claim, claims).pipe(
+      Effect.flatMap((claimed): Effect.Effect<A | A2, E | E2, R | R2> =>
+        claimed ? effect : contended,
+      ),
+      Effect.ensuring(
+        Effect.suspend(() => (held ? releaseOwnLock(lock).pipe(Effect.ignore) : Effect.void)),
+      ),
+    );
   });
 
 /**

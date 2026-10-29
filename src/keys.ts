@@ -2,7 +2,7 @@
 // falls back to when the renderer will not start. Everything else goes through OpenTUI,
 // which owns raw mode for as long as its renderer is alive.
 
-import { Effect } from "effect";
+import { Effect, Queue } from "effect";
 
 /** One chunk of stdin can carry several keypresses; split them apart. */
 export function tokenizeKeys(chunk: string): string[] {
@@ -36,9 +36,6 @@ export function tokenizeKeys(chunk: string): string[] {
 // unbuffered and unechoed. The stream would also compete with this reader for the same
 // fd. Output goes through Bun.write for the same reason — it is interleaved with the
 // escape sequences this file writes to move the cursor.
-//
-// One reader for the whole process: iterating process.stdin more than once
-// destroys the stream, and the picker asks for several things in a row.
 interface KeyboardInput {
   readonly isTTY?: boolean;
   setRawMode?(enabled: boolean): void;
@@ -48,50 +45,27 @@ interface KeyboardInput {
   off(event: "data", listener: (buffer: Buffer) => void): void;
 }
 
-export class Keyboard {
-  private queue: string[] = [];
-  private started = false;
-
-  constructor(private readonly input: KeyboardInput = process.stdin) {}
-
-  private readonly onData = (buffer: Buffer): void => {
-    for (const key of tokenizeKeys(buffer.toString("utf8"))) this.queue.push(key);
-  };
-
-  /** Raw mode and one data handler; everything else reads from the queue. */
-  start(): void {
-    if (this.started) return;
-    this.started = true;
-    this.input.setRawMode?.(true);
-    this.input.resume();
-    this.input.on("data", this.onData);
-  }
-
-  /** The next queued key, or null: for a loop that must also redraw on a timer. */
-  take(): string | null {
-    this.start();
-    return this.queue.shift() ?? null;
-  }
-
-  release(): void {
-    if (!this.started) return;
-    this.started = false;
-    this.input.off("data", this.onData);
-    this.input.setRawMode?.(false);
-    this.input.pause();
-    this.queue = [];
-  }
-
-  run<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
-    return effect.pipe(Effect.ensuring(Effect.sync(() => this.release())));
-  }
-}
-
-// Made when a key is first wanted: reading `process.stdin` sets the stream up, and most
-// commands never take a key.
-let made: Keyboard | undefined;
-const keyboard = () => (made ??= new Keyboard());
-
-export const startKeyboard = () => keyboard().start();
-export const takeKey = () => keyboard().take();
-export const releaseKeyboard = () => keyboard().release();
+/**
+ * The keys pressed while the scope is open, with raw mode on until it closes, however it
+ * closes. `process.stdin` is read only when a key is first wanted: reading it sets the
+ * stream up, and most commands never take a key.
+ */
+export const keyboard = (input: KeyboardInput = process.stdin) =>
+  Effect.acquireRelease(
+    Effect.gen(function* () {
+      const keys = yield* Queue.unbounded<string>();
+      const onData = (buffer: Buffer): void => {
+        for (const key of tokenizeKeys(buffer.toString("utf8"))) Queue.offerUnsafe(keys, key);
+      };
+      input.setRawMode?.(true);
+      input.resume();
+      input.on("data", onData);
+      return { keys, onData };
+    }),
+    ({ onData }) =>
+      Effect.sync(() => {
+        input.off("data", onData);
+        input.setRawMode?.(false);
+        input.pause();
+      }),
+  ).pipe(Effect.map(({ keys }): Queue.Dequeue<string> => keys));

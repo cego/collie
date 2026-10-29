@@ -14,6 +14,7 @@ import {
   FileSystem,
   Option,
   Path,
+  Queue,
   Schedule,
   Schema,
 } from "effect";
@@ -68,7 +69,7 @@ import {
   usageReadings,
 } from "./lifecycle";
 import type { UsageReading } from "./usage-model";
-import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
+import { keyboard } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle, shellQuote } from "./naming";
 import { listRuns, settled, type RunFacts } from "./runs";
@@ -978,20 +979,17 @@ const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, 
     process.stdout.write(`${text}\n`);
     return 0;
   }
-  startKeyboard();
-  process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
-  for (;;) {
-    const key = takeKey();
-    if (key === "q" || key === "\x03") {
-      releaseKeyboard();
-      return 0;
-    }
-    if (key === "o") {
-      releaseKeyboard();
-      return yield* boardFlow(herdr, env);
-    }
-    yield* Effect.sleep(TICK_MS);
-  }
+  const chosen = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const keys = yield* keyboard();
+      process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
+      for (;;) {
+        const key = yield* Queue.take(keys);
+        if (key === "q" || key === "\x03" || key === "o") return key;
+      }
+    }),
+  );
+  return chosen === "o" ? yield* boardFlow(herdr, env) : 0;
 });
 
 /** One Run's details from the host, as this session reads them. */
@@ -1579,7 +1577,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     process.stdout.write(`${once}\n`);
     return 0;
   }
-  startKeyboard();
+  const keys = yield* keyboard();
   let view = yield* boardOf(session, yield* scan(env, session.runsOf));
   const open = (mode: Mode) => openMode(herdr, env, mode);
   let note: string | null = why;
@@ -1604,7 +1602,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
       drawn = text;
     }
-    const key = takeKey();
+    const key = Option.getOrNull(yield* Queue.take(keys).pipe(Effect.timeoutOption(TICK_MS)));
     if (key !== null) {
       // While a run is asking, every key belongs to that question.
       if (waiting) {
@@ -1612,7 +1610,6 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
         asking = answered.asking;
         note = answered.note ?? note;
       } else if (key === "q" || key === "\x03") {
-        releaseKeyboard();
         return 0;
       } else {
         note = yield* act(session, env, view, key, open);
@@ -1625,9 +1622,8 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       view = yield* boardOf(session, yield* scan(env, session.runsOf));
       read = yield* Clock.currentTimeMillis;
     }
-    yield* Effect.sleep(TICK_MS);
   }
-});
+}, Effect.scoped);
 
 /**
  * A question nobody sees is a run that has silently stopped, so the board brings this
