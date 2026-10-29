@@ -32,6 +32,29 @@ test(
           expect(local).toContain("look-again");
           expect(local).toContain("### Flow");
 
+          const children: string[] = [];
+          for (const name of ["older", "newer"]) {
+            const child = yield* client.start({
+              project: world.project,
+              id: "hello",
+              parent: runId,
+              request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+              input: { name },
+            });
+            children.push(child.runId);
+            yield* until(
+              () => client.run({ runId: child.runId }),
+              (view) => view !== null && isSettled(view),
+            );
+          }
+          const withChildren = yield* toolNamed("collie_run")!.call(env, { run: runId });
+          expect(withChildren.indexOf(children[1]!)).toBeLessThan(
+            withChildren.indexOf(children[0]!),
+          );
+          expect(yield* client.read({ tool: "collie_run", input: { run: runId } })).toBe(
+            withChildren,
+          );
+
           const waiting = yield* hostedRun(world, "control freshness");
           for (const set of [true, false]) {
             yield* client.control({
@@ -50,7 +73,14 @@ test(
             "InvalidInput",
           );
         }),
-      ["offered.workflow.ts", "graded.workflow.ts", "proof.workflow.ts", "helper.ts", "notes.md"],
+      [
+        "offered.workflow.ts",
+        "graded.workflow.ts",
+        "hello.workflow.ts",
+        "proof.workflow.ts",
+        "helper.ts",
+        "notes.md",
+      ],
     ),
   120_000,
 );

@@ -274,7 +274,7 @@ import {
 } from "./peers-model";
 import { latest, readDispositions } from "./disposition";
 import { operationsOf, readLaunches, runAgents } from "./launches";
-import { factsOfView, settled, type RunFacts } from "./runs";
+import { factsOfView, newestFirst, settled, type RunFacts } from "./runs";
 import { Store } from "./store";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
 import {
@@ -2909,7 +2909,11 @@ const frontDoorHandlers = (
                 const runs = yield* Effect.cached(
                   registry
                     .views(null)
-                    .pipe(Effect.map((views) => views.map((view) => factsOfView(dir, view)))),
+                    .pipe(
+                      Effect.map((views) =>
+                        newestFirst(views.map((view) => factsOfView(dir, view))),
+                      ),
+                    ),
                 );
                 const offers = (id: string) =>
                   registry.offers(id).pipe(Effect.provideContext(hosted));
