@@ -122,19 +122,22 @@ export const tableEntries = (harness: string): ReadonlyArray<CatalogueEntry> => 
   );
 };
 
-/** The `models.<harness>` setting's models a harness did not list, after the ones it did. */
+/** Explicit additions expose hidden models and append models the harness did not list. */
 export const withAdded = (
   catalogue: HarnessCatalogue,
   added: ReadonlyArray<string>,
 ): HarnessCatalogue => {
   const listed = new Set(catalogue.entries.map((one) => one.model));
   const fresh = added.filter((model) => !listed.has(model));
-  if (fresh.length === 0) return catalogue;
   const efforts = HARNESS_MODELS[catalogue.harness]?.efforts ?? [];
   return {
     ...catalogue,
     entries: [
-      ...catalogue.entries,
+      ...catalogue.entries.map((one) =>
+        one.hidden && added.includes(one.model)
+          ? { ...one, hidden: false, from: "added" as const }
+          : one,
+      ),
       ...fresh.map((model) => entry(model, model, { efforts, from: "added" })),
     ],
   };

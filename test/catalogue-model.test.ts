@@ -9,6 +9,7 @@ import {
   codexEntries,
   opencodeEntries,
   piEntries,
+  withAdded,
 } from "../src/catalogue-model";
 import claudeModels from "./fixtures/catalogue/claude-supported-models.json";
 import codexModelList from "./fixtures/catalogue/codex-model-list.json";
@@ -16,6 +17,24 @@ import codexModelList from "./fixtures/catalogue/codex-model-list.json";
 const fixture = (name: string) => Bun.file(`${import.meta.dir}/fixtures/catalogue/${name}`).text();
 const piList = await fixture("pi-list-models.txt");
 const opencodeList = await fixture("opencode-models.txt");
+
+test("explicitly adding a hidden model exposes it without losing its reported capabilities", () => {
+  const catalogue = {
+    harness: "codex",
+    at: "2026-10-29T12:00:00Z",
+    table: null,
+    entries: codexEntries(Schema.decodeUnknownSync(CodexModelList)(codexModelList)),
+  };
+  const hidden = catalogue.entries.find(({ model }) => model === "gpt-reserve")!;
+  const added = withAdded(catalogue, ["gpt-reserve"]);
+  expect(added.entries.find(({ model }) => model === "gpt-reserve")).toEqual({
+    ...hidden,
+    hidden: false,
+    from: "added",
+  });
+  expect(added.entries).toHaveLength(catalogue.entries.length);
+  expect(catalogue.entries.find(({ model }) => model === "gpt-reserve")?.hidden).toBe(true);
+});
 
 describe("decoding each harness's own list", () => {
   test("Claude Code's supportedModels(), without its `default`", () => {

@@ -88,7 +88,7 @@ describe("what a Machine's catalogue holds", () => {
         expect(read.map((one) => one.harness)).toEqual(["claude", "codex", "pi"]);
         const codex = read.find((one) => one.harness === "codex")?.entries ?? [];
         expect(codex.filter((entry) => entry.model === "gpt-reserve")).toMatchObject([
-          { hidden: true, from: "harness" },
+          { hidden: false, from: "added" },
         ]);
         expect(codex.at(-1)).toMatchObject({ model: "gpt-internal", from: "added" });
       }),
