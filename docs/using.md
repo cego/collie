@@ -2767,8 +2767,17 @@ brings that workspace's Collie tab to the front — the behavior every install h
 it waits there until you go to it. Neither setting hides the question from the board or
 stops you answering it.
 
-`models` adds models the harness adapter table does not already accept. An unknown harness,
-model, effort or scope fails validation before a single tab opens. See
+Before an agent opens a pane, its model and effort are checked against its Machine's
+[Harness catalogue](cli.md#models). A refusal names the Machine, what was asked, and the
+models or efforts it reports. A successful reading replaces the built-in model patterns
+and effort levels. `models.<harness>` adds a model the Harness leaves out, with the table's
+effort levels. If the Harness cannot be read, Collie uses its table and configured
+additions; a refusal says "from Collie's table" and why. An uninstalled Harness is refused.
+
+A pinned default is checked as its pinned model; other defaults stay with the Harness.
+With a native default, name a model before asking for an effort, so its levels can be
+checked. These checks also apply to fallback candidates and the Flock chat on this
+computer. See
 [Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
 [Permissions](#permissions-auto-by-default) for what `permissions` decides.
 

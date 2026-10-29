@@ -115,6 +115,7 @@ import {
   unsafePathComponent,
 } from "./naming";
 import { machineName } from "./peers";
+import type { MachineCatalogue } from "./harness-choice";
 import { askRouteTo } from "./handoff";
 import { nowIso } from "./time";
 import { noteContext } from "./metrics";
@@ -1287,6 +1288,7 @@ export interface AgentHost {
   readonly effort?: string;
   /** Models the operator added per harness, beside the ones each adapter knows. */
   readonly models?: Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly catalogue?: Effect.Effect<MachineCatalogue>;
   /** This Machine's Usage readings; none where left out. */
   readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
   /** A running agent's own reading, where its harness serves one; none where left out. */
@@ -1875,6 +1877,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       config: configFile,
       extension,
       settings,
+      effort: ask.effort,
     });
     return yield* withControlLock(
       host.env.stateDir,
@@ -2881,6 +2884,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
             },
             host.models,
+            host.catalogue === undefined ? undefined : yield* host.catalogue,
           );
           if (!resolved.ok) return yield* new WorkflowError({ reason: resolved.problem });
           const { choice, from, why, skipped } = resolved.chosen;
@@ -3256,6 +3260,7 @@ const append = (path: string, line: string) =>
 export const configuredAgents = Effect.fn("Agents.configured")(function* (
   dir: string,
   readings: Effect.Effect<ReadonlyArray<UsageReading>>,
+  catalogue?: Effect.Effect<MachineCatalogue>,
 ) {
   const env = yield* currentEnv.pipe(
     Effect.map((env) => ({ ...env, stateDir: dir })),
@@ -3277,6 +3282,7 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (
     trust: defaults.trust,
     compactAtTokens: defaults.compactAtTokens,
     readings,
+    catalogue,
     ownReading: (agent) =>
       ownCodexReading(env.stateDir, agent).pipe(Effect.provideContext(services)),
   });

@@ -88,6 +88,7 @@ import {
 import { FALLBACK_DEFAULTS, configValue, gitlabHostOf, loadDefaults, readConfig } from "./config";
 import { unlistedServers } from "./compaction";
 import { foldPreferences, preferencesFromOptions, resolveChoice } from "./harness";
+import type { MachineCatalogue } from "./harness-choice";
 import { handoffsDir } from "./handoffs";
 import { encodeSubagents, readSubagents } from "./subagents";
 import type { UsageReading } from "./usage-model";
@@ -5756,6 +5757,7 @@ export type Locate = (options: {
 export class Registry extends Context.Service<Registry, RegistryApi>()("collie/Registry") {}
 
 export interface RegistryOptions {
+  readonly catalogue?: Effect.Effect<MachineCatalogue>;
   readonly crashAt?: CrashPoint;
   readonly locate?: Locate;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
@@ -5831,6 +5833,7 @@ const makeRegistry: (
   const crashAt = options?.crashAt;
   const locate = options?.locate;
   const userDir = options?.userDir ?? dir;
+  const catalogue = options?.catalogue;
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const fs = yield* FileSystem.FileSystem;
   const store = yield* Store;
@@ -6107,7 +6110,11 @@ const makeRegistry: (
       effort: defaults.effort,
       claudeSubagents: policy,
     };
-    const resolved = resolveChoice([configured, generation.agents, asked], defaults.models);
+    const resolved = resolveChoice(
+      [configured, generation.agents, asked],
+      defaults.models,
+      catalogue === undefined ? undefined : yield* catalogue,
+    );
     if (!resolved.ok) return yield* refusedInput(resolved.problem);
   });
 

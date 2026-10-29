@@ -805,7 +805,7 @@ test("Desktop's settings are saved through the check in one place and told to ev
 const HAIKU = "claude-haiku-4-5-20251001";
 const OFFERS: Offers = {
   claude: {
-    from: "table",
+    from: "harness",
     unset: { harness: "claude", model: "opus", effort: "medium" },
     models: [
       {
@@ -833,7 +833,9 @@ test("an effort the chosen model does not list is refused, and any effort on a m
       { chatEffort: "max" },
       OFFERS,
     ),
-  ).toEqual({ refused: '"max" is not an effort Sonnet 5.5 takes (low, medium, high)' });
+  ).toEqual({
+    refused: '"max" is not an effort this computer\'s claude/sonnet takes (low, medium, high)',
+  });
   expect(
     changeSettings(
       { proactive: true },
@@ -841,7 +843,9 @@ test("an effort the chosen model does not list is refused, and any effort on a m
       { chatModel: "sonnet", chatEffort: "xhigh" },
       OFFERS,
     ),
-  ).toEqual({ refused: '"xhigh" is not an effort Sonnet 5.5 takes (low, medium, high)' });
+  ).toEqual({
+    refused: '"xhigh" is not an effort this computer\'s claude/sonnet takes (low, medium, high)',
+  });
   expect(
     changeSettings(
       { proactive: true, chatModel: HAIKU },
@@ -849,7 +853,10 @@ test("an effort the chosen model does not list is refused, and any effort on a m
       { chatEffort: "low" },
       OFFERS,
     ),
-  ).toEqual({ refused: 'Haiku 4.5 takes no effort, so "low" cannot be asked of it' });
+  ).toEqual({
+    refused:
+      '"low" is not an effort this computer\'s claude/claude-haiku-4-5-20251001 takes (none)',
+  });
   expect(
     changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatEffort: "max" }, OFFERS),
   ).toEqual({
@@ -895,34 +902,36 @@ test("another model keeps the effort only when it lists it, and unsetting the mo
   });
 });
 
-test("a typed model that is not offered is checked as before, takes the table's efforts, and today's refusals keep their words", () => {
+test("a failed reading checks typed models against the table and names the fallback source", () => {
+  const offers: Offers = { claude: { ...OFFERS.claude!, from: "table", why: "Login expired" } };
   expect(
     changeSettings(
       { proactive: true },
       NO_FLOCK_SETTINGS,
       { chatModel: "claude-opus-5", chatEffort: "xhigh" },
-      OFFERS,
+      offers,
     ),
   ).toEqual({ proactive: true, chatModel: "claude-opus-5", chatEffort: "xhigh" });
   expect(
-    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatModel: "gpt-6.1-sol" }, OFFERS),
+    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatModel: "gpt-6.1-sol" }, offers),
   ).toEqual({
-    refused: expect.stringContaining('"gpt-6.1-sol" is not a model claude takes'),
+    refused: expect.stringContaining('this computer\'s claude has no model "gpt-6.1-sol"'),
   });
   expect(
     changeSettings(
       { proactive: true, chatHarness: "pi" },
       NO_FLOCK_SETTINGS,
       { chatModel: "gpt-6.1-sol" },
-      OFFERS,
+      offers,
     ),
   ).toEqual({
     refused: expect.stringContaining("Write provider/model, for example openai-codex/gpt-6.1-sol."),
   });
   expect(
-    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatEffort: "off" }, OFFERS),
+    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatEffort: "off" }, offers),
   ).toEqual({
-    refused: '"off" is not an effort claude takes (low, medium, high, xhigh, max)',
+    refused:
+      "\"off\" is not an effort this computer's claude/opus takes (low, medium, high, xhigh, max); from Collie's table: Login expired",
   });
 });
 
@@ -945,7 +954,10 @@ test("the default model id checks effort against the model it resolves to", () =
       { chatEffort: "high" },
       offers,
     ),
-  ).toEqual({ refused: 'Haiku 4.5 takes no effort, so "high" cannot be asked of it' });
+  ).toEqual({
+    refused:
+      '"high" is not an effort this computer\'s claude/claude-haiku-4-5-20251001 takes (none)',
+  });
 });
 
 test("a change saved through Desktop's settings is checked against the models offered then", () =>
@@ -959,7 +971,9 @@ test("a change saved through Desktop's settings is checked against the models of
         () => Effect.succeed(OFFERS),
       );
       const refused = yield* Effect.flip(held.save({ chatModel: HAIKU, chatEffort: "high" }));
-      expect(refused.reason).toBe('Haiku 4.5 takes no effort, so "high" cannot be asked of it');
+      expect(refused.reason).toBe(
+        '"high" is not an effort this computer\'s claude/claude-haiku-4-5-20251001 takes (none)',
+      );
       yield* held.save({ chatModel: "opus", chatEffort: "max" });
       expect(yield* held.save({ chatModel: "sonnet" })).toEqual({ chatModel: "sonnet" });
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),

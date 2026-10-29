@@ -3219,6 +3219,10 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     // One reader of this Machine's usage, so every door and every choice of agent paces as one.
     const usage = yield* Usage;
     const harnesses = yield* HarnessCatalogues;
+    const catalogue = Effect.map(harnesses.catalogues, (harnesses) => ({
+      machine: machineName(),
+      harnesses,
+    }));
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
     const stamp = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
@@ -3270,6 +3274,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
                 schedulesLayer({ dir, env: { ...env, stateDir: dir }, installation, seconds }).pipe(
                   Layer.provideMerge(
                     registryLayer(dir, {
+                      catalogue,
                       locate: locateIn(env),
                       userDir: env.userDir,
                       crashAt,
@@ -3298,12 +3303,12 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
             messagePoll: seconds ? "1 second" : undefined,
           }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
         ),
-        Layer.provide(yield* configuredAgents(dir, usage.readings)),
+        Layer.provide(yield* configuredAgents(dir, usage.readings, catalogue)),
         Layer.provide(forgeHttpLayer),
         Layer.tap(() => Effect.forkScoped(onceAnswering)),
       ),
     );
-  }).pipe(Effect.provide([usageLayer, catalogueLayer]), Effect.orDie);
+  }).pipe(Effect.provide([usageLayer, catalogueLayer(dir)]), Effect.orDie);
 
 /**
  * A client of the host that owns `dir`, starting one if nothing is there. Every client

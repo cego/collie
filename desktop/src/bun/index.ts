@@ -68,7 +68,7 @@ import { loopbackTools } from "./chat-endpoint";
 import { piDriver } from "./pi-driver";
 import { CHILD_CWD, childEnv, localShell, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
-import { carryIntoFlock, chatChoice, heldSettings, type Offers } from "./settings";
+import { carryIntoFlock, heldSettings, type Offers } from "./settings";
 import { offerOf, offersOf, opensOn, readPiConfig, retelling } from "./chat-choices";
 import { harnessLists, listedIn } from "./harness-lists";
 import type { ListedModel } from "./claude-models";
@@ -264,11 +264,8 @@ const main = Effect.gen(function* () {
     Effect.suspend(() => {
       const local = [...doors.values()].find((door) => door.machine.profile === "local");
       if (local === undefined) return own;
-      const flock = SubscriptionRef.getUnsafe(flockSettings);
-      const chats = (model: string) =>
-        chatChoice({ proactive: true, chatHarness: harness, chatModel: model }, flock).ok;
       return local.desktop.models().pipe(
-        Effect.map((catalogues) => listedIn(catalogues, harness, chats)),
+        Effect.map((catalogues) => listedIn(catalogues, harness)),
         Effect.catchCause(() => Effect.succeed(null)),
         Effect.flatMap((read) =>
           read === null

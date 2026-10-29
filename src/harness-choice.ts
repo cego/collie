@@ -1,6 +1,7 @@
 // Harness, model and effort choices shared by the host and Desktop, without host IO.
 
 import { Effect } from "effect";
+import type { CatalogueEntry } from "./catalogue-model";
 import { decodeSubagents, readSubagents, type ClaudeSubagents } from "./subagents";
 
 /**
@@ -21,7 +22,7 @@ interface ModelCatalogue {
   readonly [name: string]: HarnessModels;
 }
 
-/** The one model catalogue every choice is checked against. */
+/** The fallback when a harness's own catalogue cannot be read. */
 export const HARNESS_MODELS: ModelCatalogue = {
   claude: {
     defaultModel: "opus",
@@ -123,6 +124,15 @@ export interface AgentChoice {
   readonly claudeSubagents?: ClaudeSubagents;
 }
 
+export interface MachineCatalogue {
+  readonly machine: string;
+  readonly harnesses: ReadonlyArray<{
+    readonly harness: string;
+    readonly table: string | null;
+    readonly entries: ReadonlyArray<Pick<CatalogueEntry, "model" | "efforts">>;
+  }>;
+}
+
 /**
  * Layers of preferences as one, lowest first. A layer that switches harness keeps nothing
  * chosen below it: a model and an effort are for the harness they were chosen with.
@@ -167,6 +177,7 @@ export function foldPreferences(
 export function resolveChoice(
   layers: ReadonlyArray<Preferences | undefined>,
   extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
+  catalogue?: MachineCatalogue,
 ):
   | { readonly ok: true; readonly choice: AgentChoice }
   | { readonly ok: false; readonly problem: string } {
@@ -176,22 +187,51 @@ export function resolveChoice(
     return { ok: false, problem: `no harness called "${harness}" (${harnessNames().join(", ")})` };
   }
   const extra = extraModels[harness] ?? [];
-  if (!knownModel(adapter, model, extra)) {
+  const reported = catalogue?.harnesses.find((one) => one.harness === harness);
+  if (catalogue !== undefined && reported === undefined)
+    return { ok: false, problem: `${catalogue.machine} has no ${harness} installed` };
+  const selected = model === DEFAULT_MODEL ? adapter.defaultModel : model;
+  const lists = reported !== undefined && reported.table === null;
+  const known = (id: string) =>
+    lists
+      ? reported.entries.some((entry) => entry.model === id) || extra.includes(id)
+      : knownModel(adapter, id, extra);
+  const source = reported?.table == null ? "" : `; from Collie's table: ${reported.table}`;
+  if (selected !== undefined && !known(selected)) {
     return {
       ok: false,
-      problem: `"${model}" is not a model ${harness} takes (${modelHint(adapter, extra)}): name one of those, or the harness it belongs to`,
+      problem:
+        catalogue === undefined
+          ? `"${model}" is not a model ${harness} takes (${modelHint(adapter, extra)}): name one of those, or the harness it belongs to`
+          : `${catalogue.machine}'s ${harness} has no model "${selected}" (${
+              lists
+                ? reported.entries
+                    .map((entry) => entry.model)
+                    .concat(extra)
+                    .join(", ")
+                : modelHint(adapter, extra)
+            })${source}`,
     };
   }
-  if (effort !== undefined && adapter.efforts === undefined) {
+  const efforts = lists
+    ? (reported.entries.find((entry) => entry.model === selected)?.efforts ??
+      (extra.includes(selected ?? "") ? adapter.efforts : []))
+    : adapter.efforts;
+  if (effort !== undefined && catalogue !== undefined && !efforts?.includes(effort))
+    return {
+      ok: false,
+      problem: `"${effort}" is not an effort ${catalogue.machine}'s ${harness}/${selected ?? DEFAULT_MODEL} takes (${efforts?.join(", ") || "none"})${source}`,
+    };
+  if (effort !== undefined && efforts === undefined) {
     return {
       ok: false,
       problem: `${harness} takes no effort, so "${effort}" cannot be asked of it`,
     };
   }
-  if (effort !== undefined && !adapter.efforts?.includes(effort)) {
+  if (effort !== undefined && !efforts?.includes(effort)) {
     return {
       ok: false,
-      problem: `"${effort}" is not an effort ${harness} takes (${adapter.efforts?.join(", ")})`,
+      problem: `"${effort}" is not an effort ${harness} takes (${efforts?.join(", ")})`,
     };
   }
   if (harness === "claude" && claudeSubagents !== undefined) {
@@ -203,7 +243,14 @@ export function resolveChoice(
     }
     if (claudeSubagents.forceModel === true && claudeSubagents.model === undefined)
       return { ok: false, problem: "claudeSubagents.forceModel requires a model" };
-    if (claudeSubagents.model !== undefined && !knownModel(adapter, claudeSubagents.model, extra))
+    if (
+      claudeSubagents.model !== undefined &&
+      !known(
+        claudeSubagents.model === DEFAULT_MODEL
+          ? (adapter.defaultModel ?? DEFAULT_MODEL)
+          : claudeSubagents.model,
+      )
+    )
       return {
         ok: false,
         problem: `claudeSubagents.model: ${claudeSubagents.model} is not a Claude model`,
@@ -280,10 +327,11 @@ export function resolveWithRoom(
   chain: ReadonlyArray<string>,
   room: Room,
   extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
+  catalogue?: MachineCatalogue,
 ):
   | { readonly ok: true; readonly chosen: Chosen }
   | { readonly ok: false; readonly problem: string } {
-  const primary = resolveChoice(layers, extraModels);
+  const primary = resolveChoice(layers, extraModels, catalogue);
   if (!primary.ok) return primary;
   const folded = primary.choice;
   const ceiling = foldCeiling(layers);
@@ -297,15 +345,22 @@ export function resolveWithRoom(
     { choice: folded, upTo: ceiling.upTo },
   ];
   for (const [at, entry] of (ceiling.otherwise ?? []).entries()) {
-    const next = resolveChoice([base, preferencesIn(entry)], extraModels);
+    const next = resolveChoice([base, preferencesIn(entry)], extraModels, catalogue);
     if (!next.ok) return { ok: false, problem: `otherwise entry ${at + 1}: ${next.problem}` };
     candidates.push({ choice: next.choice, upTo: entry.upTo });
   }
   const skipped: string[] = [];
   for (const text of chain) {
     const entry = chainEntry(text);
-    const takes =
-      HARNESS_MODELS[entry.harness ?? ""]?.efforts?.includes(folded.effort ?? "") ?? false;
+    const harness = entry.harness ?? "";
+    const adapter = HARNESS_MODELS[harness];
+    const reported = catalogue?.harnesses.find((one) => one.harness === harness);
+    const model = entry.model ?? adapter?.defaultModel;
+    const efforts =
+      reported?.table === null
+        ? reported.entries.find((one) => one.model === model)?.efforts
+        : adapter?.efforts;
+    const takes = efforts?.includes(folded.effort ?? "") ?? false;
     const next = resolveChoice(
       [
         entry,
@@ -315,6 +370,7 @@ export function resolveWithRoom(
         takes && folded.effort !== null ? { effort: folded.effort } : undefined,
       ],
       extraModels,
+      catalogue,
     );
     if (next.ok) candidates.push({ choice: next.choice });
     else skipped.push(`fallback ${text} skipped: ${next.problem}`);

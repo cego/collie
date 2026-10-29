@@ -49,7 +49,7 @@ test("model checks accept the alias list, the harness pattern and user extras", 
     expect(knownModel(HARNESSES.codex!, model)).toBe(false);
 });
 
-test("effort is a flag only where the harness has one", () => {
+test("effort flags follow the harness's launch interface", () => {
   expect(startArgs(HARNESSES.claude!, "opus", "/p/reviewer.md", "xhigh", "harness")).toEqual([
     "--model",
     "opus",
@@ -59,12 +59,22 @@ test("effort is a flag only where the harness has one", () => {
     "/p/reviewer.md",
   ]);
 
-  // codex and opencode have none, so asking for one is a validation error, not a flag.
   expect("effortArgs" in HARNESSES.codex!).toBe(false);
   expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/reviewer.md", "xhigh", "harness")).toEqual([
     "-m",
     "gpt-5",
   ]);
+});
+
+test("Codex's accepted effort reaches both its App Server and TUI configuration", () => {
+  const wired = HARNESSES.codex!.mcp({
+    command: ["/bin/collie"],
+    env: {},
+    config: "/mcp.json",
+    extension: "/tools.ts",
+    effort: "high",
+  });
+  expect(wired.args).toEqual(expect.arrayContaining(["-c", 'model_reasoning_effort="high"']));
 });
 
 test("`default` pins Claude to Opus while other harnesses keep their native default", () => {

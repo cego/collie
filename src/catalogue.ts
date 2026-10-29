@@ -308,18 +308,19 @@ export const liveAdapters = (cwd: string) =>
   );
 
 /** This Machine's one reader of its harnesses, on the environment this process runs in. */
-export const catalogueLayer = Layer.effect(
-  HarnessCatalogues,
-  Effect.gen(function* () {
-    const env = yield* currentEnv.pipe(Effect.orDie);
-    const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
-    return yield* makeCatalogue(
-      sourcesOf(yield* liveAdapters(env.stateDir)),
-      loadDefaults(env.userDir).pipe(
-        Effect.map((defaults) => defaults.models),
-        Effect.orElseSucceed(() => ({})),
-        Effect.provideContext(files),
-      ),
-    );
-  }),
-);
+export const catalogueLayer = (cwd: string) =>
+  Layer.effect(
+    HarnessCatalogues,
+    Effect.gen(function* () {
+      const env = yield* currentEnv.pipe(Effect.orDie);
+      const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+      return yield* makeCatalogue(
+        sourcesOf(yield* liveAdapters(cwd)),
+        loadDefaults(env.userDir).pipe(
+          Effect.map((defaults) => defaults.models),
+          Effect.orElseSucceed(() => ({})),
+          Effect.provideContext(files),
+        ),
+      );
+    }),
+  );

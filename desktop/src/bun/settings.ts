@@ -141,8 +141,27 @@ export const chatChoice = (
       problem: `the Flock chat has no harness called "${harness}" (${CHAT_HARNESSES.join(", ")})`,
     };
   const resolved = resolveChoice(
-    [{ harness, model: settings.chatModel, effort: settings.chatEffort }],
+    [
+      {
+        harness,
+        model:
+          settings.chatModel === undefined || settings.chatModel === DEFAULT_MODEL
+            ? offers[harness]?.unset.model
+            : settings.chatModel,
+        effort: settings.chatEffort,
+      },
+    ],
     extraModels(flock),
+    offers[harness] === undefined
+      ? undefined
+      : {
+          machine: "this computer",
+          harnesses: Object.entries(offers).map(([harness, offer]) => ({
+            harness,
+            table: offer.from === "harness" ? null : (offer.why ?? "the harness has not been read"),
+            entries: offer.models.map(({ id, efforts }) => ({ model: id, efforts })),
+          })),
+        },
   );
   if (
     !resolved.ok &&
@@ -154,20 +173,7 @@ export const chatChoice = (
       ok: false as const,
       problem: `${resolved.problem}. Write provider/model, for example openai-codex/gpt-6.1-sol.`,
     };
-  if (!resolved.ok || settings.chatEffort === undefined) return resolved;
-  const { label, efforts } = modelOf(settings, offers);
-  const effort = settings.chatEffort;
-  if (efforts.length === 0)
-    return {
-      ok: false as const,
-      problem: `${label} takes no effort, so "${effort}" cannot be asked of it`,
-    };
-  return efforts.includes(effort)
-    ? resolved
-    : {
-        ok: false as const,
-        problem: `"${effort}" is not an effort ${label} takes (${efforts.join(", ")})`,
-      };
+  return resolved;
 };
 
 /**

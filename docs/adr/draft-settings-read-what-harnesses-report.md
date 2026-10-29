@@ -54,6 +54,22 @@ and marked as added.
 Machine, the Flock chat's Claude and Pi lists come from that Machine's host. Where it has
 none, or its host is older than the operation, Desktop's own readers stay.
 
+**D6. A choice is checked against the Machine that will run it.** Admission checks a
+Run's explicit choice, and each new agent choice is checked before a pane opens. A
+successful reading supplies the models and each model's efforts; the table's patterns do
+not extend it. `models.<harness>` remains an explicit addition. A refusal names the
+Machine, the requested model or effort, and what that Machine reports. Where the reading
+failed, the existing table check and configured additions apply, and the refusal gives
+the fallback reason. An absent Harness is refused as not installed.
+
+The same check applies to each fallback candidate. The Flock chat checks this computer's
+catalogue before opening its session, including a saved choice made before the reading
+arrived. A pinned default is checked as its pinned model. A native default stays with the
+Harness; an explicit effort requires a named model whose catalogue lists that effort.
+Codex receives an accepted effort as
+[`model_reasoning_effort`](https://learn.chatgpt.com/docs/config-file/config-reference)
+in both its App Server and TUI configuration.
+
 ## Consequences
 
 - A new model shows up without a Collie release, at most 30 minutes after the Harness on
@@ -62,6 +78,7 @@ none, or its host is older than the operation, Desktop's own readers stay.
   Collie's table, which is coarser than Desktop's own Pi reader.
 - A Harness's list follows its login. A Machine logged in to another account can offer
   other models, and each Machine's catalogue says what that Machine itself can run.
-- Checking a Run's model and effort against its Machine's catalogue before the agent starts
-  builds on this catalogue, and so does showing on how many Machines a model is offered.
-  Neither is decided here.
+- A model that only the table knows stops being accepted after a successful reading omits
+  it. Add it to `models.<harness>` if the Harness can run it despite leaving it out.
+- Showing on how many Machines a model is offered builds on this catalogue and is not
+  decided here.
