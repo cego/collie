@@ -14098,7 +14098,8 @@ const improving: HostOverride = Layer.effect(Host)(
           };
         }),
       issues: (_, numbers) => {
-        if (forgeUnavailable) return Effect.fail(new WorkflowError({ reason: "no forge login on this Machine" }));
+        if (forgeUnavailable)
+          return Effect.fail(new WorkflowError({ reason: "no forge login on this Machine" }));
         if (unlisted && filed.length > 0)
           return Effect.fail(new WorkflowError({ reason: "the forge did not answer" }));
         const filedIssues = filed.map(({ title, body }, at) => ({
@@ -14183,23 +14184,29 @@ const triaged = (
 
 scenario(
   "self-improve without its forge keeps the retrospective and files or starts nothing",
-  () => runEffect(Effect.gen(function* () {
-    freshDay();
-    forgeUnavailable = true;
-    yield* rig.queueOutputs([triaged([finding({ key: "lost-docs" })], [
-      { name: "repair-docs", keys: ["lost-docs"], why: "one missing guide" },
-    ])]);
-    const result = yield* improved("r-no-forge", { runs: "checkout", improvements: 2 });
-    expect(saidBy(result)).toContain("no issues filed: no forge login on this Machine");
-    const summary = yield* readText(`${runDir(dir, "r-no-forge")}/summary.md`);
-    expect(summary).toContain("Project lost-docs");
-    expect(summary).toContain("What the Runs did: lost-docs.");
-    expect(summary).toContain("runs/r-a/audit.jsonl");
-    expect(summary).toContain("no forge login on this Machine");
-    expect(filed).toEqual([]);
-    expect(commented).toEqual([]);
-    expect(started).toEqual([]);
-  })),
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        forgeUnavailable = true;
+        yield* rig.queueOutputs([
+          triaged(
+            [finding({ key: "lost-docs" })],
+            [{ name: "repair-docs", keys: ["lost-docs"], why: "one missing guide" }],
+          ),
+        ]);
+        const result = yield* improved("r-no-forge", { runs: "checkout", improvements: 2 });
+        expect(saidBy(result)).toContain("no issues filed: no forge login on this Machine");
+        const summary = yield* readText(`${runDir(dir, "r-no-forge")}/summary.md`);
+        expect(summary).toContain("Project lost-docs");
+        expect(summary).toContain("What the Runs did: lost-docs.");
+        expect(summary).toContain("runs/r-a/audit.jsonl");
+        expect(summary).toContain("no forge login on this Machine");
+        expect(filed).toEqual([]);
+        expect(commented).toEqual([]);
+        expect(started).toEqual([]);
+      }),
+    ),
   120_000,
 );
 

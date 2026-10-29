@@ -309,7 +309,9 @@ const main = Effect.gen(function* () {
   // Before Desktop's own settings are held, so a save does not write back what was carried.
   const loadedFlock = yield* carryIntoFlock(own, yield* nowIso()).pipe(Effect.result);
   const flockReadable = Result.isSuccess(loadedFlock);
-  const unreadableFlock = new ActionFailed({ reason: "Not set: the Flock's settings could not be read" });
+  const unreadableFlock = new ActionFailed({
+    reason: "Not set: the Flock's settings could not be read",
+  });
   const saved = Result.isSuccess(loadedFlock) ? loadedFlock.success : NO_FLOCK_SETTINGS;
   const desktop = yield* heldSettings(
     own,
@@ -531,7 +533,7 @@ const main = Effect.gen(function* () {
   });
   const syncOn = (machine: ReturnType<typeof settingsOf>) =>
     flockReadable ? settingsSync.syncOn(machine) : Effect.succeed(unreadableFlock.reason);
-  const syncEvery = () => flockReadable ? settingsSync.syncEvery() : Effect.void;
+  const syncEvery = () => (flockReadable ? settingsSync.syncEvery() : Effect.void);
   const definitions = yield* definitionsSync({
     flock: flockDefinitions,
     machines: () => [...doors.values()].map(settingsOf),
@@ -979,15 +981,20 @@ const main = Effect.gen(function* () {
       }),
     credentials: () => SubscriptionRef.changes(credentials),
     flockSettings: () =>
-      !flockReadable ? Stream.fail(unreadableFlock) : Stream.unwrap(
-        syncEvery().pipe(
-          Effect.andThen(
-            Effect.forEach(doors.values(), readOwn, { concurrency: "unbounded", discard: true }),
+      !flockReadable
+        ? Stream.fail(unreadableFlock)
+        : Stream.unwrap(
+            syncEvery().pipe(
+              Effect.andThen(
+                Effect.forEach(doors.values(), readOwn, {
+                  concurrency: "unbounded",
+                  discard: true,
+                }),
+              ),
+              Effect.forkIn(scope),
+              Effect.as(SubscriptionRef.changes(flockSettings)),
+            ),
           ),
-          Effect.forkIn(scope),
-          Effect.as(SubscriptionRef.changes(flockSettings)),
-        ),
-      ),
     setFlockSetting: ({ key, value }) =>
       editFlock(key, value).pipe(
         Effect.map((edited) => {

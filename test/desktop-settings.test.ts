@@ -55,9 +55,14 @@ test("unreadable Flock settings refuse reads, carry-over and writes without repl
         yield* writeSettings(dir, { machineRule: "Keep this rule", proactive: false });
         expect(Result.isFailure(yield* Effect.result(readFlockSettings(dir)))).toBe(true);
         expect(Result.isFailure(yield* Effect.result(carryIntoFlock(dir, at(12))))).toBe(true);
-        expect(Result.isFailure(yield* Effect.result(writeFlockSettings(dir, NO_FLOCK_SETTINGS)))).toBe(true);
+        expect(
+          Result.isFailure(yield* Effect.result(writeFlockSettings(dir, NO_FLOCK_SETTINGS))),
+        ).toBe(true);
         expect(yield* fs.readFileString(`${dir}/flock-settings.json`)).toBe(text);
-        expect(yield* readSettings(dir)).toEqual({ machineRule: "Keep this rule", proactive: false });
+        expect(yield* readSettings(dir)).toEqual({
+          machineRule: "Keep this rule",
+          proactive: false,
+        });
       }
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));
@@ -285,10 +290,12 @@ test("a save says how far it reached, from each Machine's latest sync", () => {
 
 test("a live Machine with no settings exchange is still waiting for the saved edit", () => {
   expect(flockReach(true, [{ name: "laptop", state: "live", settings: null }])).toEqual({
-    said: "Given to 0 of 1 · laptop gets it when it connects", tone: "warn",
+    said: "Given to 0 of 1 · laptop gets it when it connects",
+    tone: "warn",
   });
   expect(syncPill(true, [{ name: "laptop", state: "live", settings: null }])).toEqual({
-    said: "In sync with 0 of 1 · laptop behind", tone: "warn",
+    said: "In sync with 0 of 1 · laptop behind",
+    tone: "warn",
   });
 });
 
@@ -405,38 +412,68 @@ const syncerTelling = (
 type Machine = ReturnType<typeof machine>;
 
 test("saving one setting or an agent choice waits for a fresh exchange before acknowledging delivery", () =>
-  Effect.runPromise(Effect.gen(function* () {
-    for (const changes of [
-      [{ key: "scope", value: "all" }],
-      [{ key: "harness", value: "pi" }, { key: "model", value: "default" }, { key: "effort", value: "" }],
-    ]) {
-      const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
-      const entered = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
-      let wait = false;
-      const vm = machine("laptop", [], Effect.suspend(() => wait
-        ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released)))
-        : Effect.void));
-      const reached = { name: "laptop", state: "live" as const, settings: { failed: null as string | null } };
-      const sync = yield* flockSync({
-        flock, machines: () => [vm], save: () => Effect.void, request: Effect.succeed("fresh"),
-        told: (_, failed) => Effect.sync(() => { reached.settings = { failed }; }),
-      });
-      yield* sync.syncOn(vm);
-      wait = true;
-      const saving = yield* Effect.forkChild(sync.edit(changes, at(12)));
-      yield* Deferred.await(entered);
-      yield* Effect.yieldNow;
-      expect(saving.pollUnsafe()).toBeUndefined();
-      expect(flockReach(true, [reached])).toMatchObject({ tone: "warn" });
-      expect(vm.asked).toEqual([[]]);
-      yield* Deferred.succeed(released, undefined);
-      yield* Fiber.join(saving);
-      expect(flockReach(true, [reached])).toEqual({ said: "Given to all 1 Machines", tone: "ok" });
-      expect(vm.asked.at(-1)).toEqual(changes.map(({ key, value }) => ({ key, value: value || null, at: at(12) })));
-    }
-  })),
-);
+  Effect.runPromise(
+    Effect.gen(function* () {
+      for (const changes of [
+        [{ key: "scope", value: "all" }],
+        [
+          { key: "harness", value: "pi" },
+          { key: "model", value: "default" },
+          { key: "effort", value: "" },
+        ],
+      ]) {
+        const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        let wait = false;
+        const vm = machine(
+          "laptop",
+          [],
+          Effect.suspend(() =>
+            wait
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released)))
+              : Effect.void,
+          ),
+        );
+        const reached: {
+          name: string;
+          state: "live";
+          settings: { failed: string | null };
+        } = {
+          name: "laptop",
+          state: "live",
+          settings: { failed: null },
+        };
+        const sync = yield* flockSync({
+          flock,
+          machines: () => [vm],
+          save: () => Effect.void,
+          request: Effect.succeed("fresh"),
+          told: (_, failed) =>
+            Effect.sync(() => {
+              reached.settings = { failed };
+            }),
+        });
+        yield* sync.syncOn(vm);
+        wait = true;
+        const saving = yield* Effect.forkChild(sync.edit(changes, at(12)));
+        yield* Deferred.await(entered);
+        yield* Effect.yieldNow;
+        expect(saving.pollUnsafe()).toBeUndefined();
+        expect(flockReach(true, [reached])).toMatchObject({ tone: "warn" });
+        expect(vm.asked).toEqual([[]]);
+        yield* Deferred.succeed(released, undefined);
+        yield* Fiber.join(saving);
+        expect(flockReach(true, [reached])).toEqual({
+          said: "Given to all 1 Machines",
+          tone: "ok",
+        });
+        expect(vm.asked.at(-1)).toEqual(
+          changes.map(({ key, value }) => ({ key, value: value || null, at: at(12) })),
+        );
+      }
+    }),
+  ));
 
 test("an agent choice is validated and given to a Machine as one save, preserving fallbacks", () =>
   Effect.runPromise(

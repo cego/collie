@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
-import { CodexModelList, codexEntries } from "../src/catalogue-model";
+import { CodexModelList, codexEntries, withAdded } from "../src/catalogue-model";
 import codexModelList from "./fixtures/catalogue/codex-model-list.json";
 import { epochMs } from "../src/time";
 import { cataloguesOn } from "../desktop/src/bun/machine";
@@ -81,33 +81,117 @@ const readings: ReadonlyArray<MachineCatalogue> = [
   },
 ];
 
+test("an explicitly added hidden model is offered for the primary agent and fallbacks", () => {
+  const added: ReadonlyArray<MachineCatalogue> = [
+    {
+      profile: "a",
+      name: "laptop",
+      problem: null,
+      catalogues: [
+        withAdded(
+          {
+            harness: "codex",
+            at: "2026-10-29T12:00:00Z",
+            table: null,
+            entries: codexEntries(Schema.decodeUnknownSync(CodexModelList)(codexModelList)),
+          },
+          ["gpt-reserve"],
+        ),
+      ],
+    },
+  ];
+  expect(
+    settingsAgentSelects(added, ["a"], { harness: "codex" }).model.options.find(
+      ({ value }) => value === "gpt-reserve",
+    ),
+  ).toMatchObject({
+    value: "gpt-reserve",
+    description: expect.stringContaining("Added by models.codex"),
+  });
+  expect(
+    fallbackList("", added, ["a"], [], 0).add.options.some(
+      ({ value }) => value === "codex/gpt-reserve",
+    ),
+  ).toBe(true);
+});
+
 test("a native-default model offers its reported efforts and preserves the configured choice", () => {
-  const native: ReadonlyArray<MachineCatalogue> = [{
-    profile: "a", name: "laptop", problem: null,
-    catalogues: [{ harness: "codex", at: "2026-10-29T12:00:00Z", table: null,
-      entries: codexEntries(Schema.decodeUnknownSync(CodexModelList)(codexModelList)),
-    }],
-  }];
+  const native: ReadonlyArray<MachineCatalogue> = [
+    {
+      profile: "a",
+      name: "laptop",
+      problem: null,
+      catalogues: [
+        {
+          harness: "codex",
+          at: "2026-10-29T12:00:00Z",
+          table: null,
+          entries: codexEntries(Schema.decodeUnknownSync(CodexModelList)(codexModelList)),
+        },
+      ],
+    },
+  ];
   for (const model of ["default", undefined]) {
     const view = settingsAgentSelects(native, ["a"], { harness: "codex", model, effort: "high" });
     expect(view.effort.disabled).toBe(false);
     expect(view.effort.label).toBe("high");
-    expect(view.effort.options.map(({ value }) => value)).toEqual(["", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(view.effort.options.map(({ value }) => value)).toEqual([
+      "",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
   }
 });
 
 test("native defaults merge each Machine's capabilities and use reported efforts when no default is identified", () => {
-  const entry = (model: string, efforts: string[], isDefault = false) => ({ model, label: model,
-    description: null, efforts, isDefault, defaultEffort: null, hidden: false, from: "harness" as const });
+  const entry = (model: string, efforts: string[], isDefault = false) => ({
+    model,
+    label: model,
+    description: null,
+    efforts,
+    isDefault,
+    defaultEffort: null,
+    hidden: false,
+    from: "harness" as const,
+  });
   const machines: ReadonlyArray<MachineCatalogue> = [
-    { profile: "a", name: "laptop", problem: null, catalogues: [{ harness: "codex", at: "2026-10-29T12:00:00Z", table: null,
-      entries: [entry("native-a", ["low"], true), entry("other", ["ultra"])] }] },
-    { profile: "b", name: "vm", problem: null, catalogues: [{ harness: "codex", at: "2026-10-29T12:00:00Z", table: null,
-      entries: [entry("unknown-a", ["high"]), entry("unknown-b", ["max"])] }] },
+    {
+      profile: "a",
+      name: "laptop",
+      problem: null,
+      catalogues: [
+        {
+          harness: "codex",
+          at: "2026-10-29T12:00:00Z",
+          table: null,
+          entries: [entry("native-a", ["low"], true), entry("other", ["ultra"])],
+        },
+      ],
+    },
+    {
+      profile: "b",
+      name: "vm",
+      problem: null,
+      catalogues: [
+        {
+          harness: "codex",
+          at: "2026-10-29T12:00:00Z",
+          table: null,
+          entries: [entry("unknown-a", ["high"]), entry("unknown-b", ["max"])],
+        },
+      ],
+    },
   ];
   const view = settingsAgentSelects(machines, ["a", "b"], { harness: "codex", model: "default" });
   expect(view.effort.options.map(({ value, description }) => [value, description])).toEqual([
-    ["", undefined], ["low", "1 of 2 Machines"], ["high", "1 of 2 Machines"], ["max", "1 of 2 Machines"],
+    ["", undefined],
+    ["low", "1 of 2 Machines"],
+    ["high", "1 of 2 Machines"],
+    ["max", "1 of 2 Machines"],
   ]);
 });
 

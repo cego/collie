@@ -157,7 +157,8 @@ export const settingsAgentSelects = (
   if ((!set.model || set.model === DEFAULT_MODEL) && !HARNESS_MODELS[set.harness]?.defaultModel)
     for (const source of selected?.sources ?? []) {
       const defaultModel = source.entries.find((entry) => entry.isDefault);
-      for (const effort of defaultModel?.efforts ?? source.entries.flatMap((entry) => entry.efforts)) {
+      for (const effort of defaultModel?.efforts ??
+        source.entries.flatMap((entry) => entry.efforts)) {
         const on = efforts.get(effort) ?? new Set<string>();
         on.add(source.profile);
         efforts.set(effort, on);

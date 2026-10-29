@@ -268,7 +268,6 @@ export interface Said {
   readonly tone: "ok" | "warn";
 }
 
-/** A Machine whose settings exchange has not succeeded. */
 const missed = ({ state, settings }: Reached) =>
   state !== "live" || settings === null || settings.failed !== null;
 
