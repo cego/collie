@@ -1631,14 +1631,17 @@ cannot be read.
 
 Under **Agents › Who does the work**, harness, model, and effort use the Flock chat's
 pickers. Settings merges the catalogues read on your Machines. Each model and effort says
-how many Machines offer it, including Machines out of reach in the total. The section says
-when the oldest catalogue was read and names any Machine whose catalogue could not be read.
+how many Machines offer it. An out-of-reach Machine contributes its last catalogue held
+by Desktop; a Machine never read contributes only to the total and is named as not read yet.
+The section gives the oldest reachable reading and names older readings held for Machines out of reach.
 Models from **Collie's table** say why that harness's list could not be read. Models added
 under **Advanced**, in `models.<harness>`, are marked as additions.
 
 Pick a model to see only its reported efforts. Changing model clears an effort the new
 model doesn't support. Changing harness clears the effort and selects that harness's
-default model. The Flock chat's own choice stays in its composer on this computer.
+default model. Harness, model, and effort are validated and saved together, leaving fallbacks
+alone. Each connected Machine gets them in one settings update.
+The Flock chat's own choice stays in its composer on this computer.
 
 **Fall back to** is an ordered list. Add a harness or model from the same model menu, move
 an entry up or down, or remove it. Each entry shows its Subscription's usage across the

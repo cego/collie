@@ -500,6 +500,11 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
+  Rpc.make("setFlockSettings", {
+    payload: { changes: Schema.Array(Schema.Struct({ key: Schema.String, value: Schema.String })) },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
   /** Which credentials Desktop holds, now and whenever that changes. */
   Rpc.make("credentials", { success: Credentials, stream: true }),
   /** Keeps the Flock's GitLab token once GitLab accepts it, and gives it to every Machine. */

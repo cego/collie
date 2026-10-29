@@ -82,7 +82,12 @@ import {
   writeFlockDefinitions,
   writeFlockSettings,
 } from "./flock-settings";
-import { DEFAULT_CHAT_HARNESS, editSetting, type FlockSettings } from "../shared/flock-settings";
+import {
+  DEFAULT_CHAT_HARNESS,
+  editSetting,
+  editSettings,
+  type FlockSettings,
+} from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { changedLine } from "../../../src/schedule-model";
 import { SettingValue, settingText } from "../../../src/settings";
@@ -429,22 +434,20 @@ const main = Effect.gen(function* () {
   );
   const flockValue = (key: string) => SubscriptionRef.getUnsafe(flockSettings).settings[key]?.value;
   /** Keeps an edit made here, then gives it to every connected Machine. */
-  const editFlock = (key: string, typed: string) =>
-    Effect.gen(function* () {
-      const edited = editSetting(
-        yield* SubscriptionRef.get(flockSettings),
-        key,
-        typed,
-        yield* nowIso(),
-      );
-      if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
-      yield* writeFlockSettings(own, edited).pipe(
-        Effect.mapError((error) => new ActionFailed({ reason: error.message })),
-      );
-      yield* SubscriptionRef.set(flockSettings, edited);
-      yield* syncEvery().pipe(Effect.forkIn(scope));
-      return edited;
-    });
+  const editFlockSettings = (
+    changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
+  ) =>
+    SubscriptionRef.modifyEffect(flockSettings, (current) =>
+      Effect.gen(function* () {
+        const edited = editSettings(current, changes, yield* nowIso());
+        if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
+        yield* writeFlockSettings(own, edited).pipe(
+          Effect.mapError((error) => new ActionFailed({ reason: error.message })),
+        );
+        return [edited, edited] as const;
+      }),
+    ).pipe(Effect.tap(() => syncEvery().pipe(Effect.forkIn(scope))));
+  const editFlock = (key: string, typed: string) => editFlockSettings([{ key, value: typed }]);
   const boards = `${Utils.paths.userData}/machines`;
   const ownDirectory = `${Utils.paths.userData}/machine-own`;
   const ownReadings = new Map(
@@ -975,6 +978,10 @@ const main = Effect.gen(function* () {
           );
           return `${key} is ${now === "" ? "unset" : `now ${now}`}; connected Machines are given it now, the rest when they connect`;
         }),
+      ),
+    setFlockSettings: ({ changes }) =>
+      editFlockSettings(changes).pipe(
+        Effect.as("Agent choice saved; connected Machines are given it together"),
       ),
     saveGitlab: ({ token }) =>
       Effect.gen(function* () {

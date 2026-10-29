@@ -8,6 +8,7 @@ import { HostRefused, type SharedSetting, type SharedSettings } from "../src/boa
 import {
   desktopChange,
   editSetting,
+  editSettings,
   flockReach,
   type FlockSettings,
   NO_FLOCK_SETTINGS,
@@ -375,6 +376,43 @@ const syncerTelling = (
   });
 
 type Machine = ReturnType<typeof machine>;
+
+test("an agent choice is validated and given to a Machine as one save, preserving fallbacks", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const before = editSetting(NO_FLOCK_SETTINGS, "fallbacks", "codex", at(9));
+      if ("refused" in before) throw new Error(before.refused);
+      const edited = editSettings(
+        before,
+        [
+          { key: "harness", value: "pi" },
+          { key: "model", value: "default" },
+          { key: "effort", value: "" },
+        ],
+        at(12),
+      );
+      if ("refused" in edited) throw new Error(edited.refused);
+      const flock = yield* SubscriptionRef.make(edited);
+      const vm = machine("vm", [set("fallbacks", ["codex"], 9)]);
+      const { syncOn } = yield* syncer(flock, vm);
+      yield* syncOn(vm);
+      expect(vm.asked).toEqual([
+        [set("harness", "pi", 12), set("model", "default", 12), set("effort", null, 12)],
+      ]);
+      expect((yield* SubscriptionRef.get(flock)).settings.fallbacks?.value).toEqual(["codex"]);
+      expect(
+        editSettings(
+          before,
+          [
+            { key: "model", value: "default" },
+            { key: "harness", value: "missing" },
+          ],
+          at(12),
+        ),
+      ).toMatchObject({ refused: expect.stringContaining("harness") });
+      expect(before.settings.model).toBeUndefined();
+    }),
+  ));
 
 test("a Machine is synced through its host: given what it lacks, and asked even with nothing to give", () =>
   Effect.runPromise(

@@ -25,6 +25,7 @@ const saveGitlabAtom = FlockClient.mutation("saveGitlab");
 const saveGitlabHostAtom = FlockClient.mutation("saveGitlabHost");
 const saveHelleAtom = FlockClient.mutation("saveHelle");
 const setFlockSettingAtom = FlockClient.mutation("setFlockSetting");
+const setFlockSettingsAtom = FlockClient.mutation("setFlockSettings");
 const checkHelleAtom = FlockClient.mutation("checkHelle");
 const openSlackAtom = FlockClient.mutation("openSlack");
 const copyTextAtom = FlockClient.mutation("copyText");
@@ -70,6 +71,7 @@ export const useActions = () => {
   const saveGitlabHost = useAtomSet(() => saveGitlabHostAtom, { mode: "promiseExit" });
   const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
   const setFlockSetting = useAtomSet(() => setFlockSettingAtom, { mode: "promiseExit" });
+  const setFlockSettings = useAtomSet(() => setFlockSettingsAtom, { mode: "promiseExit" });
   const checkHelle = useAtomSet(() => checkHelleAtom, { mode: "promiseExit" });
   const openSlack = useAtomSet(() => openSlackAtom, { mode: "promiseExit" });
   const copyText = useAtomSet(() => copyTextAtom, { mode: "promiseExit" });
@@ -188,6 +190,10 @@ export const useActions = () => {
     /** Why the edit was refused, or null where it was kept; Settings says either on its row. */
     setFlockSetting: (key: string, value: string) =>
       setFlockSetting({ payload: { key, value } }).then((exit) =>
+        Exit.isFailure(exit) ? failureOf(exit.cause).reason : null,
+      ),
+    setFlockSettings: (changes: ReadonlyArray<{ readonly key: string; readonly value: string }>) =>
+      setFlockSettings({ payload: { changes } }).then((exit) =>
         Exit.isFailure(exit) ? failureOf(exit.cause).reason : null,
       ),
     /** Who the token belongs to, or why Helle would not say. */

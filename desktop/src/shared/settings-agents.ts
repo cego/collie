@@ -7,6 +7,7 @@ import { HARNESS_NAMES } from "../../../src/settings";
 import { harnessName } from "./chat-view";
 import { chatSelects, type ChoiceSelect } from "./chat-choices";
 import { whenOf } from "./flow";
+import type { MachineRow } from "./flock";
 
 export const MachineCatalogue = Schema.Struct({
   profile: Schema.String,
@@ -15,6 +16,28 @@ export const MachineCatalogue = Schema.Struct({
   problem: Schema.NullOr(Schema.String),
 });
 export type MachineCatalogue = typeof MachineCatalogue.Type;
+
+export const rememberCatalogues = (
+  held: ReadonlyArray<MachineCatalogue>,
+  fresh: ReadonlyArray<MachineCatalogue>,
+  machines: ReadonlyArray<Pick<MachineRow, "profile" | "name" | "state">>,
+): ReadonlyArray<MachineCatalogue> =>
+  machines.map(({ profile, name, state }) => {
+    const read = fresh.find((one) => one.profile === profile);
+    const before = held.find((one) => one.profile === profile);
+    return {
+      profile,
+      name,
+      catalogues:
+        read?.problem === null ? read.catalogues : (before?.catalogues ?? read?.catalogues ?? []),
+      problem:
+        state !== "live"
+          ? (read?.problem ?? "out of reach")
+          : read === undefined
+            ? (before?.problem ?? (before === undefined ? "not read yet" : null))
+            : read.problem,
+    };
+  });
 
 interface AgentSettings {
   readonly harness: string;
@@ -131,10 +154,22 @@ export const settingsAgentSelects = (
       : (HARNESS_MODELS[set.harness]?.defaultModel ?? DEFAULT_MODEL);
   const picked = model(effective);
   const efforts = picked?.efforts ?? new Map<string, Set<string>>();
-  const times = live.flatMap(({ catalogues }) => catalogues.map(({ at }) => at)).sort();
-  const problems = live.flatMap(({ name, problem }) =>
-    problem === null ? [] : [`${name}: ${problem}`],
-  );
+  const times = live
+    .filter(({ problem }) => problem === null)
+    .flatMap(({ catalogues }) => catalogues.map(({ at }) => at))
+    .sort();
+  if (times.length === 0)
+    times.push(...live.flatMap(({ catalogues }) => catalogues.map(({ at }) => at)).sort());
+  const problems = live.flatMap(({ name, problem, catalogues }) => {
+    if (catalogues.length === 0)
+      return [
+        problem === null
+          ? `${name}: no harnesses reported`
+          : `${name} not read yet${problem === "not read yet" ? "" : `: ${problem}`}`,
+      ];
+    const at = catalogues.map(({ at }) => at).sort()[0]!;
+    return problem === null ? [] : [`${name}'s at ${whenOf(at, now)}: ${problem}`];
+  });
   const effort: ChoiceSelect = {
     ...selects.effort,
     disabled: efforts.size === 0,
@@ -179,7 +214,7 @@ export const settingsAgentSelects = (
     effort,
     lead: [
       times.length === 0
-        ? "No harness catalogues read yet."
+        ? "No harness catalogues available yet."
         : `Catalogues read ${whenOf(times[0]!, now)} · ${live.filter(({ catalogues }) => catalogues.length > 0).length} of ${profiles.length} Machines read`,
       ...problems,
     ].join(" · "),
@@ -199,20 +234,21 @@ export const agentSettingChanges = (
   key: "harness" | "model" | "effort",
   value: string,
 ): ReadonlyArray<{ readonly key: string; readonly value: string }> => {
+  let next = {
+    ...current,
+    model: current.model ?? DEFAULT_MODEL,
+    effort: current.effort ?? "",
+    [key]: value,
+  };
   if (key === "harness" && value !== current.harness)
-    return [
-      { key: "effort", value: "" },
-      { key: "model", value: DEFAULT_MODEL },
-      { key, value },
-    ];
-  const next = settingsAgentSelects(catalogues, profiles, { ...current, [key]: value });
+    next = { ...next, model: DEFAULT_MODEL, effort: "" };
+  const select = settingsAgentSelects(catalogues, profiles, next);
+  if (key === "model" && !select.effort.options.some((option) => option.value === next.effort))
+    next = { ...next, effort: "" };
   return [
-    ...(key === "model" &&
-    current.effort &&
-    !next.effort.options.some((option) => option.value === current.effort)
-      ? [{ key: "effort", value: "" }]
-      : []),
-    { key, value },
+    { key: "harness", value: next.harness },
+    { key: "model", value: next.model },
+    { key: "effort", value: next.effort },
   ];
 };
 

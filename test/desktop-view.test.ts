@@ -117,6 +117,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         credentials: () => Stream.die("not asked"),
         flockSettings: () => Stream.die("not asked"),
         setFlockSetting: () => Effect.die("not asked"),
+        setFlockSettings: () => Effect.die("not asked"),
         saveGitlab: () => Effect.die("not asked"),
         saveGitlabHost: () => Effect.die("not asked"),
         saveHelle: () => Effect.die("not asked"),

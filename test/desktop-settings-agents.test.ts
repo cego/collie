@@ -7,6 +7,7 @@ import {
   fallbackList,
   changeFallbacks,
   agentSettingChanges,
+  rememberCatalogues,
   type MachineCatalogue,
 } from "../desktop/src/shared/settings-agents";
 import { editSetting, NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
@@ -105,19 +106,50 @@ test("Settings merges models and each effort across Machines without claiming un
   expect(view.lead).toContain("12:00");
 });
 
+test("an unreachable Machine keeps its last catalogue count and names its older reading, while an unread Machine adds only to the total", () => {
+  const machines = [
+    { profile: "a", name: "laptop", state: "unreachable" as const },
+    { profile: "b", name: "vm-gpu", state: "live" as const },
+    { profile: "new", name: "old-mini", state: "connecting" as const },
+  ];
+  const remembered = rememberCatalogues(readings, [readings[1]!], machines);
+  const view = settingsAgentSelects(
+    remembered,
+    ["a", "b", "new"],
+    { harness: "claude", model: "opus" },
+    epochMs("2026-10-29T13:00:00Z"),
+  );
+  expect(view.model.label).toContain("2 of 3 Machines");
+  expect(view.lead).toContain("laptop's at");
+  expect(view.lead).toContain("12:00");
+  expect(view.lead).toContain("old-mini not read yet");
+  expect(
+    rememberCatalogues(
+      remembered,
+      readings,
+      machines.slice(0, 2).map((one) => ({ ...one, state: "live" as const })),
+    )[0]?.problem,
+  ).toBeNull();
+});
+
 test("picking a model clears an effort it cannot run, retaining one it reports", () => {
   const current = { harness: "claude", model: "opus", effort: "max" };
   expect(agentSettingChanges(readings, ["a", "b"], current, "model", "sonnet")).toEqual([
-    { key: "effort", value: "" },
+    { key: "harness", value: "claude" },
     { key: "model", value: "sonnet" },
+    { key: "effort", value: "" },
   ]);
   expect(
     agentSettingChanges(readings, ["a", "b"], { ...current, effort: "low" }, "model", "sonnet"),
-  ).toEqual([{ key: "model", value: "sonnet" }]);
+  ).toEqual([
+    { key: "harness", value: "claude" },
+    { key: "model", value: "sonnet" },
+    { key: "effort", value: "low" },
+  ]);
   expect(agentSettingChanges(readings, ["a", "b"], current, "harness", "pi")).toEqual([
-    { key: "effort", value: "" },
-    { key: "model", value: "default" },
     { key: "harness", value: "pi" },
+    { key: "model", value: "default" },
+    { key: "effort", value: "" },
   ]);
 });
 
@@ -139,7 +171,7 @@ test("an older or failed Machine catalogue is explained and cannot hold back the
         model: "opus",
       });
       expect(view.model.label).toContain("2 of 3 Machines");
-      expect(view.lead).toContain("old-mini: Can't read its catalogues");
+      expect(view.lead).toContain("old-mini not read yet: Can't read its catalogues");
     }),
   ));
 

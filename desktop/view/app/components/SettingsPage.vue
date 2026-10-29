@@ -22,7 +22,7 @@ import {
 import { drawnAtom, flockSettingsAtom } from "../flock";
 
 const emit = defineEmits<{ back: [] }>();
-const { openLink, saveGitlabHost, setFlockSetting } = useActions();
+const { openLink, saveGitlabHost, setFlockSetting, setFlockSettings } = useActions();
 const { credentials, trouble: credentialsTrouble } = useCredentials();
 const { desktopSettings, change } = useDesktopSettings();
 const { rows: machines, own, now } = useFlock();
@@ -66,21 +66,19 @@ const chooseAgent = async (key: "harness" | "model" | "effort", value: string, r
   const row = agentRows.value.find((row) => row.key === key)!;
   forget(idOf(row));
   try {
-    for (const edit of agentSettingChanges(
+    const reach = flockReach(readable.value, machines.value);
+    if ("refused" in reach) return void (refusals.value[idOf(row)] = reach.refused);
+    const changes = agentSettingChanges(
       catalogues.value,
       profiles.value,
       agentSettings.value,
       key,
       reset ? row.fallback : key === "model" && value === "" ? "default" : value,
-    )) {
-      const target = agentRows.value.find((row) => row.key === edit.key)!;
-      const refused = await setShared(target, reset && edit.key === key ? "" : edit.value);
-      if (refused !== null) {
-        refusals.value[idOf(row)] = refused;
-        return;
-      }
-      saved.value[idOf(target)] = true;
-    }
+    ).map((edit) => ({ ...edit, value: reset && edit.key === key ? "" : edit.value }));
+    const refused = await setFlockSettings(changes);
+    if (refused !== null) return void (refusals.value[idOf(row)] = refused);
+    for (const edit of changes)
+      saved.value[idOf(agentRows.value.find((row) => row.key === edit.key)!)] = true;
   } finally {
     choosing.value = false;
   }

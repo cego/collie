@@ -51,6 +51,20 @@ export const editSetting = (
   };
 };
 
+export const editSettings = (
+  flock: FlockSettings,
+  changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
+  now: string,
+): FlockSettings | { readonly refused: string } => {
+  let edited = flock;
+  for (const { key, value } of changes) {
+    const next = editSetting(edited, key, value, now);
+    if ("refused" in next) return next;
+    edited = next;
+  }
+  return edited;
+};
+
 /** Desktop's own settings, which no Machine has. */
 interface DesktopSetting extends Setting {
   readonly read: (desktop: DesktopSettings) => string;
