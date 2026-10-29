@@ -157,7 +157,8 @@ export const bindingsOf = Effect.fn("Processes.bindingsOf")(function* (
   const environ = yield* fs
     .readFileString(`${PROC}/${pid}/environ`)
     .pipe(Effect.orElseSucceed(() => null));
-  if (environ === null) return null;
+  // Empty while it is mid-exec or exiting, so it says nothing of what it binds.
+  if (environ === null || environ === "") return null;
   const found: Record<string, string> = {};
   for (const entry of environ.split("\0")) {
     const at = entry.indexOf("=");
