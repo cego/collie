@@ -78,10 +78,11 @@ const hostOf = (): AgentHost => ({
   pollMs: 20,
   collectMs: 30_000,
   stopMs: 250_000,
+  help: () => Effect.succeed("  --dangerously-bypass-hook-trust"),
   ports: { codex: { ...codexPort(server()), gate: () => Effect.void } },
 });
 
-const launched = (over: Partial<StandIn> = {}) =>
+const launched = (over: Partial<StandIn> = {}, host: Partial<AgentHost> = {}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(cwd, { recursive: true });
@@ -92,7 +93,7 @@ const launched = (over: Partial<StandIn> = {}) =>
       .pipe(
         Effect.result,
         Effect.provide(body),
-        Effect.provide(agentsLayer(hostOf())),
+        Effect.provide(agentsLayer({ ...hostOf(), ...host })),
         Effect.provide(foundationLayer({ dir })),
         Effect.scoped,
       );
@@ -177,5 +178,33 @@ test("a project directory with a space and a single quote reaches the App Server
       expect(mcpOverrides((yield* started())?.argv ?? [])).toContain(
         `mcp_servers.collie.env.COLLIE_CWD=${asJson(cwd)}`,
       );
+    }),
+  ));
+
+test.each(["auto", "bypass", "harness"] as const)(
+  "a managed Codex approves enabled hooks independently of %s tool permissions",
+  (permissions) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* launched({}, { permissions });
+        const args = agentStartArgs(yield* rig.calls());
+        expect(args).toContain("--remote");
+        expect(args).toContain("--dangerously-bypass-hook-trust");
+        expect(args.includes("--approve-for-me")).toBe(permissions === "auto");
+        expect(args.includes("--dangerously-bypass-approvals-and-sandbox")).toBe(
+          permissions === "bypass",
+        );
+      }),
+    ),
+);
+
+test("an older Codex starts without the unsupported hook-trust flag", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* launched({}, { help: () => Effect.succeed("  --approve-for-me") });
+      const args = agentStartArgs(yield* rig.calls());
+      expect(args).toContain("--remote");
+      expect(args).toContain("--approve-for-me");
+      expect(args).not.toContain("--dangerously-bypass-hook-trust");
     }),
   ));
