@@ -149,11 +149,6 @@ export const RELEASE_CLEARS = {
   ],
 };
 
-/** Not one of RELEASE_CLEARS: it is cleared for a Slack channel, not the repository. */
-export const SHARE_CLEARS = (mr: string, channel: string) => [
-  `posting one Slack message in ${channel}: ${mr} linked by its title, and nothing else`,
-];
-
 const verdict = {
   verdict: Schema.Literals(["clean", "findings"]),
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
@@ -201,7 +196,9 @@ export const Shared = Schema.Struct({
   link: Schema.optionalKey(Schema.String).annotate({
     description: "the posted message's permalink",
   }),
-  why: Schema.optionalKey(Schema.String).annotate({ description: "why nothing was posted" }),
+  why: Schema.optionalKey(Schema.String).annotate({
+    description: "why nothing was posted or its permalink is missing",
+  }),
 });
 
 /** One agent for the whole Run, which each step continues. */
@@ -271,9 +268,8 @@ const shareAsk = step({
 const sharePost = step({
   id: "share",
   title: "Share",
-  description: "The agent posts the merge request in the approval channel, linked by its title.",
-  kind: "agent",
-  role: "implementer",
+  description: "The host posts the merge request in the approval channel, linked by its title.",
+  kind: "check",
 });
 const mergeGo = step({
   id: "go",
@@ -791,24 +787,18 @@ export default defineWorkflow({
                 `not shared: ${mr} no longer waits for a teammate's approval`,
               );
             const posted = yield* sharePost(
-              agentWork({
-                ...as(nth("share", shares)),
-                clears: SHARE_CLEARS(mr, channel),
-                instructions: steps.share,
-                input: { ...input, channel },
-                output: Shared,
-              }).pipe(
-                Effect.catch((failed) =>
-                  Effect.succeed<typeof Shared.Type>({ posted: false, why: failed.reason }),
-                ),
-              ),
+              Activity.make({
+                name: nth("share", shares),
+                success: Shared,
+                execute: host.shareForApproval({ runId, cwd, channel }),
+              }),
               { round: shares },
             );
             shared = posted.posted;
             yield* host.record(
               runId,
               posted.posted
-                ? `shared ${mr} in ${channel} for approval: ${posted.link ?? "no permalink given"}`
+                ? `shared ${mr} in ${channel} for approval: ${posted.link ?? posted.why ?? "permalink missing"}`
                 : `did not share ${mr} in ${channel}: ${posted.why ?? "no reason given"}`,
             );
           });

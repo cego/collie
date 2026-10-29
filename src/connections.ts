@@ -13,6 +13,7 @@ import { shell, type Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/process";
 import { redact } from "./redact";
 import { probeSlack, SLACK_FIX } from "./slack-credentials";
+import { slackApi } from "./slack";
 
 export const CONNECTION_TIMEOUT_MS = 6_000;
 
@@ -48,13 +49,14 @@ export const readConnections = <R, E>(probes: ReadonlyArray<ConnectionProbe<R, E
 export const connectionProbes = (
   env: PluginEnv,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
+  slack = slackApi,
 ) =>
   [
     { id: "gitlab", read: probeGitlab(env, run), fix: "glab auth login" },
     { id: "github", read: probeGithub(env, run), fix: "gh auth login --hostname github.com --web" },
     { id: "helle", read: probeHelle(env), fix: `check HELLE_API_TOKEN in ${helleEnvPath(env)}` },
     { id: "linear", read: probeLinearMcp(env), fix: LINEAR_MCP_FIX },
-    { id: "slack", read: probeSlack(env), fix: SLACK_FIX },
+    { id: "slack", read: probeSlack(env, slack), fix: SLACK_FIX },
   ] satisfies ReadonlyArray<
     ConnectionProbe<
       FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner,
@@ -67,8 +69,8 @@ export const connectionsOnMachine = (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) => readConnections(connectionProbes(env, run));
 
-export const connectionOnMachine = (env: PluginEnv, id: ConnectionId) =>
-  readConnections(connectionProbes(env).filter((probe) => probe.id === id)).pipe(
+export const connectionOnMachine = (env: PluginEnv, id: ConnectionId, slack = slackApi) =>
+  readConnections(connectionProbes(env, shell, slack).filter((probe) => probe.id === id)).pipe(
     Effect.map(
       (read) =>
         read[0]?.reading ?? {

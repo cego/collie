@@ -1657,6 +1657,13 @@ The direct-message choice asks **Which of these is you?**; search the workspace'
 Collie stores your user id and then shows **A direct message to** followed by your name.
 The Slack table's **Notifications** row comes from the host's own declaration beside the workflows.
 
+Each Machine's host posts the notification kinds you keep on about its own Runs.
+Desktop can be closed; Desktop never posts these messages.
+A user id opens a direct message before the host posts in its channel.
+An empty destination or a Slack Connection that is not working sends nothing.
+Each event is attempted once, including across host restarts; failed attempts are logged and do not fail the Run.
+Toasts continue independently of Slack.
+
 ### Settings
 
 **Settings** is a page in the board's column, at a wide line length, and re-reads the
@@ -2715,10 +2722,12 @@ To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`
 under Settings ([Your defaults](#your-defaults)). While the merge request waits on a
 teammate's approval, the Run asks **Post for approval** or **Wait for changes**. Check the
-merge request first: **Post for approval** has its agent post the merge request in that
-channel, linked by its title and nothing else, and the Run's log keeps the message's link
-or why nothing was posted. **Wait for changes** posts nothing and asks again once the head
-moves.
+merge request first: **Post for approval** has its host post through the [Slack Connection](#slack),
+linked by its forge title and nothing else. The Run's log keeps the message's permalink.
+If the permalink cannot be read, the log says why; the message still counts as shared.
+A failed post is logged, and the Run continues to its review wait.
+Without a working Slack Connection, it asks you to share the merge request yourself and shows its address to copy.
+**Wait for changes** posts nothing and asks again once the head moves.
 
 Then it asks **Release** or **Finish**, naming the head and who approved it. **Release**
 claims the repository, merges at exactly that head and tags the package; the Run ends

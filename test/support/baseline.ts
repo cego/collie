@@ -73,6 +73,9 @@ import {
 import { readStepLines } from "../../src/steps";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
+import { slackApi } from "../../src/slack";
+import { writeSlackToken } from "../../src/slack-credentials";
+import { fakeSlack } from "./slack";
 import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import {
@@ -164,6 +167,7 @@ const startSignal = (invocation: string) => {
   return signal;
 };
 let renamed = false;
+let slack = fakeSlack();
 
 /** The public id a shipped workflow is run under in this pass. */
 const idOf = (name: Shipped) => (renamed ? UNRELATED[name] : name);
@@ -239,6 +243,7 @@ const foundation = () => ({
   placing: { herdr: hostOf().herdr, env: hostOf().env },
   productionPoll,
   reviewPoll,
+  slack: (token: string) => slackApi(token, slack.client),
 });
 
 /** How often production is read; a scenario that must not wait on it sets it long. */
@@ -9289,7 +9294,6 @@ const releaseHost = (
   whileClaiming: Effect.Effect<void, unknown, FileSystem.FileSystem> = Effect.void,
   stallAfterReplies = Infinity,
   helle?: () => HelleSays,
-  slack = true,
 ) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
@@ -9298,10 +9302,6 @@ const releaseHost = (
       let replies = 0;
       return Host.of({
         ...host,
-        connection: (id) =>
-          id === "slack" && slack
-            ? Effect.succeed({ state: "ok", account: "Collie", detail: "fixture workspace" })
-            : host.connection(id),
         // A host that stops after posting a reply, before its Activity is journaled.
         reply: (asked) =>
           host
@@ -9501,10 +9501,11 @@ const sharingIn = (channel: string | null) =>
         }),
       ),
     ),
+    Effect.andThen(writeSlackToken(hostOf().env, "xoxb-fixture")),
     Effect.orDie,
   );
 
-const POSTED = { posted: true, link: "https://example.slack.com/archives/C01/p1700000000000100" };
+const POSTED = { posted: true, link: "https://example.slack.com/archives/D123/p1503435956000247" };
 
 /** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Object.values(model.replies ?? {}).flat();
@@ -11014,14 +11015,16 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `release on ${name}: sharing for approval is asked before the wait, posts once on the human's say, and is not asked again`,
+    `release on ${name}: the host posts approval once through Slack and records the returned message's permalink`,
     () =>
       runEffect(
         Effect.gen(function* () {
           const { bin, forge, head, changed } = yield* releasable(name, UNAPPROVED[name]);
+          slack = fakeSlack();
+          yield* changed({ title: "Fix the settings" });
           const runId = `r-share-${name}`;
-          yield* sharingIn("#frontend");
-          yield* rig.queueOutputs([PACKAGED, POSTED]);
+          yield* sharingIn("C123");
+          yield* rig.queueOutputs([PACKAGED]);
           let moved = "";
           const { status, decisions } = yield* driven(
             { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
@@ -11031,7 +11034,8 @@ for (const name of ["gitlab", "github"] as const) {
                 expect(share.prompt).toContain(mr);
                 expect(share.prompt).toContain(head.slice(0, 8));
                 expect(share.prompt).toContain("Check it first");
-                expect(share.prompt).toContain("#frontend");
+                expect(share.prompt).toContain("C123");
+                expect(slack.calls).toEqual([{ method: "auth.test", parameters: {} }]);
                 expect(optionsOf([share], "share-for-approval")).toEqual([
                   "Post for approval",
                   "Wait for changes",
@@ -11064,14 +11068,19 @@ for (const name of ["gitlab", "github"] as const) {
             "share-for-approval",
           ]);
           expect(yield* runLog(runId)).toContain(
-            `shared ${mr} in #frontend for approval: ${POSTED.link}`,
+            `shared ${mr} in C123 for approval: ${POSTED.link}`,
           );
-          expect(yield* clearance(runId, "share")).toBe(
-            `Cleared for this step: posting one Slack message in #frontend: ${mr} linked by its title, and nothing else.`,
-          );
-          const sharing = (yield* asked(runId, "share")).replace(/\s+/g, " ");
-          expect(sharing).toContain("shared for approval in the Slack channel #frontend");
-          expect(sharing).toContain(name === "gitlab" ? "glab mr view" : "gh pr view");
+          expect(slack.calls.filter((call) => call.method.startsWith("chat."))).toEqual([
+            {
+              method: "chat.postMessage",
+              parameters: { channel: "C123", text: `<${mr}|Fix the settings>` },
+            },
+            {
+              method: "chat.getPermalink",
+              parameters: { channel: "D123", message_ts: "1503435956.000247" },
+            },
+          ]);
+          expect((yield* prompts()).filter((one) => one.includes(`/${runId}/share`))).toEqual([]);
           expect(repliesOf(model)).toEqual([]);
           expect(model.merges ?? []).toEqual([]);
         }),
@@ -11085,35 +11094,37 @@ for (const name of ["gitlab", "github"] as const) {
   const options = (runId: string) => ({ entry: shipped("release"), runId, input: { mr: target } });
 
   scenario(
-    "release without Slack asks the operator to share, then continues without a posting agent",
+    "release with Slack absent in the registry asks the operator to share its address and sends no Slack requests",
     () =>
       runEffect(
         Effect.gen(function* () {
           const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
           const runId = "r-share-manually";
           yield* sharingIn("#frontend");
+          yield* writeSlackToken(hostOf().env, null);
           yield* rig.queueOutputs([PACKAGED]);
-          const status = yield* driven(
-            { ...options(runId), host: releaseHost({}, Effect.void, Infinity, undefined, false) },
-            (run) =>
-              Effect.gen(function* () {
-                const share = yield* goAsked(run.asked, "share-for-approval");
-                expect(share.prompt).toContain("Share it in #frontend yourself");
-                expect(optionsOf([share], "share-for-approval")).toEqual([
-                  "I shared it",
-                  "Wait for changes",
-                ]);
-                yield* run.answer("share-for-approval", "I shared it");
-                yield* changed(approvedBy("gitlab", "dave"));
-                yield* goAsked(run.asked, "go-1");
-                yield* run.answer("go-1", "Finish");
-                return yield* ended(run.status);
-              }),
+          const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
+            Effect.gen(function* () {
+              const share = yield* goAsked(run.asked, "share-for-approval");
+              expect(share.prompt).toContain("Share it in #frontend yourself");
+              expect(share.prompt).toContain(mr);
+              expect(share.prompt).toContain("No Slack bot token");
+              expect(optionsOf([share], "share-for-approval")).toEqual([
+                "I shared it",
+                "Wait for changes",
+              ]);
+              yield* run.answer("share-for-approval", "I shared it");
+              yield* changed(approvedBy("gitlab", "dave"));
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
           );
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(yield* runLog(runId)).toContain(`shared by the operator: ${mr} in #frontend`);
           expect((yield* rig.calls()).filter((call) => call.cmd === "agent start")).toHaveLength(1);
+          expect(slack.calls).toEqual([]);
         }),
       ),
     120_000,
@@ -11199,15 +11210,15 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   once(
-    "release on gitlab: a share step that fails is recorded, and the release goes on to go 1",
+    "release on gitlab: channel_not_found is recorded and the host continues to its review wait",
     () =>
       runEffect(
         Effect.gen(function* () {
           const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
           const runId = "r-share-failed";
           yield* sharingIn("#frontend");
-          const unusable = { posted: "yes" };
-          yield* rig.queueOutputs([PACKAGED, unusable, unusable]);
+          slack.refuse("channel_not_found", "chat.postMessage");
+          yield* rig.queueOutputs([PACKAGED]);
           const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
             Effect.gen(function* () {
               yield* goAsked(run.asked, "share-for-approval");
@@ -11215,6 +11226,10 @@ for (const name of ["gitlab", "github"] as const) {
               yield* until(
                 () => runLog(runId),
                 (log) => log.includes("did not share"),
+              );
+              yield* until(
+                () => awaitingOn(runId),
+                (on) => on.includes("approval"),
               );
               yield* changed(approvedBy("gitlab", "dave"));
               yield* goAsked(run.asked, "go-1");
@@ -11225,8 +11240,52 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(yield* runLog(runId)).toContain(
-            `did not share ${mr} in #frontend: output-unusable`,
+            `did not share ${mr} in #frontend: Slack chat.postMessage: channel_not_found`,
           );
+          expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
+          expect(slack.calls.some((call) => call.method === "chat.getPermalink")).toBe(false);
+        }),
+      ),
+    120_000,
+  );
+
+  once(
+    "release on gitlab: a missing permalink still counts as shared and a host restart does not repost",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
+          const runId = "r-share-no-permalink";
+          yield* sharingIn("C123");
+          slack.refuse("channel_not_found", "chat.getPermalink");
+          yield* rig.queueOutputs([PACKAGED]);
+          yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "share-for-approval");
+              yield* run.answer("share-for-approval", "Post for approval");
+              yield* until(
+                () => awaitingOn(runId),
+                (on) => on.includes("approval"),
+              );
+            }),
+          );
+          yield* changed(approvedBy("gitlab", "dave"));
+          const status = yield* driven(
+            { ...options(runId), host: releaseHost(), restarted: true },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(yield* runLog(runId)).toContain(
+            `shared ${mr} in C123 for approval: permalink missing: Slack chat.getPermalink: channel_not_found`,
+          );
+          expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
+          expect(slack.calls.filter((call) => call.method === "chat.getPermalink")).toHaveLength(1);
         }),
       ),
     120_000,
@@ -11240,7 +11299,8 @@ for (const name of ["gitlab", "github"] as const) {
           const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
           const runId = "r-share-replayed";
           yield* sharingIn("#frontend");
-          yield* rig.queueOutputs([PACKAGED, { posted: false, why: "no Slack tool" }]);
+          slack.refuse("not_in_channel", "chat.postMessage");
+          yield* rig.queueOutputs([PACKAGED]);
           yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
             goAsked(run.asked, "share-for-approval"),
           );
@@ -11263,7 +11323,9 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          expect(yield* runLog(runId)).toContain(`did not share ${mr} in #frontend: no Slack tool`);
+          expect(yield* runLog(runId)).toContain(
+            `did not share ${mr} in #frontend: Slack chat.postMessage: not_in_channel`,
+          );
         }),
       ),
     120_000,
@@ -11350,7 +11412,8 @@ for (const name of ["gitlab", "github"] as const) {
           const { bin, head, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
           const runId = "r-share-failed-moved";
           yield* sharingIn("#frontend");
-          yield* rig.queueOutputs([PACKAGED, { posted: false, why: "no Slack tool" }]);
+          slack.refuse("not_in_channel", "chat.postMessage");
+          yield* rig.queueOutputs([PACKAGED]);
           const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
             Effect.gen(function* () {
               yield* goAsked(run.asked, "share-for-approval");
@@ -11385,7 +11448,7 @@ for (const name of ["gitlab", "github"] as const) {
           const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
           const runId = "r-share-late";
           yield* sharingIn("#frontend");
-          yield* rig.queueOutputs([PACKAGED, POSTED]);
+          yield* rig.queueOutputs([PACKAGED]);
           const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
             Effect.gen(function* () {
               yield* goAsked(run.asked, "share-for-approval");
@@ -16384,6 +16447,7 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
     runEffect(
       Effect.gen(function* () {
         rig = yield* Rig.make();
+        slack = fakeSlack();
         const fs = yield* FileSystem.FileSystem;
         dir = `${rig.root}/host`;
         forgeApi = "";

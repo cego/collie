@@ -52,6 +52,9 @@ export const SlackChoices = Schema.Struct({
 });
 export type SlackChoices = typeof SlackChoices.Type;
 
+export const slackText = (text: string) =>
+  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+
 export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
   const safe = (message: string) => redact(message.split(token).join("<redacted>"));
   const call = <S extends Schema.Decoder<unknown>>(

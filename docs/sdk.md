@@ -876,6 +876,12 @@ With `untilBlocked: true` it returns that `Waiting` standing instead of waiting 
 repair, as the release's re-reading of a go does. Take either inside an Activity, and suspend on `Held`
 there, so a resume waits again.
 
+`host.shareForApproval({ runId, cwd, channel })` posts the Run's recorded merge request through its host's Slack Connection.
+It reads the title from the forge and returns `{ posted, link?, why? }` without failing the Run.
+`link` is Slack's permalink; `why` records a refused post or a missing permalink.
+Call it inside a journaled Activity after the operator agrees to share.
+The shipped release workflow asks the operator to share the address themselves when Slack is unavailable.
+
 `host.reply({ runId, cwd, comment, body })` replies to the comment with id `comment` on
 the merge request the Run recorded, posting `body` as it is, in the comment's thread where
 it has one. It never resolves a thread. It answers `posted`, or `already` where the forge

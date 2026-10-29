@@ -226,6 +226,8 @@ import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
+import { slackApi, slackText } from "./slack";
+import { slackToken } from "./slack-credentials";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
@@ -827,6 +829,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly config: (dotted: string) => Effect.Effect<string>;
     /** This Machine's reading; take it inside an Activity when branching on it. */
     readonly connection: (id: ConnectionId) => Effect.Effect<ConnectionReading>;
+    readonly shareForApproval: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly channel: string;
+    }) => Effect.Effect<{ readonly posted: boolean; readonly link?: string; readonly why?: string }>;
     /** Whether a merge request can be opened from here, and what it would carry. */
     readonly mr: (options: {
       readonly cwd: string;
@@ -3244,6 +3251,7 @@ export const hostLayer = (options: {
   readonly userDir?: string;
   /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
+  readonly slack?: typeof slackApi;
   /** The Herd this host works for; left out, nothing is judged or charged to one. */
   readonly herd?: Herd;
   /** This Machine's Usage readings; none where left out. */
@@ -3281,48 +3289,73 @@ export const hostLayer = (options: {
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
       yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
+      const notifying = yield* Semaphore.make(1);
       const notify: Notifier["Service"]["notify"] = (runId, kind, body, about = {}) =>
-        toast === undefined
-          ? Effect.void
-          : under(
-              Effect.gen(function* () {
-                const settings =
-                  options.userDir === undefined
-                    ? {}
-                    : (yield* loadDefaults(options.userDir)).notifications;
-                if (!wanted(settings, kind)) return;
-                // ponytail: one line per toast raised, read whole; a Run raises a handful.
-                const said = `${kind}:${(about.key ?? "").replaceAll("\n", " ")}`;
-                const file = notifiedPath(dir, runId);
-                const before = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-                if (before.split("\n").includes(said)) return;
-                yield* fs.writeFileString(file, `${said}\n`, { flag: "a" });
-                const row = yield* store.run(runId);
-                const cwd =
-                  row === null
-                    ? dir
-                    : placedOf(
-                        row,
-                        yield* decodeStrings(row.options ?? "{}").pipe(
-                          Effect.orElseSucceed((): Record<string, string> => ({})),
-                        ),
-                      ).cwd;
-                const task =
-                  row?.task == null
-                    ? null
-                    : yield* readTask(dir, row.task).pipe(Effect.orElseSucceed(() => null));
-                yield* toast(
-                  notificationTitle(
-                    kind,
-                    cwd,
-                    task === null ? runId : taskTitleOf(task.label),
-                    about.subject,
-                  ),
-                  body,
-                  SOUND[kind],
-                );
-              }),
-            ).pipe(Effect.ignore);
+        under(
+          Effect.gen(function* () {
+            const settings =
+              options.userDir === undefined
+                ? {}
+                : (yield* loadDefaults(options.userDir)).notifications;
+            if (!wanted(settings, kind)) return;
+            const raw = yield* readConfig(options.userDir ?? dir);
+            const configured = configValue(raw, "slack.notification_channel");
+            const channel = isText(configured) ? configured.trim() : "";
+            const row = yield* store.run(runId);
+            if (toast === undefined && (channel === "" || row === null)) return;
+            // Mark before delivery: a replay must not repeat an attempted post.
+            const said = `${kind}:${(about.key ?? "").replaceAll("\n", " ")}`;
+            const file = notifiedPath(dir, runId);
+            const before = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+            if (before.split("\n").includes(said)) return;
+            yield* fs.writeFileString(file, `${said}\n`, { flag: "a" });
+            const cwd =
+              row === null
+                ? dir
+                : placedOf(
+                    row,
+                    yield* decodeStrings(row.options ?? "{}").pipe(
+                      Effect.orElseSucceed((): Record<string, string> => ({})),
+                    ),
+                  ).cwd;
+            const task =
+              row?.task == null
+                ? null
+                : yield* readTask(dir, row.task).pipe(Effect.orElseSucceed(() => null));
+            const title = notificationTitle(
+              kind,
+              cwd,
+              task === null ? runId : taskTitleOf(task.label),
+              about.subject,
+            );
+            if (toast !== undefined) yield* toast(title, body, SOUND[kind]).pipe(Effect.ignore);
+            if (channel === "" || row === null) return;
+            yield* Effect.gen(function* () {
+              const reading = yield* host.connection("slack");
+              if (reading.state !== "ok") {
+                if (reading.state === "broken")
+                  yield* appendLog(
+                    runDir(dir, runId),
+                    `Slack notification (${kind}) was not posted: ${reading.detail}`,
+                  );
+                return;
+              }
+              const { env } = yield* placing;
+              const token = yield* slackToken(env);
+              if (token === null) return;
+              const api = (options.slack ?? slackApi)(token);
+              const destination = /^U[A-Z0-9]+$/.test(channel) ? yield* api.open(channel) : channel;
+              yield* api.post(destination, slackText(`${title}\n${body}`));
+            }).pipe(
+              Effect.catch((reason) =>
+                appendLog(
+                  runDir(dir, runId),
+                  `Slack notification (${kind}) was not posted: ${isText(reason) ? reason : "Slack's credential file could not be read"}`,
+                ).pipe(Effect.ignore),
+              ),
+            );
+          }),
+        ).pipe(notifying.withPermits(1), Effect.ignore);
       const lineageOf = lineageIn(store);
       const hostStarted = yield* nowIso();
       /** A pass this host collected that answers for this check now, said in the Run log. */
@@ -4101,8 +4134,38 @@ export const hostLayer = (options: {
             const { env } = yield* placing;
             const run = yield* Effect.serviceOption(Run);
             const cwd = Option.isSome(run) ? (yield* host.place(run.value.id)).cwd : env.cwd;
-            return yield* under(connectionOnMachine({ ...env, cwd }, id));
+            return yield* under(connectionOnMachine({ ...env, cwd }, id, options.slack));
           }),
+        shareForApproval: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const mr = yield* mergeRequestOf(fs, dir, asked.runId);
+              const ref = mr === null ? null : mrRefOf(mr);
+              if (mr === null || ref === null)
+                return { posted: false, why: "this Run recorded no merge request to share" };
+              const reading = yield* host.connection("slack");
+              if (reading.state !== "ok") return { posted: false, why: reading.detail };
+              const { env } = yield* placing;
+              const token = yield* slackToken(env);
+              if (token === null)
+                return { posted: false, why: "No Slack bot token on this Machine" };
+              const api = (options.slack ?? slackApi)(token);
+              const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
+              if (details._tag !== "Details") return { posted: false, why: details.reason };
+              const posted = yield* api.post(asked.channel, `<${mr}|${slackText(details.title)}>`);
+              const link = yield* api.permalink(posted.channel, posted.ts).pipe(Effect.result);
+              return link._tag === "Success"
+                ? { posted: true, link: link.success }
+                : { posted: true, why: `permalink missing: ${link.failure}` };
+            }).pipe(
+              Effect.catch((reason) =>
+                Effect.succeed({
+                  posted: false,
+                  why: isText(reason) ? reason : "Slack approval post could not be completed",
+                }),
+              ),
+            ),
+          ),
         mr: (asked) =>
           under(
             Effect.gen(function* () {
@@ -5829,6 +5892,7 @@ export const foundationLayer = (options: {
   readonly userDir?: string;
   /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
+  readonly slack?: typeof slackApi;
   /** The Herd this host works for; left out, nothing is judged or charged to one. */
   readonly herd?: Herd;
   /** This Machine's Usage readings; none where left out. */

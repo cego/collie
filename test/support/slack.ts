@@ -5,10 +5,12 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 export const fakeSlack = () => {
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];
   let refused: string | null = null;
+  let refusedMethod: string | undefined;
   const answer = (method: string, parameters: Record<string, string>, authorized: boolean) => {
     calls.push({ method, parameters });
     if (!authorized) return Response.json({ ok: false, error: "invalid_auth" });
-    if (refused !== null) return Response.json({ ok: false, error: refused });
+    if (refused !== null && (refusedMethod === undefined || refusedMethod === method))
+      return Response.json({ ok: false, error: refused });
     if (method === "auth.test")
       return Response.json({
         ok: true,
@@ -117,8 +119,9 @@ export const fakeSlack = () => {
   return {
     client,
     calls,
-    refuse: (reason: string | null) => {
+    refuse: (reason: string | null, method?: string) => {
       refused = reason;
+      refusedMethod = method;
     },
   };
 };

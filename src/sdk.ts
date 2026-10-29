@@ -838,6 +838,12 @@ export interface HostApi {
   readonly config: (dotted: string) => Effect.Effect<string>;
   /** This Machine's reading; take it inside an Activity when branching on it. */
   readonly connection: (id: ConnectionId) => Effect.Effect<ConnectionReading>;
+  /** Posts this Run's recorded merge request, linked by its forge title; a refusal never fails the Run. */
+  readonly shareForApproval: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly channel: string;
+  }) => Effect.Effect<{ readonly posted: boolean; readonly link?: string; readonly why?: string }>;
   /**
    * Whether a merge request can be opened from this checkout, and what it would carry —
    * the configured assignee, the repository's own template, the issues this branch
