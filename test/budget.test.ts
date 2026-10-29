@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { getPriority } from "node:os";
 import { Config, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { processStartTime, signalProcess, withLock } from "../src/lock";
 import {
@@ -157,6 +158,35 @@ const runner = (dir: string) =>
 const waiting = (dir: string) =>
   Effect.flatMap(ownProcess, (me) => enqueue(dir, "whole", 12, [me]));
 
+test.each(["whole", "small"] as const)(
+  "a %s run's children inherit its scheduling priority",
+  (kind) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* store;
+        const hold = yield* admitted(dir, VM_MK, kind, 1, () => Effect.void);
+        const result = `${dir}/priority`;
+        const child = yield* startOnHold(
+          dir,
+          hold.id,
+          [
+            "sh",
+            "-c",
+            'exec bun -e \'await Bun.write(process.argv[1], String(require("node:os").getPriority()))\' "$1"',
+            "sh",
+            result,
+          ],
+          { env: process.env, kind },
+        );
+        expect(yield* Effect.promise(() => child.exited)).toBe(0);
+        const priority = Number(yield* fs.readFileString(result));
+        if (kind === "whole") expect(priority).toBeGreaterThanOrEqual(10);
+        else expect(priority).toBe(getPriority());
+      }),
+    ),
+);
+
 test(
   "a runner killed with kill -9 holds its workers until the bun test it started is gone too",
   () =>
@@ -258,7 +288,10 @@ test(
         const child = yield* Effect.scoped(
           Effect.gen(function* () {
             const hold = yield* admitted(dir, VM_MK, "whole", 12, () => Effect.void);
-            const child = yield* startOnHold(dir, hold.id, ["sleep", "30"], { env: process.env });
+            const child = yield* startOnHold(dir, hold.id, ["sleep", "30"], {
+              env: process.env,
+              kind: "whole",
+            });
             process.kill(child.pid, "SIGSTOP");
             return child;
           }),

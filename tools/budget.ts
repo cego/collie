@@ -8,7 +8,7 @@
 // FileSystem cannot write to or close a pipe it did not open.
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { closeSync, writeSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { getPriority, setPriority, tmpdir } from "node:os";
 import { Clock, Duration, Effect, FileSystem, Option, Schema } from "effect";
 import { ensureLockDir, holderLives, processStartTime, withLock } from "../src/lock";
 import { described, elapsed } from "./suite-lock";
@@ -269,7 +269,11 @@ export const startOnHold = (
   dir: string,
   id: string,
   cmd: ReadonlyArray<string>,
-  options: { readonly env: Record<string, string | undefined>; readonly inherit?: boolean },
+  options: {
+    readonly env: Record<string, string | undefined>;
+    readonly inherit?: boolean;
+    readonly kind: Kind;
+  },
 ) =>
   Effect.gen(function* () {
     const child = yield* Effect.acquireRelease(
@@ -295,6 +299,13 @@ export const startOnHold = (
     );
     const gate = child.stdio[3]!;
     yield* Effect.flatMap(processOf(child.pid), (named) => join(dir, id, named)).pipe(
+      // Set before opening the gate so workers and their descendants inherit it.
+      Effect.andThen(
+        Effect.sync(() => {
+          if (options.kind === "whole")
+            setPriority(child.pid, Math.max(10, getPriority(child.pid)));
+        }),
+      ),
       Effect.andThen(Effect.sync(() => writeSync(gate, "go\n"))),
       Effect.ensuring(Effect.sync(() => closeSync(gate))),
     );

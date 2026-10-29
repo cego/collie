@@ -1865,6 +1865,22 @@ the patch. The compiler-load and Git-start reductions have targeted regression p
 their whole-suite performance benefit remains unproved. #215 and #216 stay open, and
 the full correctness gate remains CI's `test` job.
 
+The first fix round adds the scheduling mechanism ticket 02 permits for CPU contention.
+The failed candidate window supplies the scheduling-delay evidence missing from the
+base window: probe wall time and involuntary context switches increased while its CPU
+work stayed near 5 ms, with negligible I/O and memory stalls. A whole-suite child now
+starts at nice level 10, or keeps an already lower priority, before the runner opens
+its execution gate. Workers and the hosts and commands they start inherit that priority;
+small runs retain their caller's priority. Admission, worker counts, and the reserve do
+not change. `suite-priority-red` observed the whole-suite descendant still at nice 0;
+`suite-priority-green` covers both kinds with real children, alongside the existing
+hold and cleanup tests. The effect on probe latency remains to be measured.
+
+The JSX regression was also run with JSX registration temporarily removed from the
+lazy preload. `jsx-transform-disabled-red` failed because Bun's default JSX output
+lacked Solid's `_$createElement`; restoring registration made both preload cases pass
+in `jsx-transform-restored-green`. The temporary mutation is not part of the patch.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.

@@ -110,6 +110,7 @@ const suite = (targeted: boolean, kind: Kind, since: number) => {
             ...request.args,
           ],
           {
+            kind,
             env: {
               ...suiteEnv(),
               COLLIE_TEST_BINARY: `${out}/collie`,
