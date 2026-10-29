@@ -1,11 +1,25 @@
 import assert from "node:assert/strict";
 import { cpus } from "node:os";
-import { Cause, Console, DateTime, Effect, FileSystem, Path, Schema } from "effect";
+import { Cause, Console, DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { runEffect } from "../test/support/effect";
 import { ensureLockDir, withLock } from "../src/lock";
 
 const PAIRS = 10;
 const T_975_DF9 = 2.2621571628540993;
+const DEPENDENCIES = [
+  [
+    "@effect/platform-node-shared/dist/NodeFileSystem.js",
+    "a23f2022f75e7089a5e5de8e24de8b663fcee22f514c9835e7ab5d25a053c7a6",
+  ],
+  [
+    "effect/dist/sql/SqlClient.js",
+    "3a127b39491e59e9aef57f172c9d8b3470873ab04280ed8ec479475728e45c20",
+  ],
+  [
+    "@effect/sql-sqlite-bun/dist/SqliteClient.js",
+    "dcc3a53f9e0de33ac088d2f397f09be58b4bb682090ee6c7bb6bd25769b0d664",
+  ],
+] as const;
 const mean = (xs: readonly number[]) => xs.reduce((sum, x) => sum + x, 0) / xs.length;
 const comparison = (base: readonly number[], candidate: readonly number[]) => {
   assert.equal(base.length, PAIRS);
@@ -30,6 +44,10 @@ const example = comparison(Array(10).fill(20), Array(10).fill(10));
 assert.ok(Math.abs(example.ratio - 0.5) < 1e-12);
 assert.ok(example.ci95.every((x) => Math.abs(x - 0.5) < 1e-12));
 assert.ok(Math.abs(example.reduction_percent - 50) < 1e-10);
+const spread = comparison(Array(10).fill(1), [...Array(9).fill(1), 2.718281828459045]);
+assert.ok(Math.abs(spread.ratio - 1.105170185988091) < 1e-12);
+assert.ok(Math.abs((spread.ci95[0] ?? 0) - 0.88142468861435) < 1e-12);
+assert.ok(Math.abs((spread.ci95[1] ?? 0) - 1.3857142577663495) < 1e-12);
 if (process.argv[2] === "--self-check") process.exit(0);
 
 const Metrics = Schema.fromJsonString(
@@ -65,6 +83,7 @@ const study = Effect.gen(function* () {
   const candidate = process.cwd();
   const base = path.resolve(baseline);
   const out = path.resolve(destination);
+  const cache = path.join(candidate, ".scratch/private-bun-cache");
   assert.equal(
     yield* fs.exists(`${out}/manifest.json`),
     false,
@@ -83,6 +102,24 @@ const study = Effect.gen(function* () {
   yield* fs.makeDirectory(`${base}/bench`, { recursive: true });
   yield* fs.writeFileString(`${base}/bench/read.ts`, source);
   assert.equal(yield* fs.readFileString(`${base}/bench/read.ts`), source);
+  const integrity = (cwd: string) =>
+    Effect.forEach(DEPENDENCIES, ([name, expected]) =>
+      Effect.gen(function* () {
+        const file = path.join(cwd, "node_modules", name);
+        const sha256 = new Bun.CryptoHasher("sha256")
+          .update(yield* fs.readFile(file))
+          .digest("hex");
+        const info = yield* fs.stat(file);
+        assert.equal(sha256, expected, `${file} differs from the pristine locked 4.0.1 package`);
+        assert.equal(
+          Option.getOrThrow(info.nlink),
+          1,
+          `${file} is shared; install with --backend copyfile`,
+        );
+        return { file: name, sha256, dev: info.dev, inode: Option.getOrThrow(info.ino), links: 1 };
+      }),
+    );
+  const dependencies = { baseline: yield* integrity(base), candidate: yield* integrity(candidate) };
   const env = {
     ...Bun.env,
     COLLIE_BENCH_FIXTURE: `${out}/fixture`,
@@ -106,6 +143,9 @@ const study = Effect.gen(function* () {
     cpu_count: cpus().length,
     bun: Bun.version,
     fixture: env.COLLIE_BENCH_FIXTURE,
+    dependencies,
+    dependency_source:
+      "fresh private Bun cache, frozen bun.lock integrity, independently copied packages; hashes checked before and after every process",
   };
   yield* fs.writeFileString(`${out}/manifest.json`, encode(manifest));
   const contention = (name: string) =>
@@ -119,6 +159,10 @@ const study = Effect.gen(function* () {
   const run = (cwd: string, argv: string[], name: string) =>
     Effect.gen(function* () {
       yield* Console.log(`${yield* timestamp} ${name} started`);
+      yield* fs.writeFileString(
+        `${out}/${name}-before.dependencies.json`,
+        encode({ baseline: yield* integrity(base), candidate: yield* integrity(candidate) }),
+      );
       yield* contention(`${name}-before`);
       const child = Bun.spawn(argv, { cwd, env, stdout: "pipe", stderr: "pipe" });
       const [stdout, stderr, code] = yield* Effect.all(
@@ -132,13 +176,29 @@ const study = Effect.gen(function* () {
       yield* fs.writeFileString(`${out}/${name}.stdout`, stdout);
       yield* fs.writeFileString(`${out}/${name}.stderr`, stderr);
       yield* contention(`${name}-after`);
+      yield* fs.writeFileString(
+        `${out}/${name}-after.dependencies.json`,
+        encode({ baseline: yield* integrity(base), candidate: yield* integrity(candidate) }),
+      );
       assert.equal(code, 0, `${name} failed; keep its logs and reject this study`);
       yield* Console.log(`${yield* timestamp} ${name} completed`);
       return stdout.trim().split("\n").at(-1) ?? "";
     });
   const pairs: Array<{ base: Metrics; candidate: Metrics }> = [];
   yield* Effect.gen(function* () {
-    yield* run(base, [process.execPath, "install", "--frozen-lockfile"], "install-base");
+    yield* run(
+      base,
+      [
+        process.execPath,
+        "install",
+        "--frozen-lockfile",
+        "--cache-dir",
+        cache,
+        "--backend",
+        "copyfile",
+      ],
+      "install-base",
+    );
     yield* run(base, [process.execPath, "bench/read.ts", "prepare"], "prepare");
     yield* fs.writeFileString(
       `${out}/fixture-db.sha256`,

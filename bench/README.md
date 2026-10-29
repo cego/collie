@@ -13,8 +13,15 @@ a new evidence directory:
 bun bench/paired.ts /path/to/merge-base /path/to/evidence /path/to/state/measurements/machine.lock
 ```
 
-The driver takes Collie's cooperative Machine Measurement lock. It installs baseline
-dependencies and copies the identical harness into that checkout. Both versions use
+Install candidate dependencies from a fresh private cache with `bun install
+--frozen-lockfile --cache-dir .scratch/private-bun-cache --backend copyfile`, then copy
+that independent installation to the baseline checkout. Do not edit shared dependencies.
+
+The driver takes Collie's cooperative Machine Measurement lock. It checks the locked
+4.0.1 filesystem and SQL implementation hashes against pristine packages and requires
+independent files with one hard link. It repeats those checks before and after every
+process, and installs baseline dependencies only through the private cache with
+`copyfile`. It copies the identical harness into that checkout. Both versions use
 copies of one frozen fixture, with the same absolute paths. It retains each process's
 stdout, stderr and surrounding load/process readings. Cold means a fresh host with warm
 OS caches; the driver never evicts system caches or stops other work.
@@ -34,3 +41,8 @@ is not proved improved. Raw data remains available even when a process fails.
 `bun bench/paired.ts --self-check` checks the ratio/interval calculation against a
 known 50% reduction. The original discovery baseline was `eadce921`; each study records
 its actual merge-base and candidate revisions separately.
+
+The first study of 2026-10-29 was invalidated in full after discovering filesystem and
+SQL profiling instrumentation left in shared dependencies by the original tune-up.
+Its samples are retained in the Run record and excluded from conclusions. Only the
+replacement study with verified pristine dependencies can support a verdict.
