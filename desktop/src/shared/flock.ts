@@ -21,6 +21,7 @@ import { FlockSettings } from "./flock-settings";
 import { CleanupListing } from "./machine-cleanup";
 import { MachineSchedules } from "./schedules";
 import { MachineUsage } from "./usage";
+import { MachineCatalogue } from "./settings-agents";
 import { keepOwn, OwnReading } from "./machine-own";
 import {
   BoardMessage,
@@ -550,6 +551,7 @@ export const DesktopRpcs = RpcGroup.make(
   }),
   /** What each connected Machine's host read of its Usage. */
   Rpc.make("usage", { success: Schema.Array(MachineUsage) }),
+  Rpc.make("catalogues", { success: Schema.Array(MachineCatalogue) }),
   /** What each connected Machine's host listed of its Schedules. */
   Rpc.make("schedules", { success: Schema.Array(MachineSchedules) }),
   /** What a sweep would remove now on the Machine with this profile, waited on while it is connected. */

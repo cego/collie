@@ -130,6 +130,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         runDetail: () => Stream.die("not asked"),
         runFile: () => Effect.die("not asked"),
         usage: () => Effect.die("not asked"),
+        catalogues: () => Effect.die("not asked"),
         schedules: () => Effect.die("not asked"),
         cleanup: () => Effect.die("not asked"),
         sweep: () => Effect.die("not asked"),

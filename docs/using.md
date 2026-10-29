@@ -1629,6 +1629,23 @@ The header says how the Flock's settings sync: "In sync with all 4 Machines", "I
 3 of 4 · old-mini out of reach", or "Showing the Flock's settings as last read" while they
 cannot be read.
 
+Under **Agents › Who does the work**, harness, model, and effort use the Flock chat's
+pickers. Settings merges the catalogues read on your Machines. Each model and effort says
+how many Machines offer it, including Machines out of reach in the total. The section says
+when the oldest catalogue was read and names any Machine whose catalogue could not be read.
+Models from **Collie's table** say why that harness's list could not be read. Models added
+under **Advanced**, in `models.<harness>`, are marked as additions.
+
+Pick a model to see only its reported efforts. Changing model clears an effort the new
+model doesn't support. Changing harness clears the effort and selects that harness's
+default model. The Flock chat's own choice stays in its composer on this computer.
+
+**Fall back to** is an ordered list. Add a harness or model from the same model menu, move
+an entry up or down, or remove it. Each entry shows its Subscription's usage across the
+Flock, where Collie reads one. The first entry with usage left runs the step; an empty list
+waits for the reset. These controls write the existing `harness`, `model`, `effort`, and
+`fallbacks` settings.
+
 Each setting has a plain name with its config key in small print, a sentence or two on what
 it changes (what 0 or unset means where that matters, and that `scope`, `density` and
 `questions` change the TUI's board, not Desktop's), a control that fits it, its default, and

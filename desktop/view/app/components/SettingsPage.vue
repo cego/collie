@@ -13,13 +13,21 @@ import {
   syncPill,
 } from "../../../src/shared/flock-settings";
 import { drawnSaid } from "../../../src/shared/scale";
+import {
+  agentSettingChanges,
+  changeFallbacks,
+  fallbackList,
+  settingsAgentSelects,
+} from "../../../src/shared/settings-agents";
 import { drawnAtom, flockSettingsAtom } from "../flock";
 
 const emit = defineEmits<{ back: [] }>();
 const { openLink, saveGitlabHost, setFlockSetting } = useActions();
 const { credentials, trouble: credentialsTrouble } = useCredentials();
 const { desktopSettings, change } = useDesktopSettings();
-const { rows: machines, own } = useFlock();
+const { rows: machines, own, now } = useFlock();
+const { machines: catalogues, problem: catalogueProblem } = useCatalogues();
+const { machines: usage } = useUsage();
 const { open: openPage } = usePage();
 const { value: held, trouble } = useHeld(() => flockSettingsAtom);
 // Asked again on opening, which syncs every connected Machine and so shows their edits.
@@ -34,6 +42,64 @@ const sections = computed(() =>
     Effect.runSync(Clock.currentTimeMillis),
   ),
 );
+const agentRows = computed(() => sections.value.find(({ group }) => group === "Agents")!.rows);
+const agentValue = (key: string) => {
+  const row = agentRows.value.find((row) => row.key === key)!;
+  return row.value || row.fallback;
+};
+const profiles = computed(() => machines.value.map(({ profile }) => profile));
+const agentSettings = computed(() => ({
+  harness: agentValue("harness"),
+  model: agentValue("model"),
+  effort: agentValue("effort"),
+}));
+const agentSelects = computed(() =>
+  settingsAgentSelects(catalogues.value, profiles.value, agentSettings.value, now.value),
+);
+const fallbacks = computed(() =>
+  fallbackList(agentValue("fallbacks"), catalogues.value, profiles.value, usage.value, now.value),
+);
+const choosing = ref(false);
+const chooseAgent = async (key: "harness" | "model" | "effort", value: string, reset = false) => {
+  if (choosing.value) return;
+  choosing.value = true;
+  const row = agentRows.value.find((row) => row.key === key)!;
+  forget(idOf(row));
+  try {
+    for (const edit of agentSettingChanges(
+      catalogues.value,
+      profiles.value,
+      agentSettings.value,
+      key,
+      reset ? row.fallback : key === "model" && value === "" ? "default" : value,
+    )) {
+      const target = agentRows.value.find((row) => row.key === edit.key)!;
+      const refused = await setShared(target, reset && edit.key === key ? "" : edit.value);
+      if (refused !== null) {
+        refusals.value[idOf(row)] = refused;
+        return;
+      }
+      saved.value[idOf(target)] = true;
+    }
+  } finally {
+    choosing.value = false;
+  }
+};
+const chooseFallback = async (row: SettingRow, value: string) => {
+  if (choosing.value) return;
+  choosing.value = true;
+  try {
+    await set(row, value);
+  } finally {
+    choosing.value = false;
+  }
+};
+const resetRow = (row: SettingRow) =>
+  row.key === "harness" || row.key === "model" || row.key === "effort"
+    ? chooseAgent(row.key, "", true)
+    : row.key === "fallbacks"
+      ? chooseFallback(row, "")
+      : set(row, "");
 const pill = computed(() => syncPill(readable.value, machines.value));
 const toneClass = { ok: "text-primary", warn: "text-warning" } satisfies Record<
   Said["tone"],
@@ -71,7 +137,10 @@ const shown = computed(() =>
         ...section,
         subs,
         set: section.rows.filter(({ set }) => set).length,
-        lead: LEADS[section.group],
+        lead:
+          section.group === "Agents"
+            ? `What every step's agent runs on, unless it names its own. ${catalogueProblem.value ?? agentSelects.value.lead}`
+            : LEADS[section.group],
       },
     ];
   }),
@@ -428,8 +497,130 @@ const drawnLine = computed(() =>
                             {{ row.description }}
                           </p>
                         </div>
+                        <div
+                          v-if="row.shared && ['harness', 'model', 'effort'].includes(row.key)"
+                          class="self-start"
+                        >
+                          <fieldset :disabled="choosing" class="contents">
+                            <ChatModelSelect
+                              v-if="row.key === 'model'"
+                              :id="idOf(row)"
+                              :select="agentSelects.model"
+                              :aria-describedby="`desc-${idOf(row)} err-${idOf(row)}`"
+                              @choose="(value) => chooseAgent('model', value)"
+                            />
+                            <ChatChoiceSelect
+                              v-else
+                              :id="idOf(row)"
+                              :select="
+                                row.key === 'harness' ? agentSelects.harness : agentSelects.effort
+                              "
+                              :aria-describedby="`desc-${idOf(row)} err-${idOf(row)}`"
+                              @choose="
+                                (value) =>
+                                  chooseAgent(row.key === 'harness' ? 'harness' : 'effort', value)
+                              "
+                            />
+                          </fieldset>
+                          <p
+                            v-if="row.key === 'model' && agentSelects.model.warning"
+                            class="text-sm text-warning"
+                            role="status"
+                          >
+                            {{ agentSelects.model.warning }}
+                          </p>
+                        </div>
+                        <fieldset
+                          v-else-if="row.key === 'fallbacks'"
+                          :disabled="choosing"
+                          class="flex flex-col gap-2"
+                        >
+                          <ol
+                            v-if="fallbacks.entries.length"
+                            class="flex flex-col gap-2"
+                            :aria-labelledby="`label-${idOf(row)}`"
+                          >
+                            <li
+                              v-for="(entry, index) in fallbacks.entries"
+                              :key="`${index}:${entry.value}`"
+                              class="flex items-center gap-2 rounded-md border border-default p-2"
+                            >
+                              <span class="text-sm text-muted" aria-hidden="true">{{
+                                index + 1
+                              }}</span>
+                              <div class="flex min-w-0 flex-1 flex-col gap-1">
+                                <code class="break-all text-sm">{{ entry.value }}</code>
+                                <span
+                                  v-for="reading in entry.usage"
+                                  :key="reading.key"
+                                  :title="reading.title"
+                                  class="text-xs"
+                                  :class="
+                                    reading.level === 'out'
+                                      ? 'text-error'
+                                      : reading.level === 'warn'
+                                        ? 'text-warning'
+                                        : 'text-muted'
+                                  "
+                                  >{{ reading.text }}</span
+                                >
+                              </div>
+                              <UButton
+                                icon="i-lucide-arrow-up"
+                                color="neutral"
+                                variant="ghost"
+                                :aria-label="`Move ${entry.value} up`"
+                                :disabled="index === 0"
+                                @click="
+                                  chooseFallback(
+                                    row,
+                                    changeFallbacks(row.value, { at: index, move: 'up' }),
+                                  )
+                                "
+                              />
+                              <UButton
+                                icon="i-lucide-arrow-down"
+                                color="neutral"
+                                variant="ghost"
+                                :aria-label="`Move ${entry.value} down`"
+                                :disabled="index === fallbacks.entries.length - 1"
+                                @click="
+                                  chooseFallback(
+                                    row,
+                                    changeFallbacks(row.value, { at: index, move: 'down' }),
+                                  )
+                                "
+                              />
+                              <UButton
+                                icon="i-lucide-x"
+                                color="neutral"
+                                variant="ghost"
+                                :aria-label="`Remove ${entry.value}`"
+                                @click="
+                                  chooseFallback(
+                                    row,
+                                    changeFallbacks(row.value, { at: index, move: 'remove' }),
+                                  )
+                                "
+                              />
+                            </li>
+                          </ol>
+                          <p v-else class="text-sm text-muted">
+                            None: a step whose Subscription is used up waits for the reset.
+                          </p>
+                          <div class="self-start">
+                            <ChatModelSelect
+                              :id="idOf(row)"
+                              :select="fallbacks.add"
+                              @choose="
+                                (value) =>
+                                  chooseFallback(row, changeFallbacks(row.value, { add: value }))
+                              "
+                            />
+                          </div>
+                        </fieldset>
                         <USwitch
-                          v-if="row.kind === 'boolean'"
+                          v-else-if="row.kind === 'boolean'"
                           :id="idOf(row)"
                           :model-value="effective(row) === 'true'"
                           :aria-describedby="`desc-${idOf(row)}`"
@@ -444,7 +635,11 @@ const drawnLine = computed(() =>
                         />
                       </div>
                       <fieldset
-                        v-if="row.kind === 'choice' && row.choices.length <= 6"
+                        v-if="
+                          sub.sub !== 'Who does the work' &&
+                          row.kind === 'choice' &&
+                          row.choices.length <= 6
+                        "
                         :id="idOf(row)"
                         class="flex flex-wrap gap-0.5 self-start rounded-lg border border-default bg-elevated p-0.5"
                         :aria-labelledby="`label-${idOf(row)}`"
@@ -472,7 +667,7 @@ const drawnLine = computed(() =>
                         </label>
                       </fieldset>
                       <USelect
-                        v-else-if="row.kind === 'choice'"
+                        v-else-if="sub.sub !== 'Who does the work' && row.kind === 'choice'"
                         :id="idOf(row)"
                         class="self-start"
                         :model-value="row.value === '' ? undefined : row.value"
@@ -481,7 +676,7 @@ const drawnLine = computed(() =>
                         @update:model-value="(chosen) => set(row, String(chosen))"
                       />
                       <form
-                        v-else-if="row.kind !== 'boolean'"
+                        v-else-if="sub.sub !== 'Who does the work' && row.kind !== 'boolean'"
                         class="flex items-start gap-2"
                         :class="row.multiline ? 'flex-col items-stretch' : ''"
                         @submit.prevent="set(row, draftOf(row))"
@@ -580,7 +775,8 @@ const drawnLine = computed(() =>
                           icon="i-lucide-rotate-ccw"
                           label="Reset to default"
                           :aria-label="`Reset ${row.label} to default`"
-                          @click="set(row, '')"
+                          :disabled="sub.sub === 'Who does the work' && choosing"
+                          @click="resetRow(row)"
                         />
                       </div>
                     </div>

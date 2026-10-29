@@ -97,6 +97,7 @@ import {
   offersOn,
   runDetailOn,
   usageOn,
+  cataloguesOn,
   machineOwnOn,
   schedulesOn,
   cleanupOn,
@@ -1153,6 +1154,10 @@ const main = Effect.gen(function* () {
         ([installation, door]) => schedulesOn({ ...door.machine, installation }, door.desktop),
         { concurrency: "unbounded" },
       ),
+    catalogues: () =>
+      Effect.forEach(doors.values(), (door) => cataloguesOn(door.machine, door.desktop), {
+        concurrency: "unbounded",
+      }),
     cleanup: ({ profile }) => cleanupOn(doors, profile),
     sweep: ({ installation, machine, request }) =>
       sweepOn(doors, { installation, machine }, request, logged),
