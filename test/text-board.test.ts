@@ -70,7 +70,6 @@ const terminalStdin = Effect.acquireRelease(
   (stub) => Effect.sync(stub.restore),
 );
 
-/** What the board writes to stdout while the scope is open. */
 const capturedStdout = Effect.acquireRelease(
   Effect.sync(() => {
     const written: string[] = [];

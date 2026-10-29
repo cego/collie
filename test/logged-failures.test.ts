@@ -1,6 +1,3 @@
-// A failure that loses part of a Run's record is in the host log, and a Run that loses
-// nothing leaves no Error there.
-
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
