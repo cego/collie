@@ -9148,6 +9148,16 @@ const readyMr = (name: MrForge, head: string, merged: string, over: Partial<Fake
     ...over,
   }) satisfies FakeMr;
 
+/** The merge request's pipeline still running at its head, as GitLab says "ci still running". */
+const STILL_RUNNING = {
+  checks: [{ name: "build", state: "running" }],
+  mergeable: "running",
+} satisfies Partial<FakeMr>;
+const PIPELINE_PASSED = {
+  checks: [{ name: "build", state: "passed" }],
+  mergeable: "yes",
+} satisfies Partial<FakeMr>;
+
 const revParse = (ref: string, cwd = rig.projectDir) =>
   exec(["git", "rev-parse", ref], { cwd }).pipe(Effect.map((ran) => ran.stdout.trim()));
 
@@ -10791,6 +10801,129 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
+    `release on ${name}: a go answered while the head's pipeline still runs waits it out and merges on that go`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged, changed } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-go-ci-${name}`;
+          yield* rig.queueOutputs([PACKAGED, TAGGED]);
+          const status = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* changed(STILL_RUNNING);
+                yield* run.answer("go-1", "Release");
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on.startsWith("CI"),
+                );
+                expect(yield* runLog(runId)).not.toContain("no longer holds");
+                yield* changed(PIPELINE_PASSED);
+                const end = yield* ended(run.status);
+                expect(
+                  (yield* run.asked).filter((row) => row.decision.startsWith("go-")),
+                ).toHaveLength(1);
+                return end;
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
+          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a go whose pipeline fails while it still runs no longer holds, and is asked again once it is green`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, changed } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-go-ci-failed-${name}`;
+          yield* rig.queueOutputs([PACKAGED]);
+          const status = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* changed(STILL_RUNNING);
+                yield* run.answer("go-1", "Release");
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on.startsWith("CI"),
+                );
+                yield* changed({ checks: [{ name: "build", state: "failed" }], mergeable: "yes" });
+                yield* until(
+                  () => runLog(runId),
+                  (log) => log.includes("no longer holds"),
+                );
+                yield* changed(PIPELINE_PASSED);
+                yield* goAsked(run.asked, "go-2");
+                yield* run.answer("go-2", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(model.merges ?? []).toEqual([]);
+          const at = head.slice(0, 8);
+          expect(yield* runLog(runId)).toMatch(
+            new RegExp(`go 1 no longer holds for ${at}: the pipeline at ${at}, whose \\S+ failed`),
+          );
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a go whose head moves while its pipeline still runs no longer holds, naming the moved head`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, changed } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-go-ci-moved-${name}`;
+          yield* rig.queueOutputs([PACKAGED]);
+          let moved = "";
+          const status = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* changed(STILL_RUNNING);
+                yield* run.answer("go-1", "Release");
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on.startsWith("CI"),
+                );
+                moved = yield* pushedBySomebody(head);
+                yield* changed({ ...PIPELINE_PASSED, head: moved });
+                yield* goAsked(run.asked, "go-2");
+                yield* run.answer("go-2", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(model.merges ?? []).toEqual([]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+          expect(yield* runLog(runId)).toContain(
+            `go 1 no longer holds for ${head.slice(0, 8)}: its head moved to ${moved.slice(0, 8)}`,
+          );
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     `release on ${name}: a comment while the claim is taken merges nothing, gives the claim back and asks again once it is answered`,
     () =>
       runEffect(
@@ -12170,6 +12303,55 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* runLog(runId)).toContain(
             `the production go no longer holds for ${head.slice(0, 8)}: 1 unanswered comment(s)`,
           );
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a production go given while the head's pipeline still runs waits it out, then merges and sends to production`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged, now, staging } = yield* testable();
+          claimed.length = 0;
+          const runId = `r-tested-ci-${name}`;
+          yield* rig.queueOutputs([
+            MR_STAGED,
+            staging,
+            testedTag(name),
+            { verdict: "clean", played: ["deploy-production"] },
+          ]);
+          const pipeline = (over: Partial<FakeMr>) =>
+            Effect.flatMap(forge.model(), (current) =>
+              forge.set({ ...current, mrs: current.mrs.map((one) => ({ ...one, ...over })) }),
+            );
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* tested(run);
+              yield* pipeline(STILL_RUNNING);
+              yield* run.answer("production", "Send to production");
+              const [, unstaged] = yield* until(
+                () => Effect.all([awaitingOn(runId), wasAsked(runId, "unstage")]),
+                ([on, unstaged]) => on.startsWith("CI") || unstaged,
+              );
+              expect(unstaged).toBe(false);
+              yield* pipeline(PIPELINE_PASSED);
+              yield* until(
+                () => awaitingOn(runId),
+                (on) => on !== "" && !on.startsWith("CI"),
+              );
+              yield* forge.set(yield* now({ environments: deploys(head, merged) }));
+              return yield* ended(run.status);
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `${mr} merged at ${merged}, released as v1.2.0, in production`,
+          );
+          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
         }),
       ),
     120_000,

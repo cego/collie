@@ -847,7 +847,9 @@ until the standing is anything but `Waiting` or `Unreadable`, or a Hold or Stop 
 threads resolved, the forge — is recorded as the Run awaiting it, under Working with no
 notification ("Waiting for CI and a teammate's approval on `<mr>`."), until it has waited 2
 hours (2 days for a person) and parks; a red pipeline, changes requested or a merge the
-forge refuses parks it as Needs you while it keeps reading. Both are cleared when it returns. Take either inside an Activity, and suspend on `Held`
+forge refuses parks it as Needs you while it keeps reading. Both are cleared when it returns.
+With `untilBlocked: true` it returns that `Waiting` standing instead of waiting for the
+repair, as the release's re-reading of a go does. Take either inside an Activity, and suspend on `Held`
 there, so a resume waits again.
 
 `host.reply({ runId, cwd, comment, body })` replies to the comment with id `comment` on

@@ -953,6 +953,11 @@ export interface HostApi {
     readonly cwd: string;
     readonly proved: string;
     readonly seen: ReadonlyArray<string>;
+    /**
+     * Also return a `Waiting` review that needs a repair (a red pipeline, changes requested, a
+     * merge the forge refuses) rather than wait for it.
+     */
+    readonly untilBlocked?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
    * Replies to the comment with id `comment` on the merge request this Run recorded, posting

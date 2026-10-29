@@ -586,8 +586,11 @@ with **Try again**, **Release without a Helle claim**, recorded on its log as th
 say, and **Finish**. Either of the last two first gives back what it did take; a claim
 Helle will not take back parks the Run, naming it, until a resume gives it back. Holding
 them, it reads the review again, as
-the claims may have waited: where it no longer holds, the claim is given back, and the Run
-says why on its log and waits for a fresh go. Where it holds, Collie merges at exactly the head the go named — never an admin
+the claims may have waited. A pipeline still running at the go's head is waited out, as the
+wait before the go waits, and a Hold or Stop ends that wait. The go no longer holds where the
+head moved, a comment is unanswered, the pipeline failed, changes are requested, the forge
+refuses the merge, or the merge request was merged or closed: the claim is given back, and
+the Run says why on its log and waits for a fresh go. Where it holds, Collie merges at exactly the head the go named — never an admin
 merge, never auto-merge. A head that moved before the merge gives the claim back and goes
 back to waiting. The agent then tags by the repository's own conventions, and Collie reads
 the tag back on origin, carrying the merged commit, with its pipeline finished and
@@ -634,8 +637,9 @@ moved instead goes back to the wait with no fix round.
 Then, with the claim held while you test, it asks **`production`**: **Send to production**,
 **Leave production to me** or **Finish**, naming the merge request, its head and the stage
 jobs at their addresses. Nothing is merged yet, so **Send to production** and **Leave
-production to me** read again that go 1 still holds at that head and that stage still
-carries it. Where either does not, nothing is merged, stage is rolled back and the claim
+production to me** read again that go 1 still holds at that head, waiting out a pipeline
+still running there as go 1's own reading does, and that stage still carries it. Where
+either does not, nothing is merged, stage is rolled back and the claim
 given back, and the Run says why and goes back to the wait: a comment that arrived while
 you tested is answered in its round there. Where both hold, Collie merges at that head, the
 agent tags (where the tag's pipeline deploys stage too, it plays and checks those jobs as

@@ -823,6 +823,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly proved: string;
       readonly seen: ReadonlyArray<string>;
+      /** Also return a \`Waiting\` review that needs a repair, rather than wait for it. */
+      readonly untilBlocked?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
@@ -4198,6 +4200,7 @@ export const hostLayer = (options: {
                 const { mr, read, standing } = yield* reviewRead(asked);
                 if (standing._tag !== "Waiting" && standing._tag !== "Unreadable") return standing;
                 const wait = reviewWaitOf(mr, read);
+                if (wait._tag === "Blocked" && asked.untilBlocked === true) return standing;
                 yield* waitOn(
                   asked.runId,
                   wait._tag === "Awaiting" ? wait : { repair: blockedLine(mr, wait.why) },
