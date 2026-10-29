@@ -1560,6 +1560,25 @@ const frontDoorHandlers = (
           detail: `${runId} was stopped after its merge request merged; there is nothing left to resume`,
         };
       });
+      const progressFor = (runId: string) =>
+        Effect.gen(function* () {
+          const view = yield* registry.view(runId);
+          if (view === null) return null;
+          const board = Option.getOrElse(yield* Stream.runHead(boards), () => []);
+          const card = board.find((one) => one.runs.includes(runId));
+          const mr = card?.run === runId ? card.mr : null;
+          const forged =
+            mr === null ? undefined : (yield* readForge(env.stateDir)).get(mrLabel(mr));
+          return {
+            ready: readinessOfRun(
+              runId,
+              card,
+              view.status.status === "complete" || view.status.status === "failed",
+            ),
+            ci: forged?.checks ?? null,
+            steps: yield* operationsOf(env.stateDir, runId),
+          };
+        }).pipe(Effect.provideContext(bun));
       return FrontDoorRpcs.of({
         declare: ({ frontDoor, session, from, stamp: stamped, ...voice }, { client }) => {
           // Which Machine a channel came from is said by this host's own link, never by the channel.
@@ -2881,28 +2900,47 @@ const frontDoorHandlers = (
         },
         read: ({ tool, input }, { client }) =>
           Effect.promise(() => import("./tools")).pipe(
-            Effect.flatMap(({ answerRead }) => answerRead(askerEnv(client), tool, input)),
+            Effect.flatMap(({ answerRead }) =>
+              Effect.gen(function* () {
+                if (tool !== "collie_run") return yield* answerRead(askerEnv(client), tool, input);
+                const { describeOffers, refusal } = yield* Effect.promise(
+                  () => import("./lifecycle"),
+                );
+                const runs = yield* Effect.cached(
+                  registry
+                    .views(null)
+                    .pipe(Effect.map((views) => views.map((view) => factsOfView(dir, view)))),
+                );
+                const offers = (id: string) =>
+                  registry.offers(id).pipe(Effect.provideContext(hosted));
+                return yield* answerRead(askerEnv(client), tool, input, {
+                  runs,
+                  offers: (id) =>
+                    offers(id).pipe(
+                      Effect.map((listed) =>
+                        listed.length === 0 ? "Nothing is offered." : describeOffers(listed),
+                      ),
+                      Effect.catch((cause) => Effect.succeed(refusal(cause).error.message)),
+                    ),
+                  progress: progressFor,
+                  flow: (id) =>
+                    Effect.gen(function* () {
+                      return yield* taskFlowOf(
+                        {
+                          env: askerEnv(client),
+                          runs: yield* runs,
+                          alive: yield* shared.aliveNow,
+                          offers: (run) => offers(run).pipe(Effect.orElseSucceed(() => [])),
+                        },
+                        id,
+                      );
+                    }).pipe(Effect.orElseSucceed(() => null)),
+                });
+              }),
+            ),
             Effect.provideContext(bun),
           ),
-        progress: ({ runId }) =>
-          Effect.gen(function* () {
-            const view = yield* registry.view(runId);
-            if (view === null) return null;
-            const board = Option.getOrElse(yield* Stream.runHead(boards), () => []);
-            const card = board.find((one) => one.runs.includes(runId));
-            const mr = card?.run === runId ? card.mr : null;
-            const forged =
-              mr === null ? undefined : (yield* readForge(env.stateDir)).get(mrLabel(mr));
-            return {
-              ready: readinessOfRun(
-                runId,
-                card,
-                view.status.status === "complete" || view.status.status === "failed",
-              ),
-              ci: forged?.checks ?? null,
-              steps: yield* operationsOf(env.stateDir, runId),
-            };
-          }).pipe(Effect.provideContext(bun)),
+        progress: ({ runId }) => progressFor(runId),
         runDetail: ({ runId, tail, pages, refreshMr }) => {
           let fresh = refreshMr;
           const detail = Effect.gen(function* () {

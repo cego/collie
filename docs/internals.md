@@ -1682,6 +1682,9 @@ its time.
   invalidate before and after the write; external file events invalidate before the
   board's debounce. A read overtaken by invalidation retries. If the recursive watch
   fails, reuse is disabled. Engine status and clock-derived fields remain live.
+  A host's `collie_run` answer uses one local Run listing for its facts and Flow, with
+  local offers and the same write-covered readiness as `progress`. Flow relationship
+  indexes, installation identity and usual Step times are shared across a board build.
 - **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
   needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
   and a fixed sleep is too long on an idle machine and too short on a busy one. Work that
