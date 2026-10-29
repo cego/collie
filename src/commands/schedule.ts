@@ -1,6 +1,10 @@
 // `collie schedule`: a Machine's Schedules, added, listed, paused, resumed, removed and moved
 // through its host (ADR-0052). Every line names the Machine it is about.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { agentStartRefusal, asOptionText, insideCheckout } from "../agent-start";
@@ -37,21 +41,31 @@ const checkoutOf = Effect.fn("schedule.checkoutOf")(function* (
   never,
   PlatformServices
 > {
-  const named = given.trim();
-  if (named === SCHEDULE_PROJECTS_ROOT || named.startsWith("/")) return { path: named };
+  const named = Str.trim(given);
+  if (named === SCHEDULE_PROJECTS_ROOT || pipe_(named, Str.startsWith("/"))) return { path: named };
   if (named === "") return { path: (yield* insideCheckout(env.cwd)) ? env.cwd : null };
   const all = yield* new Herdr(env).workspaceList().pipe(Effect.orElseSucceed(() => []));
-  const byId = all.filter((one) => one.workspaceId === named);
+  const byId = Arr.filter(all, (one) => one.workspaceId === named);
   const matched =
-    byId.length > 0 ? byId : all.filter((one) => one.label.toLowerCase() === named.toLowerCase());
+    byId.length > 0
+      ? byId
+      : Arr.filter(all, (one) => Str.toLowerCase(one.label) === Str.toLowerCase(named));
   const found = matched.length === 1 ? matched[0] : undefined;
   if (found === undefined || found.cwd === "")
     return {
       error: err(
         "invalid_input",
         matched.length > 1
-          ? `"${named}" names ${matched.length} workspaces (${matched.map((one) => one.workspaceId).join(", ")}); say which`
-          : `no workspace id or label is "${named}"; workspaces: ${all.map((one) => one.label).join(", ") || "none"}. ${SCHEDULE_CHECKOUT_FIX}`,
+          ? `"${named}" names ${matched.length} workspaces (${Arr.join(
+              Arr.map(matched, (one) => one.workspaceId),
+              ", ",
+            )}); say which`
+          : `no workspace id or label is "${named}"; workspaces: ${
+              Arr.join(
+                Arr.map(all, (one) => one.label),
+                ", ",
+              ) || "none"
+            }. ${SCHEDULE_CHECKOUT_FIX}`,
       ),
     };
   return { path: found.cwd };
@@ -134,17 +148,17 @@ const scheduleAdd = Command.make(
           const refused = (failure: OpResult) => ({ refused: failure });
           const parsed = yield* parseInput(input, inputsJson);
           if (!parsed.ok) return refused(parsed.error);
-          const given = Object.fromEntries([
-            ...Object.entries(parsed.given.text),
-            ...Object.entries(parsed.given.json).map(([key, value]): [string, string] => [
-              key,
-              asOptionText(value),
-            ]),
+          const given = Rec.fromEntries([
+            ...Rec.toEntries(parsed.given.text),
+            ...Arr.map(
+              Rec.toEntries(parsed.given.json),
+              ([key, value]): [string, string] => [key, asOptionText(value)] as const,
+            ),
           ]);
           // The shared `--workspace` names the checkout: a path, a workspace, or the Projects root.
           const where = Option.getOrUndefined(global.workspace) ?? given.workspace ?? "";
-          const inputs = Object.fromEntries(
-            Object.entries(given).filter(([key]) => key !== "workspace"),
+          const inputs = Rec.fromEntries(
+            Arr.filter(Rec.toEntries(given), ([key]) => key !== "workspace"),
           );
           const checks = givenVerifications(verify);
           if (!checks.ok) return refused(err("invalid_input", checks.error));
@@ -157,7 +171,7 @@ const scheduleAdd = Command.make(
             ...Option.match(tz, { onNone: () => ({}), onSome: (zone) => ({ tz: zone }) }),
           });
           // Another Machine's host checks the start against its own modules and checkout.
-          if (env.machine !== undefined) return scheduled(where.trim());
+          if (env.machine !== undefined) return scheduled(Str.trim(where));
           const checkout = yield* checkoutOf(env, where);
           if ("error" in checkout) return refused(checkout.error);
           const at = checkout.path === SCHEDULE_PROJECTS_ROOT ? null : checkout.path;
@@ -203,12 +217,18 @@ const scheduleList = Command.make("list", {}, () =>
       return {
         ok: true as const,
         data: listed.value,
-        human: [
-          ...(schedules.length === 0
-            ? ["No Schedules."]
-            : schedules.map((entry) => `${machineOf(entry.machine)}\t${scheduleLine(entry)}`)),
-          ...machines.map(({ machine, note }) => `${machine} is away: ${note}`),
-        ].join("\n"),
+        human: Arr.join(
+          [
+            ...(schedules.length === 0
+              ? ["No Schedules."]
+              : Arr.map(
+                  schedules,
+                  (entry) => `${machineOf(entry.machine)}\t${scheduleLine(entry)}`,
+                )),
+            ...Arr.map(machines, ({ machine, note }) => `${machine} is away: ${note}`),
+          ],
+          "\n",
+        ),
       };
     }),
   ),

@@ -2,6 +2,9 @@
 // that host (ADR-draft-a-forge-is-asked-over-http-with-its-clis-login). Only `src/forge/`
 // imports `forges`, and only here: lazily, so a start that asks no forge never loads it.
 
+import * as Str from "effect/String";
+import * as Cause from "effect/Cause";
+import { pipe as pipe_ } from "effect/Function";
 import { Clock, Config, Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
@@ -157,11 +160,13 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
         const send = (token: string) =>
           Effect.tryPromise({
             try: (signal) => providerOf(login, slot).then((provider) => call(provider, signal)),
-            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+            catch: (error) => new Cause.UnknownError(error),
           }).pipe(
             Effect.map((value): Sent<A> => ({ sent: { ok: true, value }, refused: false })),
-            Effect.catch((error) =>
+            Effect.catch((failed) =>
               Effect.map(Effect.promise(library), (forges): Sent<A> => {
+                const error =
+                  failed.cause instanceof Error ? failed.cause : new Error(String(failed.cause));
                 const refused = error instanceof forges.ForgeApiError && error.status === 401;
                 // Another call may have read a new token since this one sent its own.
                 if (refused && slot.token === token) slot.token = null;
@@ -250,7 +255,7 @@ export const pagesAs = <S extends Schema.Decoder<unknown>>(
   Effect.gen(function* () {
     const items: Array<S["Type"]> = [];
     const pages = Schema.Array(item);
-    const separator = path.includes("?") ? "&" : "?";
+    const separator = pipe_(path, Str.includes("?")) ? "&" : "?";
     for (let page = 1; ; page++) {
       const listed = yield* requestAs(
         pages,

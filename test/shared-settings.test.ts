@@ -2,6 +2,8 @@
 // written by the host for a front door with the edit's own time, so the latest edit of a
 // key wins wherever it was made.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import {
@@ -33,13 +35,17 @@ test(
 
           const shared = yield* client.settings();
           expect(shared.flock).toBeNull();
-          expect(shared.settings.map(({ key }) => key).sort()).toEqual(["model", "scope"]);
-          expect(shared.settings.find(({ key }) => key === "model")).toEqual({
+          expect(Arr.map(shared.settings, ({ key }) => key).sort()).toEqual(["model", "scope"]);
+          expect(
+            Option.getOrUndefined(Arr.findFirst(shared.settings, ({ key }) => key === "model")),
+          ).toEqual({
             key: "model",
             value: "sonnet",
             at: "2026-10-07T10:00:00.000Z",
           });
-          const dated = shared.settings.find(({ key }) => key === "scope")!.at;
+          const dated = Option.getOrUndefined(
+            Arr.findFirst(shared.settings, ({ key }) => key === "scope"),
+          )!.at;
           // Dated once, so a later write to the file cannot make the old value newer.
           expect((yield* readSettingsSet(world.config)).set.scope).toBe(dated);
 
@@ -60,7 +66,9 @@ test(
             "local",
           ]);
           expect(after.flock).toMatchObject({ by: "desktop" });
-          expect(after.settings.find(({ key }) => key === "scope")).toEqual({
+          expect(
+            Option.getOrUndefined(Arr.findFirst(after.settings, ({ key }) => key === "scope")),
+          ).toEqual({
             key: "scope",
             value: null,
             at: "2099-10-07T11:00:00.000Z",

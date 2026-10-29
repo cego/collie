@@ -8,6 +8,7 @@
 // The Markdown beside this file is the content: how to read each kind of target, what a
 // reviewer is asked for, and what the fix is told about where it stands.
 
+import * as Arr from "effect/Array";
 import {
   Agents,
   FINDINGS_FILE,
@@ -178,7 +179,7 @@ export default defineWorkflow({
         max_iterations: "1",
         disputed: formatFindings([]),
         risks: riskLine(place.options.risks ?? ""),
-        target_repo: repoArgs(parseMrTarget(asked.target)?.project ?? null).join(" "),
+        target_repo: Arr.join(repoArgs(parseMrTarget(asked.target)?.project ?? null), " "),
         mr: mrForgeFacts(asked.target) ?? NO_MR,
         base: DEFAULT_BASE,
         obstacle: "",
@@ -264,17 +265,20 @@ export default defineWorkflow({
           chosen = yield* menu(
             ask({
               name: `post-${(asks += 1)}`,
-              prompt: [
-                "What next?",
-                ...(settled === "" ? [] : [`The rally stopped: ${settled}.`]),
-                ...(unfixable === ""
-                  ? []
-                  : [
-                      fixOffered
-                        ? `Only a live implementer can take a fix: ${unfixable}.`
-                        : `No fix is offered: ${unfixable}.`,
-                    ]),
-              ].join(" "),
+              prompt: Arr.join(
+                [
+                  "What next?",
+                  ...(settled === "" ? [] : [`The rally stopped: ${settled}.`]),
+                  ...(unfixable === ""
+                    ? []
+                    : [
+                        fixOffered
+                          ? `Only a live implementer can take a fix: ${unfixable}.`
+                          : `No fix is offered: ${unfixable}.`,
+                      ]),
+                ],
+                " ",
+              ),
               options: [
                 ...(handed ? [AGAIN] : split.live.length > 0 && fixOffered ? [FIX] : []),
                 ...(unfixable === "" ? [IMPLEMENT] : []),
@@ -393,8 +397,11 @@ export default defineWorkflow({
           run.id,
           `${operation}: fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
         );
-        const known = new Set(disputed.map(findingKey));
-        disputed = [...disputed, ...fixed.disputed.filter((one) => !known.has(findingKey(one)))];
+        const known = new Set(Arr.map(disputed, findingKey));
+        disputed = [
+          ...disputed,
+          ...Arr.filter(fixed.disputed, (one) => !known.has(findingKey(one))),
+        ];
         synthesis = yield* reviewedAgain((reviews += 1), agents.outputFor(run.id, operation));
       }
     }),
@@ -402,8 +409,11 @@ export default defineWorkflow({
 
 /** What the live implementer is told: where the review is, and that this is a fix round. */
 const handOffText = (dir: string) =>
-  [
-    `A review of this work is ready in ${dir}/${REVIEW_FILE}, with its findings as JSON in`,
-    `${dir}/${FINDINGS_FILE}. Apply it as a fix round: fix what it found, commit as you go,`,
-    "and where you disagree with a finding say so with a reason rather than dropping it.",
-  ].join(" ");
+  Arr.join(
+    [
+      `A review of this work is ready in ${dir}/${REVIEW_FILE}, with its findings as JSON in`,
+      `${dir}/${FINDINGS_FILE}. Apply it as a fix round: fix what it found, commit as you go,`,
+      "and where you disagree with a finding say so with a reason rather than dropping it.",
+    ],
+    " ",
+  );

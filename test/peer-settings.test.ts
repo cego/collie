@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Clock, ConfigProvider, Effect, Fiber, FileSystem, SubscriptionRef } from "effect";
 import { readAudit } from "../src/audit";
@@ -75,7 +78,12 @@ test(
             expect(received.flock?.by).toBe(laptop!.name);
             const there = yield* frontDoor(socketOf(second.world.state));
             expect(
-              (yield* there.settings()).settings.find((one) => one.key === "gitlab_host"),
+              Option.getOrUndefined(
+                Arr.findFirst(
+                  (yield* there.settings()).settings,
+                  (one) => one.key === "gitlab_host",
+                ),
+              ),
             ).toBeUndefined();
             yield* setSetting(second.world.config, "model", "haiku", "2099-10-12T11:00:00.000Z");
             yield* until(
@@ -88,7 +96,7 @@ test(
             yield* setSetting(first.world.config, "model", "opus", "2099-10-12T12:00:00.000Z");
             yield* until(
               () => there.settings(),
-              (has) => has.settings.some((one) => one.key === "model" && one.value === "opus"),
+              (has) => Arr.some(has.settings, (one) => one.key === "model" && one.value === "opus"),
             );
             expect((yield* readSettingsSet(second.world.config)).set.model).toBe(
               "2099-10-12T12:00:00.000Z",
@@ -106,7 +114,7 @@ test(
                   readSettingsSet(first.world.config),
                   readSettingsSet(second.world.config),
                 ]),
-              (both) => both.every((has) => has.set.model === "2099-10-12T14:00:00.000Z"),
+              (both) => Arr.every(both, (has) => has.set.model === "2099-10-12T14:00:00.000Z"),
             );
             expect(yield* fs.readFileString(`${first.world.config}/config.json`)).toContain(
               "sonnet",
@@ -114,11 +122,10 @@ test(
             const desktop = `${first.world.home}/desktop`;
             const services = yield* Effect.context<PlatformServices>();
             const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
-            const machines = [first, second].map((side) => ({
+            const machines = Arr.map([first, second], (side) => ({
               name: side.name,
               door: {
-                settings: () =>
-                  sharedSettings(side.world.config).pipe(Effect.provideContext(services)),
+                settings: sharedSettings(side.world.config).pipe(Effect.provideContext(services)),
                 setSettings: ({ settings }: { settings: Parameters<typeof takeShared>[1] }) =>
                   takeShared(
                     side.world.config,
@@ -149,7 +156,7 @@ test(
               "opus",
               "2099-10-12T16:00:00.000Z",
             );
-            if ("refused" in edited) throw new Error(edited.refused);
+            if ("refused" in edited) return yield* Effect.die(new Error(edited.refused));
             yield* SubscriptionRef.set(flock, edited);
             yield* sync.syncOn(machines[0]!);
             yield* until(
@@ -194,9 +201,11 @@ test(
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
             const older = `${first.world.home}/older-collie`;
-            const newer = (yield* collieCommand)[0]!;
+            const current = yield* collieCommand;
+            const newer = current.length === 1 ? current[0]! : `${first.world.home}/newer-collie`;
+            if (current.length !== 1) yield* releaseBinary(newer, BUILD);
             yield* releaseBinary(older, "0.0.1");
-            const bin = first.env.PATH!.split(":")[0]!;
+            const bin = Str.split(first.env.PATH!, ":")[0]!;
             const log = `${first.world.home}/upgrades`;
             yield* fs.writeFileString(
               `${bin}/collie`,
@@ -222,7 +231,7 @@ test(
               () => fs.exists(log),
               (exists) => exists,
             );
-            expect((yield* fs.readFileString(log)).trim()).toBe(BUILD);
+            expect(Str.trim(yield* fs.readFileString(log))).toBe(BUILD);
             yield* until(
               () => ownerOf(first.world.state),
               (owner) => owner !== null && owner.pid !== before?.pid,
@@ -289,7 +298,7 @@ test(
         for (const { own, far } of builds) {
           const calls: string[] = [];
           const client: Effect.Success<ReturnType<Link["connect"]>> = {
-            identity: () => Effect.succeed(far),
+            identity: Effect.succeed(far),
             shell: ({ script }) =>
               Effect.sync(() => {
                 calls.push(script);
@@ -300,9 +309,9 @@ test(
                 calls.push("refresh");
                 return true;
               }),
-            settings: () => Effect.succeed({ settings: [], flock: null }),
+            settings: Effect.succeed({ settings: [], flock: null }),
             setSettings: ({ settings }) => Effect.succeed({ settings, flock: null }),
-            sharedDefinitions: () => Effect.succeed([]),
+            sharedDefinitions: Effect.succeed([]),
             setSharedDefinitions: ({ definitions }) => Effect.succeed(definitions),
           };
           const link: Link = {

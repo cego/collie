@@ -2,6 +2,9 @@
 // own version that is used only once its signature verifies, `collie onboard`'s steps as
 // they come, and routes that come and go while Desktop runs.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { platformLayer, type PlatformServices } from "../src/platform";
@@ -166,7 +169,7 @@ test("herdr's questions while it saves a Machine are asked of the human, each wi
           false,
         ],
       ]);
-      expect((yield* fs.readFileString(`${dir}/herdr.log`)).trim()).toBe(
+      expect(Str.trim(yield* fs.readFileString(`${dir}/herdr.log`))).toBe(
         "machine add --label vm --remote-session default mk@vm install=y replace=n",
       );
     }),
@@ -219,7 +222,7 @@ test("onboarding puts the verified runner on the Machine and streams its steps, 
       yield* fs.makeDirectory(home);
       const key = pair();
       const bytes = new TextEncoder().encode(ONBOARD);
-      const uname = (yield* Effect.promise(() => Bun.$`uname -sm`.text())).trim();
+      const uname = Str.trim(yield* Effect.promise(() => Bun.$`uname -sm`.text()));
       const platform = platformOf(uname)!;
       const served = yield* releases({
         [`/0.40.0/collie-${platform}`]: bytes,
@@ -263,7 +266,7 @@ test("a runner that does not verify is never put on the Machine, and onboarding 
       const dir = yield* scratch;
       const home = `${dir}/home`;
       yield* fs.makeDirectory(home);
-      const uname = (yield* Effect.promise(() => Bun.$`uname -sm`.text())).trim();
+      const uname = Str.trim(yield* Effect.promise(() => Bun.$`uname -sm`.text()));
       const served = yield* releases({
         [`/0.40.0/collie-${platformOf(uname)}`]: new TextEncoder().encode(ONBOARD),
       });
@@ -278,7 +281,9 @@ test("a runner that does not verify is never put on the Machine, and onboarding 
         () => Effect.void,
       );
       expect(last.ready).toBe(false);
-      expect(last.steps.map(({ step, status }) => [step, status])).toEqual([["runner", "failed"]]);
+      expect(Arr.map(last.steps, ({ step, status }) => [step, status])).toEqual([
+        ["runner", "failed"],
+      ]);
       expect(last.steps[0]!.detail).toContain("unsigned");
       expect(yield* fs.exists(`${home}/.cache/collie/runners`)).toBe(false);
     }),
@@ -298,7 +303,7 @@ const snapshot = (installation: string): BoardSnapshot => ({
   seq: 0,
 });
 interface Fake {
-  readonly board: () => Stream.Stream<BoardMessage, { readonly message: string }>;
+  readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
 }
 const until = (what: () => boolean) =>
   Effect.suspend(() => (what() ? Effect.void : Effect.fail("not yet"))).pipe(
@@ -317,7 +322,9 @@ test("a route added while Desktop runs shows its Machine, one removed stops, and
           installed || name !== "bare"
             ? Effect.acquireRelease(
                 Effect.succeed<Fake>({
-                  board: () => Stream.make(snapshot(name)).pipe(Stream.concat(Stream.never)),
+                  board: Stream.suspend(() =>
+                    Stream.make(snapshot(name)).pipe(Stream.concat(Stream.never)),
+                  ),
                 }),
                 () => Effect.sync(() => closed.push(name)),
               )
@@ -361,10 +368,13 @@ test("a route added while Desktop runs shows its Machine, one removed stops, and
       yield* Deferred.await(removed);
       yield* until(() => told.includes("vm Snapshot"));
       // Said once its route has ended, so nothing it said comes after.
-      expect(told.filter((one) => one.startsWith("pc "))).toEqual(["pc Snapshot", "pc Removed"]);
+      expect(Arr.filter(told, (one) => pipe_(one, Str.startsWith("pc ")))).toEqual([
+        "pc Snapshot",
+        "pc Removed",
+      ]);
       expect(closed).toEqual(["pc"]);
       // Installed now, and found at once rather than after the 2 s its second failure waits.
-      yield* until(() => told.filter((one) => one === "bare Lost").length === 2);
+      yield* until(() => Arr.filter(told, (one) => one === "bare Lost").length === 2);
       installed = true;
       const woken = yield* Clock.currentTimeMillis;
       yield* Deferred.succeed(later, undefined);
@@ -387,10 +397,11 @@ test.each([
           machine: { profile: `p-${name}`, name, target: `mk@${name}` },
           open: () =>
             Effect.succeed<Fake>({
-              board: () =>
+              board: Stream.suspend(() =>
                 Stream.fromEffect(
                   Effect.as(Effect.sleep(name === "a" ? slower : "0 millis"), snapshot("pc")),
                 ).pipe(Stream.concat(Stream.never)),
+              ),
             }),
           collie: () => Effect.die("not asked"),
         });
@@ -415,7 +426,11 @@ test.each([
           ),
           Effect.forkScoped,
         );
-        yield* until(() => told.includes("a Snapshot") && told.some((one) => one.startsWith("b ")));
+        yield* until(
+          () =>
+            told.includes("a Snapshot") &&
+            Arr.some(told, (one) => pipe_(one, Str.startsWith("b "))),
+        );
         yield* Deferred.succeed(remove, undefined);
         yield* Deferred.await(removed);
         yield* until(
@@ -442,7 +457,7 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
     { machine: { ...machine, installation: "vm-1" }, message: snapshot("vm-1") },
     { _tag: "Onboarding", job: "j-1", machine, run },
   ];
-  const before = items.reduce(applyItem, EMPTY_FLOCK);
+  const before = Arr.reduce(items, EMPTY_FLOCK, applyItem);
   expect(machineRows(before)).toEqual([
     {
       profile: "local",
@@ -479,7 +494,7 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
   ]);
   const after = applyItem(before, { _tag: "Removed", machine });
   expect(after.machines.size).toBe(0);
-  expect(machineRows(after).map(({ profile }) => profile)).toEqual(["local"]);
+  expect(Arr.map(machineRows(after), ({ profile }) => profile)).toEqual(["local"]);
 });
 
 test("a Machine's row says what doctor finds of it, over what its last onboarding said", () =>
@@ -507,9 +522,9 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
       };
       const route = {
         collie: (args: ReadonlyArray<string>) =>
-          args.join(" ") === "--json doctor"
+          Arr.join(args, " ") === "--json doctor"
             ? Effect.succeed({ out: `${JSON.stringify(envelope)}\n`, err: "", code: 1 })
-            : Effect.die(`asked ${args.join(" ")}`),
+            : Effect.die(`asked ${Arr.join(args, " ")}`),
       };
       const doctored = Option.getOrThrow(yield* doctorOn(route));
       expect(doctored.ready).toBe(false);
@@ -528,7 +543,9 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
         { _tag: "Onboarding", job: "j-1", machine, run: onboarded },
         { _tag: "Doctored", machine, run: doctored },
       ];
-      expect(machineRows(items.reduce(applyItem, EMPTY_FLOCK))[0]!.onboarded).toEqual(doctored);
+      expect(machineRows(Arr.reduce(items, EMPTY_FLOCK, applyItem))[0]!.onboarded).toEqual(
+        doctored,
+      );
       const silent = { collie: () => Effect.fail("collie: not found") };
       expect(Option.isNone(yield* doctorOn(silent))).toBe(true);
     }),
@@ -552,7 +569,7 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
         { name: "linear mcp", ok: true, detail: "logged in", fix: "" },
       ];
       const doctored = Option.getOrThrow(yield* doctorOn(said(absent)));
-      expect(doctored.steps.map(({ step, status }) => [step, status])).toEqual([
+      expect(Arr.map(doctored.steps, ({ step, status }) => [step, status])).toEqual([
         ["helle", "needs_human"],
       ]);
       const onboarding = (status: OnboardStep["status"]): OnboardRun => ({
@@ -568,11 +585,11 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
           { _tag: "Onboarding", job: "j-1", machine, run },
           { _tag: "Doctored", machine, run: doctored },
         ];
-        return machineRows(items.reduce(applyItem, EMPTY_FLOCK))[0]!.onboarded!;
+        return machineRows(Arr.reduce(items, EMPTY_FLOCK, applyItem))[0]!.onboarded!;
       };
       expect(row(onboarding("needs_human")).ready).toBe(false);
       expect(row(onboarding("skipped")).ready).toBe(true);
-      const working = absent.map((check) =>
+      const working = Arr.map(absent, (check) =>
         check.name === "helle" ? { ...check, detail: "as mk", fix: "" } : check,
       );
       expect(Option.getOrThrow(yield* doctorOn(said(working))).ready).toBe(true);
@@ -610,11 +627,11 @@ test("a Linear login onboarding left unfinished keeps the row short, though doct
           { _tag: "Onboarding", job: "j-1", machine, run },
           { _tag: "Doctored", machine, run: doctored },
         ];
-        return machineRows(items.reduce(applyItem, EMPTY_FLOCK))[0]!.onboarded!;
+        return machineRows(Arr.reduce(items, EMPTY_FLOCK, applyItem))[0]!.onboarded!;
       };
       const failed = row("failed");
       expect(failed.ready).toBe(false);
-      expect(failed.steps.map(({ step, status }) => [step, status])).toEqual([
+      expect(Arr.map(failed.steps, ({ step, status }) => [step, status])).toEqual([
         ["linear", "failed"],
       ]);
       expect(row("skipped").ready).toBe(true);
@@ -647,7 +664,7 @@ test("a failing gh check is a failed step with its fix, as a failing glab check 
         collie: () => Effect.succeed({ out: JSON.stringify(envelope), err: "", code: 1 }),
       };
       expect(Option.getOrThrow(yield* doctorOn(route)).steps).toEqual(
-        checks.map(({ name, detail, fix }) => ({
+        Arr.map(checks, ({ name, detail, fix }) => ({
           step: name,
           title: name,
           status: "failed",

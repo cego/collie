@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import type { LinkCard } from "../../../src/shared/links";
 
 const props = defineProps<{
@@ -17,7 +19,13 @@ watch(
       if (kind !== "pipeline" || status !== undefined || statuses.value.has(url)) continue;
       statuses.value.set(url, null);
       void textOf(props.installation, props.runId, `pipeline:${url}`, { quiet: true }).then(
-        (said) => statuses.value.set(url, said?.trim() || null),
+        (said) =>
+          statuses.value.set(
+            url,
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(said), (present) => Str.trim(present)),
+            ) || null,
+          ),
       );
     }
   },

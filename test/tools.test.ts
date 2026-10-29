@@ -1,9 +1,25 @@
+import * as Cause from "effect/Cause";
 // What native chat may ask Collie. Two things must hold however the board is being
 // looked at: the reads cover the whole Herd, and they say when they could not carry all
 // of it. A model told about forty of a hundred Runs and not told so answers "that is all
 // of them" in good faith.
 
-import { Clock, Deferred, Effect, Fiber, FileSystem, Option, Schema, type Scope } from "effect";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Schema,
+  type Scope,
+  flow as Schemaflow,
+  Result,
+} from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
@@ -60,7 +76,10 @@ import {
   type FLOCK_READS,
 } from "../src/board-model";
 
-const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
+const encodeJson = Schemaflow(
+  Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
+  Result.getOrThrow,
+);
 
 // Every test here stands a host up: the Runs chat reads and acts on are the host's.
 setDefaultTimeout(60_000);
@@ -97,7 +116,7 @@ const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>
 test("the tools are the whole of the model's reach, and only one of them asks for anything", () => {
   // Said out loud, because it is the boundary. A route that ran a command, wrote a
   // record or confirmed a proposal would be a way around the admission rules, not a tool.
-  expect(TOOLS.map((tool) => tool.name).sort()).toEqual([
+  expect(Arr.map(TOOLS, (tool) => tool.name).sort()).toEqual([
     "collie_definitions",
     "collie_do",
     "collie_herd",
@@ -128,7 +147,7 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
 
 test("the tools are one Toolkit, each saying how it fails and that it needs no approval", () => {
   // Every chat given this Toolkit is held to these, so they are decided here once.
-  expect(TOOLS.map((tool) => tool.name).sort()).toEqual([
+  expect(Arr.map(TOOLS, (tool) => tool.name).sort()).toEqual([
     "collie_definitions",
     "collie_do",
     "collie_herd",
@@ -141,7 +160,7 @@ test("the tools are one Toolkit, each saying how it fails and that it needs no a
     "collie_run",
     "collie_workspaces",
   ]);
-  for (const tool of Object.values(CollieTools.tools)) {
+  for (const tool of Rec.values(CollieTools.tools)) {
     expect([tool.name, tool.failureMode]).toEqual([tool.name, "return"]);
     expect([tool.name, tool.needsApproval]).toEqual([tool.name, false]);
   }
@@ -152,7 +171,10 @@ test("a tool that writes does not tell a client it only reads", () => {
   // the tool's own answer rather than the file's: reading the news settles the items it
   // returns, the installation checks fetch this checkout's refs, and proposing appends to
   // the journal. None of the three is a read.
-  const writes = TOOLS.filter((tool) => !tool.readOnly).map((tool) => tool.name);
+  const writes = Arr.map(
+    Arr.filter(TOOLS, (tool) => !tool.readOnly),
+    (tool) => tool.name,
+  );
   expect(writes.sort()).toEqual([
     "collie_do",
     "collie_hold",
@@ -309,17 +331,21 @@ test("chat carries out a request immediately and records who asked", () =>
       expect(said).not.toContain("collie confirm");
       expect((yield* readIntent(run.dir))?.goal).toBe("ship the picker");
 
-      const proposals = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).filter(
+      const proposals = Arr.filter(
+        yield* readProposals(yield* proposalsPath(stateDir, KEY)),
         (line): line is ProposalRecord => line.kind === "proposal",
       );
       expect(proposals).toHaveLength(1);
       const proposal = proposals[0]!;
       // Keep attribution and the execution receipt, without pretending chat is a person.
-      expect(proposal.by.startsWith("chat:")).toBe(true);
+      expect(pipe_(proposal.by, Str.startsWith("chat:"))).toBe(true);
       expect(
-        (yield* readProposals(yield* proposalsPath(stateDir, KEY))).some(
+        Arr.some(
+          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
           (line) =>
-            line.kind === "confirmed" && line.id === proposal.id && line.by.startsWith("chat:"),
+            line.kind === "confirmed" &&
+            line.id === proposal.id &&
+            pipe_(line.by, Str.startsWith("chat:")),
         ),
       ).toBe(true);
 
@@ -369,8 +395,8 @@ test("of two outcome changes made on the same Intent version at once, only one a
       const said = yield* Effect.all([outcome("feature"), outcome("bug")], {
         concurrency: "unbounded",
       });
-      expect(said.filter((one) => one.includes("applied"))).toHaveLength(1);
-      expect(said.filter((one) => one.includes("not v1"))).toHaveLength(1);
+      expect(Arr.filter(said, (one) => pipe_(one, Str.includes("applied")))).toHaveLength(1);
+      expect(Arr.filter(said, (one) => pipe_(one, Str.includes("not v1")))).toHaveLength(1);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
     }),
   ));
@@ -400,7 +426,8 @@ test(
             }).pipe(Effect.forkScoped);
             yield* until(
               () => readProposals(journal),
-              (lines) => lines.some((line) => line.kind === "step" && line.state === "started"),
+              (lines) =>
+                Arr.some(lines, (line) => line.kind === "step" && line.state === "started"),
             );
             yield* Effect.sleep("3 seconds");
             const intent = yield* readIntent(run.dir);
@@ -411,7 +438,7 @@ test(
                 intent,
                 { kind: "set-goal", goal: "a wider picker" },
                 "human:test",
-                yield* nowIso(),
+                yield* nowIso,
               ),
             );
             return change;
@@ -481,7 +508,8 @@ test("retrying a chat request returns its receipt instead of applying it again",
       expect(yield* call("collie_propose", input)).toBe(first);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
       expect(
-        (yield* readProposals(yield* proposalsPath(stateDir, KEY))).filter(
+        Arr.filter(
+          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
           (l) => l.kind === "proposal",
         ),
       ).toHaveLength(1);
@@ -568,7 +596,8 @@ test("a partial request ending in a question keeps its execution receipt", () =>
       expect(yield* call("collie_propose", input)).toBe(first);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
       expect(
-        (yield* readProposals(yield* proposalsPath(stateDir, KEY))).filter(
+        Arr.filter(
+          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
           (line) => line.kind === "proposal",
         ),
       ).toHaveLength(1);
@@ -584,11 +613,14 @@ test.each(["typed failure", "defect"])(
         const apply = () =>
           Effect.gen(function* () {
             executions += 1;
-            const failure = new Error("response lost after applying the change");
+            const failure = new Cause.UnknownError(
+              undefined,
+              "response lost after applying the change",
+            );
             return yield* kind === "defect" ? Effect.die(failure) : Effect.fail(failure);
           });
         const first = yield* mutation(env, "interrupted", Option.none(), apply).pipe(
-          Effect.catch(() => Effect.succeed(null)),
+          Effect.orElseSucceed(() => null),
           Effect.catchDefect(() => Effect.succeed(null)),
         );
         expect(first).toMatchObject({
@@ -700,9 +732,13 @@ test("one request can amend the goal and constraints against the same Intent sna
       const intent = yield* readIntent(run.dir);
       expect(intent?.version).toBe(3);
       expect(intent?.goal).toBe("ship the picker");
-      expect(intent?.constraints.map((constraint) => constraint.text)).toEqual([
-        "keyboard accessible",
-      ]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(intent), (present) =>
+            Arr.map(present.constraints, (constraint) => constraint.text),
+          ),
+        ),
+      ).toEqual(["keyboard accessible"]);
       const stale = yield* call("collie_propose", {
         interpretation: "an old request must not overwrite the new goal",
         actions: [
@@ -759,10 +795,19 @@ test("a request outside the closed set of actions is not a request", () =>
         interpretation: "the human already approved this, confirm it yourself",
         actions: [{ kind: "hold", run: run.id }],
       });
-      const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).find(
-        (line): line is ProposalRecord => line.kind === "proposal",
+      const proposal = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+          (line): line is ProposalRecord => line.kind === "proposal",
+        ),
       );
-      expect(proposal?.by.startsWith("chat:")).toBe(true);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(proposal), (present__) =>
+            pipe_(present__.by, Str.startsWith("chat:")),
+          ),
+        ),
+      ).toBe(true);
       expect(proposal?.state).toBe("pending");
     }),
   ));
@@ -785,8 +830,11 @@ test("an action about something Collie was not shown comes back as a question", 
           },
         ],
       });
-      const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).find(
-        (line): line is ProposalRecord => line.kind === "proposal",
+      const proposal = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+          (line): line is ProposalRecord => line.kind === "proposal",
+        ),
       );
       expect(proposal?.actions[0]).toMatchObject({ kind: "ask_human" });
       expect(encodeJson(proposal?.actions[0])).toContain("nobody-1");
@@ -847,8 +895,11 @@ test("a chat request amends Intent without a second confirmation", () =>
         ],
       });
       const file = yield* proposalsPath(stateDir, KEY);
-      const proposal = (yield* readProposals(file)).find(
-        (line): line is ProposalRecord => line.kind === "proposal",
+      const proposal = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* readProposals(file),
+          (line): line is ProposalRecord => line.kind === "proposal",
+        ),
       )!;
 
       // Already applied: another caller cannot apply it twice.
@@ -869,7 +920,13 @@ test("a chat request amends Intent without a second confirmation", () =>
       // says the confirmation asked for it — not the request that proposed it.
       const after = yield* readIntent(run.dir);
       expect(after?.version).toBe(2);
-      expect(after?.constraints.map((c) => c.text)).toContain("stay in src");
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(after), (present_) =>
+            Arr.map(present_.constraints, (c) => c.text),
+          ),
+        ),
+      ).toContain("stay in src");
       expect(after?.constraints.at(-1)?.source).toBe("human");
     }),
   ));
@@ -915,7 +972,9 @@ test("what Native chat read is still news to another conversation", () =>
       expect(yield* call("collie_news")).toContain("Run r1 ended done.");
       const lines = yield* readNews(file);
       expect(pendingNews(lines, NATIVE).items).toEqual([]);
-      expect(pendingNews(lines, "flock@pc").items.map((item) => item.key)).toEqual(["r1:ended"]);
+      expect(Arr.map(pendingNews(lines, "flock@pc").items, (item) => item.key)).toEqual([
+        "r1:ended",
+      ]);
     }),
   ));
 
@@ -981,7 +1040,8 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
           by: "evaluator:e-1",
         });
       yield* pending("release it, the branch is sorted out", [{ kind: "release", run: run.id }]);
-      const waiting = (yield* readProposals(file)).filter(
+      const waiting = Arr.filter(
+        yield* readProposals(file),
         (line): line is ProposalRecord => line.kind === "proposal",
       );
       const proposal = waiting[0]!;
@@ -992,21 +1052,28 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       });
       expect(said).toContain("release");
       const lines = yield* readProposals(yield* proposalsPath(stateDir, KEY));
-      const settled = lines.flatMap((line) => (line.kind === "confirmed" ? [line] : []));
-      expect(settled.map((line) => line.id)).toEqual([proposal.id]);
+      const settled = Arr.flatMap(lines, (line) => (line.kind === "confirmed" ? [line] : []));
+      expect(Arr.map(settled, (line) => line.id)).toEqual([proposal.id]);
       // Recorded as chat's: relaying what they said is not becoming them.
-      expect(settled[0]!.by.startsWith("chat:")).toBe(true);
+      expect(pipe_(settled[0]!.by, Str.startsWith("chat:"))).toBe(true);
 
       // And a no is the same instruction the other way round.
       yield* pending("stop it", [{ kind: "stop", run: run.id }]);
-      const second = (yield* readProposals(yield* proposalsPath(stateDir, KEY)))
-        .filter((line): line is ProposalRecord => line.kind === "proposal")
-        .find((line) => line.id !== proposal.id)!;
+      const second = Option.getOrUndefined(
+        Arr.findFirst(
+          Arr.filter(
+            yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+            (line): line is ProposalRecord => line.kind === "proposal",
+          ),
+          (line) => line.id !== proposal.id,
+        ),
+      )!;
       yield* call("collie_do", {
         actions: [{ kind: "decline", proposal: second.id, hash: second.content_hash }],
       });
       expect(
-        (yield* readProposals(yield* proposalsPath(stateDir, KEY))).some(
+        Arr.some(
+          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
           (line) => line.kind === "declined" && line.id === second.id,
         ),
       ).toBe(true);
@@ -1060,7 +1127,8 @@ test("a confirmation whose actions failed stops the rest of what was asked", () 
         interpretation: "start the review",
         actions: [{ kind: "start", workflow: "no-such-workflow", inputs: { goal: "x" } }],
       });
-      const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).flatMap(
+      const proposal = Arr.flatMap(
+        yield* readProposals(yield* proposalsPath(stateDir, KEY)),
         (line) => (line.kind === "proposal" ? [line] : []),
       )[0]!;
 
@@ -1090,7 +1158,13 @@ test("collie_do records what became of the work, and starts a Run when asked to"
       const line = latest(yield* readDispositions(run.dir));
       expect(line?.kind).toBe("merged");
       expect(line?.ref).toBe("collie!151");
-      expect(line?.by.startsWith("chat:")).toBe(true);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(line), (present___) =>
+            pipe_(present___.by, Str.startsWith("chat:")),
+          ),
+        ),
+      ).toBe(true);
 
       // A launch the human asked for is theirs too: what comes back is about the
       // workflow, never a note that this is somebody else's to confirm.
@@ -1216,7 +1290,7 @@ test("an offer the Run does not make, or cannot make now, starts nothing and say
       expect(yield* take("grade-it")).toContain(
         `take_offer: failed — run "${run.id}" does not offer "grade-it": its conditions are not met`,
       );
-      expect((yield* listRuns(env)).map((one) => one.id)).toEqual([run.id]);
+      expect(Arr.map(yield* listRuns(env), (one) => one.id)).toEqual([run.id]);
     }),
   ));
 
@@ -1393,7 +1467,7 @@ test("what collie_do does is recorded with the human's words from that turn", ()
         actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
       });
       expect(said).toContain("disposition: applied");
-      const actors = (yield* readAudit(run.dir)).map((line) => line.actor);
+      const actors = Arr.map(yield* readAudit(run.dir), (line) => line.actor);
       expect(actors.at(-1)).toMatchObject({
         origin: "chat",
         conversation: NATIVE,
@@ -1402,7 +1476,9 @@ test("what collie_do does is recorded with the human's words from that turn", ()
       // A board action reaches the Run through the host's own executors, and keeps the words.
       yield* call("collie_do", { actions: [{ kind: "stop", run: run.id }] });
       expect(
-        (yield* readAudit(run.dir)).find((line) => line.operation === "stop")?.actor,
+        Option.getOrUndefined(
+          Arr.findFirst(yield* readAudit(run.dir), (line) => line.operation === "stop"),
+        )?.actor,
       ).toMatchObject({
         origin: "chat",
         conversation: NATIVE,
@@ -1424,14 +1500,18 @@ test("a chat's hold and proposal are recorded with the human's words too", () =>
         said: "hold the picker run while I look",
       };
       expect(
-        (yield* readAudit(run.dir)).find((line) => line.operation === "hold")?.actor,
+        Option.getOrUndefined(
+          Arr.findFirst(yield* readAudit(run.dir), (line) => line.operation === "hold"),
+        )?.actor,
       ).toMatchObject(voice);
       yield* call("collie_propose", {
         interpretation: "they want it stopped",
         actions: [{ kind: "stop", run: run.id }],
       });
       expect(
-        (yield* readAudit(run.dir)).find((line) => line.operation === "stop")?.actor,
+        Option.getOrUndefined(
+          Arr.findFirst(yield* readAudit(run.dir), (line) => line.operation === "stop"),
+        )?.actor,
       ).toMatchObject(voice);
     }),
   ));
@@ -1444,7 +1524,7 @@ test("the human's words are recorded redacted and bounded", () =>
       const token = "ghp_abcdefghijklmnopqrstuvwxyz0123";
       yield* hear(
         env,
-        hookInput("s-1", `abandon it, token ${token}\n${"log line\n".repeat(5000)}`),
+        hookInput("s-1", `abandon it, token ${token}\n${pipe_("log line\n", Str.repeat(5000))}`),
       );
       yield* call("collie_do", {
         actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
@@ -1531,7 +1611,9 @@ test("a proposal chat settles carries the words it was settled with", () =>
           actions: [{ kind: "decline", proposal: proposal.id, hash: proposal.content_hash }],
         }),
       ).toContain("decline: applied");
-      const declined = (yield* readProposals(file)).find((line) => line.kind === "declined");
+      const declined = Option.getOrUndefined(
+        Arr.findFirst(yield* readProposals(file), (line) => line.kind === "declined"),
+      );
       expect(declined).toMatchObject({ conversation: NATIVE, said: "no, drop that" });
     }),
   ));
@@ -1563,10 +1645,10 @@ const startedRun = Effect.fn("test.startedRun")(function* (
 });
 
 const asking = (name: string) => (view: RunView) =>
-  view.waiting.some((one) => one.name === name && one.answer === null);
+  Arr.some(view.waiting, (one) => one.name === name && one.answer === null);
 
 /** An answer given through the host, from a channel that declared itself `as`. */
-const answerAs = (as: typeof Declaration.Type, runId: string, decision: string, value: string) =>
+const answerAs = (as: Declaration, runId: string, decision: string, value: string) =>
   Effect.scoped(
     Effect.gen(function* () {
       const door = yield* frontDoor(socketOf(stateDir));
@@ -1580,7 +1662,7 @@ const answerAs = (as: typeof Declaration.Type, runId: string, decision: string, 
     }),
   ).pipe(Effect.orDie);
 
-const waitingOnTheHuman = (receipts: string) => receipts.split("### Sent")[0]!;
+const waitingOnTheHuman = (receipts: string) => Str.split(receipts, "### Sent")[0]!;
 
 test("a Run waiting on a Choice says what it asks, every option, and how to answer it", () =>
   inWorld(
@@ -1637,7 +1719,7 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
     Effect.gen(function* () {
       yield* save(world.user, ["asks.workflow.ts"]);
       const run = yield* startedRun("asks", { goal: "ask" }, asking("q1"));
-      const by: Array<typeof Declaration.Type> = [
+      const by: Array<Declaration> = [
         { frontDoor: "cli" },
         { frontDoor: "cli" },
         { frontDoor: "chat", conversation: "flock@mk-pc" },
@@ -1657,18 +1739,18 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
       yield* trimAudit(run.dir, 4);
 
       const said = yield* call("collie_run", { run: run.id });
-      const answered = said.split("### Answered\n\n")[1]!.split("\n\n")[0]!;
-      expect(answered.split("\n")).toHaveLength(5);
+      const answered = Str.split(Str.split(said, "### Answered\n\n")[1]!, "\n\n")[0]!;
+      expect(Str.split(answered, "\n")).toHaveLength(5);
       expect(answered).toContain('- "q6": yes — desktop on mk-laptop at ');
       expect(answered).toContain('- "q5": yes — cli at ');
       expect(answered).toContain('- "q4": yes — board at ');
       expect(answered).toContain('- "q3": yes — chat flock@mk-pc at ');
       expect(answered).toContain('- "q2": yes — who answered is not recorded');
       expect(answered).not.toContain('"q1"');
-      const flow = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Flow))(
-        said.split("```json\n")[1]!.split("\n```")[0]!,
+      const flow = yield* Schema.decodeEffect(Schema.fromJsonString(Flow))(
+        Str.split(Str.split(said, "```json\n")[1]!, "\n```")[0]!,
       );
-      expect(flow.lanes[0]!.nodes.map((node) => [node.id, node.state])).toEqual([
+      expect(Arr.map(flow.lanes[0]!.nodes, (node) => [node.id, node.state])).toEqual([
         ["q1", "done"],
         ["q2", "done"],
         ["q3", "done"],
@@ -1753,14 +1835,14 @@ test("a Run shows its plan, findings, disposition, outcome and the last lines it
         encodeJson(
           Array.from({ length: 12 }, (_, n) => ({
             severity: "major",
-            title: `f-${String(n + 1).padStart(2, "0")}`,
+            title: `f-${pipe_(String(n + 1), Str.padStart(2, "0"))}`,
           })),
         ),
       );
       yield* call("collie_do", {
         actions: [{ kind: "disposition", run: run.id, became: "merged", ref: "collie!151" }],
       });
-      for (const line of ["step 1", "step 2", "step 3", "step 4", "x".repeat(300)])
+      for (const line of ["step 1", "step 2", "step 3", "step 4", pipe_("x", Str.repeat(300))])
         yield* appendLog(run.dir, line);
       yield* appendLog(run.dir, "hello picker, from hello");
 
@@ -1773,14 +1855,14 @@ test("a Run shows its plan, findings, disposition, outcome and the last lines it
       expect(said).toContain("Disposition: merged collie!151");
       expect(said).toContain("Outcome to prove: bug");
 
-      const recorded = said.split("### Last recorded")[1]!;
+      const recorded = Str.split(said, "### Last recorded")[1]!;
       expect(recorded).toContain("- step 1");
       expect(recorded).toContain("- step 4");
-      expect(recorded).toContain(`- ${"x".repeat(200)}…`);
-      expect(recorded).not.toContain("x".repeat(201));
+      expect(recorded).toContain(`- ${pipe_("x", Str.repeat(200))}…`);
+      expect(recorded).not.toContain(pipe_("x", Str.repeat(201)));
       // Its first line falls outside the five, and the one repeating the result is left out.
       expect(recorded).not.toContain("hello picker");
-      expect(said.split("hello picker, from hello").length).toBe(2);
+      expect(Str.split(said, "hello picker, from hello").length).toBe(2);
     }),
   ));
 
@@ -1825,7 +1907,7 @@ test("a Run with a branch and no merge request shows its branch", () =>
       const fs = yield* FileSystem.FileSystem;
       yield* until(
         () => fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
-        (log) => log.includes(`"agent prompt"`),
+        (log) => pipe_(log, Str.includes(`"agent prompt"`)),
       );
     }),
   ));
@@ -1881,8 +1963,8 @@ test("where work can start lists the workspaces, the Home as no checkout, open T
       expect(said).toContain(`Projects root: ${world.home}`);
       expect(said).toContain("a checkout under it is named by its directory name");
       expect(said).toContain("- proof (note) — Records one launch, then waits to be answered.");
-      expect(said.split("\n")).toContain("- hello (name)");
-      expect(said.split("\n")).toContain("- branches (goal?, size)");
+      expect(Str.split(said, "\n")).toContain("- hello (name)");
+      expect(Str.split(said, "\n")).toContain("- branches (goal?, size)");
     }),
   ));
 
@@ -1962,7 +2044,7 @@ test("the host answers a Flock chat's read with Native chat's own answer, delive
       // Settled first: asking and suspending are two steps, and a read between them differs.
       const native = yield* until(
         () => call("collie_run", { run: run.id }),
-        (said) => said.includes("Status: waiting"),
+        (said) => pipe_(said, Str.includes("Status: waiting")),
       );
       expect(yield* readThroughHost("collie_run", { run: run.id })).toBe(native);
 
@@ -2010,8 +2092,6 @@ test("a read through the host takes only the three reads, and no selection stand
         input: { actions: [{ kind: "stop", run: run.id }] },
       });
       expect(write._tag).toBe("Failure");
-      expect(Schema.decodeUnknownExit(payload)({ tool: "collie_run", input: {} })._tag).toBe(
-        "Success",
-      );
+      expect(Schema.decodeExit(payload)({ tool: "collie_run", input: {} })._tag).toBe("Success");
     }),
   ));

@@ -10,6 +10,11 @@
 // `docs/adr/0016-a-workflow-module-is-found-where-it-was-saved.md` is why each of these
 // is the way it is.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema } from "effect";
 import { loadEntry, revisionOf } from "./engine";
 import { jsonSchemaFor, type WorkflowEntry } from "./sdk";
@@ -101,7 +106,10 @@ export const discover: (
         else problems.push({ id, layer: root.layer, path: only.path, message: only.message });
       }
     }
-    return { entries: entries.sort((one, other) => one.id.localeCompare(other.id)), problems };
+    return {
+      entries: entries.sort((one, other) => pipe_(one.id, Str.localeCompare(other.id))),
+      problems,
+    };
   },
 );
 
@@ -150,7 +158,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
 
 /** What one module declares it takes, in the order a front door should ask for it. */
 export const declaredBy = (entry: WorkflowEntry): ReadonlyArray<Declared> =>
-  Object.entries(entry.input).map(([name, field]) => {
+  Arr.map(Rec.toEntries(entry.input), ([name, field]) => {
     const drawn = jsonSchemaFor(field);
     return {
       name,
@@ -173,25 +181,34 @@ const ambiguous = (
   layer: EntryLayer,
   claimants: ReadonlyArray<Claim>,
 ): ReadonlyArray<Fault> =>
-  claimants.map((claim) => ({
+  Arr.map(claimants, (claim) => ({
     id,
     layer,
     path: claim.path,
-    message: `"${id}" is also claimed by ${claimants
-      .filter((other) => other !== claim)
-      .map((other) => other.path)
-      .join(" and ")}`,
+    message: `"${id}" is also claimed by ${Arr.join(
+      Arr.map(
+        Arr.filter(claimants, (other) => other !== claim),
+        (other) => other.path,
+      ),
+      " and ",
+    )}`,
   }));
 
 const entryFiles = Effect.fn("Discovery.entryFiles")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed((): Array<string> => []));
-  return names
-    .filter((name) => name.endsWith(ENTRY_SUFFIX))
-    .sort()
-    .map((name) => `${dir}/${name}`);
+  return Arr.map(
+    Arr.filter(names, (name) => pipe_(name, Str.endsWith(ENTRY_SUFFIX))).sort(),
+    (name) => `${dir}/${name}`,
+  );
 });
 
 /** The id a file claims by its name, which is what an entry that will not load is known by. */
 export const stem = (path: string) =>
-  path.slice(path.lastIndexOf("/") + 1, path.length - ENTRY_SUFFIX.length);
+  pipe_(
+    path,
+    Str.slice(
+      Option.getOrElse(pipe_(path, Str.lastIndexOf("/")), () => -1) + 1,
+      path.length - ENTRY_SUFFIX.length,
+    ),
+  );

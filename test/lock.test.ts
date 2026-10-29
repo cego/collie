@@ -1,11 +1,16 @@
 import { expect, test } from "bun:test";
-import { Deferred, Duration, Effect, Fiber, FileSystem, Schema } from "effect";
+import { Deferred, Duration, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { processStartTime, withLock } from "../src/lock";
 import { runEffect } from "./support/effect";
 
-const encodeClaim = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ pid: Schema.Number, start: Schema.NullOr(Schema.String) })),
+const encodeClaim = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Struct({ pid: Schema.Finite, start: Schema.NullOr(Schema.String) }),
+    ),
+  ),
+  Result.getOrThrow,
 );
 
 test("a withLock interrupted just after its claim is written leaves no lock behind", () =>

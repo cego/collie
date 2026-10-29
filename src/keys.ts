@@ -2,6 +2,9 @@
 // falls back to when the renderer will not start. Everything else goes through OpenTUI,
 // which owns raw mode for as long as its renderer is alive.
 
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, Queue } from "effect";
 
 /** One chunk of stdin can carry several keypresses; split them apart. */
@@ -14,14 +17,14 @@ export function tokenizeKeys(chunk: string): string[] {
       if (chunk[end] === "[") {
         end += 1;
         while (end < chunk.length) {
-          const code = chunk.charCodeAt(end);
+          const code = Option.getOrElse(Str.charCodeAt(chunk, end), () => Number.NaN);
           end += 1;
           if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 126) break;
         }
       } else if (chunk[end] === "O" && end + 1 < chunk.length) {
         end += 2;
       }
-      out.push(chunk.slice(i, end));
+      out.push(pipe_(chunk, Str.slice(i, end)));
       i = end;
       continue;
     }

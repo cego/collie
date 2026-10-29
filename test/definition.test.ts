@@ -1,6 +1,8 @@
 // A workflow is one default-exported definition: what it is, what it takes and gives,
 // and what it does. These read it the ways a front door does — found, described and run.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { connect } from "../src/host";
@@ -31,11 +33,15 @@ test(
             cwd: world.project,
           });
           expect(found.problems).toEqual([]);
-          const byId = new Map(found.entries.map((one) => [one.id, one]));
+          const byId = new Map(Arr.map(found.entries, (one) => [one.id, one]));
           expect(byId.get("hello")?.title).toBe("Say hello");
-          expect(byId.get("hello")?.inputs.map((one) => [one.name, one.required])).toEqual([
-            ["name", true],
-          ]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(byId.get("hello")), (present) =>
+                Arr.map(present.inputs, (one) => [one.name, one.required]),
+              ),
+            ),
+          ).toEqual([["name", true]]);
           // Nothing but an id and what it does: the title is the id, and it takes nothing.
           expect(byId.get("quiet")?.title).toBe("quiet");
           expect(byId.get("quiet")?.description).toBe("");
@@ -92,9 +98,13 @@ test(
             () => client.run({ runId: big.runId }),
             (view) => (view?.waiting ?? []).length > 0,
           ).pipe(Effect.orDie);
-          expect(asking?.waiting.map((one) => [one.name, one.options])).toEqual([
-            ["approach", ["quick", "review-first"]],
-          ]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(asking), (present_) =>
+                Arr.map(present_.waiting, (one) => [one.name, one.options]),
+              ),
+            ),
+          ).toEqual([["approach", ["quick", "review-first"]]]);
           yield* client
             .answer({
               runId: big.runId,
@@ -137,7 +147,9 @@ test(
             (view) => view?.status.status === "complete",
           ).pipe(Effect.orDie);
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-          const child = runs.find((one) => one.parent === parent.runId);
+          const child = Option.getOrUndefined(
+            Arr.findFirst(runs, (one) => one.parent === parent.runId),
+          );
           expect(child?.workflow).toBe("quiet");
           expect(child?.options.model).toBe("sonnet");
           expect(yield* readSubagents(child?.options.claudeSubagents ?? "null")).toEqual({

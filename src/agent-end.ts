@@ -12,6 +12,8 @@
 // every agent has answered, then logs each end with `endedLine`. Ticket 07's unit stop goes
 // after step 5, or after the caller's own close; ticket 08's Closure is written with step 6.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Data, Effect, FileSystem, Result } from "effect";
 import type { PlatformServices } from "./platform";
 import { STOP_WAIT_MS, notStopped, stopAgent, type CompactionDeps } from "./compaction";
@@ -67,7 +69,9 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
   const agents =
     listed ??
     (yield* deps.herdr.agentList().pipe(Effect.mapError((cause) => new AgentsUnlisted({ cause }))));
-  const one = agents.find((agent) => agent.name === launched.agent);
+  const one = Option.getOrUndefined(
+    Arr.findFirst(agents, (agent) => agent.name === launched.agent),
+  );
   const restored =
     one !== undefined && one.terminalId !== null && one.terminalId === launched.terminalId
       ? undefined
@@ -132,10 +136,12 @@ const restoredPane = (
   launched: Pick<Launched, "agentSession">,
 ): Effect.Effect<PaneInfo | undefined, never, PlatformServices> =>
   launched.agentSession === undefined
-    ? Effect.succeed(undefined)
+    ? Effect.as(Effect.void, undefined)
     : deps.herdr.paneList().pipe(
         Effect.map((panes) =>
-          panes.find((pane) => sameSession(pane.agentSession, launched.agentSession)),
+          Option.getOrUndefined(
+            Arr.findFirst(panes, (pane) => sameSession(pane.agentSession, launched.agentSession)),
+          ),
         ),
         Effect.orElseSucceed(() => undefined),
       );
@@ -147,10 +153,10 @@ const restoredPane = (
  */
 const keepWorkspace = (deps: EndDeps, paneId: string, panes: ReadonlyArray<PaneInfo>) =>
   Effect.gen(function* () {
-    const pane = panes.find((one) => one.paneId === paneId);
+    const pane = Option.getOrUndefined(Arr.findFirst(panes, (one) => one.paneId === paneId));
     const workspace = pane?.workspaceId ?? null;
     if (pane === undefined || workspace === null) return;
-    if (panes.some((one) => one.workspaceId === workspace && one.paneId !== paneId)) return;
+    if (Arr.some(panes, (one) => one.workspaceId === workspace && one.paneId !== paneId)) return;
     const shell = yield* deps.herdr.tabCreate({
       label: "shell",
       cwd: pane.cwd ?? deps.cwd,

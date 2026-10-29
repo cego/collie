@@ -1,9 +1,11 @@
+import * as Cause from "effect/Cause";
 // Collie's polled waits, on a clock that moves only by what is slept on it: how often each
 // asks, what it says once its deadline has passed between two asks, and that an ask still
 // running at the deadline is waited for and its answer used.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Clock, Effect, Fiber, FileSystem, Schema } from "effect";
+import { Clock, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { withCodex, currentContext } from "../src/codex";
 import {
@@ -20,9 +22,12 @@ import { handOverClaim } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const decodeFrame = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ id: Schema.Number, method: Schema.String })),
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const decodeFrame = flow(
+  Schema.decodeUnknownResult(
+    Schema.fromJsonString(Schema.Struct({ id: Schema.Finite, method: Schema.String })),
+  ),
+  Result.getOrThrow,
 );
 
 /** Runs `wait` on a TestClock its sleeps advance, and the times it asked, from its start. */
@@ -45,7 +50,7 @@ const every = (interval: number, from: number, to: number) =>
   Array.from({ length: (to - from) / interval + 1 }, (_, at) => from + at * interval);
 
 const port = (over: Partial<CompactionPort>): CompactionPort => ({
-  gate: () => Effect.void,
+  gate: Effect.void,
   install: () => Effect.die(new Error("not installed here")),
   usage: () => Effect.succeed(null),
   request: () => Effect.succeed(null),
@@ -91,7 +96,10 @@ test("a harness's readiness is asked every poll, and past its budget the wait sa
         awaitReady(
           deps(
             stateDir,
-            port({ ready: () => ask.pipe(Effect.andThen(Effect.fail(new Error("no prompt")))) }),
+            port({
+              ready: () =>
+                ask.pipe(Effect.andThen(Effect.fail(new Cause.NoSuchElementError("no prompt")))),
+            }),
           ),
           "build-r1",
           1000,
@@ -265,7 +273,7 @@ const session = (
         : fs.readDirectory(path, options),
     readFileString: (path, encoding) =>
       path === `/proc/${CHILD}/stat`
-        ? Effect.succeed(`${CHILD} (worker) ${fields.join(" ")}`)
+        ? Effect.succeed(`${CHILD} (worker) ${Arr.join(fields, " ")}`)
         : path === `/proc/${CHILD}/cmdline`
           ? Effect.succeed("worker\0")
           : fs.readFileString(path, encoding),

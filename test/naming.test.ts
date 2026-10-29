@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import {
   agentTabLabel,
@@ -116,12 +119,13 @@ test("a long model never truncates away the number that makes a name unique", ()
     expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
     expect(name.length).toBeLessThanOrEqual(32);
   }
-  expect(a.endsWith("-r23")).toBe(true);
-  expect(b.endsWith("-r24")).toBe(true);
+  expect(pipe(a, Str.endsWith("-r23"))).toBe(true);
+  expect(pipe(b, Str.endsWith("-r24"))).toBe(true);
   // A three-digit run number still fits, and still ends the name.
   expect(
-    agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 1234).endsWith(
-      "-r1234",
+    pipe(
+      agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 1234),
+      Str.endsWith("-r1234"),
     ),
   ).toBe(true);
   // A short variant still gets its slug prefix, as before.
@@ -154,7 +158,7 @@ test("sibling children that share a long prefix get agents of their own", () => 
   }
   // A step long enough to leave no room for the slug still keeps them apart.
   const step = "a-very-long-operation-name-here";
-  const crowded = ["a", "b"].map((repo) =>
+  const crowded = Arr.map(["a", "b"], (repo) =>
     agentName(`run-053c5b9d.implement.implement-gitlab.cego.dk-${repo}`, step, null, 1),
   );
   expect(crowded[0]).not.toBe(crowded[1]);
@@ -164,12 +168,12 @@ test("sibling children that share a long prefix get agents of their own", () => 
 });
 
 test("two steps of one Run that differ only where the name is cut get agents of their own", () => {
-  const seats = ["review-2-correctness-a", "review-2-correctness-b"].map((step) =>
+  const seats = Arr.map(["review-2-correctness-a", "review-2-correctness-b"], (step) =>
     agentName("run-053c5b9d", step, null, 1),
   );
   expect(seats[0]).not.toBe(seats[1]);
   for (const name of seats) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
-  const panel = ["security", "standards"].map((seat) =>
+  const panel = Arr.map(["security", "standards"], (seat) =>
     agentName("run-053c5b9d", "review", `claude-opus-${seat}`, 1),
   );
   expect(panel[0]).not.toBe(panel[1]);

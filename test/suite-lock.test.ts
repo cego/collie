@@ -1,5 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Path, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Path, Schema, flow, Result } from "effect";
 import { processStartTime } from "../src/lock";
 import { budgetOf, entriesOf } from "../tools/budget";
 import { inTurn } from "../tools/suite-lock";
@@ -20,8 +22,11 @@ import { until } from "./support/host";
 import { runEffect } from "./support/effect";
 
 /** A claim as `src/lock.ts` writes one. */
-const asClaim = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(Schema.String) })),
+const asClaim = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(Schema.String) })),
+  ),
+  Result.getOrThrow,
 );
 
 const STILL = /^test: still waiting, (\d+m )?\d+s so far$/;
@@ -56,7 +61,7 @@ test("a held lock names its holder once, then the wait as it grows, and falls qu
       const say = (line: string) =>
         Effect.gen(function* () {
           said.push(line);
-          if (said.filter((one) => STILL.test(one)).length === 2) yield* fs.remove(lock);
+          if (Arr.filter(said, (one) => STILL.test(one)).length === 2) yield* fs.remove(lock);
         }).pipe(Effect.orDie);
       let atStart = -1;
       // A suite that runs for several intervals, as a real one does for minutes.
@@ -211,7 +216,10 @@ test("a targeted run reads the timings and never updates them", () =>
   ));
 
 const recorded = `{"version":1,"files":{"test/suite-lock.test.ts":1234,"test/deleted-long-ago.test.ts":293830}}`;
-const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const parseJson = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 test("a whole suite forgets the timings of a deleted test file and keeps the rest", () =>
   runEffect(
@@ -264,7 +272,7 @@ test("a seed takes each file's mean over the records that timed it, longest firs
     { "test/c.test.ts": 500 },
   ]);
   expect(seed).toEqual({ "test/a.test.ts": 1501, "test/b.test.ts": 3001, "test/c.test.ts": 500 });
-  expect(Object.keys(seed)).toEqual(["test/b.test.ts", "test/a.test.ts", "test/c.test.ts"]);
+  expect(Rec.keys(seed)).toEqual(["test/b.test.ts", "test/a.test.ts", "test/c.test.ts"]);
 });
 
 test("a run asks for its kind's workers, or the --parallel its caller passed, which it hands on as its own", () => {
@@ -377,10 +385,10 @@ test("CPU pressure is read from some avg60, and is null where there is no pressu
 
 test("a suite counts the processes it started and names the ten largest sources", () => {
   const sources = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
-  const lines = sources.flatMap((source, at) =>
+  const lines = Arr.flatMap(sources, (source, at) =>
     Array.from({ length: at + 1 }, () => `herdr ${source}`),
   );
-  expect(startsSummary(`${lines.join("\n")}\ncollie host\n`)).toEqual([
+  expect(startsSummary(`${Arr.join(lines, "\n")}\ncollie host\n`)).toEqual([
     "test: 79 processes started",
     "     12  herdr l",
     "     11  herdr k",
@@ -406,7 +414,7 @@ test("a suite names the files that started the most processes, with each one's l
     "herdr session list\ttest/c.test.ts",
     "collie host",
   ];
-  expect(startsSummary(`${record.join("\n")}\n`)).toEqual([
+  expect(startsSummary(`${Arr.join(record, "\n")}\n`)).toEqual([
     "test: 17 processes started",
     "      6  herdr pane list",
     "      5  herdr agent list",

@@ -2,9 +2,13 @@
 // stand-in in `support/codex-server.ts`, run as a real process, and what is asserted is what
 // a human could see of that process and of the `agent start` herdr was asked for.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { agentWork, agentsLayer, type AgentHost } from "../src/agents";
@@ -14,8 +18,9 @@ import { agentName } from "../src/naming";
 import { codexPort } from "../src/compactors";
 import type { AgentProfile } from "../src/profile";
 import type { StandIn } from "./support/codex-server";
+import * as Layer from "effect/Layer";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 let rig: Rig;
 let dir: string;
@@ -78,7 +83,7 @@ const hostOf = (): AgentHost => ({
   pollMs: 20,
   collectMs: 30_000,
   stopMs: 250_000,
-  ports: { codex: { ...codexPort(server()), gate: () => Effect.void } },
+  ports: { codex: { ...codexPort(server()), gate: Effect.void } },
 });
 
 const launched = (over: Partial<StandIn> = {}) =>
@@ -87,19 +92,24 @@ const launched = (over: Partial<StandIn> = {}) =>
     yield* fs.makeDirectory(cwd, { recursive: true });
     yield* fs.writeFileString(config(), asJson({ events: eventsFile(), threads: [], ...over }));
     yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
-    yield* work
-      .execute({ runId: "r1", input: { skip: false } })
-      .pipe(
-        Effect.result,
-        Effect.provide(body),
-        Effect.provide(agentsLayer(hostOf())),
-        Effect.provide(foundationLayer({ dir })),
-        Effect.scoped,
-      );
+    yield* work.execute({ runId: "r1", input: { skip: false } }).pipe(
+      Effect.result,
+      Effect.provide(
+        body.pipe(
+          Layer.provideMerge(agentsLayer(hostOf())),
+          Layer.provideMerge(
+            foundationLayer({
+              dir,
+            }),
+          ),
+        ),
+      ),
+      Effect.scoped,
+    );
   }).pipe(Effect.orDie);
 
 const Started = Schema.Struct({
-  pid: Schema.Number,
+  pid: Schema.Finite,
   argv: Schema.Array(Schema.String),
   env: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
 });
@@ -109,7 +119,7 @@ const started = () =>
     Effect.flatMap((fs) => fs.readFileString(eventsFile())),
     Effect.orElseSucceed(() => ""),
     Effect.map((text) => {
-      for (const line of text.split("\n")) {
+      for (const line of Str.split(text, "\n")) {
         const one = decodeStarted(line);
         if (one._tag === "Some") return one.value;
       }
@@ -126,9 +136,11 @@ const kill = (pid: number) => {
 };
 
 const mcpOverrides = (argv: ReadonlyArray<string>) =>
-  argv.flatMap((arg, at) => (argv[at - 1] === "-c" && arg.startsWith("mcp_servers.") ? [arg] : []));
+  Arr.flatMap(argv, (arg, at) =>
+    argv[at - 1] === "-c" && pipe_(arg, Str.startsWith("mcp_servers.")) ? [arg] : [],
+  );
 const agentStartArgs = (calls: ReadonlyArray<Call>) =>
-  calls.find((call) => call.cmd === "agent start")?.argv ?? [];
+  Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "agent start"))?.argv ?? [];
 
 const withProfile = (profile: AgentProfile) =>
   FileSystem.FileSystem.pipe(

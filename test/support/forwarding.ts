@@ -17,11 +17,11 @@ export interface Answer {
  * Answers one call: its argv, the fake's name first, and the environment and directory it
  * was started in.
  */
-export type Answerer = (
+export type Answerer<E> = (
   argv: ReadonlyArray<string>,
   env: Record<string, string>,
   cwd: string,
-) => Effect.Effect<Answer, unknown>;
+) => Effect.Effect<Answer, E>;
 
 /** How a shim starts the forwarder: what `bun run test` compiled of it, or else its source. */
 export const forwarderCommand = (compiled = Bun.env.COLLIE_TEST_FAKE_HERDR ?? ""): string[] =>
@@ -38,19 +38,20 @@ const Call = Schema.fromJsonString(
 );
 
 const ANSWERER = "COLLIE_FAKE_ANSWERER";
-const answerers = new Map<string, Answerer>();
+const answerers = new Map<string, Answerer<never>>();
+
+const failedAnswer = <E>(cause: Cause.Cause<E>): Effect.Effect<Answer> =>
+  Effect.succeed({ code: 70, stdout: "", stderr: `${Cause.pretty(cause)}\n` });
 
 const answer = (request: string) =>
-  Schema.decodeUnknownEffect(Call)(request).pipe(
+  Schema.decodeEffect(Call)(request).pipe(
     Effect.flatMap(({ argv, cwd, env }) => {
       const answerer = answerers.get(env[ANSWERER] ?? "");
       return answerer === undefined
         ? Effect.succeed({ code: 70, stdout: "", stderr: `no fake answers ${argv[0]}\n` })
         : answerer(argv, { ...env }, cwd);
     }),
-    Effect.catchCause((cause) =>
-      Effect.succeed({ code: 70, stdout: "", stderr: `${Cause.pretty(cause)}\n` }),
-    ),
+    Effect.catchCause(failedAnswer),
   );
 
 const serve = (path: string) =>
@@ -99,13 +100,15 @@ const socket = once.withPermits(1)(
  * own, its calls answered here by `answerer`. Listens first, so the
  * shim's first call is answered.
  */
-export const forwarding = Effect.fn("forwarding")(function* (
+export const forwarding = Effect.fn("forwarding")(function* <E>(
   compiled: string,
   args: ReadonlyArray<string>,
-  answerer: Answerer,
+  answerer: Answerer<E>,
 ) {
   const id = String(answerers.size);
-  answerers.set(id, answerer);
+  answerers.set(id, (argv, env, cwd) =>
+    answerer(argv, env, cwd).pipe(Effect.catchCause(failedAnswer)),
+  );
   const at = yield* socket;
   const command = Result.getOrThrow(CommandLine.join([...forwarderCommand(compiled), ...args]));
   return `COLLIE_FAKE_SOCKET=${Result.getOrThrow(CommandLine.quote(at))} ${ANSWERER}=${id} exec ${command} "$@"`;

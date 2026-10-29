@@ -5,6 +5,8 @@
 // architect is asked and what the report is for — and everything that decides what
 // happens is here.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import {
   FindingSchema,
   Children,
@@ -57,7 +59,7 @@ const Report = Schema.Struct({
 /** The host's own options for a child, with the ones nobody settled left out: absent
  *  rather than empty, exactly as a front door passes them. */
 const launch = (options: Record<string, string>): Record<string, string> =>
-  Object.fromEntries(Object.entries(options).filter(([, value]) => value !== ""));
+  Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 
 const IMPLEMENT = "Implement now";
 const STOP = "Stop here";

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as ParseResult from "effect/Result";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import type { PlatformServices } from "../platform";
 import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
@@ -143,7 +147,7 @@ export const discoveryContext = Effect.fn("collie.discoveryContext")(function* (
   // Inherited from the environment: used where it helps, never a reason to fail. It
   // may name a workspace that has closed, and there may be no herdr to ask at all.
   const tried = yield* context(global, (yield* selected(global)) !== null).pipe(
-    Effect.catch(() => Effect.succeed(null)),
+    Effect.orElseSucceed(() => null),
   );
   if (tried?._tag === "ResolvedContext") return tried;
   return yield* context({ ...global, workspace: Option.none() }, false);
@@ -225,18 +229,18 @@ export const parseInput = Effect.fn("collie.parseInput")(function* (
   let typed: Record<string, Schema.Json> = {};
   if (Option.isSome(json)) {
     const raw = json.value === "-" ? yield* stdinText : json.value;
-    try {
-      typed = Schema.decodeUnknownSync(InputsJson)(raw);
-    } catch {
+    const parsed = Schema.decodeResult(InputsJson)(raw);
+    if (ParseResult.isFailure(parsed)) {
       return { ok: false, error: err("invalid_input", "--inputs-json must be a JSON object.") };
     }
+    typed = parsed.success;
   }
   const text: Record<string, string> = {};
   for (const entry of values) {
-    const at = entry.indexOf("=");
+    const at = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
     if (at <= 0)
       return { ok: false, error: err("invalid_input", `Input "${entry}" must be key=value.`) };
-    text[entry.slice(0, at)] = entry.slice(at + 1);
+    text[pipe_(entry, Str.slice(0, at))] = pipe_(entry, Str.slice(at + 1));
   }
   return { ok: true, given: { json: typed, text } };
 });
@@ -344,7 +348,11 @@ export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
     env.paneId === null
       ? []
       : yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => null));
-  const agent = agents?.find((one) => one.paneId === env.paneId);
+  const agent = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(agents), (present) =>
+      Option.getOrUndefined(Arr.findFirst(present, (one) => one.paneId === env.paneId)),
+    ),
+  );
   if (agent !== undefined) {
     const run = yield* Effect.scoped(
       connect(env.stateDir).pipe(
@@ -356,7 +364,12 @@ export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
   return cliOrigin({
     terminal,
     pane: env.paneId,
-    agentPanes: agents?.map((one) => one.paneId) ?? null,
+    agentPanes:
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(agents), (present_) =>
+          Arr.map(present_, (one) => one.paneId),
+        ),
+      ) ?? null,
   });
 });
 

@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import {
   Data,
   Duration,
@@ -9,6 +10,8 @@ import {
   Path,
   Random,
   Schedule,
+  flow,
+  Result,
 } from "effect";
 import { startedOf } from "./processes";
 
@@ -30,7 +33,7 @@ export interface LockHolder {
 
 const LockHolderSchema = Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(Schema.String) });
 const LockHolderJson = Schema.fromJsonString(LockHolderSchema);
-const decodeLockHolderJson = Schema.decodeUnknownSync(LockHolderJson);
+const decodeLockHolderJson = flow(Schema.decodeUnknownResult(LockHolderJson), Result.getOrThrow);
 
 /** The lock the host that owns a state directory holds. */
 export const hostLockOf = (stateDir: string) => `${stateDir}/host.lock`;
@@ -214,7 +217,7 @@ export const holdsLock = Effect.fn("holdsLock")(function* (lock: string) {
   const me = yield* currentPid;
   return yield* fs.readFileString(lock).pipe(
     Effect.map((raw) => decodeLockHolder(raw)?.pid === me),
-    Effect.catch(() => Effect.succeed(false)),
+    Effect.orElseSucceed(() => false),
   );
 });
 
@@ -244,7 +247,7 @@ export function withDirLock<A, E, R>(
     const lock = path.join(dir, "run.json.lock");
     return yield* withLock(
       lock,
-      Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`)),
+      Effect.fail(new Cause.TimeoutError(`${lock} could not be acquired; not writing unlocked`)),
       effect,
       budget,
     );

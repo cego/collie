@@ -14,7 +14,12 @@
 // happened to write last in this directory, which is how a Home reopens into somebody
 // else's conversation.
 
-import { Effect, FileSystem, Path, Result, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import { pipe } from "effect/Function";
+import { Effect, FileSystem, Path, Result, Schema, flow } from "effect";
 import { CommandLine } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { everyAgentText } from "./agents";
@@ -49,7 +54,7 @@ export const DEFAULT_CHAT_HARNESS: ChatHarness = "claude";
 export const CHAT_HARNESS_KEY = "chat_harness";
 
 export function isChatHarness(value: string | undefined): value is ChatHarness {
-  return CHAT_HARNESSES.some((harness) => harness === value);
+  return Arr.some(CHAT_HARNESSES, (harness) => harness === value);
 }
 
 /** What the Home's chat pane is marked with, so recovery can tell it from the board. */
@@ -80,7 +85,7 @@ const RecordSchema = Schema.Struct({
 });
 export type ChatRecord = Schema.Schema.Type<typeof RecordSchema>;
 const RecordJson = Schema.fromJsonString(RecordSchema);
-const encodeRecord = Schema.encodeSync(RecordJson);
+const encodeRecord = flow(Schema.encodeResult(RecordJson), Result.getOrThrow);
 
 export const chatPath = Effect.fn("Chat.path")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;
@@ -89,9 +94,9 @@ export const chatPath = Effect.fn("Chat.path")(function* (stateDir: string, key:
 
 export const readChat = Effect.fn("Chat.read")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  const raw = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
-  if (raw.trim() === "") return null;
-  const decoded = Schema.decodeUnknownOption(RecordJson)(raw);
+  const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  if (Str.trim(raw) === "") return null;
+  const decoded = Schema.decodeOption(RecordJson)(raw);
   return decoded._tag === "Some" ? decoded.value : null;
 });
 
@@ -138,9 +143,11 @@ export function decideChat(
   const launch = (why: string): ChatDecision => ({ kind: "launch", harness: preferred, why });
   if (record === null) return launch("no chat has been started for this Herd");
   if (record.paneId !== chatPaneId) return launch("the Home's chat pane is a different pane");
-  const agent = agents.find((entry) => entry.name === record.agent);
+  const agent = Option.getOrUndefined(
+    Arr.findFirst(agents, (entry) => entry.name === record.agent),
+  );
   if (agent === undefined) return launch(`herdr no longer has ${record.agent}`);
-  const pane = panes.find((entry) => entry.paneId === chatPaneId);
+  const pane = Option.getOrUndefined(Arr.findFirst(panes, (entry) => entry.paneId === chatPaneId));
   if (record.terminalId !== null && pane?.terminalId !== record.terminalId)
     return launch("a different process is in the Home's chat pane");
   return { kind: "adopt", record, next: preferred === record.harness ? null : preferred };
@@ -301,7 +308,7 @@ export const chatHarnessOf = Effect.fn("Chat.harnessOf")(function* (userDir: str
 export const startedNow = Effect.fn("Chat.startedNow")(function* (
   opts: Omit<Parameters<typeof started>[0], "at">,
 ) {
-  return started({ ...opts, at: yield* nowIso() });
+  return started({ ...opts, at: yield* nowIso });
 });
 
 // ---------------------------------------------------------------------------
@@ -443,12 +450,16 @@ export function claudeSettings(
   env: Readonly<Record<string, string>>,
 ): string {
   const run = (sub: string) =>
-    [
-      ...Object.entries(env).map(
-        ([key, value]) => `${key}=${Result.getOrThrow(CommandLine.quote(value))}`,
-      ),
-      Result.getOrThrow(CommandLine.join([...command, "chat", sub])),
-    ].join(" ");
+    Arr.join(
+      [
+        ...Arr.map(
+          Rec.toEntries(env),
+          ([key, value]) => `${key}=${Result.getOrThrow(CommandLine.quote(value))}`,
+        ),
+        Result.getOrThrow(CommandLine.join([...command, "chat", sub])),
+      ],
+      " ",
+    );
   const heard = { type: "command", command: run("heard") };
   const hooks = {
     UserPromptSubmit: [{ hooks: [{ type: "command", command: run("context") }, heard] }],
@@ -471,7 +482,7 @@ export const HEARD_MAX = 2000;
 
 const heardOf = (prompt: string) => {
   const said = redact(prompt);
-  return said.length <= HEARD_MAX ? said : `${said.slice(0, HEARD_MAX - 1)}…`;
+  return said.length <= HEARD_MAX ? said : `${pipe(said, Str.slice(0, HEARD_MAX - 1))}…`;
 };
 
 const heardPath = Effect.fn("Chat.heardPath")(function* (stateDir: string, key: string) {
@@ -484,14 +495,14 @@ const heardPath = Effect.fn("Chat.heardPath")(function* (stateDir: string, key: 
  * turn ends. Input that is not a hook's is ignored.
  */
 export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: string) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-  const given = Schema.decodeUnknownOption(HookInput)(input);
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const given = Schema.decodeOption(HookInput)(input);
   if (key === null || given._tag === "None") return;
   const fs = yield* FileSystem.FileSystem;
   const file = yield* heardPath(env.stateDir, key);
   if (given.value.prompt === undefined) {
-    const kept = Schema.decodeUnknownOption(HeardJson)(
-      yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(""))),
+    const kept = Schema.decodeOption(HeardJson)(
+      yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")),
     );
     if (kept._tag === "Some" && kept.value.session === given.value.session_id)
       yield* fs.remove(file, { force: true });
@@ -502,10 +513,10 @@ export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: str
   const tmp = `${file}.${process.pid}.tmp`;
   yield* fs.writeFileString(
     tmp,
-    Schema.encodeSync(HeardJson)({
+    yield* Schema.encodeEffect(HeardJson)({
       session: given.value.session_id,
       said: heardOf(given.value.prompt),
-    }),
+    }).pipe(Effect.orDie),
   );
   yield* fs.rename(tmp, file);
 });
@@ -515,13 +526,13 @@ export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: str
  * the running chat's own session last said something, those words.
  */
 export const heardVoice = Effect.fn("Chat.heardVoice")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return {};
   const fs = yield* FileSystem.FileSystem;
   const raw = yield* fs
     .readFileString(yield* heardPath(env.stateDir, key))
-    .pipe(Effect.catch(() => Effect.succeed("")));
-  const heard = Schema.decodeUnknownOption(HeardJson)(raw);
+    .pipe(Effect.orElseSucceed(() => ""));
+  const heard = Schema.decodeOption(HeardJson)(raw);
   const running = yield* readChat(yield* chatPath(env.stateDir, key));
   const current = running === null ? undefined : running.sessions[running.harness];
   return heard._tag === "Some" && heard.value.session === current
@@ -567,7 +578,13 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
   const every = yield* everyAgentText({ ...opts, cwd: opts.dir });
   yield* fs.writeFileString(
     systemPrompt,
-    `${[chat.trim(), every].filter((part) => part !== null && part !== "").join("\n\n")}\n`,
+    `${Arr.join(
+      Arr.map(
+        Arr.filter([Str.trim(chat), every], (part) => part !== null && part !== ""),
+        (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
+      ),
+      "\n\n",
+    )}\n`,
   );
   yield* fs.writeFileString(mcpConfig, opts.mcpConfig);
   yield* fs.writeFileString(settings, claudeSettings(opts.self, opts.serverEnv));
@@ -703,7 +720,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
         home: env.home,
         self,
         serverEnv,
-        tools: TOOLS.map((tool) => ({
+        tools: Arr.map(TOOLS, (tool) => ({
           name: tool.name,
           label: tool.title,
           description: tool.description,
@@ -720,7 +737,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
         // A fresh name every attempt, never derived from the session: herdr keeps a name
         // until the process holding it has gone, so a relaunch under the same name was
         // refused `agent_name_taken` and left the Home with a pane and nothing in it.
-        const agent = `${CHAT_AGENT_PREFIX}-${(yield* random.uuidV4()).slice(0, 8)}`;
+        const agent = `${CHAT_AGENT_PREFIX}-${pipe(yield* random.uuidV4(), Str.slice(0, 8))}`;
         const failed = yield* herdr
           .agentStart({
             name: agent,
@@ -742,8 +759,11 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
         yield* log(`chat: ${why}`);
         return { kind: "unavailable", harness: decision.harness, why } satisfies Ensured;
       }
-      const after = (yield* herdr.paneList().pipe(nothing<ReadonlyArray<PaneInfo>>([]))).find(
-        (entry) => entry.paneId === paneId,
+      const after = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* herdr.paneList().pipe(nothing<ReadonlyArray<PaneInfo>>([])),
+          (entry) => entry.paneId === paneId,
+        ),
       );
       const next = yield* startedNow({
         harness: decision.harness,

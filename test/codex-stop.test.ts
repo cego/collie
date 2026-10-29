@@ -4,9 +4,14 @@
 // is asserted is what a human could see: whether its checkout stops changing, what the
 // stop says, what it was sent, and whether anything started beside it.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Duration, Effect, FileSystem, Path, Schema } from "effect";
+import { Duration, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig } from "./support/recorder";
@@ -23,16 +28,21 @@ import { FakeHerdr } from "./support/recorder";
 import { agentName } from "../src/naming";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import type { StandIn } from "./support/codex-server";
+import * as Layer from "effect/Layer";
+import { CommandLine } from "effect/process";
+import { fixtureBinary } from "./support/bin";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 let rig: Rig;
 let dir: string;
+let serverBinary: string;
 
 beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      serverBinary = yield* fixtureBinary("codex");
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       yield* fs.makeDirectory(dir, { recursive: true });
@@ -75,7 +85,6 @@ const body = work.toLayer((payload) =>
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
-const SERVER = `${import.meta.dir}/support/codex-server.ts`;
 const config = () => `${rig.root}/codex-server.json`;
 const eventsFile = () => `${rig.root}/codex-server.events`;
 const written = () => `${rig.projectDir}/written.txt`;
@@ -118,10 +127,12 @@ const hostOf = (over?: Partial<AgentHost>): AgentHost => ({
   stopMs: 250_000,
   ports: {
     codex: {
-      ...codexPort(`bun ${SERVER} ${config()}`),
-      gate: () => Effect.void,
+      ...codexPort(
+        `${Result.getOrThrow(CommandLine.quote(serverBinary))} ${Result.getOrThrow(CommandLine.quote(config()))}`,
+      ),
+      gate: Effect.void,
     },
-    claude: { ...COMPACTION_PORTS.claude!, gate: () => Effect.void },
+    claude: { ...COMPACTION_PORTS.claude!, gate: Effect.void },
   },
   ...over,
 });
@@ -135,9 +146,16 @@ const session = <A, E>(
   over?: Partial<AgentHost>,
 ) =>
   run.pipe(
-    Effect.provide(body),
-    Effect.provide(agentsLayer(hostOf(over))),
-    Effect.provide(foundationLayer({ dir })),
+    Effect.provide(
+      body.pipe(
+        Layer.provideMerge(agentsLayer(hostOf(over))),
+        Layer.provideMerge(
+          foundationLayer({
+            dir,
+          }),
+        ),
+      ),
+    ),
     Effect.scoped,
     Effect.orDie,
   );
@@ -152,25 +170,28 @@ const Event = Schema.Struct({
   signal: Schema.optionalKey(Schema.String),
   method: Schema.optionalKey(Schema.String),
   params: Schema.optionalKey(Schema.Unknown),
-  pid: Schema.optionalKey(Schema.Number),
-  child: Schema.optionalKey(Schema.Number),
+  pid: Schema.optionalKey(Schema.Finite),
+  child: Schema.optionalKey(Schema.Finite),
   turn: Schema.optionalKey(Schema.String),
   thread: Schema.optionalKey(Schema.String),
 });
-const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(Event));
+const decodeEvent = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Event)),
+  Result.getOrThrow,
+);
 const events = () =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(eventsFile())),
     Effect.orElseSucceed(() => ""),
     Effect.map((text) =>
-      text
-        .split("\n")
-        .filter((line) => line !== "")
-        .map((line) => decodeEvent(line)),
+      Arr.map(
+        Arr.filter(Str.split(text, "\n"), (line) => line !== ""),
+        (line) => decodeEvent(line),
+      ),
     ),
   );
 const signals = () =>
-  events().pipe(Effect.map((all) => all.filter((one) => one.signal !== undefined)));
+  events().pipe(Effect.map((all) => Arr.filter(all, (one) => one.signal !== undefined)));
 const sizeOf = (file: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.stat(file)),
@@ -195,7 +216,11 @@ const alive = (pid: number) => {
   }
 };
 const serverPid = () =>
-  events().pipe(Effect.map((all) => all.find((one) => one.pid !== undefined)?.pid ?? 0));
+  events().pipe(
+    Effect.map(
+      (all) => Option.getOrUndefined(Arr.findFirst(all, (one) => one.pid !== undefined))?.pid ?? 0,
+    ),
+  );
 
 test("a stopped Codex agent's turn ends before the stop says it stopped, and nothing writes after", () =>
   runEffect(
@@ -211,20 +236,22 @@ test("a stopped Codex agent's turn ends before the stop says it stopped, and not
 
       expect(halt).toEqual({ stopped: [agent], left: [] });
       expect(yield* sizeOf(written())).toBe(atStop);
-      expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
-      const interrupts = (yield* events()).filter((one) => one.method === "turn/interrupt");
-      expect(interrupts.map((one) => one.params)).toEqual([{ threadId: THREAD, turnId: TURN }]);
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
+      const interrupts = Arr.filter(yield* events(), (one) => one.method === "turn/interrupt");
+      expect(Arr.map(interrupts, (one) => one.params)).toEqual([
+        { threadId: THREAD, turnId: TURN },
+      ]);
       expect(alive(yield* serverPid())).toBe(false);
     }),
   ));
 
 const SUB_THREAD = "01a13504-4237-7000-8000-000000000001";
 const SUB_TURN = "01a13504-4237-7000-8000-000000000002";
-type JsonObject = typeof Schema.JsonObject.Type;
+type JsonObject = Schema.JsonObject;
 const decodeObject = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject));
 const control = () => `${rig.root}/state/compaction/${agent}/control.json`;
 const panesClosed = () =>
-  rig.cmds().pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "pane close").length));
+  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "pane close").length));
 const agentsLog = () =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${dir}/agents/r1/agents.log`)),
@@ -250,7 +277,9 @@ const recorded = () =>
 /** A human closing the agent's pane, which herdr then no longer lists. */
 const closedByHand = Effect.gen(function* () {
   const herdr = new FakeHerdr(rig.pluginEnv());
-  const one = (yield* herdr.agentList()).find((listed) => listed.name === agent);
+  const one = Option.getOrUndefined(
+    Arr.findFirst(yield* herdr.agentList(), (listed) => listed.name === agent),
+  );
   if (one !== undefined) yield* herdr.paneClose(one.paneId);
 }).pipe(Effect.orDie);
 
@@ -277,8 +306,8 @@ test("a sub-agent's running turn on the same server is interrupted too", () =>
         ],
       });
       expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
-      const interrupts = (yield* events()).filter((one) => one.method === "turn/interrupt");
-      expect(interrupts.map((one) => one.params)).toEqual([
+      const interrupts = Arr.filter(yield* events(), (one) => one.method === "turn/interrupt");
+      expect(Arr.map(interrupts, (one) => one.params)).toEqual([
         { threadId: THREAD, turnId: TURN },
         { threadId: SUB_THREAD, turnId: SUB_TURN },
       ]);
@@ -298,9 +327,9 @@ test("a continuation queued behind an interrupted turn never starts", () =>
   ));
 
 const Turn = Schema.Struct({ threadId: Schema.String, turnId: Schema.String });
-const decodeTurn = Schema.decodeUnknownSync(Turn);
+const decodeTurn = flow(Schema.decodeUnknownResult(Turn), Result.getOrThrow);
 const byTurn = (a: typeof Turn.Type, b: typeof Turn.Type) =>
-  `${a.threadId} ${a.turnId}`.localeCompare(`${b.threadId} ${b.turnId}`);
+  pipe_(`${a.threadId} ${a.turnId}`, Str.localeCompare(`${b.threadId} ${b.turnId}`));
 
 test.each([1, 2])(
   "a continuation that started before the server took its drain is interrupted too, the drain landing after interrupt %i",
@@ -313,17 +342,21 @@ test.each([1, 2])(
         yield* aWhile;
         expect(yield* sizeOf(written())).toBe(atStop);
         const all = yield* events();
-        const interrupted = all
-          .filter((one) => one.method === "turn/interrupt")
-          .map((one) => decodeTurn(one.params));
-        const begun = all
-          .filter((one) => one.turn !== undefined)
-          .map((one) => decodeTurn({ threadId: one.thread, turnId: one.turn }));
+        const interrupted = Arr.map(
+          Arr.filter(all, (one) => one.method === "turn/interrupt"),
+          (one) => decodeTurn(one.params),
+        );
+        const begun = Arr.map(
+          Arr.filter(all, (one) => one.turn !== undefined),
+          (one) => decodeTurn({ threadId: one.thread, turnId: one.turn }),
+        );
         expect(interrupted.slice(0, 2)).toEqual([
           { threadId: THREAD, turnId: TURN },
           { threadId: THREAD, turnId: `${TURN}-continued` },
         ]);
-        expect(interrupted.toSorted(byTurn)).toEqual(begun.toSorted(byTurn));
+        expect(Arr.sortWith(interrupted, (value) => value, byTurn)).toEqual(
+          Arr.sortWith(begun, (value) => value, byTurn),
+        );
       }),
     ),
 );
@@ -332,7 +365,9 @@ test("a process left in the server's session gets one SIGTERM and ends", () =>
   runEffect(
     Effect.gen(function* () {
       yield* working({ child: "ends" });
-      const child = (yield* events()).find((one) => one.child !== undefined)!.child!;
+      const child = Option.getOrUndefined(
+        Arr.findFirst(yield* events(), (one) => one.child !== undefined),
+      )!.child!;
       expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
       expect(alive(child)).toBe(false);
     }),
@@ -342,7 +377,9 @@ test("a process the first stop noted is still the server's after the server has 
   runEffect(
     Effect.gen(function* () {
       yield* working({ ignoreInterrupt: true, child: "ends" });
-      const child = (yield* events()).find((one) => one.child !== undefined)!.child!;
+      const child = Option.getOrUndefined(
+        Arr.findFirst(yield* events(), (one) => one.child !== undefined),
+      )!.child!;
       expect((yield* halted({ stopMs: 300 })).left).toHaveLength(1);
 
       // Its turn ends and it exits, leaving the process it started.
@@ -362,17 +399,19 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* working({ child: "ignores" });
-        const child = (yield* events()).find((one) => one.child !== undefined)!.child!;
+        const child = Option.getOrUndefined(
+          Arr.findFirst(yield* events(), (one) => one.child !== undefined),
+        )!.child!;
         // Live: the server's exit and its survivors' grace are real time, not the fast clock's.
         const halt = yield* TestClock.withLive(halted({ stopMs: 5_000 }));
         expect(halt.stopped).toEqual([]);
-        expect(halt.left.join("\n")).toContain(`pid ${child}`);
+        expect(Arr.join(halt.left, "\n")).toContain(`pid ${child}`);
         expect(alive(child)).toBe(true);
         const fs = yield* FileSystem.FileSystem;
-        expect((yield* fs.readFileString(`${eventsFile()}.child`)).trim().split("\n")).toEqual([
-          "TERM",
-        ]);
-        expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
+        expect(
+          Str.split(Str.trim(yield* fs.readFileString(`${eventsFile()}.child`)), "\n"),
+        ).toEqual(["TERM"]);
+        expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
         expect(yield* panesClosed()).toBe(0);
       }),
     ),
@@ -410,7 +449,7 @@ test("a server that acknowledges but never exits is left, acknowledged, with its
         started: expect.any(String),
         stop: { state: "acknowledged", turns: [{ thread: THREAD, turn: TURN }] },
       });
-      expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
     }),
   ));
 
@@ -515,10 +554,10 @@ for (const [what, over, edit, why] of [
         if (edit !== null) yield* editControl(edit);
         const halt = yield* halted();
         expect(halt.stopped).toEqual([]);
-        expect(halt.left.join("\n")).toMatch(/is not stopped: failed/);
-        expect(halt.left.join("\n")).toMatch(why);
+        expect(Arr.join(halt.left, "\n")).toMatch(/is not stopped: failed/);
+        expect(Arr.join(halt.left, "\n")).toMatch(why);
         // Refused before it looked, so it says nothing of the turns it never read.
-        expect(halt.left.join("\n")).toContain("its turns were never read");
+        expect(Arr.join(halt.left, "\n")).toContain("its turns were never read");
         expect(yield* signals()).toEqual([]);
         expect(yield* panesClosed()).toBe(0);
         expect(alive(yield* serverPid())).toBe(true);
@@ -532,7 +571,7 @@ test("a stop repeated while the server is not Quiet looks again and sends no sec
       yield* working({ ignoreInterrupt: true });
       expect((yield* halted({ stopMs: 300 })).left).toHaveLength(1);
       expect((yield* halted({ stopMs: 300 })).left).toHaveLength(1);
-      expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
     }),
   ));
 
@@ -554,8 +593,8 @@ test("a record from the previous build, with no start time, is stopped once its 
     Effect.gen(function* () {
       yield* working();
       yield* editControl((record) =>
-        Object.fromEntries(
-          Object.entries(record).filter(([key]) => key !== "started" && key !== "stop"),
+        Rec.fromEntries(
+          Arr.filter(Rec.toEntries(record), ([key]) => key !== "started" && key !== "stop"),
         ),
       );
       expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
@@ -568,10 +607,12 @@ test("the agents log has each state reached with the full ids, and only a quiet 
     Effect.gen(function* () {
       yield* working();
       yield* halted();
-      const lines = (yield* agentsLog()).split("\n");
+      const lines = Str.split(yield* agentsLog(), "\n");
       const transcript = `${rig.root}/rollout-${THREAD}.jsonl`;
       for (const state of ["interrupt submitted", "interrupt acknowledged", "quiet"]) {
-        const line = lines.find((one) => one.includes(`${agent}: ${state}`));
+        const line = Option.getOrUndefined(
+          Arr.findFirst(lines, (one) => pipe_(one, Str.includes(`${agent}: ${state}`))),
+        );
         expect(line).toBeDefined();
         for (const fact of [
           THREAD,
@@ -582,7 +623,7 @@ test("the agents log has each state reached with the full ids, and only a quiet 
         ])
           expect(line).toContain(fact);
       }
-      expect(lines.some((one) => one.includes(`stopped ${agent}`))).toBe(true);
+      expect(Arr.some(lines, (one) => pipe_(one, Str.includes(`stopped ${agent}`)))).toBe(true);
     }),
   ));
 
@@ -607,15 +648,17 @@ const parkedWhy = () =>
     Effect.orElseSucceed(() => ""),
   );
 const agentStarts = () =>
-  rig
-    .calls()
-    .pipe(
-      Effect.map((calls) =>
-        calls
-          .filter((call) => call.cmd === "agent start")
-          .map((call) => (call.argv ?? []).find((arg) => arg === "claude" || arg === "codex")),
+  rig.calls().pipe(
+    Effect.map((calls) =>
+      Arr.map(
+        Arr.filter(calls, (call) => call.cmd === "agent start"),
+        (call) =>
+          Option.getOrUndefined(
+            Arr.findFirst(call.argv ?? [], (arg) => arg === "claude" || arg === "codex"),
+          ),
       ),
-    );
+    ),
+  );
 type Reached = Effect.Effect<boolean, never, WorkflowEngine.WorkflowEngine | FileSystem.FileSystem>;
 const suspended: Reached = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -625,8 +668,10 @@ const suspended: Reached = Effect.gen(function* () {
 const given = Effect.suspend(() =>
   rig.calls().pipe(
     Effect.map((calls) =>
-      calls.some(
-        (call) => call.cmd === "agent prompt" && (call.argv?.[3] ?? "").includes("Your task"),
+      Arr.some(
+        calls,
+        (call) =>
+          call.cmd === "agent prompt" && pipe_(call.argv?.[3] ?? "", Str.includes("Your task")),
       ),
     ),
     Effect.orElseSucceed(() => false),
@@ -678,7 +723,7 @@ test(
           Effect.orElseSucceed(() => false),
         );
         yield* until(
-          Effect.map(Effect.all([suspended, restarted]), (one) => one.some(Boolean)),
+          Effect.map(Effect.all([suspended, restarted]), (one) => Arr.some(one, Boolean)),
           { stopMs: 25_000 },
           true,
         );
@@ -699,8 +744,12 @@ test(
         yield* aWhile;
         expect(yield* sizeOf(written())).toBe(atEnd);
         const log = yield* agentsLog();
-        expect(log.indexOf(`${agent}: quiet`)).toBeGreaterThan(-1);
-        expect(log.indexOf(`${agent}: quiet`)).toBeLessThan(log.lastIndexOf(`${agent}: codex in`));
+        expect(
+          Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1),
+        ).toBeGreaterThan(-1);
+        expect(Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1)).toBeLessThan(
+          Option.getOrElse(pipe_(log, Str.lastIndexOf(`${agent}: codex in`)), () => -1),
+        );
       }),
     ),
   120_000,
@@ -737,8 +786,12 @@ test("a Codex agent that runs out is Quiet before its Claude successor starts", 
         expect(yield* agentStarts()).toEqual(["codex", "claude"]);
         expect(alive(yield* serverPid())).toBe(false);
         const log = yield* agentsLog();
-        expect(log.indexOf(`${agent}: quiet`)).toBeGreaterThan(-1);
-        expect(log.indexOf(`${agent}: quiet`)).toBeLessThan(log.indexOf(`${successor}: claude in`));
+        expect(
+          Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1),
+        ).toBeGreaterThan(-1);
+        expect(Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1)).toBeLessThan(
+          Option.getOrElse(pipe_(log, Str.indexOf(`${successor}: claude in`)), () => -1),
+        );
       }),
     ),
   ));
@@ -808,13 +861,13 @@ test("a stop just after a launch started its agent stops that agent, and a resum
       );
       expect(yield* agentStarts()).toEqual(["codex", "claude"]);
       const live = yield* new Herdr(rig.pluginEnv()).agentList().pipe(Effect.orDie);
-      expect(live.map((one) => one.name)).not.toContain(successor);
+      expect(Arr.map(live, (one) => one.name)).not.toContain(successor);
 
       yield* stopFlag(false);
       const result = yield* resumedToEnd(fallback);
       expect(result._tag === "Success" && result.success.note).toBe("after the stop");
       const now = yield* new Herdr(rig.pluginEnv()).agentList().pipe(Effect.orDie);
-      expect(now.filter((one) => one.name === successor)).toHaveLength(1);
+      expect(Arr.filter(now, (one) => one.name === successor)).toHaveLength(1);
     }),
   ));
 
@@ -831,31 +884,37 @@ test("the sweep keeps an unlisted agent's record while its server is not Quiet, 
       );
       const first = yield* sweep([sweeper], `${rig.root}/state`, "host");
       expect(first.remove).toEqual([]);
-      expect(first.keep.map((one) => one.reason).join("\n")).toContain(
-        `its Codex turn has not stopped: ${agent} is not stopped: acknowledged`,
-      );
+      expect(
+        Arr.join(
+          Arr.map(first.keep, (one) => one.reason),
+          "\n",
+        ),
+      ).toContain(`its Codex turn has not stopped: ${agent} is not stopped: acknowledged`);
       expect(yield* recorded()).not.toBeNull();
       // What `collie cleanup` lists says the same, and a second sweep sends no second signal.
       const listed = yield* sweeper.judge;
       expect(listed.remove).toEqual([]);
-      expect(listed.keep.map((one) => one.reason).join("\n")).toContain(
-        `its Codex turn has not stopped: ${agent} is not stopped: acknowledged`,
-      );
+      expect(
+        Arr.join(
+          Arr.map(listed.keep, (one) => one.reason),
+          "\n",
+        ),
+      ).toContain(`its Codex turn has not stopped: ${agent} is not stopped: acknowledged`);
       const interrupts = () =>
         events().pipe(
-          Effect.map((all) => all.filter((one) => one.method === "turn/interrupt").length),
+          Effect.map((all) => Arr.filter(all, (one) => one.method === "turn/interrupt").length),
         );
       const asked = yield* interrupts();
       yield* sweep([sweeper], `${rig.root}/state`, "host");
       // Stopped again: interrupted again, and signalled once.
       expect(yield* interrupts()).toBeGreaterThan(asked);
-      expect((yield* events()).filter((one) => one.signal === "SIGTERM")).toHaveLength(1);
+      expect(Arr.filter(yield* events(), (one) => one.signal === "SIGTERM")).toHaveLength(1);
 
       yield* release();
       const pid = yield* serverPid();
       while (alive(pid)) yield* TestClock.withLive(Effect.sleep("20 millis"));
       const second = yield* sweep([sweeper], `${rig.root}/state`, "host");
-      expect(second.remove.map((one) => one.target)).toEqual([
+      expect(Arr.map(second.remove, (one) => one.target)).toEqual([
         `${rig.root}/state/compaction/${agent}`,
       ]);
       expect(yield* recorded()).toBeNull();
@@ -889,13 +948,16 @@ test("a sweep stops again a record whose earlier stop failed before it signalled
         hostOf().ports,
         25_000,
       );
-      expect((yield* sweeper.judge).keep.map((one) => one.reason).join("\n")).toContain(
-        "the connection was lost",
-      );
+      expect(
+        Arr.join(
+          Arr.map((yield* sweeper.judge).keep, (one) => one.reason),
+          "\n",
+        ),
+      ).toContain("the connection was lost");
       // Live: the server's exit after its signal is real time, not the fast clock's.
       const swept = yield* TestClock.withLive(sweep([sweeper], `${rig.root}/state`, "host"));
-      expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
-      expect(swept.remove.map((one) => one.target)).toEqual([
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
+      expect(Arr.map(swept.remove, (one) => one.target)).toEqual([
         `${rig.root}/state/compaction/${agent}`,
       ]);
       expect(alive(pid)).toBe(false);
@@ -994,15 +1056,19 @@ test("a start herdr never admits parks naming its agent, and the next launch und
       expect(relaunched.agent).toBe(agent);
       expect(alive(stranded)).toBe(false);
       const all = yield* events();
-      const servers = all.flatMap((one, at) => (one.pid === undefined ? [] : [at]));
-      const signalled = all.flatMap((one, at) => (one.signal === undefined ? [] : [at]));
+      const servers = Arr.flatMap(all, (one, at) => (one.pid === undefined ? [] : [at]));
+      const signalled = Arr.flatMap(all, (one, at) => (one.signal === undefined ? [] : [at]));
       expect(servers).toHaveLength(2);
       expect(signalled).toHaveLength(1);
       expect(signalled[0]).toBeLessThan(servers[1]!);
       expect(yield* agentStarts()).toEqual(["codex", "codex"]);
       const log = yield* agentsLog();
-      expect(log.indexOf(`${agent}: quiet`)).toBeGreaterThan(-1);
-      expect(log.indexOf(`${agent}: quiet`)).toBeLessThan(log.lastIndexOf(`${agent}: codex in`));
+      expect(
+        Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1),
+      ).toBeGreaterThan(-1);
+      expect(Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1)).toBeLessThan(
+        Option.getOrElse(pipe_(log, Str.lastIndexOf(`${agent}: codex in`)), () => -1),
+      );
     }),
   ));
 
@@ -1018,7 +1084,7 @@ test("the stop of a Run whose start herdr never admitted stops that start's serv
     Effect.gen(function* () {
       const stranded = yield* neverAdmitted;
       expect(yield* halted({ herdr: neverAdmits() })).toEqual({ stopped: [agent], left: [] });
-      expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
       expect(alive(stranded)).toBe(false);
       expect(yield* agentsLog()).toContain(`${agent}: quiet`);
       expect(yield* recorded()).toBeNull();
@@ -1085,7 +1151,16 @@ const unreadable: ReadonlyArray<
       const fs = yield* FileSystem.FileSystem;
       const text = yield* fs.readFileString(control()).pipe(Effect.orDie);
       yield* fs
-        .writeFileString(control(), text.slice(0, text.indexOf('"stop"')))
+        .writeFileString(
+          control(),
+          pipe_(
+            text,
+            Str.slice(
+              0,
+              Option.getOrElse(pipe_(text, Str.indexOf('"stop"')), () => -1),
+            ),
+          ),
+        )
         .pipe(Effect.orDie);
       return () => Effect.void;
     }),
@@ -1159,7 +1234,7 @@ test("a stop that lands in a start herdr then refuses stops that start's server 
           ],
         },
       ]);
-      expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
       expect(alive(yield* serverPid())).toBe(false);
       expect(yield* agentsLog()).toContain(`${agent}: quiet`);
       expect(yield* recorded()).toBeNull();
@@ -1171,7 +1246,7 @@ test("a Codex agent that never got a user message stops to quiet", () =>
     Effect.gen(function* () {
       yield* working(unmaterialized());
       expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
-      expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
       expect(alive(yield* serverPid())).toBe(false);
       expect(yield* agentsLog()).toContain(`${agent}: quiet`);
       expect(yield* recorded()).toBeNull();
@@ -1183,7 +1258,7 @@ test("a Codex agent whose paginated thread with no user message cannot list its 
     Effect.gen(function* () {
       yield* working(unlistable());
       expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
-      expect((yield* signals()).map((one) => one.signal)).toEqual(["SIGTERM"]);
+      expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
       expect(alive(yield* serverPid())).toBe(false);
       expect(yield* agentsLog()).toContain(`${agent}: quiet`);
       expect(yield* recorded()).toBeNull();

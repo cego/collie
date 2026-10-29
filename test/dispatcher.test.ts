@@ -3,6 +3,11 @@
 // refuses versus one that never answers, and an agent that is no longer the one the
 // message was addressed to.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import type { PlatformServices } from "../src/platform";
 import { Clock, DateTime, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
@@ -21,16 +26,7 @@ import {
   fitDelivery,
   DELIVERY_TOKEN,
 } from "../src/dispatcher";
-import {
-  appendLine,
-  blocked,
-  causalKey,
-  ledgerPath,
-  newestById,
-  readLedger,
-  withLedgerLock,
-  type Delivery,
-} from "../src/steering";
+import { causalKey, ledgerPath, readLedger, withLedgerLock, type Delivery } from "../src/steering";
 import { ensureLockDir } from "../src/lock";
 import { reason } from "../src/naming";
 import type { AgentEntry } from "../src/registry";
@@ -65,7 +61,11 @@ test("every delivery mode carries the agent Actor's sender line before its uncha
           }),
         );
         expect(result.ok).toBe(true);
-        expect(sent.calls.find((line) => line.startsWith("agentPrompt"))).toContain(
+        expect(
+          Option.getOrUndefined(
+            Arr.findFirst(sent.calls, (line) => pipe_(line, Str.startsWith("agentPrompt"))),
+          ),
+        ).toContain(
           `From source-agent of r-source on laptop. Answer with collie_do deliver to r-source (or collie run steer r-source --operation source-agent "…").\n${text}`,
         );
       }
@@ -77,7 +77,7 @@ const AT = DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-16T12:02:30Z"));
 
 test("each door's Delivery names its sender on its first line, and Collie's own carry none", () => {
   const firstLine = (actor?: Parameters<typeof deliveryText>[1]) =>
-    deliveryText("merge it", actor, AT).split("\n")[0];
+    Str.split(deliveryText("merge it", actor, AT), "\n")[0];
   expect(firstLine({ origin: "board" })).toMatch(
     new RegExp(`^From the human, on the board, ${MINUTE}\\.$`),
   );
@@ -112,11 +112,11 @@ test("each door's Delivery names its sender on its first line, and Collie's own 
 test("a fallback that is itself over the paste budget is still typed, and its receipt says so", () =>
   runEffect(
     Effect.gen(function* () {
-      const into = `${stateDir}/${"long-state-directory/".repeat(30)}runs/r1/attachments`;
+      const into = `${stateDir}/${pipe_("long-state-directory/", Str.repeat(30))}runs/r1/attachments`;
       const token = `${DELIVERY_TOKEN}r1-req-1-steer-1`;
       const fitted = yield* fitDelivery(into, token, "first\nsecond", { origin: "board" });
       const typed = `${token}\n${deliveryText(fitted.words, fitted.actor, AT)}`;
-      expect(typed.split("\n")).toHaveLength(3);
+      expect(Str.split(typed, "\n")).toHaveLength(3);
       expect(typed.length).toBeGreaterThan(700);
       expect(fitted.words).toStartWith(`Their message is in ${into}/message-`);
       expect(fitted.kept).toContain("Kept as a file in the Run.");
@@ -130,7 +130,7 @@ test("an agent's long sender line counts against the budget, and its kept words 
       const into = `${stateDir}/runs/r1/attachments`;
       const token = `${DELIVERY_TOKEN}r1-req-2-steer-1`;
       const source = { origin: "agent" as const, from: { run: "r-source", agent: "source-agent" } };
-      const words = "w".repeat(560);
+      const words = pipe_("w", Str.repeat(560));
       expect((yield* fitDelivery(into, token, words, { origin: "board" })).kept).toBeNull();
       const fitted = yield* fitDelivery(into, token, words, source);
       expect(fitted.words).toEndWith(". Read it whole and act on it as that agent's.");
@@ -217,15 +217,17 @@ function fake(
           }),
         agentSendKeys: (target: string, keys: ReadonlyArray<string>) =>
           Effect.sync(() => {
-            calls.push(`agentSendKeys ${target} ${keys.join("+")}`);
+            calls.push(`agentSendKeys ${target} ${Arr.join(keys, "+")}`);
           }),
         agentPrompt: (target: string, text: string) =>
           Effect.gen(function* () {
             calls.push(`agentPrompt ${target} ${text}`);
             if (options.onPrompt) yield* options.onPrompt;
-            const prompted = calls.filter((call) => call.startsWith("agentPrompt")).length;
+            const prompted = Arr.filter(calls, (call) =>
+              pipe_(call, Str.startsWith("agentPrompt")),
+            ).length;
             if (options.fail && prompted <= (options.failing ?? Infinity))
-              return yield* Effect.fail(options.fail);
+              return yield* options.fail;
             return options.saw ?? ("observed" as const);
           }),
       },
@@ -240,9 +242,10 @@ function fake(
 /** The ledger as a list of `<id> <state>`, which is what every assertion here is about. */
 const states = Effect.fn("test.states")(function* () {
   const file = yield* ledgerPath(stateDir, "term-1");
-  return (yield* readLedger(file))
-    .filter((line): line is Delivery => "state" in line)
-    .map((line) => `${line.id} ${line.state}`);
+  return Arr.map(
+    Arr.filter(yield* readLedger(file), (line): line is Delivery => "state" in line),
+    (line) => `${line.id} ${line.state}`,
+  );
 });
 
 test("a continuation recovers a lost name using its recorded incarnation", () =>
@@ -284,9 +287,10 @@ test("the record is written before herdr is called, and settled after", () =>
       let atSendTime: string[] = [];
       const h = fake({
         onPrompt: Effect.gen(function* () {
-          atSendTime = (yield* readLedger(file))
-            .filter((line): line is Delivery => "state" in line)
-            .map((line) => line.state);
+          atSendTime = Arr.map(
+            Arr.filter(yield* readLedger(file), (line): line is Delivery => "state" in line),
+            (line) => line.state,
+          );
         }),
       });
 
@@ -318,10 +322,11 @@ test("a submission herdr saw no turn come of is submitted, with that as its note
       // what a later reader has to tell a lost prompt from an ignored one.
       expect(outcome).toEqual({ ok: true, id: "req-1-1", submission: "unobserved" });
       const file = yield* ledgerPath(stateDir, "term-1");
-      const settled = (yield* readLedger(file)).filter(
+      const settled = Arr.filter(
+        yield* readLedger(file),
         (line): line is Delivery => "state" in line && line.state === "submitted",
       );
-      expect(settled.map((line) => line.note)).toEqual(["unobserved"]);
+      expect(Arr.map(settled, (line) => line.note)).toEqual(["unobserved"]);
     }),
   ));
 
@@ -396,11 +401,11 @@ const quick = { firstMs: 1, maxMs: 4, forMs: 60_000 };
 
 const ledgerLines = Effect.fn("test.ledgerLines")(function* () {
   const file = yield* ledgerPath(stateDir, "term-1");
-  return (yield* readLedger(file)).filter((line): line is Delivery => "state" in line);
+  return Arr.filter(yield* readLedger(file), (line): line is Delivery => "state" in line);
 });
 
 const prompted = (calls: ReadonlyArray<string>) =>
-  calls.filter((call) => call.startsWith("agentPrompt")).length;
+  Arr.filter(calls, (call) => pipe_(call, Str.startsWith("agentPrompt"))).length;
 
 test("a pane that refuses while it is busy is retried until it takes the prompt, as one delivery", () =>
   runEffect(
@@ -413,8 +418,8 @@ test("a pane that refuses while it is busy is retried until it takes the prompt,
       expect(prompted(h.calls)).toBe(4);
       const lines = yield* ledgerLines();
       // Every try is on the ledger, under the one identity the first reservation had.
-      expect(new Set(lines.map((line) => line.id))).toEqual(new Set(["req-1-1"]));
-      expect(lines.map((line) => line.state)).toEqual([
+      expect(new Set(Arr.map(lines, (line) => line.id))).toEqual(new Set(["req-1-1"]));
+      expect(Arr.map(lines, (line) => line.state)).toEqual([
         "reserved",
         "deferred",
         "reserved",
@@ -425,11 +430,12 @@ test("a pane that refuses while it is busy is retried until it takes the prompt,
         "submitted",
         "acknowledged",
       ]);
-      expect(lines.filter((line) => line.state === "deferred").map((line) => line.code)).toEqual([
-        "agent_blocked",
-        "agent_blocked",
-        "agent_blocked",
-      ]);
+      expect(
+        Arr.map(
+          Arr.filter(lines, (line) => line.state === "deferred"),
+          (line) => line.code,
+        ),
+      ).toEqual(["agent_blocked", "agent_blocked", "agent_blocked"]);
     }),
   ));
 
@@ -487,9 +493,12 @@ test("a pane that stays busy past the deadline is given up on, and says what hel
       const last = (yield* ledgerLines()).at(-1);
       expect(last).toMatchObject({ state: "failed", code: "agent_blocked", note: detail });
       // Told apart in the Run's log from a refusal that was never retried.
-      expect(h.calls.filter((call) => call.startsWith("log ") && call.includes("gave up"))).toEqual(
-        [`log not sent to impl-1: ${detail}; gave up`],
-      );
+      expect(
+        Arr.filter(
+          h.calls,
+          (call) => pipe_(call, Str.startsWith("log ")) && pipe_(call, Str.includes("gave up")),
+        ),
+      ).toEqual([`log not sent to impl-1: ${detail}; gave up`]);
     }),
   ));
 
@@ -532,7 +541,7 @@ test("the same work is not sent twice while the first attempt is unsettled", () 
       );
 
       expect(again).toMatchObject({ ok: false, reason: "blocked" });
-      expect(h.calls.some((c) => c.startsWith("agentPrompt"))).toBe(false);
+      expect(Arr.some(h.calls, (c) => pipe_(c, Str.startsWith("agentPrompt")))).toBe(false);
       expect(yield* states()).not.toContain("req-9-1 reserved");
     }),
   ));
@@ -546,7 +555,7 @@ test("a different agent in the same pane is not the addressee, and pending work 
       ).pipe(Effect.flip);
 
       expect(outcome).toMatchObject({ _tag: "NotDeliverable", reason: "incarnation_changed" });
-      expect(moved.calls.some((c) => c.startsWith("agentPrompt"))).toBe(false);
+      expect(Arr.some(moved.calls, (c) => pipe_(c, Str.startsWith("agentPrompt")))).toBe(false);
     }),
   ));
 
@@ -570,7 +579,7 @@ test("a message over the cap is refused, and nothing is reserved for it", () =>
     Effect.gen(function* () {
       const h = fake();
       const outcome = yield* transaction(h.deps, entry, (channel) =>
-        channel.submit("x".repeat(MAX_DELIVERY_BYTES + 1), draft),
+        channel.submit(Str.repeat(MAX_DELIVERY_BYTES + 1)("x"), draft),
       );
       expect(outcome).toMatchObject({ ok: false, reason: "too_long" });
       expect(yield* states()).toEqual([]);
@@ -599,7 +608,7 @@ const holdingTheLedger = {
     ),
 };
 
-for (const [holder, hold] of Object.entries(holdingTheLedger))
+for (const [holder, hold] of Rec.toEntries(holdingTheLedger))
   test(`a patient submission waits out ${holder} on the agent's ledger, then delivers once`, () =>
     runEffect(
       fastForward(
@@ -625,9 +634,9 @@ for (const [holder, hold] of Object.entries(holdingTheLedger))
           yield* Deferred.succeed(release, undefined);
           yield* Fiber.join(holding);
           expect(yield* Fiber.join(submitting)).toMatchObject({ ok: true, id: "req-1-1" });
-          expect(h.calls.filter((call) => call.startsWith("agentPrompt"))).toEqual([
-            `agentPrompt impl-1 ${marked("read the prompt file", "req-1-1")}`,
-          ]);
+          expect(Arr.filter(h.calls, (call) => pipe_(call, Str.startsWith("agentPrompt")))).toEqual(
+            [`agentPrompt impl-1 ${marked("read the prompt file", "req-1-1")}`],
+          );
           expect(yield* states()).toEqual([
             "req-1-1 reserved",
             "req-1-1 submitted",
@@ -656,8 +665,8 @@ test("an interrupt presses nothing in a pane whose harness has not been shown to
       );
 
       expect(outcome).toMatchObject({ ok: false, detail: expect.stringContaining("codex") });
-      expect(h.calls.some((call) => call.startsWith("agentSendKeys"))).toBe(false);
-      expect(h.calls.some((call) => call.startsWith("agentPrompt"))).toBe(false);
+      expect(Arr.some(h.calls, (call) => pipe_(call, Str.startsWith("agentSendKeys")))).toBe(false);
+      expect(Arr.some(h.calls, (call) => pipe_(call, Str.startsWith("agentPrompt")))).toBe(false);
       // Nothing was reserved either: the gate is before the ledger, not after it.
       expect(yield* states()).toEqual([]);
     }),
@@ -671,7 +680,7 @@ test("what goes out first is the human interrupting, and last is a compaction", 
     { mode: "now" as const, cause: { kind: "steer" as const, ref: "s" } },
     { mode: "interrupt" as const, cause: { kind: "correction" as const, ref: "c1" } },
   ];
-  expect(dispatchOrder(due).map((d) => d.cause.kind)).toEqual([
+  expect(Arr.map(dispatchOrder(due), (d) => d.cause.kind)).toEqual([
     "correction",
     "steer",
     "step",
@@ -690,7 +699,7 @@ test("the order survives the inbox, whose decode types mode and cause as plain s
     { mode: "boundary", cause: { kind: "steer", ref: "s" } },
     { mode: "boundary", cause: { kind: "correction", ref: "c1" } },
   ];
-  expect(dispatchOrder(queued).map((d) => d.cause.kind)).toEqual([
+  expect(Arr.map(dispatchOrder(queued), (d) => d.cause.kind)).toEqual([
     "correction",
     "steer",
     "handoff",

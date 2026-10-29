@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
 import type { Question } from "../../../../src/board-model";
 import {
   answerKey,
@@ -50,7 +51,7 @@ const send = (question: Question, value: string, shown: string) => {
   sitting.value = sittingAnswered(sitting.value, now.value);
 };
 const sendTyped = (question: Question) => {
-  const said = draft.value.trim();
+  const said = Str.trim(draft.value);
   if (said !== "") send(question, said, said);
 };
 const move = (by: number) => (sitting.value = sittingMoved(sitting.value, by));
@@ -101,7 +102,7 @@ const move = (by: number) => (sitting.value = sittingMoved(sitting.value, by));
               type="submit"
               label="Send"
               data-testid="send-answer"
-              :disabled="draft.trim() === ''"
+              :disabled="Str.trim(draft) === ''"
             />
           </form>
         </template>

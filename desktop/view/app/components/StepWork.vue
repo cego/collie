@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { Flow, FlowRun, RunDetail } from "../../../../src/board-model";
 import type { PlacedTask } from "../../../src/shared/flock";
 import type { FlowSelection } from "../../../src/shared/flow";
@@ -25,7 +27,10 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ open: [run: string, tab: string, agent?: string]; focus: [] }>();
 const row = computed(
-  () => props.flow.lanes.find((one) => one.run === props.selected.run) ?? props.flow.lanes.at(-1),
+  () =>
+    Option.getOrUndefined(
+      Arr.findFirst(props.flow.lanes, (one) => one.run === props.selected.run),
+    ) ?? props.flow.lanes.at(-1),
 );
 const run = computed(() => row.value?.run ?? props.placed.task.run);
 const detail = computed(() => (props.detail?.id === run.value ? props.detail : null));
@@ -37,12 +42,18 @@ const live = computed(
   () =>
     props.placed.asOf === null &&
     props.node.agent != null &&
-    props.placed.task.agents.some((one) => one.name === props.node.agent),
+    Arr.some(props.placed.task.agents, (one) => one.name === props.node.agent),
 );
 const starts = computed(() =>
-  (row.value?.nodes ?? [])
-    .flatMap((node) => [node.log, ...node.runs.map((one) => one.log)])
-    .filter((line): line is number => line != null),
+  Arr.filter(
+    Arr.flatMap(
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(row.value), (present) => present.nodes),
+      ) ?? [],
+      (node) => [node.log, ...Arr.map(node.runs, (one) => one.log)],
+    ),
+    (line): line is number => line != null,
+  ),
 );
 const log = computed(() =>
   stepLines(detail.value?.tail ?? null, detail.value?.logStart ?? 1, props.node.log, starts.value),

@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
@@ -56,7 +59,7 @@ test(
               yield* registered.workflow.execute(payload, { discard: true });
               yield* until(
                 () => readStepLines(`${dir}/runs/${id}`),
-                (lines) => lines.some((one) => one.kind === "enter"),
+                (lines) => Arr.some(lines, (one) => one.kind === "enter"),
               );
               return payload;
             });
@@ -84,7 +87,10 @@ test(
             const otherEntry = `${dir}/other-times.workflow.ts`;
             yield* fs.writeFileString(
               otherEntry,
-              (yield* fs.readFileString(entry)).replace('id: "step-times"', 'id: "other-times"'),
+              pipe_(
+                yield* fs.readFileString(entry),
+                Str.replace('id: "step-times"', 'id: "other-times"'),
+              ),
             );
             const other = (yield* loadEntry(otherEntry)).make("other-times@1");
             yield* finish("other", 120, other, "other-times").pipe(Effect.provide(other.layer));
@@ -149,27 +155,34 @@ test(
               model: "opus",
               permissions: "auto",
               compactAtTokens: 0,
-            }),
-          ),
-          Effect.provide(
-            Layer.succeed(Children)(
-              Children.of({
-                start: () => Effect.die("no child in this fixture"),
-                result: () => Effect.die("no child in this fixture"),
-              }),
+            }).pipe(
+              Layer.provideMerge(
+                Layer.succeed(Children)(
+                  Children.of({
+                    start: () => Effect.die("no child in this fixture"),
+                    result: () => Effect.die("no child in this fixture"),
+                  }),
+                ),
+              ),
+              Layer.provideMerge(
+                Layer.effect(Host)(
+                  Effect.gen(function* () {
+                    const host = yield* Host;
+                    return Host.of({
+                      ...host,
+                      step: (id, note) =>
+                        host.step(id, note).pipe(Effect.provideService(Clock.Clock, clock)),
+                    });
+                  }),
+                ).pipe(
+                  Layer.provideMerge(
+                    foundationLayer({
+                      dir,
+                    }),
+                  ),
+                ),
+              ),
             ),
-          ),
-          Effect.provide(
-            Layer.effect(Host)(
-              Effect.gen(function* () {
-                const host = yield* Host;
-                return Host.of({
-                  ...host,
-                  step: (id, note) =>
-                    host.step(id, note).pipe(Effect.provideService(Clock.Clock, clock)),
-                });
-              }),
-            ).pipe(Layer.provideMerge(foundationLayer({ dir }))),
           ),
           Effect.scoped,
         );

@@ -2,6 +2,10 @@
 // what lives here is the frontmatter split, the value schemas, and the write-back used
 // when forking a definition.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { Data, Schema } from "effect";
 import * as Yaml from "effect/encoding/Yaml";
 
@@ -14,7 +18,7 @@ export interface YamlMap {
 export const YamlValueSchema: Schema.Codec<YamlValue> = Schema.suspend(() =>
   Schema.Union([
     Schema.String,
-    Schema.Number,
+    Schema.Finite,
     Schema.Boolean,
     Schema.Null,
     Schema.Array(YamlValueSchema),
@@ -29,7 +33,7 @@ export class YamlError extends Data.TaggedError("YamlError")<{ message: string }
 const isStringMap = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
 export function isYamlMap(value: YamlValue | undefined): value is YamlMap {
-  return value !== undefined && value !== null && !Array.isArray(value) && isStringMap(value);
+  return value !== undefined && value !== null && !Arr.isArray(value) && isStringMap(value);
 }
 
 const KEY = /^("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_][A-Za-z0-9_./-]*)\s*:(?:[ \t]+(.*))?$/;
@@ -65,10 +69,11 @@ export function yamlScalar(value: string): string {
 }
 
 function unquote(raw: string): string {
-  if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
-    return raw.slice(1, -1).replace(/\\(.)/g, "$1");
+  if (pipe(raw, Str.startsWith('"')) && pipe(raw, Str.endsWith('"')) && raw.length > 1) {
+    return pipe(raw, Str.slice(1, -1), Str.replace(/\\(.)/g, "$1"));
   }
-  if (raw.startsWith("'") && raw.endsWith("'") && raw.length > 1) return raw.slice(1, -1);
+  if (pipe(raw, Str.startsWith("'")) && pipe(raw, Str.endsWith("'")) && raw.length > 1)
+    return pipe(raw, Str.slice(1, -1));
   return raw;
 }
 
@@ -84,21 +89,27 @@ function unquote(raw: string): string {
  * a block scalar cannot hide an existing key and get a duplicate written above it.
  */
 export function setFrontmatterKey(text: string, key: string, value: string): string {
-  const lines = text.split("\n");
+  const lines = Str.split(text, "\n");
   const written = `${key}: ${yamlScalar(value)}`;
   if (!FENCE.test(withoutBom(lines[0] ?? ""))) return `---\n${written}\n---\n\n${text}`;
-  const close = lines.findIndex((line, i) => i > 0 && FENCE.test(line));
+  const close = Option.getOrElse(
+    Arr.findFirstIndex(lines, (line, i) => i > 0 && FENCE.test(line)),
+    () => -1,
+  );
   const end = close < 0 ? lines.length : close;
-  const at = lines.findIndex((line, i) => i > 0 && i < end && topLevelKey(line) === key);
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(lines, (line, i) => i > 0 && i < end && topLevelKey(line) === key),
+    () => -1,
+  );
   if (at < 0) lines.splice(1, 0, written);
   else lines[at] = written;
-  return lines.join("\n");
+  return Arr.join(lines, "\n");
 }
 
 /** The key a frontmatter line sets, or null for anything nested or not a mapping. */
 function topLevelKey(line: string): string | null {
   if (/^\s/.test(line)) return null;
-  const m = KEY.exec(line.trim());
+  const m = KEY.exec(Str.trim(line));
   return m ? unquote(m[1]!) : null;
 }
 
@@ -114,14 +125,14 @@ export interface Document {
 const FENCE = /^---[ \t]*\r?$/;
 
 function withoutBom(line: string): string {
-  return line.replace(/^﻿/, "");
+  return pipe(line, Str.replace(/^﻿/, ""));
 }
 
 /** Splits `---` frontmatter from the markdown body. */
 export function parseDocument(text: string): Document {
   const normalised = withoutBom(text);
   const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(normalised);
-  if (!m) return { data: {}, body: normalised.trim() };
+  if (!m) return { data: {}, body: Str.trim(normalised) };
   const parsed = parseYaml(m[1]!);
   // A block that is empty or nothing but comments parses to null. For a document that is
   // frontmatter setting no keys, not frontmatter that failed to be a mapping.
@@ -129,6 +140,6 @@ export function parseDocument(text: string): Document {
   if (!isYamlMap(data)) throw new YamlError({ message: "frontmatter must be a mapping" });
   return {
     data,
-    body: normalised.slice(m[0].length).trim(),
+    body: Str.trim(pipe(normalised, Str.slice(m[0].length))),
   };
 }

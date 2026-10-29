@@ -1,5 +1,6 @@
 // Collie's published releases: the newest, and a release's runner verified against the release key.
 
+import * as Str from "effect/String";
 import { Data, Duration, Effect, FileSystem, Option } from "effect";
 import * as Digest from "effect/crypto/Digest";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -24,7 +25,7 @@ export const ownPlatform = () =>
 export const newestRelease = (source: string) =>
   HttpClient.get(`${source}/latest`).pipe(
     Effect.map((response) => {
-      const tag = (response.headers.location ?? "").split("/").at(-1) ?? "";
+      const tag = Str.split(response.headers.location ?? "", "/").at(-1) ?? "";
       return RELEASE_TAG.test(tag) ? tag : null;
     }),
     Effect.provide(FetchHttpClient.layer),

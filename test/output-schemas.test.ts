@@ -7,8 +7,9 @@
 // the optional judgement fields and the free-text severity, which are exactly what a
 // schema is tempted to narrow.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Schema } from "effect";
+import { Schema, flow, Result } from "effect";
 import {
   CriterionSchema,
   FixOutputSchema,
@@ -29,8 +30,8 @@ import { jsonSchemaFor } from "../src/sdk";
 type Readable = Schema.Codec<unknown, unknown, never, never>;
 
 const accepts = (schema: Readable, text: string): boolean =>
-  Schema.decodeUnknownExit(schema)(Schema.decodeUnknownSync(YamlValueJsonSchema)(text))._tag ===
-  "Success";
+  Schema.decodeExit(schema)(flow(Schema.decodeResult(YamlValueJsonSchema), Result.getOrThrow)(text))
+    ._tag === "Success";
 
 /** Both readings of one document agree on whether it is one. */
 const agree = <T>(
@@ -100,7 +101,11 @@ test("a synthesis reads the same through the shared schema and the parser", () =
 test("a fix report reads the same through the shared schema and the parser", () => {
   agree(
     FixOutputSchema,
-    (text) => parseFixOutput(Schema.decodeUnknownSync(YamlValueJsonSchema)(text), "fix.json"),
+    (text) =>
+      parseFixOutput(
+        flow(Schema.decodeResult(YamlValueJsonSchema), Result.getOrThrow)(text),
+        "fix.json",
+      ),
     FIXES,
   );
 });
@@ -121,7 +126,10 @@ test("a fixer is told its verdict counts only what it left unresolved; a reviewe
 });
 
 test("the optional judgement fields survive the schema, and the values come back whole", () => {
-  const decoded = Schema.decodeUnknownSync(ReviewOutputSchema)({
+  const decoded = flow(
+    Schema.decodeResult(ReviewOutputSchema),
+    Result.getOrThrow,
+  )({
     verdict: "findings",
     findings: [
       { file: "a.ts", line: 3, severity: "major", title: "leak", detail: "d", rebuttal: "r" },
@@ -140,30 +148,41 @@ test("the optional judgement fields survive the schema, and the values come back
 
 test("the merge request and plan steps carry what a card reads, and no more", () => {
   expect(
-    Schema.decodeUnknownSync(MrOutputSchema)({ pushed: false, note: "auto-merge is on" }),
+    flow(
+      Schema.decodeResult(MrOutputSchema),
+      Result.getOrThrow,
+    )({ pushed: false, note: "auto-merge is on" }),
   ).toEqual({ pushed: false, note: "auto-merge is on" });
   expect(
-    Schema.decodeUnknownSync(MrOutputSchema)({ pushed: true, mr_url: "https://example/mr/1" }),
+    flow(
+      Schema.decodeResult(MrOutputSchema),
+      Result.getOrThrow,
+    )({ pushed: true, mr_url: "https://example/mr/1" }),
   ).toEqual({ pushed: true, mr_url: "https://example/mr/1" });
   // `pushed` is the one thing that is never absent: a step that says nothing about it has
   // not reported whether somebody else's pipeline was started.
   expect(Schema.decodeUnknownExit(MrOutputSchema)({ mr_url: "u" })._tag).toBe("Failure");
 
-  expect(Schema.decodeUnknownSync(PlanOutputSchema)({ issues_dir: "plan/issues" })).toEqual({
+  expect(
+    flow(Schema.decodeResult(PlanOutputSchema), Result.getOrThrow)({ issues_dir: "plan/issues" }),
+  ).toEqual({
     issues_dir: "plan/issues",
   });
-  expect(Schema.decodeUnknownExit(PlanOutputSchema)({ issues_dir: " " })._tag).toBe("Failure");
+  expect(Schema.decodeExit(PlanOutputSchema)({ issues_dir: " " })._tag).toBe("Failure");
 });
 
 test("each criterion is answered with how it is met, and one unanswered or unmet blocks", () => {
   const Built = Schema.Struct({ criteria: Schema.optionalKey(Schema.Array(CriterionSchema)) });
-  expect(Schema.decodeUnknownSync(Built)({})).toEqual({});
+  expect(flow(Schema.decodeResult(Built), Result.getOrThrow)({})).toEqual({});
   expect(
-    Schema.decodeUnknownSync(Built)({
+    flow(
+      Schema.decodeResult(Built),
+      Result.getOrThrow,
+    )({
       criteria: [{ criterion: "**A.** it does a", met: "test/a.test.ts" }],
     }),
   ).toEqual({ criteria: [{ criterion: "**A.** it does a", met: "test/a.test.ts" }] });
-  expect(Schema.decodeUnknownExit(Built)({ criteria: [{ criterion: "a", met: " " }] })._tag).toBe(
+  expect(Schema.decodeExit(Built)({ criteria: [{ criterion: "a", met: " " }] })._tag).toBe(
     "Failure",
   );
 
@@ -193,7 +212,8 @@ test("each criterion is answered with how it is met, and one unanswered or unmet
   ]);
   expect(unmetCriteria("05-x.md", [], [])).toEqual([]);
   expect(
-    unmetCriteria("05-x.md", criteria.slice(0, 1), [{ criterion: "A.", met: "t" }]).map(
+    Arr.map(
+      unmetCriteria("05-x.md", criteria.slice(0, 1), [{ criterion: "A.", met: "t" }]),
       (one) => one.title,
     ),
   ).toEqual(["acceptance criterion not answered: **A.** It does `a`, with one entry per thing."]);
@@ -203,11 +223,14 @@ test("an answer to a criterion's earlier wording does not answer it once amended
   const answers = [{ criterion: "All six tests pass.", met: "one run of test/flake.test.ts" }];
   expect(unmetCriteria("01.md", ["All six tests pass."], answers)).toEqual([]);
   expect(
-    unmetCriteria(
-      "01.md",
-      ["**All six tests pass.** Each passes twenty consecutive runs."],
-      answers,
-    ).map((one) => one.title),
+    Arr.map(
+      unmetCriteria(
+        "01.md",
+        ["**All six tests pass.** Each passes twenty consecutive runs."],
+        answers,
+      ),
+      (one) => one.title,
+    ),
   ).toEqual([
     "acceptance criterion not answered: **All six tests pass.** Each passes twenty consecutive runs.",
   ]);
@@ -219,7 +242,7 @@ test("a criterion only a deploy can show is answered after merge, and neither bl
     { criterion: "**A.** It does a.", met: "After merge: only the deploy shows it" },
     { criterion: "**B.** It does b.", met: "not met: b needs a service nobody has" },
   ];
-  expect(unmetCriteria("05-x.md", criteria, answers).map((one) => one.title)).toEqual([
+  expect(Arr.map(unmetCriteria("05-x.md", criteria, answers), (one) => one.title)).toEqual([
     "acceptance criterion not met: **B.** It does b.",
     "acceptance criterion not answered: **C.** It does c.",
   ]);

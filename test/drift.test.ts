@@ -2,7 +2,11 @@
 // having no evidence — no verification ran, no Output was written, no merge request
 // exists — and the check saying so rather than saying nothing is wrong.
 
-import { Effect, FileSystem, Path, Schema } from "effect";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { expect, test } from "bun:test";
 import {
   MAX_FILES,
@@ -70,7 +74,13 @@ test("protected paths report the files that were outside them, not that some wer
   );
   expect(report?.kind).toBe("rule");
   expect(report?.severity).toBe("block");
-  expect(report?.evidence.map((ref) => ref.path)).toEqual(["docs/using.md", ".gitlab-ci.yml"]);
+  expect(
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(report), (present) =>
+        Arr.map(present.evidence, (ref) => ref.path),
+      ),
+    ),
+  ).toEqual(["docs/using.md", ".gitlab-ci.yml"]);
 });
 
 test("protected paths say when their list of files was cut, and the line says so too", () => {
@@ -159,23 +169,34 @@ test("a semantic constraint is never checked by a rule check", () => {
 });
 
 test("a diff is split per file, capped, and secret files are named rather than quoted", () => {
-  const body = (lines: number) => Array.from({ length: lines }, (_, i) => `+line ${i}`).join("\n");
-  const diff = [
-    "diff --git a/src/a.ts b/src/a.ts",
-    "@@",
-    body(MAX_LINES_PER_FILE + 50),
-    "diff --git a/.env b/.env",
-    "@@",
-    "+SECRET=hunter2",
-    "diff --git a/src/b.ts b/src/b.ts",
-    "@@",
-    "+one line",
-  ].join("\n");
+  const body = (lines: number) =>
+    Arr.join(
+      Array.from({ length: lines }, (_, i) => `+line ${i}`),
+      "\n",
+    );
+  const diff = Arr.join(
+    [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "@@",
+      body(MAX_LINES_PER_FILE + 50),
+      "diff --git a/.env b/.env",
+      "@@",
+      "+SECRET=hunter2",
+      "diff --git a/src/b.ts b/src/b.ts",
+      "@@",
+      "+one line",
+    ],
+    "\n",
+  );
 
   const blocks = splitDiff(diff);
-  expect(blocks.map((b) => b.path)).toEqual(["src/a.ts", ".env", "src/b.ts"]);
+  expect(Arr.map(blocks, (b) => b.path)).toEqual(["src/a.ts", ".env", "src/b.ts"]);
   expect(blocks[0]?.truncated).toBe(true);
-  expect(blocks[0]?.diff.split("\n")).toHaveLength(MAX_LINES_PER_FILE);
+  expect(
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(blocks[0]), (present_) => Str.split(present_.diff, "\n")),
+    ),
+  ).toHaveLength(MAX_LINES_PER_FILE);
   // The name is the evidence; the contents are not something to hand a model.
   expect(blocks[1]?.diff).toBe("<redacted>");
   expect(blocks[1]?.diff).not.toContain("hunter2");
@@ -200,33 +221,36 @@ test("the same finding in the same place is not a second finding", () => {
   expect(findingKey("c1", found[0]!.evidence)).not.toBe(findingKey("c1", other[0]!.evidence));
 
   // And a report that has been settled stops suppressing new ones.
-  const settled = found.map((report) => ({ ...report, resolution: "verified" as const }));
+  const settled = Arr.map(found, (report) => ({ ...report, resolution: "verified" as const }));
   expect(newReports(found, settled)).toHaveLength(1);
 });
 
 test("a finding still there after the Intent moves is the same report, at the new version", () => {
   const intent = intentWith({ kind: "protected_paths", globs: ["src/**"] });
-  const onFile = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t").map(
+  const onFile = Arr.map(
+    checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t"),
     (report) => ({ ...report, resolution: "correction_submitted" as const }),
   );
   const moved = { ...intent, version: 2 };
   const again = checkRules(moved, facts({ changedFiles: ["docs/using.md"] }), "t2");
 
   const refiled = newReports(again, onFile);
-  expect(refiled.map((r) => [r.id, r.intent_version, r.resolution])).toEqual([
+  expect(Arr.map(refiled, (r) => [r.id, r.intent_version, r.resolution])).toEqual([
     [onFile[0]!.id, 2, "correction_submitted"],
   ]);
-  expect(openReports([...onFile, ...refiled]).map((r) => r.intent_version)).toEqual([2]);
+  expect(Arr.map(openReports([...onFile, ...refiled]), (r) => r.intent_version)).toEqual([2]);
   expect(newReports(again, [...onFile, ...refiled])).toEqual([]);
 });
 
 test("a moved report says what the new version found, under the id and state on file", () => {
   const warn = intentWith({ kind: "protected_paths", globs: ["src/**"] }, "warn");
-  const onFile = checkRules(warn, facts({ changedFiles: ["docs/using.md"] }), "t").map(
+  const onFile = Arr.map(
+    checkRules(warn, facts({ changedFiles: ["docs/using.md"] }), "t"),
     (report) => ({ ...report, resolution: "correction_submitted" as const, correction: "del-1" }),
   );
   const raised = { ...intentWith({ kind: "protected_paths", globs: ["src/**"] }), version: 2 };
-  const again = checkRules(raised, facts({ changedFiles: ["docs/using.md"] }), "t2").map(
+  const again = Arr.map(
+    checkRules(raised, facts({ changedFiles: ["docs/using.md"] }), "t2"),
     (report) => ({ ...report, id: "model-chose-this" }),
   );
 
@@ -255,7 +279,7 @@ test("a finding filed again after the Intent moves is still one open report", ()
         false,
       );
       const open = openReports(yield* readDrift(dir));
-      expect(open.map((r) => [r.id, r.intent_version])).toEqual([[onFile!.id, 2]]);
+      expect(Arr.map(open, (r) => [r.id, r.intent_version])).toEqual([[onFile!.id, 2]]);
     }),
   ));
 
@@ -283,9 +307,9 @@ test("an amended Intent supersedes what it moved past, and nothing else", () => 
   // Current version, constraint still there: nothing has moved past it.
   expect(supersededBy([open({})], at)).toEqual([]);
   // Judged against an older Intent.
-  expect(supersededBy([open({ intent_version: 2 })], at).map((r) => r.id)).toEqual(["d1"]);
+  expect(Arr.map(supersededBy([open({ intent_version: 2 })], at), (r) => r.id)).toEqual(["d1"]);
   // The constraint itself was removed, so the report is about something nobody asks for.
-  expect(supersededBy([open({ constraint: "gone" })], at).map((r) => r.id)).toEqual(["d1"]);
+  expect(Arr.map(supersededBy([open({ constraint: "gone" })], at), (r) => r.id)).toEqual(["d1"]);
 });
 
 test("the journal is append-only, so the newest line is the state", () =>
@@ -326,11 +350,11 @@ test("evidence is the actual diff, from the actual tree", () =>
       yield* fs.writeFileString(path.join(repo, "a.ts"), "one\n");
       yield* git(["add", "-A"]);
       yield* git(["commit", "-qm", "first"]);
-      const base = (yield* git(["rev-parse", "HEAD"])).stdout.trim();
+      const base = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
       yield* fs.writeFileString(path.join(repo, "a.ts"), "two\n");
 
       const evidence = yield* evidenceFor(repo, [], base);
-      expect(evidence.blocks.map((b) => b.path)).toEqual(["a.ts"]);
+      expect(Arr.map(evidence.blocks, (b) => b.path)).toEqual(["a.ts"]);
       expect(evidence.blocks[0]?.diff).toContain("+two");
       expect(evidence.truncated).toBe(false);
       expect(MAX_FILES).toBeGreaterThan(0);
@@ -363,20 +387,26 @@ const fakeEvaluator = Effect.fn("test.fakeEvaluator")(function* (dir: string) {
 });
 
 /** The evaluator's own envelope, encoded the way every boundary here encodes JSON. */
-const envelope = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const envelope = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
-const FLAGS = [
-  "--print",
-  "--output-format",
-  "--json-schema",
-  "--tools",
-  "--restricted",
-  "--strict-mcp-config",
-  "--setting-sources",
-  "--no-session-persistence",
-  "--max-budget-usd",
-  "--append-system-prompt-file",
-].join(" ");
+const FLAGS = Arr.join(
+  [
+    "--print",
+    "--output-format",
+    "--json-schema",
+    "--tools",
+    "--restricted",
+    "--strict-mcp-config",
+    "--setting-sources",
+    "--no-session-persistence",
+    "--max-budget-usd",
+    "--append-system-prompt-file",
+  ],
+  " ",
+);
 
 /** A checkout with one commit, which is what a judgement reads its diff from. */
 const checkout = Effect.fn("DriftTest.checkout")(function* (prefix: string) {
@@ -408,10 +438,10 @@ const committed = Effect.fn("DriftTest.committed")(function* (
   const fs = yield* FileSystem.FileSystem;
   const git = (args: string[]) =>
     exec(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { cwd: dir });
-  const base = (yield* git(["rev-parse", "HEAD"])).stdout.trim();
-  for (const [name, text] of Object.entries(files))
+  const base = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
+  for (const [name, text] of Rec.toEntries(files))
     yield* fs.writeFileString(`${dir}/${name}`, text);
-  yield* git(["add", ...Object.keys(files)]);
+  yield* git(["add", ...Rec.keys(files)]);
   yield* git(["commit", "-qm", "work"]);
   return base;
 });
@@ -476,7 +506,7 @@ test("a judgement with no evaluator is skipped, and skipped is not passed", () =
 
       // Recorded, so `alignment` says `unverified` with the reason rather than `true`.
       const lines = yield* readDrift(dir);
-      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
+      expect(Arr.map(lines, (line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
         expect.stringContaining("the evaluator is missing"),
       ]);
       expect(alignment(semanticIntent(), lines, out.judged).aligned).toBe("unverified");
@@ -499,7 +529,7 @@ test("a judgement whose evaluator cannot run is skipped saying why, not as missi
         { runDir: dir, worktree: dir, base, at: "t0" },
       );
       const lines = yield* readDrift(dir);
-      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
+      expect(Arr.map(lines, (line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
         `the evaluator is unavailable: ${reason}`,
       ]);
     }),
@@ -517,7 +547,7 @@ test("a judgement whose diff git cannot read is skipped in git's words, never ju
         at: "t0",
       });
       const lines = yield* readDrift(dir);
-      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
+      expect(Arr.map(lines, (line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
         expect.stringContaining("the diff could not be read: git diff HEAD..HEAD"),
       ]);
     }),
@@ -564,10 +594,10 @@ const judgedOnOutput = Effect.fn("DriftTest.judgedOnOutput")(function* (
   evaluator.restore();
   expect(yield* evaluator.pack).toContain(`--- output build\n{\n  "summary": "added left-pad"\n}`);
   expect(
-    (yield* readBudget(deps.budgetFile)).filter((line) => line.kind === "reserve"),
+    Arr.filter(yield* readBudget(deps.budgetFile), (line) => line.kind === "reserve"),
   ).toHaveLength(1);
   expect(out.judged.semantic).toBe(true);
-  expect(out.reports.map((report) => report.evidence)).toEqual([
+  expect(Arr.map(out.reports, (report) => report.evidence)).toEqual([
     [{ kind: "output", path: "build" }],
   ]);
 });
@@ -587,7 +617,7 @@ test("a Run whose only work is its Outputs is judged on them, not skipped as unc
       const dir = yield* checkout("hw-judge-");
       yield* judgedOnOutput(dir, dir);
       const lines = yield* readDrift(dir);
-      expect(lines.filter((line) => line.kind === "skipped")).toEqual([]);
+      expect(Arr.filter(lines, (line) => line.kind === "skipped")).toEqual([]);
     }),
   ));
 
@@ -603,7 +633,7 @@ const judgedWithNoCall = Effect.fn("DriftTest.judgedWithNoCall")(function* (
   const out = yield* judge(deps, intent, { runDir: dir, worktree: dir, base, at: "t0" });
   evaluator.restore();
   expect(yield* fs.exists(`${dir}/pack.txt`)).toBe(false);
-  expect((yield* readBudget(deps.budgetFile)).filter((line) => line.kind === "reserve")).toEqual(
+  expect(Arr.filter(yield* readBudget(deps.budgetFile), (line) => line.kind === "reserve")).toEqual(
     [],
   );
   return out;
@@ -616,9 +646,9 @@ test("a judgement with no change to cite is skipped without a call, and reads un
       const out = yield* judgedWithNoCall(dir, semanticIntent(), "HEAD");
       expect(out).toEqual({ judged: { semantic: false, truncated: false }, reports: [] });
       const lines = yield* readDrift(dir);
-      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual([
-        "no change to judge",
-      ]);
+      expect(Arr.map(lines, (line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual(
+        ["no change to judge"],
+      );
       expect(alignment(semanticIntent(), lines, out.judged)).toEqual({
         aligned: "unverified",
         why: "a judgement was skipped: no change to judge",
@@ -632,7 +662,7 @@ test("a judgement of named paths the change did not touch is skipped without a c
       const dir = yield* checkout("hw-judge-");
       const base = yield* committed(dir, { "a.ts": "export const a = 1;\n" });
       const docsOnly = semanticIntent({
-        constraints: semanticIntent().constraints.map((constraint) => ({
+        constraints: Arr.map(semanticIntent().constraints, (constraint) => ({
           ...constraint,
           paths: ["docs"],
         })),
@@ -640,9 +670,9 @@ test("a judgement of named paths the change did not touch is skipped without a c
       const out = yield* judgedWithNoCall(dir, docsOnly, base);
       expect(out.judged.semantic).toBe(false);
       const lines = yield* readDrift(dir);
-      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual([
-        "no change to judge",
-      ]);
+      expect(Arr.map(lines, (line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual(
+        ["no change to judge"],
+      );
     }),
   ));
 
@@ -773,7 +803,7 @@ test("a Run's own report is filed only when it cites a file whose diff the pack 
       });
       evaluator.restore();
       // Only the one citing the change, and its file as the pack named it.
-      expect(out.reports.map((report) => report.evidence)).toEqual([
+      expect(Arr.map(out.reports, (report) => report.evidence)).toEqual([
         [{ kind: "diff", path: "a.ts", line: 1 }],
       ]);
     }),
@@ -806,16 +836,16 @@ test("every judgement is made and recorded; none is refused over how many came b
       evaluator.restore();
       expect(again.judged.semantic).toBe(true);
       const lines = yield* readBudget(deps.budgetFile);
-      expect(lines.map((line) => `${line.kind} ${line.id}`)).toEqual([
+      expect(Arr.map(lines, (line) => `${line.kind} ${line.id}`)).toEqual([
         "reserve call-1",
         "settle call-1",
         "reserve call-2",
         "settle call-2",
       ]);
-      expect(lines.flatMap((line) => (line.kind === "settle" ? [line.usd] : []))).toEqual([
+      expect(Arr.flatMap(lines, (line) => (line.kind === "settle" ? [line.usd] : []))).toEqual([
         0.02, 0.02,
       ]);
-      expect((yield* readDrift(dir)).some((line) => line.kind === "skipped")).toBe(false);
+      expect(Arr.some(yield* readDrift(dir), (line) => line.kind === "skipped")).toBe(false);
     }),
   ));
 

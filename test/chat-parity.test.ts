@@ -22,7 +22,10 @@
 //
 // A leaf with no row is what this file exists to fail on.
 
-import { Effect, Fiber, FileSystem, Option, Schema, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import { Effect, Fiber, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { hostname } from "node:os";
 import { afterAll, expect, test } from "bun:test";
 import { app } from "../src/collie";
@@ -46,27 +49,33 @@ import { hosted, hostedRun } from "./support/hosted";
 import { until } from "./support/host";
 import { save } from "./support/world";
 
-const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
+const encodeJson = flow(
+  Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
+  Result.getOrThrow,
+);
 
 /** A propose tool's input schema, as far as the action kinds it offers. */
-const decodeOffered = Schema.decodeUnknownSync(
-  Schema.Struct({
-    properties: Schema.Struct({
-      actions: Schema.Struct({
-        items: Schema.Struct({
-          anyOf: Schema.Array(
-            Schema.Struct({
-              properties: Schema.Struct({
-                kind: Schema.Struct({ enum: Schema.Array(Schema.String) }),
+const decodeOffered = flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({
+      properties: Schema.Struct({
+        actions: Schema.Struct({
+          items: Schema.Struct({
+            anyOf: Schema.Array(
+              Schema.Struct({
+                properties: Schema.Struct({
+                  kind: Schema.Struct({ enum: Schema.Array(Schema.String) }),
+                }),
               }),
-            }),
-          ),
+            ),
+          }),
         }),
       }),
     }),
-  }),
+  ),
+  Result.getOrThrow,
 );
-const decodeAction = Schema.decodeUnknownSync(ActionSchema);
+const decodeAction = flow(Schema.decodeUnknownResult(ActionSchema), Result.getOrThrow);
 
 // A file that registers its own executors leaves none for the next file.
 afterAll(() => {
@@ -310,7 +319,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     },
   ],
   ["schedule list", { route: "read", tool: "collie_installation" }],
-  ...(["pause", "resume", "remove"] as const).map((change): readonly [string, Route] => [
+  ...Arr.map(["pause", "resume", "remove"] as const, (change): readonly [string, Route] => [
     `schedule ${change}`,
     {
       route: "propose",
@@ -385,10 +394,10 @@ type CommandNode = (typeof app.subcommands)[number]["commands"][number];
  */
 function leaves(node: CommandNode, path: ReadonlyArray<string> = []): string[] {
   const here = [...path, node.name];
-  const children = (node.subcommands ?? []).flatMap((group) => group.commands ?? []);
+  const children = Arr.flatMap(node.subcommands ?? [], (group) => group.commands ?? []);
   // The root's own name is not part of what a person types after `collie`.
-  if (children.length === 0) return [here.slice(1).join(" ")];
-  return children.flatMap((child) => leaves(child, here));
+  if (children.length === 0) return [Arr.join(here.slice(1), " ")];
+  return Arr.flatMap(children, (child) => leaves(child, here));
 }
 
 test("the operations are the command tree's, not a list somebody kept up to date", () => {
@@ -398,8 +407,8 @@ test("the operations are the command tree's, not a list somebody kept up to date
   expect(found.length).toBeGreaterThan(40);
   expect(found).toContain("run stop");
   expect(found).toContain("run intent defaults show");
-  const covered = new Set(INVENTORY.map(([operation]) => operation));
-  expect(found.filter((leaf) => !covered.has(leaf))).toEqual([]);
+  const covered = new Set(Arr.map(INVENTORY, ([operation]) => operation));
+  expect(Arr.filter(found, (leaf) => !covered.has(leaf))).toEqual([]);
 });
 
 test(
@@ -427,10 +436,10 @@ test(
             expect([operation, tool !== null]).toEqual([operation, true]);
             const answer = yield* tool!.call(env, route.input ?? {});
             expect([operation, answer.length > 0]).toEqual([operation, true]);
-            expect([operation, answer.startsWith("Collie could not read that")]).toEqual([
+            expect([
               operation,
-              false,
-            ]);
+              pipe_(answer, Str.startsWith("Collie could not read that")),
+            ]).toEqual([operation, false]);
             continue;
           }
           if (route.route === "write") {
@@ -445,7 +454,10 @@ test(
             // Three halves, and each is a different way this goes wrong: a kind the model
             // is invited to ask for, an action the closed union actually accepts, and a
             // kind this build can carry out.
-            expect([operation, offered.includes(`"${route.kind}"`)]).toEqual([operation, true]);
+            expect([operation, pipe_(offered, Str.includes(`"${route.kind}"`))]).toEqual([
+              operation,
+              true,
+            ]);
             const decoded = decodeAction(route.action) satisfies Action;
             expect([operation, decoded.kind]).toEqual([operation, route.kind]);
             expect([operation, carried.has(route.kind)]).toEqual([operation, true]);
@@ -457,9 +469,10 @@ test(
 
         // The decisions, named: no action kind is any of these, so a proposal can never
         // carry its own yes. Settling one is a separate act — the human's or chat's.
-        const kinds = decodeOffered(
-          toolNamed("collie_propose")!.input,
-        ).properties.actions.items.anyOf.flatMap((one) => one.properties.kind.enum);
+        const kinds = Arr.flatMap(
+          decodeOffered(toolNamed("collie_propose")!.input).properties.actions.items.anyOf,
+          (one) => one.properties.kind.enum,
+        );
         expect(kinds).toContain("start");
         for (const forbidden of ["confirm", "decline", "reconcile", "verify", "grant", "authorize"])
           expect([forbidden, kinds.includes(forbidden)]).toEqual([forbidden, false]);
@@ -497,7 +510,9 @@ test(
           (view) => view?.status.status === "complete",
         );
         const said = (operation: string) => {
-          const route = INVENTORY.find(([one]) => one === operation)?.[1];
+          const route = Option.getOrUndefined(
+            Arr.findFirst(INVENTORY, ([one]) => one === operation),
+          )?.[1];
           if (route?.route !== "offer") throw new Error(`${operation} is not an offer row`);
           return toolNamed(route.tool)!.call(env, route.input(runId));
         };
@@ -524,11 +539,15 @@ test("nothing this build cannot carry out is offered as something to ask for", (
       const carried = new Set<string>(registeredKinds());
       // `ask_human` and `none` are what the validator turns a refused action into, not
       // something to ask for; everything else the schema offers has to be runnable.
-      const offered = decodeOffered(
-        toolNamed("collie_propose")!.input,
-      ).properties.actions.items.anyOf.flatMap((one) => one.properties.kind.enum);
+      const offered = Arr.flatMap(
+        decodeOffered(toolNamed("collie_propose")!.input).properties.actions.items.anyOf,
+        (one) => one.properties.kind.enum,
+      );
       expect(
-        offered.filter((kind) => kind !== "ask_human" && kind !== "none" && !carried.has(kind)),
+        Arr.filter(
+          offered,
+          (kind) => kind !== "ask_human" && kind !== "none" && !carried.has(kind),
+        ),
       ).toEqual([]);
     }),
   ));
@@ -536,13 +555,16 @@ test("nothing this build cannot carry out is offered as something to ask for", (
 test("every tool chat is given is a route somebody named", () => {
   // The other direction: a tool that no operation routes to is reach nobody asked for.
   const routed = new Set(
-    INVENTORY.flatMap((entry) =>
+    Arr.flatMap(INVENTORY, (entry) =>
       entry[1].route === "shell" || entry[1].route === "propose" ? [] : [entry[1].tool],
     ),
   );
-  expect(TOOLS.map((tool) => tool.name).filter((name) => !routed.has(name))).toEqual([
-    "collie_propose",
-  ]);
+  expect(
+    Arr.filter(
+      Arr.map(TOOLS, (tool) => tool.name),
+      (name) => !routed.has(name),
+    ),
+  ).toEqual(["collie_propose"]);
 });
 
 test("chat and the text board list the sections in the board's one order", () => {
@@ -552,10 +574,12 @@ test("chat and the text board list the sections in the board's one order", () =>
     task({ id: "waiting", name: "Shippable", state: "done", landed: false }),
     task({ id: "blocked", name: "Asking", state: "blocked" }),
   ]);
-  const order = SECTIONS.map(([, title]) => title);
+  const order = Arr.map(SECTIONS, ([, title]) => title);
   const titled = (lines: ReadonlyArray<string>) =>
-    lines.flatMap((line) => order.filter((title) => line.replace(/^## /, "").startsWith(title)));
-  expect(titled(herdLines(views, 0).split("\n"))).toEqual(order);
+    Arr.flatMap(lines, (line) =>
+      Arr.filter(order, (title) => pipe_(line, Str.replace(/^## /, ""), Str.startsWith(title))),
+    );
+  expect(titled(Str.split(herdLines(views, 0), "\n"))).toEqual(order);
   expect(titled(boardLines(views))).toEqual(order);
 });
 
@@ -606,7 +630,10 @@ test("collie_run gives a running check's last forty lines under the card's sente
       yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
       yield* fs.writeFileString(
         log,
-        Array.from({ length: 45 }, (_, at) => `line ${at + 1}`).join("\n") + "\n",
+        Arr.join(
+          Array.from({ length: 45 }, (_, at) => `line ${at + 1}`),
+          "\n",
+        ) + "\n",
       );
       yield* fs.writeFileString(
         `${run.dir}/verifying`,
@@ -686,10 +713,12 @@ test(
         );
         const said = yield* toolNamed("collie_run")!.call(env, { run: run.id });
         const block = /### Flow, as `run show --json` carries it\n\n```json\n(.*)\n```/s.exec(said);
-        expect(Schema.decodeUnknownSync(Schema.fromJsonString(Flow))(block?.[1] ?? "")).toEqual(
-          detail!.flow!,
-        );
-        expect(detail!.flow!.lanes.map((lane) => lane.run)).toEqual([run.id]);
+        expect(
+          yield* Schema.decodeEffect(Schema.fromJsonString(Flow))(block?.[1] ?? "").pipe(
+            Effect.orDie,
+          ),
+        ).toEqual(detail!.flow!);
+        expect(Arr.map(detail!.flow!.lanes, (lane) => lane.run)).toEqual([run.id]);
       }),
     ),
   // A host, and a Run of it waiting on its decision.

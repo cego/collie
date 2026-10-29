@@ -1,5 +1,9 @@
 // Every Run a reader can see, as one shape, from the host's rows.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
@@ -96,7 +100,7 @@ const stateOf = (view: RunView): RunState => {
     // A stop suspends the Run; otherwise only a question or a parked Run is waiting.
     case "suspended":
       if (stopped) return "stopped";
-      return view.parked !== null || view.waiting.some((one) => one.answer === null)
+      return view.parked !== null || Arr.some(view.waiting, (one) => one.answer === null)
         ? "waiting"
         : "running";
     // Concurrent work can keep the Run pending while one Activity is parked.
@@ -120,8 +124,8 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   finished: null,
   state: stateOf(view),
   settled: {
-    inputs: Object.fromEntries(
-      Object.entries(view.input).map(([name, value]) => [name, textOf(value)]),
+    inputs: Rec.fromEntries(
+      Arr.map(Rec.toEntries(view.input), ([name, value]) => [name, textOf(value)] as const),
     ),
     strategies: view.strategies,
     sources: view.provenance,
@@ -133,10 +137,11 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   worktree: view.worktree,
   dir: runDir(stateDir, view.runId),
   evidence: evidenceDir(stateDir, view.runId),
-  asking: view.waiting
-    .filter((one) => one.answer === null)
-    .map((one) => ({ name: one.name, prompt: one.prompt, options: one.options })),
-  answered: view.waiting.flatMap(({ name, prompt, options, answer }) =>
+  asking: Arr.map(
+    Arr.filter(view.waiting, (one) => one.answer === null),
+    (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
+  ),
+  answered: Arr.flatMap(view.waiting, ({ name, prompt, options, answer }) =>
     answer === null ? [] : [{ name, prompt, options, answer }],
   ),
   held: view.controls.includes(HOLD),
@@ -149,18 +154,21 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
     view.parked ??
     (view.awaiting === null ? null : awaitingLine(view.awaiting)) ??
     (view.status.status === "failed"
-      ? [view.status.reason, view.diagnostic].filter((part) => part !== null).join(" — ")
+      ? Arr.join(
+          Arr.filter([view.status.reason, view.diagnostic], (part) => part !== null),
+          " — ",
+        )
       : view.diagnostic),
   summary: view.status.status === "complete" ? resultText(view.status.value) : null,
   engine: {
-    questions: view.waiting.map((one) => ({
+    questions: Arr.map(view.waiting, (one) => ({
       name: one.name,
       asked: one.asked ?? null,
       answered: one.answered ?? null,
       by: one.by ?? null,
       open: one.answer === null,
       text: one.prompt,
-      options: one.options.map((value) => ({ id: value, title: value, subtitle: null })),
+      options: Arr.map(one.options, (value) => ({ id: value, title: value, subtitle: null })),
     })),
     wakes: view.wakes ?? null,
     execution: executionOf(view),
@@ -190,11 +198,11 @@ type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
  */
 export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
   const live = yield* runViews(env, null);
-  return newestFirst(live.runs.map((view) => factsOfView(env.stateDir, view)));
+  return newestFirst(Arr.map(live.runs, (view) => factsOfView(env.stateDir, view)));
 });
 
 export const newestFirst = (runs: ReadonlyArray<RunFacts>): RunFacts[] =>
-  [...runs].sort((a, b) => b.created.localeCompare(a.created));
+  [...runs].sort((a, b) => pipe_(b.created, Str.localeCompare(a.created)));
 
 /** One Run by id, or null where there is none. */
 export const findRun = (
@@ -217,9 +225,12 @@ export const liveCheckouts = (
     Effect.map(({ runs, unreadable }) =>
       unreadable !== null
         ? null
-        : runs
-            .map((view) => factsOfView(env.stateDir, view))
-            .filter((run) => !settled(run))
-            .map((run) => run.cwd),
+        : Arr.map(
+            Arr.filter(
+              Arr.map(runs, (view) => factsOfView(env.stateDir, view)),
+              (run) => !settled(run),
+            ),
+            (run) => run.cwd,
+          ),
     ),
   );

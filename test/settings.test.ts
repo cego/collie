@@ -1,4 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { describe, expect, test } from "bun:test";
+import { Result, Schema } from "effect";
 import { harnessNames } from "../src/harness";
 import { NOTIFICATION_KINDS } from "../src/notify";
 import {
@@ -8,11 +12,20 @@ import {
   settingOf,
   settingShown,
   settingStored,
+  SettingValue,
 } from "../src/settings";
 
-const keys = SETTINGS.map((setting) => setting.key);
+const keys = Arr.map(SETTINGS, (setting) => setting.key);
 
 describe("Collie's settings", () => {
+  test("numeric setting values reject non-finite numbers", () => {
+    const decode = Schema.decodeUnknownResult(SettingValue);
+    for (const value of [Infinity, -Infinity, Number.NaN])
+      expect(Result.isFailure(decode(value))).toBe(true);
+    for (const value of [0, -1, 0.5, Number.MAX_VALUE])
+      expect(Result.getOrThrow(decode(value))).toBe(value);
+  });
+
   test("are every default a Run reads, the per-harness models and every notification", () => {
     expect(keys).toEqual(
       expect.arrayContaining([
@@ -34,19 +47,21 @@ describe("Collie's settings", () => {
         "compact_at_tokens",
         "claude_auto_compact_window",
         "proactive",
-        ...harnessNames().map((harness) => `models.${harness}`),
-        ...NOTIFICATION_KINDS.map((kind) => `notifications.${kind}`),
+        ...Arr.map(harnessNames(), (harness) => `models.${harness}`),
+        ...Arr.map(NOTIFICATION_KINDS, (kind) => `notifications.${kind}`),
       ]),
     );
     expect(new Set(keys).size).toBe(keys.length);
   });
 
   test("offer a closed set as choices, with the default among them", () => {
-    const harness = SETTINGS.find((setting) => setting.key === "harness")!;
+    const harness = Option.getOrUndefined(
+      Arr.findFirst(SETTINGS, (setting) => setting.key === "harness"),
+    )!;
     expect(harness.kind).toBe("choice");
     expect([...harness.choices].sort()).toEqual(harnessNames());
     expect(harness.fallback).toBe("claude");
-    for (const setting of SETTINGS.filter((one) => one.kind === "choice"))
+    for (const setting of Arr.filter(SETTINGS, (one) => one.kind === "choice"))
       expect(setting.choices).toContain(setting.fallback);
   });
 
@@ -133,7 +148,7 @@ describe("Each setting explains itself", () => {
       "harness",
       "model",
       "effort",
-      ...harnessNames().map((harness) => `models.${harness}`),
+      ...Arr.map(harnessNames(), (harness) => `models.${harness}`),
       "fallbacks",
       "permissions",
       "trust",
@@ -153,23 +168,24 @@ describe("Each setting explains itself", () => {
     ],
     Board: ["scope", "density", "board_quiet_ms"],
     Chat: ["proactive"],
-    Notifications: ["questions", ...NOTIFICATION_KINDS.map((kind) => `notifications.${kind}`)],
+    Notifications: ["questions", ...Arr.map(NOTIFICATION_KINDS, (kind) => `notifications.${kind}`)],
     "GitLab and credentials": ["gitlab_host"],
   };
 
   test("under a group, with a plain name and a sentence on what it changes", () => {
-    expect<ReadonlyArray<string>>(SETTING_GROUPS).toEqual(Object.keys(PLACED));
-    for (const [group, placed] of Object.entries(PLACED))
+    expect<ReadonlyArray<string>>(SETTING_GROUPS).toEqual(Rec.keys(PLACED));
+    for (const [group, placed] of Rec.toEntries(PLACED))
       expect(
-        SETTINGS.filter((setting) => setting.group === group)
-          .map(({ key }) => key)
-          .sort(),
+        Arr.map(
+          Arr.filter(SETTINGS, (setting) => setting.group === group),
+          ({ key }) => key,
+        ).sort(),
       ).toEqual([...placed].sort());
     for (const setting of SETTINGS) {
       expect(setting.label).not.toBe("");
       expect(setting.description).not.toBe("");
     }
-    const descriptions = SETTINGS.map((setting) => setting.description);
+    const descriptions = Arr.map(SETTINGS, (setting) => setting.description);
     expect(new Set(descriptions).size).toBe(descriptions.length);
   });
 

@@ -1,6 +1,7 @@
 // Each connected Machine's Usage readings, asked when Desktop opens, each minute while it is
 // shown, and whenever the Usage page opens.
 
+import * as Arr from "effect/Array";
 import { useAtomSet } from "@effect/atom-vue";
 import { Exit } from "effect";
 import { type MachineUsage, usageDue, usageEntries, usagePage } from "../../../src/shared/usage";
@@ -28,7 +29,10 @@ export const useUsage = () => {
     if (now.value > 0 && usageDue(askedAt, now.value, shown())) void refresh();
   };
   const live = computed(() =>
-    rows.value.filter(({ state }) => state === "live").map(({ profile }) => profile),
+    Arr.map(
+      Arr.filter(rows.value, ({ state }) => state === "live"),
+      ({ profile }) => profile,
+    ),
   );
   return {
     /** Of Machines live now, so one that left the Flock leaves the header at once. */

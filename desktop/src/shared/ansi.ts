@@ -1,6 +1,10 @@
 // Terminal output as styled spans: SGR colours and weights kept, every other escape dropped.
 // No Bun-only import: the view bundles this.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 export interface AnsiSpan {
   readonly text: string;
   readonly style: Readonly<Record<string, string>>;
@@ -39,18 +43,19 @@ const CLEARS = new Map<number, ReadonlyArray<string>>([
 ]);
 
 export const ansiSpans = (output: string): ReadonlyArray<AnsiSpan> => {
-  const text = output.replace(OTHER, "");
+  const text = pipe(output, Str.replace(OTHER, ""));
   const spans: AnsiSpan[] = [];
   let style: AnsiSpan["style"] = {};
   const set = (key: string, value: string) => (style = { ...style, [key]: value });
   const clear = (keys: ReadonlyArray<string>) =>
-    (style = Object.fromEntries(Object.entries(style).filter(([key]) => !keys.includes(key))));
+    (style = Rec.fromEntries(Arr.filter(Rec.toEntries(style), ([key]) => !keys.includes(key))));
   let from = 0;
-  for (const match of text.matchAll(ESCAPE)) {
-    if (match.index > from) spans.push({ text: text.slice(from, match.index), style });
-    from = match.index + match[0].length;
+  for (const match of pipe(text, Str.matchAll(ESCAPE))) {
+    const index = match.index ?? 0;
+    if (index > from) spans.push({ text: pipe(text, Str.slice(from, index)), style });
+    from = index + match[0].length;
     if (match[2] !== "m") continue;
-    const codes = match[1] === "" ? [0] : match[1]!.split(";").map(Number);
+    const codes = match[1] === "" ? [0] : Arr.map(Str.split(match[1]!, ";"), Number);
     for (let at = 0; at < codes.length; at++) {
       const code = codes[at]!;
       const sets = SETS.get(code);
@@ -75,7 +80,7 @@ export const ansiSpans = (output: string): ReadonlyArray<AnsiSpan> => {
       }
     }
   }
-  if (from < text.length) spans.push({ text: text.slice(from), style });
+  if (from < text.length) spans.push({ text: pipe(text, Str.slice(from)), style });
   return spans;
 };
 
@@ -83,7 +88,7 @@ export const ansiSpans = (output: string): ReadonlyArray<AnsiSpan> => {
 export const ansiLines = (text: string): ReadonlyArray<ReadonlyArray<AnsiSpan>> => {
   const lines: AnsiSpan[][] = [[]];
   for (const span of ansiSpans(text))
-    span.text.split("\n").forEach((part, at) => {
+    Arr.forEach(Str.split(span.text, "\n"), (part, at) => {
       if (at > 0) lines.push([]);
       if (part !== "") lines.at(-1)!.push({ text: part, style: span.style });
     });

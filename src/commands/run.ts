@@ -1,4 +1,21 @@
-import { Cause, Duration, Effect, Exit, Option, Path, Ref, Schema, Stdio, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import {
+  Cause,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Path,
+  Ref,
+  Schema,
+  Stdio,
+  Stream,
+  flow as Schemaflow,
+  Result as SchemaResult,
+} from "effect";
 import { CommandLine } from "effect/process";
 import { redactedField, withNotice } from "../redact";
 import type { PlatformServices } from "../platform";
@@ -57,14 +74,7 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports } from "../drift";
 import { newest } from "../cards";
 import { metricsOf } from "../metrics";
-import {
-  requestedByLine,
-  ranOn,
-  type Metrics,
-  type ReadyToRelease,
-  type RunAgent,
-  type RunProgress,
-} from "../board-model";
+import { requestedByLine, ranOn, type RunAgent, type RunProgress } from "../board-model";
 import {
   followEvents,
   followLine,
@@ -194,7 +204,7 @@ const attachFlag = Flag.String("attach").pipe(
 /** Each `--attach` as an absolute path, resolved against where the command runs. */
 const absolute = (files: ReadonlyArray<string>) =>
   Effect.map(Path.Path, (path) =>
-    files.length === 0 ? undefined : files.map((file) => path.resolve(file)),
+    files.length === 0 ? undefined : Arr.map(files, (file) => path.resolve(file)),
   );
 
 const runStart = Command.make(
@@ -329,8 +339,9 @@ const runStart = Command.make(
                 // The host's own options are settled apart from the author's payload, so
                 // nothing the host supplies is ever injected into a module's input.
                 const launch = hostOptions(explicit.given);
-                const agent = Object.entries({ harness, model, effort }).flatMap(([name, value]) =>
-                  Option.isSome(value) ? [[name, value.value] as const] : [],
+                const agent = Arr.flatMap(
+                  Rec.toEntries({ harness, model, effort }),
+                  ([name, value]) => (Option.isSome(value) ? [[name, value.value] as const] : []),
                 );
                 // What it declares and nobody gave, with what would fill each, so a caller
                 // can fill the gaps and retry under the same request id.
@@ -346,7 +357,7 @@ const runStart = Command.make(
                   id: workflow,
                   request: requestId,
                   input: launch.input,
-                  options: { ...launch.options, ...Object.fromEntries(agent) },
+                  options: { ...launch.options, ...Rec.fromEntries(agent) },
                   task: task.choice,
                   intent: Option.isSome(goal)
                     ? { goal: goal.value, constraints: named.constraints }
@@ -416,12 +427,16 @@ const runList = Command.make("list", {}, () =>
           ok: true,
           data: { runs: hosted.runs, unreadable: hosted.unreadable, machines: hosted.machines },
           human:
-            [
-              ...hosted.runs.map(
-                (view) => `${view.runId}\t${view.machine}\t${statusOf(view)}\t${view.workflow}`,
-              ),
-              ...(hosted.unreadable === null ? [] : [`runs: ${hosted.unreadable}`]),
-            ].join("\n") || "No runs found.",
+            Arr.join(
+              [
+                ...Arr.map(
+                  hosted.runs,
+                  (view) => `${view.runId}\t${view.machine}\t${statusOf(view)}\t${view.workflow}`,
+                ),
+                ...(hosted.unreadable === null ? [] : [`runs: ${hosted.unreadable}`]),
+              ],
+              "\n",
+            ) || "No runs found.",
         };
       }),
       global.json,
@@ -431,7 +446,7 @@ const runList = Command.make("list", {}, () =>
 
 /** `run show`'s line for each agent: `  review  claude/opus xhigh`. */
 export const agentLines = (agents: ReadonlyArray<RunAgent>) =>
-  agents.map((agent) => `  ${agent.operation}  ${agent.agent}  ${ranOn(agent)}`);
+  Arr.map(agents, (agent) => `  ${agent.operation}  ${agent.agent}  ${ranOn(agent)}`);
 
 /** The Run this command is about, and the environment it was resolved in. */
 const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
@@ -452,9 +467,9 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
  * option, else the checkout the command was run in.
  */
 const namedCheckout = Effect.fn("run.namedCheckout")(function* (env: PluginEnv, workspace: string) {
-  const given = workspace.trim();
+  const given = Str.trim(workspace);
   if (given === PROJECTS_ROOT_OPTION) return (yield* projectsRoot(env)).path;
-  if (given.startsWith("/")) return given;
+  if (pipe_(given, Str.startsWith("/"))) return given;
   if (given !== "" || (yield* insideCheckout(env.cwd))) return env.cwd;
   return null;
 });
@@ -512,39 +527,48 @@ const runShow = Command.make(
               memory,
               flow,
             },
-            human: [
-              `${view.runId}\t${statusLine(statusOf(view), disposition)}\t${view.workflow}`,
-              ...(memory === null ? [] : [`  ${memory}`]),
-              ...(machine === null ? [] : [`  on ${machine}`]),
-              `  in ${view.cwd}${view.provenance["workspace"] === INFERRED ? " (inferred)" : ""}`,
-              ...(view.measurement ? [`  proves ${view.outcome}; ${view.measurement}`] : []),
-              ...Object.entries(view.input).map(
-                ([name, value]) =>
-                  `  ${name} = ${textOf(value)} (${view.provenance[name] ?? GIVEN})`,
-              ),
-              ...(startedBy === undefined ? [] : [`  ${startedBy}`]),
-              ...(view.requestedBy === undefined ? [] : [`  ${requestedByLine(view.requestedBy)}`]),
-              ...(view.report === undefined
-                ? []
-                : [
-                    `  Report ${view.report.state}: ${view.report.note}`,
-                    ...(view.report.closure === undefined ? [] : [`  ${view.report.closure}`]),
-                  ]),
-              ...(view.linkNotices ?? [])
-                .filter((one) => one.state === "undelivered")
-                .map((one) => `  ${one.phase} link notice undelivered: ${one.note}`),
-              ...(view.stepNotes ?? [])
-                .filter((one) => one.read === null)
-                .map(
+            human: Arr.join(
+              [
+                `${view.runId}\t${statusLine(statusOf(view), disposition)}\t${view.workflow}`,
+                ...(memory === null ? [] : [`  ${memory}`]),
+                ...(machine === null ? [] : [`  on ${machine}`]),
+                `  in ${view.cwd}${view.provenance["workspace"] === INFERRED ? " (inferred)" : ""}`,
+                ...(view.measurement ? [`  proves ${view.outcome}; ${view.measurement}`] : []),
+                ...Arr.map(
+                  Rec.toEntries(view.input),
+                  ([name, value]) =>
+                    `  ${name} = ${textOf(value)} (${view.provenance[name] ?? GIVEN})`,
+                ),
+                ...(startedBy === undefined ? [] : [`  ${startedBy}`]),
+                ...(view.requestedBy === undefined
+                  ? []
+                  : [`  ${requestedByLine(view.requestedBy)}`]),
+                ...(view.report === undefined
+                  ? []
+                  : [
+                      `  Report ${view.report.state}: ${view.report.note}`,
+                      ...(view.report.closure === undefined ? [] : [`  ${view.report.closure}`]),
+                    ]),
+                ...Arr.map(
+                  Arr.filter(view.linkNotices ?? [], (one) => one.state === "undelivered"),
+                  (one) => `  ${one.phase} link notice undelivered: ${one.note}`,
+                ),
+                ...Arr.map(
+                  Arr.filter(view.stepNotes ?? [], (one) => one.read === null),
                   (one) => `  Unread note ${one.id} for ${one.step}, from ${one.by}: ${one.text}`,
                 ),
-              ...agentLines(agents),
-              ...describeWaiting(view),
-              ...children.map((child) => `  ${child.runId}\t${child.workflow}\t${statusOf(child)}`),
-              ...handoffs.map((file) => `  handoff ${file.path} (${file.bytes} bytes)`),
-              ...replies.map((reply) => `  ${replyLine(reply)}`),
-              ...(ready === null ? [] : readyLines(ready).map((line) => `  ${line}`)),
-            ].join("\n"),
+                ...agentLines(agents),
+                ...describeWaiting(view),
+                ...Arr.map(
+                  children,
+                  (child) => `  ${child.runId}\t${child.workflow}\t${statusOf(child)}`,
+                ),
+                ...Arr.map(handoffs, (file) => `  handoff ${file.path} (${file.bytes} bytes)`),
+                ...Arr.map(replies, (reply) => `  ${replyLine(reply)}`),
+                ...(ready === null ? [] : Arr.map(readyLines(ready), (line) => `  ${line}`)),
+              ],
+              "\n",
+            ),
           };
         }),
         global.json,
@@ -577,16 +601,19 @@ const runMetrics = Command.make(
           return {
             ok: true,
             data: { metrics, outcome: facts.outcome },
-            human: [
-              `${facts.id}\t${facts.workflow}\t${facts.outcome}`,
-              `time to first evidence: ${said(metrics.timeToFirstEvidence)}`,
-              `verifications: ${metrics.verifications.pass} pass, ${metrics.verifications.fail} fail, ${metrics.verifications.unstable} unstable (${metrics.verifications.byCollie} by collie)`,
-              `slices: ${metrics.slices.done} of ${metrics.slices.total} done`,
-              `rework: ${metrics.rework} (fix rounds and halts)`,
-              metrics.peakContext === null
-                ? "context: nothing sampled"
-                : `context: ${metrics.peakContext.tokens} tokens at most, on ${metrics.peakContext.agent}`,
-            ].join("\n"),
+            human: Arr.join(
+              [
+                `${facts.id}\t${facts.workflow}\t${facts.outcome}`,
+                `time to first evidence: ${said(metrics.timeToFirstEvidence)}`,
+                `verifications: ${metrics.verifications.pass} pass, ${metrics.verifications.fail} fail, ${metrics.verifications.unstable} unstable (${metrics.verifications.byCollie} by collie)`,
+                `slices: ${metrics.slices.done} of ${metrics.slices.total} done`,
+                `rework: ${metrics.rework} (fix rounds and halts)`,
+                metrics.peakContext === null
+                  ? "context: nothing sampled"
+                  : `context: ${metrics.peakContext.tokens} tokens at most, on ${metrics.peakContext.agent}`,
+              ],
+              "\n",
+            ),
           };
         }),
         global.json,
@@ -665,15 +692,17 @@ const runChecks = Command.make(
               : [
                   `running\t${passOf(running.pass, running.round)}\t${running.name}\t${running.sentence}\t${running.log ?? "no log"}`,
                 ]),
-            ...done.map(
+            ...Arr.map(
+              done,
               (one) =>
-                `${one.result}\t${passOf(one.pass, one.round)}\t${one.name}\t${Math.round(one.seconds)}s\t${one.revision.slice(0, 12)}\t${one.log ?? "no log"}`,
+                `${one.result}\t${passOf(one.pass, one.round)}\t${one.name}\t${Math.round(one.seconds)}s\t${pipe_(one.revision, Str.slice(0, 12))}\t${one.log ?? "no log"}`,
             ),
           ];
           return {
             ok: true as const,
             data: { run: runId, running, done },
-            human: human.length === 0 ? `Collie has run no checks for ${runId}.` : human.join("\n"),
+            human:
+              human.length === 0 ? `Collie has run no checks for ${runId}.` : Arr.join(human, "\n"),
           };
         }),
         global.json,
@@ -749,17 +778,21 @@ const runOutput = Command.make(
             ok: true,
             data: { runId, outputs },
             human:
-              outputs
-                .map((output) => {
+              Arr.join(
+                Arr.map(outputs, (output) => {
                   const body = output.error
                     ? `Error: ${output.error}`
-                    : Schema.encodeSync(PrettyUnknownJson)(output.value);
-                  return `${output.path}\n${body
-                    .split("\n")
-                    .map((line) => `  ${line}`)
-                    .join("\n")}`;
-                })
-                .join("\n\n") || "This Run has written no Outputs.",
+                    : Schemaflow(
+                        Schema.encodeResult(PrettyUnknownJson),
+                        SchemaResult.getOrThrow,
+                      )(output.value);
+                  return `${output.path}\n${Arr.join(
+                    Arr.map(Str.split(body, "\n"), (line) => `  ${line}`),
+                    "\n",
+                  )}`;
+                }),
+                "\n\n",
+              ) || "This Run has written no Outputs.",
           };
         }),
         global.json,
@@ -772,7 +805,7 @@ type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Resul
 /** A duration in Effect's canonical `DurationFromString` grammar. */
 function parseTimeout(value: Option.Option<string>): ParsedTimeout {
   if (Option.isNone(value)) return { ok: true, ms: null };
-  const duration = Schema.decodeUnknownOption(Schema.DurationFromString)(value.value);
+  const duration = Schema.decodeOption(Schema.DurationFromString)(value.value);
   return Option.isSome(duration)
     ? { ok: true, ms: Duration.toMillis(duration.value) }
     : { ok: false, error: err("invalid_input", `Invalid timeout "${value.value}".`) };
@@ -783,11 +816,11 @@ type ParsedUntil = { ok: true; until: Until } | { ok: false; error: Result };
 /** What ends the wait. Omitted keeps the terminal-only wait every caller already has. */
 function parseUntil(value: Option.Option<string>): ParsedUntil {
   if (Option.isNone(value)) return { ok: true, until: "terminal" };
-  const until = UNTILS.find((one) => one === value.value);
+  const until = Option.getOrUndefined(Arr.findFirst(UNTILS, (one) => one === value.value));
   if (until !== undefined) return { ok: true, until };
   return {
     ok: false,
-    error: err("invalid_input", `Invalid --until "${value.value}"; use ${UNTILS.join(", ")}.`),
+    error: err("invalid_input", `Invalid --until "${value.value}"; use ${Arr.join(UNTILS, ", ")}.`),
   };
 }
 
@@ -855,7 +888,7 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
     for (const event of followEvents(yield* Ref.getAndSet(told, now), now))
       yield* say(
         global.json
-          ? Schema.encodeSync(UnknownJson)({ ...event, run: runId })
+          ? yield* Schema.encodeEffect(UnknownJson)({ ...event, run: runId }).pipe(Effect.orDie)
           : followLine(runId, event),
       );
   });
@@ -866,7 +899,9 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       if (options.follow && (last === null || statusOf(last) !== statusOf(view))) {
         yield* say(
           global.json
-            ? Schema.encodeSync(UnknownJson)({ type: "status", run: view })
+            ? yield* Schema.encodeEffect(UnknownJson)({ type: "status", run: view }).pipe(
+                Effect.orDie,
+              )
             : `${view.runId}: ${statusOf(view)}`,
         );
       }
@@ -939,7 +974,10 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
     return yield* printResult(
       err(
         "invalid_state",
-        `Run "${runId}" will not become ready by itself: ${(progress?.ready.missing ?? []).map((one) => one.said).join("; ")}.`,
+        `Run "${runId}" will not become ready by itself: ${Arr.join(
+          Arr.map(progress?.ready.missing ?? [], (one) => one.said),
+          "; ",
+        )}.`,
         { run: runId },
       ),
       global.json,
@@ -960,9 +998,10 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       human:
         progress === null
           ? `${view.runId}: ${statusOf(view)}`
-          : `${view.runId}: ${statusOf(view)}\n${readyLines(progress.ready)
-              .map((line) => `  ${line}`)
-              .join("\n")}`,
+          : `${view.runId}: ${statusOf(view)}\n${Arr.join(
+              Arr.map(readyLines(progress.ready), (line) => `  ${line}`),
+              "\n",
+            )}`,
     },
     global.json,
   );
@@ -1153,7 +1192,7 @@ const holdTask = Effect.fn("run.holdTask")(function* (
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null)
     return err("invalid_input", `Workspace "${workspace}" is not a Task's.`, { workspace });
-  const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
+  const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));
   const held: string[] = [];
   const door = yield* cliDoor(env);
   for (const view of runs) {
@@ -1170,7 +1209,7 @@ const holdTask = Effect.fn("run.holdTask")(function* (
   return {
     ok: true as const,
     data: { task: task.id, workspace, held },
-    human: held.length === 0 ? "Nothing here is running." : `Held ${held.join(", ")}.`,
+    human: held.length === 0 ? "Nothing here is running." : `Held ${Arr.join(held, ", ")}.`,
   };
 });
 
@@ -1269,7 +1308,7 @@ const runClearOverride = Command.make(
           yield* cliDoor(env),
         );
         if (!result.ok) return result;
-        return Schema.decodeUnknownSync(ResultBoundary)(result.value);
+        return yield* Schema.decodeUnknownEffect(ResultBoundary)(result.value).pipe(Effect.orDie);
       }),
     ),
 ).pipe(
@@ -1394,22 +1433,27 @@ const runDrift = Command.make("drift", { runId: runIdArg }, ({ runId }) =>
         if (!records.ok) return records;
         const lines = records.value;
         const reports = currentReports(lines);
-        const skipped = lines.flatMap((line) => (line.kind === "skipped" ? [line] : []));
+        const skipped = Arr.flatMap(lines, (line) => (line.kind === "skipped" ? [line] : []));
         return {
           ok: true,
           data: { reports, skipped },
           human:
-            [
-              ...reports.map(
-                (report) =>
-                  `${report.resolution}\t${report.severity}\t${report.kind}\t${report.constraint}\t${report.evidence
-                    .map((ref) => ref.path ?? ref.excerpt ?? ref.kind)
-                    .join(", ")}${report.evidence_truncated ? " (evidence truncated)" : ""}`,
-              ),
-              // A judgement nobody could make is worth saying: the alternative is a Run
-              // that looks clean because nothing looked at it.
-              ...skipped.map((line) => `skipped\t${line.reason}`),
-            ].join("\n") || "Nothing has drifted.",
+            Arr.join(
+              [
+                ...Arr.map(
+                  reports,
+                  (report) =>
+                    `${report.resolution}\t${report.severity}\t${report.kind}\t${report.constraint}\t${Arr.join(
+                      Arr.map(report.evidence, (ref) => ref.path ?? ref.excerpt ?? ref.kind),
+                      ", ",
+                    )}${report.evidence_truncated ? " (evidence truncated)" : ""}`,
+                ),
+                // A judgement nobody could make is worth saying: the alternative is a Run
+                // that looks clean because nothing looked at it.
+                ...Arr.map(skipped, (line) => `skipped\t${line.reason}`),
+              ],
+              "\n",
+            ) || "Nothing has drifted.",
         };
       }),
       global.json,
@@ -1431,13 +1475,15 @@ const runCards = Command.make("cards", { runId: runIdArg }, ({ runId }) =>
           ok: true,
           data: { cards },
           human:
-            cards
-              .map(
+            Arr.join(
+              Arr.map(
+                cards,
                 (card) =>
                   `${card.at}\t${card.kind}\t${card.step}\t${card.readiness}\t${card.significance}\taligned:${card.aligned}` +
-                  (card.missing.length > 0 ? `\n  unchecked: ${card.missing.join("; ")}` : ""),
-              )
-              .join("\n") || "No cards yet.",
+                  (card.missing.length > 0 ? `\n  unchecked: ${Arr.join(card.missing, "; ")}` : ""),
+              ),
+              "\n",
+            ) || "No cards yet.",
         };
       }),
       global.json,
@@ -1492,10 +1538,12 @@ const runAction = Command.make(
           door,
           runId,
           offer,
-          input: Object.fromEntries(
-            input.flatMap((pair) => {
-              const at = pair.indexOf("=");
-              return at === -1 ? [] : [[pair.slice(0, at), pair.slice(at + 1)] as const];
+          input: Rec.fromEntries(
+            Arr.flatMap(input, (pair) => {
+              const at = Option.getOrElse(pipe_(pair, Str.indexOf("=")), () => -1);
+              return at === -1
+                ? []
+                : [[pipe_(pair, Str.slice(0, at)), pipe_(pair, Str.slice(at + 1))] as const];
             }),
           ),
           request: id,
@@ -1597,21 +1645,25 @@ function intentChange(
                   ok: true as const,
                   data: { runId, version, propagated, ...redactedField(redacted) },
                   human: withNotice(
-                    [`${runId}: intent v${version}`, ...propagated].join("\n"),
+                    Arr.join([`${runId}: intent v${version}`, ...propagated], "\n"),
                     redacted,
                   ),
                 }
               : {
                   ok: true as const,
                   data: { run: runId, approved, warning },
-                  human: [
-                    `${runId} may have Collie run:`,
-                    ...approved.map(
-                      (one) =>
-                        `  ${one.name}: ${CommandLine.display([one.executable, ...one.argv])} (in ${one.cwd})`,
-                    ),
-                    ...(warning === undefined ? [] : [warning]),
-                  ].join("\n"),
+                  human: Arr.join(
+                    [
+                      `${runId} may have Collie run:`,
+                      ...Arr.map(
+                        approved,
+                        (one) =>
+                          `  ${one.name}: ${CommandLine.display([one.executable, ...one.argv])} (in ${one.cwd})`,
+                      ),
+                      ...(warning === undefined ? [] : [warning]),
+                    ],
+                    "\n",
+                  ),
                 };
           }),
         );
@@ -1651,13 +1703,17 @@ const intentShow = Command.make("show", { runId: runIdArg }, ({ runId }) =>
         return {
           ok: true,
           data: { intent },
-          human: [
-            `v${intent.version}\tgoal: ${intent.goal ?? "(none)"}`,
-            ...intent.constraints.map(
-              (c) => `  ${c.id}\t${c.severity}\t${c.kind}\t${c.source}\t${c.text}`,
-            ),
-            ...intent.history.map((h) => `  v${h.version}\t${h.by}\t${h.change}`),
-          ].join("\n"),
+          human: Arr.join(
+            [
+              `v${intent.version}\tgoal: ${intent.goal ?? "(none)"}`,
+              ...Arr.map(
+                intent.constraints,
+                (c) => `  ${c.id}\t${c.severity}\t${c.kind}\t${c.source}\t${c.text}`,
+              ),
+              ...Arr.map(intent.history, (h) => `  v${h.version}\t${h.by}\t${h.change}`),
+            ],
+            "\n",
+          ),
         };
       }),
       global.json,
@@ -1835,7 +1891,9 @@ const intentRemember = Command.make(
                 (client) => client.rememberVerification({ runId, replace, request }),
                 yield* cliDoor(resolved.env),
               );
-              return result.ok ? Schema.decodeUnknownSync(ResultBoundary)(result.value) : result;
+              return result.ok
+                ? yield* Schema.decodeUnknownEffect(ResultBoundary)(result.value).pipe(Effect.orDie)
+                : result;
             }),
           );
         }),
@@ -1904,7 +1962,10 @@ const defaultsAdd = Command.make(
       const constraint = { ...parsed, source: "workspace-default" as const, since: 1 };
       return {
         ...defaults,
-        constraints: [...defaults.constraints.filter((c) => c.id !== constraint.id), constraint],
+        constraints: [
+          ...Arr.filter(defaults.constraints, (c) => c.id !== constraint.id),
+          constraint,
+        ],
       };
     }),
 ).pipe(Command.withDescription("Add a constraint every Run started here begins with"));
@@ -1920,7 +1981,7 @@ const defaultsRemove = Command.make(
   ({ id, requestId }) =>
     defaultsCommand("run-intent-defaults-remove", requestId, (defaults) => ({
       ...defaults,
-      constraints: defaults.constraints.filter((c) => c.id !== id),
+      constraints: Arr.filter(defaults.constraints, (c) => c.id !== id),
     })),
 ).pipe(Command.withDescription("Remove a constraint from this workspace's defaults"));
 

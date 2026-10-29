@@ -1,6 +1,9 @@
 // How the Workflows page draws a module a host read: its offers and its files.
 // No Bun-only import: the view bundles this.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Option, Schema } from "effect";
 import type { Described } from "../../../src/definitions-model";
 
@@ -35,16 +38,21 @@ export const offersOf = (metadata: Described["metadata"]): ReadonlyArray<Offer> 
   Option.match(Schema.decodeUnknownOption(Offers)(metadata), {
     onNone: () => [],
     onSome: ({ followUps = [], actions = [] }) => [
-      ...followUps.map(({ id, title, workflow, when }) => ({
+      ...Arr.map(followUps, ({ id, title, workflow, when }) => ({
         id,
         title,
         workflow,
         when: AFTER[when],
       })),
-      ...actions.map(({ id, title, workflow }) => ({ id, title, workflow, when: "on its card" })),
+      ...Arr.map(actions, ({ id, title, workflow }) => ({
+        id,
+        title,
+        workflow,
+        when: "on its card",
+      })),
     ],
   });
 
 /** A module's Markdown is read rendered; anything else is code. */
 export const shownAs = (path: string): "markdown" | "code" =>
-  path.endsWith(".md") ? "markdown" : "code";
+  pipe(path, Str.endsWith(".md")) ? "markdown" : "code";

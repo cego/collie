@@ -1,5 +1,8 @@
 // What the Flock chat's harness, model and effort run as, and what its selects show.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Stream } from "effect";
 import { useFilter } from "../desktop/node_modules/@nuxt/ui/dist/runtime/composables/useFilter.js";
@@ -103,7 +106,7 @@ const extra = (models: ReadonlyArray<string>, hour: number) =>
     {
       key: "models.claude",
       value: [...models],
-      at: `2026-10-07T${String(hour).padStart(2, "0")}:00:00.000Z`,
+      at: `2026-10-07T${pipe_(String(hour), Str.padStart(2, "0"))}:00:00.000Z`,
     },
   ]).flock;
 
@@ -115,7 +118,7 @@ test("a harness's list from the table holds its models, the Flock's extras and t
     {},
   );
   expect(offer.unset).toEqual({ harness: "claude", model: "opus", effort: "medium" });
-  expect(offer.models.map(({ id }) => id)).toEqual([
+  expect(Arr.map(offer.models, ({ id }) => id)).toEqual([
     "fable",
     "opus",
     "sonnet",
@@ -131,12 +134,11 @@ test("a harness's list from the table holds its models, the Flock's extras and t
     unsetEffort: "medium",
   });
   expect(
-    tableOffer(
-      "claude",
-      { proactive: true, chatModel: "gpt-6.1-sol" },
-      NO_FLOCK_SETTINGS,
-      {},
-    ).models.map(({ id }) => id),
+    Arr.map(
+      tableOffer("claude", { proactive: true, chatModel: "gpt-6.1-sol" }, NO_FLOCK_SETTINGS, {})
+        .models,
+      ({ id }) => id,
+    ),
   ).not.toContain("gpt-6.1-sol");
   expect(
     tableOffer(
@@ -440,7 +442,7 @@ test("the effort select starts with the level an unset effort runs at, then foll
     disabled: false,
   });
   expect(
-    chatSelects({ proactive: true }, ACCOUNT).effort.options.map(({ label }) => label),
+    Arr.map(chatSelects({ proactive: true }, ACCOUNT).effort.options, ({ label }) => label),
   ).toEqual(["Default · Medium", "Low", "Medium", "High", "Extra high", "Max"]);
   const onPi = (chatModel?: string) =>
     chatSelects(
@@ -486,7 +488,7 @@ test("a typed model keeps the table's effort choices when the default model take
   };
   const { effort } = chatSelects({ proactive: true, chatModel: "claude-opus-5" }, choices);
   expect(effort.disabled).toBe(false);
-  expect(effort.options.map(({ value }) => value)).toEqual([
+  expect(Arr.map(effort.options, ({ value }) => value)).toEqual([
     "",
     "low",
     "medium",

@@ -2,8 +2,10 @@
 // herdr's own published schema (`herdr api schema --json`), so a renamed or retyped
 // field turns a test red instead of a workflow.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { describe, expect, test } from "bun:test";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, flow, Result } from "effect";
 import type { PlatformServices } from "../src/platform";
 import type { HerdrError, SocketMethod } from "../src/herdr";
 import { Herdr, replySchemas, SOCKET_METHODS } from "../src/herdr";
@@ -13,12 +15,15 @@ import { loadContract } from "./support/contract";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeJson = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 const repoFile = (name: string) => new URL(`../${name}`, import.meta.url).pathname;
 
 const pin = await runEffect(
   Effect.promise(() => Bun.file(repoFile("herdr-pin.json")).json()).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ protocol: Schema.Number }))),
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ protocol: Schema.Finite }))),
     Effect.orDie,
   ),
 );
@@ -99,7 +104,7 @@ const sentBy = (method: SocketMethod) =>
       Effect.ensuring(Effect.sync(() => delete Bun.env.FAKE_HERDR_PUSH_EVENT)),
     );
     const sent = yield* rig.calls();
-    expect(sent.map((call) => call.cmd)).toEqual([method]);
+    expect(Arr.map(sent, (call) => call.cmd)).toEqual([method]);
     return sent[0]!.params ?? {};
   }).pipe(Effect.scoped);
 
@@ -111,11 +116,11 @@ test.skipIf(Bun.env.HERDR_API_SCHEMA !== undefined)(
 );
 
 test("every reply herdr.ts decodes has a row above", () => {
-  expect(Object.keys(replySchemas).filter((name) => !(name in replies))).toEqual([]);
+  expect(Arr.filter(Rec.keys(replySchemas), (name) => !(name in replies))).toEqual([]);
 });
 
 describe("reply structs accept everything herdr may send", () => {
-  for (const [name, { of, at }] of Object.entries(replies)) {
+  for (const [name, { of, at }] of Rec.toEntries(replies)) {
     test(name, () => {
       expect(contract.replyFindings(name, of, at)).toEqual([]);
     });
@@ -149,7 +154,7 @@ test("a struct requiring a field herdr marks optional is reported", () => {
 
 test("a struct declaring the wrong primitive type is reported", () => {
   const wrong = Schema.Struct({
-    result: Schema.Struct({ tabs: Schema.Array(Schema.Struct({ tab_id: Schema.Number })) }),
+    result: Schema.Struct({ tabs: Schema.Array(Schema.Struct({ tab_id: Schema.Finite })) }),
   });
   expect(contract.replyFindings("Wrong", wrong, { envelope: "tab_list" })).toEqual([
     "Wrong.result.tabs[].tab_id is number, but herdr sends string",
@@ -165,7 +170,7 @@ test("drift inside a nullable object is reported", () => {
       workspaces: Schema.Array(
         Schema.Struct({
           worktree: Schema.optionalKey(
-            Schema.NullOr(Schema.Struct({ checkout_path: Schema.optionalKey(Schema.Number) })),
+            Schema.NullOr(Schema.Struct({ checkout_path: Schema.optionalKey(Schema.Finite) })),
           ),
         }),
       ),
@@ -214,7 +219,7 @@ test("a struct offering several objects for one field is reported, not skipped",
 test("each element of a tuple is checked against what herdr sends", () => {
   const probe = Schema.Struct({
     result: Schema.Struct({
-      tabs: Schema.Tuple([Schema.Struct({ tab_id: Schema.Number }), Schema.String]),
+      tabs: Schema.Tuple([Schema.Struct({ tab_id: Schema.Finite }), Schema.String]),
     }),
   });
   expect(contract.replyFindings("Probe", probe, { envelope: "tab_list" })).toEqual([

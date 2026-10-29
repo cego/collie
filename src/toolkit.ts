@@ -3,6 +3,9 @@
 // with. No effects and nothing Bun-only, so Native chat's tool host (`tools.ts`) and
 // Desktop's Flock chat serve the same definitions.
 
+import * as Struct from "effect/Struct";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Context, Effect, Option, Result, Schema, Stream } from "effect";
 import * as AiError from "effect/ai/AiError";
 import * as Tool from "effect/ai/Tool";
@@ -97,7 +100,7 @@ const MEMBERS = new Map<
   string,
   (typeof ActionSchema.members | typeof SettleSchema.members)[number]
 >(
-  [...ActionSchema.members, ...SettleSchema.members].map((member) => [
+  Arr.map([...ActionSchema.members, ...SettleSchema.members], (member) => [
     member.fields.kind.literal,
     member,
   ]),
@@ -110,7 +113,7 @@ const MEMBERS = new Map<
 const DoInput = Schema.Struct({
   actions: Schema.Array(
     Schema.Union(
-      [...MEMBERS.values()].map((member) =>
+      Arr.map([...MEMBERS.values()], (member) =>
         "run" in member.fields
           ? member.mapFields((fields) => ({ ...fields, run: Schema.optionalKey(Schema.String) }))
           : member,
@@ -128,34 +131,40 @@ const DoInput = Schema.Struct({
 function wrongActions(input: JsonObject): string[] {
   const loose = decodeLoose(input);
   if (loose._tag === "None") return [];
-  return loose.value.actions.flatMap((action, at) => {
+  return Arr.flatMap(loose.value.actions, (action, at) => {
     const kind = isString(action["kind"]) ? action["kind"] : JSON.stringify(action["kind"] ?? null);
     const member = MEMBERS.get(kind);
     if (!member)
       return [
-        `actions[${at}] has kind ${kind}, which is none of ${[...MEMBERS.keys()].join(", ")}`,
+        `actions[${at}] has kind ${kind}, which is none of ${Arr.join([...MEMBERS.keys()], ", ")}`,
       ];
-    const takes = Object.keys(member.fields);
-    const extra = Object.keys(action).filter((key) => !takes.includes(key));
+    const takes = Struct.keys(member.fields);
+    const extra = Arr.filter(
+      Struct.keys(action),
+      (key) => !Arr.some(takes, (name) => name === key),
+    );
     if (extra.length === 0) {
       const own = decodeStrict(member)(action);
       return Result.isFailure(own) ? [`actions[${at}] (kind "${kind}"): ${own.failure}`] : [];
     }
-    const hints = [
-      extra.includes("goal") ? 'a Run\'s goal is an Input: put it in "inputs"' : null,
-      extra.includes("constraints") || extra.includes("constraint")
-        ? "constraints are added with update_intent on the started Run, or update_defaults on the workspace before it starts"
-        : null,
-    ].filter((hint) => hint !== null);
+    const hints = Arr.filter(
+      [
+        extra.includes("goal") ? 'a Run\'s goal is an Input: put it in "inputs"' : null,
+        extra.includes("constraints") || extra.includes("constraint")
+          ? "constraints are added with update_intent on the started Run, or update_defaults on the workspace before it starts"
+          : null,
+      ],
+      (hint) => hint !== null,
+    );
     return [
-      `actions[${at}] (kind "${kind}") does not take ${extra.join(", ")}; a ${kind} takes ${takes.join(", ")}${hints.length > 0 ? ` (${hints.join("; ")})` : ""}`,
+      `actions[${at}] (kind "${kind}") does not take ${Arr.join(extra, ", ")}; a ${kind} takes ${Arr.join(takes, ", ")}${hints.length > 0 ? ` (${Arr.join(hints, "; ")})` : ""}`,
     ];
   });
 }
 
 export const refusedActions = (tool: string, input: JsonObject, why: string, takes: string) => {
   const wrong = wrongActions(input);
-  return refused(tool, wrong.length > 0 ? wrong.join("; ") : why, takes);
+  return refused(tool, wrong.length > 0 ? Arr.join(wrong, "; ") : why, takes);
 };
 
 /**
@@ -323,7 +332,7 @@ export const CollieTools = Toolkit.make(
     title: "Do what the board does",
     description:
       "Carry out, at once, anything the board does: its own actions " +
-      `on a named Run (${ASKED_KINDS.join(", ")}), and its decisions — ` +
+      `on a named Run (${Arr.join(ASKED_KINDS, ", ")}), and its decisions — ` +
       "`confirm` a waiting proposal by its id and the hash `collie_receipts` lists beside " +
       "it, `decline` one by the same two, `disposition` to record what became of a finished Run's " +
       "work, and `seen` to acknowledge a finished Run's report for every board. " +
@@ -393,7 +402,12 @@ function cardLine(view: TaskView): string {
         ? `, branch ${view.branch}`
         : "";
   const agents =
-    view.agents.length === 0 ? "" : `, agents ${view.agents.map((agent) => agent.name).join(", ")}`;
+    view.agents.length === 0
+      ? ""
+      : `, agents ${Arr.join(
+          Arr.map(view.agents, (agent) => agent.name),
+          ", ",
+        )}`;
   return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
 }
 
@@ -403,14 +417,14 @@ export function herdLines(views: ReadonlyArray<TaskView>, now: number): string {
   const lines = [headerSentence(views, now).text];
   let room = HERD_CARDS;
   for (const [section, title] of SECTIONS) {
-    const cards = views.filter((view) => sectionOf(view) === section);
+    const cards = Arr.filter(views, (view) => sectionOf(view) === section);
     if (cards.length === 0) continue;
-    lines.push("", `## ${title} · ${cards.length}`, ...cards.slice(0, room).map(cardLine));
+    lines.push("", `## ${title} · ${cards.length}`, ...Arr.map(cards.slice(0, room), cardLine));
     room = Math.max(0, room - cards.length);
   }
   const left = views.length - HERD_CARDS;
   if (left > 0) lines.push("", `- (${left} more card(s) not listed here)`);
-  return lines.join("\n");
+  return Arr.join(lines, "\n");
 }
 
 /** Only the two fields the stand-in turns on; the closed union decodes the rest. */
@@ -429,7 +443,7 @@ export const jsonSchemaOf = (schema: Schema.Top): JsonObject => {
 export const inputSchemaOf = (tool: Tool.Any): JsonObject => jsonSchemaOf(tool.parametersSchema);
 
 export const isToolName = (name: string): name is ToolName =>
-  Object.hasOwn(CollieTools.tools, name);
+  Arr.some(Struct.keys(CollieTools.tools), (key) => key === name);
 
 /**
  * One call through a Toolkit made of Collie tools, decoded strictly. Input it will not take
@@ -438,7 +452,7 @@ export const isToolName = (name: string): name is ToolName =>
 export const answerWith = Effect.fn("Toolkit.answer")(function* <
   Tools extends Record<string, Tool.Any>,
 >(toolkit: Toolkit.WithHandler<Tools>, name: string, input: JsonObject) {
-  if (!Object.hasOwn(toolkit.tools, name)) return "";
+  if (!Rec.has(toolkit.tools, name)) return "";
   // SAFETY: `handle` decodes it, which is what makes untrusted JSON a tool's parameters.
   const results = yield* toolkit.handle(name, input as never, undefined, STRICT);
   const last = yield* Stream.runLast(results);

@@ -1,14 +1,19 @@
 // Where Runs end, across all of them: the numbers a change to Collie is judged by.
 // Data only: nothing here is a threshold, and nothing refuses anything.
 
-import { Schema } from "effect";
+import * as Num from "effect/Number";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import { Schema, flow, Result } from "effect";
 import { STOP, type RunView } from "./engine";
 import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { measuresOf, type Measures, type OutcomeRecords } from "./outcomes";
 import type { Metric } from "./metrics";
 
-const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 const isText = Schema.is(Schema.String);
 export const resultText = (value: Schema.Json): string =>
   isText(value) ? value : asJsonText(value);
@@ -67,10 +72,12 @@ export interface Recorded {
 
 const CLOSES = /Closes #(\d+)/gi;
 
-const closesIn = (input: RunView["input"]) =>
-  Object.values(input)
-    .filter(isText)
-    .flatMap((text) => [...text.matchAll(CLOSES)].map((match) => Number(match[1])));
+const closesIn = (input: RunView["input"]) => {
+  const texts = Arr.filter(Rec.values(input), (value): value is string => isText(value));
+  return Arr.flatMap(texts, (text) =>
+    Arr.map([...pipe(text, Str.matchAll(CLOSES))], (match) => Number(match[1])),
+  );
+};
 
 type Mutable<T> = { -readonly [K in keyof T]: Mutable<T[K]> };
 
@@ -81,9 +88,12 @@ export function reportOf(
   recorded: ReadonlyMap<string, Recorded> = new Map(),
 ): Report {
   const from = since === null ? -Infinity : epochMs(since);
-  const kept = views
-    .filter((view) => epochMs(view.created) >= from)
-    .toSorted((a, b) => epochMs(a.created) - epochMs(b.created));
+  const recent = Arr.filter(views, (view) => epochMs(view.created) >= from);
+  const kept = Arr.sortWith(
+    recent,
+    (value) => value,
+    (a, b) => Num.sign(epochMs(a.created) - epochMs(b.created)),
+  );
   const tallies = new Map<string, Mutable<WorkflowTally>>();
   const failed: Mutable<Report["failed"]> = [];
   const completed: Mutable<Report["completed"]> = [];
@@ -123,7 +133,7 @@ export function reportOf(
       stopped.push({ runId, workflow });
     }
     if (view.mr !== null) tally.withMr++;
-    const answered = view.waiting.filter((decision) => decision.answer !== null).length;
+    const answered = Arr.filter(view.waiting, (decision) => decision.answer !== null).length;
     tally.answered += answered;
     tally.open += view.waiting.length - answered;
     const recorded = metrics.get(runId);
@@ -134,10 +144,12 @@ export function reportOf(
       tally.verifications.unstable += recorded.verifications.unstable;
     }
   }
-  const workflows = [...tallies.values()].toSorted(
-    (a, b) => b.total - a.total || a.workflow.localeCompare(b.workflow),
+  const workflows = Arr.sortWith(
+    [...tallies.values()],
+    (value) => value,
+    (a, b) => Num.sign(b.total - a.total || pipe(a.workflow, Str.localeCompare(b.workflow))),
   );
-  const runs = kept.map(({ runId, workflow, parent, project, created, status, input }) => ({
+  const runs = Arr.map(kept, ({ runId, workflow, parent, project, created, status, input }) => ({
     runId,
     workflow,
     parent,
@@ -147,7 +159,7 @@ export function reportOf(
     closes: [...new Set(closesIn(input))],
   }));
   const measures = measuresOf(
-    kept.map(({ runId }) => ({
+    Arr.map(kept, ({ runId }) => ({
       runId,
       records: recorded.get(runId)?.records ?? null,
       metrics: recorded.get(runId)?.metrics ?? [],
@@ -165,26 +177,35 @@ const percent = (share: number | null) => (share === null ? "" : ` (${Math.round
 const citing = (runs: ReadonlyArray<string>, cap = 10) =>
   runs.length === 0
     ? ""
-    : `: ${runs.slice(0, cap).join(", ")}${runs.length > cap ? ` …and ${runs.length - cap} more` : ""}`;
+    : `: ${Arr.join(runs.slice(0, cap), ", ")}${runs.length > cap ? ` …and ${runs.length - cap} more` : ""}`;
 
 /** The measures, as `run report` prints them under the tallies. */
 const measureLines = (measures: Measures): string[] => {
   const { rounds, dispositions, steering, verifications, parks, peakContext } = measures;
-  const recorded = peakContext.filter((one) => one.tokens !== null);
+  const recorded = Arr.filter(peakContext, (one) => one.tokens !== null);
   return [
     `review rounds: ${rounds.runs.length} Runs with a rally, median ${rounds.median ?? "none"}, ${rounds.atCap.count} hit the cap${citing(rounds.atCap.runs)}`,
-    ...capped(rounds.runs.map((one) => `  ${one.runId}  ${one.reached} of ${one.cap}`)),
-    `dispositions: ${(["merged", "superseded", "abandoned"] as const)
-      .map((kind) => `${dispositions[kind].count} ${kind}${percent(dispositions[kind].share)}`)
-      .join(", ")}`,
-    ...(["merged", "superseded", "abandoned"] as const).flatMap((kind) =>
+    ...capped(Arr.map(rounds.runs, (one) => `  ${one.runId}  ${one.reached} of ${one.cap}`)),
+    `dispositions: ${Arr.join(
+      Arr.map(
+        ["merged", "superseded", "abandoned"] as const,
+        (kind) => `${dispositions[kind].count} ${kind}${percent(dispositions[kind].share)}`,
+      ),
+      ", ",
+    )}`,
+    ...Arr.flatMap(["merged", "superseded", "abandoned"] as const, (kind) =>
       dispositions[kind].count === 0 ? [] : [`  ${kind}${citing(dispositions[kind].runs)}`],
     ),
-    `steering by origin: ${(["human", "chat", "agent", "host"] as const)
-      .map((origin) => `${steering.byOrigin[origin].count} ${origin}`)
-      .join(", ")}`,
+    `steering by origin: ${Arr.join(
+      Arr.map(
+        ["human", "chat", "agent", "host"] as const,
+        (origin) => `${steering.byOrigin[origin].count} ${origin}`,
+      ),
+      ", ",
+    )}`,
     ...capped(
-      steering.runs.map(
+      Arr.map(
+        steering.runs,
         (one) =>
           `  ${one.runId}  ${one.steer} steers, ${one.followup} follow-ups, ${one.deliver} deliveries, ${one.correction} corrections`,
       ),
@@ -192,30 +213,42 @@ const measureLines = (measures: Measures): string[] => {
     `verifications: ${verifications.total}, ${verifications.byCollector.collie} by Collie, ${verifications.byCollector.agent} by agents; ${verifications.repeated.count} repeated${citing(verifications.repeated.runs)}; ${verifications.executableOnly.count} named only by their executable${citing(verifications.executableOnly.runs)}`,
     `parks: ${parks.collectExpiries.count} collect-budget expiries${citing(parks.collectExpiries.runs)}`,
     ...capped(
-      parks.byReason.map((one) => `  ${one.count}× ${one.reason.slice(0, 120)}${citing(one.runs)}`),
+      Arr.map(
+        parks.byReason,
+        (one) => `  ${one.count}× ${pipe(one.reason, Str.slice(0, 120))}${citing(one.runs)}`,
+      ),
     ),
     `peak context tokens: ${recorded.length} of ${peakContext.length} Runs recorded; the rest not recorded`,
-    ...capped(recorded.map((one) => `  ${one.runId}  ${one.tokens} on ${one.agent}`)),
+    ...capped(Arr.map(recorded, (one) => `  ${one.runId}  ${one.tokens} on ${one.agent}`)),
   ];
 };
 
 /** `run report` in words, which chat reads too. */
 export const reportLines = (report: Report, unreadable: string | null): string => {
   const unread = unreadable === null ? [] : [`runs: ${unreadable}`];
-  if (report.total === 0) return [...unread, "No runs found."].join("\n");
-  return [
-    `${report.total} Runs`,
-    ...report.workflows.map(
-      (t) =>
-        `${t.workflow}  ${t.total}: ${t.complete} complete, ${t.failed} failed, ${t.suspended} suspended, ${t.pending} pending; ${t.withMr} recorded a merge request; ${t.stopped} stopped; ${t.answered} decisions answered; rework ${t.rework}; verifications ${t.verifications.pass} pass, ${t.verifications.fail} fail, ${t.verifications.unstable} unstable`,
-    ),
-    ...(report.failed.length === 0 ? [] : ["failed:"]),
-    ...capped(report.failed.map((r) => `  ${r.runId}  ${r.workflow}  ${r.reason.slice(0, 120)}`)),
-    ...(report.completed.length === 0 ? [] : ["complete:"]),
-    ...capped(report.completed.map((r) => `  ${r.runId}  ${r.workflow}  ${r.value}`)),
-    ...(report.stopped.length === 0 ? [] : ["stopped:"]),
-    ...capped(report.stopped.map((r) => `  ${r.runId}  ${r.workflow}`)),
-    ...measureLines(report.measures),
-    ...unread,
-  ].join("\n");
+  if (report.total === 0) return Arr.join([...unread, "No runs found."], "\n");
+  return Arr.join(
+    [
+      `${report.total} Runs`,
+      ...Arr.map(
+        report.workflows,
+        (t) =>
+          `${t.workflow}  ${t.total}: ${t.complete} complete, ${t.failed} failed, ${t.suspended} suspended, ${t.pending} pending; ${t.withMr} recorded a merge request; ${t.stopped} stopped; ${t.answered} decisions answered; rework ${t.rework}; verifications ${t.verifications.pass} pass, ${t.verifications.fail} fail, ${t.verifications.unstable} unstable`,
+      ),
+      ...(report.failed.length === 0 ? [] : ["failed:"]),
+      ...capped(
+        Arr.map(
+          report.failed,
+          (r) => `  ${r.runId}  ${r.workflow}  ${pipe(r.reason, Str.slice(0, 120))}`,
+        ),
+      ),
+      ...(report.completed.length === 0 ? [] : ["complete:"]),
+      ...capped(Arr.map(report.completed, (r) => `  ${r.runId}  ${r.workflow}  ${r.value}`)),
+      ...(report.stopped.length === 0 ? [] : ["stopped:"]),
+      ...capped(Arr.map(report.stopped, (r) => `  ${r.runId}  ${r.workflow}`)),
+      ...measureLines(report.measures),
+      ...unread,
+    ],
+    "\n",
+  );
 };

@@ -3,6 +3,9 @@
 // client: over a channel that would start a host on this computer, or signal a pid that is
 // not its own.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import {
   Cause,
   Clock,
@@ -124,15 +127,15 @@ export const stderrTail = Effect.fnUntraced(function* (
   yield* Stream.fromReadableStream({ evaluate: () => from, onError: () => undefined }).pipe(
     Stream.runForEach((chunk: Uint8Array) =>
       Effect.suspend(() => {
-        text = (text + decoder.decode(chunk, { stream: true })).slice(-4000);
-        return echo(chunk, text.trim());
+        text = pipe_(text + decoder.decode(chunk, { stream: true }), Str.slice(-4000));
+        return echo(chunk, Str.trim(text));
       }),
     ),
     Effect.ignore,
     // Ends with its process.
     Effect.forkDetach,
   );
-  return () => text.trim();
+  return () => Str.trim(text);
 });
 
 /** Told what an SSO login a connection waits on asks for. */
@@ -266,13 +269,13 @@ export const openDoors = (
       machine,
       desktop,
       chat,
-      board: () => desktop.board(),
+      board: desktop.board(),
     })),
   );
 
 export interface BoardSource {
   readonly machine?: KnownMachine;
-  readonly board: () => Stream.Stream<BoardMessage, { readonly message: string }>;
+  readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
 }
 
 /**
@@ -280,7 +283,7 @@ export interface BoardSource {
  * first and says which installation it is; every change after it is that installation's.
  */
 export const machineBoard = (known: KnownMachine, door: BoardSource) =>
-  door.board().pipe(
+  door.board.pipe(
     Stream.mapError((error) => error.message),
     Stream.mapAccum(
       (): Machine => ({ ...known, installation: "" }),
@@ -325,7 +328,7 @@ export const output = (command: ReadonlyArray<string>) =>
     Effect.flatMap(({ out, err, code }) =>
       code === 0
         ? Effect.succeed(out)
-        : Effect.fail(err.trim() || `${CommandLine.display(command)} exited ${code}`),
+        : Effect.fail(Str.trim(err) || `${CommandLine.display(command)} exited ${code}`),
     ),
   );
 
@@ -355,9 +358,9 @@ export const herdrMachines = (herdr: string, minHerdr: string) =>
       ),
     ),
     Effect.flatMap((json) =>
-      Schema.decodeUnknownEffect(HerdrMachines)(json).pipe(Effect.mapError((e) => e.message)),
+      Schema.decodeEffect(HerdrMachines)(json).pipe(Effect.mapError((e) => e.message)),
     ),
-    Effect.map((machines) => machines.filter((machine) => machine.enabled)),
+    Effect.map((machines) => Arr.filter(machines, (machine) => machine.enabled)),
   );
 
 /** Drops a machine from herdr's list; nothing on it is stopped or uninstalled. */
@@ -420,7 +423,7 @@ const machineConnect = Effect.fn("Desktop.machineConnect")(function* (
   const [out, code] = yield* Effect.promise(() =>
     Promise.all([new Response(child.stdout).text(), child.exited]),
   );
-  const answer = Schema.decodeUnknownOption(Connected)(out.trim());
+  const answer = Schema.decodeOption(Connected)(Str.trim(out));
   if (Option.isSome(answer))
     return answer.value.ok
       ? answer.value.data.path
@@ -527,7 +530,7 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
                       paired = true;
                       return null;
                     })
-                  : Effect.fail((err || out).trim()),
+                  : Effect.fail(Str.trim(err || out)),
               ),
               Effect.catch((reason) =>
                 Effect.succeed(`Could not pair ${machine.label}: ${reason}`),
@@ -705,9 +708,9 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
       code === 0
         ? Effect.void
         : Effect.fail(
-            Schema.decodeUnknownOption(Envelope)(out.trim()).pipe(
+            Schema.decodeOption(Envelope)(Str.trim(out)).pipe(
               Option.flatMap(({ error }) => Option.fromNullishOr(error?.message)),
-              Option.getOrElse(() => err.trim() || `collie upgrade exited ${code}`),
+              Option.getOrElse(() => Str.trim(err) || `collie upgrade exited ${code}`),
             ),
           ),
     ),
@@ -1005,10 +1008,11 @@ export const flockStream = <D extends BoardSource>(
             ? Stream.empty
             : Stream.fromEffectDrain(
                 Effect.gen(function* () {
-                  const owned = [...(yield* Ref.get(owners))]
-                    .filter(([, owner]) => owner.at === at)
-                    .map(([installation]) => installation);
-                  if (owned.some((installation) => upgradingNow.has(installation))) return;
+                  const owned = Arr.map(
+                    Arr.filter([...(yield* Ref.get(owners))], ([, owner]) => owner.at === at),
+                    ([installation]) => installation,
+                  );
+                  if (Arr.some(owned, (installation) => upgradingNow.has(installation))) return;
                   // Asked again even where the last upgrade succeeded and did not move.
                   for (const installation of owned) upgrading.delete(installation);
                   yield* Queue.offer(reopens[at]!, undefined);
@@ -1039,14 +1043,18 @@ export const flockStream = <D extends BoardSource>(
         // A route that merged into this one's Machine shows it now, as a route added afresh.
         const again = Stream.suspend(() =>
           Stream.mergeAll(
-            [...merged]
-              .filter(([place, installation]) => shown.has(installation) && !removedAt(place))
-              .map(([place]) => {
+            Arr.map(
+              Arr.filter(
+                [...merged],
+                ([place, installation]) => shown.has(installation) && !removedAt(place),
+              ),
+              ([place]) => {
                 merged.delete(place);
                 const route = routeAt[place]!;
                 places.delete(route.machine.profile);
                 return Stream.unwrap(added(route));
-              }),
+              },
+            ),
             { concurrency: "unbounded" },
           ),
         );
@@ -1106,13 +1114,13 @@ const over = <A, R>(
             reason: `${machine.name}'s connection was renewed before this finished`,
           }),
         );
-      const misfit = cause.reasons.find(Cause.isDieReason)?.defect;
+      const misfit = Option.getOrUndefined(Arr.findFirst(cause.reasons, Cause.isDieReason))?.defect;
       // The RPC client dies on a misfit, its schema issue as the defect's cause.
       return Predicate.isError(misfit) && SchemaIssue.isIssue(misfit.cause)
         ? Effect.fail(
             new ActionFailed({
               request,
-              reason: `The call to ${machine.name} did not fit its schema: ${formatIssue(misfit.cause).replace(/\s+/g, " ")}`,
+              reason: `The call to ${machine.name} did not fit its schema: ${pipe_(formatIssue(misfit.cause), Str.replace(/\s+/g, " "))}`,
             }),
           )
         : Effect.failCause(cause);
@@ -1137,7 +1145,7 @@ const aboutOf = (action: DesktopAction) => {
     default:
       return {
         about: action.runId,
-        what: `the ${action._tag === "FollowUp" ? "follow-up" : action._tag.toLowerCase()} to ${action.runId}`,
+        what: `the ${action._tag === "FollowUp" ? "follow-up" : Str.toLowerCase(action._tag)} to ${action.runId}`,
       };
   }
 };
@@ -1433,9 +1441,10 @@ export const usageOn = (
       const defect = Cause.findDefect(cause);
       const problem = Option.isSome(failed)
         ? failed.value.reason
-        : defect._tag === "Success" && String(defect.success).startsWith("Unknown request tag")
+        : defect._tag === "Success" &&
+            pipe_(String(defect.success), Str.startsWith("Unknown request tag"))
           ? UPGRADE_SAID
-          : Cause.pretty(cause).split("\n")[0]!;
+          : Str.split(Cause.pretty(cause), "\n")[0]!;
       return Effect.succeed({ profile, name, readings: [], problem });
     }),
   );
@@ -1475,9 +1484,10 @@ export const schedulesOn = (
       if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
       const defect = Cause.findDefect(cause);
       return Effect.succeed(
-        defect._tag === "Success" && String(defect.success).startsWith("Unknown request tag")
+        defect._tag === "Success" &&
+          pipe_(String(defect.success), Str.startsWith("Unknown request tag"))
           ? read({ problem: SCHEDULES_UPGRADE_SAID })
-          : read({ unreachable: true, problem: Cause.pretty(cause).split("\n")[0]! }),
+          : read({ unreachable: true, problem: Str.split(Cause.pretty(cause), "\n")[0]! }),
       );
     }),
   );
@@ -1494,7 +1504,9 @@ export const cleanupOn = (
 ): Effect.Effect<CleanupListing, ActionFailed> =>
   Effect.suspend(() => {
     const failed = (reason: string) => Effect.fail(new ActionFailed({ reason }));
-    const found = [...doors].find(([, door]) => door.machine.profile === profile);
+    const found = Option.getOrUndefined(
+      Arr.findFirst([...doors], ([, door]) => door.machine.profile === profile),
+    );
     if (found === undefined) return failed("That Machine isn't connected.");
     const [installation, first] = found;
     let waiting = false;
@@ -1521,9 +1533,10 @@ export const cleanupOn = (
             );
           const defect = Cause.findDefect(exit.cause);
           return failed(
-            defect._tag === "Success" && String(defect.success).startsWith("Unknown request tag")
+            defect._tag === "Success" &&
+              pipe_(String(defect.success), Str.startsWith("Unknown request tag"))
               ? CLEANUP_UPGRADE_SAID
-              : Cause.pretty(exit.cause).split("\n")[0]!,
+              : Str.split(Cause.pretty(exit.cause), "\n")[0]!,
           );
         }),
       );
@@ -1628,7 +1641,7 @@ export const changeScheduleOn = (door: Reached, change: ScheduleChange, request:
 
 const scheduleDoor = (door: Reached): ScheduleDoor => ({
   name: door.machine.name,
-  schedules: () => door.desktop.schedules(),
+  schedules: door.desktop.schedules(),
   changeSchedule: (asked) => door.desktop.changeSchedule(asked),
 });
 
@@ -1680,17 +1693,21 @@ export const syncNow = (
     const failed = yield* steps.sync;
     const unshared = yield* steps.syncDefinitions;
     const gave = yield* steps.give;
-    const said = [
-      `${machine.name}: ${failed === null ? "settings synced" : `settings didn't sync: ${failed}`}`,
-      unshared === null ? "definitions synced" : `definitions didn't sync: ${unshared}`,
-      ...gave.map(({ credential, failed: why }) =>
-        why === null
-          ? `${CREDENTIAL_SAID[credential].lacks} given`
-          : `${CREDENTIAL_SAID[credential].lacks} not given: ${why}`,
-      ),
-    ].join("; ");
+    const said = Arr.join(
+      [
+        `${machine.name}: ${failed === null ? "settings synced" : `settings didn't sync: ${failed}`}`,
+        unshared === null ? "definitions synced" : `definitions didn't sync: ${unshared}`,
+        ...Arr.map(gave, ({ credential, failed: why }) =>
+          why === null
+            ? `${CREDENTIAL_SAID[credential].lacks} given`
+            : `${CREDENTIAL_SAID[credential].lacks} not given: ${why}`,
+        ),
+      ],
+      "; ",
+    );
     return {
       said,
-      failed: failed !== null || unshared !== null || gave.some(({ failed: why }) => why !== null),
+      failed:
+        failed !== null || unshared !== null || Arr.some(gave, ({ failed: why }) => why !== null),
     };
   });

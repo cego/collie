@@ -1,6 +1,8 @@
 // The board the view draws: the Flock's Tasks in their sections and the header sentence,
 // counted against a clock that moves even while no board message arrives.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { AsyncResult, Atom, useAtomValue } from "@effect/atom-vue";
 import { Clock, Schedule, Stream } from "effect";
 import {
@@ -38,7 +40,7 @@ export const useFlock = () => {
   const told = computed(() => flock.value.value ?? EMPTY_FLOCK);
   const board = computed(() => flockCards(told.value));
   const tasks = computed(() => board.value.tasks);
-  const placed = (some: ReadonlyArray<TaskView>) => some.map(board.value.placedOf);
+  const placed = (some: ReadonlyArray<TaskView>) => Arr.map(some, board.value.placedOf);
   const sections = computed(() => sectionsOf(tasks.value, ""));
   return {
     connecting: computed(() => flock.value.value === undefined && flock.trouble.value === null),
@@ -55,9 +57,15 @@ export const useFlock = () => {
     onboarding: computed(() => told.value.onboarding),
     tasks,
     everyTask: computed(() => placed(tasks.value)),
-    placedBy: (key: string) => placed(tasks.value).find((one) => one.key === key),
+    placedBy: (key: string) =>
+      Option.getOrUndefined(Arr.findFirst(placed(tasks.value), (one) => one.key === key)),
     placedAt: (machine: string, task: string) =>
-      placed(tasks.value).find((one) => one.machine === machine && one.task.id === task),
+      Option.getOrUndefined(
+        Arr.findFirst(
+          placed(tasks.value),
+          (one) => one.machine === machine && one.task.id === task,
+        ),
+      ),
     sections: computed(
       () =>
         ({

@@ -1,3 +1,4 @@
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { scriptLine } from "../src/script";
@@ -19,7 +20,7 @@ const argvOf = (line: string, program: string, env: Readonly<Record<string, stri
       env: { PATH: `${bin}:/usr/bin:/bin`, HOME: bin, ...env },
     });
     expect(ran.stderr).toBe("");
-    return ran.stdout.split("\0").slice(0, -1);
+    return Str.split(ran.stdout, "\0").slice(0, -1);
   }).pipe(Effect.scoped);
 
 test("the status line runs the words it names", () =>

@@ -1,6 +1,8 @@
 // Desktop's main process: one window on the view, every Machine's board relayed to it as
 // Effect RPC over Electrobun's message channel, and the Flock chat beside them.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { homedir, hostname, tmpdir } from "node:os";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
@@ -22,6 +24,7 @@ import {
   Scope,
   Stream,
   SubscriptionRef,
+  flow,
 } from "effect";
 import { CommandLine } from "effect/process";
 import * as Digest from "effect/crypto/Digest";
@@ -272,7 +275,7 @@ const main = Effect.gen(function* () {
   const seeded =
     ownGitlabHost === undefined || saved.settings.gitlab_host !== undefined
       ? saved
-      : editSetting(saved, "gitlab_host", ownGitlabHost, yield* nowIso());
+      : editSetting(saved, "gitlab_host", ownGitlabHost, yield* nowIso);
   const flockSettings = yield* SubscriptionRef.make("refused" in seeded ? saved : seeded);
   const flockDefinitions = yield* SubscriptionRef.make(yield* readFlockDefinitions(own));
   const defaultGitlab = yield* Config.String("COLLIE_DESKTOP_GITLAB").pipe(
@@ -343,7 +346,9 @@ const main = Effect.gen(function* () {
   const open = (machine: HerdrMachine) =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
-      const peer = (yield* pairedMachines(collie)).find((one) => one.name === machine.label);
+      const peer = Option.getOrUndefined(
+        Arr.findFirst(yield* pairedMachines(collie), (one) => one.name === machine.label),
+      );
       const ssh = yield* remoteRoute(
         "ssh",
         collie,
@@ -377,13 +382,15 @@ const main = Effect.gen(function* () {
   const news = yield* PubSub.unbounded<FlockItem>();
   /** Each route's paired link as Local last listed it, told again to a view that subscribes. */
   const links = new Map<string, MachineLinked>();
-  const asListed = Schema.encodeSync(Schema.fromJsonString(PeerView));
+  const asListed = flow(Schema.encodeResult(Schema.fromJsonString(PeerView)), Result.getOrThrow);
   yield* pairedMachines(collie).pipe(
     Effect.flatMap((listed) =>
       Effect.forEach(
         routes.values(),
         ({ route: { machine } }) => {
-          const link = listed.find((one) => one.name === machine.name);
+          const link = Option.getOrUndefined(
+            Arr.findFirst(listed, (one) => one.name === machine.name),
+          );
           const was = links.get(machine.profile)?.link;
           if (link === undefined || (was !== undefined && asListed(was) === asListed(link)))
             return Effect.void;
@@ -405,7 +412,7 @@ const main = Effect.gen(function* () {
         yield* SubscriptionRef.get(flockSettings),
         key,
         typed,
-        yield* nowIso(),
+        yield* nowIso,
       );
       if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
       yield* writeFlockSettings(own, edited).pipe(
@@ -448,7 +455,11 @@ const main = Effect.gen(function* () {
   const synced = new Map<string, MachineSynced>();
   const settingsOf = (door: Doors) => ({
     name: door.machine.name,
-    door: door.desktop,
+    door: {
+      ...door.desktop,
+      settings: door.desktop.settings(),
+      sharedDefinitions: door.desktop.sharedDefinitions(),
+    },
     machine: door.machine,
   });
   // A Machine out of reach, or on a collie without the operation until it is upgraded, is
@@ -463,14 +474,14 @@ const main = Effect.gen(function* () {
       }).pipe(Effect.asVoid);
   const { syncOn, syncEvery } = yield* flockSync({
     flock: flockSettings,
-    machines: () => [...doors.values()].map(settingsOf),
+    machines: () => Arr.map([...doors.values()], settingsOf),
     save: (flock) => writeFlockSettings(own, flock).pipe(Effect.provide(BunServices.layer)),
     request: uuid,
     told: toldSynced("settings"),
   });
   const definitions = yield* definitionsSync({
     flock: flockDefinitions,
-    machines: () => [...doors.values()].map(settingsOf),
+    machines: () => Arr.map([...doors.values()], settingsOf),
     save: (flock) => writeFlockDefinitions(own, flock).pipe(Effect.provide(BunServices.layer)),
     request: uuid,
     told: toldSynced("definitions"),
@@ -489,10 +500,20 @@ const main = Effect.gen(function* () {
       savedOnboardings(onboardings).pipe(
         Effect.map(
           (all) =>
-            all
-              .find((saved) => saved.machine.profile === profile)
-              ?.run.steps.filter(({ status }) => status === "skipped")
-              .map(({ step }) => step) ?? [],
+            Option.getOrUndefined(
+              Option.map(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst(all, (saved) => saved.machine.profile === profile),
+                  ),
+                ),
+                (present) =>
+                  Arr.map(
+                    Arr.filter(present.run.steps, ({ status }) => status === "skipped"),
+                    ({ step }) => step,
+                  ),
+              ),
+            ) ?? [],
         ),
         Effect.provide(BunServices.layer),
       ),
@@ -537,13 +558,19 @@ const main = Effect.gen(function* () {
       // Without its credentials file, a Machine is onboarded as far as it goes with none.
       const secrets = yield* secretsFor(keyring).pipe(Effect.orElseSucceed(() => ""));
       const handed = yield* given.held;
-      const before = (yield* savedOnboardings(onboardings)).find(
-        (saved) => saved.machine.profile === machine.profile,
+      const before = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* savedOnboardings(onboardings),
+          (saved) => saved.machine.profile === machine.profile,
+        ),
       );
-      const skip = Skippable.literals.filter(
+      const skip = Arr.filter(
+        Skippable.literals,
         (step) =>
           skipping.includes(step) ||
-          before?.run.steps.some((one) => one.step === step && one.status === "skipped"),
+          Option.exists(Option.fromNullishOr(before), (present_) =>
+            Arr.some(present_.run.steps, (one) => one.step === step && one.status === "skipped"),
+          ),
       );
       const run = yield* onboardThrough(
         route,
@@ -562,9 +589,10 @@ const main = Effect.gen(function* () {
       );
       if (run.ready === true && secrets !== "") yield* given.handed(machine, handed, run.steps);
       // Kept as skipped where the run ended before it, so the next run skips it too.
-      const unreached = skip
-        .filter((step) => !run.steps.some((one) => one.step === step))
-        .map((step): OnboardStep => ({ step, title: step, status: "skipped" }));
+      const unreached = Arr.map(
+        Arr.filter(skip, (step) => !Arr.some(run.steps, (one) => one.step === step)),
+        (step): OnboardStep => ({ step, title: step, status: "skipped" }),
+      );
       return { ...run, steps: [...run.steps, ...unreached] };
     }).pipe(
       Effect.tap((run) => saveOnboarding(onboardings, { _tag: "Onboarding", job, machine, run })),
@@ -601,9 +629,12 @@ const main = Effect.gen(function* () {
       const added = yield* addToHerdr("herdr", target, label, session, ask).pipe(
         Effect.andThen(herdrMachines("herdr", manifest.min_herdr_version)),
         Effect.flatMap((machines) => {
-          const found = machines.find(
-            (machine) =>
-              !before.has(machine.id) && machine.target === target && machine.label === label,
+          const found = Option.getOrUndefined(
+            Arr.findFirst(
+              machines,
+              (machine) =>
+                !before.has(machine.id) && machine.target === target && machine.label === label,
+            ),
           );
           return found === undefined
             ? Effect.fail(`herdr lists no new machine for ${target}`)
@@ -622,16 +653,19 @@ const main = Effect.gen(function* () {
       yield* Fiber.join(yield* onboardAs(job, route, run.current()));
     });
 
-  const everyRoute = () => [...routes.values()].map(({ route }) => route);
+  const everyRoute = () => Arr.map([...routes.values()], ({ route }) => route);
   const gave = (
     what: string,
     each: ReadonlyArray<{ readonly name: string; readonly failed: string | null }>,
   ) => {
-    const failed = each.filter((one) => one.failed !== null);
-    return [
-      `${what} given to ${each.length - failed.length} of ${each.length} Machines`,
-      ...failed.map(({ name, failed: why }) => `${name}: ${why}`),
-    ].join("; ");
+    const failed = Arr.filter(each, (one) => one.failed !== null);
+    return Arr.join(
+      [
+        `${what} given to ${each.length - failed.length} of ${each.length} Machines`,
+        ...Arr.map(failed, ({ name, failed: why }) => `${name}: ${why}`),
+      ],
+      "; ",
+    );
   };
   const codes = new Map<string, Queue.Queue<string>>();
   /** Logs Claude Code in through `route`, then onboards it again under the same job. */
@@ -675,20 +709,24 @@ const main = Effect.gen(function* () {
   const routedAt = new Map<string, number>();
   const holds = Effect.map(given.held, (texts) => ({
     version: manifest.version,
-    credentials: CREDENTIALS.filter((one) => texts[one] !== undefined),
+    credentials: Arr.filter(CREDENTIALS, (one) => texts[one] !== undefined),
   }));
   /** Sync now: what connecting would do for the Machine on `profile`. */
   const syncMachine = (profile: string) =>
     Effect.gen(function* () {
       const route = routes.get(profile)?.route;
-      const row = machineRows(shown).find((one) => one.profile === profile);
+      const row = Option.getOrUndefined(
+        Arr.findFirst(machineRows(shown), (one) => one.profile === profile),
+      );
       if (route === undefined || row === undefined)
         return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
       const { behind } = inSync(row, yield* holds);
-      const door = [...doors.values()].find((one) => one.machine.profile === profile);
+      const door = Option.getOrUndefined(
+        Arr.findFirst([...doors.values()], (one) => one.machine.profile === profile),
+      );
       return yield* syncNow(
         route.machine,
-        behind.map(({ part }) => part),
+        Arr.map(behind, ({ part }) => part),
         {
           reopen: PubSub.publish(changes, { _tag: "Reopen", profile }),
           sync:
@@ -743,8 +781,8 @@ const main = Effect.gen(function* () {
     setChatHarness: ({ harness, model, effort }) => {
       const changed: Partial<Record<"chatHarness" | "chatModel" | "chatEffort", string>> = {};
       if (harness !== undefined) changed.chatHarness = harness;
-      if (model !== undefined) changed.chatModel = model.trim();
-      if (effort !== undefined) changed.chatEffort = effort.trim();
+      if (model !== undefined) changed.chatModel = Str.trim(model);
+      if (effort !== undefined) changed.chatEffort = Str.trim(effort);
       return saveSettings(changed).pipe(
         Effect.as(null),
         Effect.catch(({ reason }) => Effect.succeed(reason)),
@@ -758,16 +796,21 @@ const main = Effect.gen(function* () {
       Effect.gen(function* () {
         const rows = machineRows(shown);
         if (sync === undefined) return flockInSyncSaid(rows, yield* holds);
-        const row = rows.find((one) => one.name === sync || one.profile === sync);
+        const row = Option.getOrUndefined(
+          Arr.findFirst(rows, (one) => one.name === sync || one.profile === sync),
+        );
         if (row === undefined)
-          return `No Machine "${sync}"; the Machines are ${rows.map(({ name }) => name).join(", ")}`;
+          return `No Machine "${sync}"; the Machines are ${Arr.join(
+            Arr.map(rows, ({ name }) => name),
+            ", ",
+          )}`;
         return yield* syncMachine(row.profile).pipe(
           Effect.map(({ said }) => said),
           Effect.catch(({ reason }) => Effect.succeed(reason)),
         );
       }),
     machines: () =>
-      chatBoards(shown, routedAt).map(({ name, profile, installation, board }) => {
+      Arr.map(chatBoards(shown, routedAt), ({ name, profile, installation, board }) => {
         const held = installation === null ? undefined : doors.get(installation);
         const machine: ChatMachine = { name, board, local: profile === "local" };
         return held === undefined ? machine : { ...machine, door: chatDoor(held.chat) };
@@ -796,7 +839,7 @@ const main = Effect.gen(function* () {
           // Before the routes are read, so a route added meanwhile is not missed.
           const changed = yield* PubSub.subscribe(changes);
           const told = yield* PubSub.subscribe(news);
-          const reachable = [...routes.values()].map(({ route }) => route);
+          const reachable = Arr.map([...routes.values()], ({ route }) => route);
           // A Machine herdr no longer lists is not Desktop's to show.
           const listed = ({ machine }: { readonly machine: KnownMachine }) =>
             routes.has(machine.profile);
@@ -838,12 +881,12 @@ const main = Effect.gen(function* () {
           routedAt.clear();
           const before: ReadonlyArray<FlockItem> = [
             { _tag: "Routes", profiles: [...routes.keys()] },
-            ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
-            ...(yield* savedBoards(boards)).filter(listed),
-            ...(yield* savedOnboardings(onboardings)).filter(listed),
-            ...(yield* given.states(reachable.map(({ machine }) => machine))),
-            ...[...synced.values()].filter(listed),
-            ...[...links.values()].filter(listed),
+            ...Arr.map(reachable, ({ machine }): FlockItem => ({ _tag: "Routed", machine })),
+            ...Arr.filter(yield* savedBoards(boards), listed),
+            ...Arr.filter(yield* savedOnboardings(onboardings), listed),
+            ...(yield* given.states(Arr.map(reachable, ({ machine }) => machine))),
+            ...Arr.filter([...synced.values()], listed),
+            ...Arr.filter([...links.values()], listed),
           ];
           return Stream.fromIterable(before).pipe(
             Stream.concat(
@@ -890,12 +933,12 @@ const main = Effect.gen(function* () {
       }),
     addMachine: ({ target, label, session }) =>
       Effect.gen(function* () {
-        if ([target, label, session].some((one) => one.trim() === ""))
+        if (Arr.some([target, label, session], (one) => Str.trim(one) === ""))
           return yield* new ActionFailed({
             reason: "a Machine needs an SSH target, a label and a session",
           });
         const job = yield* uuid;
-        yield* addAs(job, target.trim(), label.trim(), session.trim()).pipe(
+        yield* addAs(job, Str.trim(target), Str.trim(label), Str.trim(session)).pipe(
           Effect.provide(BunServices.layer),
           Effect.forkIn(scope),
         );
@@ -919,7 +962,7 @@ const main = Effect.gen(function* () {
       ),
     saveGitlab: ({ token }) =>
       Effect.gen(function* () {
-        const said = token.trim();
+        const said = Str.trim(token);
         if (!oneLine(said)) return yield* Effect.fail("a token is one line");
         const { expires } = yield* gitlabToken(gitlab(), said);
         yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost()}`, said);
@@ -928,7 +971,7 @@ const main = Effect.gen(function* () {
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     saveGitlabHost: ({ host }) =>
       Effect.gen(function* () {
-        const named = host.trim();
+        const named = Str.trim(host);
         if (!isHostName(named))
           return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
         if (named === gitlabHost()) return `GitLab is ${named} already`;
@@ -946,14 +989,14 @@ const main = Effect.gen(function* () {
         return `Machines are onboarded and doctored against ${named} from now on; make a token there`;
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     checkHelle: ({ token }) =>
-      helleOwner(helle, token.trim()).pipe(
+      helleOwner(helle, Str.trim(token)).pipe(
         Effect.mapError((reason) => new ActionFailed({ reason })),
       ),
     openSlack: () => openSlack,
     copyText: ({ text }) => Effect.sync(() => Utils.clipboardWriteText(text)),
     saveHelle: ({ token }) =>
       Effect.gen(function* () {
-        const said = token.trim();
+        const said = Str.trim(token);
         if (!oneLine(said)) return yield* Effect.fail("a token is one line");
         yield* helleOwner(helle, said);
         yield* keyring.store("helle-token", "Collie's Helle token", said);
@@ -980,9 +1023,9 @@ const main = Effect.gen(function* () {
     pasteCode: ({ job, code }) =>
       Effect.suspend(() => {
         const typed = codes.get(job);
-        return typed === undefined || code.trim() === ""
+        return typed === undefined || Str.trim(code) === ""
           ? Effect.void
-          : Queue.offer(typed, code.trim()).pipe(Effect.asVoid);
+          : Queue.offer(typed, Str.trim(code)).pipe(Effect.asVoid);
       }),
     answerHerdr: ({ job, yes }) =>
       Effect.suspend(() => {
@@ -1144,7 +1187,7 @@ const main = Effect.gen(function* () {
     pickFiles: () =>
       Effect.promise(() =>
         Utils.openFileDialog({ canChooseDirectory: false, allowsMultipleSelection: true }),
-      ).pipe(Effect.flatMap((paths) => stagedFrom(paths.filter((path) => path !== "")))),
+      ).pipe(Effect.flatMap((paths) => stagedFrom(Arr.filter(paths, (path) => path !== "")))),
     clipboardFiles: () =>
       Effect.sync(() =>
         Utils.clipboardAvailableFormats().includes("files")

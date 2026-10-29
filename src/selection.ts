@@ -9,7 +9,7 @@
 // open is true only right now, and a record of what used to be selected would be a thing
 // chat could answer about after the human closed it.
 
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { herdDir } from "./steering";
 
 export interface Selection {
@@ -27,7 +27,7 @@ const SelectionSchema = Schema.Struct({
   name: Schema.String,
 });
 const SelectionJson = Schema.fromJsonString(SelectionSchema);
-const encode = Schema.encodeSync(SelectionJson);
+const encode = flow(Schema.encodeResult(SelectionJson), Result.getOrThrow);
 const decode = Schema.decodeUnknownOption(SelectionJson);
 
 export const selectionPath = Effect.fn("Selection.path")(function* (stateDir: string, key: string) {
@@ -50,7 +50,7 @@ export const writeSelection = Effect.fn("Selection.write")(function* (
 /** What is selected, or null for no board, no selection and a record nobody can read. */
 export const readSelection = Effect.fn("Selection.read")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  const raw = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
+  const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   const found = decode(raw);
   return found._tag === "Some" ? found.value : null;
 });

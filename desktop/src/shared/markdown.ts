@@ -1,5 +1,10 @@
 // A Comark plugin for agent-written markdown. No Bun-only import: the view bundles this.
 
+import * as Struct from "effect/Struct";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+
 import type { ComarkPlugin, ElementNodeAttributes, Node } from "comark";
 import security from "comark/plugins/security";
 import { shortUrl } from "./links";
@@ -13,12 +18,12 @@ const LEFT_ALONE = new Set(["pre", "a", "code", "file-ref"]);
 const referencesIn = (text: string): Array<Node> => {
   const nodes: Array<Node> = [];
   let from = 0;
-  for (const found of text.matchAll(FILE_LINE)) {
-    if (found.index > from) nodes.push(text.slice(from, found.index));
+  for (const found of pipe(text, Str.matchAll(FILE_LINE))) {
+    if ((found.index ?? 0) > from) nodes.push(pipe(text, Str.slice(from, found.index)));
     nodes.push(["file-ref", { file: found[1], line: found[2] }, found[0]]);
-    from = found.index + found[0].length;
+    from = (found.index ?? 0) + found[0].length;
   }
-  if (from < text.length) nodes.push(text.slice(from));
+  if (from < text.length) nodes.push(pipe(text, Str.slice(from)));
   return nodes;
 };
 
@@ -29,14 +34,14 @@ const referencesIn = (text: string): Array<Node> => {
  */
 const scripted = (attributes: ElementNodeAttributes, name: string) => {
   let rendered = String(JSON.stringify(attributes[name]));
-  if (name.startsWith(":"))
+  if (pipe(name, Str.startsWith(":")))
     try {
       rendered = JSON.stringify(JSON.parse(String(attributes[name])));
     } catch {
       return true;
     }
   // A URL's scheme survives whitespace and control characters, which JSON writes escaped.
-  return /javascript:/i.test(rendered.replace(/\\(?:[bfnrt]|u00[01][\da-f])|\s/gi, ""));
+  return /javascript:/i.test(pipe(rendered, Str.replace(/\\(?:[bfnrt]|u00[01][\da-f])|\s/gi, "")));
 };
 
 const decoded = (href: string) => {
@@ -50,16 +55,16 @@ const decoded = (href: string) => {
 const confine =
   (referenced: boolean) =>
   (node: Node): Array<Node> => {
-    if (!Array.isArray(node)) return referenced ? referencesIn(node) : [node];
+    if (!Arr.isArray<typeof node>(node)) return referenced ? referencesIn(node) : [node];
     const [tag, attributes, ...children] = node;
     if (tag === null) return [node];
     // A style could lay an overlay across the whole window; a popover, or a dialog a command
     // opens, is drawn above it.
-    for (const name of Object.keys(attributes))
+    for (const name of Struct.keys(attributes))
       if (/^:?(style|popover\w*|command\w*|closedby)$/i.test(name) || scripted(attributes, name))
         delete attributes[name];
     const [only] = children;
-    const text = children.length === 1 && !Array.isArray(only) ? (only ?? "") : null;
+    const text = children.length === 1 && !Arr.isArray<typeof only>(only) ? (only ?? "") : null;
     const whole = referenced && tag === "code" && text !== null ? WHOLE_FILE_LINE.exec(text) : null;
     if (whole !== null) return [["file-ref", { file: whole[1], line: whole[2] }, whole[0]]];
     const href = String(attributes.href);
@@ -67,7 +72,9 @@ const confine =
       return [["a", { ...attributes, title: href }, shortUrl(text)]];
     if (referenced && tag === "code" && text !== null && WEB_URL.test(text))
       return [["a", { href: text, title: text }, ["code", {}, shortUrl(text)]]];
-    return [[tag, attributes, ...children.flatMap(confine(referenced && !LEFT_ALONE.has(tag)))]];
+    return [
+      [tag, attributes, ...Arr.flatMap(children, confine(referenced && !LEFT_ALONE.has(tag)))],
+    ];
   };
 
 /**
@@ -77,7 +84,7 @@ const confine =
 export const confined = (): ComarkPlugin => ({
   name: "confined",
   post: ({ tree }) => {
-    tree.nodes = tree.nodes.flatMap(confine(true));
+    tree.nodes = Arr.flatMap(tree.nodes, confine(true));
   },
 });
 

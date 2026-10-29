@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
 import type { ComputedRef } from "vue";
 
 const props = defineProps<{ href?: string }>();
@@ -10,8 +12,10 @@ const { openLink } = useActions();
 const planFile = computed(() => {
   const href = props.href ?? "";
   if (from?.value === undefined || /^([a-z][a-z\d+.-]*:|[#/])/i.test(href)) return null;
-  const path = decodeURIComponent(new URL(href, `http://plan/${from.value}`).pathname.slice(1));
-  return path.endsWith(".md") ? path : null;
+  const path = decodeURIComponent(
+    pipe(new URL(href, `http://plan/${from.value}`).pathname, Str.slice(1)),
+  );
+  return pipe(path, Str.endsWith(".md")) ? path : null;
 });
 
 const follow = () => {

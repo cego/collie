@@ -9,6 +9,7 @@
 // pass: an ordinary function over the same content and the same schemas, not a step one
 // of them copied from the other. The Markdown beside this file is the content.
 
+import * as Arr from "effect/Array";
 import {
   Agents,
   FixOutputSchema,
@@ -166,7 +167,7 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
   max_iterations: String(ask.of),
   disputed: formatFindings(ask.disputed),
   risks: riskLine(ask.risks),
-  target_repo: repoArgs(parseMrTarget(ask.target)?.project ?? null).join(" "),
+  target_repo: Arr.join(repoArgs(parseMrTarget(ask.target)?.project ?? null), " "),
   mr: mrForgeFacts(ask.target) ?? NO_MR,
   base: ask.base || DEFAULT_BASE,
   obstacle: ask.obstacle ?? "",
@@ -185,7 +186,7 @@ export const reviewPass = (ask: ReviewAsk) =>
     const input = told(ask, { dir, id });
     // A check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
-      (yield* host.approved(id)).filter((spec) => spec.ci !== undefined),
+      Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),
       (spec) =>
         Effect.map(host.ciJob({ runId: id, cwd, name: spec.name }), (read) => ({
           name: spec.name,
@@ -201,7 +202,7 @@ export const reviewPass = (ask: ReviewAsk) =>
       `${prefix}${ask.at === 1 ? `review-${seat}` : `review-${ask.at}-${seat}`}`;
     const synthesis = `${prefix}${ask.at === 1 ? "synthesize" : `synthesize-${ask.at}`}`;
 
-    const seats = (yield* panelOf("reviewer")).map((seat, at) => ({
+    const seats = Arr.map(yield* panelOf("reviewer"), (seat, at) => ({
       seat,
       operation: reviewOp(seat.name ?? String(at + 1)),
     }));
@@ -241,7 +242,10 @@ export const reviewPass = (ask: ReviewAsk) =>
         instructions: SYNTHESIZE,
         input: {
           ...input,
-          fan_in: seats.map(({ operation }) => `- ${agents.outputFor(id, operation)}`).join("\n"),
+          fan_in: Arr.join(
+            Arr.map(seats, ({ operation }) => `- ${agents.outputFor(id, operation)}`),
+            "\n",
+          ),
         },
         output: SynthesisSchema,
       }),
@@ -258,12 +262,11 @@ type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSyste
 
 /** Each blocking dispute left standing, as the merge request lists it for the human. */
 const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
-  findings
-    .filter(isBlocking)
-    .map(
-      (one) =>
-        `disputed blocking finding: [${one.severity}] ${one.title}${one.file ? ` (${one.file})` : ""}${one.reason ? `: ${one.reason}` : ""}`,
-    );
+  Arr.map(
+    Arr.filter(findings, isBlocking),
+    (one) =>
+      `disputed blocking finding: [${one.severity}] ${one.title}${one.file ? ` (${one.file})` : ""}${one.reason ? `: ${one.reason}` : ""}`,
+  );
 
 /** Where a rally stood when it stopped: what halted it, and what the last fix left. */
 export interface Rallied extends Reviewed {
@@ -341,7 +344,7 @@ export const rally = (ask: {
               halted: null,
               unreviewed: "",
               unsettled: disputesOf(round.outstanding),
-              disputes: round.outstanding.filter(isBlocking),
+              disputes: Arr.filter(round.outstanding, isBlocking),
               reviewed: synthesis,
             };
           }
@@ -360,7 +363,10 @@ export const rally = (ask: {
             if (synthesis.findings.length > 0) {
               yield* host.record(
                 runId,
-                `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${synthesis.findings.map((one) => one.title).join("; ")}`,
+                `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${Arr.join(
+                  Arr.map(synthesis.findings, (one) => one.title),
+                  "; ",
+                )}`,
               );
             }
             return {
@@ -382,9 +388,9 @@ export const rally = (ask: {
           // A dispute is carried, not re-argued: the next review either answers it with a
           // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new
           // reason, and one fixed since is gone.
-          const settledNow = new Set([...fixed.fixed, ...fixed.disputed].map(findingKey));
+          const settledNow = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
           disputed = [
-            ...disputed.filter((one) => !settledNow.has(findingKey(one))),
+            ...Arr.filter(disputed, (one) => !settledNow.has(findingKey(one))),
             ...fixed.disputed,
           ];
 
@@ -398,12 +404,12 @@ export const rally = (ask: {
                 halted: null,
                 unreviewed: settled.attestation,
                 unsettled: disputesOf(disputed),
-                disputes: disputed.filter(isBlocking),
+                disputes: Arr.filter(disputed, isBlocking),
                 reviewed: synthesis,
               };
             }
             return {
-              halted: `${settled.halt}: ${settled.reasons.join("; ")}`,
+              halted: `${settled.halt}: ${Arr.join(settled.reasons, "; ")}`,
               unreviewed: "",
               unsettled: [],
               disputes: [],

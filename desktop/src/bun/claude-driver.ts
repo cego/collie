@@ -1,6 +1,9 @@
 // The Flock chat on the user's own Claude Code, through the Agent SDK. Desktop mints the
 // session id; the Machine rule and News go in its UserPromptSubmit hook, not the message.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { homedir } from "node:os";
 import { Config, Effect, type FileSystem, Option, Path, Queue, Schema, Stream } from "effect";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
@@ -126,7 +129,7 @@ export const claudeDriver = <Server>(
       Effect.tryPromise(() => claude.listSessions({ dir: opts.dir, limit })).pipe(
         Effect.orElseSucceed(() => []),
         Effect.map((sessions) =>
-          sessions.map(({ sessionId, summary, lastModified }) => ({
+          Arr.map(sessions, ({ sessionId, summary, lastModified }) => ({
             session: sessionId,
             title: summary,
             at: lastModified,
@@ -140,7 +143,12 @@ export const claudeDriver = <Server>(
           Config.withDefault(path.join(homedir(), ".claude")),
           Effect.orDie,
         );
-        return path.join(config, "projects", opts.dir.replace(/[^a-zA-Z0-9]/g, "-"), `${id}.jsonl`);
+        return path.join(
+          config,
+          "projects",
+          pipe_(opts.dir, Str.replace(/[^a-zA-Z0-9]/g, "-")),
+          `${id}.jsonl`,
+        );
       }),
   };
 };

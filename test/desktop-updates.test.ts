@@ -2,6 +2,7 @@
 // every hour and when asked, downloaded in the background, and applied only once the tar it
 // would install verifies against Collie's release key.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { Deferred, Effect, Fiber, FileSystem, Schedule, Stream } from "effect";
@@ -196,8 +197,8 @@ test("a check asked for while one runs joins it rather than downloading twice", 
       const [first, second] = yield* Fiber.join(asked);
       expect(first).toEqual({ _tag: "Ready", version: "0.33.0" });
       expect(second).toEqual(first);
-      expect(calls.filter((call) => call === "download")).toHaveLength(1);
-      expect(calls.filter((call) => call === "check")).toHaveLength(1);
+      expect(Arr.filter(calls, (call) => call === "download")).toHaveLength(1);
+      expect(Arr.filter(calls, (call) => call === "check")).toHaveLength(1);
     }).pipe(Effect.scoped),
   );
 });
@@ -243,9 +244,9 @@ test("Desktop checks again every hour", () => {
       const { port, calls } = yield* fakeUpdater(dir, { signature: null, available: false });
       yield* updatesOf(port, "0.32.0", key.publicKey);
       yield* Effect.sleep("50 minutes");
-      expect(calls.filter((call) => call === "check")).toHaveLength(1);
+      expect(Arr.filter(calls, (call) => call === "check")).toHaveLength(1);
       yield* Effect.sleep("20 minutes");
-      expect(calls.filter((call) => call === "check")).toHaveLength(2);
+      expect(Arr.filter(calls, (call) => call === "check")).toHaveLength(2);
     }).pipe(Effect.scoped, (effect) => fastForward(effect, 60_000)),
   );
 });

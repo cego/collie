@@ -1,6 +1,8 @@
 // A Measurement's Schemas alone, so a front door reads its record without loading the sampler
 // (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement).
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, Schema } from "effect";
 import { Judgement } from "./measurement-verdict";
 
@@ -62,14 +64,14 @@ export const Sample = Schema.Struct({
   tree: Side,
   /** Recorded, never judged. */
   warmup: Schema.Boolean,
-  readings: Schema.Record(Schema.String, Schema.Number),
+  readings: Schema.Record(Schema.String, Schema.Finite),
   /** The Machine's 1, 5 and 15 minute load as the sample began. */
-  load: Schema.Array(Schema.Number),
+  load: Schema.Array(Schema.Finite),
   memory: Schema.NullOr(
     Schema.Struct({
-      available: Schema.Number,
-      total: Schema.Number,
-      pressure: Schema.NullOr(Schema.Number),
+      available: Schema.Finite,
+      total: Schema.Finite,
+      pressure: Schema.NullOr(Schema.Finite),
     }),
   ),
   at: Schema.String,
@@ -99,8 +101,8 @@ export const MeasurementSchema = Schema.Struct({
   prepare: Schema.Array(
     Schema.Struct({
       tree: Side,
-      exit: Schema.Number,
-      seconds: Schema.Number,
+      exit: Schema.Finite,
+      seconds: Schema.Finite,
       output: Schema.String,
     }),
   ),
@@ -112,7 +114,7 @@ export const MeasurementSchema = Schema.Struct({
       tree: Side,
       stage: Stage,
       command: Schema.String,
-      exit: Schema.Number,
+      exit: Schema.Finite,
       output: Schema.String,
     }),
     Schema.TaggedStruct("Unjudged", { reason: Schema.String }),
@@ -129,9 +131,13 @@ export const summaryOf = (measurement: Measurement) => {
   const result = measurement.result;
   switch (result._tag) {
     case "Judged":
-      return result.verdicts
-        .map((one) => `${one.metric} ${one.verdict} (ratio ${one.ratio.toFixed(3)})`)
-        .join(", ");
+      return Arr.join(
+        Arr.map(
+          result.verdicts,
+          (one) => `${one.metric} ${one.verdict} (ratio ${one.ratio.toFixed(3)})`,
+        ),
+        ", ",
+      );
     case "TimedOut":
       return `timed out in ${result.stage} on the ${result.tree} tree (${result.command})`;
     case "Failed":
@@ -143,7 +149,7 @@ export const summaryOf = (measurement: Measurement) => {
 
 /** The latest `final` Measurement, named with its verdicts; null before one. */
 export const finalMeasurementLine = (measurements: ReadonlyArray<Measurement>) => {
-  const last = measurements.findLast((one) => one.pass === "final");
+  const last = Option.getOrUndefined(Arr.findLast(measurements, (one) => one.pass === "final"));
   return last === undefined ? null : `final Measurement ${last.id}: ${summaryOf(last)}`;
 };
 

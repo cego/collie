@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
 import { Deferred, Effect, Fiber, FileSystem } from "effect";
@@ -40,9 +41,9 @@ test("the loopback tools require their token, list the chat's tools and match a 
       const endpoint = yield* loopbackTools({
         dir,
         flock,
-        run: (effect) => Effect.runPromise(effect.pipe(Effect.provideContext(services))),
+        run: Effect.runPromiseWith(services),
         ask: (id, signal) =>
-          Effect.runPromise(
+          Effect.runPromiseWith(services)(
             Deferred.succeed(asked, id).pipe(Effect.andThen(Deferred.await(clicked))),
             { signal },
           ),
@@ -66,8 +67,8 @@ test("the loopback tools require their token, list the chat's tools and match a 
         ),
       );
       const tools = yield* Effect.promise(() => client.listTools());
-      expect(tools.tools.map(({ name }) => name)).toEqual(
-        [...FLOCK_TOOLS, ...FILE_TOOLS].map(({ name }) => name).concat("AskUserQuestion"),
+      expect(Arr.map(tools.tools, ({ name }) => name)).toEqual(
+        Arr.map([...FLOCK_TOOLS, ...FILE_TOOLS], ({ name }) => name).concat("AskUserQuestion"),
       );
       expect(
         yield* Effect.promise(() =>

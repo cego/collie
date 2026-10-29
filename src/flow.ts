@@ -2,6 +2,10 @@
 // declares (ADR-draft-a-step-is-declared-where-its-work-is-written D3–D6). Pure, so every
 // door that reads a Flow reads one set of rules.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
 import { DateTime } from "effect";
 import { CommandLine } from "effect/process";
 import {
@@ -121,7 +125,12 @@ const ordinal = (n: number) => {
 
 const isoOf = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-const firstLine = (text: string) => text.split("\n")[0]?.trim() ?? "";
+const firstLine = (text: string) =>
+  Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(Str.split(text, "\n")[0]), (present_____) =>
+      Str.trim(present_____),
+    ),
+  ) ?? "";
 
 const agentOf = (launch: Launched): RunAgent => ({
   operation: launch.operation,
@@ -225,17 +234,21 @@ export function laneOf(facts: LaneFacts): FlowLane {
   };
 
   const ranOnFor = (key: string) => {
-    const last = facts.launches.findLast(({ launch }) => stepKeyOf(launch) === key);
+    const last = Option.getOrUndefined(
+      Arr.findLast(facts.launches, ({ launch }) => stepKeyOf(launch) === key),
+    );
     return last === undefined ? null : ranOn(agentOf(last.launch));
   };
   const agentFor = (key: string) =>
-    facts.launches.findLast(({ launch }) => stepKeyOf(launch) === key)?.launch.agent ?? null;
+    Option.getOrUndefined(Arr.findLast(facts.launches, ({ launch }) => stepKeyOf(launch) === key))
+      ?.launch.agent ?? null;
   const questionsFor = (key: string) =>
-    facts.questions.filter((one) => questionKey(one.name) === key);
+    Arr.filter(facts.questions, (one) => questionKey(one.name) === key);
   const placeKey = (place: StepPlace | null | undefined) =>
     place == null ? null : "item" in place ? place.item : `Round ${place.round}`;
   const proofsFor = (one: StepRun) =>
-    (facts.verifications ?? []).filter(
+    Arr.filter(
+      facts.verifications ?? [],
       (proof) =>
         proof.step === one.meta.id &&
         placeKey(proof.place) === placeKey(one.place) &&
@@ -244,16 +257,21 @@ export function laneOf(facts: LaneFacts): FlowLane {
     );
   const whyFor = (state: FlowState, one: StepRun) => {
     if (state !== "failed") return null;
-    const last = proofsFor(one).findLast((proof) => proof.at >= one.attempts.at(-1)!.at);
+    const last = Option.getOrUndefined(
+      Arr.findLast(proofsFor(one), (proof) => proof.at >= one.attempts.at(-1)!.at),
+    );
     if (last?.result === "fail") {
       const command = CommandLine.display([last.executable, ...last.argv]);
-      const output = [last.tail.stdout.trimEnd(), last.tail.stderr.trimEnd()]
-        .filter(Boolean)
-        .join("\n")
-        .split("\n");
-      return [command, ...output.slice(-19)].join("\n");
+      const output = Str.split(
+        Arr.join(
+          Arr.filter([Str.trimEnd(last.tail.stdout), Str.trimEnd(last.tail.stderr)], Boolean),
+          "\n",
+        ),
+        "\n",
+      );
+      return Arr.join([command, ...output.slice(-19)], "\n");
     }
-    return (one.failed?.why ?? run.note ?? "Failed").split("\n").slice(0, 20).join("\n");
+    return Arr.join(Str.split(one.failed?.why ?? run.note ?? "Failed", "\n").slice(0, 20), "\n");
   };
 
   const stateOfRun = (one: StepRun): FlowState => {
@@ -263,7 +281,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
     if (run.state === "stopped") return "stopped";
     if (run.state === "failed") return "failed";
     if (run.state === "succeeded") return "done";
-    if (questionsFor(one.key).some((asked) => asked.open)) return "needs-you";
+    if (Arr.some(questionsFor(one.key), (asked) => asked.open)) return "needs-you";
     if (facts.wakes !== null) return "waiting";
     return "running";
   };
@@ -275,7 +293,9 @@ export function laneOf(facts: LaneFacts): FlowLane {
       case "running":
         return said ?? minutes(now - epochMs(one.attempts.at(-1)!.at));
       case "needs-you": {
-        const asked = questionsFor(one.key).find((question) => question.open)?.asked;
+        const asked = Option.getOrUndefined(
+          Arr.findFirst(questionsFor(one.key), (question) => question.open),
+        )?.asked;
         return asked == null ? "Asked" : `Asked ${minutes(now - epochMs(asked))} ago`;
       }
       case "waiting":
@@ -314,12 +334,16 @@ export function laneOf(facts: LaneFacts): FlowLane {
       attempts: one.attempts,
       ranOn: ranOnFor(one.key),
       agent: agentFor(one.key),
-      questions: questionsFor(one.key).map(flowQuestion),
+      questions: Arr.map(questionsFor(one.key), flowQuestion),
       log: one.log,
       why: whyFor(state, one),
       evidence: proofsFor(one).length,
-      link: facts.children.find((child) => childIn.get(child.id) === one.key && child.wave === null)
-        ?.link,
+      link: Option.getOrUndefined(
+        Arr.findFirst(
+          facts.children,
+          (child) => childIn.get(child.id) === one.key && child.wave === null,
+        ),
+      )?.link,
     };
   };
 
@@ -348,31 +372,36 @@ export function laneOf(facts: LaneFacts): FlowLane {
   };
 
   /** Which forecast was in force at a time: the latest made before it. */
-  const forecastAt = (at: string) => forecasts.findLast((one) => one.at <= at) ?? null;
+  const forecastAt = (at: string) =>
+    Option.getOrUndefined(Arr.findLast(forecasts, (one) => one.at <= at)) ?? null;
   const latest = forecasts.at(-1) ?? null;
 
   const stepNode = (id: string): FlowNode => {
-    const calls = [...runs.values()].filter((one) => one.meta.id === id);
+    const calls = Arr.filter([...runs.values()], (one) => one.meta.id === id);
     const meta = calls.at(-1)!.meta;
     const first = calls[0]!;
     const inForce = forecastAt(first.entered);
-    const offPath = inForce !== null && !inForce.steps.some((one) => one.id === id);
-    const items = calls.findLast((one) => one.place !== null && "item" in one.place)?.place;
+    const offPath = inForce !== null && !Arr.some(inForce.steps, (one) => one.id === id);
+    const items = Option.getOrUndefined(
+      Arr.findLast(calls, (one) => one.place !== null && "item" in one.place),
+    )?.place;
     const listed = items !== undefined && items !== null && "items" in items ? items.items : [];
     const called = new Set(
-      calls.map((one) => (one.place !== null && "item" in one.place ? one.place.item : "")),
+      Arr.map(calls, (one) => (one.place !== null && "item" in one.place ? one.place.item : "")),
     );
-    const keys = new Set(calls.map((one) => one.key));
-    const started = facts.children.filter((child) => keys.has(childIn.get(child.id) ?? ""));
-    const repos = started.filter((child) => child.wave !== null);
-    const link = started.findLast((child) => child.wave === null)?.link;
-    const fan = repos.length === 0 ? [] : [...repos.map(linkRun), ...facts.toCome.map(toComeRun)];
-    const made = calls.map((one) => runNode(one, offPath));
-    const toCome = listed
-      .filter((item) => !called.has(item))
-      .map((item) => unreached(meta, `${id}@${item}`, item, item));
+    const keys = new Set(Arr.map(calls, (one) => one.key));
+    const started = Arr.filter(facts.children, (child) => keys.has(childIn.get(child.id) ?? ""));
+    const repos = Arr.filter(started, (child) => child.wave !== null);
+    const link = Option.getOrUndefined(Arr.findLast(started, (child) => child.wave === null))?.link;
+    const fan =
+      repos.length === 0 ? [] : [...Arr.map(repos, linkRun), ...Arr.map(facts.toCome, toComeRun)];
+    const made = Arr.map(calls, (one) => runNode(one, offPath));
+    const toCome = Arr.map(
+      Arr.filter(listed, (item) => !called.has(item)),
+      (item) => unreached(meta, `${id}@${item}`, item, item),
+    );
     const all = listed.length === 0 ? made : sortedByItems(listed, [...made, ...toCome]);
-    const states = made.map((one) => one.state);
+    const states = Arr.map(made, (one) => one.state);
     const state: FlowState = states.includes("needs-you")
       ? "needs-you"
       : states.includes("running")
@@ -386,7 +415,9 @@ export function laneOf(facts: LaneFacts): FlowLane {
               : toCome.length > 0 && !ended
                 ? "running"
                 : "done";
-    const current = calls.findLast((one) => stateOfRun(one) === state) ?? calls.at(-1)!;
+    const current =
+      Option.getOrUndefined(Arr.findLast(calls, (one) => stateOfRun(one) === state)) ??
+      calls.at(-1)!;
     const position =
       listed.length > 0 && current.place !== null && "item" in current.place
         ? `Slice ${listed.indexOf(current.place.item) + 1} of ${listed.length}`
@@ -419,10 +450,13 @@ export function laneOf(facts: LaneFacts): FlowLane {
       attempts,
       ranOn: ranOnFor(current.key),
       agent: agentFor(current.key),
-      questions: calls.flatMap((one) => questionsFor(one.key)).map(flowQuestion),
+      questions: Arr.map(
+        Arr.flatMap(calls, (one) => questionsFor(one.key)),
+        flowQuestion,
+      ),
       log: current.log,
       why: whyFor(state, current),
-      evidence: (facts.verifications ?? []).filter((proof) => proof.step === id).length,
+      evidence: Arr.filter(facts.verifications ?? [], (proof) => proof.step === id).length,
       runs: fan.length > 0 ? fan : calls.length > 1 || listed.length > 0 ? all : [],
       link: calls.length === 1 && listed.length === 0 ? link : undefined,
     };
@@ -439,12 +473,15 @@ export function laneOf(facts: LaneFacts): FlowLane {
   }
   for (const node of undeclaredNodes(facts, keyOfLaunch, questionKey, childIn, ended))
     happened.push(node);
-  happened.sort((one, other) => one.at.localeCompare(other.at));
+  happened.sort((one, other) => pipe(one.at, Str.localeCompare(other.at)));
   const nodes = inPathOrder(
-    happened.map((one) => one.node),
-    (latest?.steps ?? []).map(
+    Arr.map(happened, (one) => one.node),
+    Arr.map(
+      latest?.steps ?? [],
       (meta) =>
-        happened.find((one) => one.node.declared && one.node.id === meta.id)?.node ?? {
+        Option.getOrUndefined(
+          Arr.findFirst(happened, (one) => one.node.declared && one.node.id === meta.id),
+        )?.node ?? {
           ...unreached(meta, meta.id, meta.title, null),
           runs: [],
         },
@@ -458,13 +495,23 @@ export function laneOf(facts: LaneFacts): FlowLane {
       const long = one.state === "running" && usual !== null && stepElapsed(one, now) > usual * 2;
       return { ...one, usual, long, said: long ? "Longer than usual" : one.said };
     };
-    const pause = facts.steering?.pauses.find((one) => one.step === node.id) ?? null;
+    const pause =
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(facts.steering), (present) =>
+          Option.getOrUndefined(Arr.findFirst(present.pauses, (one) => one.step === node.id)),
+        ),
+      ) ?? null;
     const reached = facts.steering?.reached;
     nodes[i] = {
       ...timing(node),
-      runs: node.runs.map(timing),
+      runs: Arr.map(node.runs, timing),
       pause,
-      notes: facts.steering?.notes.filter((one) => one.step === node.id) ?? [],
+      notes:
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(facts.steering), (present_) =>
+            Arr.filter(present_.notes, (one) => one.step === node.id),
+          ),
+        ) ?? [],
       said:
         reached?.step === node.id && node.wait === "hold"
           ? `Paused here, as ${reached.by} asked`
@@ -489,11 +536,35 @@ export function laneOf(facts: LaneFacts): FlowLane {
 }
 
 export const flowNotice = (flow: Flow, now: number): string | null => {
-  const node = flow.lanes
-    .find((one) => one.run === flow.current?.run)
-    ?.nodes.find((one) => one.id === flow.current?.node);
+  const node = Option.getOrUndefined(
+    Option.map(
+      Option.fromNullishOr(
+        Option.getOrUndefined(
+          Arr.findFirst(
+            flow.lanes,
+            (one) =>
+              one.run ===
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(flow.current), (present__) => present__.run),
+              ),
+          ),
+        ),
+      ),
+      (present___) =>
+        Option.getOrUndefined(
+          Arr.findFirst(
+            present___.nodes,
+            (one) =>
+              one.id ===
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(flow.current), (present____) => present____.node),
+              ),
+          ),
+        ),
+    ),
+  );
   return node?.long === true && node.usual != null
-    ? `${node.title} is taking longer than usual: ${minutes(stepElapsed(node, now))}, usually ${minutes(node.usual).replace(/ min$/, "")}.`
+    ? `${node.title} is taking longer than usual: ${minutes(stepElapsed(node, now))}, usually ${pipe(minutes(node.usual), Str.replace(/ min$/, ""))}.`
     : null;
 };
 
@@ -504,7 +575,7 @@ export const flowNotice = (flow: Flow, now: number): string | null => {
 function inPathOrder(happened: ReadonlyArray<FlowNode>, path: ReadonlyArray<FlowNode>): FlowNode[] {
   if (path.length === 0) return [...happened];
   const ordered = [...path];
-  happened.forEach((node, at) => {
+  Arr.forEach(happened, (node, at) => {
     if (ordered.includes(node)) return;
     const before = happened[at - 1];
     ordered.splice(before === undefined ? 0 : ordered.indexOf(before) + 1, 0, node);
@@ -549,10 +620,10 @@ function undeclaredNodes(
     const last = launches.at(-1)!;
     const at = launches[0]!.launch.at;
     const started = at === undefined ? null : isoOf(at);
-    const asked = facts.questions.filter((one) => askerOf(one.name) === operation);
+    const asked = Arr.filter(facts.questions, (one) => askerOf(one.name) === operation);
     const state: FlowState = last.done
       ? "done"
-      : asked.some((one) => one.open)
+      : Arr.some(asked, (one) => one.open)
         ? "needs-you"
         : run.state === "stopped"
           ? "stopped"
@@ -573,7 +644,7 @@ function undeclaredNodes(
         started,
         ranOn: ranOn(agentOf(last.launch)),
         agent: last.launch.agent,
-        questions: asked.map(flowQuestion),
+        questions: Arr.map(asked, flowQuestion),
       },
     });
   }
@@ -595,8 +666,8 @@ function undeclaredNodes(
       },
     });
   }
-  const loose = facts.children.filter((child) => !childIn.has(child.id));
-  for (const child of loose.filter((one) => one.wave === null))
+  const loose = Arr.filter(facts.children, (child) => !childIn.has(child.id));
+  for (const child of Arr.filter(loose, (one) => one.wave === null))
     nodes.push({
       at: child.created,
       node: {
@@ -612,9 +683,9 @@ function undeclaredNodes(
         link: child.link,
       },
     });
-  const repos = loose.filter((one) => one.wave !== null);
+  const repos = Arr.filter(loose, (one) => one.wave !== null);
   if (repos.length > 0) {
-    const runs = [...repos.map(linkRun), ...facts.toCome.map(toComeRun)];
+    const runs = [...Arr.map(repos, linkRun), ...Arr.map(facts.toCome, toComeRun)];
     nodes.push({
       at: repos[0]!.created,
       node: {
@@ -679,7 +750,7 @@ const toComeRun = (repo: { readonly repo: string; readonly wave: number }): Flow
 });
 
 const fanState = (runs: ReadonlyArray<FlowRun>, ended: boolean): FlowState => {
-  const states = runs.map((one) => one.state);
+  const states = Arr.map(runs, (one) => one.state);
   for (const state of ["needs-you", "running", "waiting", "failed", "stopped"] as const)
     if (states.includes(state)) return state;
   return states.includes("expected") && !ended ? "running" : "done";
@@ -687,13 +758,23 @@ const fanState = (runs: ReadonlyArray<FlowRun>, ended: boolean): FlowState => {
 
 /** Where a wait sits: the Step going, else the next the path expects, else the last that ran. */
 const heldUp = (nodes: ReadonlyArray<FlowNode>): number => {
-  const going = nodes.findLastIndex(
-    (node) => node.state === "running" || node.state === "needs-you" || node.state === "waiting",
+  const going = Option.getOrElse(
+    Arr.findLastIndex(
+      nodes,
+      (node) => node.state === "running" || node.state === "needs-you" || node.state === "waiting",
+    ),
+    () => -1,
   );
   if (going >= 0) return going;
-  const next = nodes.findIndex((node) => node.state === "expected");
+  const next = Option.getOrElse(
+    Arr.findFirstIndex(nodes, (node) => node.state === "expected"),
+    () => -1,
+  );
   if (next >= 0) return next;
-  return nodes.findLastIndex((node) => node.started !== null);
+  return Option.getOrElse(
+    Arr.findLastIndex(nodes, (node) => node.started !== null),
+    () => -1,
+  );
 };
 
 function withWait(nodes: FlowNode[], wait: LaneWait | null) {
@@ -703,7 +784,7 @@ function withWait(nodes: FlowNode[], wait: LaneWait | null) {
   // A question open on it is already what it waits on.
   if (node === undefined || (node.state === "needs-you" && node.wait === null)) return;
   // A Step that failed already says why its Run parked.
-  if (wait.wait === "parked" && nodes.some((one) => one.state === "failed")) return;
+  if (wait.wait === "parked" && Arr.some(nodes, (one) => one.state === "failed")) return;
   nodes[at] = {
     ...node,
     state: wait.needsYou ? "needs-you" : "waiting",
@@ -714,8 +795,9 @@ function withWait(nodes: FlowNode[], wait: LaneWait | null) {
 
 function withReadiness(nodes: FlowNode[], readiness: string | null) {
   if (readiness === null) return;
-  const at = nodes.findLastIndex(
-    (node) => node.produces === "merge-request" && node.state === "done",
+  const at = Option.getOrElse(
+    Arr.findLastIndex(nodes, (node) => node.produces === "merge-request" && node.state === "done"),
+    () => -1,
   );
   if (at >= 0) nodes[at] = { ...nodes[at]!, said: readiness };
 }
@@ -754,7 +836,7 @@ function undeclaredSaid(
     case "running":
       return started === null ? null : minutes(now - epochMs(started));
     case "needs-you": {
-      const open = asked.find((one) => one.open)?.asked;
+      const open = Option.getOrUndefined(Arr.findFirst(asked, (one) => one.open))?.asked;
       return open == null ? "Asked" : `Asked ${minutes(now - epochMs(open))} ago`;
     }
     case "failed":
@@ -769,12 +851,15 @@ function undeclaredSaid(
 /** Where the work is: the last node of a Run still going that is not done or to come. */
 export function currentOf(lane: FlowLane): { readonly run: string; readonly node: string } | null {
   if (lane.execution !== "running" && lane.execution !== "suspended") return null;
-  const at = lane.nodes.findLast(
-    (node) =>
-      node.state === "running" ||
-      node.state === "needs-you" ||
-      node.state === "waiting" ||
-      node.state === "failed",
+  const at = Option.getOrUndefined(
+    Arr.findLast(
+      lane.nodes,
+      (node) =>
+        node.state === "running" ||
+        node.state === "needs-you" ||
+        node.state === "waiting" ||
+        node.state === "failed",
+    ),
   );
   return at === undefined ? null : { run: lane.run, node: at.id };
 }
@@ -839,8 +924,11 @@ export function laneWaitOf(facts: WaitFacts): LaneWait | null {
 /** `!12` of a merge request's label, or the label where it has no number. */
 const mrNumber = (mr: string) => {
   const label = mrLabel(mr);
-  const at = Math.max(label.lastIndexOf("!"), label.lastIndexOf("#"));
-  return at < 0 ? label : `!${label.slice(at + 1)}`;
+  const at = Math.max(
+    Option.getOrElse(pipe(label, Str.lastIndexOf("!")), () => -1),
+    Option.getOrElse(pipe(label, Str.lastIndexOf("#")), () => -1),
+  );
+  return at < 0 ? label : `!${pipe(label, Str.slice(at + 1))}`;
 };
 
 /** What a link says of the Run it stands for, by how far that Run has got. */
@@ -934,23 +1022,28 @@ export function releaseRow(facts: {
         : [];
   return [
     { ...ci, url: facts.ci?.url },
-    ...[merged, ...deployed].map((node) => ({ ...node, url: facts.mrUrl ?? undefined })),
+    ...Arr.map([merged, ...deployed], (node) => ({ ...node, url: facts.mrUrl ?? undefined })),
   ];
 }
 
 /** The strip a card draws: the leading Run's Steps, then the Release row, and where it is. */
 export function stripOf(flow: Flow, leader: string): FlowStrip {
-  const lane = flow.lanes.find((one) => one.run === leader);
+  const lane = Option.getOrUndefined(Arr.findFirst(flow.lanes, (one) => one.run === leader));
   const release = flow.release ?? [];
   const at =
     flow.current === null
       ? undefined
-      : [
-          ...flow.lanes.flatMap((one) => (one.run === flow.current!.run ? one.nodes : [])),
-          ...release,
-        ].find((node) => node.id === flow.current!.node);
+      : Option.getOrUndefined(
+          Arr.findFirst(
+            [
+              ...Arr.flatMap(flow.lanes, (one) => (one.run === flow.current!.run ? one.nodes : [])),
+              ...release,
+            ],
+            (node) => node.id === flow.current!.node,
+          ),
+        );
   return {
-    glyphs: [...(lane?.nodes ?? []), ...release].map((node) => ({
+    glyphs: Arr.map([...(lane?.nodes ?? []), ...release], (node) => ({
       title: node.title,
       state: node.state,
     })),

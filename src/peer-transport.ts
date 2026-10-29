@@ -1,6 +1,9 @@
 // How this Machine dials a peer: direct, or through its SSH connection's tunnel
 // (ADR-draft-a-blocked-link-rides-the-machines-ssh-connection).
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { createServer } from "node:net";
 import { Deferred, Effect, Exit, Option, Schema, Scope } from "effect";
 import { MachineUnreachable, type Peer } from "./peers-model";
@@ -40,9 +43,10 @@ export interface Opened {
 }
 
 /** The URL's port, which the peer's listener is on at its own `127.0.0.1` too. */
-const portOf = (url: string) => Number(new URL(url.replace(/^wss:/, "https:")).port || 443);
+const portOf = (url: string) =>
+  Number(new URL(pipe_(url, Str.replace(/^wss:/, "https:"))).port || 443);
 
-const Bound = Schema.Struct({ port: Schema.Number });
+const Bound = Schema.Struct({ port: Schema.Finite });
 
 const freePort = Effect.callback<number>((resume) => {
   const server = createServer();
@@ -140,7 +144,7 @@ export const openPeer = (
         ways.ssh = ssh;
       }
       if (waits) ways.waits = "ssh_connection";
-      return new MachineUnreachable({ machine: peer.name, seen: seen.join("; "), ...ways });
+      return new MachineUnreachable({ machine: peer.name, seen: Arr.join(seen, "; "), ...ways });
     };
     if (way === "direct") return yield* unreachable(null);
     const ssh = yield* connection;

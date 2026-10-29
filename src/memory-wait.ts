@@ -2,6 +2,9 @@
 // is Short of memory (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D2–D7).
 // Each wait is a file in its Run's directory, so every door reads it the one way.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Clock, Config, Duration, Effect, FileSystem, Option, Path, Random, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
@@ -23,10 +26,10 @@ const MemoryWaitJson = Schema.fromJsonString(
   Schema.Struct({
     what: Schema.String,
     sentence: Schema.String,
-    since: Schema.Number,
+    since: Schema.Finite,
     /** When the wait last read its Machine, and how often it reads: an older read is a dead host's. */
-    read: Schema.Number,
-    every: Schema.Number,
+    read: Schema.Finite,
+    every: Schema.Finite,
     /** The agent whose Output budget this wait pauses: the one that asked for it. */
     asker: Schema.NullOr(Schema.String),
   }),
@@ -46,7 +49,7 @@ const waitsOf = (runDir: string) =>
     const waits: MemoryWait[] = [];
     for (const name of names) {
       const text = yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
-      const decoded = Schema.decodeUnknownOption(MemoryWaitJson)(text);
+      const decoded = Schema.decodeOption(MemoryWaitJson)(text);
       if (Option.isSome(decoded) && now - decoded.value.read <= 3 * decoded.value.every)
         waits.push(decoded.value);
     }
@@ -55,7 +58,7 @@ const waitsOf = (runDir: string) =>
 
 /** A wait as every door says it: `Waiting for memory on vm-mk: 2.1 of 62.0 GB available.` */
 export const waitLine = (wait: MemoryWait) =>
-  `${wait.sentence[0]!.toUpperCase()}${wait.sentence.slice(1)}.`;
+  `${Str.toUpperCase(wait.sentence[0]!)}${pipe_(wait.sentence, Str.slice(1))}.`;
 
 /** What of this Run waits for memory longest, or null where nothing does. */
 export const memoryWaitOf = (runDir: string) =>
@@ -66,7 +69,7 @@ const waitsDir = (stateDir: string, runId: string) => `${stateDir}/runs/${runId}
 /** Whether a `collie verify` `agent` asked for waits for memory, which pauses its Output budget. */
 export const holdsBudgetOf = (stateDir: string, runId: string, agent: string) =>
   Effect.map(waitsOf(`${stateDir}/runs/${runId}`), (waits) =>
-    waits.some((one) => one.asker === agent),
+    Arr.some(waits, (one) => one.asker === agent),
   );
 
 /**
@@ -114,14 +117,14 @@ export const waitForMemory = (opts: {
       Effect.gen(function* () {
         yield* fs.writeFileString(
           file,
-          Schema.encodeSync(MemoryWaitJson)({
+          yield* Schema.encodeEffect(MemoryWaitJson)({
             what: opts.what,
             sentence: memorySentence(memory),
             since,
             read: yield* Clock.currentTimeMillis,
             every: Duration.toMillis(period),
             asker: opts.asker ?? null,
-          }),
+          }).pipe(Effect.orDie),
         );
       }).pipe(Effect.ignore({ log: "Warn" }));
     const freed = Effect.gen(function* () {

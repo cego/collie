@@ -1,3 +1,5 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { sha256Hex } from "./attachments";
 import { nowIso } from "./time";
@@ -30,7 +32,7 @@ export const isCheckout = Effect.fn("release.isCheckout")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) {
   const prefix = yield* run("git", ["rev-parse", "--show-prefix"], root);
-  return prefix.code === 0 && prefix.stdout.trim() === "";
+  return prefix.code === 0 && Str.trim(prefix.stdout) === "";
 });
 
 /**
@@ -50,7 +52,7 @@ export const installation = Effect.fn("release.installation")(function* (
   const git = (...args: string[]) => run("git", args, root);
   if (!(yield* isCheckout(root, run))) return RELEASED;
   if (yield* atCollieDir(root, collieDir)) return RELEASED;
-  const sha = (yield* git("rev-parse", "--short", "HEAD")).stdout.trim();
+  const sha = Str.trim((yield* git("rev-parse", "--short", "HEAD")).stdout);
   return { release: false, build: `${version}+${sha}`, reason: "it is a development checkout" };
 });
 
@@ -82,7 +84,7 @@ export const carriedRelease = (
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
 ): Carried | null =>
-  modulePath.startsWith("/$bunfs/") ? { tree: CARRIED_TREE, runner: execPath } : null;
+  pipe_(modulePath, Str.startsWith("/$bunfs/")) ? { tree: CARRIED_TREE, runner: execPath } : null;
 
 const Placed = Schema.fromJsonString(
   Schema.Struct({ version: Schema.String, files: Schema.Record(Schema.String, Schema.String) }),
@@ -130,7 +132,10 @@ export const placeRelease = Effect.fn("release.place")(function* (
   yield* fs.writeFile(path.join(next, "bin", "collie"), runner);
   yield* fs.chmod(path.join(next, "bin", "collie"), 0o755);
   files["bin/collie"] = sha256Hex(runner);
-  yield* fs.writeFileString(path.join(next, RECORD), Schema.encodeSync(Placed)({ version, files }));
+  yield* fs.writeFileString(
+    path.join(next, RECORD),
+    yield* Schema.encodeEffect(Placed)({ version, files }).pipe(Effect.orDie),
+  );
 
   const kept: string[] = [];
   if (yield* fs.exists(current)) {
@@ -139,7 +144,7 @@ export const placeRelease = Effect.fn("release.place")(function* (
       Effect.map((record) => record.files),
       Effect.orElseSucceed((): Record<string, string> => ({})),
     );
-    const when = (yield* nowIso()).replace(/:/g, "-");
+    const when = pipe_(yield* nowIso, Str.replace(/:/g, "-"));
     for (const name of yield* filesUnder(current)) {
       if (name === RECORD) continue;
       const bytes = yield* fs.readFile(path.join(current, name));

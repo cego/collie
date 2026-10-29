@@ -2,6 +2,8 @@
 // Kept once by sha256: a digest held whole is answered at once, and a retried part is the
 // same part, so no request id is needed. Removed a week after it was last asked for.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem, Path, Result, Semaphore } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ATTACHMENT_BYTES, sha256Hex } from "./attachments";
@@ -43,7 +45,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   const entries = yield* fs
     .readDirectory(dir)
     .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  const held = entries.find((entry) => entry !== ".partial");
+  const held = Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry !== ".partial"));
   if (held !== undefined) {
     // The same bytes asked for under another name are that name here too.
     if (!entries.includes(part.name)) yield* fs.link(path.join(dir, held), whole);

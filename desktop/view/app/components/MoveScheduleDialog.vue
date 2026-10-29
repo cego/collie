@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
 const open = defineModel<boolean>("open", { required: true });
 const props = defineProps<{
   name: string;
@@ -14,7 +15,10 @@ watch(
   (now) => now && Object.assign(typed, { to: props.targets[0]?.installation ?? "", checkout: "" }),
 );
 const items = computed(() =>
-  props.targets.map(({ installation, name }) => ({ label: name, value: installation })),
+  Arr.map(props.targets, ({ installation, name }) => ({
+    label: name,
+    value: installation,
+  })),
 );
 const submit = () => {
   if (typed.to === "") return;

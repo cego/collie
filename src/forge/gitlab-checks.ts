@@ -1,6 +1,9 @@
 // The doctor's GitLab checks: glab and its login, the token's expiry, and whether this
 // Machine can push to the Flock's GitLab. They run glab, so they live beside its adapter.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
 import { hostname } from "node:os";
 import { Clock, Effect, Option, Result, Schema } from "effect";
 import { type ChildProcessSpawner, CommandLine } from "effect/process";
@@ -26,13 +29,16 @@ import { whatItSaid, type Runner } from "../mr";
  * for all of them.
  */
 export const glabHosts = (status: string) =>
-  status
-    .split("\n")
-    .filter((line) => /^[a-z0-9.-]+(:\d+)?$/i.test(line))
-    .map((host) => ({
+  Arr.map(
+    Arr.filter(Str.split(status, "\n"), (line) => /^[a-z0-9.-]+(:\d+)?$/i.test(line)),
+    (host) => ({
       host,
-      https: status.includes(`Git operations for ${host} configured to use https protocol`),
-    }));
+      https: pipe(
+        status,
+        Str.includes(`Git operations for ${host} configured to use https protocol`),
+      ),
+    }),
+  );
 
 const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
   host: string,
@@ -43,7 +49,7 @@ const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
   const answer = yield* answered(
     run("glab", ["api", "--hostname", host, "personal_access_tokens/self"], root),
   );
-  const token = Schema.decodeUnknownOption(TokenSelf)(jsonIn(answer.stdout));
+  const token = Schema.decodeOption(TokenSelf)(jsonIn(answer.stdout));
   if (answer.code !== 0 || Option.isNone(token)) {
     return warned(`${host} would not say when its token expires`, renew);
   }
@@ -74,7 +80,7 @@ export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
   if (answer.code === 0) return passed(`pushes to ${host.host} with this Machine's own key`);
   if (answer.code === 124)
     return failed(`${host.host} did not answer within ${FETCH_LIMIT}`, `ssh -T git@${host.host}`);
-  if (whatItSaid(answer).includes("Host key verification failed")) {
+  if (pipe(whatItSaid(answer), Str.includes("Host key verification failed"))) {
     return failed(
       `${host.host}'s host key is not known here`,
       `ssh-keyscan ${host.host} >> ~/.ssh/known_hosts`,
@@ -127,7 +133,9 @@ export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
   });
 
   // A host glab has never heard of is the `glab` check's failure, not two more.
-  const known = auth ? glabHosts(whatItSaid(auth)).find((one) => one.host === host) : undefined;
+  const known = auth
+    ? Option.getOrUndefined(Arr.findFirst(glabHosts(whatItSaid(auth)), (one) => one.host === host))
+    : undefined;
   if (known !== undefined || auth?.code === 0) {
     const ssh = (yield* onPath(search, "ssh")) !== null;
     checks.push({ name: "gitlab token", ...(yield* tokenExpiry(host, root, run)) });
@@ -137,13 +145,16 @@ export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
     });
   }
   const others = everyHost
-    ? glabHosts(whatItSaid(everyHost)).filter((one) => one.host !== host)
+    ? Arr.filter(glabHosts(whatItSaid(everyHost)), (one) => one.host !== host)
     : [];
   if (others.length > 0) {
     checks.push({
       name: "other gitlabs",
       ...noted(
-        `${others.map((one) => one.host).join(", ")}: glab knows ${others.length === 1 ? "it" : "them"}, and only ${host} is checked`,
+        `${Arr.join(
+          Arr.map(others, (one) => one.host),
+          ", ",
+        )}: glab knows ${others.length === 1 ? "it" : "them"}, and only ${host} is checked`,
         "",
       ),
     });

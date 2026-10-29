@@ -1,6 +1,8 @@
 // The suite's turn on this machine: one suite runs at a time, and the next waits. A wait
 // says who it is waiting for once, then how long it has waited, so it is never silent.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Clock, Duration, Effect, Fiber, Option, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lockHolder, withLock } from "../src/lock";
@@ -25,8 +27,10 @@ export const described = (pid: number) =>
         (all, chunk) => all + chunk,
       ),
     );
-    const line = out.trim();
-    return line === "" ? null : { start: line.slice(0, 24), command: line.slice(24).trim() };
+    const line = Str.trim(out);
+    return line === ""
+      ? null
+      : { start: pipe_(line, Str.slice(0, 24)), command: Str.trim(pipe_(line, Str.slice(24))) };
   }).pipe(
     Effect.scoped,
     Effect.orElseSucceed(() => null),
@@ -59,7 +63,7 @@ export const inTurn = <A, E, R>(
   every: Duration.Input = "30 seconds",
 ) =>
   Effect.gen(function* () {
-    const ran = run.pipe(Effect.map(Option.some));
+    const ran = run.pipe(Effect.asSome);
     const now = yield* withLock(lock, Effect.succeedNone, ran, 1);
     if (Option.isSome(now)) return now.value;
     yield* say(yield* holderLine(lock));

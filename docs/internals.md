@@ -1449,6 +1449,35 @@ fake.
 tests after all three pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
 
+Lint enables Effect's correctness, effect-native, and strict presets. Effect findings
+fail the check, including native collection helpers, synchronous schema decoders,
+untyped error channels, and resources started outside their Effect context. `lint:ts`
+uses `effect-tsgo oxlint` directly so lint cannot silently lose Effect rules when a
+package installation skips the patch hook. Root typechecking also covers `tools/`.
+
+`lint:vue` prepares Nuxt's declarations and projects Vue scripts and template expressions
+through Vue's compiler before running the same rules. Diagnostics map back to the Vue
+source. Static attribute and slot names are excluded because their generated JavaScript
+bindings are not expressions written by the author. Both lint commands run in CI through
+`lint` and `check:static`.
+
+An exception names the missing equivalent or compatibility boundary where it applies.
+Examples include callback string replacements, synchronous process-exit cleanup,
+Ed25519 signing, erased errors from authored workflows, and the public `HostApi.usage()`
+method. Numeric schemas require finite values; measurement ratios and interval bounds
+retain infinity where the statistical model requires it. Electrobun's Cottontail config
+loader cannot parse Effect's modules, so its signing-config helper remains native.
+Pinned Hutch also starts build hooks in Cottontail. Their small native launchers run the
+Effect implementations under Bun, preserving environment, output, and exit status.
+
+Workflow and cluster modules remain architectural dependencies under ADR-0014, so their unstable-API rule is
+disabled. Vendored lint sources and author workflow fixtures keep their separate
+toolchains; first-party build scripts and process fixtures are linted.
+
+The suite builds its SSH and Codex protocol fixtures with the runner and forwarding
+fixture. A focused source test builds each needed protocol fixture once under its
+isolated home. This keeps repeated process starts within their existing test budgets.
+
 Root tests import Desktop modules and libraries, so install both sets of dependencies
 before running root checks. CI installs both with `--frozen-lockfile` before its root gate.
 Desktop's full typecheck, including its Vue views, runs separately with

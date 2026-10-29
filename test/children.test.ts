@@ -12,6 +12,9 @@
 // Real hosts, real SQLite, real projects — a service that is selected only in a map is
 // not selected at all.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
@@ -28,7 +31,7 @@ const MODULES = [
 ] as const;
 
 const sorted = <A>(values: ReadonlyArray<A>) =>
-  [...values].sort((one, other) => String(one).localeCompare(String(other)));
+  [...values].sort((one, other) => pipe_(String(one), Str.localeCompare(String(other))));
 
 /** A project of its own, with the same modules saved in it and its own house. */
 const projectOf = Effect.fn("ChildrenTest.project")(function* (
@@ -47,7 +50,8 @@ const projectOf = Effect.fn("ChildrenTest.project")(function* (
 });
 
 /** What a grading child recorded itself, apart from oversight's lines in the same log. */
-const graded = (lines: ReadonlyArray<string>) => lines.filter((line) => line.startsWith("graded "));
+const graded = (lines: ReadonlyArray<string>) =>
+  Arr.filter(lines, (line) => pipe_(line, Str.startsWith("graded ")));
 
 test(
   "two projects grade the same notes with their own reviewer, parent and child alike",
@@ -80,7 +84,7 @@ test(
           for (const run of started) {
             yield* until(
               () => client.run({ runId: run.runId }).pipe(Effect.orDie),
-              (view) => (view?.waiting ?? []).some((one) => one.name === "sign-off"),
+              (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "sign-off"),
             );
             yield* client
               .answer({ runId: run.runId, decision: "sign-off", value: "ok", request: run.runId })
@@ -138,7 +142,7 @@ test(
 
           // Nothing was half-made: no row, no execution, and nothing the child recorded.
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-          expect(runs.map((one) => one.runId)).toEqual([started.runId]);
+          expect(Arr.map(runs, (one) => one.runId)).toEqual([started.runId]);
           expect(yield* events(world.state, `${started.runId}.grade-n`)).toEqual([]);
           yield* stopHost(world.state);
         }),
@@ -169,20 +173,21 @@ test(
           // The parent parks on its question with both children already admitted.
           yield* until(
             () => client.run({ runId: started.runId }).pipe(Effect.orDie),
-            (view) => (view?.waiting ?? []).some((one) => one.name === "sign-off"),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "sign-off"),
           );
-          const children = (yield* client.runs({ task: "task-9" }).pipe(Effect.orDie)).filter(
+          const children = Arr.filter(
+            yield* client.runs({ task: "task-9" }).pipe(Effect.orDie),
             (one) => one.parent === started.runId,
           );
           // One Run per invocation, each carrying what it belongs to and what it was given.
-          expect(sorted(children.map((one) => one.runId))).toEqual([
+          expect(sorted(Arr.map(children, (one) => one.runId))).toEqual([
             `${started.runId}.grade-one`,
             `${started.runId}.grade-two`,
           ]);
-          expect(sorted(children.map((one) => one.input.note))).toEqual(["one", "two"]);
-          expect(children.every((one) => one.workflow === "graded" && one.task === "task-9")).toBe(
-            true,
-          );
+          expect(sorted(Arr.map(children, (one) => one.input.note))).toEqual(["one", "two"]);
+          expect(
+            Arr.every(children, (one) => one.workflow === "graded" && one.task === "task-9"),
+          ).toBe(true);
 
           // Answering replays the parent from the top: it asks for the same children
           // again, and the engine's idempotency hands back the executions it already has.
@@ -236,7 +241,7 @@ test(
             .pipe(Effect.orDie);
           yield* until(
             () => client.run({ runId: started.runId }).pipe(Effect.orDie),
-            (view) => (view?.waiting ?? []).some((one) => one.name === "sign-off"),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "sign-off"),
           );
 
           const childId = `${started.runId}.grade-one`;
@@ -261,7 +266,7 @@ test(
           });
           expect(graded(yield* events(world.state, childId))).toEqual(["graded strict:one/pass"]);
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-          expect(sorted(runs.map((one) => one.runId))).toEqual([started.runId, childId]);
+          expect(sorted(Arr.map(runs, (one) => one.runId))).toEqual([started.runId, childId]);
           expect((yield* client.run({ runId: childId }).pipe(Effect.orDie))?.task).toBe(
             child?.task,
           );
@@ -293,7 +298,7 @@ test(
             () => client.run({ runId: `${started.runId}.grade-one` }).pipe(Effect.orDie),
             (view) =>
               view?.status.status === "suspended" &&
-              view.waiting.some((one) => one.name === "ready"),
+              Arr.some(view.waiting, (one) => one.name === "ready"),
           );
 
           expect(
@@ -324,7 +329,7 @@ test(
             () => client.run({ runId: started.runId }).pipe(Effect.orDie),
             (view) =>
               view?.status.status === "suspended" &&
-              view.waiting.some((one) => one.name === "sign-off"),
+              Arr.some(view.waiting, (one) => one.name === "sign-off"),
           );
           yield* client
             .answer({ runId: started.runId, decision: "sign-off", value: "ok", request: "sign-1" })
@@ -366,7 +371,7 @@ test(
                 // Parked, not only asking: an earlier answer is taken without a replay.
                 (view) =>
                   view?.status.status === "suspended" &&
-                  view.waiting.some((one) => one.name === "sign-off"),
+                  Arr.some(view.waiting, (one) => one.name === "sign-off"),
               );
               yield* client.control({
                 runId: started.runId,
@@ -449,7 +454,7 @@ test(
             .pipe(Effect.orDie);
           yield* until(
             () => client.run({ runId: started.runId }).pipe(Effect.orDie),
-            (view) => (view?.waiting ?? []).some((one) => one.name === "sign-off"),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "sign-off"),
           );
           yield* client
             .answer({ runId: started.runId, decision: "sign-off", value: "ok", request: "a-1" })
@@ -499,7 +504,7 @@ test(
                 // Parked, not only asking: an earlier answer is taken without a replay.
                 (view) =>
                   view?.status.status === "suspended" &&
-                  view.waiting.some((one) => one.name === "sign-off"),
+                  Arr.some(view.waiting, (one) => one.name === "sign-off"),
               );
               return started.runId;
             }),

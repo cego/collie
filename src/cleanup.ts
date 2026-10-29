@@ -1,7 +1,22 @@
 // Cleanup (ADR-0045): one sweeper per kind of thing Collie made. A listing is every judge; a
 // sweep is every judge, then each removal judged again and written to `cleanup.jsonl`.
 
-import { Clock, Duration, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import {
+  Clock,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Schema,
+  Semaphore,
+  flow,
+  Result,
+} from "effect";
 import type { PlatformServices } from "./platform";
 import {
   FrontDoor,
@@ -97,12 +112,13 @@ export const sizesOf = (paths: ReadonlyArray<string>) =>
     // ponytail: one `du` per 500 paths, so a cache of 100k entries is 200 processes.
     for (let at = 0; at < paths.length; at += 500) {
       const du = yield* shell("du", ["-sk", ...paths.slice(at, at + 500)], "/");
-      for (const line of du.stdout.split("\n")) {
-        const tab = line.indexOf("\t");
-        if (tab > 0) sizes.set(line.slice(tab + 1), Number.parseInt(line, 10) * 1024 || 0);
+      for (const line of Str.split(du.stdout, "\n")) {
+        const tab = Option.getOrElse(pipe(line, Str.indexOf("\t")), () => -1);
+        if (tab > 0)
+          sizes.set(pipe(line, Str.slice(tab + 1)), Number.parseInt(line, 10) * 1024 || 0);
       }
     }
-    return paths.map((path) => sizes.get(path) ?? 0);
+    return Arr.map(paths, (path) => sizes.get(path) ?? 0);
   });
 
 /** What `path` takes on disk. */
@@ -113,19 +129,27 @@ export const sweeping = Semaphore.makeUnsafe(1);
 
 /** One line per item, then the kept, then the total. */
 export const cleanupLines = (report: CleanupReport, applied: boolean) =>
-  [
-    ...report.remove.map((item) =>
-      [
-        applied ? "removed" : "would remove",
-        item.kind,
-        item.target,
-        humanBytes(item.bytes),
-        item.reason,
-      ].join("\t"),
-    ),
-    ...report.keep.map((item) => ["kept", item.kind, item.target, item.reason].join("\t")),
-    `${applied ? "freed" : "would free"}\t${humanBytes(report.bytes)}`,
-  ].join("\n");
+  Arr.join(
+    [
+      ...Arr.map(report.remove, (item) =>
+        Arr.join(
+          [
+            applied ? "removed" : "would remove",
+            item.kind,
+            item.target,
+            humanBytes(item.bytes),
+            item.reason,
+          ],
+          "\t",
+        ),
+      ),
+      ...Arr.map(report.keep, (item) =>
+        Arr.join(["kept", item.kind, item.target, item.reason], "\t"),
+      ),
+      `${applied ? "freed" : "would free"}\t${humanBytes(report.bytes)}`,
+    ],
+    "\n",
+  );
 
 /** How long a listing or sweep may take before the host log says where its time went. */
 const SLOW_CLEANUP_MS = 2_000;
@@ -165,10 +189,13 @@ const timedJudging = <A, E, R, F, Q>(
     );
     const total = Duration.toMillis(duration);
     if (total > SLOW_CLEANUP_MS) {
-      const kinds = [...spent]
-        .sort(([, a], [, b]) => b - a)
-        .map(([kind, ms]) => `${kind} ${ms} ms`)
-        .join(", ");
+      const kinds = Arr.join(
+        Arr.map(
+          [...spent].sort(([, a], [, b]) => b - a),
+          ([kind, ms]) => `${kind} ${ms} ms`,
+        ),
+        ", ",
+      );
       const gatheringSaid = gathering === undefined ? "" : `gathering took ${gathering} ms; `;
       yield* Effect.logWarning(
         `the cleanup ${what} took ${total} ms; ${gatheringSaid}judging took ${kinds}`,
@@ -193,7 +220,7 @@ export const judge = <E = never, R = never>(sweepers: Sweepers<E, R>) =>
   );
 
 const total = (items: ReadonlyArray<CleanupItem>) =>
-  items.reduce((sum, item) => sum + item.bytes, 0);
+  Arr.reduce(items, 0, (sum, item) => sum + item.bytes);
 
 /** Who asked for a sweep: a front door's Actor, or the host on its own schedule. */
 export const SweptBy = Schema.Union([
@@ -213,7 +240,7 @@ const JournalLine = Schema.Struct({
   by: SweptBy,
   kind: Schema.String,
   target: Schema.String,
-  bytes: Schema.Number,
+  bytes: Schema.Finite,
   reason: Schema.String,
 });
 const JournalJson = Schema.fromJsonString(JournalLine);
@@ -232,8 +259,8 @@ export const sweep = <E = never, R = never>(
       const keep: CleanupKept[] = [];
       for (const sweeper of sweepers) {
         const judged = yield* judgeOf(sweeper);
-        const retried = new Set((judged.retry ?? []).map((item) => item.target));
-        keep.push(...judged.keep.filter((one) => !retried.has(one.target)));
+        const retried = new Set(Arr.map(judged.retry ?? [], (item) => item.target));
+        keep.push(...Arr.filter(judged.keep, (one) => !retried.has(one.target)));
         for (const item of [...judged.remove, ...(judged.retry ?? [])]) {
           const outcome = yield* sweeper.remove(item);
           if ("kept" in outcome) {
@@ -242,7 +269,7 @@ export const sweep = <E = never, R = never>(
           }
           const gone = { ...item, bytes: outcome.freed };
           removed.push(gone);
-          yield* appendJournal(journal, JournalJson, { at: yield* nowIso(), by, ...gone }).pipe(
+          yield* appendJournal(journal, JournalJson, { at: yield* nowIso, by, ...gone }).pipe(
             Effect.ignore,
           );
         }
@@ -274,12 +301,18 @@ const trimJournal = (file: string) =>
   Effect.gen(function* () {
     const lines = yield* readJournal(file, JournalJson);
     const since = (yield* Clock.currentTimeMillis) - JOURNAL_KEEP_MS;
-    const kept = lines.filter((line) => epochMs(line.at) >= since);
+    const kept = Arr.filter(lines, (line) => epochMs(line.at) >= since);
     if (kept.length === lines.length) return;
     const fs = yield* FileSystem.FileSystem;
-    const encode = Schema.encodeSync(JournalJson);
+    const encode = flow(Schema.encodeResult(JournalJson), Result.getOrThrow);
     const tmp = `${file}.${process.pid}.tmp`;
-    yield* fs.writeFileString(tmp, kept.map((line) => `${encode(line)}\n`).join(""));
+    yield* fs.writeFileString(
+      tmp,
+      Arr.join(
+        Arr.map(kept, (line) => `${encode(line)}\n`),
+        "",
+      ),
+    );
     yield* fs.rename(tmp, file);
   }).pipe(Effect.ignore);
 
@@ -321,8 +354,8 @@ export const generationsSweeper = (dir: string): Sweeper => {
           keep.push({ kind, target, reason: `used ${days(unused)} day(s) ago` });
         else remove.push({ kind, target, bytes: 0, reason: `unused for ${days(unused)} days` });
       }
-      const sizes = yield* sizesOf(remove.map((item) => item.target));
-      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+      const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
+      return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
     remove: (item) =>
       Effect.gen(function* () {
@@ -392,7 +425,7 @@ export const settlingOf = (opts: {
     const workspaceHolds = new Map<string, string>();
     for (const run of opts.runs) {
       if (run.worktree?.created_by_collie !== true || run.task === null) continue;
-      const task = opts.tasks.find((one) => one.id === run.task);
+      const task = Option.getOrUndefined(Arr.findFirst(opts.tasks, (one) => one.id === run.task));
       if (task === undefined) continue;
       if (unknown)
         workspaceHolds.set(run.worktree.path, "could not ask herdr which workspaces are open");
@@ -446,7 +479,9 @@ export const worktreesSweeper = (opts: {
         const bytes = yield* sizeOf(item.target);
         const settling = opts.settling === undefined ? undefined : yield* opts.settling;
         const round = yield* judgeWorktrees({ ...opts, settling, only: item.target });
-        const one = round.judged.find((judged) => judged.path === item.target);
+        const one = Option.getOrUndefined(
+          Arr.findFirst(round.judged, (judged) => judged.path === item.target),
+        );
         if (one?.removed === true) return { freed: bytes };
         return { kept: one?.keep ?? (round.busy ? "another sweep is removing it" : "gone") };
       }),
@@ -458,7 +493,7 @@ const RECEIPT_KEEP_MS = 30 * DAY_MS;
 /** Whether anything at or under `path` changed in the last day; true where it cannot tell. */
 const changedToday = (path: string) =>
   shell("find", [path, "-mmin", "-1440", "-print", "-quit"], "/").pipe(
-    Effect.map((found) => found.code !== 0 || found.stdout.trim() !== ""),
+    Effect.map((found) => found.code !== 0 || Str.trim(found.stdout) !== ""),
   );
 
 /** What the state directory holds that is the host's own and never a sweeper's. */
@@ -492,7 +527,7 @@ const KEPT_KINDS = new Set([
   "running-checks",
 ]);
 const MARKER_KINDS = ["stop", "hold", "parked", "awaiting", "notified"];
-const MARKER = new RegExp(`^(?:${MARKER_KINDS.join("|")})\\.(.+)$`);
+const MARKER = new RegExp(`^(?:${Arr.join(MARKER_KINDS, "|")})\\.(.+)$`);
 /** Nothing reads these any more ([ADR-0027](../docs/adr/0027-one-engine-and-a-hard-cutover.md)). */
 const DEAD = /^(?:events\..*\.log|plans)$/;
 
@@ -504,7 +539,7 @@ const DEAD = /^(?:events\..*\.log|plans)$/;
 export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweeper => {
   const kind = "state";
   /** A child's files are its root Run's as well. */
-  const owned = (run: string) => rows.has(run) || rows.has(run.split(".")[0] ?? run);
+  const owned = (run: string) => rows.has(run) || rows.has(Str.split(run, ".")[0] ?? run);
   /** Gone once quiet for a day, for `why`. */
   const quiet = (target: string, why: string) =>
     Effect.map(changedToday(target), (changed) =>
@@ -518,15 +553,19 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
   ): Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const rel = target.slice(stateDir.length + 1).split("/");
+      const rel = Str.split(pipe(target, Str.slice(stateDir.length + 1)), "/");
       const [top = "", name = "", file] = rel;
       if (rel.length === 1) {
-        if (KEPT_KINDS.has(top) || top.startsWith(`${PRUNE_FILE}.`) || isDestinationLock(top))
+        if (
+          KEPT_KINDS.has(top) ||
+          pipe(top, Str.startsWith(`${PRUNE_FILE}.`)) ||
+          isDestinationLock(top)
+        )
           return null;
         if (top === "runs" || top === "agents" || top === "evidence" || top === "requests")
           return null;
         if (top === "schedules") return { keep: "the Schedules this host fires" };
-        if (top.startsWith(`${JOURNAL}.`)) return null;
+        if (pipe(top, Str.startsWith(`${JOURNAL}.`))) return null;
         if (DEAD.test(top)) return yield* quiet(target, "nothing reads it any more");
         const marker = MARKER.exec(top)?.[1];
         if (marker !== undefined) return owned(marker) ? null : yield* quiet(target, rowless);
@@ -545,11 +584,11 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
       if (top === "runs" && name === ".seq")
         return yield* quiet(target, "nothing reads it any more");
       if (top === "agents") {
-        if (name.endsWith(".json") || name === "deliveries.log") return null;
+        if (pipe(name, Str.endsWith(".json")) || name === "deliveries.log") return null;
         const ledger = `${target}/${LEDGER_FILE}`;
         if (yield* fs.exists(ledger).pipe(Effect.orElseSucceed(() => false))) {
           const runs = yield* readJournal(ledger, LedgerRuns);
-          return runs.some((line) => owned(line.run))
+          return Arr.some(runs, (line) => owned(line.run))
             ? null
             : yield* quiet(target, "a ledger of Runs none of which has a row");
         }
@@ -562,7 +601,7 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
     const fs = yield* FileSystem.FileSystem;
     const list = (dir: string) =>
       fs.readDirectory(dir).pipe(
-        Effect.map((names) => names.map((name) => `${dir}/${name}`)),
+        Effect.map((names) => Arr.map(names, (name) => `${dir}/${name}`)),
         Effect.orElseSucceed((): Array<string> => []),
       );
     const out = yield* list(stateDir);
@@ -583,8 +622,8 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
         if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
         else remove.push({ kind, target, bytes: 0, reason: judged.remove });
       }
-      const sizes = yield* sizesOf(remove.map((item) => item.target));
-      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+      const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
+      return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
     remove: (item) => removeIf(item.target, verdict(item.target)),
   };
@@ -683,9 +722,9 @@ export const compactionSweeper = (
           } else remove.push({ kind, target, bytes: 0, reason: "herdr no longer lists its agent" });
         }
       }
-      const sizes = yield* sizesOf(remove.map((item) => item.target));
+      const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
       return {
-        remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })),
+        remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })),
         keep,
         retry,
       };
@@ -693,7 +732,7 @@ export const compactionSweeper = (
     remove: (item) =>
       Effect.gen(function* () {
         const live = yield* listed;
-        const name = item.target.slice(root.length + 1);
+        const name = pipe(item.target, Str.slice(root.length + 1));
         if (live === null) return { kept: "could not ask herdr what is live" };
         if (live.has(name)) return { kept: "herdr lists its agent again" };
         const bytes = yield* sizeOf(item.target);
@@ -713,15 +752,15 @@ export const runnersSweeper = (dir: string, running: string): Sweeper => {
   const versionOf = (name: string) => /^collie-(.+)$/.exec(name)?.[1] ?? null;
   const verdicts = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const names = (yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))).filter(
+    const names = Arr.filter(
+      yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => [])),
       (name) => Bun.semver.satisfies(versionOf(name) ?? "", "*"),
     );
-    const versions = names.map((name) => versionOf(name)!);
-    const newest = versions.reduce<string | null>(
-      (best, v) => (best === null || Bun.semver.order(v, best) > 0 ? v : best),
-      null,
+    const versions = Arr.map(names, (name) => versionOf(name)!);
+    const newest = Arr.reduce<string, string | null>(versions, null, (best, v) =>
+      best === null || Bun.semver.order(v, best) > 0 ? v : best,
     );
-    return names.map((name) => {
+    return Arr.map(names, (name) => {
       const version = versionOf(name)!;
       const target = `${dir}/${name}`;
       return version === running
@@ -735,20 +774,22 @@ export const runnersSweeper = (dir: string, running: string): Sweeper => {
     kind,
     judge: Effect.gen(function* () {
       const all = yield* verdicts;
-      const remove = all.flatMap((one) =>
+      const remove = Arr.flatMap(all, (one) =>
         "remove" in one ? [{ kind, target: one.target, bytes: 0, reason: one.remove! }] : [],
       );
-      const keep = all.flatMap((one) =>
+      const keep = Arr.flatMap(all, (one) =>
         "keep" in one ? [{ kind, target: one.target, reason: one.keep! }] : [],
       );
-      const sizes = yield* sizesOf(remove.map((item) => item.target));
-      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+      const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
+      return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
     remove: (item) =>
       removeIf(
         item.target,
         Effect.map(verdicts, (all) => {
-          const one = all.find((each) => each.target === item.target);
+          const one = Option.getOrUndefined(
+            Arr.findFirst(all, (each) => each.target === item.target),
+          );
           return one === undefined
             ? null
             : "remove" in one
@@ -789,11 +830,11 @@ export const launchedPanes = (stateDir: string, runs: ReadonlyArray<string>) =>
     for (const run of runs) {
       const dir = `${stateDir}/agents/${run}`;
       const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-      for (const name of names.filter((one) => one.endsWith(".launch.json"))) {
+      for (const name of Arr.filter(names, (one) => pipe(one, Str.endsWith(".launch.json")))) {
         const text = yield* fs
           .readFileString(`${dir}/${name}`)
           .pipe(Effect.orElseSucceed(() => ""));
-        const launched = Schema.decodeUnknownOption(LaunchedPane)(text);
+        const launched = Schema.decodeOption(LaunchedPane)(text);
         if (Option.isNone(launched)) continue;
         if (launched.value.terminalId !== undefined) terminals.add(launched.value.terminalId);
         if (launched.value.agentSession !== undefined) sessions.push(launched.value.agentSession);
@@ -808,18 +849,21 @@ export const isLaunched = (
   pane: Pick<PaneInfo, "terminalId" | "agentSession">,
 ) =>
   (pane.terminalId !== null && launched.terminals.has(pane.terminalId)) ||
-  launched.sessions.some((session) => sameSession(session, pane.agentSession));
+  Arr.some(launched.sessions, (session) => sameSession(session, pane.agentSession));
 
 export const paneNotOwned = (
   task: Pick<TaskRecord, "workspace" | "root_pane">,
   panes: ReadonlyArray<PaneInfo>,
   launched: LaunchedPanes,
 ) =>
-  panes.find(
-    (pane) =>
-      pane.workspaceId === task.workspace &&
-      pane.paneId !== task.root_pane &&
-      !isLaunched(launched, pane),
+  Option.getOrUndefined(
+    Arr.findFirst(
+      panes,
+      (pane) =>
+        pane.workspaceId === task.workspace &&
+        pane.paneId !== task.root_pane &&
+        !isLaunched(launched, pane),
+    ),
   );
 
 /**
@@ -841,11 +885,13 @@ export const taskWorkspacesSweeper = (opts: {
   /** Each agent a Task's Runs launched, as its latest launch recorded it. */
   const launchesOf = (task: TaskRecord) =>
     Effect.forEach(
-      opts.runs.filter((run) => run.task === task.id),
+      Arr.filter(opts.runs, (run) => run.task === task.id),
       (run) => readLaunches(opts.stateDir, run.id),
-    ).pipe(Effect.map((all) => [...new Map(all.flat().map((one) => [one.agent, one])).values()]));
+    ).pipe(
+      Effect.map((all) => [...new Map(Arr.map(all.flat(), (one) => [one.agent, one])).values()]),
+    );
   const agentsOf = (task: TaskRecord) =>
-    Effect.map(launchesOf(task), (all) => all.map((one) => one.agent));
+    Effect.map(launchesOf(task), (all) => Arr.map(all, (one) => one.agent));
   /** Why one of them may still be writing after an earlier stop, or null. */
   const stillWriting = (task: TaskRecord) =>
     Effect.gen(function* () {
@@ -865,7 +911,7 @@ export const taskWorkspacesSweeper = (opts: {
   const sessionOf = (task: TaskRecord) =>
     task.herd === undefined || task.herd === null
       ? opts.sessions[0]
-      : opts.sessions.find((one) => one.herd === task.herd);
+      : Option.getOrUndefined(Arr.findFirst(opts.sessions, (one) => one.herd === task.herd));
 
   /** What becomes of one Task's workspace now, or null where it has none open to close. */
   const verdict = (
@@ -885,7 +931,7 @@ export const taskWorkspacesSweeper = (opts: {
     Effect.gen(function* () {
       const session = sessionOf(task);
       if (session === undefined) return null;
-      const view = opts.views.find((one) => one.id === task.id);
+      const view = Option.getOrUndefined(Arr.findFirst(opts.views, (one) => one.id === task.id));
       if (view === undefined) return null;
       const now = yield* Clock.currentTimeMillis;
       const section = sectionOf(view);
@@ -899,7 +945,9 @@ export const taskWorkspacesSweeper = (opts: {
       const panes = yield* session.herdr.paneList().pipe(Effect.option);
       if (Option.isNone(workspaces) || Option.isNone(panes))
         return { keep: "could not ask herdr what is open" };
-      const open = workspaces.value.find((one) => one.workspaceId === task.workspace);
+      const open = Option.getOrUndefined(
+        Arr.findFirst(workspaces.value, (one) => one.workspaceId === task.workspace),
+      );
       if (open === undefined) return null;
       if ((named.get(task.workspace) ?? 0) > 1) return { keep: "another Task names it too" };
       if ("collie_home" in open.tokens) return { keep: "it is the Home" };
@@ -908,7 +956,10 @@ export const taskWorkspacesSweeper = (opts: {
       if (open.focused) return { keep: "in focus" };
       const launched = yield* launchedPanes(
         opts.stateDir,
-        opts.runs.filter((run) => run.task === task.id).map((run) => run.id),
+        Arr.map(
+          Arr.filter(opts.runs, (run) => run.task === task.id),
+          (run) => run.id,
+        ),
       );
       const foreign = paneNotOwned(task, panes.value, launched);
       if (foreign !== undefined)
@@ -918,7 +969,8 @@ export const taskWorkspacesSweeper = (opts: {
       return { remove: `Finished ${minutes} min ago`, launched, panes: panes.value, writing };
     });
 
-  const taskAt = (target: string) => opts.tasks.find((task) => task.workspace === target);
+  const taskAt = (target: string) =>
+    Option.getOrUndefined(Arr.findFirst(opts.tasks, (task) => task.workspace === target));
 
   return {
     kind,
@@ -951,18 +1003,23 @@ export const taskWorkspacesSweeper = (opts: {
         const listed = yield* session.herdr.agentList().pipe(Effect.option);
         if (Option.isNone(listed)) return { kept: "could not ask herdr what is open" };
         const inside = new Set(
-          judged.panes
-            .filter((pane) => pane.workspaceId === task.workspace)
-            .map((pane) => pane.paneId),
+          Arr.map(
+            Arr.filter(judged.panes, (pane) => pane.workspaceId === task.workspace),
+            (pane) => pane.paneId,
+          ),
         );
-        const stranger = listed.value.find(
-          (agent) =>
-            inside.has(agent.paneId) &&
-            !launches.some(
-              (one) =>
-                (one.agent === agent.name && one.terminalId === agent.terminalId) ||
-                sameSession(one.agentSession, agent.agentSession),
-            ),
+        const stranger = Option.getOrUndefined(
+          Arr.findFirst(
+            listed.value,
+            (agent) =>
+              inside.has(agent.paneId) &&
+              !Arr.some(
+                launches,
+                (one) =>
+                  (one.agent === agent.name && one.terminalId === agent.terminalId) ||
+                  sameSession(one.agentSession, agent.agentSession),
+              ),
+          ),
         );
         if (stranger !== undefined)
           return { kept: `${stranger.name} runs in it, and is not this Task's` };
@@ -1007,7 +1064,9 @@ export const taskWorkspacesSweeper = (opts: {
             }
         }
         for (const { agent, runId, terminalId } of ended) {
-          const at = listed.value.find((one) => one.name === agent);
+          const at = Option.getOrUndefined(
+            Arr.findFirst(listed.value, (one) => one.name === agent),
+          );
           if (at === undefined || inside.has(at.paneId) || gone.has(terminalId ?? ""))
             yield* runLog(opts.stateDir, runId)(endedLine(agent, why)).pipe(Effect.ignore);
         }
@@ -1107,14 +1166,15 @@ export const idleAgentsSweeper = (opts: {
         Effect.map(({ agents, panes }) => {
           const named = Option.getOrElse(agents, (): ReadonlyArray<AgentInfo> => []);
           // A pane no named agent stands for: a restored one that lost its name.
-          const unnamed = Option.getOrElse(panes, (): ReadonlyArray<PaneInfo> => []).filter(
-            (pane) => !named.some((agent) => agent.paneId === pane.paneId),
+          const unnamed = Arr.filter(
+            Option.getOrElse(panes, (): ReadonlyArray<PaneInfo> => []),
+            (pane) => !Arr.some(named, (agent) => agent.paneId === pane.paneId),
           );
           return {
             session,
             live: [
-              ...named.map((agent): Live => ({ ...agent, status: agent.status })),
-              ...unnamed.map((pane): Live => ({
+              ...Arr.map(named, (agent): Live => ({ ...agent, status: agent.status })),
+              ...Arr.map(unnamed, (pane): Live => ({
                 ...pane,
                 name: null,
                 status: pane.agentStatus ?? null,
@@ -1125,15 +1185,18 @@ export const idleAgentsSweeper = (opts: {
         }),
       ),
     );
-    const seen = listings.flatMap((one) => one.live);
+    const seen = Arr.flatMap(listings, (one) => one.live);
     /** The agent herdr has on `launched`'s own terminal, whose session is recorded. */
     const onOwnTerminal = (launched: Launched, here: ReadonlyArray<Live>) =>
       Effect.gen(function* () {
-        const own = here.find(
-          (one) =>
-            one.name === launched.agent &&
-            one.terminalId !== null &&
-            one.terminalId === launched.terminalId,
+        const own = Option.getOrUndefined(
+          Arr.findFirst(
+            here,
+            (one) =>
+              one.name === launched.agent &&
+              one.terminalId !== null &&
+              one.terminalId === launched.terminalId,
+          ),
         );
         if (own !== undefined && !sameSession(own.agentSession, launched.agentSession))
           yield* recordSession(launched, own.agentSession);
@@ -1144,8 +1207,8 @@ export const idleAgentsSweeper = (opts: {
       if (own?.agentSession != null) sessions.push(own.agentSession);
     }
     noteIdle(opts.idle, seen, now);
-    if (listings.every((one) => one.listed))
-      forgetGone(opts.idle, new Set(seen.flatMap((one) => one.terminalId ?? [])));
+    if (Arr.every(listings, (one) => one.listed))
+      forgetGone(opts.idle, new Set(Arr.flatMap(seen, (one) => Arr.ensure(one.terminalId ?? []))));
 
     const found: Array<{
       run: RunFacts;
@@ -1156,11 +1219,15 @@ export const idleAgentsSweeper = (opts: {
     for (const { run, launched } of named)
       for (const { session, live: here } of listings) {
         const own = yield* onOwnTerminal(launched, here);
-        const at = own ?? here.find((one) => sameSession(one.agentSession, launched.agentSession));
+        const at =
+          own ??
+          Option.getOrUndefined(
+            Arr.findFirst(here, (one) => sameSession(one.agentSession, launched.agentSession)),
+          );
         if (at === undefined || at.terminalId === null) continue;
         const terminalId = at.terminalId;
         if (isLaunched(live, { terminalId, agentSession: launched.agentSession ?? null })) continue;
-        if (found.some((one) => one.at.terminalId === terminalId)) continue;
+        if (Arr.some(found, (one) => one.at.terminalId === terminalId)) continue;
         found.push({ run, launched, at: { ...at, terminalId }, session });
       }
     return found;
@@ -1175,7 +1242,7 @@ export const idleAgentsSweeper = (opts: {
       if (agentSession === null) return;
       const fs = yield* FileSystem.FileSystem;
       const file = `${launchDir(opts.stateDir, launched.runId)}/${stemOf(launched)}${LAUNCH_SUFFIX}`;
-      const now = yield* Schema.decodeUnknownEffect(LaunchedJson)(yield* fs.readFileString(file));
+      const now = yield* Schema.decodeEffect(LaunchedJson)(yield* fs.readFileString(file));
       if (now.terminalId !== launched.terminalId) return;
       yield* fs.writeFileString(
         file,
@@ -1221,12 +1288,20 @@ export const idleAgentsSweeper = (opts: {
       const ledger = yield* readLedger(yield* ledgerPath(opts.stateDir, one.at.terminalId)).pipe(
         Effect.orElseSucceed(() => []),
       );
-      if ([...newestById(ledger).values()].some((delivery) => QUEUED.has(delivery.state)))
+      if (Arr.some([...newestById(ledger).values()], (delivery) => QUEUED.has(delivery.state)))
         return { keep: "a Delivery to it is queued" };
-      const stems = (yield* readLaunches(opts.stateDir, one.run.id))
-        .filter((launched) => launched.agent === one.launched.agent)
-        .map((launched) => `ask-${stemOf(launched)}-`);
-      if (one.run.asking.some((asked) => stems.some((stem) => asked.name.startsWith(stem))))
+      const stems = Arr.map(
+        Arr.filter(
+          yield* readLaunches(opts.stateDir, one.run.id),
+          (launched) => launched.agent === one.launched.agent,
+        ),
+        (launched) => `ask-${stemOf(launched)}-`,
+      );
+      if (
+        Arr.some(one.run.asking, (asked) =>
+          Arr.some(stems, (stem) => pipe(asked.name, Str.startsWith(stem))),
+        )
+      )
         return { keep: "a question it asked is open" };
       const workspaces = yield* one.session.herdr.workspaceList().pipe(Effect.option);
       const panes = yield* one.session.herdr.paneList().pipe(Effect.option);
@@ -1234,11 +1309,13 @@ export const idleAgentsSweeper = (opts: {
         return { keep: "could not ask herdr what is open" };
       const workspace =
         one.at.workspaceId ??
-        panes.value.find((pane) => pane.paneId === one.at.paneId)?.workspaceId;
-      if (workspaces.value.some((at) => at.workspaceId === workspace && at.focused))
+        Option.getOrUndefined(Arr.findFirst(panes.value, (pane) => pane.paneId === one.at.paneId))
+          ?.workspaceId;
+      if (Arr.some(workspaces.value, (at) => at.workspaceId === workspace && at.focused))
         return { keep: "in focus" };
       if (
-        ledger.some(
+        Arr.some(
+          ledger,
           (line) => "kind" in line && line.kind === "manual_override" && epochMs(line.at) >= since,
         )
       )
@@ -1271,8 +1348,11 @@ export const idleAgentsSweeper = (opts: {
     remove: (item) =>
       Effect.gen(function* () {
         if (opts.idleCloseMs <= 0) return { kept: "idle agents are never closed" };
-        const one = (yield* candidates).find(
-          (candidate) => targetOf(candidate.launched.agent, candidate.run.id) === item.target,
+        const one = Option.getOrUndefined(
+          Arr.findFirst(
+            yield* candidates,
+            (candidate) => targetOf(candidate.launched.agent, candidate.run.id) === item.target,
+          ),
         );
         if (one === undefined) return { kept: "already gone" };
         const judged = yield* verdict(one);
@@ -1317,7 +1397,7 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
   const kind = "renovate-clone";
   const root = `${stateDir}/renovate-repositories`;
   const used = new Set(
-    runs.flatMap((run) => {
+    Arr.flatMap(runs, (run) => {
       const repository = repositoryOf(run.settled)?.value ?? "";
       return repository === "" ? [] : [Bun.hash(repository).toString(16)];
     }),
@@ -1328,15 +1408,19 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       if (!(yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))) return null;
-      if (used.has(target.slice(root.length + 1)))
+      if (used.has(pipe(target, Str.slice(root.length + 1))))
         return { keep: "a Run with a row cut a checkout from it" };
       const listed = yield* shell("git", ["worktree", "list", "--porcelain"], target);
       if (listed.code !== 0) return { keep: "git could not list its checkouts" };
-      const checkouts = listed.stdout
-        .split("\n")
-        .filter((line) => line.startsWith("worktree "))
-        .map((line) => line.slice("worktree ".length))
-        .filter((path) => path !== target);
+      const checkouts = Arr.filter(
+        Arr.map(
+          Arr.filter(Str.split(listed.stdout, "\n"), (line) =>
+            pipe(line, Str.startsWith("worktree ")),
+          ),
+          (line) => pipe(line, Str.slice("worktree ".length)),
+        ),
+        (path) => path !== target,
+      );
       for (const path of checkouts)
         if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => true)))
           return { keep: `a checkout cut from it is still on disk (${path})` };
@@ -1356,8 +1440,8 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
         if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
         else remove.push({ kind, target, bytes: 0, reason: judged.remove });
       }
-      const sizes = yield* sizesOf(remove.map((item) => item.target));
-      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+      const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
+      return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
     remove: (item) => removeIf(item.target, verdict(item.target)),
   };
@@ -1373,14 +1457,19 @@ export const measurementTreesSweeper = (
 ): Sweeper => {
   const kind = "measurement-tree";
   const root = `${stateDir}/measurements/trees`;
-  const live = new Set(runs.filter((run) => !settled(run)).map((run) => run.id));
+  const live = new Set(
+    Arr.map(
+      Arr.filter(runs, (run) => !settled(run)),
+      (run) => run.id,
+    ),
+  );
   const verdict = (
     target: string,
   ): Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       if (!(yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))) return null;
-      const run = target.slice(root.length + 1).split("/")[0] ?? "";
+      const run = Str.split(pipe(target, Str.slice(root.length + 1)), "/")[0] ?? "";
       return live.has(run)
         ? { keep: `${run} may measure on it again` }
         : { remove: `${run} has ended, so nothing measures on it` };
@@ -1401,8 +1490,8 @@ export const measurementTreesSweeper = (
           if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
           else remove.push({ kind, target, bytes: 0, reason: judged.remove });
         }
-      const sizes = yield* sizesOf(remove.map((item) => item.target));
-      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+      const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
+      return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
     remove: (item) =>
       Effect.gen(function* () {
@@ -1414,8 +1503,14 @@ export const measurementTreesSweeper = (
         );
         const freed = yield* removeIf(item.target, verdict(item.target));
         if (common.code === 0)
-          yield* shell("git", ["--git-dir", common.stdout.trim(), "worktree", "prune"], "/");
-        const parent = item.target.slice(0, item.target.lastIndexOf("/"));
+          yield* shell("git", ["--git-dir", Str.trim(common.stdout), "worktree", "prune"], "/");
+        const parent = pipe(
+          item.target,
+          Str.slice(
+            0,
+            Option.getOrElse(pipe(item.target, Str.lastIndexOf("/")), () => -1),
+          ),
+        );
         if ((yield* fs.readDirectory(parent).pipe(Effect.orElseSucceed(() => ["?"]))).length === 0)
           yield* fs.remove(parent, { recursive: true }).pipe(Effect.ignore);
         return freed;
@@ -1448,8 +1543,8 @@ export const retentionSweeper = (opts: {
 }): Sweeper => {
   const kind = "task";
   const filesOf = (ids: ReadonlyArray<string>) =>
-    ids.flatMap((id) =>
-      ["runs", "agents", "evidence"].map((dir) => `${opts.stateDir}/${dir}/${id}`),
+    Arr.flatMap(ids, (id) =>
+      Arr.map(["runs", "agents", "evidence"], (dir) => `${opts.stateDir}/${dir}/${id}`),
     );
 
   /** When its last Run ended: the board's own reading, else the newest of its files. */
@@ -1462,7 +1557,7 @@ export const retentionSweeper = (opts: {
         const names = yield* fs
           .readDirectory(dir, { recursive: true })
           .pipe(Effect.orElseSucceed(() => []));
-        for (const path of [dir, ...names.map((name) => `${dir}/${name}`)]) {
+        for (const path of [dir, ...Arr.map(names, (name) => `${dir}/${name}`)]) {
           const info = yield* fs.stat(path).pipe(Effect.option);
           if (Option.isSome(info))
             newest = Math.max(newest, Option.getOrNull(info.value.mtime)?.getTime() ?? 0);
@@ -1480,7 +1575,7 @@ export const retentionSweeper = (opts: {
       const listed = yield* session.workspaceList().pipe(Effect.option);
       const listedPanes = yield* session.paneList().pipe(Effect.option);
       if (Option.isNone(listed) || Option.isNone(listedPanes)) return null;
-      workspaces.push(...listed.value.map((one) => one.workspaceId));
+      workspaces.push(...Arr.map(listed.value, (one) => one.workspaceId));
       panes.push(...listedPanes.value);
     }
     return { workspaces, panes };
@@ -1497,17 +1592,17 @@ export const retentionSweeper = (opts: {
   > =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const view = facts.views.find((one) => one.id === task.id);
+      const view = Option.getOrUndefined(Arr.findFirst(facts.views, (one) => one.id === task.id));
       if (view === undefined) return null;
       const section = sectionOf(view);
       if (section !== "finished") return { keep: SECTION_SAID[section] };
       const seen = yield* open;
       if (seen === null) return { keep: "could not ask herdr what is open" };
       if (seen.workspaces.includes(task.workspace)) return { keep: "its workspace is open" };
-      const mine = facts.runs.filter((run) => run.task === task.id);
-      const ids = mine.map((run) => run.id);
+      const mine = Arr.filter(facts.runs, (run) => run.task === task.id);
+      const ids = Arr.map(mine, (run) => run.id);
       const launched = yield* launchedPanes(opts.stateDir, ids);
-      if (seen.panes.some((pane) => isLaunched(launched, pane)))
+      if (Arr.some(seen.panes, (pane) => isLaunched(launched, pane)))
         return { keep: "an agent of it is alive" };
       for (const run of mine)
         if (
@@ -1515,14 +1610,17 @@ export const retentionSweeper = (opts: {
           (yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true)))
         )
           return { keep: `a checkout it made is on disk (${run.worktree.path})` };
-      const dirs = ids.map((id) => `${opts.stateDir}/runs/${id}`);
-      const pointing = facts.runs.find(
-        (run) =>
-          run.task !== task.id &&
-          ((run.parent !== null && ids.includes(run.parent)) ||
-            Object.values(run.settled.inputs).some((value) =>
-              dirs.some((dir) => value === dir || value.startsWith(`${dir}/`)),
-            )),
+      const dirs = Arr.map(ids, (id) => `${opts.stateDir}/runs/${id}`);
+      const pointing = Option.getOrUndefined(
+        Arr.findFirst(
+          facts.runs,
+          (run) =>
+            run.task !== task.id &&
+            ((run.parent !== null && ids.includes(run.parent)) ||
+              Arr.some(Rec.values(run.settled.inputs), (value) =>
+                Arr.some(dirs, (dir) => value === dir || pipe(value, Str.startsWith(`${dir}/`))),
+              )),
+        ),
       );
       if (pointing !== undefined) return { keep: `${pointing.id} still points into it` };
       const since = (yield* Clock.currentTimeMillis) - (yield* endedAt(view, ids));
@@ -1542,7 +1640,7 @@ export const retentionSweeper = (opts: {
         const ledger = `${root}/${name}/${LEDGER_FILE}`;
         if (!(yield* fs.exists(ledger).pipe(Effect.orElseSucceed(() => false)))) continue;
         const lines = yield* readJournal(ledger, LedgerRuns);
-        if (lines.length > 0 && lines.every((line) => gone.has(line.run)))
+        if (lines.length > 0 && Arr.every(lines, (line) => gone.has(line.run)))
           found.push(`${root}/${name}`);
       }
       return found;
@@ -1566,41 +1664,69 @@ export const retentionSweeper = (opts: {
         remove.push({
           kind,
           target: task.id,
-          bytes: sizes.reduce((sum, one) => sum + one, 0),
+          bytes: Arr.reduce(sizes, 0, (sum, one) => sum + one),
           reason: judged.remove,
         });
       }
       return { remove, keep };
     }),
     remove: (item) =>
-      Effect.gen(function* () {
-        return yield* withTaskLock(
+      Effect.suspend(() =>
+        withTaskLock(
           opts.stateDir,
           item.target,
           Effect.gen(function* () {
             const facts = yield* opts.facts;
-            const task = facts.tasks.find((one) => one.id === item.target);
-            if (task === undefined) return { kept: "no such Task any more" };
+            const task = Option.getOrUndefined(
+              Arr.findFirst(facts.tasks, (one) => one.id === item.target),
+            );
+            if (task === undefined)
+              return {
+                kept: "no such Task any more",
+              };
             const judged = yield* verdict(task, facts, openNow);
-            if (judged === null) return { kept: "nothing to forget any more" };
-            if ("keep" in judged) return { kept: judged.keep };
+            if (judged === null)
+              return {
+                kept: "nothing to forget any more",
+              };
+            if ("keep" in judged)
+              return {
+                kept: judged.keep,
+              };
             const fs = yield* FileSystem.FileSystem;
-            const freed = (yield* sizesOf(filesOf(judged.ids))).reduce((sum, one) => sum + one, 0);
+            const freed = Arr.reduce(
+              yield* sizesOf(filesOf(judged.ids)),
+              0,
+              (sum, one) => sum + one,
+            );
             // Rows first: a file left behind without its row is the no-row rule's next sweep.
             const gone = yield* opts.retire(judged.ids);
             const goneSet = new Set(gone);
-            const markers = gone.flatMap((id) =>
-              MARKER_KINDS.map((one) => `${opts.stateDir}/${one}.${id}`),
+            const markers = Arr.flatMap(gone, (id) =>
+              Arr.map(MARKER_KINDS, (one) => `${opts.stateDir}/${one}.${id}`),
             );
             for (const path of [...filesOf(gone), ...markers, ...(yield* ledgersOf(goneSet))])
-              yield* fs.remove(path, { recursive: true, force: true }).pipe(Effect.ignore);
+              yield* fs
+                .remove(path, {
+                  recursive: true,
+                  force: true,
+                })
+                .pipe(Effect.ignore);
             if (gone.length < judged.ids.length)
-              return { kept: "a Run of it was never accepted by the engine" };
+              return {
+                kept: "a Run of it was never accepted by the engine",
+              };
             yield* removeTask(opts.stateDir, task.id).pipe(Effect.ignore);
-            return { freed };
+            return {
+              freed,
+            };
           }),
-        ).pipe(Effect.orElseSucceed(() => ({ kept: "its Task is in use" })));
-      }),
+        ).pipe(
+          Effect.orElseSucceed(() => ({
+            kept: "its Task is in use",
+          })),
+        ),
+      ),
   };
 };
 
@@ -1636,8 +1762,8 @@ export const desktopSweeper = (root: string, state: string, installedPath: strin
       if (!(yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false))))
         return { remove: [], keep: [] };
       const found = yield* verdicts;
-      const sizes = yield* sizesOf(found.remove.map((one) => one.target));
-      const remove = found.remove.map((one, at) => ({ kind, ...one, bytes: sizes[at] ?? 0 }));
+      const sizes = yield* sizesOf(Arr.map(found.remove, (one) => one.target));
+      const remove = Arr.map(found.remove, (one, at) => ({ kind, ...one, bytes: sizes[at] ?? 0 }));
       if (found.usage !== null)
         remove.push({
           kind,
@@ -1645,7 +1771,7 @@ export const desktopSweeper = (root: string, state: string, installedPath: strin
           bytes: 0,
           reason: `${found.usage.dropped} usage line(s) over 30 days old`,
         });
-      return { remove, keep: found.keep.map((one) => ({ kind, ...one })) };
+      return { remove, keep: Arr.map(found.keep, (one) => ({ kind, ...one })) };
     }),
     remove: (item) =>
       Effect.gen(function* () {
@@ -1656,7 +1782,9 @@ export const desktopSweeper = (root: string, state: string, installedPath: strin
           yield* trimUsage(found.usage);
           return { freed: Math.max(0, before - (yield* sizeOf(item.target))) };
         }
-        const now = found.remove.find((one) => one.target === item.target);
+        const now = Option.getOrUndefined(
+          Arr.findFirst(found.remove, (one) => one.target === item.target),
+        );
         if (now === undefined) return { kept: "Desktop keeps it now" };
         return yield* removeIf(item.target, Effect.succeed({ remove: now.reason }));
       }),
@@ -1685,7 +1813,7 @@ export const checksSweeper = (checks: CheckProcessesApi): Sweeper => {
           reason,
         })),
       );
-      const keep = (yield* checks.collecting).map((target) => ({
+      const keep = Arr.map(yield* checks.collecting, (target) => ({
         kind,
         target,
         reason: collecting,
@@ -1695,7 +1823,9 @@ export const checksSweeper = (checks: CheckProcessesApi): Sweeper => {
     remove: (item) =>
       Effect.gen(function* () {
         if ((yield* checks.collecting).includes(item.target)) return { kept: collecting };
-        const leftover = (yield* checks.left).find((one) => one.id === item.target);
+        const leftover = Option.getOrUndefined(
+          Arr.findFirst(yield* checks.left, (one) => one.id === item.target),
+        );
         if (leftover === undefined) return { freed: 0 };
         return (yield* checks.endLeftover(leftover)) === "still running"
           ? { kept: "still running after SIGKILL" }

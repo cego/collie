@@ -1,6 +1,9 @@
 // What `bun test` printed about its failures, and how one of them is run again alone
 // (ADR-0034, amended 2026-10-15).
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
 import type { FailedTest } from "./verify-model";
 
 // ponytail: more failures than this is a broken change, not flakiness; a check that names none is handled whole.
@@ -21,7 +24,7 @@ const HOOK = "(unnamed)";
  * or there are over `MAX_FAILED`.
  */
 export function failedTests(output: string): ReadonlyArray<FailedTest> | null {
-  const lines = output.split("\n");
+  const lines = Str.split(output, "\n");
   const found = new Map<string, FailedTest>();
   let file: string | null = null;
   let listed = false;
@@ -49,9 +52,9 @@ export function failedTests(output: string): ReadonlyArray<FailedTest> | null {
  * nested name with its parts joined by one space, where bun prints ` > `.
  */
 export function rerunArgv(test: FailedTest): ReadonlyArray<string> {
-  const joined = test.name.split(" > ").join(" ");
-  const file = test.file.startsWith("/") ? test.file : `./${test.file}`;
-  return ["test", file, "-t", `^${joined.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`];
+  const joined = Arr.join(Str.split(test.name, " > "), " ");
+  const file = pipe(test.file, Str.startsWith("/")) ? test.file : `./${test.file}`;
+  return ["test", file, "-t", `^${pipe(joined, Str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))}$`];
 }
 
 /** Whether a rerun ran exactly one test and it passed; "matched 0 tests" and two of that name do not. */
@@ -66,6 +69,6 @@ export function failedAlone(exit: number, output: string, test: FailedTest): boo
     /^\s*0 pass$/m.test(output) &&
     /^\s*1 fail$/m.test(output) &&
     /^Ran 1 test across 1 file\./m.test(output) &&
-    output.split("\n").some((line) => FAILED.exec(line)?.[1] === test.name)
+    Arr.some(Str.split(output, "\n"), (line) => FAILED.exec(line)?.[1] === test.name)
   );
 }

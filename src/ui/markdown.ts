@@ -1,6 +1,8 @@
 // Agent-written markdown as styled terminal text: Comark parses and renders it to ANSI,
 // and its SGR codes become OpenTUI chunks, because a <text> draws escapes literally.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { renderAnsi } from "@comark/ansi";
 import security from "comark/plugins/security";
 import { RGBA, StyledText, TextAttributes, type TextChunk } from "@opentui/core";
@@ -9,7 +11,7 @@ import { C } from "./sections";
 const SANITISED = [security({ blockedTags: ["script", "style", "iframe", "object", "embed"] })];
 
 /** SGR's black, red, green, yellow, blue, magenta, cyan and white, in the board's palette. */
-const COLOURS = [C.dim, C.red, C.green, C.amber, C.blue, C.purple, C.blue, C.text].map((hex) =>
+const COLOURS = Arr.map([C.dim, C.red, C.green, C.amber, C.blue, C.purple, C.blue, C.text], (hex) =>
   RGBA.fromHex(hex),
 );
 
@@ -43,12 +45,12 @@ export function ansiText(ansi: string): StyledText {
   const chunks: TextChunk[] = [];
   let fg: RGBA | undefined;
   let attributes = 0;
-  for (const [index, part] of ansi.split(/\x1b\[([\d;]*)m/).entries()) {
+  for (const [index, part] of Str.split(ansi, /\x1b\[([\d;]*)m/).entries()) {
     if (index % 2 === 0) {
       if (part !== "") chunks.push({ __isChunk: true, text: part, fg, attributes });
       continue;
     }
-    const codes = part === "" ? [0] : part.split(";").map(Number);
+    const codes = part === "" ? [0] : Arr.map(Str.split(part, ";"), Number);
     for (let at = 0; at < codes.length; at++) {
       const code = codes[at]!;
       if (code === 38 || code === 48) at += 1 + (EXTENDED.get(codes[at + 1]!) ?? 0);

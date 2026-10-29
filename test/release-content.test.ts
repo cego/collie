@@ -1,3 +1,7 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { RELEASE_CLEARS, RELEASE_ON, SHARE_CLEARS } from "../workflows/release.workflow";
 import { contentOf } from "../src/sdk";
@@ -10,10 +14,10 @@ import renovateOnGithub from "../workflows/renovate.github.md" with { type: "tex
 // differs, so each says it its forge's way.
 
 const content = { gitlab: contentOf(onGitlab), github: contentOf(onGithub) };
-const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+const flat = (text: string) => Str.trim(pipe(text, Str.replace(/\s+/g, " ")));
 
 test("both forges' release content has the steps the module asks for, and every step fills from what it gives", () => {
-  for (const one of Object.values(content))
+  for (const one of Rec.values(content))
     expect([...one.sections.keys()]).toEqual([
       "assess",
       "answer",
@@ -28,7 +32,7 @@ test("both forges' release content has the steps the module asks for, and every 
       "share",
     ]);
   // A template naming anything ReleaseInput does not give is refused as it is made.
-  expect(Object.keys(RELEASE_ON.github)).toEqual(Object.keys(RELEASE_ON.gitlab));
+  expect(Rec.keys(RELEASE_ON.github)).toEqual(Rec.keys(RELEASE_ON.gitlab));
 });
 
 test("release decides package or application by renovate's own rule, word for word", () => {
@@ -47,14 +51,14 @@ test("release decides package or application by renovate's own rule, word for wo
 
 test("each Clearance names the repository's URL", () => {
   const url = "https://gitlab.example.com/group/app";
-  for (const [step, clears] of Object.entries(RELEASE_CLEARS)) {
+  for (const [step, clears] of Rec.toEntries(RELEASE_CLEARS)) {
     const lines = clears(url, [{ name: "deploy-production", url: `${url}/-/jobs/4` }]);
-    expect([step, lines.some((line) => line.includes(url))]).toEqual([step, true]);
+    expect([step, Arr.some(lines, (line) => pipe(line, Str.includes(url)))]).toEqual([step, true]);
   }
 });
 
 test("the tag step tags by the repository's conventions, watches its pipeline and plays no production job", () => {
-  for (const one of Object.values(content)) {
+  for (const one of Rec.values(content)) {
     const tag = flat(one.sections.get("tag") ?? "");
     expect(tag).toContain("the repository's own tag and notes conventions");
     expect(tag).toContain("`## <version> - <YYYY-MM-DD>`");
@@ -66,7 +70,7 @@ test("the tag step tags by the repository's conventions, watches its pipeline an
 });
 
 test("a comment round fixes test first and pushes plainly, and leaves every reply to Collie", () => {
-  for (const one of Object.values(content)) {
+  for (const one of Rec.values(content)) {
     const answer = flat(one.sections.get("answer") ?? "");
     expect(answer).toContain("{{comments}}");
     expect(answer).toContain("never a force push");
@@ -77,7 +81,7 @@ test("a comment round fixes test first and pushes plainly, and leaves every repl
 });
 
 test("an application's tag step stages the tag, rolls a failed stage back and leaves production waiting", () => {
-  for (const one of Object.values(content)) {
+  for (const one of Rec.values(content)) {
     const stage = flat(one.sections.get("stage") ?? "");
     for (const said of [
       "{{recovery}}",
@@ -97,7 +101,7 @@ test("an application's tag step stages the tag, rolls a failed stage back and le
 });
 
 test("staging a merge request deploys its own pipeline's head, checks stage and rolls it back, unmerged and never to production", () => {
-  for (const one of Object.values(content)) {
+  for (const one of Rec.values(content)) {
     const staging = flat(one.sections.get("stage-merge-request") ?? "");
     for (const said of [
       "{{head}}",
@@ -123,7 +127,7 @@ test("staging a merge request deploys its own pipeline's head, checks stage and 
 });
 
 test("sharing for approval posts one Slack message, the merge request linked by its title, and nothing else", () => {
-  for (const [forge, one] of Object.entries(content)) {
+  for (const [forge, one] of Rec.toEntries(content)) {
     const share = flat(one.sections.get("share") ?? "");
     for (const said of [
       "{{inputs.mr}}",
@@ -141,7 +145,7 @@ test("sharing for approval posts one Slack message, the merge request linked by 
 test("sharing's Clearance names the channel and the merge request, well under the 400 characters a Clearance may be", () => {
   const mr = "https://gitlab.example.com/spilnu/frontend/monorepo/-/merge_requests/12345";
   const clears = SHARE_CLEARS(mr, "#frontend-approval-requests");
-  const joined = clears.join("; ");
+  const joined = Arr.join(clears, "; ");
   expect(joined).toContain("one Slack message in #frontend-approval-requests");
   expect(joined).toContain(mr);
   expect(joined.length).toBeLessThanOrEqual(200);

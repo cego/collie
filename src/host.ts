@@ -14,6 +14,10 @@
 // machine. `docs/adr/0015-one-local-host-owns-a-state-directory.md` is why each of those
 // is the way it is.
 
+import * as Num from "effect/Number";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { createConnection, type Socket as NetSocket } from "node:net";
 import { withdrawStepNote } from "./step-steering";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
@@ -41,6 +45,7 @@ import {
   Semaphore,
   Stream,
   Struct,
+  flow as Schemaflow,
 } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -308,7 +313,7 @@ const HostRecord = Schema.fromJsonString(
     herd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   }),
 );
-const encodeRecord = Schema.encodeSync(HostRecord);
+const encodeRecord = Schemaflow(Schema.encodeResult(HostRecord), Result.getOrThrow);
 
 /** Whether `build` is a newer release than `than`. */
 const newer = (build: string, than: string) =>
@@ -614,7 +619,12 @@ const handlers = (
             const peer =
               sender === undefined
                 ? undefined
-                : (yield* peersOf(dir)).find((one) => one.installation === sender.installation);
+                : Option.getOrUndefined(
+                    Arr.findFirst(
+                      yield* peersOf(dir),
+                      (one) => one.installation === sender.installation,
+                    ),
+                  );
             if (peer === undefined || sender?.installation !== notice.machine.installation)
               return yield* new HostRefused({
                 reason: "only a paired Machine can send a Run link notice",
@@ -626,8 +636,11 @@ const handlers = (
             const runId = notice.requestedBy.run;
             if ((yield* registry.view(runId)) === null)
               return yield* new HostRefused({ reason: `No Run "${runId}".` });
-            const launch = (yield* readLaunches(dir, runId)).findLast(
-              (one) => one.agent === notice.requestedBy.agent,
+            const launch = Option.getOrUndefined(
+              Arr.findLast(
+                yield* readLaunches(dir, runId),
+                (one) => one.agent === notice.requestedBy.agent,
+              ),
             );
             if (launch === undefined)
               return yield* new HostRefused({
@@ -640,14 +653,17 @@ const handlers = (
                   operation: "run-link",
                   request,
                   ...actor,
-                  asked: Schema.encodeSync(RunLinkNotice)(notice),
+                  asked: yield* Schema.encodeEffect(RunLinkNotice)(notice).pipe(Effect.orDie),
                   result: Schema.Boolean,
                 },
                 Effect.gen(function* () {
-                  const prior = (yield* readRunLinks(runDir(dir, runId))).find(
-                    (one) =>
-                      one.run === notice.run &&
-                      one.machine.installation === notice.machine.installation,
+                  const prior = Option.getOrUndefined(
+                    Arr.findFirst(
+                      yield* readRunLinks(runDir(dir, runId)),
+                      (one) =>
+                        one.run === notice.run &&
+                        one.machine.installation === notice.machine.installation,
+                    ),
                   );
                   yield* recordRunLink(runDir(dir, runId), {
                     ...notice,
@@ -682,7 +698,8 @@ const handlers = (
           catalogue(project).pipe(
             Effect.map((found) => ({
               // Without the revision: that is how this host decides a reload, not a caller.
-              entries: found.entries.map(
+              entries: Arr.map(
+                found.entries,
                 ({ id, title, description, layer, path, inputs, outcome }) => ({
                   id,
                   title,
@@ -708,8 +725,8 @@ const handlers = (
         runChecks: ({ runId }) =>
           Effect.gen(function* () {
             const views = yield* registry.views(null);
-            const runs = views.map((view) => factsOfView(dir, view));
-            const run = runs.find((one) => one.id === runId);
+            const runs = Arr.map(views, (view) => factsOfView(dir, view));
+            const run = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.id === runId));
             if (run === undefined) return yield* new HostRefused({ reason: `No Run "${runId}".` });
             return {
               running: yield* runningCheck(
@@ -725,8 +742,8 @@ const handlers = (
           Stream.unwrap(
             Effect.gen(function* () {
               const views = yield* registry.views(null);
-              const runs = views.map((view) => factsOfView(dir, view));
-              const run = runs.find((one) => one.id === runId);
+              const runs = Arr.map(views, (view) => factsOfView(dir, view));
+              const run = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.id === runId));
               if (run === undefined)
                 return yield* new HostRefused({ reason: `No Run "${runId}".` });
               const running = yield* runningCheck(
@@ -751,7 +768,7 @@ const handlers = (
         deliveries: ({ runId }) =>
           Effect.gen(function* () {
             if ((yield* registry.view(runId)) === null) return null;
-            return (yield* deliveriesOf(dir, runId)).map((one) => one.delivery);
+            return Arr.map(yield* deliveriesOf(dir, runId), (one) => one.delivery);
           }),
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
@@ -768,12 +785,12 @@ const handlers = (
               disposition: latest(
                 yield* readDispositions(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
               ),
-              children: all.filter((one) => one.parent === runId),
+              children: Arr.filter(all, (one) => one.parent === runId),
               startedBy: startedBy(
                 yield* readAudit(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
                 { id: runId, parent: view.parent },
               ),
-              handoffs: (yield* handoffsIn(runDir(dir, runId))).map((file) => ({
+              handoffs: Arr.map(yield* handoffsIn(runDir(dir, runId)), (file) => ({
                 path: `${handoffsDir(runDir(dir, runId))}/${file.name}`,
                 bytes: file.bytes,
               })),
@@ -784,7 +801,7 @@ const handlers = (
               flow: yield* taskFlowOf(
                 {
                   env,
-                  runs: all.map((one) => factsOfView(env.stateDir, one)),
+                  runs: Arr.map(all, (one) => factsOfView(env.stateDir, one)),
                   // One command reads once, and says what herdr lists now.
                   alive: yield* aliveNow,
                   offers: (id) =>
@@ -811,7 +828,9 @@ const handlers = (
         agentRun: ({ agent }) =>
           everyRegistered(dir).pipe(
             Effect.map(
-              (entries) => entries.findLast((entry) => entry.agent === agent)?.runId ?? null,
+              (entries) =>
+                Option.getOrUndefined(Arr.findLast(entries, (entry) => entry.agent === agent))
+                  ?.runId ?? null,
             ),
             Effect.orElseSucceed(() => null),
             Effect.provideContext(bun),
@@ -872,9 +891,13 @@ const handlers = (
                 copyInto(into, attachments ?? []).pipe(
                   Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
                   Effect.map((copied) =>
-                    [text, ...copied.map((one) => attachedLine(`${into}/${one.name}`))]
-                      .filter((line) => line !== "")
-                      .join("\n"),
+                    Arr.join(
+                      Arr.filter(
+                        [text, ...Arr.map(copied, (one) => attachedLine(`${into}/${one.name}`))],
+                        (line) => line !== "",
+                      ),
+                      "\n",
+                    ),
                   ),
                   Effect.flatMap((told) =>
                     registry.steer({
@@ -921,7 +944,7 @@ const attachedAs = (into: string | null, paths: ReadonlyArray<string> | undefine
     if (paths === undefined || paths.length === 0) return undefined;
     const refused = yield* attachmentRefusal(paths);
     if (refused !== null) return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${refused}` });
-    return (yield* namesIn(into, paths)).map(({ name, from }) => ({ name, from }));
+    return Arr.map(yield* namesIn(into, paths), ({ name, from }) => ({ name, from }));
   }).pipe(
     Effect.mapError((cause) =>
       Schema.is(HostRefused)(cause) ? cause : new HostRefused({ reason: reason(cause) }),
@@ -929,7 +952,10 @@ const attachedAs = (into: string | null, paths: ReadonlyArray<string> | undefine
   );
 
 /** A steer that came to nothing, which is told to the caller but not kept as its request's answer. */
-class SteerUnanswered extends Schema.TaggedError<SteerUnanswered>()("SteerUnanswered", {
+class SteerUnanswered extends Schema.TaggedError<
+  SteerUnanswered,
+  { readonly brand: unique symbol }
+>()("SteerUnanswered", {
   outcome: SteerOutcome,
 }) {}
 
@@ -948,8 +974,14 @@ const outcomeOf = (result: OpResult): SteerOutcome =>
       };
 
 /** Through JSON text, so a field left undefined is dropped rather than refused. */
-const toText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const fromText = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
+const toText = Schemaflow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
+const fromText = Schemaflow(
+  Schema.decodeResult(Schema.fromJsonString(Schema.Json)),
+  Result.getOrThrow,
+);
 
 /** How often a board is built again with nothing written, so "silent for" stays true. */
 const BOARD_TICK = "5 seconds";
@@ -988,7 +1020,7 @@ const hostBoard = (dir: string) =>
     );
     const runs = registry
       .views(null)
-      .pipe(Effect.map((views) => views.map((view) => factsOfView(env.stateDir, view))));
+      .pipe(Effect.map((views) => Arr.map(views, (view) => factsOfView(env.stateDir, view))));
     const idle: IdleSince = new Map();
     const finishedSince: FinishedSince = new Map();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
@@ -1024,7 +1056,7 @@ const hostBoard = (dir: string) =>
     const sweepersOver = <E, F>(board: BoardSource<E, F>) =>
       Effect.gen(function* () {
         const herds = yield* liveHerds(herdr, env);
-        const sessions = herds.map((session) => session.herdr);
+        const sessions = Arr.map(herds, (session) => session.herdr);
         const build = board.views(herds);
         const all = yield* board.runs;
         const tasks = yield* listTasks(env.stateDir);
@@ -1067,7 +1099,7 @@ const hostBoard = (dir: string) =>
             }),
           }),
           generationsSweeper(generationsDir()),
-          stateSweeper(env.stateDir, new Set(all.map((run) => run.id))),
+          stateSweeper(env.stateDir, new Set(Arr.map(all, (run) => run.id))),
           uploadsSweeper(env.stateDir),
           compactionSweeper(env.stateDir, sessions),
           runnersSweeper(`${collieCache()}/runners`, BUILD),
@@ -1156,9 +1188,13 @@ class SharedBoard extends Context.Service<
 
 /** What the host writes for itself, by its path under the state directory, which no build reads. */
 const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
-  const [top, , below] = path.split("/");
-  const name = path.slice(path.lastIndexOf("/") + 1);
-  if (name.endsWith(".lock") || name.endsWith(".tmp") || top === "ssh") return true;
+  const [top, , below] = Str.split(path, "/");
+  const name = pipe(
+    path,
+    Str.slice(Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1) + 1),
+  );
+  if (pipe(name, Str.endsWith(".lock")) || pipe(name, Str.endsWith(".tmp")) || top === "ssh")
+    return true;
   if (/^host\.(log|out)(\.\d+)?$|^host\.db-(wal|journal)$/.test(path)) return true;
   if (top === "compaction") return name !== QUESTIONS;
   // The board reads only these directories' mtime, which a file growing leaves alone.
@@ -1186,7 +1222,9 @@ export const boardWrites = (dir: string) =>
 /** What a Run's open drawer lists and the board ignores: its handoffs' and evidence's sizes. */
 export const drawerWrites = (dir: string, runId: string) =>
   Stream.merge(
-    watched(runDir(dir, runId)).pipe(Stream.filter((event) => event.path.startsWith("handoffs/"))),
+    watched(runDir(dir, runId)).pipe(
+      Stream.filter((event) => pipe(event.path, Str.startsWith("handoffs/"))),
+    ),
     watched(evidenceDir(dir, runId)),
   ).pipe(Stream.debounce("200 millis"));
 
@@ -1378,7 +1416,7 @@ const frontDoorHandlers = (
       const trail = (runId: string) => runDir(env.stateDir, runId);
       /** The Herd of the session the asker runs in, where it names none. */
       const askersHerd = (client: { readonly id: number }) =>
-        herdOf(askerEnv(client).socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+        herdOf(askerEnv(client).socketPath).pipe(Effect.orElseSucceed(() => null));
       /** An operation that is idempotent by itself, recorded the first time it does anything. */
       // ponytail: a host that dies between acting and recording leaves that one unrecorded.
       const fresh = <A extends { readonly fresh: boolean }, I extends Schema.Json, E>(
@@ -1413,15 +1451,12 @@ const frontDoorHandlers = (
           ),
         );
       const known = (runId: string) =>
-        registry
-          .view(runId)
-          .pipe(
-            Effect.flatMap((view) =>
-              view === null
-                ? Effect.fail(new HostRefused({ reason: `no Run ${runId}` }))
-                : Effect.succeed(view),
-            ),
-          );
+        registry.view(runId).pipe(
+          Effect.filterOrFail(
+            (view) => view !== null,
+            () => new HostRefused({ reason: `no Run ${runId}` }),
+          ),
+        );
       const auditedControl =
         (
           runId: string,
@@ -1502,8 +1537,11 @@ const frontDoorHandlers = (
               detail: `no proposal "${proposal}"`,
             });
           const lines = yield* readProposals(file);
-          const found = lines.find(
-            (line): line is ProposalRecord => line.kind === "proposal" && line.id === proposal,
+          const found = Option.getOrUndefined(
+            Arr.findFirst(
+              lines,
+              (line): line is ProposalRecord => line.kind === "proposal" && line.id === proposal,
+            ),
           );
           if (found?.content_hash !== hash)
             return yield* new ProposalRefused({
@@ -1565,8 +1603,8 @@ const frontDoorHandlers = (
           return Effect.gen(function* () {
             let where = from;
             if (frontDoor === "agent" && from?.machine === undefined) {
-              const entry = (yield* everyRegistered(dir)).findLast(
-                (one) => one.agent === from?.agent,
+              const entry = Option.getOrUndefined(
+                Arr.findLast(yield* everyRegistered(dir), (one) => one.agent === from?.agent),
               );
               if (entry === undefined || (from?.run !== undefined && from.run !== entry.runId))
                 return yield* new HostRefused({
@@ -1738,11 +1776,15 @@ const frontDoorHandlers = (
         workflows: ({ project }) =>
           discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })).pipe(
             Effect.map(({ entries }) =>
-              entries.map(({ id, title, description, inputs }) => ({
+              Arr.map(entries, ({ id, title, description, inputs }) => ({
                 id,
                 title,
                 description,
-                inputs: inputs.map(({ name, required, schema }) => ({ name, required, schema })),
+                inputs: Arr.map(inputs, ({ name, required, schema }) => ({
+                  name,
+                  required,
+                  schema,
+                })),
               })),
             ),
             Effect.provideContext(bun),
@@ -1767,7 +1809,7 @@ const frontDoorHandlers = (
                   extendEnv: true,
                 }),
               );
-              yield* child.unref;
+              yield* Effect.asVoid(child.unref);
               return true;
             }).pipe(
               Effect.uninterruptible,
@@ -1828,7 +1870,7 @@ const frontDoorHandlers = (
                     : who.origin === "desktop"
                       ? (who.from?.client ?? who.origin)
                       : null,
-                  yield* nowIso(),
+                  yield* nowIso,
                 ).pipe(
                   Effect.mapError(
                     (cause) =>
@@ -1847,13 +1889,13 @@ const frontDoorHandlers = (
           ),
         sharedDefinitions: (_, { client }) =>
           Effect.gen(function* () {
-            const held = yield* sharedDefinitions(env.userDir, yield* nowIso());
+            const held = yield* sharedDefinitions(env.userDir, yield* nowIso);
             const trail = (yield* Path.Path).join(env.stateDir, "definitions");
             yield* recordAudit(trail, {
               operation: "definitions",
               request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
               ...whoOf(client),
-              result: Schema.Number,
+              result: Schema.Finite,
               value: held.length,
             }).pipe(Effect.andThen(trimAudit(trail, DEFINITIONS_TRAIL)), Effect.orDie);
             return held;
@@ -1879,7 +1921,7 @@ const frontDoorHandlers = (
                   env.userDir,
                   definitions,
                   who.from?.machine?.name ?? who.from?.client ?? who.origin,
-                  yield* nowIso(),
+                  yield* nowIso,
                 ).pipe(
                   Effect.mapError(
                     (cause) =>
@@ -2129,19 +2171,19 @@ const frontDoorHandlers = (
           );
         },
         act: ({ actions: given, request }, { client }) => {
-          const scrubbed = given.map((one) => scrubJson(one));
-          const actions = scrubbed.map((one) => one.value);
+          const scrubbed = Arr.map(given, (one) => scrubJson(one));
+          const actions = Arr.map(scrubbed, (one) => one.value);
           return plainly(
             Schema.decodeUnknownEffect(Schema.Array(ActionSchema))(actions).pipe(
               Effect.mapError(
                 () => new HostRefused({ reason: `${REFUSED_INPUT}: ${refusedAction(actions)}` }),
               ),
               Effect.flatMap((decoded) => {
-                const proposed = decoded.filter((action) => !ACTED_KINDS.has(action.kind));
+                const proposed = Arr.filter(decoded, (action) => !ACTED_KINDS.has(action.kind));
                 return proposed.length > 0
                   ? Effect.fail(
                       new HostRefused({
-                        reason: `${REFUSED_INPUT}: ${[...new Set(proposed.map((a) => a.kind))].join(", ")} is carried out through propose, so it is on the record as asked for`,
+                        reason: `${REFUSED_INPUT}: ${Arr.join([...new Set(Arr.map(proposed, (a) => a.kind))], ", ")} is carried out through propose, so it is on the record as asked for`,
                       }),
                     )
                   : carryOutAsked(askerEnv(client), decoded, {
@@ -2149,11 +2191,14 @@ const frontDoorHandlers = (
                       requestId: request,
                     }).pipe(
                       Effect.map((results) =>
-                        results.map((result, index) => {
+                        Arr.map(results, (result, index) => {
                           const notice = removedNotice(scrubbed[index]?.removed ?? []);
                           return notice === null
                             ? result
-                            : { ...result, note: [result.note, notice].filter(Boolean).join("; ") };
+                            : {
+                                ...result,
+                                note: Arr.join(Arr.filter([result.note, notice], Boolean), "; "),
+                              };
                         }),
                       ),
                     );
@@ -2231,8 +2276,11 @@ const frontDoorHandlers = (
                     const from = whoOf(client).from;
                     const step =
                       from?.run === runId
-                        ? (yield* readLaunches(env.stateDir, runId)).findLast(
-                            (one) => one.agent === from.agent,
+                        ? Option.getOrUndefined(
+                            Arr.findLast(
+                              yield* readLaunches(env.stateDir, runId),
+                              (one) => one.agent === from.agent,
+                            ),
                           )?.step
                         : undefined;
                     const fs = yield* FileSystem.FileSystem;
@@ -2260,8 +2308,8 @@ const frontDoorHandlers = (
                       );
                       return;
                     }
-                    const started = (yield* nowIso()).replace(/[:.]/g, "-");
-                    const log = `${evidenceDir(env.stateDir, runId)}/verify/${started}-${name.replace(/[^\w.-]/g, "_")}.log`;
+                    const started = pipe(yield* nowIso, Str.replace(/[:.]/g, "-"));
+                    const log = `${evidenceDir(env.stateDir, runId)}/verify/${started}-${pipe(name, Str.replace(/[^\w.-]/g, "_"))}.log`;
                     const collected = yield* Effect.raceFirst(
                       collect(
                         evidenceDir(env.stateDir, runId),
@@ -2476,7 +2524,7 @@ const frontDoorHandlers = (
                   const asked = change.outcome;
                   if (asked !== null && !REQUESTABLE.includes(asked))
                     return yield* new HostRefused({
-                      reason: `${REFUSED_INPUT}: "${asked}" is not an outcome; a Run is held to one of ${REQUESTABLE.join(", ")}`,
+                      reason: `${REFUSED_INPUT}: "${asked}" is not an outcome; a Run is held to one of ${Arr.join(REQUESTABLE, ", ")}`,
                     });
                   const fixed = Option.getOrNull(
                     yield* registry
@@ -2514,12 +2562,17 @@ const frontDoorHandlers = (
                       });
                     const recorded =
                       change.kind === "verification"
-                        ? (yield* readAudit(trail(runId))).find((one) => one.request === request)
+                        ? Option.getOrUndefined(
+                            Arr.findFirst(
+                              yield* readAudit(trail(runId)),
+                              (one) => one.request === request,
+                            ),
+                          )
                         : undefined;
                     const amendedBy = recorded?.actor ?? by;
                     if (
                       change.kind === "verification" &&
-                      current.history.some((one) => one.by === actorName(amendedBy))
+                      Arr.some(current.history, (one) => one.by === actorName(amendedBy))
                     )
                       return current;
                     const wanted =
@@ -2530,7 +2583,7 @@ const frontDoorHandlers = (
                       current,
                       wanted,
                       actorName(amendedBy),
-                      yield* nowIso(),
+                      yield* nowIso,
                       voiceOf(amendedBy),
                     );
                     if (amended !== current)
@@ -2559,7 +2612,8 @@ const frontDoorHandlers = (
                   });
                 const propagated: string[] = [];
                 if (spread && next !== null)
-                  for (const child of (yield* registry.views(null)).filter(
+                  for (const child of Arr.filter(
+                    yield* registry.views(null),
                     (view) =>
                       view.parent === runId &&
                       view.status.status !== "complete" &&
@@ -2574,7 +2628,7 @@ const frontDoorHandlers = (
                         if (current === null) return null;
                         const carried = propagateIntent(next, current);
                         yield* writeIntentHeld(runDir(env.stateDir, child.runId), carried.intent);
-                        return `  ${child.runId}: propagated${carried.conflicts.length ? ` (${carried.conflicts.join("; ")})` : ""}`;
+                        return `  ${child.runId}: propagated${carried.conflicts.length ? ` (${Arr.join(carried.conflicts, "; ")})` : ""}`;
                       }),
                     ).pipe(Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })));
                     if (note !== null) propagated.push(note);
@@ -2610,8 +2664,11 @@ const frontDoorHandlers = (
                 result: Schema.Json,
               },
               Effect.gen(function* () {
-                const found = (yield* deliveriesOf(env.stateDir, runId)).find(
-                  (entry) => entry.delivery.id === delivery,
+                const found = Option.getOrUndefined(
+                  Arr.findFirst(
+                    yield* deliveriesOf(env.stateDir, runId),
+                    (entry) => entry.delivery.id === delivery,
+                  ),
                 );
                 if (!found)
                   return yield* new HostRefused({
@@ -2622,7 +2679,7 @@ const frontDoorHandlers = (
                   delivery,
                   as,
                   actorName({ ...whoOf(client), requestId: request }),
-                  yield* nowIso(),
+                  yield* nowIso,
                 );
                 if ("error" in settled)
                   return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${settled.error}` });
@@ -2687,7 +2744,7 @@ const frontDoorHandlers = (
                 },
                 Effect.gen(function* () {
                   const line = {
-                    at: yield* nowIso(),
+                    at: yield* nowIso,
                     by: actorName({ ...whoOf(client), requestId: request }),
                     kind,
                     ref,
@@ -2711,7 +2768,7 @@ const frontDoorHandlers = (
                     const [first] = yield* readSeen(trail(runId));
                     if (first !== undefined) return first;
                     const line = {
-                      at: yield* nowIso(),
+                      at: yield* nowIso,
                       by: actorName({ ...whoOf(client), requestId: request }),
                     };
                     yield* recordSeen(trail(runId), line);
@@ -2727,13 +2784,20 @@ const frontDoorHandlers = (
             Effect.gen(function* () {
               const view = yield* known(runId);
               const task = view.task === null ? null : yield* readTask(env.stateDir, view.task);
-              const agents = (yield* everyRegistered(env.stateDir))
-                .filter((entry) => entry.runId === runId)
-                .map((entry) => entry.agent)
-                .filter((name) => agent === undefined || name === agent)
-                .reverse();
-              const sessions = (yield* liveHerds(herdr, env)).toSorted(
-                (a, b) => Number(b.herd === task?.herd) - Number(a.herd === task?.herd),
+              const agents = Arr.filter(
+                Arr.map(
+                  Arr.filter(
+                    yield* everyRegistered(env.stateDir),
+                    (entry) => entry.runId === runId,
+                  ),
+                  (entry) => entry.agent,
+                ),
+                (name) => agent === undefined || name === agent,
+              ).reverse();
+              const sessions = Arr.sortWith(
+                yield* liveHerds(herdr, env),
+                (value) => value,
+                (a, b) => Num.sign(Number(b.herd === task?.herd) - Number(a.herd === task?.herd)),
               );
               return yield* once(
                 trail(runId),
@@ -2750,14 +2814,12 @@ const frontDoorHandlers = (
                   view.workspace ?? task?.workspace ?? null,
                   task?.herd,
                 ).pipe(
-                  Effect.flatMap((at) =>
-                    at === null
-                      ? Effect.fail(
-                          new HostRefused({
-                            reason: `${runId} has no pane or workspace herdr still has`,
-                          }),
-                        )
-                      : Effect.succeed(at),
+                  Effect.filterOrFail(
+                    (at) => at !== null,
+                    () =>
+                      new HostRefused({
+                        reason: `${runId} has no pane or workspace herdr still has`,
+                      }),
                   ),
                 ),
               );
@@ -2839,8 +2901,8 @@ const frontDoorHandlers = (
                   return yield* new HostRefused({
                     reason: "a follow-up is a child of a finished run, and this one is still going",
                   });
-                const offered = (yield* registry.offers(runId)).find(
-                  (one) => one.kind === "follow-up",
+                const offered = Option.getOrUndefined(
+                  Arr.findFirst(yield* registry.offers(runId), (one) => one.kind === "follow-up"),
                 );
                 if (offered === undefined)
                   return yield* new HostRefused({
@@ -2872,7 +2934,9 @@ const frontDoorHandlers = (
             const view = yield* registry.view(runId);
             if (view === null) return null;
             const board = Option.getOrElse(yield* Stream.runHead(boards), () => []);
-            const card = board.find((one) => one.runs.includes(runId));
+            const card = Option.getOrUndefined(
+              Arr.findFirst(board, (one) => one.runs.includes(runId)),
+            );
             const mr = card?.run === runId ? card.mr : null;
             const forged =
               mr === null ? undefined : (yield* readForge(env.stateDir)).get(mrLabel(mr));
@@ -2906,7 +2970,9 @@ const frontDoorHandlers = (
                   });
             fresh = false;
             // Every Run, because another built from the same plan may have finished its tickets.
-            const runs = (yield* registry.views(null)).map((one) => factsOfView(env.stateDir, one));
+            const runs = Arr.map(yield* registry.views(null), (one) =>
+              factsOfView(env.stateDir, one),
+            );
             const hosted = yield* Effect.context<HostServices>();
             const flow = yield* taskFlowOf(
               {
@@ -2952,7 +3018,7 @@ const frontDoorHandlers = (
                     ...development,
                     protocol: PROTOCOL,
                     files: true,
-                    herds: sessions.flatMap(({ herd, name }) =>
+                    herds: Arr.flatMap(sessions, ({ herd, name }) =>
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
                     ),
                   },
@@ -2970,7 +3036,7 @@ const frontDoorHandlers = (
 const installationOf = Effect.fn("Host.installationOf")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${dir}/installation`;
-  const known = (yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))).trim();
+  const known = Str.trim(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")));
   if (known !== "") return known;
   const made = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   // Renamed into place, so a host that dies mid-write leaves no half an id.
@@ -3028,7 +3094,7 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
         // No process can carry an id this host has yet to make.
         const fresh = !(yield* fs.exists(`${dir}/installation`));
         const installation = yield* installationOf(dir);
-        yield* markSeenSince(dir, yield* nowIso());
+        yield* markSeenSince(dir, yield* nowIso);
         const checks = yield* hostCheckProcesses({
           dir,
           installation,
@@ -3152,13 +3218,15 @@ const locateIn =
   ({ project, id }) =>
     discover(searchPath({ ...install, project })).pipe(
       Effect.flatMap((found) => {
-        const entry = found.entries.find((one) => one.id === id);
+        const entry = Option.getOrUndefined(Arr.findFirst(found.entries, (one) => one.id === id));
         if (entry !== undefined) {
           return Effect.succeed({ entry: entry.path, revision: entry.revision });
         }
         // A file the search path refuses is refused here by name: what it was written to
         // override is not what the author asked to run.
-        const problem = found.problems.find((one) => one.id === id);
+        const problem = Option.getOrUndefined(
+          Arr.findFirst(found.problems, (one) => one.id === id),
+        );
         return new HostRefused({
           reason:
             problem === undefined
@@ -3223,7 +3291,15 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
       userDir: env.userDir,
       build: BUILD,
       ...development,
-      connect: (peer) => connectPeer(dir, peer.name, { as: "host", client: machineName(), stamp }),
+      connect: (peer) =>
+        connectPeer(dir, peer.name, { as: "host", client: machineName(), stamp }).pipe(
+          Effect.map((client) => ({
+            ...client,
+            identity: client.identity(),
+            settings: client.settings(),
+            sharedDefinitions: client.sharedDefinitions(),
+          })),
+        ),
       installation,
       stamp,
       socket: socketOf(dir),
@@ -3489,7 +3565,7 @@ export const peerChannel = (stateDir: string, name: string, header: RelayHeader)
     (conn) => Effect.sync(() => conn.destroy()),
   );
 
-const encodeHeader = Schema.encodeSync(RelayHeaderJson);
+const encodeHeader = Schemaflow(Schema.encodeResult(RelayHeaderJson), Result.getOrThrow);
 
 /**
  * A client of a peer's host, over this Machine's relay to it. It is asked who it is and
@@ -3772,12 +3848,12 @@ const hostCommand: Effect.Effect<ReadonlyArray<string>> = Effect.gen(function* (
   const override = yield* Config.option(Config.String("COLLIE_HOST"));
   if (override._tag === "Some") {
     const value = override.value;
-    if (!value.trimStart().startsWith("[")) return [value];
-    return yield* Schema.decodeUnknownEffect(CommandJson)(value).pipe(
-      Effect.orElseSucceed(() => [value]),
-    );
+    if (!pipe(Str.trimStart(value), Str.startsWith("["))) return [value];
+    return yield* Schema.decodeEffect(CommandJson)(value).pipe(Effect.orElseSucceed(() => [value]));
   }
   // A standalone executable's entry lives in the binary itself, under `/$bunfs`; there
   // is no file to pass, and passing that path would be read as a subcommand.
-  return Bun.main.startsWith("/$bunfs/") ? [process.execPath] : [process.execPath, Bun.main];
+  return pipe(Bun.main, Str.startsWith("/$bunfs/"))
+    ? [process.execPath]
+    : [process.execPath, Bun.main];
 }).pipe(Effect.orDie);

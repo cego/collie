@@ -27,8 +27,12 @@
 // it: a pane shows the question as well as the answer, so a marker that appears in the
 // question is satisfied by its echo.
 
-import { BunServices } from "@effect/platform-bun";
-import { Clock, Effect, FileSystem, ManagedRuntime } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { Clock, ConfigProvider, Effect, FileSystem, ManagedRuntime, Schema } from "effect";
+import { platformLayer } from "../src/platform";
 import {
   chatHarnessOf,
   chatPath,
@@ -38,11 +42,12 @@ import {
   readChat,
 } from "../src/chat";
 import { writeConfigValue } from "../src/config";
-import { readEnv } from "../src/env";
+import { readEnv, type PluginEnv } from "../src/env";
 import { ensureHome, homeDeps, homePath, readHome, UNREADABLE } from "../src/home";
 import { Herdr } from "../src/herdr";
 import { carryOutProposal } from "../src/operations";
-import { readIntent, seedIntent, writeIntent } from "../src/intent";
+import { readIntent } from "../src/intent";
+import { startRun } from "../src/lifecycle";
 import {
   append as appendNews,
   newsPath,
@@ -50,10 +55,53 @@ import {
   read as readNews,
 } from "../src/news";
 import { pendingFor, proposalsPath, read as readProposals } from "../src/proposals";
-import { RunStore } from "../src/run";
 import { herdDir, herdOf } from "../src/steering";
 
-const runtime = ManagedRuntime.make(BunServices.layer);
+const runtime = ManagedRuntime.make(platformLayer);
+const main = new URL("../src/main.ts", import.meta.url).pathname;
+const CommandJson = Schema.fromJsonString(Schema.Array(Schema.String));
+const probeWorkflow = `import { ask, defineWorkflow } from "collie";
+import { Schema } from "effect";
+export default defineWorkflow({
+  id: "chat-probe",
+  title: "A disposable Run for the chat probe",
+  input: Schema.Struct({}),
+  output: Schema.String,
+  run: () => ask({ name: "finish", prompt: "Finish the chat probe?", options: ["Done"] }),
+});
+`;
+
+const disposableRun = Effect.fn("live.disposableRun")(function* (
+  env: PluginEnv,
+  workspaceId: string,
+  project: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const workflows = `${env.userDir}/workflows`;
+  yield* fs.makeDirectory(workflows, { recursive: true });
+  yield* fs.writeFileString(`${workflows}/chat-probe.workflow.ts`, probeWorkflow);
+  const host = yield* Schema.encodeEffect(CommandJson)([process.execPath, main]);
+  const started = yield* startRun(
+    { ...env, cwd: project, cwdExplicit: true, workspaceId },
+    {
+      door: "cli",
+      id: "chat-probe",
+      request: "chat-probe",
+      input: { json: {}, text: {} },
+      task: { mode: "here" },
+      intent: { goal: "a disposable Run for the probe" },
+    },
+  ).pipe(
+    Effect.provide(
+      ConfigProvider.layer(
+        ConfigProvider.fromEnv({
+          env: { ...env.raw, COLLIE_HOST: host },
+        }),
+      ),
+    ),
+  );
+  return started.ok ? { id: started.runId, dir: `${env.stateDir}/runs/${started.runId}` } : null;
+});
 
 type Result = "pass" | "fail" | "not-run";
 interface Row {
@@ -82,8 +130,8 @@ const answers = Effect.fn("live.answers")(function* (
 ) {
   const until = (yield* Clock.currentTimeMillis) + withinMs;
   while ((yield* Clock.currentTimeMillis) < until) {
-    const tail = yield* herdr.paneRead(paneId, 200).pipe(Effect.catch(() => Effect.succeed("")));
-    if (tail.includes(marker)) return tail;
+    const tail = yield* herdr.paneRead(paneId, 200).pipe(Effect.orElseSucceed(() => ""));
+    if (pipe_(tail, Str.includes(marker))) return tail;
     yield* Effect.sleep("3 seconds");
   }
   return null;
@@ -101,6 +149,8 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   yield* writeConfigValue(userDir, "chat_harness", harness);
 
   const env = readEnv({
+    // The probe replays the caller's complete environment into its disposable configuration.
+    // oxlint-disable-next-line effecttsgo/process-env, effecttsgo/process-env-in-effect
     ...process.env,
     HERDR_PLUGIN_STATE_DIR: stateDir,
     COLLIE_USER_DIR: userDir,
@@ -132,9 +182,11 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     return rows;
   }
   const home = ensured.record;
-  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
-  const board = panes.find((pane) => pane.paneId === home.paneId);
-  const chatPane = panes.find((pane) => pane.paneId === home.chatPaneId);
+  const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+  const board = Option.getOrUndefined(Arr.findFirst(panes, (pane) => pane.paneId === home.paneId));
+  const chatPane = Option.getOrUndefined(
+    Arr.findFirst(panes, (pane) => pane.paneId === home.chatPaneId),
+  );
   say(
     "one tab, two panes",
     board && chatPane && board.tabId === chatPane.tabId ? "pass" : "fail",
@@ -145,7 +197,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   // `tools/chat-live.ts`, so the MCP server Claude started would be the probe again and
   // the conversation would have no Collie tools at all. An install has the compiled
   // binary and needs none of this.
-  const self = [process.execPath, new URL("../src/main.ts", import.meta.url).pathname];
+  const self = [process.execPath, main];
   const chat = yield* ensureChatFor(
     herdr,
     env,
@@ -166,23 +218,13 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
 
   // A disposable Run of this probe's own, so there is exactly one thing to read about
   // and its id is a string that appears nowhere in what is typed at the model.
-  const store = new RunStore(stateDir);
-  const mine = yield* store
-    .create({
-      workflow: "implement",
-      cwd: namespaceDir,
-      inputs: {},
-      inputSources: {},
-      stepIds: ["build"],
-      maxIterations: 1,
-      namedAfter: "picker",
-    })
-    .pipe(Effect.catch(() => Effect.succeed(null)));
+  const mine = yield* disposableRun(env, home.workspaceId, namespaceDir).pipe(
+    Effect.orElseSucceed(() => null),
+  );
   if (mine === null) {
     say("a disposable Run to talk about", "fail", "could not make one");
     return rows;
   }
-  yield* writeIntent(mine.dir, seedIntent(mine.id, { goal: "a disposable Run for the probe" }));
 
   // (3) A question typed into the native editor, answered through a Collie tool.
   //
@@ -268,27 +310,34 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   const file = yield* proposalsPath(stateDir, yield* herdOf(env.socketPath));
   const now = yield* Clock.currentTimeMillis;
   const records = yield* readProposals(file);
-  const one = records
-    .filter((line) => line.kind === "proposal")
-    .find((line) => line.targets.some((target) => target.run === mine.id));
+  const one = Option.getOrUndefined(
+    Arr.findFirst(
+      Arr.filter(records, (line) => line.kind === "proposal"),
+      (line) => Arr.some(line.targets, (target) => target.run === mine.id),
+    ),
+  );
   const intent = yield* readIntent(mine.dir);
   say(
     "a requested action is executed and attributed to chat",
     applied !== null &&
       one !== undefined &&
-      one.by.startsWith("chat:") &&
-      records.some((line) => line.kind === "confirmed" && line.id === one.id && line.by === one.by)
+      pipe_(one.by, Str.startsWith("chat:")) &&
+      Arr.some(
+        records,
+        (line) => line.kind === "confirmed" && line.id === one.id && line.by === one.by,
+      )
       ? "pass"
       : "fail",
     `by ${one?.by ?? "nobody"}`,
   );
-  const constraints = (intent?.constraints ?? []).map((constraint) => constraint.text);
+  const constraints = Arr.map(intent?.constraints ?? [], (constraint) => constraint.text);
   say(
     "the Intent changes without a second confirmation",
-    intent?.version === 2 && constraints.some((text) => text.includes("stay in src"))
+    intent?.version === 2 &&
+      Arr.some(constraints, (text) => pipe_(text, Str.includes("stay in src")))
       ? "pass"
       : "fail",
-    `Intent v${intent?.version ?? "?"}: ${constraints.join("; ") || "no constraints"}`,
+    `Intent v${intent?.version ?? "?"}: ${Arr.join(constraints, "; ") || "no constraints"}`,
   );
   const waiting = pendingFor(records, mine.id, now);
   say(
@@ -352,7 +401,8 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     arrived === null ? "fail" : "pass",
     push.how,
   );
-  const settled = pendingNews(yield* readNews(newsFile)).items.some(
+  const settled = Arr.some(
+    pendingNews(yield* readNews(newsFile)).items,
     (item) => item.key === `${mine.id}:probe`,
   );
   say(
@@ -363,30 +413,33 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
 
   const pane = homeAgain.chatPaneId ?? chat.record.paneId;
   yield* Effect.log(
-    `--- ${pane} tail ---\n${yield* herdr.paneRead(pane, 60).pipe(Effect.catch(() => Effect.succeed("(nothing)")))}`,
+    `--- ${pane} tail ---\n${yield* herdr.paneRead(pane, 60).pipe(Effect.orElseSucceed(() => "(nothing)"))}`,
   );
   return rows;
 });
 
-const argv = Bun.argv.slice(2);
+const argv = Arr.drop(Bun.argv, 2);
 const flag = (name: string, fallback: string) => {
   const at = argv.indexOf(`--${name}`);
   return at === -1 ? fallback : (argv[at + 1] ?? fallback);
 };
 
 const rows = await runtime.runPromise(
-  Effect.scoped(live(flag("harness", "claude"), argv.includes("--keep"))),
+  Effect.scoped(live(flag("harness", "claude"), Arr.contains(argv, "--keep"))),
 );
 await runtime.runPromise(
   Effect.log(
-    [
-      "",
-      "| check | result | note |",
-      "|---|---|---|",
-      ...rows.map((row) => `| ${row.check} | ${row.result} | ${row.note} |`),
-      "",
-      "Paste these rows into the implementation Run, with the harness version and revision.",
-    ].join("\n"),
+    Arr.join(
+      [
+        "",
+        "| check | result | note |",
+        "|---|---|---|",
+        ...Arr.map(rows, (row) => `| ${row.check} | ${row.result} | ${row.note} |`),
+        "",
+        "Paste these rows into the implementation Run, with the harness version and revision.",
+      ],
+      "\n",
+    ),
   ),
 );
-process.exitCode = rows.some((row) => row.result !== "pass") ? 1 : 0;
+process.exitCode = Arr.some(rows, (row) => row.result !== "pass") ? 1 : 0;

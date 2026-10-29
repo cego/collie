@@ -2,6 +2,10 @@
 // agent's timings (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement). What only
 // another repository could change is put to the human and never counts toward the outcome.
 
+import * as Num from "effect/Number";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
 import {
   Agents,
   FindingSchema,
@@ -27,7 +31,18 @@ import {
   type Measurement,
   type SynthesisReport,
 } from "collie";
-import { Array as Arr, Clock, Duration, Effect, FileSystem, Hash, Option, Schema } from "effect";
+import {
+  Array as Arr,
+  Clock,
+  Duration,
+  Effect,
+  FileSystem,
+  Hash,
+  Option,
+  Schema,
+  flow,
+  Result,
+} from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./tune-up.md" with { type: "text" };
 import { IMPLEMENTER, REVIEWER, ROUNDS, rally, reviewPass, reviewRound } from "./reviewing.ts";
@@ -47,7 +62,7 @@ const Percent = Schema.Union([
 const isDuration = Schema.makeFilter(
   (said: string) =>
     said === "" ||
-    Option.isSome(Schema.decodeUnknownOption(Schema.DurationFromString)(said)) ||
+    Option.isSome(Schema.decodeOption(Schema.DurationFromString)(said)) ||
     "a duration, such as 2 hours",
 );
 
@@ -379,8 +394,10 @@ type Unjudged = Exclude<Measurement["result"], Judged>;
 
 /** Why calibration rules out proof for each metric it does. */
 const unprovable = (plan: Plan, verdicts: Judged["verdicts"]) =>
-  plan.metrics.flatMap((metric) => {
-    const judged = verdicts.find((one) => one.metric === metric.name);
+  Arr.flatMap(plan.metrics, (metric) => {
+    const judged = Option.getOrUndefined(
+      Arr.findFirst(verdicts, (one) => one.metric === metric.name),
+    );
     if (judged === undefined) return [];
     if (metric.role === "primary" && judged.verdict === "inconclusive")
       return [{ metric: metric.name, why: `${metric.name} is inconclusive against itself` }];
@@ -398,8 +415,8 @@ const unjudged = (measured: Measurement, result: Unjudged) => {
   switch (result._tag) {
     case "Failed":
       return result.stage === "prepare"
-        ? `${tree(result.tree)} could not be built: \`${result.command}\` exited ${result.exit}: ${result.output.trim()}`
-        : `\`${result.command}\` failed on ${tree(result.tree)} with exit ${result.exit}: ${result.output.trim()}`;
+        ? `${tree(result.tree)} could not be built: \`${result.command}\` exited ${result.exit}: ${Str.trim(result.output)}`
+        : `\`${result.command}\` failed on ${tree(result.tree)} with exit ${result.exit}: ${Str.trim(result.output)}`;
     case "TimedOut":
       return `\`${result.command}\` outlived the plan's time limit in ${result.stage} on ${tree(result.tree)}`;
     case "Unjudged":
@@ -409,25 +426,27 @@ const unjudged = (measured: Measurement, result: Unjudged) => {
 
 /** Why a Cycle is not kept, or null: its checks pass, its primary gains and every guardrail holds. */
 const notKept = (plan: Plan, failed: ReadonlyArray<string>, measured: Measurement) => {
-  const whys = failed.length === 0 ? [] : [`checks failed: ${failed.join(", ")}`];
+  const whys = failed.length === 0 ? [] : [`checks failed: ${Arr.join(failed, ", ")}`];
   if (measured.result._tag !== "Judged")
-    return [...whys, unjudged(measured, measured.result)].join("; ");
+    return Arr.join([...whys, unjudged(measured, measured.result)], "; ");
   const { verdicts } = measured.result;
   for (const metric of plan.metrics) {
-    const judged = verdicts.find((one) => one.metric === metric.name);
+    const judged = Option.getOrUndefined(
+      Arr.findFirst(verdicts, (one) => one.metric === metric.name),
+    );
     const verdict = judged?.verdict ?? "no verdict";
     if (metric.role === "primary") {
       if (verdict !== "gain") whys.push(`${metric.name} ${verdict}, not a gain`);
     } else if (judged === undefined || !judged.held || verdict === "inconclusive")
       whys.push(`guardrail ${metric.name} ${verdict}, not held`);
   }
-  return whys.length === 0 ? null : whys.join("; ");
+  return whys.length === 0 ? null : Arr.join(whys, "; ");
 };
 
 /** What stopped an integration, as the tuner is told it. */
 const stoppedBy = (merged: Integration) =>
   merged.status === "conflicted"
-    ? `Collie merged ${merged.ref} (${merged.sha}) into this branch, and the merge stopped on conflicts in: ${merged.files.join(", ")}.`
+    ? `Collie merged ${merged.ref} (${merged.sha}) into this branch, and the merge stopped on conflicts in: ${Arr.join(merged.files, ", ")}.`
     : `Collie could not merge ${merged.ref} (${merged.sha}) into this branch: ${merged.reason}.`;
 
 const cycleLine = (one: Cycled) =>
@@ -447,9 +466,13 @@ const researchLine = (one: Discovered["research"][number]) =>
 
 const verdictsLine = (measured: Measurement) =>
   measured.result._tag === "Judged"
-    ? measured.result.verdicts
-        .map((one) => `${one.metric} ${one.verdict}${one.held ? ", held" : ", not held"}`)
-        .join("; ")
+    ? Arr.join(
+        Arr.map(
+          measured.result.verdicts,
+          (one) => `${one.metric} ${one.verdict}${one.held ? ", held" : ", not held"}`,
+        ),
+        "; ",
+      )
     : unjudged(measured, measured.result);
 
 /** The findings as the human reads them, every statement marked by what it rests on. */
@@ -462,98 +485,117 @@ const reportOf = (options: {
 }) => {
   const { found } = options;
   const sourced = (title: string) =>
-    found.research.flatMap((one) =>
+    Arr.flatMap(found.research, (one) =>
       one.kind !== "nothing-found" && one.opportunity === title
         ? [`  - ${one.effect} by [${one.title}](${one.link})`]
         : [],
     );
-  const ranked = new Set(found.opportunities.map((one) => one.title));
+  const ranked = new Set(Arr.map(found.opportunities, (one) => one.title));
   const ruledOut = [
     ...new Set(
-      found.research.flatMap((one) =>
+      Arr.flatMap(found.research, (one) =>
         one.kind !== "nothing-found" && !ranked.has(one.opportunity) ? [one.opportunity] : [],
       ),
     ),
   ];
-  const searched = found.research.flatMap((one) =>
+  const searched = Arr.flatMap(found.research, (one) =>
     one.kind === "nothing-found" ? [`- Searched, nothing found: ${one.searched}`] : [],
   );
-  return [
-    `# Tune-up findings: ${options.runId}`,
-    "",
-    options.ending,
-    "",
-    "## Stack",
-    "",
-    `- ${found.stack.join(", ")}`,
-    `- Skills loaded: ${found.skills.join(", ") || "none"}`,
-    "",
-    "## Journeys",
-    "",
-    ...found.journeys.flatMap((journey) =>
-      journey.objectives.map(
-        (one) =>
-          `- ${journey.name}: ${one.metric}${one.target === undefined ? "" : ` (${one.target})`}, because ${one.why}`,
+  return Arr.join(
+    [
+      `# Tune-up findings: ${options.runId}`,
+      "",
+      options.ending,
+      "",
+      "## Stack",
+      "",
+      `- ${Arr.join(found.stack, ", ")}`,
+      `- Skills loaded: ${Arr.join(found.skills, ", ") || "none"}`,
+      "",
+      "## Journeys",
+      "",
+      ...Arr.flatMap(found.journeys, (journey) =>
+        Arr.map(
+          journey.objectives,
+          (one) =>
+            `- ${journey.name}: ${one.metric}${one.target === undefined ? "" : ` (${one.target})`}, because ${one.why}`,
+        ),
       ),
-    ),
-    "",
-    "## Telemetry",
-    "",
-    ...found.telemetry.map((one) => `- ${telemetryLine(one).replace(/^telemetry /, "")}`),
-    "",
-    "## Opportunities",
-    "",
-    ...found.opportunities.flatMap((one, at) => [
-      `${at + 1}. ${one.title} (${one.evidence}; cites ${one.cites.join(", ")})`,
-      ...sourced(one.title),
-    ]),
-    ...ruledOut.flatMap((title) => [`- Not ranked: ${title}`, ...sourced(title)]),
-    ...searched,
-    "",
-    "## Calibration (measured)",
-    "",
-    ...options.calibrations.map((one) => `- ${one.id}: ${verdictsLine(one)}`),
-    ...(options.cycles.length === 0
-      ? []
-      : ["", "## Cycles (measured)", "", ...options.cycles.map((one) => `- ${cycleLine(one)}`)]),
-    "",
-  ].join("\n");
+      "",
+      "## Telemetry",
+      "",
+      ...Arr.map(
+        found.telemetry,
+        (one) => `- ${pipe(telemetryLine(one), Str.replace(/^telemetry /, ""))}`,
+      ),
+      "",
+      "## Opportunities",
+      "",
+      ...Arr.flatMap(found.opportunities, (one, at) => [
+        `${at + 1}. ${one.title} (${one.evidence}; cites ${Arr.join(one.cites, ", ")})`,
+        ...sourced(one.title),
+      ]),
+      ...Arr.flatMap(ruledOut, (title) => [`- Not ranked: ${title}`, ...sourced(title)]),
+      ...searched,
+      "",
+      "## Calibration (measured)",
+      "",
+      ...Arr.map(options.calibrations, (one) => `- ${one.id}: ${verdictsLine(one)}`),
+      ...(options.cycles.length === 0
+        ? []
+        : [
+            "",
+            "## Cycles (measured)",
+            "",
+            ...Arr.map(options.cycles, (one) => `- ${cycleLine(one)}`),
+          ]),
+      "",
+    ],
+    "\n",
+  );
 };
 
 /** Stable across Runs, so a later Run's search finds the issue an earlier one filed. */
 const keyOf = (one: External) =>
-  `external-${(Hash.string(`${one.repository}\n${one.change}`) >>> 0).toString(16).padStart(8, "0")}`;
+  `external-${pipe((Hash.string(`${one.repository}\n${one.change}`) >>> 0).toString(16), Str.padStart(8, "0"))}`;
 const markerOf = (key: string) => `collie:${key}`;
 
 /** One external finding as the human reads it, in the report and in its question. */
 const previewOf = (one: External, key: string) =>
   redact(
-    [
-      `### ${one.title}`,
-      "",
-      `- Repository: ${one.repository}`,
-      `- Team: ${one.team ?? "unknown"}`,
-      `- Journey: ${one.journey}`,
-      `- Change needed: ${one.change}`,
-      `- Estimated impact, not measured: ${one.estimated_impact}`,
-      `- How it relates to the local change: ${one.relation}`,
-      `- Evidence: ${one.links.join(", ") || "none"}`,
-      ...(one.existing === undefined ? [] : [`- Existing issue: ${one.existing}`]),
-      "- Acceptance criteria:",
-      ...one.criteria.map((criterion) => `  - ${criterion}`),
-      `- Key: ${key}, carried by its issue as ${markerOf(key)}`,
-    ].join("\n"),
+    Arr.join(
+      [
+        `### ${one.title}`,
+        "",
+        `- Repository: ${one.repository}`,
+        `- Team: ${one.team ?? "unknown"}`,
+        `- Journey: ${one.journey}`,
+        `- Change needed: ${one.change}`,
+        `- Estimated impact, not measured: ${one.estimated_impact}`,
+        `- How it relates to the local change: ${one.relation}`,
+        `- Evidence: ${Arr.join(one.links, ", ") || "none"}`,
+        ...(one.existing === undefined ? [] : [`- Existing issue: ${one.existing}`]),
+        "- Acceptance criteria:",
+        ...Arr.map(one.criteria, (criterion) => `  - ${criterion}`),
+        `- Key: ${key}, carried by its issue as ${markerOf(key)}`,
+      ],
+      "\n",
+    ),
   );
 
 const median = (values: ReadonlyArray<number>) => {
-  const sorted = values.toSorted((a, b) => a - b);
+  const sorted = Arr.sortWith(
+    values,
+    (value) => value,
+    (a, b) => Num.sign(a - b),
+  );
   const middle = sorted.length >> 1;
   return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 };
 
 /** One side's judged samples of one metric, in the order they were taken. */
 const readingsOf = (measured: Measurement, metric: string, side: "base" | "candidate") =>
-  measured.samples.flatMap((one) => {
+  Arr.flatMap(measured.samples, (one) => {
     const value = one.readings[metric];
     return one.tree !== side || one.warmup || value === undefined ? [] : [value];
   });
@@ -561,22 +603,27 @@ const readingsOf = (measured: Measurement, metric: string, side: "base" | "candi
 const commandLine = (command: {
   readonly executable: string;
   readonly argv: ReadonlyArray<string>;
-}) => [command.executable, ...command.argv].join(" ");
+}) => Arr.join([command.executable, ...command.argv], " ");
 
 const tableOf = (measured: Measurement) => [
   "| Metric | Role | Base | Candidate | Ratio | 95% interval | Verdict |",
   "| --- | --- | --- | --- | --- | --- | --- |",
-  ...measured.plan.metrics.map((metric) => {
+  ...Arr.map(measured.plan.metrics, (metric) => {
     const judged =
       measured.result._tag === "Judged"
-        ? measured.result.verdicts.find((one) => one.metric === metric.name)
+        ? Option.getOrUndefined(
+            Arr.findFirst(measured.result.verdicts, (one) => one.metric === metric.name),
+          )
         : undefined;
-    const sides = (["base", "candidate"] as const).map((side) =>
+    const sides = Arr.map(["base", "candidate"] as const, (side) =>
       String(median(readingsOf(measured, metric.name, side))),
     );
     return judged === undefined
-      ? `| ${metric.name} | ${metric.role} | ${sides.join(" | ")} | | | ${verdictsLine(measured)} |`
-      : `| ${metric.name} | ${metric.role} | ${sides.join(" | ")} | ${judged.ratio.toFixed(3)} | [${judged.interval.map((bound) => bound.toFixed(3)).join(", ")}] | ${judged.verdict}${judged.held ? "" : ", not held"} |`;
+      ? `| ${metric.name} | ${metric.role} | ${Arr.join(sides, " | ")} | | | ${verdictsLine(measured)} |`
+      : `| ${metric.name} | ${metric.role} | ${Arr.join(sides, " | ")} | ${judged.ratio.toFixed(3)} | [${Arr.join(
+          Arr.map(judged.interval, (bound) => bound.toFixed(3)),
+          ", ",
+        )}] | ${judged.verdict}${judged.held ? "" : ", not held"} |`;
   }),
 ];
 
@@ -599,117 +646,144 @@ const bodyOf = (got: {
 }) => {
   const { final, found } = got;
   const plan = final.plan;
-  const primary = plan.metrics.find((one) => one.role === "primary")?.name ?? "";
-  const guardrails = plan.metrics.filter((one) => one.role === "guardrail");
+  const primary =
+    Option.getOrUndefined(Arr.findFirst(plan.metrics, (one) => one.role === "primary"))?.name ?? "";
+  const guardrails = Arr.filter(plan.metrics, (one) => one.role === "guardrail");
   const verdictOf = (metric: string) =>
     final.result._tag === "Judged"
-      ? final.result.verdicts.find((one) => one.metric === metric)
+      ? Option.getOrUndefined(Arr.findFirst(final.result.verdicts, (one) => one.metric === metric))
       : undefined;
   const kept = new Set(
-    got.cycles.flatMap((one) => (one.kept && one.opportunity !== null ? [one.opportunity] : [])),
+    Arr.flatMap(got.cycles, (one) =>
+      one.kept && one.opportunity !== null ? [one.opportunity] : [],
+    ),
   );
-  const left = found.opportunities.filter((one) => !kept.has(one.title));
+  const left = Arr.filter(found.opportunities, (one) => !kept.has(one.title));
   const said = (field: "behavior_preserved" | "measurement_valid") =>
     `${field}: ${got.review[field] === true}`;
   return redact(
-    [
-      `## Tune-up: ${primary} ${verdictOf(primary)?.verdict ?? "unjudged"} against the merge base`,
-      "",
-      `The host's \`final\` Measurement ${final.id}, on ${final.machine}, compares ${final.base.commit} with the harness applied against this branch at ${final.candidate.head_sha}.`,
-      "",
-      ...tableOf(final),
-      ...(got.original === null
-        ? []
-        : [
-            "",
-            `Against the base the Run started from, ${got.original.base.commit} (\`final\` Measurement ${got.original.id}):`,
-            "",
-            ...tableOf(got.original),
-          ]),
-      "",
-      "### Commands and harness",
-      "",
-      ...plan.commands.map((one) => `- ${one.name}: \`${commandLine(one)}\``),
-      ...(plan.prepare === null
-        ? []
-        : [`- Prepared once per tree: \`${commandLine(plan.prepare)}\``]),
-      `- Harness commits ${plan.harness.commits.join(", ")}, touching only ${plan.harness.paths.join(", ")}`,
-      "",
-      "### Regressions and tradeoffs",
-      "",
-      ...guardrails.map((one) => {
-        const judged = verdictOf(one.name);
-        return `- Guardrail ${one.name}: ${judged === undefined ? "unjudged" : `${judged.verdict}, ${judged.held ? "held" : "not held"}, worse bound ${judged.interval[one.direction === "lower" ? 1 : 0].toFixed(3)}`}`;
-      }),
-      ...got.cycles.filter((one) => !one.kept).map((one) => `- Not kept: ${cycleLine(one)}`),
-      "",
-      "### Tests and review",
-      "",
-      got.evidence,
-      `- Review: ${said("behavior_preserved")}, ${said("measurement_valid")}. ${got.review.summary}`,
-      "",
-      "### Opportunities left",
-      "",
-      ...(left.length === 0
-        ? ["- None ranked."]
-        : left.map((one) => `- ${one.title} (${one.evidence})`)),
-      "",
-      "### What to monitor after deploying",
-      "",
-      ...found.journeys.flatMap((journey) =>
-        journey.objectives.map(
-          (one) =>
-            `- ${journey.name}: ${one.metric}${one.target === undefined ? "" : ` (${one.target})`}, because ${one.why}`,
-        ),
+    Arr.join(
+      Arr.map(
+        [
+          `## Tune-up: ${primary} ${verdictOf(primary)?.verdict ?? "unjudged"} against the merge base`,
+          "",
+          `The host's \`final\` Measurement ${final.id}, on ${final.machine}, compares ${final.base.commit} with the harness applied against this branch at ${final.candidate.head_sha}.`,
+          "",
+          ...tableOf(final),
+          ...(got.original === null
+            ? []
+            : [
+                "",
+                `Against the base the Run started from, ${got.original.base.commit} (\`final\` Measurement ${got.original.id}):`,
+                "",
+                ...tableOf(got.original),
+              ]),
+          "",
+          "### Commands and harness",
+          "",
+          ...Arr.map(plan.commands, (one) => `- ${one.name}: \`${commandLine(one)}\``),
+          ...(plan.prepare === null
+            ? []
+            : [`- Prepared once per tree: \`${commandLine(plan.prepare)}\``]),
+          `- Harness commits ${Arr.join(plan.harness.commits, ", ")}, touching only ${Arr.join(plan.harness.paths, ", ")}`,
+          "",
+          "### Regressions and tradeoffs",
+          "",
+          ...Arr.map(guardrails, (one) => {
+            const judged = verdictOf(one.name);
+            return `- Guardrail ${one.name}: ${judged === undefined ? "unjudged" : `${judged.verdict}, ${judged.held ? "held" : "not held"}, worse bound ${judged.interval[one.direction === "lower" ? 1 : 0].toFixed(3)}`}`;
+          }),
+          ...Arr.map(
+            Arr.filter(got.cycles, (one) => !one.kept),
+            (one) => `- Not kept: ${cycleLine(one)}`,
+          ),
+          "",
+          "### Tests and review",
+          "",
+          got.evidence,
+          `- Review: ${said("behavior_preserved")}, ${said("measurement_valid")}. ${got.review.summary}`,
+          "",
+          "### Opportunities left",
+          "",
+          ...(left.length === 0
+            ? ["- None ranked."]
+            : Arr.map(left, (one) => `- ${one.title} (${one.evidence})`)),
+          "",
+          "### What to monitor after deploying",
+          "",
+          ...Arr.flatMap(found.journeys, (journey) =>
+            Arr.map(
+              journey.objectives,
+              (one) =>
+                `- ${journey.name}: ${one.metric}${one.target === undefined ? "" : ` (${one.target})`}, because ${one.why}`,
+            ),
+          ),
+          "",
+          "<details>",
+          "<summary>Evidence to audit and reproduce</summary>",
+          "",
+          `#### Samples of \`final\` Measurement ${final.id}`,
+          "",
+          ...Arr.flatMap(plan.metrics, (metric) =>
+            Arr.map(
+              ["base", "candidate"] as const,
+              (side) =>
+                `- ${metric.name}, ${side}: ${Arr.join(
+                  Arr.map(readingsOf(final, metric.name, side), (part) =>
+                    part === null || part === undefined ? "" : globalThis.String(part),
+                  ),
+                  ", ",
+                )}`,
+            ),
+          ),
+          "",
+          "#### The frozen plan",
+          "",
+          `- Journeys ${Arr.join(got.written.journeys, ", ")}; cases ${Arr.join(got.written.cases, ", ") || "none"}`,
+          ...Arr.map(plan.commands, (one) => `- Command ${one.name}: \`${commandLine(one)}\``),
+          `- Warmup ${plan.warmup}, ${plan.samples} samples per side, threshold ${plan.threshold}%, tolerance ${plan.tolerance}%`,
+          ...Arr.map(
+            Rec.toEntries(final.environment),
+            ([command, environment]) => `- Environment of ${command}: ${environment ?? "unread"}`,
+          ),
+          ...Arr.map(["base", "candidate"] as const, (side) => {
+            const lockfiles = Rec.toEntries(final[side].lockfiles);
+            return `- Lockfiles of the ${side}: ${
+              Arr.join(
+                Arr.map(lockfiles, ([file, digest]) => `${file} ${digest}`),
+                ", ",
+              ) || "none"
+            }`;
+          }),
+          `- Harness commits ${Arr.join(plan.harness.commits, ", ")}, under ${Arr.join(plan.harness.paths, ", ")}`,
+          `- Base: ${final.base.commit}, with the harness at ${final.base.head_sha}`,
+          `- Candidate: ${final.candidate.head_sha}`,
+          "",
+          "#### Every plan and every `final` Measurement",
+          "",
+          ...Arr.map(got.plans, (reason, at) => `- Plan ${at + 1}: ${reason}`),
+          ...Arr.map(
+            got.finals,
+            (one) =>
+              `- ${one.id}: ${one.base.commit} against ${one.candidate.head_sha}: ${verdictsLine(one)}`,
+          ),
+          "",
+          "#### Reproduce",
+          "",
+          "```sh",
+          `git checkout ${final.candidate.head_sha}`,
+          `collie measure --run ${got.runId} --base ${final.base.commit} --plan ${got.planFile} --pass final`,
+          "```",
+          "",
+          `The full record is kept with Run ${got.runId}.`,
+          "",
+          "</details>",
+          "",
+        ],
+        (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
       ),
-      "",
-      "<details>",
-      "<summary>Evidence to audit and reproduce</summary>",
-      "",
-      `#### Samples of \`final\` Measurement ${final.id}`,
-      "",
-      ...plan.metrics.flatMap((metric) =>
-        (["base", "candidate"] as const).map(
-          (side) => `- ${metric.name}, ${side}: ${readingsOf(final, metric.name, side).join(", ")}`,
-        ),
-      ),
-      "",
-      "#### The frozen plan",
-      "",
-      `- Journeys ${got.written.journeys.join(", ")}; cases ${got.written.cases.join(", ") || "none"}`,
-      ...plan.commands.map((one) => `- Command ${one.name}: \`${commandLine(one)}\``),
-      `- Warmup ${plan.warmup}, ${plan.samples} samples per side, threshold ${plan.threshold}%, tolerance ${plan.tolerance}%`,
-      ...Object.entries(final.environment).map(
-        ([command, environment]) => `- Environment of ${command}: ${environment ?? "unread"}`,
-      ),
-      ...(["base", "candidate"] as const).map((side) => {
-        const lockfiles = Object.entries(final[side].lockfiles);
-        return `- Lockfiles of the ${side}: ${lockfiles.map(([file, digest]) => `${file} ${digest}`).join(", ") || "none"}`;
-      }),
-      `- Harness commits ${plan.harness.commits.join(", ")}, under ${plan.harness.paths.join(", ")}`,
-      `- Base: ${final.base.commit}, with the harness at ${final.base.head_sha}`,
-      `- Candidate: ${final.candidate.head_sha}`,
-      "",
-      "#### Every plan and every `final` Measurement",
-      "",
-      ...got.plans.map((reason, at) => `- Plan ${at + 1}: ${reason}`),
-      ...got.finals.map(
-        (one) =>
-          `- ${one.id}: ${one.base.commit} against ${one.candidate.head_sha}: ${verdictsLine(one)}`,
-      ),
-      "",
-      "#### Reproduce",
-      "",
-      "```sh",
-      `git checkout ${final.candidate.head_sha}`,
-      `collie measure --run ${got.runId} --base ${final.base.commit} --plan ${got.planFile} --pass final`,
-      "```",
-      "",
-      `The full record is kept with Run ${got.runId}.`,
-      "",
-      "</details>",
-      "",
-    ].join("\n"),
+      "\n",
+    ),
   );
 };
 
@@ -794,7 +868,7 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const started = yield* Activity.make({
         name: "started",
-        success: Schema.Number,
+        success: Schema.Finite,
         execute: Clock.currentTimeMillis,
       });
       const place = yield* host.place(runId);
@@ -834,10 +908,16 @@ export default defineWorkflow({
           instructions: prompts.harness,
           input: {
             ...told,
-            discovered: [
-              ...found.journeys.map((one) => `- journey: ${one.name}`),
-              ...found.opportunities.map((one, at) => `${at + 1}. ${one.title} (${one.evidence})`),
-            ].join("\n"),
+            discovered: Arr.join(
+              [
+                ...Arr.map(found.journeys, (one) => `- journey: ${one.name}`),
+                ...Arr.map(
+                  found.opportunities,
+                  (one, at) => `${at + 1}. ${one.title} (${one.evidence})`,
+                ),
+              ],
+              "\n",
+            ),
             budget: {
               samples: String(budget.samples),
               threshold: String(budget.threshold),
@@ -912,35 +992,45 @@ export default defineWorkflow({
           });
         if (measured.base.content !== measured.candidate.content)
           return yield* new WorkflowError({
-            reason: `calibration ${measured.id} did not measure the base against itself: ${cwd} at ${measured.candidate.head_sha} holds more than the harness commits ${plan.harness.commits.join(", ")}`,
+            reason: `calibration ${measured.id} did not measure the base against itself: ${cwd} at ${measured.candidate.head_sha} holds more than the harness commits ${Arr.join(plan.harness.commits, ", ")}`,
           });
         const lost = unprovable(plan, measured.result.verdicts);
         if (lost.length === 0) {
-          const primary = plan.metrics.find((one) => one.role === "primary")?.name ?? "";
+          const primary =
+            Option.getOrUndefined(Arr.findFirst(plan.metrics, (one) => one.role === "primary"))
+              ?.name ?? "";
           ending = `calibrated on ${primary} (calibration ${measured.id})`;
           calibrated = true;
           break;
         }
-        const counters = lost.map((one) => ({
+        const counters = Arr.map(lost, (one) => ({
           ...one,
-          counter: written.metrics.find((metric) => metric.name === one.metric)?.counter,
+          counter: Option.getOrUndefined(
+            Arr.findFirst(written.metrics, (metric) => metric.name === one.metric),
+          )?.counter,
         }));
-        if (counters.some((one) => one.counter === undefined)) {
-          ending = `proof unavailable: ${lost.map((one) => one.why).join("; ")} (calibration ${measured.id})`;
+        if (Arr.some(counters, (one) => one.counter === undefined)) {
+          ending = `proof unavailable: ${Arr.join(
+            Arr.map(lost, (one) => one.why),
+            "; ",
+          )} (calibration ${measured.id})`;
           break;
         }
-        const switched = counters.map(
+        const switched = Arr.map(
+          counters,
           (one) => `switched ${one.metric} to its counter ${one.counter?.name}: ${one.why}`,
         );
         plan = yield* recordPlan(
           {
             ...plan,
             metrics: Arr.map(plan.metrics, (metric) => {
-              const counter = counters.find((one) => one.metric === metric.name)?.counter;
+              const counter = Option.getOrUndefined(
+                Arr.findFirst(counters, (one) => one.metric === metric.name),
+              )?.counter;
               return counter === undefined ? metric : { ...counter, role: metric.role };
             }),
           },
-          switched.join("; "),
+          Arr.join(switched, "; "),
         );
       }
       yield* host.record(runId, ending);
@@ -1000,7 +1090,7 @@ export default defineWorkflow({
             searched.marked !== null
               ? `external ${key}: ${filedHere ? "posted" : "existing"} ${searched.marked}`
               : searched.matching.length > 0
-                ? `external ${key}: existing ${searched.matching.join(", ")}`
+                ? `external ${key}: existing ${Arr.join(searched.matching, ", ")}`
                 : null;
           const launches = `${place.dir}/external`;
           const marked = (operation: string, state: string) =>
@@ -1060,10 +1150,8 @@ export default defineWorkflow({
       /** The Run's end, after what only another repository could change is handed on. */
       const handOn = (ending: string) =>
         Effect.gen(function* () {
-          const keyed = Arr.dedupeWith(
-            handed.map((one) => ({ key: keyOf(one), one })),
-            (one, other) => one.key === other.key,
-          );
+          const named = Arr.map(handed, (one) => ({ key: keyOf(one), one }));
+          const keyed = Arr.dedupeWith(named, (one, other) => one.key === other.key);
           if (budget.external === "off" || keyed.length === 0) return ending;
           yield* externalReport(
             Effect.gen(function* () {
@@ -1077,13 +1165,16 @@ export default defineWorkflow({
                   yield* fs.makeDirectory(`${place.dir}/handoffs`, { recursive: true });
                   yield* fs.writeFileString(
                     file,
-                    [
-                      `# Tune-up external findings: ${runId}`,
-                      "",
-                      "Improvements only another repository can make. None is assumed done: no Measurement, outcome or merge readiness counts on any of them.",
-                      "",
-                      ...keyed.flatMap(({ key, one }) => [previewOf(one, key), ""]),
-                    ].join("\n"),
+                    Arr.join(
+                      [
+                        `# Tune-up external findings: ${runId}`,
+                        "",
+                        "Improvements only another repository can make. None is assumed done: no Measurement, outcome or merge readiness counts on any of them.",
+                        "",
+                        ...Arr.flatMap(keyed, ({ key, one }) => [previewOf(one, key), ""]),
+                      ],
+                      "\n",
+                    ),
                   );
                 }).pipe(
                   Effect.mapError(
@@ -1117,17 +1208,23 @@ export default defineWorkflow({
         budget.wall_time === ""
           ? null
           : Duration.toMillis(
-              Schema.decodeUnknownSync(Schema.DurationFromString)(budget.wall_time),
+              yield* Schema.decodeEffect(Schema.DurationFromString)(budget.wall_time).pipe(
+                Effect.orDie,
+              ),
             );
       const opportunities =
-        found.opportunities
-          .map(
-            (one, at) => `${at + 1}. ${one.title} (${one.evidence}; cites ${one.cites.join(", ")})`,
-          )
-          .join("\n") || "None ranked.";
-      const metrics = plan.metrics
-        .map((one) => `${one.name}, ${one.role}, ${one.direction} is better`)
-        .join("; ");
+        Arr.join(
+          Arr.map(
+            found.opportunities,
+            (one, at) =>
+              `${at + 1}. ${one.title} (${one.evidence}; cites ${Arr.join(one.cites, ", ")})`,
+          ),
+          "\n",
+        ) || "None ranked.";
+      const metrics = Arr.join(
+        Arr.map(plan.metrics, (one) => `${one.name}, ${one.role}, ${one.direction} is better`),
+        "; ",
+      );
       const sameTree = (one: typeof Tree.Type, other: typeof Tree.Type) =>
         one.head === other.head && one.fingerprint === other.fingerprint;
       const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
@@ -1204,7 +1301,11 @@ export default defineWorkflow({
               ...told,
               cycle: { n: String(n), of: String(budget.cycles), start: start.head },
               opportunities,
-              earlier: cycled.map((one) => `- ${cycleLine(one)}`).join("\n") || "None yet.",
+              earlier:
+                Arr.join(
+                  Arr.map(cycled, (one) => `- ${cycleLine(one)}`),
+                  "\n",
+                ) || "None yet.",
               metrics,
             },
             output: Tried,
@@ -1242,7 +1343,7 @@ export default defineWorkflow({
                     n: String(n),
                     start: start.head,
                     end: movedTo,
-                    commits: tried.result === "changed" ? tried.commits.join(", ") : "none",
+                    commits: tried.result === "changed" ? Arr.join(tried.commits, ", ") : "none",
                   },
                   why,
                 },
@@ -1280,7 +1381,10 @@ export default defineWorkflow({
         if (stopped === null && unkept >= 2) stopped = "two consecutive Cycles were not kept";
       }
       const stop = stopped ?? `cycles spent: ${budget.cycles} of ${budget.cycles}`;
-      const kept = cycled.filter((one) => one.kept).map((one) => `Cycle ${one.n}`);
+      const kept = Arr.map(
+        Arr.filter(cycled, (one) => one.kept),
+        (one) => `Cycle ${one.n}`,
+      );
       yield* host.record(runId, `stopped: ${stop}`);
       if (kept.length === 0) {
         const done = `${stop}; no Cycle was kept, so the Run is back on its base tree`;
@@ -1416,7 +1520,7 @@ export default defineWorkflow({
                   ...told,
                   base: { merge: measured.base.commit, tree: measured.base.head_sha },
                   head: movedTo,
-                  commits: [...plan.harness.commits, ...keptCommits].join(", "),
+                  commits: Arr.join([...plan.harness.commits, ...keptCommits], ", "),
                   why,
                 },
               }),
@@ -1474,7 +1578,7 @@ export default defineWorkflow({
         }),
       );
       if (proved.why !== null) return yield* handOn(yield* dropped(proved.measured, proved.why));
-      yield* findings("findings.integrated", `${stop}; kept ${kept.join(", ")}`);
+      yield* findings("findings.integrated", `${stop}; kept ${Arr.join(kept, ", ")}`);
 
       const reviewedOn: Array<typeof Snapshot.Type> = [];
       const rallied = yield* rally({
@@ -1518,8 +1622,10 @@ export default defineWorkflow({
 
       const bodyNow = Effect.gen(function* () {
         const evidence = yield* host.evidence(runId, cwd);
-        const taken = (evidence.measurements ?? []).filter((one) => one.pass === "final");
-        const final = taken.findLast((one) => one.base.commit === evidence.mergeBase);
+        const taken = Arr.filter(evidence.measurements ?? [], (one) => one.pass === "final");
+        const final = Option.getOrUndefined(
+          Arr.findLast(taken, (one) => one.base.commit === evidence.mergeBase),
+        );
         if (final === undefined)
           return yield* new WorkflowError({
             reason: "no `final` Measurement against the merge base to write the merge request from",
@@ -1528,7 +1634,9 @@ export default defineWorkflow({
         const planFile = `${place.dir}/handoffs/tune-up-plan.json`;
         yield* fs.writeFileString(
           planFile,
-          Schema.encodeSync(Schema.fromJsonString(Planned.fields.plan))(plan),
+          yield* Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(plan).pipe(
+            Effect.orDie,
+          ),
         );
         const body = bodyOf({
           runId,
@@ -1594,7 +1702,10 @@ export default defineWorkflow({
             latest = yield* reviewOf("proof.", answered);
             yield* FileSystem.FileSystem.pipe(
               Effect.flatMap((fs) =>
-                fs.writeFileString(proofReview, Schema.encodeSync(ProofReview)(latest)),
+                fs.writeFileString(
+                  proofReview,
+                  flow(Schema.encodeResult(ProofReview), Result.getOrThrow)(latest),
+                ),
               ),
               Effect.orDie,
             );
@@ -1657,7 +1768,7 @@ export default defineWorkflow({
         }),
       });
       if (gaps.gaps.length > 0) {
-        const why = `${delivered.mr} is not ready: ${gaps.gaps.join("; ")}`;
+        const why = `${delivered.mr} is not ready: ${Arr.join(gaps.gaps, "; ")}`;
         yield* Activity.make({
           name: "not-ready",
           success: Schema.Void,

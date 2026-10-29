@@ -96,7 +96,7 @@ const compactionProgram = Effect.gen(function* () {
   const [stdin, { recordClaudeEvent }] = yield* Effect.promise(() =>
     Promise.all([Bun.stdin.text(), import("./compactors")]),
   );
-  const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.catch(() => Effect.succeed("")));
+  const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.orElseSucceed(() => ""));
   if (line !== "") yield* Console.log(line);
 }).pipe(Effect.provide(platformLayer));
 

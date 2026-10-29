@@ -9,6 +9,9 @@
 // names and no other, is still there after a restart, and is honest about whether it got
 // anywhere. None of it is a file a client writes and something else consumes.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { mrLabel, type MrState } from "../src/board-model";
@@ -70,7 +73,7 @@ test(
         expect(done.value).toBe("note:once=go");
         // One launch, whatever the answers did: nothing here started the work again.
         expect(
-          (yield* events(state, "r1")).filter((line) => line.startsWith("launch")),
+          Arr.filter(yield* events(state, "r1"), (line) => pipe_(line, Str.startsWith("launch"))),
         ).toHaveLength(1);
         yield* host.stop;
       }).pipe(Effect.scoped),
@@ -425,7 +428,7 @@ test(
         expect(resumed.ok).toBe(false);
         expect(resumed.detail).toContain("was stopped after its merge request merged");
         expect(yield* host.ask({ op: "waiting", runId: "r1" })).toEqual(before);
-        expect((yield* events(state, "r1")).filter((line) => line === "wait")).toHaveLength(2);
+        expect(Arr.filter(yield* events(state, "r1"), (line) => line === "wait")).toHaveLength(2);
         expect(yield* fs.readFileString(claim)).toBe(CLAIM);
         yield* host.stop;
       }).pipe(Effect.scoped),

@@ -1,5 +1,7 @@
 // The taxonomy is the contract: what is sent, how it is titled, and how often.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, type Schema } from "effect";
@@ -19,7 +21,7 @@ test("every kind names the repo and the run, and none of them is a bare slug", (
   // say which one.
   for (const kind of NOTIFICATION_KINDS) {
     const title = notificationTitle(kind, "/home/mk/work/collie", "review-mr-2");
-    expect(title.startsWith("collie · review-mr-2 ")).toBe(true);
+    expect(pipe_(title, Str.startsWith("collie · review-mr-2 "))).toBe(true);
   }
   expect(notificationTitle("run-done", "/home/mk/work/collie/", "review-mr-2")).toBe(
     "collie · review-mr-2 finished",
@@ -78,15 +80,24 @@ const session = <A, E>(
         model: "opus",
         permissions: "auto",
         compactAtTokens: 0,
-      }),
-    ),
-    Effect.provide(Layer.succeed(Children)(Children.of({ start: nothing, result: nothing }))),
-    Effect.provide(
-      foundationLayer({
-        dir,
-        userDir: rig.pluginEnv().userDir,
-        toast: (title, body, sound) => Effect.sync(() => toasts.push(`${sound}|${title}|${body}`)),
-      }),
+      }).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(
+            Children.of({
+              start: nothing,
+              result: nothing,
+            }),
+          ),
+        ),
+        Layer.provideMerge(
+          foundationLayer({
+            dir,
+            userDir: rig.pluginEnv().userDir,
+            toast: (title, body, sound) =>
+              Effect.sync(() => toasts.push(`${sound}|${title}|${body}`)),
+          }),
+        ),
+      ),
     ),
     Effect.scoped,
     Effect.orDie,
@@ -97,6 +108,7 @@ const executed = (entry: string, runId: string, input: Readonly<Record<string, S
     Effect.gen(function* () {
       const described = yield* loadEntry(`${fixtures}/${entry}`).pipe(Effect.orDie);
       const made = described.make(`${described.id}@${runId}`);
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       return yield* made.workflow
         .execute({ runId, input })
         .pipe(Effect.result, Effect.provide(made.layer));

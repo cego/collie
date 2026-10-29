@@ -1,5 +1,8 @@
 // The herdr sessions a host reads, and what tells it that one of them changed.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { type Duration, Effect, Option, Stream } from "effect";
 import { Herdr } from "../src/herdr";
@@ -42,7 +45,9 @@ test("a change is what herdr pushes on the session's subscription, for each agen
       Bun.env.FAKE_HERDR_PUSH_EVENT = "1";
       expect(Option.isSome(yield* changeAfter("10 seconds"))).toBe(true);
 
-      const subscribed = (yield* rig.calls()).find((call) => call.cmd === "events.subscribe");
+      const subscribed = Option.getOrUndefined(
+        Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "events.subscribe"),
+      );
       expect(subscribed?.params).toEqual({
         subscriptions: [
           { type: "pane.created" },
@@ -73,7 +78,9 @@ test("a pane herdr restored on a session but with no name is watched, and its st
       });
       expect(Option.isSome(yield* changeAfter("10 seconds"))).toBe(true);
 
-      const subscribed = (yield* rig.calls()).find((call) => call.cmd === "events.subscribe");
+      const subscribed = Option.getOrUndefined(
+        Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "events.subscribe"),
+      );
       expect(subscribed?.params).toEqual({
         subscriptions: [
           { type: "pane.created" },
@@ -104,7 +111,7 @@ test("a session's named agents and restored panes are read with one agent list",
       yield* herdr.cli(["agent", "start", "impl-1", "--pane", "1-1"]);
       const before = (yield* rig.cmds()).length;
       const read = yield* agentsIn([{ herd: null, herdr }]);
-      expect(read.alive.map((agent) => agent.paneId)).toContain("1-1");
+      expect(Arr.map(read.alive, (agent) => agent.paneId)).toContain("1-1");
       expect(read.restored).toEqual([{ terminalId: "t-restored", status: "idle" }]);
       expect((yield* rig.cmds()).slice(before).sort()).toEqual(["agent list", "pane list"]);
     }),
@@ -119,9 +126,10 @@ test("a session whose socket does not answer is not listed for a subscription it
       const before = (yield* rig.cmds()).length;
       yield* herdChanges(herdr, env).pipe(Stream.runHead, Effect.timeoutOption("1 second"));
       expect(
-        (yield* rig.cmds())
-          .slice(before)
-          .filter((cmd) => cmd === "agent list" || cmd === "pane list"),
+        Arr.filter(
+          (yield* rig.cmds()).slice(before),
+          (cmd) => cmd === "agent list" || cmd === "pane list",
+        ),
       ).toEqual([]);
     }),
   ));
@@ -166,7 +174,9 @@ test(
           pane: paneId,
           agent: "impl-1",
         });
-        expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual(["agent focus"]);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => pipe_(cmd, Str.includes("focus")))).toEqual([
+          "agent focus",
+        ]);
 
         // herdr's default session is the one a client attaches to without naming one.
         const inDefault = yield* focusPane(
@@ -222,7 +232,7 @@ test(
           workspace: "workspace 7",
           tab: null,
         });
-        expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual([
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => pipe_(cmd, Str.includes("focus")))).toEqual([
           "workspace.focus",
         ]);
         expect(yield* focusPane(sessions, ["impl-1"], "w7", null)).not.toHaveProperty("pane");
@@ -246,7 +256,9 @@ test(
         expect(
           yield* focusPane([theirs, { ...theirs, herd: "x" }], [], "w7", undefined),
         ).toBeNull();
-        expect((yield* rig.cmds()).filter((cmd) => cmd.includes("focus"))).toEqual([]);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => pipe_(cmd, Str.includes("focus")))).toEqual(
+          [],
+        );
         expect((yield* focusPane([theirs], [], "w7", undefined))?.workspace).toBe("someone else's");
       }),
     ),

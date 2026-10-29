@@ -1,5 +1,8 @@
 // Review comments: a Run's drafts, where each is about, and the one message they become.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { processFile } from "@pierre/diffs";
 import {
@@ -35,7 +38,7 @@ test("drafts are added in order, edited and removed by id", () => {
   const one = plan("a", "SPEC.md", "x", "first");
   const two = plan("b", "SPEC.md", "y", "second");
   const drafts = addDraft(addDraft([], one), two);
-  expect(drafts.map((draft) => draft.id)).toEqual(["a", "b"]);
+  expect(Arr.map(drafts, (draft) => draft.id)).toEqual(["a", "b"]);
   expect(editDraft(drafts, "b", "sharper")[1]!.text).toBe("sharper");
   expect(removeDraft(drafts, "a")).toEqual([two]);
 });
@@ -55,35 +58,38 @@ test("the message numbers each comment in the order written, with its place, quo
       plan("b", "issues/02-plan.md", "stamp", words),
     ]),
   ).toBe(
-    [
-      "2 review comments from the human in Desktop. Each names where it is, quotes what it is about, then says what they want.",
-      "",
-      "1. the plan's `SPEC.md`",
-      "> The tab reads",
-      "> the files again",
-      "",
-      "Is this true?",
-      "",
-      "2. the plan's `issues/02-plan.md`",
-      "> stamp",
-      "",
-      words,
-    ].join("\n"),
+    Arr.join(
+      [
+        "2 review comments from the human in Desktop. Each names where it is, quotes what it is about, then says what they want.",
+        "",
+        "1. the plan's `SPEC.md`",
+        "> The tab reads",
+        "> the files again",
+        "",
+        "Is this true?",
+        "",
+        "2. the plan's `issues/02-plan.md`",
+        "> stamp",
+        "",
+        words,
+      ],
+      "\n",
+    ),
   );
 });
 
 test("one comment is said as one", () => {
-  expect(compose([plan("a", "SPEC.md", "q", "c")]).split("\n")[0]).toBe(
+  expect(Str.split(compose([plan("a", "SPEC.md", "q", "c")]), "\n")[0]).toBe(
     "1 review comment from the human in Desktop. Each names where it is, quotes what it is about, then says what they want.",
   );
 });
 
 test("a long quote keeps its start and end, 300 characters in all", () => {
-  const quote = `${"a".repeat(200)}${"b".repeat(200)}`;
-  const said = compose([plan("a", "SPEC.md", quote, "c")]).split("\n")[3]!;
-  expect(said).toBe(`> ${"a".repeat(150)}…${"b".repeat(149)}`);
-  const short = "c".repeat(300);
-  expect(compose([plan("a", "SPEC.md", short, "c")]).split("\n")[3]).toBe(`> ${short}`);
+  const quote = `${pipe("a", Str.repeat(200))}${pipe("b", Str.repeat(200))}`;
+  const said = Str.split(compose([plan("a", "SPEC.md", quote, "c")]), "\n")[3]!;
+  expect(said).toBe(`> ${pipe("a", Str.repeat(150))}…${pipe("b", Str.repeat(149))}`);
+  const short = pipe("c", Str.repeat(300));
+  expect(Str.split(compose([plan("a", "SPEC.md", short, "c")]), "\n")[3]).toBe(`> ${short}`);
 });
 
 const changed = processFile(
@@ -193,7 +199,7 @@ test("a diff draft is located by its path and lines, and by the side as it was f
     diff("was", { start: 1, end: 2, side: "deletions" }),
     diff("was-one", { start: 2, end: 2, side: "deletions" }),
   ]);
-  expect(said.split("\n").filter((line) => /^\d+\. /.test(line))).toEqual([
+  expect(Arr.filter(Str.split(said, "\n"), (line) => /^\d+\. /.test(line))).toEqual([
     "1. `src/a.ts:21`",
     "2. `src/a.ts:20-22`",
     "3. `src/a.ts:1-2` (as it was)",

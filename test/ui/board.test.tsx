@@ -2,6 +2,10 @@
 // a card, text in the search field. Every assertion is about what the pane says and
 // which command went out — never about a component's own state.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, Schedule } from "effect";
 import { createSignal } from "solid-js";
@@ -90,15 +94,12 @@ const mount = Effect.fn("board.mount")(function* (
   yield* flush;
   return {
     commands,
-    acted: () => commands.filter((c) => c._tag !== "Select"),
+    acted: () => Arr.filter(commands, (c) => c._tag !== "Select"),
     flush,
     frame: () => t.captureCharFrame(),
     /** The frame as one run of words, so a test is not a test of where a wrap fell. */
     said: () =>
-      t
-        .captureCharFrame()
-        .replace(/[│┌┐└┘─]/g, " ")
-        .replace(/\s+/g, " "),
+      pipe_(t.captureCharFrame(), Str.replace(/[│┌┐└┘─]/g, " "), Str.replace(/\s+/g, " ")),
     mockInput: t.mockInput,
     escape: Effect.gen(function* () {
       t.mockInput.pressEscape();
@@ -154,7 +155,7 @@ const mount = Effect.fn("board.mount")(function* (
     bgOf(text: string) {
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans) {
-          if (span.text.includes(text)) return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
+          if (pipe_(span.text, Str.includes(text))) return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
         }
       }
       throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
@@ -163,14 +164,15 @@ const mount = Effect.fn("board.mount")(function* (
     fgOf(text: string) {
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans) {
-          if (span.text.includes(text)) return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
+          if (pipe_(span.text, Str.includes(text))) return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
         }
       }
       throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
     },
     attributesOf(text: string) {
       for (const line of t.captureSpans().lines) {
-        for (const span of line.spans) if (span.text.includes(text)) return span.attributes;
+        for (const span of line.spans)
+          if (pipe_(span.text, Str.includes(text))) return span.attributes;
       }
       throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
     },
@@ -178,7 +180,7 @@ const mount = Effect.fn("board.mount")(function* (
     until: (text: string) =>
       flush.pipe(
         Effect.repeat({
-          until: () => t.captureCharFrame().includes(text),
+          until: () => pipe_(t.captureCharFrame(), Str.includes(text)),
           schedule: Schedule.spaced("20 millis"),
           times: 100,
         }),
@@ -190,14 +192,16 @@ const mount = Effect.fn("board.mount")(function* (
       ),
     /** One screen line as drawn, for aiming at a cell by what is next to it. */
     frameLine(y: number) {
-      return t.captureCharFrame().split("\n")[y] ?? "";
+      return Str.split(t.captureCharFrame(), "\n")[y] ?? "";
     },
     /** Where a line is on screen, which is what a click has to be aimed at. */
     lineOf(text: string) {
-      const y = t
-        .captureCharFrame()
-        .split("\n")
-        .findIndex((l) => l.includes(text));
+      const y = Option.getOrElse(
+        Arr.findFirstIndex(Str.split(t.captureCharFrame(), "\n"), (l) =>
+          pipe_(l, Str.includes(text)),
+        ),
+        () => -1,
+      );
       if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
       return y;
     },
@@ -206,11 +210,18 @@ const mount = Effect.fn("board.mount")(function* (
 
 /** Where a word is on screen, which is what a click has to be aimed at. */
 function spotOf(frame: string, text: string) {
-  const lines = frame.split("\n");
-  const y = lines.findIndex((line) => line.includes(text));
+  const lines = Str.split(frame, "\n");
+  const y = Option.getOrElse(
+    Arr.findFirstIndex(lines, (line) => pipe_(line, Str.includes(text))),
+    () => -1,
+  );
   if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
   // The middle of the word: its own cell, whatever sits either side of it.
-  return { x: lines[y]!.indexOf(text) + Math.floor(text.length / 2), y };
+  return {
+    x:
+      Option.getOrElse(pipe_(lines[y]!, Str.indexOf(text)), () => -1) + Math.floor(text.length / 2),
+    y,
+  };
 }
 
 const QUESTION: TaskView["decision"] = {
@@ -397,14 +408,14 @@ test("opening an Unseen Task's record acknowledges its Run once, and opening a s
     Effect.gen(function* () {
       const app = yield* mount(appState({ tasks: [UNSEEN, SEEN] }));
       yield* app.click(6, app.lineOf("Audit the herd"));
-      expect(app.commands.filter((c) => c._tag === "Acknowledge")).toEqual([
+      expect(Arr.filter(app.commands, (c) => c._tag === "Acknowledge")).toEqual([
         { _tag: "Acknowledge", runId: "r-u" },
       ]);
 
       yield* app.escape;
       yield* app.click(4, app.lineOf("2 finished today"));
       yield* app.click(6, app.lineOf("Tidy the docs"));
-      expect(app.commands.filter((c) => c._tag === "Acknowledge")).toHaveLength(1);
+      expect(Arr.filter(app.commands, (c) => c._tag === "Acknowledge")).toHaveLength(1);
     }),
   ));
 
@@ -413,7 +424,7 @@ test("Acknowledge on an Unseen card acknowledges its Run once, without opening i
     Effect.gen(function* () {
       const app = yield* mount(appState({ tasks: [UNSEEN] }));
       yield* app.clickOn("Acknowledge");
-      expect(app.commands.filter((c) => c._tag === "Acknowledge")).toEqual([
+      expect(Arr.filter(app.commands, (c) => c._tag === "Acknowledge")).toEqual([
         { _tag: "Acknowledge", runId: "r-u" },
       ]);
       expect(app.said()).not.toContain("INTENT");
@@ -842,13 +853,18 @@ test("a long record does not take the drawer's spacing back from its header", ()
       yield* app.clickOn("1 finished today");
       yield* app.clickOn("Strapi prod seeder");
 
-      const lines = app.frame().split("\n");
-      const at = (text: string) => lines.findIndex((line) => line.includes(text));
+      const lines = Str.split(app.frame(), "\n");
+      const at = (text: string) =>
+        Option.getOrElse(
+          Arr.findFirstIndex(lines, (line) => pipe_(line, Str.includes(text))),
+          () => -1,
+        );
       expect(at("Finished; nothing merged yet.")).toBe(at("content · 58m") + 2);
       expect(at("Go to its tab")).toBe(at("Finished; nothing merged yet.") + 2);
       // The buttons may wrap; the tabs still sit a blank row under the last of them.
-      const left = lines[at("Summary")]!.indexOf("Summary") - 3;
-      expect(lines[at("Summary") - 1]!.slice(left).replace(/[│ ]/g, "")).toBe("");
+      const left =
+        Option.getOrElse(pipe_(lines[at("Summary")]!, Str.indexOf("Summary")), () => -1) - 3;
+      expect(pipe_(lines[at("Summary") - 1]!, Str.slice(left), Str.replace(/[│ ]/g, ""))).toBe("");
     }),
   ));
 
@@ -1117,13 +1133,16 @@ test("Tab moves between the board, an open record and the menu", () =>
     }),
   ));
 
-const REVIEW = [
-  "## Verdict",
-  "",
-  "clean, with one thing worth saying.",
-  "",
-  "- src/seed.ts: the brand loop reads the whole file per brand",
-].join("\n");
+const REVIEW = Arr.join(
+  [
+    "## Verdict",
+    "",
+    "clean, with one thing worth saying.",
+    "",
+    "- src/seed.ts: the brand loop reads the whole file per brand",
+  ],
+  "\n",
+);
 
 const MR_PANEL = {
   _tag: "Details" as const,
@@ -1408,19 +1427,22 @@ test("Plan shows the spec and its tickets, ticked where they are done", () =>
     }),
   ));
 
-const PLAN_SPEC = [
-  "# The seeder",
-  "",
-  "| brand | env |",
-  "| --- | --- |",
-  "| alpha | prod |",
-  "",
-  "```ts",
-  "seed(brands);",
-  "```",
-  "",
-  "<script>steal()</script>",
-].join("\n");
+const PLAN_SPEC = Arr.join(
+  [
+    "# The seeder",
+    "",
+    "| brand | env |",
+    "| --- | --- |",
+    "| alpha | prod |",
+    "",
+    "```ts",
+    "seed(brands);",
+    "```",
+    "",
+    "<script>steal()</script>",
+  ],
+  "\n",
+);
 
 test("Plan renders its spec through Comark: headings, a table and a code block, sanitised", () =>
   runEffect(
@@ -1526,7 +1548,10 @@ test("a finished run has no steer field: there is nothing driving it to say it t
 test("the wheel scrolls the record under the pointer", () =>
   runEffect(
     Effect.gen(function* () {
-      const long = Array.from({ length: 80 }, (_, at) => `finding ${at + 1}`).join("\n");
+      const long = Arr.join(
+        Array.from({ length: 80 }, (_, at) => `finding ${at + 1}`),
+        "\n",
+      );
       const app = yield* opened(
         appState({
           tasks: [task()],
@@ -1549,7 +1574,10 @@ test("the wheel scrolls the record under the pointer", () =>
 test("a new record opens at the top of what it is showing", () =>
   runEffect(
     Effect.gen(function* () {
-      const long = Array.from({ length: 80 }, (_, at) => `finding ${at + 1}`).join("\n");
+      const long = Arr.join(
+        Array.from({ length: 80 }, (_, at) => `finding ${at + 1}`),
+        "\n",
+      );
       const other = task({ id: "t9", name: "Kibana upload cap", run: "r9" });
       const app = yield* opened(
         appState({
@@ -1763,10 +1791,13 @@ test("a menu item pressed where it is drawn acts, and does not open the card ben
       // row is the item, and every cell of it is over the card.
       const y = app.lineOf("Go to its tab");
       const row = app.frameLine(y);
-      yield* app.click(row.lastIndexOf("g"), y);
+      yield* app.click(
+        Option.getOrElse(pipe_(row, Str.lastIndexOf("g")), () => -1),
+        y,
+      );
       const since = app.commands.slice(before);
-      expect(since.some((command) => command._tag === "Jump")).toBe(true);
-      expect(since.some((command) => command._tag === "Select")).toBe(false);
+      expect(Arr.some(since, (command) => command._tag === "Jump")).toBe(true);
+      expect(Arr.some(since, (command) => command._tag === "Select")).toBe(false);
       expect(app.said()).not.toContain("Summary");
     }),
   ));
@@ -1799,11 +1830,12 @@ test("the Home board draws its sections in the board's one order", () =>
           ],
         }),
       );
-      const lines = ["Needs you", "Waiting on you · 1", "Working · 2", "1 finished today"].map(
+      const lines = Arr.map(
+        ["Needs you", "Waiting on you · 1", "Working · 2", "1 finished today"],
         (label) => app.lineOf(label),
       );
       expect(lines).toEqual([...lines].sort((a, b) => a - b));
-      expect(SECTIONS.map(([, title]) => title)).toEqual([
+      expect(Arr.map(SECTIONS, ([, title]) => title)).toEqual([
         "Needs you",
         "Waiting on you",
         "Working",
@@ -1884,11 +1916,11 @@ test("a newer release is said in full on a narrow pane, and hides none of the he
     Effect.gen(function* () {
       for (const width of [100, 70]) {
         const header = (app: { frame: () => string }) =>
-          app.frame().split("\n").slice(0, 5).join("\n");
+          Arr.join(Str.split(app.frame(), "\n").slice(0, 5), "\n");
         const current = header(yield* mount(appState(), width));
         const stale = header(yield* mount(appState({ board: board({ newer: "99.0.0" }) }), width));
         for (const control of ["⌕", "+ New run", "≡"]) {
-          expect(stale.includes(control)).toBe(current.includes(control));
+          expect(pipe_(stale, Str.includes(control))).toBe(pipe_(current, Str.includes(control)));
         }
         expect(stale).toContain("⌕");
         expect(stale).toContain("+ New run");

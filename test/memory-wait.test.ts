@@ -175,14 +175,14 @@ test("a wait whose host died, reading nothing for three of its periods, is no lo
         yield* fs.makeDirectory(`${runDir()}/memory-waits`, { recursive: true });
         yield* fs.writeFileString(
           `${runDir()}/memory-waits/0-1.json`,
-          Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
             what: "build's agent",
             sentence: "waiting for memory on vm-mk: 2.0 of 100.0 GB available",
             since: 0,
             read: 0,
             every: 15_000,
             asker: "r1-build",
-          }),
+          }).pipe(Effect.orDie),
         );
         expect(yield* memoryWaitOf(runDir())).not.toBeNull();
         yield* TestClock.adjust("46 seconds");

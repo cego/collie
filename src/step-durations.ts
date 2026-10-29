@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Schema, Semaphore } from "effect";
 import { readStepLines, type StepLine } from "./steps";
 import { epochMs } from "./time";
@@ -8,7 +12,7 @@ const Sample = Schema.Struct({
   run: Schema.String,
   key: Schema.String,
   at: Schema.String,
-  ms: Schema.Number,
+  ms: Schema.Finite,
 });
 type Sample = typeof Sample.Type;
 const Index = Schema.fromJsonString(Schema.Array(Sample));
@@ -23,9 +27,11 @@ const read = (dir: string) =>
     );
   });
 const samples = (run: string, workflow: string, lines: ReadonlyArray<StepLine>): Sample[] =>
-  lines.flatMap((line) => {
+  Arr.flatMap(lines, (line) => {
     if (line.kind !== "leave") return [];
-    const entered = lines.find((one) => one.kind === "enter" && one.key === line.key);
+    const entered = Option.getOrUndefined(
+      Arr.findFirst(lines, (one) => one.kind === "enter" && one.key === line.key),
+    );
     if (entered?.kind !== "enter") return [];
     const ms = epochMs(line.at) - epochMs(entered.at);
     return Number.isFinite(ms) && ms >= 0
@@ -34,10 +40,11 @@ const samples = (run: string, workflow: string, lines: ReadonlyArray<StepLine>):
   });
 const latest = (all: ReadonlyArray<Sample>) => {
   const kept: Sample[] = [];
-  for (const one of [...all].sort((a, b) => b.at.localeCompare(a.at))) {
-    if (kept.some((other) => other.run === one.run && other.key === one.key)) continue;
+  for (const one of [...all].sort((a, b) => pipe_(b.at, Str.localeCompare(a.at)))) {
+    if (Arr.some(kept, (other) => other.run === one.run && other.key === one.key)) continue;
     if (
-      kept.filter((other) => other.workflow === one.workflow && other.step === one.step).length < 10
+      Arr.filter(kept, (other) => other.workflow === one.workflow && other.step === one.step)
+        .length < 10
     )
       kept.push(one);
   }
@@ -46,7 +53,10 @@ const latest = (all: ReadonlyArray<Sample>) => {
 const write = (dir: string, values: ReadonlyArray<Sample>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(`${file(dir)}.tmp`, Schema.encodeSync(Index)(latest(values)));
+    yield* fs.writeFileString(
+      `${file(dir)}.tmp`,
+      yield* Schema.encodeEffect(Index)(latest(values)).pipe(Effect.orDie),
+    );
     yield* fs.rename(`${file(dir)}.tmp`, file(dir));
   }).pipe(Effect.orDie);
 
@@ -79,13 +89,13 @@ export const rememberStepDurations = (
   );
 export const usualStepTimes = (dir: string, workflow: string) =>
   Effect.gen(function* () {
-    const all = ((yield* read(dir)) ?? []).filter((one) => one.workflow === workflow);
+    const all = Arr.filter((yield* read(dir)) ?? [], (one) => one.workflow === workflow);
     const usual = new Map<string, number>();
-    for (const step of new Set(all.map((one) => one.step))) {
-      const values = all
-        .filter((one) => one.step === step)
-        .map((one) => one.ms)
-        .sort((a, b) => a - b);
+    for (const step of new Set(Arr.map(all, (one) => one.step))) {
+      const values = Arr.map(
+        Arr.filter(all, (one) => one.step === step),
+        (one) => one.ms,
+      ).sort((a, b) => a - b);
       if (values.length < 3) continue;
       const middle = Math.floor(values.length / 2);
       usual.set(

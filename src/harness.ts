@@ -1,6 +1,10 @@
 // How to start each supported agent CLI, pass it a model, and inject a Persona.
 // Personas are injected, never installed as harness-native config (CONTEXT.md, Persona).
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Effect, FileSystem, Option, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
@@ -72,13 +76,14 @@ export const claudeForbidsBypass = Effect.fn("Harness.claudeForbidsBypass")(func
     .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
   const files = [
     `${dir}/managed-settings.json`,
-    ...dropIns
-      .filter((name) => name.endsWith(".json"))
-      .map((name) => `${dir}/managed-settings.d/${name}`),
+    ...Arr.map(
+      Arr.filter(dropIns, (name) => pipe_(name, Str.endsWith(".json"))),
+      (name) => `${dir}/managed-settings.d/${name}`,
+    ),
   ];
   for (const file of files) {
     const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-    const settings = Schema.decodeUnknownOption(ManagedSettingsJson)(text);
+    const settings = Schema.decodeOption(ManagedSettingsJson)(text);
     if (
       Option.isSome(settings) &&
       settings.value.permissions?.disableBypassPermissionsMode === "disable"
@@ -180,7 +185,7 @@ export const HARNESSES: Harnesses = {
         `mcp_servers.collie.command=${JSON.stringify(command[0])}`,
         "-c",
         `mcp_servers.collie.args=${JSON.stringify([...command.slice(1), "mcp"])}`,
-        ...Object.entries(env).flatMap(([key, value]) => [
+        ...Arr.flatMap(Rec.toEntries(env), ([key, value]) => [
           "-c",
           `mcp_servers.collie.env.${key}=${JSON.stringify(value)}`,
         ]),

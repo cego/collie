@@ -14,6 +14,11 @@
 // The Markdown beside this file is the content: the five kinds of work source, what a
 // slice is told, and what the merge request has to say.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Option from "effect/Option";
 import {
   CriterionSchema,
   FindingSchema,
@@ -52,7 +57,7 @@ import {
   type Integration,
   type Slice,
 } from "collie";
-import { DateTime, Deferred, Effect, Fiber, FileSystem, Schema } from "effect";
+import { DateTime, Deferred, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
@@ -80,9 +85,11 @@ const Implementing = Schema.Struct({
 
 /** A section's text is sent as it is, so the names it carries are filled here. */
 const sectionOf = (section: string, input: typeof Implementing.Type) =>
-  (content.sections.get(section) ?? "")
-    .replaceAll("{{inputs.plan}}", input.inputs.plan)
-    .replaceAll("{{run.dir}}", input.run.dir);
+  pipe_(
+    content.sections.get(section) ?? "",
+    Str.replaceAll("{{inputs.plan}}", input.inputs.plan),
+    Str.replaceAll("{{run.dir}}", input.run.dir),
+  );
 
 const prompts = {
   build: content.template("build", {
@@ -304,7 +311,7 @@ export default defineWorkflow({
           execute: planReposOf(source.value, cwd).pipe(
             Effect.map((read) => ({
               single: isSingleRepo(read),
-              waves: read.waves.map((wave) => [...wave]),
+              waves: Arr.map(read.waves, (wave) => [...wave]),
               refusal: read.refusal?.message ?? null,
             })),
             // A plan that cannot be read is refused by name, not a defect the Run dies of.
@@ -320,8 +327,9 @@ export default defineWorkflow({
         if (plan.refusal !== null) return yield* new WorkflowError({ reason: plan.refusal });
         if (!plan.single) {
           yield* forecast([repoRuns]);
-          const carried = Object.fromEntries(
-            Object.entries(place.options).filter(
+          const carried = Rec.fromEntries(
+            Arr.filter(
+              Rec.toEntries(place.options),
               ([name]) => name !== "repo" && name !== "workspace",
             ),
           );
@@ -386,7 +394,7 @@ export default defineWorkflow({
             yield* host.record(runId, why);
             yield* host.parked(
               runId,
-              `${why.replace(/\.+$/, "")}. Resume ${runId} once it can be read.`,
+              `${pipe_(why, Str.replace(/\.+$/, ""))}. Resume ${runId} once it can be read.`,
             );
             return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
@@ -458,7 +466,7 @@ export default defineWorkflow({
           success: Schema.Array(SliceRecord),
           execute: orderedTicketsOf(source.value, place.options.repo ?? ""),
         });
-        return read.map((one) => ({ ...one, criteria: one.criteria ?? [] }));
+        return Arr.map(read, (one) => ({ ...one, criteria: one.criteria ?? [] }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
       // Read only after the build, which is what writes SPEC.md for any source but a plan.
@@ -489,10 +497,12 @@ export default defineWorkflow({
       for (;;) {
         // Identities before work: two tickets nobody can tell apart would share one
         // result, and finding that out after an agent has been paid for is too late.
-        const clash = identityProblem(tickets.map((ticket) => ticket.file));
+        const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
         if (clash !== null) return yield* new WorkflowError({ reason: clash });
         const ticket =
-          whole && built.size === 0 ? null : tickets.find((one) => !built.has(one.file));
+          whole && built.size === 0
+            ? null
+            : Option.getOrUndefined(Arr.findFirst(tickets, (one) => !built.has(one.file)));
         if (ticket === undefined) break;
         rallied = null;
         const { done, blocking } = yield* building(
@@ -509,7 +519,7 @@ export default defineWorkflow({
               ticket?.criteria ??
               (source.kind === "text"
                 ? criteriaIn(source.value)
-                : tickets.flatMap((one) => one.criteria));
+                : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
             build = yield* agentWork({
               operation: ticket?.file ?? "build",
@@ -564,7 +574,7 @@ export default defineWorkflow({
             // and handed back as it reads now; one that cannot be read keeps its last reading.
             let read: ReadonlyArray<{ file: string } & typeof TicketReading.Type> =
               source.kind === "plan-dir"
-                ? (ticket === null ? tickets : [ticket]).map((one) => ({
+                ? Arr.map(ticket === null ? tickets : [ticket], (one) => ({
                     file: one.file,
                     criteria: one.criteria,
                     afterMerge: [],
@@ -591,8 +601,8 @@ export default defineWorkflow({
                   ),
                 ),
               });
-              read = read.map((one, at) => (now[at] ? { file: one.file, ...now[at] } : one));
-              return read.flatMap((one) => one.criteria);
+              read = Arr.map(read, (one, at) => (now[at] ? { file: one.file, ...now[at] } : one));
+              return Arr.flatMap(read, (one) => one.criteria);
             });
             // Each criterion answered before any reviewer is launched: one left unanswered or
             // unmet goes back to the builder, and the Run asks if it still is.
@@ -627,7 +637,10 @@ export default defineWorkflow({
                   options: [HAND_BACK, STOP],
                 });
                 if (chosen !== HAND_BACK) {
-                  stopped = `${item}: a criteria hand-back reported a blocker and changed nothing, so no review starts: ${unmet.map((one) => one.title).join("; ")}`;
+                  stopped = `${item}: a criteria hand-back reported a blocker and changed nothing, so no review starts: ${Arr.join(
+                    Arr.map(unmet, (one) => one.title),
+                    "; ",
+                  )}`;
                   break;
                 }
                 blockers = [];
@@ -644,7 +657,10 @@ export default defineWorkflow({
                   options: [HAND_BACK, STOP],
                 });
                 if (chosen !== HAND_BACK) {
-                  stopped = `${still}, so no review starts: ${unmet.map((one) => one.title).join("; ")}. Stop was answered to ${name}`;
+                  stopped = `${still}, so no review starts: ${Arr.join(
+                    Arr.map(unmet, (one) => one.title),
+                    "; ",
+                  )}. Stop was answered to ${name}`;
                   break;
                 }
                 tries = 1;
@@ -676,7 +692,7 @@ export default defineWorkflow({
                 after.head === before.head &&
                 after.fingerprint === before.fingerprint &&
                 after.fingerprint !== TOO_LARGE
-                  ? (answered.findings ?? []).filter(isBlocking)
+                  ? Arr.filter(answered.findings ?? [], isBlocking)
                   : [];
               tries += 1;
               turn += 1;
@@ -685,9 +701,10 @@ export default defineWorkflow({
               item,
               title: ticket?.title ?? "",
               commits,
-              verifications: (yield* host.evidence(runId, cwd)).verifications
-                .slice(before)
-                .map((one) => `${one.name}: ${one.result}`),
+              verifications: Arr.map(
+                (yield* host.evidence(runId, cwd)).verifications.slice(before),
+                (one) => `${one.name}: ${one.result}`,
+              ),
             };
             handed.push(done);
             if (stopped !== null) {
@@ -698,21 +715,21 @@ export default defineWorkflow({
             for (const one of assumptions) assumed.push(`assumed in ${item}: ${one}`);
             for (const one of read)
               afterMerged.push(
-                ...one.afterMerge.map((line) => `${one.file}: after merge: ${line}`),
+                ...Arr.map(one.afterMerge, (line) => `${one.file}: after merge: ${line}`),
               );
             for (const { criterion, met } of afterMergeAnswers(criteria, answers))
               afterMerged.push(
-                `${read.find((one) => one.criteria.includes(criterion))?.file ?? item}: ${criterion} — ${met}`,
+                `${Option.getOrUndefined(Arr.findFirst(read, (one) => one.criteria.includes(criterion)))?.file ?? item}: ${criterion} — ${met}`,
               );
             built.add(done.item);
             if (ticket === null) for (const one of tickets) built.add(one.file);
             if (ticket !== null)
               yield* checkpoint(place.dir, ticket, "done", claimsOf(build, ticket));
-            return { done, blocking: (build.findings ?? []).filter(isBlocking) };
+            return { done, blocking: Arr.filter(build.findings ?? [], isBlocking) };
           }),
           ticket === null
             ? undefined
-            : { item: ticket.file, items: tickets.map((one) => one.file) },
+            : { item: ticket.file, items: Arr.map(tickets, (one) => one.file) },
         );
         if (blocking.length > 0) {
           rallied = yield* builderRally({
@@ -722,11 +739,11 @@ export default defineWorkflow({
             input,
             build: {
               item: done.item,
-              completed: handed.map((one) => one.item),
+              completed: Arr.map(handed, (one) => one.item),
               findings: blocking,
             },
           });
-          const unresolved = rallied.halted ?? rallied.unsettled.join("; ");
+          const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
           if (unresolved !== "") return yield* unbuilt(`${done.item}: ${unresolved}`);
         }
         tickets = yield* ticketsNow;
@@ -760,7 +777,7 @@ export default defineWorkflow({
         outcome: outcomeOf,
         outcomeJournaled: kindNow,
         outputs: () => ({ build: { ...build } }),
-        tickets: tickets.map((ticket) => ({ file: ticket.file, checks: ticket.checks })),
+        tickets: Arr.map(tickets, (ticket) => ({ file: ticket.file, checks: ticket.checks })),
         roots: evidenceRoots(place.dir, cwd, source.value),
         rallied,
         unsettled: [...assumed, ...afterMerged],
@@ -895,8 +912,8 @@ const buildEach = (fan: {
     const host = yield* Host;
     const children = yield* Children;
     const runId = (yield* Run).id;
-    const invocation = (repo: string) => `implement-${repo.replaceAll("/", "-")}`;
-    const clash = identityProblem(fan.waves.flat().map(invocation));
+    const invocation = (repo: string) => `implement-${pipe_(repo, Str.replaceAll("/", "-"))}`;
+    const clash = identityProblem(Arr.map(fan.waves.flat(), invocation));
     if (clash !== null) return yield* new WorkflowError({ reason: clash });
     const built: string[] = [];
     const repos = fan.waves.flat();
@@ -933,17 +950,17 @@ const buildEach = (fan: {
         built.push(`${one.repo}: ${one.built ?? one.why}`);
         yield* host.record(runId, `${one.repo}: ${one.built ?? one.why}`);
       }
-      const stopped = ended.find((one) => one.built === null);
+      const stopped = Option.getOrUndefined(Arr.findFirst(ended, (one) => one.built === null));
       if (stopped !== undefined) {
         const left = fan.waves.slice(at + 1).flat();
         const waiting =
-          left.length === 0 ? "" : ` Not run: ${left.join(", ")}, waiting on ${stopped.repo}.`;
+          left.length === 0 ? "" : ` Not run: ${Arr.join(left, ", ")}, waiting on ${stopped.repo}.`;
         return yield* new WorkflowError({
-          reason: `${stopped.repo} did not build.${waiting} ${built.join("; ")}`,
+          reason: `${stopped.repo} did not build.${waiting} ${Arr.join(built, "; ")}`,
         });
       }
     }
-    return `${fan.waves.flat().length} repositories built in ${fan.waves.length} wave(s): ${built.join("; ")}`;
+    return `${fan.waves.flat().length} repositories built in ${fan.waves.length} wave(s): ${Arr.join(built, "; ")}`;
   });
 
 /** What the slice claims it built, or the ticket's own name where it named nothing. */
@@ -967,32 +984,40 @@ const checkpoint = (
     const at = DateTime.formatIso(yield* DateTime.now);
     yield* fs.makeDirectory(`${dir}/steering/progress`, { recursive: true });
     yield* fs.writeFileString(
-      `${dir}/steering/progress/${ticket.file.replace(/\.md$/, "")}.json`,
+      `${dir}/steering/progress/${pipe_(ticket.file, Str.replace(/\.md$/, ""))}.json`,
       asCheckpoint({ ticket: ticket.file, status, claims: [...claims], at }),
     );
   }).pipe(Effect.orDie);
 
-const asCheckpoint = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      ticket: Schema.String,
-      status: Schema.Literals(["started", "done"]),
-      claims: Schema.Array(Schema.String),
-      at: Schema.String,
-    }),
+const asCheckpoint = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Struct({
+        ticket: Schema.String,
+        status: Schema.Literals(["started", "done"]),
+        claims: Schema.Array(Schema.String),
+        at: Schema.String,
+      }),
+    ),
   ),
+  Result.getOrThrow,
 );
 
 /** A ticket's criteria as its builder is given them. */
 const renderCriteria = (criteria: ReadonlyArray<string>) =>
   criteria.length === 0
     ? "None: this work names no checkbox criteria, so `criteria` stays empty."
-    : criteria.map((one) => `- ${one}`).join("\n");
+    : Arr.join(
+        Arr.map(criteria, (one) => `- ${one}`),
+        "\n",
+      );
 
 /** Each answer as the wording it answered; one that answered none of it is dropped. */
 const boundTo = (wording: ReadonlyArray<string>, given: ReadonlyArray<Criterion>): Criterion[] =>
-  given.flatMap((answer) => {
-    const criterion = wording.find((one) => answerFor(one, [answer]) !== undefined);
+  Arr.flatMap(given, (answer) => {
+    const criterion = Option.getOrUndefined(
+      Arr.findFirst(wording, (one) => answerFor(one, [answer]) !== undefined),
+    );
     return criterion === undefined ? [] : [{ ...answer, criterion }];
   });
 
@@ -1008,27 +1033,32 @@ const showsAnything = (one: Answered) => one.criteria.length > 0 || one.assumpti
 
 /** Every built item's criteria, answers and assumptions, as a reviewer is shown them. */
 export const renderAnswered = (all: ReadonlyArray<Answered>) =>
-  all.some(showsAnything)
-    ? [
-        "What the builder says of each acceptance criterion, and what it decided where the plan did not settle it. Check each answer against the code rather than taking it on its word, and raise an assumption the spec contradicts. Raise as blocking an `after merge` answer to a criterion this Run could have shown before its merge request:",
-        ...all
-          .filter(showsAnything)
-          .map((one) =>
-            [
-              `\n${one.item}:`,
-              ...one.criteria.map(
-                (criterion) =>
-                  `- ${criterion}\n  → ${answerFor(criterion, one.answers)?.met ?? "not answered"}`,
-              ),
-              ...one.assumptions.map((assumption) => `- assumed: ${assumption}`),
-            ].join("\n"),
+  Arr.some(all, showsAnything)
+    ? Arr.join(
+        [
+          "What the builder says of each acceptance criterion, and what it decided where the plan did not settle it. Check each answer against the code rather than taking it on its word, and raise an assumption the spec contradicts. Raise as blocking an `after merge` answer to a criterion this Run could have shown before its merge request:",
+          ...Arr.map(Arr.filter(all, showsAnything), (one) =>
+            Arr.join(
+              [
+                `\n${one.item}:`,
+                ...Arr.map(
+                  one.criteria,
+                  (criterion) =>
+                    `- ${criterion}\n  → ${answerFor(criterion, one.answers)?.met ?? "not answered"}`,
+                ),
+                ...Arr.map(one.assumptions, (assumption) => `- assumed: ${assumption}`),
+              ],
+              "\n",
+            ),
           ),
-      ].join("\n")
+        ],
+        "\n",
+      )
     : "";
 
 /** A merge of the default branch that stopped on conflicts, as the builder is told it. */
 const conflictOf = (merged: Integration) =>
-  `Collie merged ${merged.ref} (${merged.sha}) into this branch, and the merge stopped on conflicts in: ${merged.files.join(", ")}.`;
+  `Collie merged ${merged.ref} (${merged.sha}) into this branch, and the merge stopped on conflicts in: ${Arr.join(merged.files, ", ")}.`;
 
 /** What stopped an integration, as the builder is told it. */
 const stoppedBy = (merged: Integration) =>
@@ -1069,7 +1099,7 @@ const builderRally = (ask: {
       obstacle:
         ask.build === undefined
           ? ""
-          : `Review the built part of this plan: ${ask.build.completed.join(", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
+          : `Review the built part of this plan: ${Arr.join(ask.build.completed, ", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
       fix: ({ operation, at, proves, findings }) =>
         Effect.gen(function* () {
           return yield* agentWork({

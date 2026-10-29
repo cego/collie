@@ -1,6 +1,7 @@
 // The two records `run report` counts that nothing wrote before: a park, as the `halt` its
 // metrics journal already documents, and a context sample read at a work boundary.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { connect } from "../src/host";
@@ -28,10 +29,12 @@ test(
             (view) => view?.status.status === "complete",
           );
           const lines = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
-          expect(lines.filter((line) => line.kind === "halt").map((line) => line.note)).toEqual([
-            "waiting on a pane",
-            "the agent has written nothing",
-          ]);
+          expect(
+            Arr.map(
+              Arr.filter(lines, (line) => line.kind === "halt"),
+              (line) => line.note,
+            ),
+          ).toEqual(["waiting on a pane", "the agent has written nothing"]);
         }),
       ["parking.workflow.ts"],
     ),

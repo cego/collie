@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -30,7 +33,7 @@ import { epochMs } from "../src/time";
 
 let rig: Rig;
 
-const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
 const mkdir = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(path, { recursive: true }));
 const writeFile = (path: string, text: string) =>
@@ -44,20 +47,14 @@ beforeEach(() =>
   ),
 );
 
-afterEach(() =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* rig.close();
-    }),
-  ),
-);
+afterEach(() => runEffect(rig.close()));
 
 /** A scripted shell, so these tests never touch a real glab or git. */
 function runner(table: Record<string, { code?: number; stdout?: string }>) {
   return (cmd: string, args: string[]) =>
     Effect.succeed(
       (() => {
-        const key = `${cmd} ${args.join(" ")}`;
+        const key = `${cmd} ${Arr.join(args, " ")}`;
         const hit = table[key] ?? table[`${cmd} ${args[0]}`];
         return { code: hit?.code ?? (hit ? 0 : 1), stdout: hit?.stdout ?? "" };
       })(),
@@ -207,7 +204,7 @@ for (const name of ["gitlab", "github"] as const) {
               : "https://github.com/owner/repo",
         });
         expect(ready.commands?.create).toContain(`${CLI[name]} `);
-        expect(ready.commands?.create).toContain("--assignee 'me'");
+        expect(ready.commands?.create).toContain("--assignee me ");
         expect(ready.commands?.comment).toBe("");
         expect((yield* prepare(checkout(), { [name]: "lander" })).assignee).toBe("lander");
       }),
@@ -380,7 +377,7 @@ function recorder(table: Record<string, { code?: number; stdout?: string }>) {
   const calls: string[][] = [];
   const run = (cmd: string, args: string[]) => {
     calls.push([cmd, ...args]);
-    const key = `${cmd} ${args.join(" ")}`;
+    const key = `${cmd} ${Arr.join(args, " ")}`;
     const hit = table[key] ?? table[`${cmd} ${args[0]}`];
     return Effect.succeed({ code: hit?.code ?? (hit ? 0 : 1), stdout: hit?.stdout ?? "" });
   };
@@ -426,7 +423,7 @@ test("a merge request answers the whole panel from one read of it", () =>
       expect(details.url).toBe("https://gitlab.example.com/g/p/-/merge_requests/42");
 
       // One read of the merge request itself; its approvals and discussions are others.
-      expect(glab.calls.filter((c) => c.join(" ") === viewOf("42"))).toHaveLength(1);
+      expect(Arr.filter(glab.calls, (c) => Arr.join(c, " ") === viewOf("42"))).toHaveLength(1);
     }),
   ));
 
@@ -575,7 +572,7 @@ test("a pipeline's status is read from GitLab by its address", () => {
       // Not answered, or not a pipeline at all: nothing to say.
       expect(yield* status("https://gitlab.example.com/g/p/-/pipelines/78")).toBeNull();
       expect(yield* status("https://gitlab.example.com/g/p/-/merge_requests/1")).toBeNull();
-      expect(fake.requests.map((one) => one.url)).toEqual([
+      expect(Arr.map(fake.requests, (one) => one.url)).toEqual([
         "https://gitlab.example.com/api/v4/projects/g%2Fp/pipelines/77",
         "https://gitlab.example.com/api/v4/projects/g%2Fp/pipelines/77",
         "https://gitlab.example.com/api/v4/projects/g%2Fp/pipelines/78",
@@ -642,7 +639,9 @@ test("posting checks the login on the target's GitLab host", () =>
         ok: false,
         message: `${target} is assigned to you, so its findings are yours to fix rather than to post`,
       });
-      expect(glab.calls.some((call) => call[2] === "note" || call[2] === "approve")).toBe(false);
+      expect(Arr.some(glab.calls, (call) => call[2] === "note" || call[2] === "approve")).toBe(
+        false,
+      );
     }),
   ));
 

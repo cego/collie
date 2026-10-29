@@ -2,6 +2,9 @@
 // the model is told of it, and how the conversation shows it again. No Bun-only import:
 // the view bundles this.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Option, Schema } from "effect";
 import type { AttachmentFile } from "../../../src/board-model";
 
@@ -9,7 +12,7 @@ import type { AttachmentFile } from "../../../src/board-model";
 export const Attached = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
-  size: Schema.Number,
+  size: Schema.Finite,
   mediaType: Schema.String,
 });
 export type Attached = typeof Attached.Type;
@@ -32,7 +35,8 @@ export const LONG_EDGE = 2000;
 /** The image types the model is shown as images. */
 export const SHOWN = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 export type ShownImage = (typeof SHOWN)[number];
-export const shownAs = (mediaType: string) => SHOWN.find((one) => one === mediaType);
+export const shownAs = (mediaType: string) =>
+  Option.getOrUndefined(Arr.findFirst(SHOWN, (one) => one === mediaType));
 /** The largest image shown: 5 MB once base64, the API's limit for one. */
 export const IMAGE_BYTES = 3.75 * 1024 * 1024;
 /** What may be text; a file of unknown type is, where its bytes say so. */
@@ -47,7 +51,7 @@ export const capRefusal = (
 ) => {
   if (adding.size > FILE_CAP)
     return `${adding.name} is ${megabytes(adding.size)}, over the 20 MB one file may be.`;
-  const total = held.reduce((sum, one) => sum + one.size, adding.size);
+  const total = Arr.reduce(held, adding.size, (sum, one) => sum + one.size);
   return total > MESSAGE_CAP
     ? `With ${adding.name} this message's files come to ${megabytes(total)}, over the 30 MB one message may carry.`
     : null;
@@ -65,7 +69,10 @@ export const scaledSize = (image: { readonly width: number; readonly height: num
 export const imageSize = (bytes: Uint8Array) => {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const tag = (at: number, text: string) =>
-    [...text].every((c, i) => bytes[at + i] === c.charCodeAt(0));
+    Arr.every(
+      [...text],
+      (c, i) => bytes[at + i] === Option.getOrElse(Str.charCodeAt(c, 0), () => Number.NaN),
+    );
   const le24 = (at: number) => view.getUint16(at, true) + (view.getUint8(at + 2) << 16);
   try {
     if (bytes[0] === 0x89 && tag(1, "PNG") && tag(12, "IHDR"))
@@ -112,7 +119,9 @@ export const showable = (bytes: Uint8Array) => {
 export const pastedImages = (
   items: ReadonlyArray<{ readonly kind: string; readonly type: string }>,
 ) =>
-  items.flatMap((item, at) => (item.kind === "file" && item.type.startsWith("image/") ? [at] : []));
+  Arr.flatMap(items, (item, at) =>
+    item.kind === "file" && pipe(item.type, Str.startsWith("image/")) ? [at] : [],
+  );
 
 const decoded = (text: string) => {
   try {
@@ -129,8 +138,8 @@ const decoded = (text: string) => {
 export const uriListPaths = (text: string) => {
   const paths: string[] = [];
   const refused: string[] = [];
-  for (const line of text.split(/\r?\n/).map((one) => one.trim())) {
-    if (line === "" || line.startsWith("#")) continue;
+  for (const line of Arr.map(Str.split(text, /\r?\n/), (one) => Str.trim(one))) {
+    if (line === "" || pipe(line, Str.startsWith("#"))) continue;
     const url = URL.parse(line);
     const path =
       url?.protocol === "file:" && (url.host === "" || url.host === "localhost")
@@ -144,12 +153,15 @@ export const uriListPaths = (text: string) => {
 
 /** The files the system clipboard names as text: `file://` URIs, or absolute paths. */
 export const clipboardPaths = (text: string) =>
-  text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .flatMap((line) =>
-      line.startsWith("/") ? [line] : line.startsWith("file:") ? uriListPaths(line).paths : [],
-    );
+  Arr.flatMap(
+    Arr.map(Str.split(text, /\r?\n/), (line) => Str.trim(line)),
+    (line) =>
+      pipe(line, Str.startsWith("/"))
+        ? [line]
+        : pipe(line, Str.startsWith("file:"))
+          ? uriListPaths(line).paths
+          : [],
+  );
 
 /** What a drop carries: files named by URI, files' bytes, or text. */
 export const dropKind = (types: ReadonlyArray<string>) =>
@@ -159,7 +171,7 @@ export const dropKind = (types: ReadonlyArray<string>) =>
 export const pastedName = (name: string, mediaType: string, at: string) =>
   name !== "" && name !== "image.png"
     ? name
-    : `pasted-${at.slice(0, 19).replaceAll(/[T:]/g, "-")}.${mediaType.split("/")[1] ?? "png"}`;
+    : `pasted-${pipe(at, Str.slice(0, 19), Str.replaceAll(/[T:]/g, "-"))}.${Str.split(mediaType, "/")[1] ?? "png"}`;
 
 /** How Desktop's own block about a message's files begins. */
 export const ATTACHED = "[Desktop: the human attached these files to this message]";
@@ -168,23 +180,29 @@ const LINE = /^- (.+) \(([^,()]+), (\d+) bytes\): (.+)$/;
 
 /** The block the model is handed beside the human's words, apart from them. */
 export const listing = (files: ReadonlyArray<Staged>) =>
-  [
-    ATTACHED,
-    ...files.map(
-      ({ name, mediaType, size, path }) => `- ${name} (${mediaType}, ${size} bytes): ${path}`,
-    ),
-  ].join("\n");
+  Arr.join(
+    [
+      ATTACHED,
+      ...Arr.map(
+        files,
+        ({ name, mediaType, size, path }) => `- ${name} (${mediaType}, ${size} bytes): ${path}`,
+      ),
+    ],
+    "\n",
+  );
 
 /** The files a block of Desktop's lists, or null for any other text. */
 export const fromListing = (text: string): ReadonlyArray<Attached> | null => {
-  const [first, ...lines] = text.split("\n");
+  const [first, ...lines] = Str.split(text, "\n");
   if (first !== ATTACHED) return null;
-  return lines.flatMap((line) => {
+  return Arr.flatMap(lines, (line) => {
     const [, name, mediaType, size, path] = LINE.exec(line) ?? [];
     if (name === undefined || mediaType === undefined || size === undefined || path === undefined)
       return [];
     // A copy is kept at `<sha256>/<name>`, which is its id.
-    return [{ id: path.split("/").slice(-2).join("/"), name, size: Number(size), mediaType }];
+    return [
+      { id: Arr.join(Str.split(path, "/").slice(-2), "/"), name, size: Number(size), mediaType },
+    ];
   });
 };
 
@@ -197,7 +215,7 @@ export const AttachmentPart = Schema.Struct({
     value: Schema.String,
     mimeType: Schema.String,
   }),
-  metadata: Schema.Struct({ name: Schema.String, size: Schema.Number }),
+  metadata: Schema.Struct({ name: Schema.String, size: Schema.Finite }),
 });
 export type AttachmentPart = typeof AttachmentPart.Type;
 
@@ -221,7 +239,10 @@ export const attachedIn = (part: { readonly type: string }): Option.Option<Attac
 
 /** A Run's attachments: images as thumbnails, everything else by name. */
 export const attachmentsShown = (files: ReadonlyArray<AttachmentFile>) => {
-  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+  const sorted = [...files].sort((a, b) => pipe(a.name, Str.localeCompare(b.name)));
   const image = (file: AttachmentFile) => shownAs(file.mediaType) !== undefined;
-  return { thumbnails: sorted.filter(image), named: sorted.filter((file) => !image(file)) };
+  return {
+    thumbnails: Arr.filter(sorted, image),
+    named: Arr.filter(sorted, (file) => !image(file)),
+  };
 };

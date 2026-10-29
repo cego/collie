@@ -5,6 +5,8 @@
 // undecodable line anywhere else is not that — nothing appends into the middle of a file
 // — so it is corruption, and `corrupt` is how a caller that must fail closed finds out.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema } from "effect";
 
 export interface Journal<A> {
@@ -18,9 +20,9 @@ export const readJournalWhole = Effect.fn("Journal.readWhole")(function* <A>(
   json: Schema.Codec<A, string, never, never>,
 ): Effect.fn.Return<Journal<A>, never, FileSystem.FileSystem> {
   const fs = yield* FileSystem.FileSystem;
-  const raw = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
+  const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   const decode = Schema.decodeUnknownOption(json);
-  const texts = raw.split("\n").filter((text) => text.trim() !== "");
+  const texts = Arr.filter(Str.split(raw, "\n"), (text) => Str.trim(text) !== "");
   const lines: A[] = [];
   let corrupt = 0;
   for (const [at, text] of texts.entries()) {
@@ -42,5 +44,9 @@ export const appendJournal = Effect.fn("Journal.append")(function* <A>(
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-  yield* fs.writeFileString(file, `${Schema.encodeSync(json)(line)}\n`, { flag: "a" });
+  yield* fs.writeFileString(
+    file,
+    `${yield* Schema.encodeEffect(json)(line).pipe(Effect.orDie)}\n`,
+    { flag: "a" },
+  );
 });

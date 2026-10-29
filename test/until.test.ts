@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Cause, ConfigProvider, Effect, Exit, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
@@ -10,7 +11,7 @@ test("an until that runs out names its wait, the last value it read, and the end
       const fs = yield* FileSystem.FileSystem;
       const state = yield* fs.makeTempDirectoryScoped({ prefix: "until-" });
       const lines = Array.from({ length: 100 }, (_, at) => `log line ${at + 1}`);
-      yield* fs.writeFileString(`${state}/host.log`, `${lines.join("\n")}\n`);
+      yield* fs.writeFileString(`${state}/host.log`, `${Arr.join(lines, "\n")}\n`);
       let reads = 0;
       const waiting = yield* until(
         () => Effect.sync(() => ({ runs: [`run-${++reads}`] })),

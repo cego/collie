@@ -1,6 +1,7 @@
 // What the tab is around the board: the boundary that catches a render, the screen it
 // falls back to, and the one overlay the board puts up by itself.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { createSignal } from "solid-js";
@@ -63,7 +64,7 @@ const mount = Effect.fn("shell.mount")(function* (initial: AppState) {
   const flush = Effect.promise(() => t.flush());
   yield* flush;
   return {
-    acted: () => commands.filter((c) => c._tag !== "Select"),
+    acted: () => Arr.filter(commands, (c) => c._tag !== "Select"),
     flush,
     frame: () => t.captureCharFrame(),
     mockInput: t.mockInput,

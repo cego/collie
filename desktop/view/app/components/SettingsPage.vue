@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import { injectRegistry } from "@effect/atom-vue";
 import { settingOf, settingStored } from "../../../../src/settings";
 import {
@@ -24,8 +26,13 @@ const sections = computed(() =>
 );
 
 const host = ref("");
-const saveHost = async () => {
-  if (await saveGitlabHost(host.value.trim())) host.value = "";
+const saveHost = () => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (yield* Effect.promise(() => Promise.resolve(saveGitlabHost(Str.trim(host.value)))))
+        host.value = "";
+    }),
+  );
 };
 
 const idOf = (row: SettingRow) => `${row.shared ? "flock" : "desktop"}-${row.key}`;
@@ -33,16 +40,31 @@ const idOf = (row: SettingRow) => `${row.shared ? "flock" : "desktop"}-${row.key
 const drafts = ref<Record<string, string>>({});
 const shown = (row: SettingRow) => drafts.value[idOf(row)] ?? row.value;
 /** `typed` in the row's unit; empty unsets it. */
-const set = async (row: SettingRow, typed: string) => {
-  if (!row.shared) {
-    const refused = await change(desktopChange(row.key, typed));
-    if (refused === null) delete drafts.value[idOf(row)];
-    else toast.add({ title: refused, color: "error" });
-    return;
-  }
-  const stored = settingStored(row.key, typed);
-  if ("refused" in stored) return void toast.add({ title: stored.refused, color: "error" });
-  if (await setFlockSetting(row.key, stored.stored)) delete drafts.value[idOf(row)];
+const set = (row: SettingRow, typed: string) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (!row.shared) {
+        const refused = yield* Effect.promise(() =>
+          Promise.resolve(change(desktopChange(row.key, typed))),
+        );
+        if (refused === null) delete drafts.value[idOf(row)];
+        else
+          toast.add({
+            title: refused,
+            color: "error",
+          });
+        return;
+      }
+      const stored = settingStored(row.key, typed);
+      if ("refused" in stored)
+        return void toast.add({
+          title: stored.refused,
+          color: "error",
+        });
+      if (yield* Effect.promise(() => Promise.resolve(setFlockSetting(row.key, stored.stored))))
+        delete drafts.value[idOf(row)];
+    }),
+  );
 };
 const gitlabHostSaid = settingOf("gitlab_host")?.description;
 
@@ -186,7 +208,7 @@ const drawnLine = computed(() =>
                   size="sm"
                   label="Use this GitLab"
                   data-testid="save-gitlab-host"
-                  :disabled="host.trim() === ''"
+                  :disabled="Str.trim(host) === ''"
                 />
               </form>
             </div>

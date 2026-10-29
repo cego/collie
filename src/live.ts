@@ -8,6 +8,8 @@
 // looking at it. Nothing is inferred either — a Run no journal says anything about gets no
 // marks, rather than the reassuring ones a "clean" default would invent.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Clock, Effect, Path, Schema } from "effect";
 import type { AgentEntry } from "./registry";
 import type { RunFacts } from "./runs";
@@ -115,7 +117,7 @@ export const readPendingReports = Effect.fn("Live.readPendingReports")(function*
  * a key from a cwd is exactly what keys two sessions to one Herd.
  */
 const herdOrNull = (socketPath: string | null) =>
-  herdOf(socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  herdOf(socketPath).pipe(Effect.orElseSucceed(() => null));
 
 /** What a row's marks are read from: the Run, whether it is held, and its agents' harnesses. */
 export interface MarkedRun extends LiveRun {
@@ -129,7 +131,7 @@ export function markedOf(
   run: Pick<RunFacts, "id" | "dir" | "held">,
   registered: ReadonlyArray<AgentEntry>,
 ): MarkedRun {
-  const harnesses = registered.flatMap((entry) =>
+  const harnesses = Arr.flatMap(registered, (entry) =>
     entry.runId === run.id && entry.incarnation?.agentSession
       ? [entry.incarnation.agentSession.kind]
       : [],
@@ -190,7 +192,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
       unattributed: yield* unattributed(run),
       proposal: pendingFor(lines, run.id, now).length > 0,
     };
-    if (Object.values(mark).some((set) => set)) marks[run.id] = mark;
+    if (Arr.some(Rec.values(mark), (set) => set)) marks[run.id] = mark;
   }
   // The region is drawn by the app's Runs view and the text board, and by nothing else:
   // a View that will not look at it is not worth the Herd's journals.
@@ -227,7 +229,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
         run: one.id,
         cards: newest(own).slice(-CARDS).reverse(),
         drift: openReports(yield* readDrift(one.dir)),
-        deliveries: (yield* deliveriesOf(opts.stateDir, one.id)).map((found) => found.delivery),
+        deliveries: Arr.map(yield* deliveriesOf(opts.stateDir, one.id), (found) => found.delivery),
         proposals: [...pendingFor(lines, one.id, now), ...herdWide],
         pending: key === null ? [] : yield* readPendingReports(opts.stateDir, key, one.id),
         ownership: opts.ownership,
@@ -245,13 +247,16 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
  */
 const unattributed = Effect.fn("Live.unattributed")(function* (run: MarkedRun) {
   if (run.harnesses.length === 0) return false;
-  const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
+  const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return false;
   const { auto_correct, exclusive_steering } = intent.authority;
   if (!auto_correct || !exclusive_steering) return false;
   // A harness Collie has no row for is one nothing has been shown about, which is the
   // same answer as `unproven` and never a reason to say nothing.
-  return run.harnesses.some((harness) => capabilitiesOf(harness)?.attribution?.status !== "proven");
+  return Arr.some(
+    run.harnesses,
+    (harness) => capabilitiesOf(harness)?.attribution?.status !== "proven",
+  );
 });
 
 /**

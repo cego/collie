@@ -1,10 +1,13 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "../support/effect";
 
 const uiFiles = Effect.fn("boundary.uiFiles")(function* (predicate: (name: string) => boolean) {
   const fs = yield* FileSystem.FileSystem;
-  const names = (yield* fs.readDirectory("src/ui")).filter(predicate);
+  const names = Arr.filter(yield* fs.readDirectory("src/ui"), predicate);
   return yield* Effect.forEach(names, (name) =>
     Effect.map(fs.readFileString(`src/ui/${name}`), (source) => ({ name, source })),
   );
@@ -12,11 +15,13 @@ const uiFiles = Effect.fn("boundary.uiFiles")(function* (predicate: (name: strin
 
 /** The code, without the prose: a comment naming `Effect` is not a use of it. */
 function code(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("//"))
-    .join("\n");
+  return Arr.join(
+    Arr.filter(
+      Str.split(pipe(source, Str.replace(/\/\*[\s\S]*?\*\//g, "")), "\n"),
+      (line) => !pipe(Str.trimStart(line), Str.startsWith("//")),
+    ),
+    "\n",
+  );
 }
 
 /**
@@ -25,10 +30,16 @@ function code(source: string): string {
  * file compliant while the component had acquired a direct Effect dependency.
  */
 function effectValueImports(source: string): string[] {
-  return [...code(source).matchAll(/^import\b[\s\S]*?from\s*"[^"]*";/gm)]
-    .map((match) => match[0])
-    .filter((statement) => /from\s*"effect/.test(statement))
-    .filter((statement) => !/^import\s+type\b/.test(statement));
+  return Arr.filter(
+    Arr.filter(
+      Arr.map(
+        [...pipe(code(source), Str.matchAll(/^import\b[\s\S]*?from\s*"[^"]*";/gm))],
+        (match) => match[0],
+      ),
+      (statement) => /from\s*"effect/.test(statement),
+    ),
+    (statement) => !/^import\s+type\b/.test(statement),
+  );
 }
 
 test("a wrapped value import counts as one", () => {
@@ -52,8 +63,8 @@ test("a wrapped value import counts as one", () => {
 test("no component imports effect", () =>
   runEffect(
     Effect.gen(function* () {
-      const components = yield* uiFiles((n) => n.endsWith(".tsx") && n !== "bridge.tsx");
-      expect(components.map((c) => c.name)).toContain("App.tsx");
+      const components = yield* uiFiles((n) => pipe(n, Str.endsWith(".tsx")) && n !== "bridge.tsx");
+      expect(Arr.map(components, (c) => c.name)).toContain("App.tsx");
 
       for (const { name, source } of components) {
         expect([name, effectValueImports(source)]).toEqual([name, []]);

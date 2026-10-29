@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
 import type { DesktopAction } from "../../../src/shared/flock";
 import type { FlowEffect } from "../../../src/shared/flow-actions";
 import { answerKey, cardQuestion, draftOf } from "../../../src/shared/pending-answer";
@@ -31,7 +32,7 @@ const status = computed(() =>
 const send = (value: string, shown: string) => {
   const asked = question.value;
   if (asked !== null)
-    answering.answer(
+    return answering.answer(
       props.effect.installation,
       props.machine,
       asked,
@@ -65,12 +66,12 @@ const send = (value: string, shown: string) => {
         <form
           v-else
           class="flex gap-2"
-          @submit.prevent="draft.trim() !== '' && send(draft.trim(), draft.trim())"
+          @submit.prevent="Str.trim(draft) !== '' && send(Str.trim(draft), Str.trim(draft))"
         >
           <UInput v-model="draft" autofocus class="flex-1" aria-label="Your answer" /><UButton
             type="submit"
             label="Send"
-            :disabled="draft.trim() === ''"
+            :disabled="Str.trim(draft) === ''"
           />
         </form>
       </template>

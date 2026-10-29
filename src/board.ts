@@ -4,6 +4,10 @@
 // became of a Run's work is the disposition's answer alone — a finished Run with a merge
 // request has not been merged by anyone.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { AUDIT_FILE, readAudit } from "./audit";
 import { FINAL_DIFF, planDirOf } from "./run-detail";
@@ -122,7 +126,7 @@ const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as c
 const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
   if (run.finished !== null) return epochMs(run.finished);
   const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
-  const final = cards.findLast((card) => card.kind === "final");
+  const final = Option.getOrUndefined(Arr.findLast(cards, (card) => card.kind === "final"));
   return final === undefined ? null : epochMs(final.at);
 });
 
@@ -151,15 +155,15 @@ const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
 ) {
   const ended = yield* finishedAt(run);
   if (ended === null) return null;
-  const steer = (yield* deliveries)
-    .filter(
-      (one) =>
-        one.run === run.id &&
-        one.cause.kind === "steer" &&
-        SENT_STATES.has(one.state) &&
-        epochMs(one.at) > ended,
-    )
-    .sort((a, b) => a.at.localeCompare(b.at))
+  const steer = Arr.filter(
+    yield* deliveries,
+    (one) =>
+      one.run === run.id &&
+      one.cause.kind === "steer" &&
+      SENT_STATES.has(one.state) &&
+      epochMs(one.at) > ended,
+  )
+    .sort((a, b) => pipe(a.at, Str.localeCompare(b.at)))
     .at(-1);
   if (steer === undefined) return null;
   return {
@@ -252,8 +256,8 @@ export interface Sentence {
 }
 
 /** What a step is doing, for every step whose definition names no `summary` of its own. */
-const VERBS = new Map(
-  Object.entries({
+const VERBS = new Map<string, string>(
+  Rec.toEntries({
     grill: "Working out what you want",
     spec: "Writing the spec",
     tickets: "Cutting the plan into tickets",
@@ -282,9 +286,9 @@ function verbOf(facts: Sentence): string {
   if (facts.verb !== null) return facts.verb;
   if (facts.step === null) return "Starting";
   const id = facts.step.id;
-  const kind = id.slice(id.lastIndexOf(".") + 1);
+  const kind = pipe(id, Str.slice(Option.getOrElse(pipe(id, Str.lastIndexOf(".")), () => -1) + 1));
   // Never the step id: a card says what is happening in words.
-  return VERBS.get(kind) ?? VERBS.get(kind.split("-")[0]!) ?? "Working on it";
+  return VERBS.get(kind) ?? VERBS.get(Str.split(kind, "-")[0]!) ?? "Working on it";
 }
 
 function roundOf(step: Sentence["step"]): string {
@@ -325,13 +329,8 @@ const lastLaunched = Effect.fn("Board.lastLaunched")(function* (stateDir: string
   const fs = yield* FileSystem.FileSystem;
   const order = yield* fs
     .readFileString(launchesOf(stateDir, runId))
-    .pipe(Effect.catch(() => Effect.succeed("")));
-  return (
-    order
-      .split("\n")
-      .filter((line) => line !== "")
-      .at(-1) ?? null
-  );
+    .pipe(Effect.orElseSucceed(() => ""));
+  return Arr.filter(Str.split(order, "\n"), (line) => line !== "").at(-1) ?? null;
 });
 
 /** `2 times` reads as a count; twice reads as a sentence. */
@@ -341,7 +340,7 @@ function times(n: number): string {
 
 function clause(repos: ReadonlyArray<string>, singular: string, plural: string): string[] {
   if (repos.length === 0) return [];
-  return [`${repos.join(", ")} ${repos.length === 1 ? singular : plural}`];
+  return [`${Arr.join(repos, ", ")} ${repos.length === 1 ? singular : plural}`];
 }
 
 function waveSentence(wave: NonNullable<Sentence["wave"]>): string {
@@ -352,7 +351,7 @@ function waveSentence(wave: NonNullable<Sentence["wave"]>): string {
     ...clause(wave.next, "is next", "are next"),
   ];
   const where = `Wave ${wave.at} of ${wave.of}.`;
-  return parts.length === 0 ? where : `${where} ${parts.join(", ")}.`;
+  return parts.length === 0 ? where : `${where} ${Arr.join(parts, ", ")}.`;
 }
 
 function decisionSentence(decision: Decision): string {
@@ -364,7 +363,7 @@ function decisionSentence(decision: Decision): string {
   }
 }
 
-const short = (sha: string) => sha.slice(0, 7);
+const short = (sha: string) => pipe(sha, Str.slice(0, 7));
 
 /** An open merge request: whether it is ready, and the human's next move. */
 function openSentence(
@@ -410,13 +409,13 @@ function doneSentence(
   if (disposition === null) {
     if (planReady) return "Plan ready to implement.";
     if (mr === null)
-      return summary === null || summary.trim() === ""
+      return summary === null || Str.trim(summary) === ""
         ? "Finished; nothing merged yet."
-        : `Completed. It reported: “${summary.trim().replace(/\s+/g, " ")}”`;
+        : `Completed. It reported: “${pipe(Str.trim(summary), Str.replace(/\s+/g, " "))}”`;
     if (mrState === "closed") {
       const ref = readMrRef(mr);
       const noun = ref === null ? "merge request" : mrWords(ref).noun;
-      return `${noun[0]!.toUpperCase()}${noun.slice(1)} ${mrLabel(mr)} closed without merging.`;
+      return `${Str.toUpperCase(noun[0]!)}${pipe(noun, Str.slice(1))} ${mrLabel(mr)} closed without merging.`;
     }
     return openSentence(mr, checks, agent, readiness);
   }
@@ -530,7 +529,10 @@ const STEP_STATE: Readonly<Record<RunState, StepState>> = {
 
 /** The Task's pipeline: its Runs in the order they started, each as it now stands. */
 function glyphsOf(runs: ReadonlyArray<RunFacts>): BoardStep[] {
-  return [...runs].reverse().map((run) => ({ name: run.workflow, state: STEP_STATE[run.state] }));
+  return Arr.map([...runs].reverse(), (run) => ({
+    name: run.workflow,
+    state: STEP_STATE[run.state],
+  }));
 }
 
 /** What a Run is, in the board's words. A decision outranks whatever it was doing. */
@@ -592,16 +594,25 @@ export function checksAt(
         ? record.by === "collie"
           ? [record.name]
           : []
-        : approved.filter((spec) => ranCommand(record, spec)).map((spec) => spec.name);
-  const counted = records.flatMap((record) => checksOf(record).map((name) => ({ name, record })));
+        : Arr.map(
+            Arr.filter(approved, (spec) => ranCommand(record, spec)),
+            (spec) => spec.name,
+          );
+  const counted = Arr.flatMap(records, (record) =>
+    Arr.map(checksOf(record), (name) => ({ name, record })),
+  );
   const at = head ?? counted.at(-1)?.record.end.head_sha ?? "";
   const newest = new Map<string, Verification>();
   for (const { name, record } of counted)
     if (at !== "" && record.end.head_sha === at) newest.set(name, record);
-  const red = [...newest.entries()].find(([, record]) => !passed(record));
+  const red = Option.getOrUndefined(
+    Arr.findFirst([...newest.entries()], ([, record]) => !passed(record)),
+  );
   if (red !== undefined) return { state: "failed", name: red[0], at };
   const unrun =
-    approved.length === 0 ? newest.size === 0 : approved.some((spec) => !newest.has(spec.name));
+    approved.length === 0
+      ? newest.size === 0
+      : Arr.some(approved, (spec) => !newest.has(spec.name));
   return unrun ? { state: "unchecked" } : { state: "passed", at };
 }
 
@@ -616,7 +627,7 @@ const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: 
     ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
     run.cwd,
   );
-  const sha = read.stdout.trim();
+  const sha = Str.trim(read.stdout);
   const head = read.code === 0 && sha !== "" ? sha : null;
   heads.set(key, { at: now, sha: head });
   return head;
@@ -629,26 +640,28 @@ const heads = new Map<string, { readonly at: number; readonly sha: string | null
 
 /** An absolute path, wherever one sits in a name, read as what it points at. */
 function withoutPaths(text: string): string {
+  // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   return text.replace(/(?:^|\s)\/(?:[^\s/]+\/)+([^\s/]+)/g, (whole, last: string) =>
-    whole.startsWith(" ") ? ` ${last}` : last,
+    pipe(whole, Str.startsWith(" ")) ? ` ${last}` : last,
   );
 }
 
 /** What the Task is called, and whose project it is: the workspace label's two halves. */
 function namesOf(label: string, run: RunFacts) {
-  const clean = withoutPaths(label.replace(LEADING_GLYPH, "").trim());
-  const at = clean.indexOf(" | ");
-  if (at >= 0) return { project: clean.slice(0, at), name: clean.slice(at + 3) };
+  const clean = withoutPaths(Str.trim(pipe(label, Str.replace(LEADING_GLYPH, ""))));
+  const at = Option.getOrElse(pipe(clean, Str.indexOf(" | ")), () => -1);
+  if (at >= 0)
+    return { project: pipe(clean, Str.slice(0, at)), name: pipe(clean, Str.slice(at + 3)) };
   const name = runTitle(run);
   // A label that names the Run says nothing the card does not: the checkout names the
   // project then, and a project the name already says is said once.
   const named = clean === "" || clean === name;
-  const project = named ? basename(run.project) : name.includes(clean) ? "" : clean;
+  const project = named ? basename(run.project) : pipe(name, Str.includes(clean)) ? "" : clean;
   return { project, name };
 }
 
 function basename(path: string): string {
-  return path.replace(/\/+$/, "").split("/").at(-1) ?? path;
+  return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
 
 /**
@@ -680,7 +693,9 @@ function agentsOf(
 /** Who set the hold that stands, and why, as the Run's audit trail recorded it. */
 const holderOf = Effect.fn("Board.holderOf")(function* (run: RunFacts) {
   const lines = yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []));
-  const last = lines.findLast((line) => line.operation === "hold" || line.operation === "unhold");
+  const last = Option.getOrUndefined(
+    Arr.findLast(lines, (line) => line.operation === "hold" || line.operation === "unhold"),
+  );
   return last?.operation === "hold" ? { by: last.actor.origin, reason: last.reason ?? "" } : null;
 });
 
@@ -717,17 +732,17 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
   for (const child of children)
     if (!started.has(child.repo ?? "")) started.set(child.repo ?? "", child);
   const planned = plan === null || plan.refusal !== null ? [] : plan.waves;
-  const unplanned = [...started.keys()].filter((repo) => !planned.flat().includes(repo));
+  const unplanned = Arr.filter([...started.keys()], (repo) => !planned.flat().includes(repo));
   const waves = unplanned.length === 0 ? planned : [...planned, unplanned];
-  const placed = waves.flatMap((wave, at) =>
-    wave.map((repo) => ({
+  const placed = Arr.flatMap(waves, (wave, at) =>
+    Arr.map(wave, (repo) => ({
       parent: parent.id,
       repo,
       wave: at + 1,
       run: started.get(repo)?.id ?? null,
     })),
   );
-  const rows = waves.flat().map((repo): BoardChild => {
+  const rows = Arr.map(waves.flat(), (repo): BoardChild => {
     const run = started.get(repo);
     return {
       repo,
@@ -736,9 +751,15 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
       mr: run === undefined ? null : mrOf(run),
     };
   });
-  const reached = waves.findLastIndex((wave) => wave.some((repo) => started.has(repo)));
+  const reached = Option.getOrElse(
+    Arr.findLastIndex(waves, (wave) => Arr.some(wave, (repo) => started.has(repo))),
+    () => -1,
+  );
   const where = (state: StepState) =>
-    rows.filter((row) => row.state === state).map((row) => row.repo);
+    Arr.map(
+      Arr.filter(rows, (row) => row.state === state),
+      (row) => row.repo,
+    );
   return {
     children: rows,
     waves: placed,
@@ -761,32 +782,34 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
 function over(run: RunFacts, runs: ReadonlyArray<RunFacts>): boolean {
   if (ended(run)) return true;
   if (run.asking.length > 0 || run.parked !== null) return false;
-  const children = runs.filter((one) => one.parent === run.id);
+  const children = Arr.filter(runs, (one) => one.parent === run.id);
   return (
-    children.some((child) => child.state === "stopped" || !ended(child)) &&
-    children.every((child) => over(child, runs))
+    Arr.some(children, (child) => child.state === "stopped" || !ended(child)) &&
+    Arr.every(children, (child) => over(child, runs))
   );
 }
 
 /** Who made a Run's latest stop, from its audit trail (ADR-0039). */
 const lastStopBy = (run: RunFacts) =>
   readAudit(run.dir).pipe(
-    Effect.map((lines) => lines.findLast((line) => line.operation === "stop")?.actor.origin),
+    Effect.map(
+      (lines) =>
+        Option.getOrUndefined(Arr.findLast(lines, (line) => line.operation === "stop"))?.actor
+          .origin,
+    ),
     Effect.orElseSucceed(() => undefined),
   );
 
 /** The Run a card is about: the newest still going, else the newest. */
 function leaderOf(runs: ReadonlyArray<RunFacts>): RunFacts {
-  return runs.find((run) => !over(run, runs)) ?? runs[0]!;
+  return Option.getOrUndefined(Arr.findFirst(runs, (run) => !over(run, runs))) ?? runs[0]!;
 }
 
 /** What became of a Task's work: the latest Disposition on any of its Runs. */
 const dispositionOf = Effect.fn("Board.dispositionOf")(function* (runs: ReadonlyArray<RunFacts>) {
   let newest: Disposition | null = null;
   for (const run of runs) {
-    const seen = latest(
-      yield* readDispositions(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
-    );
+    const seen = latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])));
     if (seen !== null && (newest === null || epochMs(seen.at) > epochMs(newest.at))) newest = seen;
   }
   return newest;
@@ -808,10 +831,10 @@ const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
   const at = (file: string) =>
     fs.stat(file).pipe(
       Effect.map((stat) => (Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : 0)),
-      Effect.catch(() => Effect.succeed(0)),
+      Effect.orElseSucceed(() => 0),
     );
   let newest = 0;
-  for (const name of yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])))) {
+  for (const name of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
     if (name === FINAL_DIFF || name === AUDIT_FILE) continue;
     if (name !== "steering") {
       newest = Math.max(newest, yield* at(path.join(dir, name)));
@@ -819,7 +842,7 @@ const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
     }
     const inside = yield* fs
       .readDirectory(path.join(dir, name))
-      .pipe(Effect.catch(() => Effect.succeed([])));
+      .pipe(Effect.orElseSucceed(() => []));
     for (const entry of inside) {
       if (entry === "disposition.jsonl" || entry === "seen.jsonl") continue;
       newest = Math.max(newest, yield* at(path.join(dir, name, entry)));
@@ -841,7 +864,7 @@ const lastActivityAt = Effect.fn("Board.lastActivityAt")(function* (
 });
 
 const isMrTarget = (target: string | null): target is string =>
-  target !== null && target.startsWith("mr:");
+  target !== null && pipe(target, Str.startsWith("mr:"));
 
 /** The merge request this Run opened, or the one it was pointed at; null for neither. */
 export function mrOf(run: RunFacts): string | null {
@@ -879,7 +902,7 @@ function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal
     id: line.id,
     hash: line.content_hash,
     text: line.interpretation,
-    actions: line.actions.map((action, at) => ({
+    actions: Arr.map(line.actions, (action, at) => ({
       text: describeAction(action),
       allowed: line.allowed_now.includes(at),
     })),
@@ -888,7 +911,9 @@ function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal
 
 /** Every Herd's proposals: the host serves every Herd on its Machine, not the one it came from. */
 const proposalsOf = (stateDir: string) =>
-  everyJournal(stateDir).pipe(Effect.map((journals) => journals.flatMap(({ lines }) => lines)));
+  everyJournal(stateDir).pipe(
+    Effect.map((journals) => Arr.flatMap(journals, ({ lines }) => lines)),
+  );
 
 /** How many Tasks a build reads at once. */
 const READS_AT_ONCE = 8;
@@ -932,17 +957,17 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(
-    (opts.tasks ?? (yield* listTasks(stateDir))).map((task) => [task.id, task]),
+    Arr.map(opts.tasks ?? (yield* listTasks(stateDir)), (task) => [task.id, task]),
   );
   const registered = opts.registered ?? (yield* everyRegistered(stateDir));
   const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);
-  const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
+  const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
   const records = yield* recordsIn(stateDir);
   const markers = yield* markersOf(all, records);
-  const checked = new Set(records.map((record) => record.run));
+  const checked = new Set(Arr.map(records, (record) => record.run));
   // Every agent's ledger, read only once a card has a finished Run to look for a steer to.
   const deliveries =
     opts.deliveries === undefined
@@ -957,7 +982,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       ));
 
   // A Repo run is its fan-out's card's child rather than a card of its own.
-  const present = new Map(all.map((run) => [run.id, run.task]));
+  const present = new Map(Arr.map(all, (run) => [run.id, run.task]));
   const repoRunsOf = new Map<string, RunFacts[]>();
   for (const run of all)
     if (run.repo !== null && run.parent !== null && present.get(run.parent) === run.task)
@@ -973,11 +998,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     groups,
     ([id, runs]) =>
       Effect.gen(function* () {
-        const children = runs.flatMap((run) => repoRunsOf.get(run.id) ?? []);
+        const children = Arr.flatMap(runs, (run) => repoRunsOf.get(run.id) ?? []);
         // What a card answers for and who works on it includes its Repo runs'.
         const everyRun = [...runs, ...children];
-        if (opts.only !== undefined && !everyRun.some((run) => run.id === opts.only)) return null;
-        const pending = everyRun.flatMap((run) => pendingFor(proposals, run.id, now));
+        if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only))
+          return null;
+        const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
         const touched = new Map<string, number>();
         for (const run of everyRun) touched.set(run.id, yield* lastActivityAt(stateDir, run));
         // A Run records no end of its own: its last activity is when it ended, and a Run
@@ -986,18 +1012,23 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           run.finished === null
             ? touched.get(run.id) || epochMs(run.created)
             : epochMs(run.finished);
-        const last = Math.max(0, ...runs.map(endedAt).filter(Number.isFinite));
-        const fanned = runs.find((run) => repoRunsOf.has(run.id));
+        const last = Math.max(0, ...Arr.filter(Arr.map(runs, endedAt), Number.isFinite));
+        const fanned = Option.getOrUndefined(Arr.findFirst(runs, (run) => repoRunsOf.has(run.id)));
         const fan = fanned === undefined ? null : yield* fanOf(fanned, repoRunsOf.get(fanned.id)!);
-        const own = runs.map(mrOf).find((one) => one !== null) ?? null;
+        const own =
+          Option.getOrUndefined(Arr.findFirst(Arr.map(runs, mrOf), (one) => one !== null)) ?? null;
         const only = fan?.children.length === 1 ? fan.children[0]!.run : null;
         // A single-repository fan-out's card is its one Repo run's merge request.
         const repoRun =
-          own === null ? children.find((run) => run.id === only && mrOf(run) !== null) : undefined;
+          own === null
+            ? Option.getOrUndefined(
+                Arr.findFirst(children, (run) => run.id === only && mrOf(run) !== null),
+              )
+            : undefined;
         // Read whatever the state: a merge GitLab reported lands the work even while the Run
         // is still going, and the card must say so.
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
-        const checking = everyRun.filter((run) => checked.has(run.id));
+        const checking = Arr.filter(everyRun, (run) => checked.has(run.id));
         const leader = leaderOf(runs);
         const unseenReport = (run: RunFacts) =>
           disposition === null &&
@@ -1016,7 +1047,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         if (
           opts.only === undefined &&
           checking.length === 0 &&
-          runs.every((run) => over(run, runs)) &&
+          Arr.every(runs, (run) => over(run, runs)) &&
           last < now - FINISHED_FOR_MS &&
           pending.length === 0 &&
           (disposition !== null || (yield* nothingToFile(runs))) &&
@@ -1030,32 +1061,37 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           ),
         );
         const waitsOf = (run: RunFacts) => waits.get(run.id)!;
-        const proposed = everyRun.flatMap((run) => waitsOf(run).proposals)[0];
-        const questions = everyRun.flatMap((run) => waitsOf(run).questions);
+        const proposed = Arr.flatMap(everyRun, (run) => waitsOf(run).proposals)[0];
+        const questions = Arr.flatMap(everyRun, (run) => waitsOf(run).questions);
         const decision: Decision | null = proposed ? asProposal(proposed) : (questions[0] ?? null);
 
         const status = leader.state;
         // A fan-out waiting on its Repo runs writes nothing itself: their work is its work.
         const working = [leader, ...children];
         const ownsAgent = (agent: { readonly run: string }) =>
-          working.some((run) => run.id === agent.run);
-        const at = Math.max(...working.map((run) => touched.get(run.id) ?? 0));
+          Arr.some(working, (run) => run.id === agent.run);
+        const at = Math.max(...Arr.map(working, (run) => touched.get(run.id) ?? 0));
         const checkOf = markers.has(leader.id) ? leader : (checking[0] ?? leader);
         const check = yield* runningCheck(checkOf, all, markers, now);
         const memory =
-          everyRun
-            .map((run) => waitsOf(run).memory)
-            .filter((wait) => wait !== null)
-            .sort((a, b) => a.since - b.since)[0] ?? null;
+          Arr.filter(
+            Arr.map(everyRun, (run) => waitsOf(run).memory),
+            (wait) => wait !== null,
+          ).sort((a, b) => a.since - b.since)[0] ?? null;
         const awaiting =
-          working.map((run) => waitsOf(run).awaiting).find((one) => one !== null) ?? null;
+          Option.getOrUndefined(
+            Arr.findFirst(
+              Arr.map(working, (run) => waitsOf(run).awaiting),
+              (one) => one !== null,
+            ),
+          ) ?? null;
         // An agent mid-turn, a check Collie is running or a wait for memory or anything else
         // that ends by itself is work, however little it writes.
         const busy =
           check !== null ||
           memory !== null ||
           awaiting !== null ||
-          agents.some((agent) => ownsAgent(agent) && agent.status === "working");
+          Arr.some(agents, (agent) => ownsAgent(agent) && agent.status === "working");
         const going = !ended(leader);
         const silentFor = going && !busy && at > 0 ? now - at : 0;
         // Under a minute has no span to name, and is not silence worth a card saying.
@@ -1066,13 +1102,19 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // Stopped for a human with no Decision to answer: herdr reports `blocked` for an agent
         // sitting at its harness's own dialog, and a Run parks where its pane will not take a
         // prompt. herdr's name for the pane first: it is the one a human has to go to.
-        const blocked = everyRun.map((run) => waitsOf(run).blocked).find((one) => one !== null);
+        const blocked = Option.getOrUndefined(
+          Arr.findFirst(
+            Arr.map(everyRun, (run) => waitsOf(run).blocked),
+            (one) => one !== null,
+          ),
+        );
         const stalled =
           (blocked ? `${blocked.name}'s pane` : null) ??
           (waitsOf(leader).parked !== null ? "its pane" : null);
         // Nothing drives it and nobody works on it: the host could not take it up again. A
         // Decision outranks it, because answering is still what moves the work.
-        const abandoned = decision === null && going && leader.undriven && !agents.some(ownsAgent);
+        const abandoned =
+          decision === null && going && leader.undriven && !Arr.some(agents, ownsAgent);
         const reopened = ended(leader)
           ? yield* reopenedOf(stateDir, leader, deliveries, live)
           : null;
@@ -1085,30 +1127,35 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               ? "blocked"
               : stateOf(status, silent !== null, decision, stalled !== null, checking.length > 0);
 
-        const held = runs.find((run) => waitsOf(run).held);
+        const held = Option.getOrUndefined(Arr.findFirst(runs, (run) => waitsOf(run).held));
         const settledNow =
           state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
         const failure =
           state === "failed"
             ? lastFailure(
-                yield* readVerifications(leader.evidence).pipe(
-                  Effect.catch(() => Effect.succeed([])),
-                ),
+                yield* readVerifications(leader.evidence).pipe(Effect.orElseSucceed(() => [])),
               )
             : null;
-        const open = openReports(
-          yield* readDrift(leader.dir).pipe(Effect.catch(() => Effect.succeed([]))),
-        );
+        const open = openReports(yield* readDrift(leader.dir).pipe(Effect.orElseSucceed(() => [])));
         const task = leader.task === null ? null : (tasks.get(leader.task) ?? null);
         const { name, project } = namesOf(task?.label ?? "", leader);
-        const started = runs.map((run) => epochMs(run.created)).filter(Number.isFinite);
+        const started = Arr.filter(
+          Arr.map(runs, (run) => epochMs(run.created)),
+          Number.isFinite,
+        );
         // A Task is as old as its first Run; a Run with no readable stamp has no age.
         const first = started.length === 0 ? 0 : Math.min(...started);
 
         const mr = repoRun === undefined ? own : mrOf(repoRun);
         const merging = repoRun ?? leader;
         const mrState = mr === null ? null : (mrStates.get(mrLabel(mr)) ?? null);
-        const branch = runs.map((run) => run.branch).find((b) => b !== null) ?? null;
+        const branch =
+          Option.getOrUndefined(
+            Arr.findFirst(
+              Arr.map(runs, (run) => run.branch),
+              (b) => b !== null,
+            ),
+          ) ?? null;
         // What the Task left behind: the tickets are whichever of its Runs wrote any.
         let issues = 0;
         for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
@@ -1135,7 +1182,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const verified = awaitingMerge
           ? {
               records: yield* readVerifications(merging.evidence).pipe(
-                Effect.catch(() => Effect.succeed([])),
+                Effect.orElseSucceed(() => []),
               ),
               head: forged?.head ?? (yield* branchHead(merging, now)),
               approved: yield* Effect.forEach(
@@ -1169,7 +1216,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           blocking:
             mr === null
               ? 0
-              : (yield* findingsIn(merging.dir)).filter((one) => isBlocking(one)).length,
+              : Arr.filter(yield* findingsIn(merging.dir), (one) => isBlocking(one)).length,
           mergeable: forged?.mergeable ?? null,
         });
         const finishedAt = settledNow ? endedAt(leader) : 0;
@@ -1207,7 +1254,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               machine: opts.env.machine ?? machineName(),
               sleeping:
                 (run.engine?.wakes ?? null) !== null ||
-                all.some((one) => one.parent === run.id && !ended(one)),
+                Arr.some(all, (one) => one.parent === run.id && !ended(one)),
             });
           },
           offer,
@@ -1243,7 +1290,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             checks,
             readiness,
             summary: leader.summary,
-            agent: agents.find((one) => one.run === leader.id)?.name ?? null,
+            agent:
+              Option.getOrUndefined(Arr.findFirst(agents, (one) => one.run === leader.id))?.name ??
+              null,
             planReady,
             abandoned: abandoned && at > 0 ? agoMs(at, now) : null,
             decision,
@@ -1304,7 +1353,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           planReady,
           offer,
           run: leader.id,
-          runs: runs.map((run) => run.id),
+          runs: Arr.map(runs, (run) => run.id),
           at: at === 0 ? first : at,
           flow: stripOf(flow, leader.id),
         };
@@ -1314,7 +1363,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             flow,
             view,
             new Map(
-              runs.map((run) => [
+              Arr.map(runs, (run) => [
                 run.id,
                 {
                   canResume:
@@ -1335,7 +1384,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       }),
     { concurrency: READS_AT_ONCE },
   );
-  return sortBoard(views.filter((view) => view !== null));
+  return sortBoard(Arr.filter(views, (view) => view !== null));
 });
 
 /** The whole Flow of the Task a Run belongs to, built as its card is. */
@@ -1353,7 +1402,7 @@ export function readyRuns(
   views: ReadonlyArray<TaskView>,
 ): ReadonlyMap<string, { at: string; sentence: string }> {
   return new Map(
-    views.flatMap((view) =>
+    Arr.flatMap(views, (view) =>
       view.ready && view.checks?.state === "passed"
         ? [[view.run, { at: view.checks.at, sentence: view.sentence }] as const]
         : [],
@@ -1363,7 +1412,9 @@ export function readyRuns(
 
 /** The offer a card presents first: the one its module marks primary and can make now. */
 const primaryOf = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
-  const first = offers.find((one) => one.primary && one.unavailable === null);
+  const first = Option.getOrUndefined(
+    Arr.findFirst(offers, (one) => one.primary && one.unavailable === null),
+  );
   return first === undefined ? null : { id: first.id, title: first.title };
 };
 
@@ -1391,8 +1442,8 @@ export function finishedLabel(
   const today =
     now === undefined
       ? finished
-      : finished.filter((view) => (view.ended ?? view.at) >= now - FINISHED_FOR_MS);
-  const failed = today.filter((view) => view.state === "failed").length;
+      : Arr.filter(finished, (view) => (view.ended ?? view.at) >= now - FINISHED_FOR_MS);
+  const failed = Arr.filter(today, (view) => view.state === "failed").length;
   const older = finished.length - today.length;
   return `${today.length} finished today${failed === 0 ? "" : `, ${failed} failed`}${older === 0 ? "" : `, ${older} older`}`;
 }
@@ -1400,7 +1451,10 @@ export function finishedLabel(
 /** The step a Task has got to, in one word, or `done` where it is past the last of them. */
 export function whereItIs(view: TaskView): string {
   if (view.steps.length === 0) return "";
-  return view.steps.find((step) => step.state !== "done")?.name ?? "done";
+  return (
+    Option.getOrUndefined(Arr.findFirst(view.steps, (step) => step.state !== "done"))?.name ??
+    "done"
+  );
 }
 
 /** How many agents are on it, or nothing where herdr has none left. */
@@ -1428,8 +1482,8 @@ export function boardLines(
     working: workingLabel,
     finished: (rows) => finishedLabel(rows, true),
   };
-  return SECTIONS.flatMap(([section]) => {
-    const rows = views.filter((view) => sectionOf(view) === section);
+  return Arr.flatMap(SECTIONS, ([section]) => {
+    const rows = Arr.filter(views, (view) => sectionOf(view) === section);
     const always = section === "needs-you" || section === "working";
     return rows.length === 0 && !always ? [] : textSection(label[section](rows), rows, under);
   });
@@ -1440,7 +1494,7 @@ function textSection(
   views: ReadonlyArray<TaskView>,
   under: { run: string; lines: ReadonlyArray<string> } | null,
 ): string[] {
-  const rows = views.flatMap((view) => [
+  const rows = Arr.flatMap(views, (view) => [
     `  ${GLYPH_FOR[view.state]} ${view.name} · ${view.project} — ${view.sentence}`,
     ...(view.drift === null ? [] : [`    ↯ ${view.drift}`]),
     ...(view.held === null ? [] : [`    ${view.held}`]),

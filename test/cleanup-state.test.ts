@@ -1,8 +1,12 @@
 // What cleanup removes from the state directory, the compaction controls and the runner
 // cache: only what no Run, agent or running build needs (ADR-0045).
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, DateTime, Effect, FileSystem, Schema } from "effect";
+import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result } from "effect";
 import { CleanupReport } from "../src/board-model";
 import { compactionSweeper, runnersSweeper, sweep } from "../src/cleanup";
 import { Herdr } from "../src/herdr";
@@ -12,7 +16,7 @@ import { Rig } from "./support/recorder";
 import { collie } from "./support/world";
 
 const DAY_MS = 24 * 60 * 60_000;
-const Listed = Schema.decodeUnknownSync(CleanupReport);
+const Listed = flow(Schema.decodeUnknownResult(CleanupReport), Result.getOrThrow);
 
 /** `path`, and everything directly in it, last changed `days` ago. */
 const aged = (path: string, days: number) =>
@@ -30,7 +34,16 @@ const aged = (path: string, days: number) =>
 const written = (path: string, text: string, days: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.makeDirectory(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+    yield* fs.makeDirectory(
+      pipe(
+        path,
+        Str.slice(
+          0,
+          Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1),
+        ),
+      ),
+      { recursive: true },
+    );
     yield* fs.writeFileString(path, text);
     yield* aged(path, days);
   });
@@ -67,10 +80,10 @@ test(
         yield* aged(`${state}/schedules`, 2);
 
         const listed = Listed((yield* collie(world, ["cleanup"])).envelope.data);
-        const removable = listed.remove
-          .filter((item) => item.kind === "state")
-          .map((item) => item.target.slice(state.length + 1))
-          .sort();
+        const removable = Arr.map(
+          Arr.filter(listed.remove, (item) => item.kind === "state"),
+          (item) => pipe(item.target, Str.slice(state.length + 1)),
+        ).sort();
         expect(removable).toEqual([
           "agents/abc123",
           "events.run-x.log",
@@ -128,8 +141,8 @@ test("cleanup lists nothing of a running check's record, fresh or a day old", ()
       yield* aged(`${state}/running-checks`, 2);
 
       const listed = Listed((yield* collie(world, ["cleanup"])).envelope.data);
-      const named = [...listed.remove, ...listed.keep].filter((item) =>
-        item.target.includes("running-checks"),
+      const named = Arr.filter([...listed.remove, ...listed.keep], (item) =>
+        pipe(item.target, Str.includes("running-checks")),
       );
       expect(named).toEqual([]);
     }),
@@ -177,7 +190,9 @@ test("a gone agent's compaction controls go and its endpoint is stopped; a liste
         rig.stateDir,
         "host",
       );
-      expect(report.remove.map((item) => item.target)).toEqual([`${rig.stateDir}/compaction/gone`]);
+      expect(Arr.map(report.remove, (item) => item.target)).toEqual([
+        `${rig.stateDir}/compaction/gone`,
+      ]);
       expect(yield* fs.exists(`${rig.stateDir}/compaction/gone`)).toBe(false);
       expect(yield* fs.exists(`${rig.stateDir}/compaction/alive`)).toBe(true);
       yield* Effect.promise(() => endpoint.exited);
@@ -233,7 +248,7 @@ test("of three runner copies, only the one neither running nor newest goes", () 
         yield* written(`${dir}/collie-${version}`, "bin", 0);
 
       const report = yield* sweep([runnersSweeper(dir, "0.10.0")], rig.stateDir, "host");
-      expect(report.remove.map((item) => item.target)).toEqual([`${dir}/collie-0.9.0`]);
+      expect(Arr.map(report.remove, (item) => item.target)).toEqual([`${dir}/collie-0.9.0`]);
       expect((yield* fs.readDirectory(dir)).sort()).toEqual(["collie-0.10.0", "collie-0.11.1"]);
     }),
   ));

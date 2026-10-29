@@ -2,7 +2,8 @@
 // changes something. So: the journal has both turns, a proposal is recorded pending, and
 // nothing at all reached an agent — whatever authority the Run has granted.
 
-import { Effect, FileSystem, Path, Schema, type Scope } from "effect";
+import * as Arr from "effect/Array";
+import { Effect, FileSystem, Path, Schema, type Scope, flow, Result } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { steer } from "../src/operations";
@@ -19,7 +20,10 @@ import type { World } from "./support/world";
 setDefaultTimeout(60_000);
 
 /** What the fake CLI prints, as a real envelope would carry it. */
-const envelope = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const envelope = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 let world: World;
 let stateDir: string;
@@ -32,18 +36,21 @@ const deps = (root: string) => ({
     // Every flag present, so the gate lets the call through and the test is about what
     // comes back rather than about the gate.
     help: Effect.succeed(
-      [
-        "--print",
-        "--output-format",
-        "--json-schema",
-        "--tools",
-        "--restricted",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "--no-session-persistence",
-        "--max-budget-usd",
-        "--append-system-prompt-file",
-      ].join(" "),
+      Arr.join(
+        [
+          "--print",
+          "--output-format",
+          "--json-schema",
+          "--tools",
+          "--restricted",
+          "--strict-mcp-config",
+          "--setting-sources",
+          "--no-session-persistence",
+          "--max-budget-usd",
+          "--append-system-prompt-file",
+        ],
+        " ",
+      ),
     ),
     systemPromptFile: `${root}/prompts/steward.md`,
     limits: {
@@ -135,15 +142,15 @@ test("a steer executes the requested change without a confirmation hop", () =>
       expect(result.ok).toBe(true);
 
       const turns = yield* readConversation(yield* conversationPath(stateDir, herdKey));
-      expect(turns.map((turn) => turn.role)).toEqual(["human", "collie"]);
+      expect(Arr.map(turns, (turn) => turn.role)).toEqual(["human", "collie"]);
       expect(turns[1]?.proposal).toBeDefined();
 
       const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
-      const recorded = proposals.filter((line) => line.kind === "proposal");
+      const recorded = Arr.filter(proposals, (line) => line.kind === "proposal");
       expect(recorded).toHaveLength(1);
 
       expect((yield* readIntent(run.dir))?.goal).toBe("ship the picker");
-      expect(proposals.some((line) => line.kind === "confirmed")).toBe(true);
+      expect(Arr.some(proposals, (line) => line.kind === "confirmed")).toBe(true);
     }),
   ));
 
@@ -167,9 +174,9 @@ test("a steer retried under its request reports what it did, and asks nobody aga
 
       expect(again).toEqual(first);
       const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
-      expect(proposals.filter((line) => line.kind === "proposal")).toHaveLength(1);
+      expect(Arr.filter(proposals, (line) => line.kind === "proposal")).toHaveLength(1);
       const spent = yield* readBudget(yield* budgetPath(stateDir, herdKey));
-      expect(spent.filter((line) => line.kind === "reserve")).toHaveLength(1);
+      expect(Arr.filter(spent, (line) => line.kind === "reserve")).toHaveLength(1);
     }),
   ));
 
@@ -212,7 +219,7 @@ test("a turn the board starts is journaled as the board's, never as the human's"
       expect(result.ok).toBe(true);
 
       const turns = yield* readConversation(yield* conversationPath(stateDir, herdKey));
-      expect(turns.map((turn) => turn.role)).toEqual(["event", "collie"]);
+      expect(Arr.map(turns, (turn) => turn.role)).toEqual(["event", "collie"]);
       expect(turns[0]!.text).toContain("stopped with evidence_missing");
     }),
   ));
@@ -260,14 +267,24 @@ test("every call is counted and costed, and none is refused over the count", () 
       // Both calls are in the record — started, then settled with what the CLI said they
       // cost — which is the telemetry that stays.
       const lines = yield* readBudget(yield* budgetPath(stateDir, herdKey));
-      expect(lines.map((line) => line.kind)).toEqual(["reserve", "settle", "reserve", "settle"]);
-      expect(lines.filter((line) => line.kind === "settle").map((line) => line.usd)).toEqual([
-        0.0123, 0.0123,
+      expect(Arr.map(lines, (line) => line.kind)).toEqual([
+        "reserve",
+        "settle",
+        "reserve",
+        "settle",
       ]);
-      expect(lines.filter((line) => line.kind === "reserve").map((line) => line.run)).toEqual([
-        run.id,
-        run.id,
-      ]);
+      expect(
+        Arr.map(
+          Arr.filter(lines, (line) => line.kind === "settle"),
+          (line) => line.usd,
+        ),
+      ).toEqual([0.0123, 0.0123]);
+      expect(
+        Arr.map(
+          Arr.filter(lines, (line) => line.kind === "reserve"),
+          (line) => line.run,
+        ),
+      ).toEqual([run.id, run.id]);
     }),
   ));
 
@@ -296,7 +313,7 @@ test("a dry run prints what it would propose and records nothing", () =>
       if (result.ok) expect(result.human).toContain("hold it while you look");
 
       const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
-      expect(proposals.filter((line) => line.kind === "proposal")).toEqual([]);
+      expect(Arr.filter(proposals, (line) => line.kind === "proposal")).toEqual([]);
     }),
   ));
 
@@ -316,7 +333,7 @@ test("a model that answers outside its schema is not acted on", () =>
 
       // The call still cost something, and the budget still says so.
       const budget = yield* readBudget(yield* budgetPath(stateDir, herdKey));
-      expect(budget.filter((line) => line.kind === "settle")).toMatchObject([
+      expect(Arr.filter(budget, (line) => line.kind === "settle")).toMatchObject([
         { outcome: "failed" },
       ]);
     }),

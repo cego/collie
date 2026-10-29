@@ -2,6 +2,11 @@
 // somebody else's workspace adopted because it looks like one. Everything here is a way
 // of arriving at one of those, and the answer being `ownership_unknown` instead.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Clock, DateTime, Duration, Effect, Fiber, FileSystem, Queue } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -332,7 +337,9 @@ function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}
     splitPane: (opts) =>
       Effect.sync(() => {
         calls.push(`splitPane ${opts.paneId} ${opts.ratio.toFixed(3)}`);
-        const source = state.panes.find((entry) => entry.paneId === opts.paneId);
+        const source = Option.getOrUndefined(
+          Arr.findFirst(state.panes, (entry) => entry.paneId === opts.paneId),
+        );
         const opened = pane({
           paneId: `${opts.paneId}-chat`,
           tabId: source?.tabId ?? "9",
@@ -345,9 +352,10 @@ function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}
     markWorkspace: (workspaceId, tokens) =>
       Effect.sync(() => {
         calls.push(
-          `markWorkspace ${workspaceId} ${Object.entries(tokens)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(",")}`,
+          `markWorkspace ${workspaceId} ${Arr.join(
+            Arr.map(Rec.toEntries(tokens), ([k, v]) => `${k}=${v}`),
+            ",",
+          )}`,
         );
       }),
     markPane: (paneId) =>
@@ -357,7 +365,7 @@ function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}
     closePane: (paneId) =>
       Effect.sync(() => {
         calls.push(`closePane ${paneId}`);
-        state.panes = state.panes.filter((entry) => entry.paneId !== paneId);
+        state.panes = Arr.filter(state.panes, (entry) => entry.paneId !== paneId);
       }),
     log: () => Effect.void,
   } satisfies { -readonly [K in keyof HomeDeps]: HomeDeps[K] };
@@ -378,7 +386,9 @@ test("a first ensure creates one Home, and records it before the pane exists", (
       // says whose it is.
       expect(h.calls[1]).toBe(`markWorkspace w-new collie_home=${KEY}`);
       expect(h.calls[2]).toBe("openPane w-new");
-      expect(h.calls.filter((call) => call.startsWith("createWorkspace"))).toHaveLength(1);
+      expect(
+        Arr.filter(h.calls, (call) => pipe_(call, Str.startsWith("createWorkspace"))),
+      ).toHaveLength(1);
 
       const written = yield* readHome(yield* homePath(stateDir, KEY));
       expect(written).toMatchObject({
@@ -446,7 +456,9 @@ test("a pane herdr would not open leaves a creating record the next ensure finis
         kind: "ready",
         record: { workspaceId: "w-new", paneId: "9-1" },
       });
-      expect(h.calls.filter((call) => call.startsWith("createWorkspace"))).toHaveLength(1);
+      expect(
+        Arr.filter(h.calls, (call) => pipe_(call, Str.startsWith("createWorkspace"))),
+      ).toHaveLength(1);
       expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({ state: "ready" });
     }),
   ));
@@ -461,7 +473,9 @@ test("a reopened Home records the terminal of the pane it just opened", () =>
       const h = fake({ workspaces: [workspace("w1", { [HOME_TOKEN]: KEY })], panes: [] });
       expect((yield* ensureHome(stateDir, KEY, "/ns", h.deps)).kind).toBe("ready");
       expect(h.calls).toContain("openPane w1");
-      expect(h.calls.filter((call) => call.startsWith("createWorkspace"))).toHaveLength(0);
+      expect(
+        Arr.filter(h.calls, (call) => pipe_(call, Str.startsWith("createWorkspace"))),
+      ).toHaveLength(0);
       expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({
         workspaceId: "w1",
         paneId: "9-1",
@@ -480,7 +494,9 @@ test("an expired token on a Home whose pane is still there refreshes it, and cre
 
       const ensured = yield* ensureHome(stateDir, KEY, "/ns", h.deps);
       expect(ensured.kind).toBe("ready");
-      expect(h.calls.some((call) => call.startsWith("createWorkspace"))).toBe(false);
+      expect(Arr.some(h.calls, (call) => pipe_(call, Str.startsWith("createWorkspace")))).toBe(
+        false,
+      );
       expect(h.calls).toContain(`markWorkspace w1 ${HOME_TOKEN}=${KEY}`);
     }),
   ));
@@ -523,7 +539,9 @@ test("while the Home is proven the host restates its tokens every few hours, so 
         yield* TestClock.adjust("4 hours");
         expect(Duration.toMillis(yield* Queue.take(sleeps))).toBe(4 * 60 * 60 * 1000);
       }
-      expect(h.calls.filter((call) => call.startsWith("markWorkspace"))).toHaveLength(7);
+      expect(
+        Arr.filter(h.calls, (call) => pipe_(call, Str.startsWith("markWorkspace"))),
+      ).toHaveLength(7);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   ));
 
@@ -597,7 +615,7 @@ test("the server record notices herdr moving, and invents no epoch for it", () =
 
 test("a herdr without what the Home rests on is refused, with no label-only fallback", () => {
   const properties = (fields: ReadonlyArray<string>) =>
-    Object.fromEntries(fields.map((field) => [field, { type: "string" }]));
+    Rec.fromEntries(Arr.map(fields, (field) => [field, { type: "string" }] as const));
   const schema = (workspaceInfo: ReadonlyArray<string>, paneInfo: ReadonlyArray<string>): string =>
     JSON.stringify({
       methods: ["workspace.report_metadata", "pane.report_metadata", "workspace.create"],
@@ -614,7 +632,7 @@ test("a herdr without what the Home rests on is refused, with no label-only fall
   expect(missingRuntime(complete)).toEqual([]);
 
   // A method missing is named as itself.
-  expect(missingRuntime(complete.replace("workspace.report_metadata", ""))).toEqual([
+  expect(missingRuntime(pipe_(complete, Str.replace("workspace.report_metadata", "")))).toEqual([
     "workspace.report_metadata",
   ]);
   // The fields are wanted on the types the ownership proof reads them from, and nowhere
@@ -665,7 +683,7 @@ test("the shortcut records where it was pressed, and forgets it a minute later",
       const long = DateTime.formatIso(
         DateTime.subtract(DateTime.makeUnsafe(yield* Clock.currentTimeMillis), { minutes: 2 }),
       );
-      yield* fs.writeFileString(file, old.replace(/"at":"[^"]+"/, `"at":"${long}"`));
+      yield* fs.writeFileString(file, pipe_(old, Str.replace(/"at":"[^"]+"/, `"at":"${long}"`)));
       expect(yield* readOrigin(file)).toBeNull();
     }),
   ));
@@ -678,12 +696,14 @@ test("the Home is one tab: the board on the left, native chat on the right", () 
       expect(ensured.kind).toBe("ready");
       // One workspace, one pane opened, and the second made by splitting the first —
       // not a second tab and not a second plugin pane.
-      expect(h.calls.filter((call) => call.startsWith("openPane"))).toHaveLength(1);
+      expect(Arr.filter(h.calls, (call) => pipe_(call, Str.startsWith("openPane")))).toHaveLength(
+        1,
+      );
       expect(h.calls).toContain(`splitPane 9-1 ${BOARD_RATIO.toFixed(3)}`);
       // And the shell herdr made the workspace with is gone: a normal Home is one tab,
       // not Collie's beside a blank one nobody asked for.
       expect(h.calls).toContain("closePane 9-shell");
-      expect(h.state.panes.map((entry) => entry.paneId)).not.toContain("9-shell");
+      expect(Arr.map(h.state.panes, (entry) => entry.paneId)).not.toContain("9-shell");
       expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({
         paneId: "9-1",
         chatPaneId: "9-1-chat",
@@ -708,7 +728,7 @@ test("a Home recorded before native chat gains the pane without losing the board
       expect((yield* ensureHome(stateDir, KEY, "/ns", h.deps)).kind).toBe("ready");
       // The board pane is the one that was there: reopening it would have replaced a
       // live board to add a pane beside it.
-      expect(h.calls.filter((call) => call.startsWith("openPane"))).toEqual([]);
+      expect(Arr.filter(h.calls, (call) => pipe_(call, Str.startsWith("openPane")))).toEqual([]);
       expect(h.calls).toContain(`splitPane 1-1 ${BOARD_RATIO.toFixed(3)}`);
       expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({
         paneId: "1-1",
@@ -725,11 +745,11 @@ test("opening a live Home again changes nothing about its layout", () =>
       expect((yield* ensureHome(stateDir, KEY, "/ns", h.deps)).kind).toBe("ready");
       // Neither pane is reopened and nothing is split: a human who dragged the divider
       // keeps where they put it.
-      expect(h.calls.some((call) => call.startsWith("openPane"))).toBe(false);
-      expect(h.calls.some((call) => call.startsWith("splitPane"))).toBe(false);
+      expect(Arr.some(h.calls, (call) => pipe_(call, Str.startsWith("openPane")))).toBe(false);
+      expect(Arr.some(h.calls, (call) => pipe_(call, Str.startsWith("splitPane")))).toBe(false);
       // And nothing is closed: only a workspace Collie has just made has a shell of
       // herdr's to tidy, and a tab a human added later is theirs.
-      expect(h.calls.some((call) => call.startsWith("closePane"))).toBe(false);
+      expect(Arr.some(h.calls, (call) => pipe_(call, Str.startsWith("closePane")))).toBe(false);
     }),
   ));
 

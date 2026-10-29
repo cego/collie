@@ -5,8 +5,13 @@
 // next step, a fix round, a hand-off from another Run — and a threshold repeated per
 // harness is a threshold that disagrees with itself.
 
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import {
   Clock,
+  Cause,
   Data,
   Duration,
   Effect,
@@ -16,10 +21,14 @@ import {
   Result,
   Schedule,
   Schema,
+  flow,
 } from "effect";
 import type { PlatformServices } from "./platform";
 import type { Channel } from "./dispatcher";
-import type { Herdr, Submission } from "./herdr";
+import type { Herdr, HerdrError, Submission } from "./herdr";
+import type { CodexError } from "./codex";
+import type { OpenCodeError } from "./opencode";
+import type { HarnessVersionError, Submitting } from "./compactors";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import { COMPACTION_OFF } from "./settings";
@@ -73,6 +82,7 @@ export function threshold(configured: number): Threshold {
  */
 export class Unsubmitted extends Data.TaggedError("Unsubmitted")<{
   readonly message: string;
+  readonly cause?: unknown;
 }> {}
 
 /**
@@ -117,7 +127,18 @@ export interface AgentContext extends LaunchContext {
  */
 type PortServices = FileSystem.FileSystem | Path.Path | PlatformServices;
 /** What reading a file or talking to a harness fails with, in one name. */
-type PortError = Error | PlatformError.PlatformError;
+type PortError =
+  | PlatformError.PlatformError
+  | Cause.TimeoutError
+  | Cause.NoSuchElementError
+  | Cause.UnknownError
+  | Schema.SchemaError
+  | CodexError
+  | OpenCodeError
+  | HerdrError
+  | HarnessVersionError
+  | Submitting
+  | Unsubmitted;
 
 /**
  * One harness's official compaction interface. Four methods, because the shared policy
@@ -155,7 +176,7 @@ const StoppedTurn = Schema.Struct({
 });
 
 /** A process as a stop saw it: a pid is not an identity without its start. */
-const SeenProcess = Schema.Struct({ pid: Schema.Number, started: Schema.String });
+const SeenProcess = Schema.Struct({ pid: Schema.Finite, started: Schema.String });
 export type SeenProcess = typeof SeenProcess.Type;
 
 /** What a stop reached, and why it got no further where it is not `quiet`. */
@@ -194,7 +215,7 @@ export interface CompactionPort {
    * rather than quietly becoming an unmanaged agent, which is how a partial-harness
    * feature would ship.
    */
-  gate(): Effect.Effect<void, PortError, PortServices>;
+  readonly gate: Effect.Effect<void, PortError, PortServices>;
   /** Installs this agent's controls and returns the extra `agent start` arguments. */
   install(ctx: LaunchContext): Effect.Effect<Installed, PortError, PortServices>;
   /** The harness's own current-context total. `null` where no usable sample exists. */
@@ -264,7 +285,7 @@ const AttemptSchema = Schema.Struct({
   run: Schema.String,
   step: Schema.String,
   /** When the five-minute budget runs out, in epoch ms, so a resumed Run inherits it. */
-  deadline: Schema.Number,
+  deadline: Schema.Finite,
 });
 const ControlSchema = Schema.Struct({
   agent: Schema.String,
@@ -278,7 +299,7 @@ const ControlSchema = Schema.Struct({
    * herdr no longer has — a server nothing will connect to again is a leak.
    */
   endpoint: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
-  pid: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  pid: Schema.NullOr(Schema.Finite).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** What `pid`'s command line has to contain before anything signals it. */
   command: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** When `pid` started, so a number that came round again is not taken for it. */
@@ -290,7 +311,7 @@ const ControlSchema = Schema.Struct({
   stop: Schema.NullOr(
     Schema.Struct({
       state: Schema.Literals(StopStates),
-      at: Schema.Number,
+      at: Schema.Finite,
       turns: Schema.NullOr(Schema.Array(StoppedTurn)),
       reason: Schema.NullOr(Schema.String),
       signalled: Schema.Array(SeenProcess).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
@@ -301,7 +322,7 @@ const ControlSchema = Schema.Struct({
 });
 export interface ControlRecord extends Schema.Schema.Type<typeof ControlSchema> {}
 const ControlJson = Schema.fromJsonString(ControlSchema);
-const encodeControl = Schema.encodeSync(ControlJson);
+const encodeControl = flow(Schema.encodeResult(ControlJson), Result.getOrThrow);
 const decodeControl = Schema.decodeUnknownEffect(ControlJson);
 
 export const controlDir = Effect.fn("Compaction.controlDir")(function* (
@@ -354,7 +375,7 @@ export const readControl = Effect.fn("Compaction.readControl")(function* (
   if (!(yield* fs.exists(file))) return null;
   return yield* fs.readFileString(file).pipe(
     Effect.flatMap(decodeControl),
-    Effect.catch(() => Effect.succeed(null)),
+    Effect.orElseSucceed(() => null),
   );
 });
 
@@ -415,7 +436,7 @@ const DISPATCH: Boundary = { dispatch: true };
 const enabled = Effect.fn("Compaction.enabled")(function* (configured: number) {
   const limit = threshold(configured);
   if ("off" in limit) return null;
-  if ("bad" in limit) return yield* Effect.fail(new Error(limit.bad));
+  if ("bad" in limit) return yield* new Cause.IllegalArgumentError(limit.bad);
   return limit;
 });
 
@@ -449,7 +470,7 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
     yield* deps.log(`${agent.agent}: ${agent.harness} has no compaction controls in Collie`);
     return [];
   }
-  const supported = yield* port.gate().pipe(
+  const supported = yield* port.gate.pipe(
     Effect.as(true),
     Effect.catch((cause) =>
       deps
@@ -488,7 +509,8 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
 
 /** Each turn a stop covered, by its full ids, with the server and where the transcript is. */
 const stopFacts = (target: StopTarget, turns: Stopped["turns"]) => {
-  const covered = (turns ?? []).map(
+  const covered = Arr.map(
+    turns ?? [],
     (one) =>
       `thread ${one.thread} turn ${one.turn}${one.transcript === null ? "" : ` (transcript ${one.transcript})`}`,
   );
@@ -497,7 +519,7 @@ const stopFacts = (target: StopTarget, turns: Stopped["turns"]) => {
       ? "its turns were never read"
       : covered.length === 0
         ? "no turn running"
-        : covered.join(", ");
+        : Arr.join(covered, ", ");
   return `${said}; server ${target.endpoint} pid ${target.pid}`;
 };
 
@@ -579,7 +601,7 @@ export const mayWrite = Effect.fn("Compaction.mayWrite")(function* (record: Cont
   if (
     server !== null &&
     (record.started === null || server.started === record.started) &&
-    (record.command === null || server.command.includes(record.command))
+    (record.command === null || pipe_(server.command, Str.includes(record.command)))
   )
     return true;
   for (const one of record.stop?.left ?? []) if (yield* stillRunning(one)) return true;
@@ -647,7 +669,8 @@ export const serversOfRun = Effect.fn("Compaction.serversOfRun")(function* (
     }
     const record = yield* decodeControl(text.success).pipe(Effect.option);
     if (record._tag === "None") {
-      if (text.success.includes(runLog)) unread.push(`${name}'s control record does not parse`);
+      if (pipe_(text.success, Str.includes(runLog)))
+        unread.push(`${name}'s control record does not parse`);
     } else if (record.value.runLog === runLog && targetOf(record.value) !== null)
       servers.push(name);
   }
@@ -749,11 +772,11 @@ const putDownStaleControls = Effect.fn("Compaction.putDownStaleControls")(functi
   const path = yield* Path.Path;
   const root = path.join(deps.stateDir, CONTROL_DIR);
   if (!(yield* fs.exists(root))) return;
-  const live = new Set((yield* deps.herdr.agentList()).map((agent) => agent.name));
+  const live = new Set(Arr.map(yield* deps.herdr.agentList(), (agent) => agent.name));
   for (const name of yield* fs.readDirectory(root)) {
     if (name === launching || live.has(name)) continue;
     const listed = deps.herdr.agentList().pipe(
-      Effect.map((agents) => agents.some((agent) => agent.name === name)),
+      Effect.map((agents) => Arr.some(agents, (agent) => agent.name === name)),
       Effect.orElseSucceed(() => true),
     );
     yield* putDownControl(deps, name, listed).pipe(Effect.ignore);
@@ -783,7 +806,14 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
       const record = yield* readControl(deps.stateDir, name);
       // A server an earlier stop already signalled is only looked at again, so no launch
       // waits out its budget.
-      const signalled = record?.stop?.signalled.some((one) => one.pid === record.pid) ?? false;
+      const signalled =
+        Option.getOrUndefined(
+          Option.flatMap(Option.fromNullishOr(record), (present) =>
+            Option.map(Option.fromNullishOr(present.stop), (present_) =>
+              Arr.some(present_.signalled, (one) => one.pid === present.pid),
+            ),
+          ),
+        ) ?? false;
       const budget = signalled ? 0 : (deps.stopMs ?? STOP_WAIT_MS);
       const reached = record === null ? null : yield* stopRecord(deps, record, budget);
       if (reached !== null && reached.state !== "quiet")
@@ -826,7 +856,7 @@ export const endpointPid = Effect.fn("Compaction.endpointPid")(function* (
 ) {
   const { pid, command } = record ?? {};
   if (!pid || !command) return null;
-  return (yield* commandOf(pid, proc)).includes(command) ? pid : null;
+  return pipe_(yield* commandOf(pid, proc), Str.includes(command)) ? pid : null;
 });
 
 /**
@@ -834,7 +864,7 @@ export const endpointPid = Effect.fn("Compaction.endpointPid")(function* (
  * work is given the next piece. Never a liveness nudge, a mid-step recovery message or
  * a human typing in the pane — those are not boundaries, and this is not called on them.
  */
-export const atBoundary = Effect.fn("Compaction.atBoundary")(function* (
+export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <SubmissionError>(
   deps: CompactionDeps,
   at: { agent: string; run: string; step: string },
   /**
@@ -843,7 +873,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* (
    */
   submitting: <A, E, R>(
     body: (channel: Channel) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | Unsubmitted | Error, R | PortServices>,
+  ) => Effect.Effect<A, E | Unsubmitted | SubmissionError, R | PortServices>,
 ) {
   const limit = yield* enabled(deps.configured);
   if (!limit) return DISPATCH;

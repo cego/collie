@@ -1,6 +1,10 @@
 // What the Flock chat's composer decides about a file before it is sent: whether it fits,
 // how far an image is scaled, and which pasted data becomes an attachment.
 
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   capRefusal,
@@ -41,7 +45,8 @@ test("an image's size is read from its header, and null where the header says no
   const be32 = (n: number) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
   const le16 = (n: number) => [n & 255, n >>> 8];
   const le24 = (n: number) => [n & 255, (n >>> 8) & 255, n >>> 16];
-  const ascii = (text: string) => [...text].map((c) => c.charCodeAt(0));
+  const ascii = (text: string) =>
+    Arr.map([...text], (c) => Option.getOrElse(Str.charCodeAt(c, 0), () => Number.NaN));
   const png = [
     0x89,
     ...ascii("PNG\r\n\x1a\n"),
@@ -104,7 +109,7 @@ test("a pasted image with no name of its own is named by when it was pasted", ()
 });
 
 test("Desktop's listing of a message's files reads back as the files it lists", () => {
-  const sha = "a".repeat(64);
+  const sha = pipe("a", Str.repeat(64));
   const files = [
     {
       id: `${sha}/my shot (1).png`,

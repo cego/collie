@@ -3,6 +3,10 @@
 // everything it does is a plain `Command` dispatched back out: it imports no Effect and
 // holds no runtime, which is what makes it testable with `testRender` and plain data.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { createEffect, createMemo, createSignal, untrack, Show } from "solid-js";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { onBlur, onFocus, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
@@ -104,7 +108,8 @@ export function App(props: AppProps) {
   const header = createMemo(() => headerSentence(tasks(), props.state().now));
   const usage = createMemo(() => usagePhrase(props.state().usage ?? [], props.state().now));
   const columns = () => columnsFor(dimensions().width, props.state().density);
-  const open = () => tasks().find((view) => view.id === openId()) ?? null;
+  const open = () =>
+    Option.getOrUndefined(Arr.findFirst(tasks(), (view) => view.id === openId())) ?? null;
 
   // What is open decides what the producers read, so it is dispatched rather than kept
   // here: that is what fills the drawer's record.
@@ -256,7 +261,7 @@ export function App(props: AppProps) {
   };
   const sendSteer = () => {
     const view = open();
-    const text = steerDraft().trim();
+    const text = Str.trim(steerDraft());
     if (view === null || text === "") return;
     setSteering(false);
     setSteers((was) => ({ ...was, [view.id]: "" }));
@@ -291,7 +296,7 @@ export function App(props: AppProps) {
     const going = props.state().stopping;
     if (going.length === 0) return null;
     if (going.length > 1) return `Stopped ${going.length} runs`;
-    return `Stopped ${tasks().find((view) => view.run === going[0])?.name ?? going[0]}`;
+    return `Stopped ${Option.getOrUndefined(Arr.findFirst(tasks(), (view) => view.run === going[0]))?.name ?? going[0]}`;
   };
 
   const batch: Batch = {
@@ -307,8 +312,8 @@ export function App(props: AppProps) {
 
   /** What is picked, in the board's own order, and whether there is anything to stop. */
   const stoppable = (view: TaskView) =>
-    menuFor(view).some((item) => item.command._tag === "StopRun");
-  const pickedViews = () => tasks().filter((view) => picked().has(view.id));
+    Arr.some(menuFor(view), (item) => item.command._tag === "StopRun");
+  const pickedViews = () => Arr.filter(tasks(), (view) => picked().has(view.id));
   const stopPicked = () => {
     for (const view of pickedViews())
       if (stoppable(view)) props.dispatch({ _tag: "StopRun", runId: view.run });
@@ -329,7 +334,9 @@ export function App(props: AppProps) {
   /** The proposals a card carries: those are answered on the card, not over the board. */
   const carded = () =>
     new Set(
-      tasks().flatMap((view) => (view.decision?.kind === "proposal" ? [view.decision.id] : [])),
+      Arr.flatMap(tasks(), (view) =>
+        view.decision?.kind === "proposal" ? [view.decision.id] : [],
+      ),
     );
 
   /**
@@ -340,7 +347,13 @@ export function App(props: AppProps) {
   const previewing = () => {
     const id = props.state().previewing;
     if (id === null || carded().has(id)) return null;
-    return props.state().live?.proposals.find((p) => p.id === id) ?? null;
+    return (
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(props.state().live), (present) =>
+          Option.getOrUndefined(Arr.findFirst(present.proposals, (p) => p.id === id)),
+        ),
+      ) ?? null
+    );
   };
   /**
    * A proposal that has just appeared is put on screen. It is the one thing the board
@@ -350,9 +363,9 @@ export function App(props: AppProps) {
   let answered = new Set<string>();
   createEffect(() => {
     const onCards = carded();
-    const pending = (props.state().live?.proposals ?? []).filter((p) => !onCards.has(p.id));
-    const fresh = pending.find((p) => !answered.has(p.id));
-    answered = new Set(pending.map((p) => p.id));
+    const pending = Arr.filter(props.state().live?.proposals ?? [], (p) => !onCards.has(p.id));
+    const fresh = Option.getOrUndefined(Arr.findFirst(pending, (p) => !answered.has(p.id)));
+    answered = new Set(Arr.map(pending, (p) => p.id));
     if (fresh && untrack(() => props.state().previewing) === null) {
       props.dispatch({ _tag: "Preview", id: fresh.id });
     }
@@ -406,7 +419,9 @@ export function App(props: AppProps) {
     if (menu !== null) {
       if (key.name === "escape") return setMenuOn(null);
       const pressed = key.name === "return" ? "enter" : key.sequence;
-      const item = menu.items.find((one) => one.key !== "" && one.key === pressed);
+      const item = Option.getOrUndefined(
+        Arr.findFirst(menu.items, (one) => one.key !== "" && one.key === pressed),
+      );
       return item === undefined ? undefined : act(item.command);
     }
     if (steering()) return typeIntoSteer(key);
@@ -441,7 +456,8 @@ export function App(props: AppProps) {
       setEditing(null);
       return props.dispatch({ _tag: "SetDefault", key: at.key, value: at.typed });
     }
-    if (key.name === "backspace") return setEditing({ ...at, typed: at.typed.slice(0, -1) });
+    if (key.name === "backspace")
+      return setEditing({ ...at, typed: pipe(at.typed, Str.slice(0, -1)) });
     if (PRINTABLE.test(key.sequence)) setEditing({ ...at, typed: at.typed + key.sequence });
   };
 
@@ -451,15 +467,15 @@ export function App(props: AppProps) {
     if (id === null) return setSteering(false);
     if (key.name === "escape") return setSteering(false);
     if (key.name === "return") return sendSteer();
-    if (key.name === "backspace") return editSteer((was) => was.slice(0, -1));
+    if (key.name === "backspace") return editSteer((was) => pipe(was, Str.slice(0, -1)));
     if (PRINTABLE.test(key.sequence)) editSteer((was) => was + key.sequence);
   };
 
   /** Esc leaves the field and keeps the draft; only sending it empties the card. */
   const typeIntoAnswer = (question: Question, key: Keypress) => {
     if (key.name === "escape") return setTypingTo(null);
-    if (key.name === "return") return decide.answer(question, decide.draft(question).trim());
-    if (key.name === "backspace") return editDraft(question, (was) => was.slice(0, -1));
+    if (key.name === "return") return decide.answer(question, Str.trim(decide.draft(question)));
+    if (key.name === "backspace") return editDraft(question, (was) => pipe(was, Str.slice(0, -1)));
     if (PRINTABLE.test(key.sequence)) editDraft(question, (was) => was + key.sequence);
   };
 
@@ -474,7 +490,7 @@ export function App(props: AppProps) {
       return setSearching(false);
     }
     if (key.name === "return") return setSearching(false);
-    if (key.name === "backspace") return setQuery((was) => was.slice(0, -1));
+    if (key.name === "backspace") return setQuery((was) => pipe(was, Str.slice(0, -1)));
     if (PRINTABLE.test(key.sequence)) setQuery((was) => was + key.sequence);
   };
 
@@ -560,7 +576,7 @@ export function App(props: AppProps) {
           <text fg={C.text}>{` ${picked().size} selected `}</text>
           {/* Absent where nothing picked can be stopped: a button that would do nothing
               is worse than no button. */}
-          <Show when={pickedViews().some(stoppable)}>
+          <Show when={Arr.some(pickedViews(), stoppable)}>
             <text
               fg={C.amber}
               bg={C.strong}

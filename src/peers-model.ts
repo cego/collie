@@ -108,13 +108,13 @@ export type PeerView = typeof PeerView.Type;
  * no control link, a refused connection, or no dial-back. A peer this Machine dials also
  * says what each way to it saw.
  */
-export class MachineUnreachable extends Schema.TaggedError<MachineUnreachable>()(
-  "MachineUnreachable",
-  {
-    machine: Schema.String,
-    seen: Schema.String,
-    direct: Schema.optionalKey(Schema.String),
-    ssh: Schema.optionalKey(Schema.String),
-    waits: Schema.optionalKey(Waits),
-  },
-) {}
+export class MachineUnreachable extends Schema.TaggedError<
+  MachineUnreachable,
+  { readonly brand: unique symbol }
+>()("MachineUnreachable", {
+  machine: Schema.String,
+  seen: Schema.String,
+  direct: Schema.optionalKey(Schema.String),
+  ssh: Schema.optionalKey(Schema.String),
+  waits: Schema.optionalKey(Waits),
+}) {}

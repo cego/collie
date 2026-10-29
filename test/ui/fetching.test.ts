@@ -2,6 +2,10 @@
 // nothing at all, and the host's merge watch reads one merge request once per poll, again
 // only when asked to.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Layer, PlatformError } from "effect";
@@ -68,7 +72,8 @@ function glab() {
   };
   return {
     run,
-    views: () => calls.filter((c) => c[1] === "api" && /\/merge_requests\/\d+$/.test(c.at(-1)!)),
+    views: () =>
+      Arr.filter(calls, (c) => c[1] === "api" && /\/merge_requests\/\d+$/.test(c.at(-1)!)),
   };
 }
 
@@ -112,7 +117,7 @@ const watched = (
 /** A Run of this workspace, remembered as the newest the host would list. */
 const made = Effect.fn("fetching.made")(function* (over: Partial<RunFacts>) {
   const env = rig.pluginEnv();
-  const at = `2026-09-02T10:${String(runs.length).padStart(2, "0")}:00.000Z`;
+  const at = `2026-09-02T10:${pipe_(String(runs.length), Str.padStart(2, "0"))}:00.000Z`;
   const run = yield* madeRun(env.stateDir, {
     id: `r${runs.length + 1}`,
     project: env.cwd,
@@ -133,7 +138,7 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
     const run = yield* made({
       workflow: "review",
       state: "succeeded",
-      finished: `2026-09-02T11:${String(n).padStart(2, "0")}:00.000Z`,
+      finished: `2026-09-02T11:${pipe_(String(n), Str.padStart(2, "0"))}:00.000Z`,
       settled: {
         inputs: { target: `mr:gitlab.example.com/g/p!${n}` },
         strategies: { target: "diff-target" },
@@ -152,7 +157,10 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
   }
   // And in production, as far as a merge can go: the watch that follows a merged card to
   // its deploy jobs has nothing left to ask about these either.
-  yield* writeMrStates(env.stateDir, new Map(ids.map((_, at) => [`g/p!${at + 1}`, "in-prod"])));
+  yield* writeMrStates(
+    env.stateDir,
+    new Map(Arr.map(ids, (_, at) => [`g/p!${at + 1}`, "in-prod"])),
+  );
   return ids;
 });
 
@@ -169,7 +177,8 @@ effectTest(
   "the merge watch reads one merge request once a poll, and again when asked",
   function* () {
     const [first, second] = yield* seedMany(2);
-    const runOf = (id: string) => runs.find((run) => run.id === id)!;
+    const runOf = (id: string) =>
+      Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))!;
     const asked = glab();
     const panels: MrPanels = new Map();
 
@@ -217,12 +226,15 @@ effectTest("a glab that writes a notice to stderr is still read as a merge reque
   const bin = yield* FakeBin.make(`${rig.root}/bin`);
   yield* bin.add(
     "glab",
-    [
-      `if [ "$1" = "--version" ]; then echo "glab 1.115.0"; exit 0; fi`,
-      `if [ "$1" = "auth" ]; then echo ok; exit 0; fi`,
-      `echo "A new version of glab is available" >&2`,
-      `printf '%s' '${MR_JSON}'`,
-    ].join("\n"),
+    Arr.join(
+      [
+        `if [ "$1" = "--version" ]; then echo "glab 1.115.0"; exit 0; fi`,
+        `if [ "$1" = "auth" ]; then echo ok; exit 0; fi`,
+        `echo "A new version of glab is available" >&2`,
+        `printf '%s' '${MR_JSON}'`,
+      ],
+      "\n",
+    ),
   );
 
   const ref = { project: "gitlab.example.com/g/p", iid: "1" };
@@ -242,7 +254,9 @@ effectTest("a card outside the legacy lists still fills its own record", functio
   const oldest = ids[0]!;
   const state = yield* app().load(focus({ selected: `run:${oldest}` }));
 
-  expect([...state.board.active, ...state.board.recent].map((r) => r.id)).not.toContain(oldest);
+  expect(Arr.map([...state.board.active, ...state.board.recent], (r) => r.id)).not.toContain(
+    oldest,
+  );
   expect(state.live?.run).toBe(oldest);
 });
 

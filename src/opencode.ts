@@ -16,6 +16,9 @@
 //     available yet" on this release. `POST /session/{id}/summarize` is the endpoint
 //     that works, and it needs the model to summarize with.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Data, Effect, Schema } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -54,11 +57,11 @@ const Message = Schema.Struct({
     tokens: Schema.optionalKey(
       Schema.NullOr(
         Schema.Struct({
-          total: Schema.optionalKey(Schema.Number),
-          input: Schema.Number,
-          output: Schema.Number,
-          reasoning: Schema.Number,
-          cache: Schema.Struct({ read: Schema.Number, write: Schema.Number }),
+          total: Schema.optionalKey(Schema.Finite),
+          input: Schema.Finite,
+          output: Schema.Finite,
+          reasoning: Schema.Finite,
+          cache: Schema.Struct({ read: Schema.Finite, write: Schema.Finite }),
         }),
       ),
     ),
@@ -79,7 +82,7 @@ const decode = <S extends Schema.Top>(
   schema: S,
   value: Schema.Schema.Type<typeof Schema.Json>,
 ) =>
-  Schema.decodeUnknownEffect(schema)(value).pipe(
+  Schema.decodeEffect(schema)(value).pipe(
     Effect.mapError((cause) => failed(`${what}: ${String(cause)}`)),
   );
 
@@ -102,8 +105,8 @@ const send = Effect.fn("OpenCode.send")(function* (
     ),
   );
   if (response.status < 200 || response.status >= 300) {
-    const body = yield* response.text.pipe(Effect.catch(() => Effect.succeed("")));
-    return yield* Effect.fail(failed(`${what} answered ${response.status}: ${body.slice(0, 200)}`));
+    const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
+    return yield* failed(`${what} answered ${response.status}: ${pipe_(body, Str.slice(0, 200))}`);
   }
   return yield* response.json.pipe(Effect.mapError((cause) => failed(`${what}: ${reason(cause)}`)));
 }, Effect.provide(FetchHttpClient.layer));
@@ -147,9 +150,7 @@ export const sessionIsHere = Effect.fn("OpenCode.sessionIsHere")(function* (
     yield* send(what, HttpClientRequest.get(`${base}/session/${session}`)),
   );
   if (found.directory !== undefined && found.directory !== cwd) {
-    return yield* Effect.fail(
-      failed(`session ${session} is working in ${found.directory}, not ${cwd}`),
-    );
+    return yield* failed(`session ${session} is working in ${found.directory}, not ${cwd}`);
   }
 });
 
@@ -246,9 +247,10 @@ export function compactionAfter(
   all: ReadonlyArray<OpenCodeMessage>,
   before: ReadonlySet<string>,
 ): CompactionState {
-  const mine = all
-    .filter((message) => message.info.mode === COMPACTION_MODE && !before.has(message.info.id))
-    .at(-1);
+  const mine = Arr.filter(
+    all,
+    (message) => message.info.mode === COMPACTION_MODE && !before.has(message.info.id),
+  ).at(-1);
   if (!mine) return { kind: "none" };
   const { id, error, finish } = mine.info;
   if (error !== undefined && error !== null) {
@@ -276,7 +278,8 @@ function describe(error: OpenCodeMessage["info"]["error"]): string {
 
 /** Every compaction this session already has, by message id. */
 export function compactionIds(all: ReadonlyArray<OpenCodeMessage>): string[] {
-  return all
-    .filter((message) => message.info.mode === COMPACTION_MODE)
-    .map((message) => message.info.id);
+  return Arr.map(
+    Arr.filter(all, (message) => message.info.mode === COMPACTION_MODE),
+    (message) => message.info.id,
+  );
 }

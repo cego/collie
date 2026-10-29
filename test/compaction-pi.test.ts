@@ -2,8 +2,9 @@
 // telemetry contract, the session binding, and what may and may not complete an
 // attempt. Checked against the installed Pi where the check is about Pi itself.
 
+import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schedule, Schema } from "effect";
+import { Effect, FileSystem, Path, Schedule, Schema, flow, Result } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith, removesCache } from "./support/live";
@@ -40,18 +41,21 @@ interface Line {
   message?: string;
   reason?: string;
 }
-const encodeLine = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      at: Schema.Number,
-      session: Schema.String,
-      kind: Schema.String,
-      tokens: Schema.optionalKey(Schema.NullOr(Schema.Union([Schema.Number, Schema.String]))),
-      request: Schema.optionalKey(Schema.String),
-      message: Schema.optionalKey(Schema.String),
-      reason: Schema.optionalKey(Schema.String),
-    }),
+const encodeLine = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Struct({
+        at: Schema.Finite,
+        session: Schema.String,
+        kind: Schema.String,
+        tokens: Schema.optionalKey(Schema.NullOr(Schema.Union([Schema.Finite, Schema.String]))),
+        request: Schema.optionalKey(Schema.String),
+        message: Schema.optionalKey(Schema.String),
+        reason: Schema.optionalKey(Schema.String),
+      }),
+    ),
   ),
+  Result.getOrThrow,
 );
 
 const event = (line: Line) =>
@@ -283,10 +287,10 @@ onMachineWith("pi")(
       Effect.gen(function* () {
         const wanted = VERIFIED_VERSIONS.get("pi") ?? "";
         yield* removesCache("node-compile-cache");
-        const installed = (yield* Effect.promise(() => Bun.$`pi --version`.text())).trim();
+        const installed = Str.trim(yield* Effect.promise(() => Bun.$`pi --version`.text()));
         // A floor, as the name says: the gate below is what checks the interface still holds.
         expect([installed, atLeast(installed, wanted)]).toEqual([installed, true]);
-        yield* pi.gate();
+        yield* pi.gate;
       }),
     ),
   { timeout: 30_000 },
@@ -313,8 +317,11 @@ onMachineWith("pi")(
 );
 
 /** One command on Pi's RPC stdin. */
-const asRpc = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ type: Schema.String, message: Schema.String })),
+const asRpc = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(Schema.Struct({ type: Schema.String, message: Schema.String })),
+  ),
+  Result.getOrThrow,
 );
 
 onMachineWith("pi")(

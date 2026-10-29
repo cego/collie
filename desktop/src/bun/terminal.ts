@@ -3,7 +3,9 @@
 // terminal of its own on this computer. Desktop passes on what the controller prints and
 // decides nothing from it.
 
-import { Effect, Option, Result, Schema, Stream } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import { Effect, Option, Result, Schema, Stream, flow } from "effect";
 import { CommandLine } from "effect/process";
 import type { PaneAt } from "../../../src/board-model";
 import { ActionFailed, TerminalCommand, type TerminalEvent } from "../shared/flock";
@@ -49,7 +51,7 @@ const ControllerCommand = Schema.Union([
 
 /** A command as the controller reads it: one JSON object to a line. */
 export const commandLine = (command: typeof ControllerCommand.Type) =>
-  `${Schema.encodeSync(Schema.fromJsonString(ControllerCommand))(command)}\n`;
+  `${flow(Schema.encodeResult(Schema.fromJsonString(ControllerCommand)), Result.getOrThrow)(command)}\n`;
 
 const RELEASE = commandLine({ type: "terminal.release" });
 
@@ -167,7 +169,8 @@ const TERMINALS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ["xterm", ["-e"]],
 ];
 
-const appleString = (text: string) => `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+const appleString = (text: string) =>
+  `"${pipe_(text, Str.replaceAll("\\", "\\\\"), Str.replaceAll('"', '\\"'))}"`;
 
 /** `command` in this computer's default terminal, or null where none is found. */
 export const inTerminal = (

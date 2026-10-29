@@ -2,6 +2,10 @@
 // interactive work happens in the pane entrypoints. Every question a human answers goes
 // through `InputPrompts`, so the same flow draws in a popup pane and inline in the tab.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
 import { releasesOf } from "./releases";
 import { withNotice } from "./redact";
 import {
@@ -197,11 +201,14 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
   if (ensured === null) return 1;
   if (ensured.kind === "ownership_unknown") {
     yield* Console.error(
-      [
-        `Collie cannot tell which workspace is this Herd's Home: ${ensured.why}.`,
-        `Candidates: ${ensured.candidates.join(", ")}`,
-        "`collie home reconcile --adopt <id>` or `--forget` settles it.",
-      ].join("\n"),
+      Arr.join(
+        [
+          `Collie cannot tell which workspace is this Herd's Home: ${ensured.why}.`,
+          `Candidates: ${Arr.join(ensured.candidates, ", ")}`,
+          "`collie home reconcile --adopt <id>` or `--forget` settles it.",
+        ],
+        "\n",
+      ),
     );
     return 1;
   }
@@ -224,7 +231,7 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
     home,
     yield* chatHarnessOf(env.userDir),
     (line) => Console.error(line),
-  ).pipe(Effect.catch(() => Effect.succeed(null)));
+  ).pipe(Effect.orElseSucceed(() => null));
   if (chat?.kind === "unavailable")
     yield* Console.error(`Collie has no native chat: ${chat.why}. The board is unaffected.`);
 
@@ -245,14 +252,17 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
  * directory, which is no checkout, so a Run started there is placed rather than asked.
  */
 const fromHome = Effect.fn("Flows.fromHome")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
   return home !== null && home !== UNREADABLE && env.workspaceId === home.workspaceId;
 });
 
 function banner(defs: Definitions): string | undefined {
   if (defs.errors.length === 0) return undefined;
-  return ["Definitions with errors (skipped):", ...defs.errors.map((e) => `  ${e}`)].join("\n");
+  return Arr.join(
+    ["Definitions with errors (skipped):", ...Arr.map(defs.errors, (e) => `  ${e}`)],
+    "\n",
+  );
 }
 
 /**
@@ -298,14 +308,17 @@ const pickTask = Effect.fn("Flows.pickTask")(function* (env: PluginEnv, prompts:
     return null;
   }
   const chosen = yield* prompts.menu(
-    [...kept, ...tasks.map((task) => ({ id: task.id, title: task.label, subtitle: task.cwd }))],
+    [
+      ...kept,
+      ...Arr.map(tasks, (task) => ({ id: task.id, title: task.label, subtitle: task.cwd })),
+    ],
     {
       header: "Which task?",
       footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
     },
   );
   if (chosen?.id === HERE) return { mode: "here" } as const;
-  const task = tasks.find((one) => one.id === chosen?.id);
+  const task = Option.getOrUndefined(Arr.findFirst(tasks, (one) => one.id === chosen?.id));
   return task === undefined ? null : ({ mode: "continue", task } as const);
 });
 
@@ -324,7 +337,9 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
       subtitle: `[${entry.layer}] ${entry.path}`,
     });
   }
-  const items: PickItem[] = [...offered.values()].sort((a, b) => a.id.localeCompare(b.id));
+  const items: PickItem[] = [...offered.values()].sort((a, b) =>
+    pipe_(a.id, Str.localeCompare(b.id)),
+  );
 
   if (items.length === 0) {
     return yield* bail(prompts, "No workflows found. Check the plugin's workflows/ directory.");
@@ -367,11 +382,13 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   // A workflow saved as a module is started through the host, with the same claim and
   // the same rows `collie run start` uses — the Run is the same either way.
   const saved = yield* savedModules(env);
-  const module = saved.entries.find((entry) => entry.id === opts.workflow);
+  const module = Option.getOrUndefined(
+    Arr.findFirst(saved.entries, (entry) => entry.id === opts.workflow),
+  );
   if (module) {
     const started = yield* startModule(herdr, env, prompts, { ...opts, task }, module);
     if (started === null || "line" in started) return started?.line ?? null;
-    const plan = saved.entries.find(plansAGoal);
+    const plan = Option.getOrUndefined(Arr.findFirst(saved.entries, plansAGoal));
     if (plan === undefined) {
       yield* bail(
         prompts,
@@ -388,7 +405,9 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     );
     return planned !== null && "line" in planned ? planned.line : null;
   }
-  const broken = saved.problems.find((problem) => problem.id === opts.workflow);
+  const broken = Option.getOrUndefined(
+    Arr.findFirst(saved.problems, (problem) => problem.id === opts.workflow),
+  );
   if (broken) {
     yield* bail(prompts, `${broken.path}: ${broken.message}`);
     return null;
@@ -420,8 +439,8 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   },
   module: Found,
 ) {
-  const launchInput = module.inputs.find((field) =>
-    EXCLUSIVE_STRATEGIES.includes(field.strategy ?? ""),
+  const launchInput = Option.getOrUndefined(
+    Arr.findFirst(module.inputs, (field) => EXCLUSIVE_STRATEGIES.includes(field.strategy ?? "")),
   );
   const home = yield* fromHome(env);
   const text = { ...opts.given };
@@ -435,7 +454,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   ) {
     const answer = yield* prompts.ask(WHAT_DO_YOU_WANT);
     if (answer === null) return null;
-    words = answer.trim();
+    words = Str.trim(answer);
   }
   let at = env;
   let rooted = false;
@@ -500,12 +519,13 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     }
   }
   if (inferred.size > 0) {
-    const inputs = Object.entries(text).map(
+    const inputs = Arr.map(
+      Rec.toEntries(text),
       ([name, value]) =>
         `${name} = ${value} (${inferred.has(name) ? `inferred from ${inferred.get(name)}` : "given"})`,
     );
     const confirmed = yield* prompts.menu(
-      [{ id: "start", title: `Starting in ${at.cwd}`, subtitle: inputs.join(" · ") }],
+      [{ id: "start", title: `Starting in ${at.cwd}`, subtitle: Arr.join(inputs, " · ") }],
       { header: module.title, footer: "Enter start · Esc cancel" },
     );
     if (confirmed === null) return null;
@@ -528,10 +548,10 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     return null;
   }
   if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
-  const given = Object.entries(text).map(([name, value]) => `${name}=${value}`);
+  const given = Arr.map(Rec.toEntries(text), ([name, value]) => `${name}=${value}`);
   return {
     line: withNotice(
-      `${module.id}: ${given.join("  ")} → ${started.runId}`,
+      `${module.id}: ${Arr.join(given, "  ")} → ${started.runId}`,
       started.redacted,
       " — ",
     ),
@@ -546,7 +566,7 @@ const PLAN_INSTEAD = "plan-instead";
 
 /** A module that plans from a goal, by what it declares rather than what it is called. */
 const plansAGoal = (found: Found) =>
-  found.outcome === "plan" && found.inputs.some((field) => field.strategy === "goal");
+  found.outcome === "plan" && Arr.some(found.inputs, (field) => field.strategy === "goal");
 
 /** The host option a placed start names its checkout with, recorded as inferred. */
 const WORKSPACE = "workspace";
@@ -605,7 +625,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   >();
   const items: PickItem[] = [];
 
-  for (const persona of [...defs.personas.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const persona of [...defs.personas.values()].sort((a, b) =>
+    pipe_(a.name, Str.localeCompare(b.name)),
+  )) {
     sources.set(`persona:${persona.name}`, {
       kind: "personas",
       path: persona.path,
@@ -655,7 +677,7 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   let step: string | undefined;
   if (how.id === "extends" && source.steps.length > 0) {
     const which = yield* prompts.menu(
-      source.steps.map((id) => ({ id, title: id })),
+      Arr.map(source.steps, (id) => ({ id, title: id })),
       {
         header: `Which step of ${chosen.title}`,
         footer: "↑↓ move · Enter choose · Esc cancel",
@@ -679,7 +701,7 @@ function layerOf(def: Provenance): string {
   if (def.extends) parts.push(`extends ${def.extends}`);
   // A full copy whose parent has moved on is not the fork you took.
   if (isStale(def)) parts.push("(stale — the original has changed since this copy)");
-  return parts.join(" ");
+  return Arr.join(parts, " ");
 }
 
 export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
@@ -688,13 +710,13 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   prompts: FlowPrompts,
   placement: Placement = "popup",
 ) {
-  const runs = (yield* listRuns(env)).filter((run) => !settled(run));
+  const runs = Arr.filter(yield* listRuns(env), (run) => !settled(run));
   if (runs.length === 0) return yield* bail(prompts, "No runs are still going to pick back up.");
 
-  const items: PickItem[] = runs.map((run) => ({
+  const items: PickItem[] = Arr.map(runs, (run) => ({
     id: run.id,
     title: runTitle(run),
-    subtitle: `${run.state} · ${run.created.slice(0, 16).replace("T", " ")}`,
+    subtitle: `${run.state} · ${pipe_(run.created, Str.slice(0, 16), Str.replace("T", " "))}`,
   }));
 
   const chosen = yield* prompts.menu(items, {
@@ -745,7 +767,7 @@ export const attachFiles = Effect.fn("Flows.attachFiles")(function* (
     door: "board",
     runId,
     text: "",
-    attachments: paths.map((one) => path.resolve(env.cwd, one)),
+    attachments: Arr.map(paths, (one) => path.resolve(env.cwd, one)),
     request: yield* newRequestId(),
   });
   return done.ok ? done.human : done.error.message;
@@ -763,7 +785,7 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
 ) {
   const listed = yield* offersOf(env, runId);
   if ("ok" in listed) return listed.error.message;
-  const offer = listed.find((one) => one.id === chosen);
+  const offer = Option.getOrUndefined(Arr.findFirst(listed, (one) => one.id === chosen));
   if (offer === undefined) return `${runId} no longer offers ${chosen}`;
   if (offer.unavailable !== null) return `${offer.title}: ${offer.unavailable}`;
   const input = yield* offerArguments(prompts, offer.arguments);
@@ -829,13 +851,15 @@ export const replacedOnDisk = (
       Effect.orElseSucceed(() => null),
     );
     const start = yield* inode;
-    if (start === null) return Effect.never;
-    return inode.pipe(
-      Effect.repeat({
-        schedule: Schedule.spaced(every),
-        until: (now) => now !== null && now !== start,
-      }),
-      Effect.asVoid,
+    if (start === null) return yield* Effect.succeed(Effect.never);
+    return yield* Effect.succeed(
+      inode.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced(every),
+          until: (now) => now !== null && now !== start,
+        }),
+        Effect.asVoid,
+      ),
     );
   });
 
@@ -843,7 +867,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
 ) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
   // A board outside the Home is a board this Herd no longer has: one Home per Herd, so
   // two of them would be two boards disagreeing about the same Runs (ADR-0009). It is
@@ -955,10 +979,9 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
       // fall through to the text view, which is what that view is kept for. An interrupt
       // is not that — the pane is closing, and a key loop started on the way out would
       // hang it — so it is re-raised rather than fallen back from.
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause)
-          ? Effect.failCause(cause)
-          : Effect.succeed(reason(cause).split("\n")[0]!),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        (cause) => Effect.succeed(Str.split(reason(cause), "\n")[0]!),
       ),
     ));
   if (why === null) return replaced ? RELAUNCH : 0;
@@ -982,7 +1005,7 @@ const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, 
   const chosen = yield* Effect.scoped(
     Effect.gen(function* () {
       const keys = yield* keyboard();
-      process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
+      process.stdout.write(`${CLEAR}${pipe_(text, Str.replace(/\n/g, "\r\n"))}\r\n`);
       for (;;) {
         const key = yield* Queue.take(keys);
         if (key === "q" || key === "\x03" || key === "o") return key;
@@ -1024,7 +1047,7 @@ export function appState(
   let last: { focus: Focus; state: AppState } | null = null;
   /** One row per Run: a Run on the local board is on the wide one too. */
   const dedupe = (rows: ReadonlyArray<{ id: string; dir: string }>) => [
-    ...new Map(rows.map((row) => [row.id, { id: row.id, dir: row.dir }])).values(),
+    ...new Map(Arr.map(rows, (row) => [row.id, { id: row.id, dir: row.dir }])).values(),
   ];
 
   const load = Effect.fn("Flows.appState.load")(function* (focus: Focus) {
@@ -1060,19 +1083,30 @@ export function appState(
     // The wide groups too: a row the human is on may belong to another workspace, and
     // looking only at this one left its panel empty while its row carried the target.
     const selected = runId
-      ? [
-          ...board.active,
-          ...board.recent,
-          ...(wide?.groups.flatMap((g) => [...g.active, ...g.recent]) ?? []),
-          ...(history ?? []),
-        ].find((r) => r.id === runId)
+      ? Option.getOrUndefined(
+          Arr.findFirst(
+            [
+              ...board.active,
+              ...board.recent,
+              ...(Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(wide), (present) =>
+                  Arr.flatMap(present.groups, (g) => [...g.active, ...g.recent]),
+                ),
+              ) ?? []),
+              ...(history ?? []),
+            ],
+            (r) => r.id === runId,
+          ),
+        )
       : undefined;
     // The Run itself, not the row: what a card is about is on the record, and a row
     // carries only what its list needed. One record, for the one Run selected.
     const selectedRun =
       runId === null
         ? null
-        : ((runs ?? (yield* runsOf(env))).find((run) => run.id === runId) ?? null);
+        : (Option.getOrUndefined(
+            Arr.findFirst(runs ?? (yield* runsOf(env)), (run) => run.id === runId),
+          ) ?? null);
     const where =
       selected !== undefined
         ? { id: selected.id, dir: selected.dir }
@@ -1088,11 +1122,15 @@ export function appState(
     const onBoard = [
       ...board.active,
       ...board.recent,
-      ...(wide?.groups.flatMap((g) => [...g.active, ...g.recent]) ?? []),
+      ...(Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(wide), (present_) =>
+          Arr.flatMap(present_.groups, (g) => [...g.active, ...g.recent]),
+        ),
+      ) ?? []),
     ];
     /** What each Run's record says about it that a row does not carry. */
     const recorded = new Map(
-      (runs ?? []).map((run) => [run.id, markedOf(run, scanned?.registered ?? [])]),
+      Arr.map(runs ?? [], (run) => [run.id, markedOf(run, scanned?.registered ?? [])]),
     );
     /**
      * The Live region and every row's marks, from one pass over the same journals. The
@@ -1110,7 +1148,7 @@ export function appState(
             run: where === null ? null : { id: where.id, dir: where.dir },
             // From the scan this read already made, never a second read per Run: the
             // facts are the only thing the marks need that a row does not carry.
-            runs: dedupe(onBoard).map((row) => ({
+            runs: Arr.map(dedupe(onBoard), (row) => ({
               ...row,
               ...(recorded.get(row.id) ?? { held: false, harnesses: [] }),
             })),
@@ -1178,7 +1216,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 ) {
   const runOf = (runId: string) =>
     (session.runsOf ?? listRuns)(env).pipe(
-      Effect.map((runs) => runs.find((run) => run.id === runId) ?? null),
+      Effect.map(
+        (runs) => Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === runId)) ?? null,
+      ),
     );
   switch (command._tag) {
     /**
@@ -1204,16 +1244,17 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       if (!run) return `${jump.label} has gone`;
       // A run is where its newest agent is; one that has started none is only reachable
       // as the workspace it lives in.
-      const agent = (yield* everyRegistered(env.stateDir)).findLast(
-        (entry) => entry.runId === run.id,
+      const agent = Option.getOrUndefined(
+        Arr.findLast(yield* everyRegistered(env.stateDir), (entry) => entry.runId === run.id),
       );
       if (agent) return yield* went(session.herdr.agentFocus(agent.agent));
       const workspace =
         run.workspace ??
         (run.task === null
           ? null
-          : ((yield* listTasks(env.stateDir)).find((task) => task.id === run.task)?.workspace ??
-            null));
+          : (Option.getOrUndefined(
+              Arr.findFirst(yield* listTasks(env.stateDir), (task) => task.id === run.task),
+            )?.workspace ?? null));
       if (!workspace) return `${jump.label} has no tab to jump to`;
       return yield* went(session.herdr.workspaceFocus(workspace));
     }
@@ -1256,8 +1297,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         run.workspace ??
         (run.task === null
           ? null
-          : ((yield* listTasks(env.stateDir)).find((task) => task.id === run.task)?.workspace ??
-            null));
+          : (Option.getOrUndefined(
+              Arr.findFirst(yield* listTasks(env.stateDir), (task) => task.id === run.task),
+            )?.workspace ?? null));
       // The same state directory as this board's, whatever the pane's shell would default to.
       const follow = yield* Effect.orDie(
         Effect.fromResult(
@@ -1308,10 +1350,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "ChooseOffer": {
       const listed = yield* offersOf(env, command.runId);
       if ("ok" in listed) return listed.error.message;
-      const open = listed.filter((one) => one.unavailable === null);
+      const open = Arr.filter(listed, (one) => one.unavailable === null);
       if (open.length === 0) return `${command.runId} offers nothing now`;
       const chosen = yield* prompts.menu(
-        open.map((one) => ({ id: one.id, title: one.title, subtitle: one.workflow })),
+        Arr.map(open, (one) => ({ id: one.id, title: one.title, subtitle: one.workflow })),
         { header: `What next for ${command.runId}?` },
       );
       if (chosen === null) return null;
@@ -1375,7 +1417,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "SetDefault": {
       const parsed = parseSetting(command.key, command.value);
       if ("refused" in parsed) return parsed.refused;
-      return yield* setSetting(env.userDir, command.key, parsed.value, yield* nowIso()).pipe(
+      return yield* setSetting(env.userDir, command.key, parsed.value, yield* nowIso).pipe(
         // What was written, so the note cannot disagree with the file.
         Effect.as(`${command.key} is now ${settingText(parsed.value) || "unset"}`),
         Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),
@@ -1419,11 +1461,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
      */
     case "FollowUp": {
       const text = yield* prompts.ask(`What still needs doing on ${command.runId}?`);
-      if (text === null || text.trim() === "") return null;
+      if (text === null || Str.trim(text) === "") return null;
       const done = yield* followUpRun(env, {
         door: "board",
         runId: command.runId,
-        text: text.trim(),
+        text: Str.trim(text),
         request: yield* newRequestId(),
       });
       return done.ok ? done.human : done.error.message;
@@ -1558,8 +1600,8 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       run: null,
       runs: yield* Effect.gen(function* () {
         const { runs, registered } = yield* scan(env, session.runsOf);
-        return rows.map((row) => {
-          const run = runs.find((one) => one.id === row.id);
+        return Arr.map(rows, (row) => {
+          const run = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.id === row.id));
           return run === undefined
             ? { id: row.id, dir: row.dir, held: false, harnesses: [] }
             : markedOf(run, registered);
@@ -1601,7 +1643,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     const steering = yield* steeringOf(view);
     const text = renderWorkspace(view, unreadable ?? note ?? undefined, asking, steering);
     if (text !== drawn) {
-      process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
+      process.stdout.write(`${CLEAR}${pipe_(text, Str.replace(/\n/g, "\r\n"))}\r\n`);
       drawn = text;
     }
     const key = Option.getOrNull(yield* Queue.take(keys).pipe(Effect.timeoutOption(TICK_MS)));
@@ -1773,7 +1815,10 @@ const liveOf = Effect.fn("Flows.liveOf")(function* (session: ControlSession) {
     { concurrency: "unbounded" },
   ).pipe(
     // A herdr that will not answer means "nothing verified live", not a crash.
-    Effect.catch(() => Effect.succeed<SessionNow>({ alive: [], workspaces: [] })),
+    Effect.orElseSucceed(() => ({
+      alive: [],
+      workspaces: [],
+    })),
   );
 });
 
@@ -1815,7 +1860,7 @@ type RunsOf = (
 const scan = Effect.fn("Flows.scan")(function* (env: PluginEnv, runsOf: RunsOf = listRuns) {
   return {
     runs: yield* runsOf(env),
-    tasks: yield* listTasks(env.stateDir).pipe(Effect.catch(() => Effect.succeed([]))),
+    tasks: yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => [])),
     registered: yield* everyRegistered(env.stateDir),
   } satisfies Scanned;
 });
@@ -1832,7 +1877,9 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     // The live label is how a run recorded against a since-recycled workspace id is
     // kept out; without it the board falls back to the id alone.
     workspaceLabel:
-      live.workspaces.find((w) => w.workspaceId === session.workspaceId)?.label ?? null,
+      Option.getOrUndefined(
+        Arr.findFirst(live.workspaces, (w) => w.workspaceId === session.workspaceId),
+      )?.label ?? null,
     alive: live.alive,
     worktrees: yield* reportedWorktrees(session.stateDir),
     pluginRoot: session.pluginRoot,

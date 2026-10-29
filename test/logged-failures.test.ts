@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -6,7 +9,8 @@ import { HostReply, openHost, until, workspace } from "./support/host";
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
 const complete = (reply: typeof HostReply.Type) => reply.status === "complete";
 
-const errorLines = (log: string) => log.split("\n").filter((line) => line.includes("level=ERROR"));
+const errorLines = (log: string) =>
+  Arr.filter(Str.split(log, "\n"), (line) => pipe_(line, Str.includes("level=ERROR")));
 
 test(
   "a Run that finishes cleanly leaves no Error-level line in the host log",
@@ -51,7 +55,11 @@ test(
           () =>
             fs
               .readFileString(`${state}/host.log`)
-              .pipe(Effect.map((log) => errorLines(log).filter((line) => line.includes(cards)))),
+              .pipe(
+                Effect.map((log) =>
+                  Arr.filter(errorLines(log), (line) => pipe_(line, Str.includes(cards))),
+                ),
+              ),
           (lines) => lines.length > 0,
         );
         expect(logged[0]).toContain("cause=");

@@ -8,9 +8,13 @@
 // The host here is the real registry, engine and agents over a stand-in herdr, and the
 // repository is a real git one, so the worktree is one git actually made.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Clock, ConfigProvider, Effect, FileSystem, Layer, Result, Schema } from "effect";
+import { Clock, ConfigProvider, Effect, FileSystem, Layer, Result, Schema, flow } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
@@ -40,7 +44,7 @@ import { writeMrStates } from "../src/merges";
 import { mrLabel, type MrState } from "../src/board-model";
 import type { Call } from "./support/recorder";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 const ROOT = new URL("../", import.meta.url).pathname;
 const shipped = (name: string) => `${ROOT}workflows/${name}.workflow.ts`;
@@ -80,7 +84,7 @@ const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
       Effect.flatMap((done) =>
         done.exitCode === 0
           ? Effect.void
-          : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+          : Effect.die(new Error(`git ${Arr.join(args, " ")}: ${done.stderr}`)),
       ),
     );
   yield* git("init", "--quiet", "-b", "master");
@@ -97,7 +101,9 @@ const env = () =>
     FAKE_HERDR_SESSIONS:
       sessions === null
         ? ""
-        : JSON.stringify(sessions.map((socket, at) => ({ name: `s${at}`, socket_path: socket }))),
+        : JSON.stringify(
+            Arr.map(sessions, (socket, at) => ({ name: `s${at}`, socket_path: socket })),
+          ),
   });
 /** The state directory the host, its Tasks and its agents all share, as an install's do. */
 const dir = () => env().stateDir;
@@ -129,17 +135,29 @@ const hosted = <A, E>(
   run.pipe(
     Effect.provide(
       registryLayer(dir(), {
-        placing: { herdr: new FakeHerdr(env()), env: env() },
+        placing: {
+          herdr: new FakeHerdr(env()),
+          env: env(),
+        },
         userDir: rig.userDir,
-      }),
-    ),
-    Effect.provide(agentsLayer({ ...hostOf(), ...agents })),
-    Effect.provide(
-      foundationLayer({
-        dir: dir(),
-        userDir: rig.userDir,
-        placing: { herdr: new FakeHerdr(env()), env: env() },
-      }),
+      }).pipe(
+        Layer.provideMerge(
+          agentsLayer({
+            ...hostOf(),
+            ...agents,
+          }),
+        ),
+        Layer.provideMerge(
+          foundationLayer({
+            dir: dir(),
+            userDir: rig.userDir,
+            placing: {
+              herdr: new FakeHerdr(env()),
+              env: env(),
+            },
+          }),
+        ),
+      ),
     ),
     Effect.scoped,
     Effect.orDie,
@@ -174,15 +192,16 @@ const approvedByOperator = FileSystem.FileSystem.pipe(
 
 /** Which workspace each tab was opened in, and on which directory, in order. */
 const tabs = (calls: ReadonlyArray<Call>) =>
-  calls
-    .filter((call) => call.cmd === "tab create")
-    .map((call) => {
+  Arr.map(
+    Arr.filter(calls, (call) => call.cmd === "tab create"),
+    (call) => {
       const argv = call.argv ?? [];
       return {
         workspace: argv[argv.indexOf("--workspace") + 1] ?? "",
         cwd: argv[argv.indexOf("--cwd") + 1] ?? "",
       };
-    });
+    },
+  );
 
 const loaded = (registry: typeof Registry.Service, names: ReadonlyArray<string>) =>
   Effect.forEach(names, (name) => registry.load(name));
@@ -226,15 +245,18 @@ const start = (
     Effect.result,
   );
 
-const asPlacing = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      from: Schema.String,
-      taskLabel: Schema.String,
-      workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
-      checkout: Schema.optionalKey(Schema.Null),
-    }),
+const asPlacing = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Struct({
+        from: Schema.String,
+        taskLabel: Schema.String,
+        workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        checkout: Schema.optionalKey(Schema.Null),
+      }),
+    ),
   ),
+  Result.getOrThrow,
 );
 
 /** A claim as a dying host left it: the row, what to place it from, and what it had asked for. */
@@ -354,12 +376,12 @@ test(
         expect(own?.cwd).toBe(worktree);
         expect(own?.label).toBe("Project | Add a picker");
         expect(own?.workspace).not.toBe("wT");
-        const created = (yield* rig.calls()).filter((call) => call.cmd === "workspace create");
-        expect(created.map((call) => call.argv)).toEqual([
+        const created = Arr.filter(yield* rig.calls(), (call) => call.cmd === "workspace create");
+        expect(Arr.map(created, (call) => call.argv)).toEqual([
           expect.arrayContaining(["--cwd", worktree, "--no-focus"]),
         ]);
         expect(tabs(yield* rig.calls())).toEqual([{ workspace: "wT", cwd: rig.projectDir }]);
-        const agents = (yield* rig.calls()).filter((call) => call.cmd === "agent start");
+        const agents = Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start");
         expect(agents.at(-1)?.argv).toEqual(
           expect.arrayContaining(["--pane", `${own?.workspace}-p1`]),
         );
@@ -408,7 +430,7 @@ test(
           status: { status: "complete" },
         });
         expect(views.child?.task).not.toBe(parentTask.id);
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -562,7 +584,7 @@ test(
 
         expect(seen.run?.cwd).toBe(`${held}-2`);
         const passing = `passing over ${held} is a checkout that does not say which repository it belongs to`;
-        expect(seen.log.split(passing)).toHaveLength(2);
+        expect(Str.split(seen.log, passing)).toHaveLength(2);
         expect(yield* fs.readFileString(`${held}/notes.txt`)).toBe("mine\n");
       }),
     ),
@@ -629,7 +651,7 @@ test(
             const done = yield* finished(started.success.runId);
             // Nobody named the branch; the one the host inferred is what the offer sees.
             const offers = yield* registry.offers(started.success.runId);
-            return { ...done!, offers: offers.map((one) => one.id) };
+            return { ...done!, offers: Arr.map(offers, (one) => one.id) };
           }),
         );
 
@@ -638,8 +660,8 @@ test(
         expect(view).toMatchObject({ cwd: worktree, workspace: null });
         const task = yield* readTask(env().stateDir, view?.task ?? "");
         expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree });
-        const created = (yield* rig.calls()).filter((call) => call.cmd === "workspace create");
-        expect(created.map((call) => call.argv)).toEqual([
+        const created = Arr.filter(yield* rig.calls(), (call) => call.cmd === "workspace create");
+        expect(Arr.map(created, (call) => call.argv)).toEqual([
           expect.arrayContaining(["--cwd", worktree, "--no-focus"]),
         ]);
         // A start never takes the human away from what they are looking at.
@@ -647,7 +669,9 @@ test(
         // The first agent takes over the shell the workspace came with, rather than leaving
         // it an empty first tab beside one of its own.
         expect(tabs(yield* rig.calls())).toEqual([]);
-        const agentStart = (yield* rig.calls()).find((call) => call.cmd === "agent start");
+        const agentStart = Option.getOrUndefined(
+          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "agent start"),
+        );
         expect(agentStart?.argv).toEqual(
           expect.arrayContaining(["--pane", `${task?.workspace}-p1`]),
         );
@@ -671,7 +695,7 @@ test(
             const both = yield* Effect.all([start(builds!, ask), start(builds!, ask)], {
               concurrency: "unbounded",
             });
-            const ids = both.map((one) => (one._tag === "Success" ? one.success.runId : ""));
+            const ids = Arr.map(both, (one) => (one._tag === "Success" ? one.success.runId : ""));
             yield* finished(ids[0] ?? "");
             return { ids, rows: yield* (yield* Store).runs };
           }),
@@ -680,7 +704,7 @@ test(
         expect(new Set(outcome.ids).size).toBe(1);
         expect(outcome.rows).toHaveLength(1);
         const cmds = yield* rig.cmds();
-        expect(cmds.filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+        expect(Arr.filter(cmds, (cmd) => cmd === "workspace create")).toHaveLength(1);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readDirectory(`${env().stateDir}/tasks`)).toHaveLength(1);
       }),
@@ -701,7 +725,7 @@ test(
         expect(view?.worktree?.path).toBe(view?.cwd);
         expect(view?.task).not.toBeNull();
         expect(view?.status.status).toBe("complete");
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -719,7 +743,7 @@ test(
         const view = yield* hosted(finished("run-cut"));
         expect(view?.status.status).toBe("complete");
         expect((yield* readTask(env().stateDir, view?.task ?? ""))?.workspace).toBe("wX");
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toEqual([]);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toEqual([]);
       }),
     ),
   120_000,
@@ -745,7 +769,7 @@ test(
         );
         expect(refusedWith(again.started)).toContain("may have been opened for run-cut");
         expect(again.row?.checkout).toBeNull();
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toEqual([]);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toEqual([]);
       }),
     ),
   120_000,
@@ -830,7 +854,7 @@ test(
                     .pipe(Effect.orElseSucceed(() => null)),
                 ]),
               // Written in place, so a read can land between the open and the write.
-              ([view, read]) => view?.branch != null && (read ?? "").trim() !== "",
+              ([view, read]) => view?.branch != null && Str.trim(read ?? "") !== "",
             );
             return {
               runId,
@@ -1193,7 +1217,7 @@ test(
         yield* git(rig.root, "clone", "--quiet", origin, elsewhere);
         yield* git(elsewhere, "commit", "--quiet", "--allow-empty", "-m", "later");
         yield* git(elsewhere, "push", "--quiet", "origin", "master");
-        const latest = (yield* git(elsewhere, "rev-parse", "HEAD")).stdout.trim();
+        const latest = Str.trim((yield* git(elsewhere, "rev-parse", "HEAD")).stdout);
         yield* fs.writeFileString(`${rig.projectDir}/other-work.txt`, "someone else's");
         const view = yield* hosted(
           Effect.gen(function* () {
@@ -1213,8 +1237,10 @@ test(
         expect(view?.worktree?.path).toBe(roaming);
         const head = yield* exec(["git", "symbolic-ref", "-q", "HEAD"], { cwd: roaming });
         expect(head.exitCode).not.toBe(0);
-        expect((yield* git(roaming, "rev-parse", "HEAD")).stdout.trim()).toBe(latest);
-        expect((yield* git(rig.projectDir, "rev-parse", "master")).stdout.trim()).not.toBe(latest);
+        expect(Str.trim((yield* git(roaming, "rev-parse", "HEAD")).stdout)).toBe(latest);
+        expect(Str.trim((yield* git(rig.projectDir, "rev-parse", "master")).stdout)).not.toBe(
+          latest,
+        );
         expect(yield* fs.exists(`${roaming}/other-work.txt`)).toBe(false);
         expect(yield* fs.readFileString(`${rig.projectDir}/other-work.txt`)).toBe("someone else's");
       }),
@@ -1278,7 +1304,7 @@ test(
 );
 
 const headOf = (at: string) =>
-  exec(["git", "rev-parse", "HEAD"], { cwd: at }).pipe(Effect.map((done) => done.stdout.trim()));
+  exec(["git", "rev-parse", "HEAD"], { cwd: at }).pipe(Effect.map((done) => Str.trim(done.stdout)));
 
 const logOf = (runId: string) =>
   FileSystem.FileSystem.pipe(
@@ -1361,16 +1387,18 @@ test(
             yield* finished(next.success.runId);
             // herdr lists the repository's checkouts, as it would git's.
             const state = `${rig.logPath}.state.json`;
-            const was = Schema.decodeUnknownSync(
+            const was = yield* Schema.decodeEffect(
               Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
-            )(yield* fs.readFileString(state).pipe(Effect.orElseSucceed(() => "{}")));
-            const worktrees = [roaming, `${roaming}-2`].map((path) => ({
+            )(yield* fs.readFileString(state).pipe(Effect.orElseSucceed(() => "{}"))).pipe(
+              Effect.orDie,
+            );
+            const worktrees = Arr.map([roaming, `${roaming}-2`], (path) => ({
               path,
               branch: "",
               open_workspace_id: null,
             }));
             yield* fs.writeFileString(state, asJson({ ...was, worktrees }));
-            return (yield* registry.views(null)).map((view) => factsOfView(dir(), view));
+            return Arr.map(yield* registry.views(null), (view) => factsOfView(dir(), view));
           }),
         );
         const herdr = new FakeHerdr(env());
@@ -1389,7 +1417,7 @@ test(
           "host",
         );
 
-        expect(report.remove.map((one) => one.target)).toEqual([`${roaming}-2`]);
+        expect(Arr.map(report.remove, (one) => one.target)).toEqual([`${roaming}-2`]);
         expect(report.keep).toContainEqual({
           kind: "worktree",
           target: roaming,
@@ -1491,8 +1519,8 @@ test(
               ],
               { concurrency: "unbounded" },
             );
-            const worked = both.filter(Result.isSuccess).map((one) => one.success.runId);
-            const refused = both.filter(Result.isFailure).map(refusedWith);
+            const worked = Arr.map(Arr.filter(both, Result.isSuccess), (one) => one.success.runId);
+            const refused = Arr.map(Arr.filter(both, Result.isFailure), refusedWith);
             const places: string[] = [];
             for (const runId of worked) {
               const view = yield* until(
@@ -1585,7 +1613,11 @@ test(
           }),
         );
 
-        expect(seen.left.map((one) => one.at)).toEqual([roaming, `${roaming}-2`, `${roaming}-3`]);
+        expect(Arr.map(seen.left, (one) => one.at)).toEqual([
+          roaming,
+          `${roaming}-2`,
+          `${roaming}-3`,
+        ]);
         for (const [at, one] of seen.left.entries()) {
           expect(seen.refused).toContain(
             `${one.at} is a checkout of ${rig.projectDir}, recorded by Run ${one.runId}, kept: uncommitted changes`,
@@ -1629,7 +1661,7 @@ test(
               yield* start(roams!, { request: "r3", text: { work: "next" } }),
             );
             yield* fs.chmod(`${rig.root}/.herdr/worktrees/project`, 0o755);
-            const recorded = (yield* registry.views(null)).flatMap((view) =>
+            const recorded = Arr.flatMap(yield* registry.views(null), (view) =>
               view.worktree === null ? [] : [view.worktree.path],
             );
             const next = yield* start(roams!, { request: "r4", text: { work: "next" } });
@@ -1698,7 +1730,7 @@ test(
               input: payload.input,
               provenance: { work: "given" },
               options: {},
-              placing: Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+              placing: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
                 from: rig.projectDir,
                 taskLabel: null,
                 checkout: {
@@ -1708,7 +1740,7 @@ test(
                   },
                   opened: null,
                 },
-              }),
+              }).pipe(Effect.orDie),
               generation: roams!.name,
               execution: yield* roams!.registration.workflow.executionId(payload),
               task: null,
@@ -1973,12 +2005,15 @@ test(
         expect(view?.status.status).toBe("complete");
         const cmds = yield* rig.cmds();
         // Only the agent's pane went; the Task's workspace is where it was.
-        expect(cmds.filter((cmd) => cmd === "pane close")).toHaveLength(1);
+        expect(Arr.filter(cmds, (cmd) => cmd === "pane close")).toHaveLength(1);
         expect(
-          cmds.filter((cmd) => cmd.startsWith("workspace") && cmd !== "workspace list"),
+          Arr.filter(
+            cmds,
+            (cmd) => pipe_(cmd, Str.startsWith("workspace")) && cmd !== "workspace list",
+          ),
         ).toEqual([]);
-        expect(cmds.filter((cmd) => cmd === "agent start")).toHaveLength(2);
-        expect(tabs(yield* rig.calls()).map((tab) => tab.workspace)).toEqual(["wT", "wT"]);
+        expect(Arr.filter(cmds, (cmd) => cmd === "agent start")).toHaveLength(2);
+        expect(Arr.map(tabs(yield* rig.calls()), (tab) => tab.workspace)).toEqual(["wT", "wT"]);
       }),
     ),
   120_000,
@@ -2022,10 +2057,10 @@ test(
         // last pane: the stop opened a shell there before it closed the agent's.
         const opened = tabs(calls);
         expect(opened).toEqual([{ workspace: task?.workspace ?? "", cwd: expect.any(String) }]);
-        const cmds = calls.map((call) => call.cmd);
+        const cmds = Arr.map(calls, (call) => call.cmd);
         expect(cmds.indexOf("tab create")).toBeLessThan(cmds.indexOf("pane close"));
         // And the resumed agent took that shell over: that one tab is the only one opened.
-        expect(cmds.filter((cmd) => cmd === "agent start")).toHaveLength(2);
+        expect(Arr.filter(cmds, (cmd) => cmd === "agent start")).toHaveLength(2);
         expect(cmds.lastIndexOf("agent start")).toBeGreaterThan(cmds.indexOf("tab create"));
         expect(task?.root_pane ?? null).toBeNull();
       }),
@@ -2066,7 +2101,7 @@ test(
             ),
           },
         );
-        expect(stopped.left.join("\n")).toContain("would not close (");
+        expect(Arr.join(stopped.left, "\n")).toContain("would not close (");
       }),
     ),
   120_000,
@@ -2160,9 +2195,9 @@ test(
         expect(fresh).toMatchObject({ label: "Project | Menu", cwd: views.fresh?.cwd });
         expect(yield* rig.cmds()).not.toContain("workspace create");
         // The fresh Task's agent takes over the shell herdr opened its workspace with.
-        expect(tabs(yield* rig.calls()).map((tab) => tab.workspace)).toEqual([own]);
+        expect(Arr.map(tabs(yield* rig.calls()), (tab) => tab.workspace)).toEqual([own]);
         expect(fresh?.root_pane ?? null).toBeNull();
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "worktree create")).toHaveLength(2);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "worktree create")).toHaveLength(2);
       }),
     ),
   120_000,
@@ -2245,7 +2280,7 @@ const chainedFrom = (options: {
       const runId = started.success.runId;
       yield* until(
         () => store.asked(runId),
-        (rows) => rows.some((row) => row.decision === options.decision),
+        (rows) => Arr.some(rows, (row) => row.decision === options.decision),
       );
       yield* registry
         .answer({ runId, decision: options.decision, value: "Implement now", request: "a1" })
@@ -2328,7 +2363,7 @@ test(
             const runId = started.success.runId;
             yield* until(
               () => store.asked(runId),
-              (rows) => rows.some((row) => row.decision === "post-1"),
+              (rows) => Arr.some(rows, (row) => row.decision === "post-1"),
             );
             yield* registry
               .answer({
@@ -2495,7 +2530,7 @@ test(
         expect(review?.task).toBe(build?.task);
         expect(hello?.task).not.toBe(build?.task);
         expect(there?.task).not.toBe(build?.task);
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(3);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toHaveLength(3);
         expect(yield* rig.cmds()).not.toContain("workspace.focus");
       }),
     ),
@@ -2681,13 +2716,13 @@ test(
           parent: null,
           status: { status: "complete" },
         });
-        const created = (yield* rig.calls()).filter((call) => call.cmd === "workspace create");
-        expect(created.map((call) => call.argv)).toEqual([
+        const created = Arr.filter(yield* rig.calls(), (call) => call.cmd === "workspace create");
+        expect(Arr.map(created, (call) => call.argv)).toEqual([
           expect.arrayContaining(["--cwd", rig.projectDir, "--label", "Project | Picker"]),
         ]);
         const reopened = (yield* readTask(env().stateDir, "task-1"))?.workspace;
         expect(reopened).not.toBe("wT");
-        const agents = (yield* rig.calls()).filter((call) => call.cmd === "agent start");
+        const agents = Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start");
         expect(agents.at(-1)?.argv).toEqual(expect.arrayContaining(["--pane", `${reopened}-p1`]));
       }),
     ),
@@ -2822,7 +2857,7 @@ test(
               forgotten,
               view: yield* registry.view(gone),
               other: yield* registry.view(kept),
-              listed: (yield* registry.views(null)).map((one) => one.runId),
+              listed: Arr.map(yield* registry.views(null), (one) => one.runId),
               claim: yield* store.run("run-claimed"),
               before,
               messages: messages[0]?.n,
@@ -2865,12 +2900,22 @@ test(
           const [quiet] = yield* loaded(registry, [`${fixtures}/quiet.workflow.ts`]);
           const started = yield* start(quiet!, { request: "r1", task: task.id });
           const pending = yield* (yield* Store).pending;
-          return { reason: refusedWith(started), pending: pending.map((row) => row.request) };
+          return { reason: refusedWith(started), pending: Arr.map(pending, (row) => row.request) };
         }).pipe(
-          Effect.provide(registryLayer(dir(), { userDir: rig.userDir })),
-          Effect.provide(stalled),
-          Effect.provide(agentsLayer(hostOf())),
-          Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          Effect.provide(
+            registryLayer(dir(), {
+              userDir: rig.userDir,
+            }).pipe(
+              Layer.provideMerge(stalled),
+              Layer.provideMerge(agentsLayer(hostOf())),
+              Layer.provideMerge(
+                foundationLayer({
+                  dir: dir(),
+                  userDir: rig.userDir,
+                }),
+              ),
+            ),
+          ),
           Effect.scoped,
           Effect.orDie,
         );
@@ -2912,12 +2957,22 @@ test(
         const served = yield* Effect.gen(function* () {
           const held = yield* (yield* Registry).registrations;
           const pending = yield* (yield* Store).pending;
-          return { live: held.live, pending: pending.map((row) => row.run) };
+          return { live: held.live, pending: Arr.map(pending, (row) => row.run) };
         }).pipe(
-          Effect.provide(registryLayer(dir(), { userDir: rig.userDir })),
-          Effect.provide(stalled),
-          Effect.provide(agentsLayer(hostOf())),
-          Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          Effect.provide(
+            registryLayer(dir(), {
+              userDir: rig.userDir,
+            }).pipe(
+              Layer.provideMerge(stalled),
+              Layer.provideMerge(agentsLayer(hostOf())),
+              Layer.provideMerge(
+                foundationLayer({
+                  dir: dir(),
+                  userDir: rig.userDir,
+                }),
+              ),
+            ),
+          ),
           Effect.scoped,
           Effect.orDie,
         );
@@ -2933,7 +2988,7 @@ test(
 const REVIEWED = "branch:master...feature";
 
 const git = (...args: string[]) =>
-  exec(["git", ...args], { cwd: rig.projectDir }).pipe(Effect.map((ran) => ran.stdout.trim()));
+  exec(["git", ...args], { cwd: rig.projectDir }).pipe(Effect.map((ran) => Str.trim(ran.stdout)));
 
 const cutsOf = () =>
   Effect.all([git("worktree", "list", "--porcelain"), git("branch", "--format=%(refname:short)")]);
@@ -2977,11 +3032,10 @@ test(
         expect(parent).toStartWith(`${rig.root}/.herdr/worktrees/project/${LOGIN}/`);
         expect(view?.status).toEqual({ status: "complete", value: `${parent} ${parent}` });
         const [list, branches] = yield* cutsOf();
-        expect(list.split("\n").filter((line) => line.startsWith("worktree "))).toEqual([
-          `worktree ${rig.projectDir}`,
-          `worktree ${parent}`,
-        ]);
-        expect(branches.split("\n")).toEqual(["feature", "master", view?.branch ?? ""]);
+        expect(
+          Arr.filter(Str.split(list, "\n"), (line) => pipe_(line, Str.startsWith("worktree "))),
+        ).toEqual([`worktree ${rig.projectDir}`, `worktree ${parent}`]);
+        expect(Str.split(branches, "\n")).toEqual(["feature", "master", view?.branch ?? ""]);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${dir()}/runs/${view?.runId}.stage-1/log.txt`)).toContain(
           `working in ${parent}, Run ${view?.runId}'s checkout`,
@@ -3103,7 +3157,13 @@ test.each([
         const unavailable = (registry: typeof Registry.Service, runId: string) =>
           registry
             .offers(runId)
-            .pipe(Effect.map((offers) => offers.find((one) => one.id === offer)?.unavailable));
+            .pipe(
+              Effect.map(
+                (offers) =>
+                  Option.getOrUndefined(Arr.findFirst(offers, (one) => one.id === offer))
+                    ?.unavailable,
+              ),
+            );
 
         const [held, freed] = yield* hosted(
           Effect.gen(function* () {
@@ -3129,9 +3189,13 @@ test.each([
           ),
         );
 
-        const occupants = [first, `${first}-2`, `${first}-3`]
-          .map((slot) => `${slot} is a checkout that does not say which repository it belongs to`)
-          .join("; ");
+        const occupants = Arr.join(
+          Arr.map(
+            [first, `${first}-2`, `${first}-3`],
+            (slot) => `${slot} is a checkout that does not say which repository it belongs to`,
+          ),
+          "; ",
+        );
         expect(held).toBe(`no worktree for feature: ${occupants}; free one of them and retry`);
         expect(freed).toBeNull();
       }).pipe(Effect.scoped),

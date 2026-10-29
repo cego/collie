@@ -1,5 +1,9 @@
 // Claude Code's file tools for a path on a Machine, answered by its host (ADR-0011).
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { Effect, Result, Schema } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { HostRefused } from "../../../src/board-model";
@@ -126,23 +130,26 @@ export const FILE_TOOLS = [
   ),
 ];
 
-export const isFileTool = (name: string) => FILE_TOOLS.some((one) => one.name === name);
+export const isFileTool = (name: string) => Arr.some(FILE_TOOLS, (one) => one.name === name);
 
 const text = (said: string): ReadonlyArray<ToolContent> => [{ type: "text", text: said }];
 
 /** Where a `<machine>:<path>` points, or why it does not. */
 const placed = (flock: FlockChat, named: string) => {
-  const colon = named.indexOf(":");
-  const machine = flock.machines().find((one) => one.name === named.slice(0, colon));
+  const colon = Option.getOrElse(pipe_(named, Str.indexOf(":")), () => -1);
+  const machine = Option.getOrUndefined(
+    Arr.findFirst(flock.machines(), (one) => one.name === pipe_(named, Str.slice(0, colon))),
+  );
   if (colon <= 0)
     return Result.fail(
-      `${named} names no Machine: write it as <machine>:<path>, one of ${flock
-        .machines()
-        .map((one) => one.name)
-        .join(", ")}. Files on this computer are read with Read.`,
+      `${named} names no Machine: write it as <machine>:<path>, one of ${Arr.join(
+        Arr.map(flock.machines(), (one) => one.name),
+        ", ",
+      )}. Files on this computer are read with Read.`,
     );
-  if (machine === undefined) return Result.fail(`No Machine "${named.slice(0, colon)}".`);
-  return Result.succeed({ machine, path: named.slice(colon + 1) });
+  if (machine === undefined)
+    return Result.fail(`No Machine "${pipe_(named, Str.slice(0, colon))}".`);
+  return Result.succeed({ machine, path: pipe_(named, Str.slice(colon + 1)) });
 };
 
 /** The Machine reached, refused where its host does not take files. */
@@ -165,9 +172,14 @@ const READ_BYTES = 8 * 1024 * 1024;
 const LINE_CHARS = 2000;
 
 const numbered = (lines: ReadonlyArray<string>, from: number) =>
-  lines
-    .map((line, at) => `${String(from + at).padStart(6)}\t${line.slice(0, LINE_CHARS)}`)
-    .join("\n");
+  Arr.join(
+    Arr.map(
+      lines,
+      (line, at) =>
+        `${pipe_(String(from + at), Str.padStart(6))}\t${pipe_(line, Str.slice(0, LINE_CHARS))}`,
+    ),
+    "\n",
+  );
 
 const read = Effect.fn("FileTools.read")(function* (
   machine: Reached,
@@ -199,7 +211,7 @@ const read = Effect.fn("FileTools.read")(function* (
     return (seen += newlines(part)) >= from + limit || taken >= READ_BYTES;
   });
   if (file.size === 0) return text(`${named} is empty.`);
-  const lines = new TextDecoder().decode(bytes).replace(/\n$/, "").split("\n");
+  const lines = Str.split(pipe_(new TextDecoder().decode(bytes), Str.replace(/\n$/, "")), "\n");
   const shown = lines.slice(from - 1, from - 1 + limit);
   return text(
     shown.length === 0
@@ -210,7 +222,7 @@ const read = Effect.fn("FileTools.read")(function* (
 
 /** A line a host answered that starts with one of its paths, named by its Machine. */
 const onMachine = (machine: ChatMachine, line: string) =>
-  line.startsWith("/") ? `${machine.name}:${line}` : line;
+  pipe_(line, Str.startsWith("/")) ? `${machine.name}:${line}` : line;
 
 const answered = (
   machine: ChatMachine,
@@ -221,10 +233,13 @@ const answered = (
   text(
     lines.length === 0
       ? none
-      : [
-          ...lines.map((line) => onMachine(machine, line)),
-          ...(omitted > 0 ? [`(and ${omitted} more)`] : []),
-        ].join("\n"),
+      : Arr.join(
+          [
+            ...Arr.map(lines, (line) => onMachine(machine, line)),
+            ...(omitted > 0 ? [`(and ${omitted} more)`] : []),
+          ],
+          "\n",
+        ),
   );
 
 const answer = Effect.fn("FileTools.answer")(function* (
@@ -277,7 +292,7 @@ const answer = Effect.fn("FileTools.answer")(function* (
         headLimit: one.head_limit,
         multiline: one.multiline,
       });
-      const lines = found.text.split("\n").filter((line) => line !== "");
+      const lines = Arr.filter(Str.split(found.text, "\n"), (line) => line !== "");
       return answered(machine, lines, found.omitted, "No matches found.");
     }
     case "collie_write": {

@@ -43,12 +43,12 @@ export interface DriverContext {
 
 /** What a turn cost; counts a harness does not report are 0. */
 export const TurnCost = Schema.Struct({
-  duration_ms: Schema.Number,
+  duration_ms: Schema.Finite,
   usage: Schema.Struct({
-    input_tokens: Schema.Number,
-    output_tokens: Schema.Number,
-    cache_read_input_tokens: Schema.Number,
-    cache_creation_input_tokens: Schema.Number,
+    input_tokens: Schema.Finite,
+    output_tokens: Schema.Finite,
+    cache_read_input_tokens: Schema.Finite,
+    cache_creation_input_tokens: Schema.Finite,
   }),
 });
 export type TurnCost = typeof TurnCost.Type;

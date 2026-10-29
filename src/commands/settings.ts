@@ -1,6 +1,8 @@
 // Collie's settings on this Machine: what each is, and setting one through the host, so an
 // agent can do what the TUI's and Desktop's Settings do.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 import { readConfig, configValue } from "../config";
@@ -15,7 +17,7 @@ const list = Command.make("list", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
       const raw = yield* readConfig(env.userDir);
-      const settings = SETTINGS.map(({ key, kind, choices, fallback }) => ({
+      const settings = Arr.map(SETTINGS, ({ key, kind, choices, fallback }) => ({
         key,
         kind,
         choices,
@@ -25,11 +27,15 @@ const list = Command.make("list", {}, () =>
       return {
         ok: true,
         data: { settings },
-        human: settings
-          .map(({ key, value, fallback }) =>
-            [key, value === null ? `(default ${fallback || "unset"})` : String(value)].join("\t"),
-          )
-          .join("\n"),
+        human: Arr.join(
+          Arr.map(settings, ({ key, value, fallback }) =>
+            Arr.join(
+              [key, value === null ? `(default ${fallback || "unset"})` : String(value)],
+              "\t",
+            ),
+          ),
+          "\n",
+        ),
       };
     }),
   ),
@@ -55,14 +61,14 @@ const set = Command.make(
               door: yield* cliDoor(env),
               key,
               value: parsed.value,
-              at: yield* nowIso(),
+              at: yield* nowIso,
               request: id,
             });
             if (!done.ok) return done;
             return {
               ok: true,
               data: done.value,
-              human: `${key} is now ${value.trim() || "unset"}; paired hosts share it with their peers`,
+              human: `${key} is now ${Str.trim(value) || "unset"}; paired hosts share it with their peers`,
             };
           }),
         );

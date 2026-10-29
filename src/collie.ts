@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { Console, Effect, Layer, Schema } from "effect";
 // The manifest is the version: herdr reads it, `install.sh` builds the release URL
 // from it, and a `--version` that disagreed with either would be worse than none.
@@ -77,7 +78,12 @@ const helpAsked = Bun.argv.includes("--help") || Bun.argv.includes("-h");
 const consoleToStderr = Console.Console.of({
   ...globalThis.console,
   log: (...args: ReadonlyArray<unknown>) => {
-    process.stderr.write(`${args.map((arg) => String(arg)).join(" ")}\n`);
+    process.stderr.write(
+      `${Arr.join(
+        Arr.map(args, (arg) => String(arg)),
+        " ",
+      )}\n`,
+    );
   },
 });
 
@@ -108,14 +114,21 @@ export const program = app.pipe(
     }),
   ),
   Effect.provide(
-    CliConfig.layer({ builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.LogLevel] }),
+    CliConfig.layer({
+      builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.LogLevel],
+    }).pipe(
+      Layer.provideMerge(jsonAsked ? Layer.succeed(Console.Console, consoleToStderr) : Layer.empty),
+      Layer.provideMerge(forgeHttpLayer),
+    ),
   ),
-  Effect.provide(jsonAsked ? Layer.succeed(Console.Console, consoleToStderr) : Layer.empty),
-  Effect.provide(forgeHttpLayer),
 );
 
 /** What was wrong with the command line, or that it stopped short of a command. */
 function parseMessage(parse: CliError.ShowHelp): string {
-  if (parse.errors.length > 0) return parse.errors.map((error) => error.message).join("; ");
-  return `${["collie", ...parse.commandPath.slice(1)].join(" ")} needs a subcommand.`;
+  if (parse.errors.length > 0)
+    return Arr.join(
+      Arr.map(parse.errors, (error) => error.message),
+      "; ",
+    );
+  return `${Arr.join(["collie", ...parse.commandPath.slice(1)], " ")} needs a subcommand.`;
 }

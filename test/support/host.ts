@@ -6,7 +6,11 @@
 // host's logic. Exercised against the compiled binary when `COLLIE_TEST_BINARY` names one,
 // and against the sources otherwise.
 
-import { Config, Effect, FileSystem, Option, Schedule, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import { Cause, Config, Effect, FileSystem, Option, Schedule, Schema, flow, Result } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { CrashPoint } from "../../src/engine";
 import { connect, ownerOf, type HostClient } from "../../src/host";
@@ -82,7 +86,13 @@ export interface Host {
 
 /** Where a workspace keeps what its host was told, beside the directory the host owns. */
 const layoutOf = (state: string) => {
-  const dir = state.slice(0, state.lastIndexOf("/"));
+  const dir = pipe_(
+    state,
+    Str.slice(
+      0,
+      Option.getOrElse(pipe_(state, Str.lastIndexOf("/")), () => -1),
+    ),
+  );
   const world: World = {
     install: `${dir}/install`,
     user: `${dir}/install/user/workflows`,
@@ -113,9 +123,14 @@ const readNames = (fs: FileSystem.FileSystem, file: string) =>
   );
 
 const writeNames = (fs: FileSystem.FileSystem, file: string, names: Names) =>
-  fs.writeFileString(file, Schema.encodeSync(NamesJson)(names)).pipe(Effect.orDie);
+  fs
+    .writeFileString(file, flow(Schema.encodeResult(NamesJson), Result.getOrThrow)(names))
+    .pipe(Effect.orDie);
 
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
 
 /** What a module check reported, as `collie workflow check` puts it in its envelope. */
 const Checked = Schema.Struct({
@@ -142,7 +157,11 @@ const sentenceOf = (cause: unknown): string => {
 };
 
 const stem = (entry: string) =>
-  entry.slice(entry.lastIndexOf("/") + 1).replace(/\.workflow\.ts$/, "");
+  pipe_(
+    entry,
+    Str.slice(Option.getOrElse(pipe_(entry, Str.lastIndexOf("/")), () => -1) + 1),
+    Str.replace(/\.workflow\.ts$/, ""),
+  );
 
 /**
  * One host process against one state directory, and a client of it. The process is the
@@ -200,10 +219,11 @@ export const openHost = Effect.fn("HostTest.open")(function* (
       const named = known.runs[runId];
       if (named !== undefined) return named;
       if (!known.told.includes(runId)) return runId;
-      const claimed = new Set(Object.values(known.runs));
-      const unclaimed = (yield* client.runs({ task: null }).pipe(Effect.orDie))
-        .filter((view) => !claimed.has(view.runId))
-        .sort((one, other) => one.created.localeCompare(other.created));
+      const claimed = new Set(Rec.values(known.runs));
+      const unclaimed = Arr.filter(
+        yield* client.runs({ task: null }).pipe(Effect.orDie),
+        (view) => !claimed.has(view.runId),
+      ).sort((one, other) => pipe_(one.created, Str.localeCompare(other.created)));
       const found = unclaimed[known.told.indexOf(runId)];
       if (found === undefined) return runId;
       yield* writeNames(fs, names, { ...known, runs: { ...known.runs, [runId]: found.runId } });
@@ -273,7 +293,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
           const known = yield* readNames(fs, names);
           yield* writeNames(fs, names, {
             runs: { ...known.runs, [request.runId]: started.success.runId },
-            told: known.told.filter((one) => one !== request.runId),
+            told: Arr.filter(known.told, (one) => one !== request.runId),
           });
           return {
             ok: true,
@@ -333,7 +353,10 @@ export const openHost = Effect.fn("HostTest.open")(function* (
           return {
             ok: true,
             op: "waiting",
-            diagnostics: asked.filter((one) => one.answer === null).map((one) => one.name),
+            diagnostics: Arr.map(
+              Arr.filter(asked, (one) => one.answer === null),
+              (one) => one.name,
+            ),
           };
         }
 
@@ -368,7 +391,9 @@ export const openHost = Effect.fn("HostTest.open")(function* (
           const report = yield* Schema.decodeUnknownEffect(Checked)(
             envelope.ok ? envelope.data : envelope.error?.details,
           ).pipe(Effect.orDie);
-          const one = report.workflows.find((module) => module.path === request.entry);
+          const one = Option.getOrUndefined(
+            Arr.findFirst(report.workflows, (module) => module.path === request.entry),
+          );
           if (one === undefined) {
             return { ok: false, op: "check", detail: envelope.error?.message ?? "not checked" };
           }
@@ -384,16 +409,22 @@ export const openHost = Effect.fn("HostTest.open")(function* (
           const report = yield* Schema.decodeUnknownEffect(Checked)(
             envelope.ok ? envelope.data : envelope.error?.details,
           ).pipe(Effect.orDie);
-          const unavailable = report.workflows.find((module) => module.toolchain !== null);
+          const unavailable = Option.getOrUndefined(
+            Arr.findFirst(report.workflows, (module) => module.toolchain !== null),
+          );
           if (unavailable !== undefined) {
             return { ok: false, op: "checks", detail: unavailable.toolchain ?? "" };
           }
           const problems = (entry: string) =>
-            report.workflows.find((module) => module.path === entry)?.problems ?? ["not checked"];
+            Option.getOrUndefined(
+              Arr.findFirst(report.workflows, (module) => module.path === entry),
+            )?.problems ?? ["not checked"];
           return {
             ok: true,
             op: "checks",
-            value: Object.fromEntries(request.entries.map((entry) => [entry, problems(entry)])),
+            value: Rec.fromEntries(
+              Arr.map(request.entries, (entry) => [entry, problems(entry)] as const),
+            ),
           };
         }
 
@@ -436,9 +467,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
     // is there rather than sleeping for a duration it invented.
     until: (request: HostRequest, wanted: (reply: HostReply) => boolean) =>
       ask(request).pipe(
-        Effect.flatMap((reply) =>
-          wanted(reply) ? Effect.succeed(reply) : Effect.fail(new Error("not yet")),
-        ),
+        Effect.filterOrFail(wanted, () => new Cause.NoSuchElementError("not yet")),
         Effect.retry({ times: 1_000, schedule: Schedule.spaced("20 millis") }),
         Effect.orDie,
       ),
@@ -483,7 +512,7 @@ export const stopHost = Effect.fn("HostTest.stopHost")(function* (dir: string) {
         ),
         Effect.flatMap((owner) =>
           Effect.forEach([...stopped.values()], holderLives).pipe(
-            Effect.map((lives) => owner === null && lives.every((live) => !live)),
+            Effect.map((lives) => owner === null && Arr.every(lives, (live) => !live)),
           ),
         ),
       ),
@@ -589,7 +618,7 @@ export const events = Effect.fn("HostTest.events")(function* (state: string, run
   const text = yield* fs
     .readFileString(`${yield* runDirOf(state, runId)}/log.txt`)
     .pipe(Effect.orElseSucceed(() => ""));
-  return text.split("\n").filter((line) => line.length > 0);
+  return Arr.filter(Str.split(text, "\n"), (line) => line.length > 0);
 });
 
 class NotYet<A> {
@@ -599,7 +628,7 @@ class NotYet<A> {
 const hostLogEnd = Effect.gen(function* () {
   const log = `${yield* Config.String("HERDR_PLUGIN_STATE_DIR").pipe(Config.withDefault(""))}/host.log`;
   const text = yield* Effect.tryPromise(() => Bun.file(log).text());
-  return [`end of ${log}:`, ...text.trimEnd().split("\n").slice(-40)];
+  return [`end of ${log}:`, ...Str.split(Str.trimEnd(text), "\n").slice(-40)];
 }).pipe(Effect.orElseSucceed((): Array<string> => []));
 
 /**
@@ -611,19 +640,20 @@ export const until = <A, E, R>(
   wanted: (value: A) => boolean,
 ): Effect.Effect<A, E, R> =>
   Effect.suspend(read).pipe(
-    Effect.flatMap((value) =>
-      wanted(value) ? Effect.succeed(value) : Effect.fail(new NotYet(value)),
-    ),
+    Effect.filterOrFail(wanted, (value) => new NotYet(value)),
     Effect.retry({ times: 1_000, schedule: Schedule.spaced("20 millis") }),
     Effect.catch((last) =>
       Effect.flatMap(hostLogEnd, (log) =>
         Effect.die(
           new Error(
-            [
-              `ran out waiting for ${String(wanted)} of ${String(read)}`,
-              `last read: ${Bun.inspect(last instanceof NotYet ? last.value : last)}`,
-              ...log,
-            ].join("\n"),
+            Arr.join(
+              [
+                `ran out waiting for ${String(wanted)} of ${String(read)}`,
+                `last read: ${Bun.inspect(last instanceof NotYet ? last.value : last)}`,
+                ...log,
+              ],
+              "\n",
+            ),
           ),
         ),
       ),

@@ -1,6 +1,8 @@
 // The release build's check on Desktop's installer: Electrobun's self-extractor cannot read
 // a GNU long-name tar entry, so a payload with any path over 100 characters never ships.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { exec } from "./support/command";
@@ -10,7 +12,7 @@ import { runEffect } from "./support/effect";
 const flavour = (format: string) =>
   exec(["tar", "--version"]).pipe(
     Effect.map((done) =>
-      done.stdout.includes("bsdtar")
+      pipe_(done.stdout, Str.includes("bsdtar"))
         ? [`--format=${format === "gnu" ? "gnutar" : format}`, "--uid", "0", "--gid", "0"]
         : [`--format=${format}`, "--owner=0", "--group=0"],
     ),
@@ -22,7 +24,9 @@ const installerWith = (dir: string, paths: ReadonlyArray<string>, format = "gnu"
     const fs = yield* FileSystem.FileSystem;
     const tree = `${dir}/tree`;
     for (const path of paths) {
-      yield* fs.makeDirectory(`${tree}/${path}`.replace(/\/[^/]*$/, ""), { recursive: true });
+      yield* fs.makeDirectory(pipe_(`${tree}/${path}`, Str.replace(/\/[^/]*$/, "")), {
+        recursive: true,
+      });
       yield* fs.writeFileString(`${tree}/${path}`, "x");
     }
     const flags = yield* flavour(format);
@@ -65,7 +69,7 @@ test("an installer with a path over 100 characters is refused, naming the path",
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped();
-      const long = `Resources/app/views/_nuxt/${"a".repeat(90)}.js`;
+      const long = `Resources/app/views/_nuxt/${pipe_("a", Str.repeat(90))}.js`;
       const installer = yield* installerWith(dir, ["bin/launcher", long]);
       const done = yield* check(installer);
       expect(done.code).not.toBe(0);
@@ -78,7 +82,7 @@ test("an installer whose tar carries pax headers is refused", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped();
-      const installer = yield* installerWith(dir, [`bin/${"b".repeat(120)}`], "pax");
+      const installer = yield* installerWith(dir, [`bin/${pipe_("b", Str.repeat(120))}`], "pax");
       const done = yield* check(installer);
       expect(done.code).not.toBe(0);
       expect(done.said).toContain("a pax header");
@@ -90,7 +94,7 @@ test("a macOS update archive is checked as the tar it is, with no installer arou
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped();
-      const long = `collie-desktop.app/Contents/Resources/${"a".repeat(90)}.js`;
+      const long = `collie-desktop.app/Contents/Resources/${pipe_("a", Str.repeat(90))}.js`;
       yield* installerWith(dir, ["collie-desktop.app/Contents/MacOS/launcher", long], "ustar");
       const archive = `${dir}/stable-macos-arm64-collie-desktop.app.tar.zst`;
       yield* fs.writeFile(archive, Bun.zstdCompressSync(yield* fs.readFile(`${dir}/payload.tar`)));

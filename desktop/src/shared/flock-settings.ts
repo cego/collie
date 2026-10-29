@@ -1,6 +1,8 @@
 // The Flock's settings, as Desktop keeps them: each key is decided by its latest edit,
 // made in Desktop or on any Machine, and every Machine is given what it lacks.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import {
   parseSetting,
@@ -88,7 +90,7 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
     description:
       "Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say.",
     read: (desktop: DesktopSettings) => desktop.machineRule ?? "",
-    change: (typed) => ({ machineRule: typed.trim() }),
+    change: (typed) => ({ machineRule: Str.trim(typed) }),
     unset: () => "Unset: no rule",
     multiline: true,
   },
@@ -109,7 +111,7 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
 
 /** What setting Desktop's own `key` to `typed` changes; empty sets it back to its default. */
 export const desktopChange = (key: string, typed: string): DesktopSettingsChange => {
-  const setting = DESKTOP_SETTINGS.find((one) => one.key === key)!;
+  const setting = Option.getOrUndefined(Arr.findFirst(DESKTOP_SETTINGS, (one) => one.key === key))!;
   return setting.change(typed || setting.fallback);
 };
 
@@ -182,23 +184,29 @@ export const settingSections = (
   desktop: DesktopSettings,
 ): ReadonlyArray<SettingSection> => {
   const rows = [
-    ...SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map((setting) => flockRow(flock, setting)),
-    ...DESKTOP_SETTINGS.map(({ read, change: _, unset, multiline, ...setting }): SettingRow => {
-      const value = read(desktop);
-      return {
-        ...rowOf(setting),
-        value,
-        fallback: setting.fallback,
-        defaultSaid: unset?.(desktop) ?? defaultSaid(setting, setting.fallback),
-        set: value !== setting.fallback,
-        from: null,
-        shared: false,
-        multiline: multiline === true,
-      };
-    }),
+    ...Arr.map(
+      Arr.filter(SETTINGS, ({ key }) => key !== GIVEN_ONLY),
+      (setting) => flockRow(flock, setting),
+    ),
+    ...Arr.map(
+      DESKTOP_SETTINGS,
+      ({ read, change: _, unset, multiline, ...setting }): SettingRow => {
+        const value = read(desktop);
+        return {
+          ...rowOf(setting),
+          value,
+          fallback: setting.fallback,
+          defaultSaid: unset?.(desktop) ?? defaultSaid(setting, setting.fallback),
+          set: value !== setting.fallback,
+          from: null,
+          shared: false,
+          multiline: multiline === true,
+        };
+      },
+    ),
   ];
-  return SETTING_GROUPS.flatMap((group) => {
-    const placed = rows.filter((row) => row.group === group);
+  return Arr.flatMap(SETTING_GROUPS, (group) => {
+    const placed = Arr.filter(rows, (row) => row.group === group);
     return placed.length === 0 ? [] : [{ group, rows: placed }];
   });
 };

@@ -9,6 +9,10 @@
 // Nothing in here reads a file or runs a command. The caller collects the evidence and
 // this says what is missing.
 
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { CommandLine } from "effect/process";
 import type { VerifySpec } from "./verify-spec";
 import { checkProof, owedLocally, owesNothingHere } from "./check-proof";
@@ -115,7 +119,7 @@ const TEXT_SEARCHES = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack"]);
 
 /** Whether a command only searches text, also as a `sh -c` or `bash -c` script's first word. */
 function textSearch(executable: string, argv: ReadonlyArray<string>): boolean {
-  const program = executable.split("/").at(-1) ?? "";
+  const program = Str.split(executable, "/").at(-1) ?? "";
   if (TEXT_SEARCHES.has(program)) return true;
   if (program === "git") return argv[0] === "grep";
   if (program !== "sh" && program !== "bash") return false;
@@ -133,8 +137,12 @@ function shellWords(script: string): ReadonlyArray<string> {
   let started = false;
   let quote = "";
   for (let i = 0; i < script.length; i++) {
-    const c = script.charAt(i);
-    if (quote !== "'" && c === "\\" && script.charAt(i + 1) === "\n") {
+    const c = Option.getOrElse(Str.charAt(script, i), () => "");
+    if (
+      quote !== "'" &&
+      c === "\\" &&
+      Option.getOrElse(Str.charAt(script, i + 1), () => "") === "\n"
+    ) {
       i++;
       continue;
     }
@@ -149,8 +157,8 @@ function shellWords(script: string): ReadonlyArray<string> {
       if (c === "'") quote = "";
       else word += c;
     } else if (c === "\\" && i + 1 < script.length) {
-      const next = script.charAt(++i);
-      word += quote === '"' && !'"\\$`'.includes(next) ? c + next : next;
+      const next = Option.getOrElse(Str.charAt(script, ++i), () => "");
+      word += quote === '"' && !pipe('"\\$`', Str.includes(next)) ? c + next : next;
     } else if (c === quote) quote = "";
     else if (quote === "" && (c === "'" || c === '"')) quote = c;
     else word += c;
@@ -169,11 +177,11 @@ function provedAtFinal(got: Collected, name: string): "passed" | "searched" | "u
 }
 
 function withoutSearches(got: Collected, name: string): Collected {
-  const ownCheck = [...got.approved, ...(got.commands ?? [])].some((one) => one.name === name);
+  const ownCheck = Arr.some([...got.approved, ...(got.commands ?? [])], (one) => one.name === name);
   if (ownCheck) return got;
   const searched = (v: Verification) =>
     v.name === name && passed(v) && textSearch(v.executable, v.argv);
-  return { ...got, verifications: got.verifications.filter((v) => !searched(v)) };
+  return { ...got, verifications: Arr.filter(got.verifications, (v) => !searched(v)) };
 }
 
 const onlySearched = (what: string) =>
@@ -194,20 +202,24 @@ function rerunOf(got: Journal, last: Verification | undefined) {
   if (last.failed === undefined || last.failed.length === 0) return null;
   const after = got.verifications.slice(got.verifications.indexOf(last) + 1);
   const rerun = (test: FailedTest) =>
-    after.findLast(
-      (v) =>
-        v.pass === "rerun" &&
-        v.by === "collie" &&
-        v.name === last.name &&
-        v.cwd === last.cwd &&
-        v.test?.file === test.file &&
-        v.test.name === test.name &&
-        !earlierTree(v, got.final),
+    Option.getOrUndefined(
+      Arr.findLast(
+        after,
+        (v) =>
+          v.pass === "rerun" &&
+          v.by === "collie" &&
+          v.name === last.name &&
+          v.cwd === last.cwd &&
+          v.test?.file === test.file &&
+          v.test.name === test.name &&
+          !earlierTree(v, got.final),
+      ),
     );
   const alone = (test: FailedTest) => rerun(test)?.result === "pass";
   // Its runs in this check's directory where the branch leaves the default branch, which fail only where bun said that test failed.
   const bases = (test: FailedTest, among: ReadonlyArray<Verification>) =>
-    among.filter(
+    Arr.filter(
+      among,
       (v) =>
         v.pass === "baseline" &&
         v.by === "collie" &&
@@ -217,17 +229,17 @@ function rerunOf(got: Journal, last: Verification | undefined) {
         v.test.name === test.name,
     );
   const base = (test: FailedTest) => bases(test, got.verifications).at(-1);
-  const still = last.failed.filter((test) => !alone(test));
+  const still = Arr.filter(last.failed, (test) => !alone(test));
   return {
-    flakes: last.failed.filter(alone),
+    flakes: Arr.filter(last.failed, alone),
     still,
-    owed: last.failed.filter((test) => rerun(test) === undefined),
-    atBase: still.flatMap((test) => {
+    owed: Arr.filter(last.failed, (test) => rerun(test) === undefined),
+    atBase: Arr.flatMap(still, (test) => {
       const at = base(test);
       return at?.result === "fail" ? [{ ...test, at: at.start.head_sha }] : [];
     }),
-    own: still.filter((test) => base(test)?.result !== "fail"),
-    unasked: still.filter((test) => bases(test, after).length === 0),
+    own: Arr.filter(still, (test) => base(test)?.result !== "fail"),
+    unasked: Arr.filter(still, (test) => bases(test, after).length === 0),
   };
 }
 
@@ -238,7 +250,10 @@ function settledUnpassed(got: Journal, name: string): boolean {
 
 /** The Run's checks settled without a pass: every test each failed on was a Flake or fails at the base too. */
 export function settledChecks(got: Journal & Pick<Collected, "approved">): string[] {
-  return got.approved.filter((spec) => settledUnpassed(got, spec.name)).map((spec) => spec.name);
+  return Arr.map(
+    Arr.filter(got.approved, (spec) => settledUnpassed(got, spec.name)),
+    (spec) => spec.name,
+  );
 }
 
 /**
@@ -248,12 +263,17 @@ export function settledChecks(got: Journal & Pick<Collected, "approved">): strin
 export function flakesOf(
   got: Journal & Pick<Collected, "approved">,
 ): Array<FailedTest & { readonly check: string }> {
-  return got.approved.flatMap(
+  return Arr.flatMap(
+    got.approved,
     (spec) =>
-      rerunOf(got, runsOf(got, spec.name).last)?.flakes.map((test) => ({
-        check: spec.name,
-        ...test,
-      })) ?? [],
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(rerunOf(got, runsOf(got, spec.name).last)), (present) =>
+          Arr.map(present.flakes, (test) => ({
+            check: spec.name,
+            ...test,
+          })),
+        ),
+      ) ?? [],
   );
 }
 
@@ -261,12 +281,17 @@ export function flakesOf(
 export function baseFailuresOf(
   got: Journal & Pick<Collected, "approved">,
 ): Array<FailedTest & { readonly check: string; readonly at: string }> {
-  return got.approved.flatMap(
+  return Arr.flatMap(
+    got.approved,
     (spec) =>
-      rerunOf(got, runsOf(got, spec.name).last)?.atBase.map((test) => ({
-        check: spec.name,
-        ...test,
-      })) ?? [],
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(rerunOf(got, runsOf(got, spec.name).last)), (present_) =>
+          Arr.map(present_.atBase, (test) => ({
+            check: spec.name,
+            ...test,
+          })),
+        ),
+      ) ?? [],
   );
 }
 
@@ -274,12 +299,17 @@ export function baseFailuresOf(
 export function baselinesOwed(
   got: Journal & Pick<Collected, "approved">,
 ): Array<{ readonly check: string; readonly test: FailedTest }> {
-  return got.approved.flatMap(
+  return Arr.flatMap(
+    got.approved,
     (spec) =>
-      rerunOf(got, runsOf(got, spec.name).last)?.unasked.map((test) => ({
-        check: spec.name,
-        test,
-      })) ?? [],
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(rerunOf(got, runsOf(got, spec.name).last)), (present__) =>
+          Arr.map(present__.unasked, (test) => ({
+            check: spec.name,
+            test,
+          })),
+        ),
+      ) ?? [],
   );
 }
 
@@ -287,12 +317,17 @@ export function baselinesOwed(
 export function rerunsOwed(
   got: Journal & Pick<Collected, "approved">,
 ): Array<{ readonly check: string; readonly test: FailedTest }> {
-  return got.approved.flatMap(
+  return Arr.flatMap(
+    got.approved,
     (spec) =>
-      rerunOf(got, runsOf(got, spec.name).last)?.owed.map((test) => ({
-        check: spec.name,
-        test,
-      })) ?? [],
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(rerunOf(got, runsOf(got, spec.name).last)), (present___) =>
+          Arr.map(present___.owed, (test) => ({
+            check: spec.name,
+            test,
+          })),
+        ),
+      ) ?? [],
   );
 }
 
@@ -301,12 +336,13 @@ export function rerunsOwed(
  * without naming its tests, or with no run of their command on it, as after a re-grant.
  */
 export function wholeRunsOwed(got: Journal & Pick<Collected, "approved">): string[] {
-  return got.approved
-    .filter((spec) => {
+  return Arr.map(
+    Arr.filter(got.approved, (spec) => {
       const { last } = runsOf(got, spec.name);
       return last === undefined || (!passed(last) && rerunOf(got, last) === null);
-    })
-    .map((spec) => spec.name);
+    }),
+    (spec) => spec.name,
+  );
 }
 
 /**
@@ -314,9 +350,10 @@ export function wholeRunsOwed(got: Journal & Pick<Collected, "approved">): strin
  * `recheck` of their command on this tree (ADR-0034, amended 2026-10-19).
  */
 export function recheckOwed(got: Journal & Pick<Collected, "approved">): string[] {
-  return wholeRunsOwed(got).filter(
+  return Arr.filter(
+    wholeRunsOwed(got),
     (name) =>
-      !runsOf(got, name).runs.some((v) => v.pass === "recheck" && !earlierTree(v, got.final)),
+      !Arr.some(runsOf(got, name).runs, (v) => v.pass === "recheck" && !earlierTree(v, got.final)),
   );
 }
 
@@ -344,12 +381,15 @@ function approvedSetGaps(got: Collected): string[] {
       // Not a gap, and not a pass either: every test it failed on passed alone or fails at the base too.
       if (reran.own.length === 0) continue;
       gaps.push(
-        `${spec.name} failed: ${reran.own.map((test) => `${test.name} (${test.file})`).join(", ")}`,
+        `${spec.name} failed: ${Arr.join(
+          Arr.map(reran.own, (test) => `${test.name} (${test.file})`),
+          ", ",
+        )}`,
       );
     } else if (state === "never") gaps.push(`${spec.name} was never run`);
-    else if (runs.some((v) => v.result === "fail" || v.expect === "fail"))
+    else if (Arr.some(runs, (v) => v.result === "fail" || v.expect === "fail"))
       gaps.push(`${spec.name} failed`);
-    else if (runs.some((v) => v.result === "unstable"))
+    else if (Arr.some(runs, (v) => v.result === "unstable"))
       gaps.push(`${spec.name} ran on a tree that moved under it`);
     else gaps.push(`${spec.name} last passed on a different tree`);
   }
@@ -390,11 +430,14 @@ const shown = (v: Verification) => {
     v.asked === undefined || v.asked === v.executable
       ? executable
       : `${CommandLine.display([v.asked])} (${executable})`;
-  return `"${[program, CommandLine.display(v.argv)].filter((part) => part !== "").join(" ")}" in ${v.cwd}`;
+  return `"${Arr.join(
+    Arr.filter([program, CommandLine.display(v.argv)], (part) => part !== ""),
+    " ",
+  )}" in ${v.cwd}`;
 };
 
 function names(value: YamlValue | undefined): string[] {
-  return Array.isArray(value) ? value.filter(isString) : [];
+  return Arr.isArray(value) ? Arr.filter(value, isString) : [];
 }
 
 /**
@@ -402,7 +445,8 @@ function names(value: YamlValue | undefined): string[] {
  * checkout, and, where it builds another Run's plan, that Run's.
  */
 export function evidenceRoots(own: string, cwd: string, workSource: string): string[] {
-  const planned = planRunOf(workSource) === null ? [] : [workSource.replace(/\/plan\/?$/, "")];
+  const planned =
+    planRunOf(workSource) === null ? [] : [pipe(workSource, Str.replace(/\/plan\/?$/, ""))];
   return [own, cwd, ...planned];
 }
 
@@ -412,10 +456,13 @@ export function evidenceRoots(own: string, cwd: string, workSource: string): str
  * `..` in either is a path nobody can answer for.
  */
 export function refInside(roots: ReadonlyArray<string>, ref: string): boolean {
-  const value = ref.trim();
-  if (value === "" || value.includes("..")) return false;
-  if (!value.startsWith("/")) return true;
-  return roots.some((root) => root !== "" && (value === root || value.startsWith(`${root}/`)));
+  const value = Str.trim(ref);
+  if (value === "" || pipe(value, Str.includes(".."))) return false;
+  if (!pipe(value, Str.startsWith("/"))) return true;
+  return Arr.some(
+    roots,
+    (root) => root !== "" && (value === root || pipe(value, Str.startsWith(`${root}/`))),
+  );
 }
 
 /**
@@ -423,7 +470,7 @@ export function refInside(roots: ReadonlyArray<string>, ref: string): boolean {
  * there; every entry is one sentence a human can act on.
  */
 export function evidenceGaps(kind: Outcome, got: Collected): string[] {
-  return gapsOf(kind, got).map((gap) => gap.text);
+  return Arr.map(gapsOf(kind, got), (gap) => gap.text);
 }
 
 /**
@@ -431,16 +478,18 @@ export function evidenceGaps(kind: Outcome, got: Collected): string[] {
  * are a reviewer's judgement or an Output's claim, and no command moves them.
  */
 export function checkGaps(kind: Outcome, got: Collected): string[] {
-  return gapsOf(kind, got)
-    .filter((gap) => gap.by === "check")
-    .map((gap) => gap.text);
+  return Arr.map(
+    Arr.filter(gapsOf(kind, got), (gap) => gap.by === "check"),
+    (gap) => gap.text,
+  );
 }
 
 /** The gaps a fresh review could close: a reviewer's judgement the Outputs do not report. */
 export function reviewGaps(kind: Outcome, got: Collected): string[] {
-  return gapsOf(kind, got)
-    .filter((gap) => gap.by === "review")
-    .map((gap) => gap.text);
+  return Arr.map(
+    Arr.filter(gapsOf(kind, got), (gap) => gap.by === "review"),
+    (gap) => gap.text,
+  );
 }
 
 /** Who can close a gap: a verification, a reviewer, a new Measurement, or nobody short of new work. */
@@ -480,9 +529,9 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
     case "bug": {
       // Fail then pass, on two different trees: a reproduction that never failed proves
       // nothing was reproduced, and one that never passed proves nothing was fixed.
-      const regression = got.verifications.filter((v) => v.name === "regression");
-      const reproduced = regression.filter((v) => v.expect === "fail" && v.result === "pass");
-      const before = reproduced.filter((v) => earlierTree(v, got.final));
+      const regression = Arr.filter(got.verifications, (v) => v.name === "regression");
+      const reproduced = Arr.filter(regression, (v) => v.expect === "fail" && v.result === "pass");
+      const before = Arr.filter(reproduced, (v) => earlierTree(v, got.final));
       if (reproduced.length === 0)
         check(
           "no regression verification recorded with --expect fail, so the bug was never reproduced",
@@ -499,12 +548,12 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
             ? onlySearched("regression")
             : "regression does not pass on the current tree, so the fix is not proven",
         );
-      else if (before.length > 0 && !before.some((v) => sameAsked(v, fixedBy)))
+      else if (before.length > 0 && !Arr.some(before, (v) => sameAsked(v, fixedBy)))
         check(
           `the bug was reproduced by ${shown(before.at(-1)!)} but the fix is proven by ${shown(fixedBy)}: one command has to fail before the fix and pass after it`,
         );
       const named = anyField(got, "reproduced");
-      if (!isString(named) || named.trim() === "")
+      if (!isString(named) || Str.trim(named) === "")
         claim("the Output does not name the verification that reproduced the bug");
       break;
     }
@@ -513,7 +562,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
       break;
     case "investigation": {
       const conclusion = anyField(got, "conclusion");
-      if (!isString(conclusion) || conclusion.trim() === "")
+      if (!isString(conclusion) || Str.trim(conclusion) === "")
         claim("the investigation reports no conclusion");
       const refs = names(anyField(got, "evidence"));
       if (refs.length === 0) claim("the conclusion is supported by no evidence references");
@@ -542,12 +591,14 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
       for (const name of ["migrate-up", "migrate-down"]) {
         // `rollback` is the same thing under another name, and a project that calls it
         // that has still proved it can go back.
-        const proofs = (name === "migrate-down" ? [name, "rollback"] : [name]).map((one) => ({
+        const proofs = Arr.map(name === "migrate-down" ? [name, "rollback"] : [name], (one) => ({
           one,
           proof: provedAtFinal(got, one),
         }));
-        if (proofs.some(({ proof }) => proof === "passed")) continue;
-        const searched = proofs.find(({ proof }) => proof === "searched");
+        if (Arr.some(proofs, ({ proof }) => proof === "passed")) continue;
+        const searched = Option.getOrUndefined(
+          Arr.findFirst(proofs, ({ proof }) => proof === "searched"),
+        );
         check(
           searched === undefined
             ? `${name} has no passing verification on this tree`
@@ -559,12 +610,12 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
     }
     case "plan": {
       const issues = anyField(got, "issues_dir");
-      if (!isString(issues) || issues.trim() === "") claim("the plan wrote no tickets");
+      if (!isString(issues) || Str.trim(issues) === "") claim("the plan wrote no tickets");
       break;
     }
     case "review": {
       const summary = anyField(got, "summary");
-      if (!isString(summary) || summary.trim() === "")
+      if (!isString(summary) || Str.trim(summary) === "")
         claim("the review has no summary a human can read");
       break;
     }
@@ -600,9 +651,11 @@ function reviewerSaysOfThisTree(got: Collected, key: string): boolean {
 }
 
 function finalMeasurementGaps(got: Collected): string[] {
-  const finals = (got.measurements ?? []).filter((one) => one.pass === "final");
-  const here = finals.filter((one) => isFinal(one.candidate, got.final));
-  const proving = here.findLast((one) => one.base.commit === got.mergeBase);
+  const finals = Arr.filter(got.measurements ?? [], (one) => one.pass === "final");
+  const here = Arr.filter(finals, (one) => isFinal(one.candidate, got.final));
+  const proving = Option.getOrUndefined(
+    Arr.findLast(here, (one) => one.base.commit === got.mergeBase),
+  );
   if (finals.length === 0) return ["no `final` Measurement was taken, so no gain is proved"];
   if (here.length === 0)
     return [`the latest \`final\` Measurement, ${finals.at(-1)!.id}, was taken on an earlier tree`];
@@ -617,7 +670,8 @@ function finalMeasurementGaps(got: Collected): string[] {
   const result = proving.result;
   if (result._tag !== "Judged")
     return [`the \`final\` Measurement ${proving.id} has no verdict: it ended ${result._tag}`];
-  const verdictOf = (metric: string) => result.verdicts.find((one) => one.metric === metric);
+  const verdictOf = (metric: string) =>
+    Option.getOrUndefined(Arr.findFirst(result.verdicts, (one) => one.metric === metric));
   const gaps: string[] = [];
   for (const metric of proving.plan.metrics) {
     const judged = verdictOf(metric.name);
@@ -660,7 +714,7 @@ export function renderEvidence(
   const latest = new Map<string, Verification>();
   for (const v of got.verifications) if (!ranOneTest(v)) latest.set(`${v.name}:${v.by}`, v);
   const measured = finalMeasurementLine(got.measurements ?? []);
-  const lines = [...latest.values()].map((v) => {
+  const lines = Arr.map([...latest.values()], (v) => {
     const stale =
       v.end.head_sha === got.final.head_sha && v.end.fingerprint === got.final.fingerprint
         ? ""
@@ -669,7 +723,7 @@ export function renderEvidence(
     return `- ${v.name}: ${v.result} (by ${v.by}${expected})${stale}`;
   });
   if (measured !== null) lines.push(`- ${measured}`);
-  return lines.length === 0 ? "(nothing was verified)" : lines.join("\n");
+  return lines.length === 0 ? "(nothing was verified)" : Arr.join(lines, "\n");
 }
 
 /** A check left to CI as a reviewer is told of it, with its job's state where the Run has a merge request. */
@@ -690,7 +744,7 @@ export function renderRecordedChecks(
 ): string {
   const latest = new Map<string, Verification>();
   const baseline = new Map<string, Verification>();
-  for (const v of got.verifications.filter((one) => !ranOneTest(one)))
+  for (const v of Arr.filter(got.verifications, (one) => !ranOneTest(one)))
     if (v.pass === "baseline") baseline.set(v.name, v);
     else latest.set(`${v.name}:${v.by}`, v);
   if (latest.size + baseline.size + leftToCi.length === 0)
@@ -700,22 +754,29 @@ export function renderRecordedChecks(
       ? "on this tree"
       : "on an earlier tree";
   const seenFailing = (v: Verification) =>
-    got.verifications.some(
+    Arr.some(
+      got.verifications,
       (one) => one.exit !== 0 && onTree(one) === "on an earlier tree" && sameAsked(one, v),
     )
       ? "seen failing on an earlier tree"
       : "never seen failing on an earlier tree";
-  return [
-    ...[...latest.values()].map(
-      (v) => `- ${v.name}: ${v.result} (by ${v.by}), ${onTree(v)}, at ${v.at}; ${seenFailing(v)}`,
-    ),
-    ...[...baseline.values()].map(
-      (v) =>
-        `- ${v.name} (baseline, where this branch leaves the default branch, ${v.start.head_sha.slice(0, 12)}): ${v.result}, at ${v.at}`,
-    ),
-    ...leftToCi.map(
-      (one) =>
-        `- ${one.name}: left to CI (job ${one.job}), do not run it. left to CI: proved by ${one.job} on the merge request's head${one.state === null ? "" : `; its job is ${one.state} now`}`,
-    ),
-  ].join("\n");
+  return Arr.join(
+    [
+      ...Arr.map(
+        [...latest.values()],
+        (v) => `- ${v.name}: ${v.result} (by ${v.by}), ${onTree(v)}, at ${v.at}; ${seenFailing(v)}`,
+      ),
+      ...Arr.map(
+        [...baseline.values()],
+        (v) =>
+          `- ${v.name} (baseline, where this branch leaves the default branch, ${pipe(v.start.head_sha, Str.slice(0, 12))}): ${v.result}, at ${v.at}`,
+      ),
+      ...Arr.map(
+        leftToCi,
+        (one) =>
+          `- ${one.name}: left to CI (job ${one.job}), do not run it. left to CI: proved by ${one.job} on the merge request's head${one.state === null ? "" : `; its job is ${one.state} now`}`,
+      ),
+    ],
+    "\n",
+  );
 }

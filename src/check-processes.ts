@@ -2,6 +2,9 @@
 // Nothing is signalled that is not proved the check's: its recorded leader by pid and start
 // token, or a process carrying both of its bindings.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import {
   Clock,
   Context,
@@ -17,6 +20,8 @@ import {
   Schedule,
   Schema,
   Stream,
+  flow,
+  Result,
 } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -119,14 +124,17 @@ const RecordSchema = Schema.Struct({
   run: Schema.String,
   name: Schema.String,
   pass: Schema.optionalKey(Schema.String),
-  round: Schema.optionalKey(Schema.Number),
+  round: Schema.optionalKey(Schema.Finite),
   by: Schema.String,
-  leader: Schema.Struct({ pid: Schema.Number, started: Schema.String, group: Schema.Number }),
-  host: Schema.Struct({ pid: Schema.Number, started: Schema.String }),
+  leader: Schema.Struct({ pid: Schema.Finite, started: Schema.String, group: Schema.Finite }),
+  host: Schema.Struct({ pid: Schema.Finite, started: Schema.String }),
   started: Schema.String,
 });
 export type CheckRecord = Schema.Schema.Type<typeof RecordSchema>;
-export const encodeCheckRecord = Schema.encodeSync(Schema.fromJsonString(RecordSchema));
+export const encodeCheckRecord = flow(
+  Schema.encodeResult(Schema.fromJsonString(RecordSchema)),
+  Result.getOrThrow,
+);
 const decodeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(RecordSchema));
 
 export const runningChecksDir = (stateDir: string) => `${stateDir}/running-checks`;
@@ -138,7 +146,7 @@ export const recordsIn = Effect.fn("CheckProcesses.recordsIn")(function* (stateD
   const dir = runningChecksDir(stateDir);
   const found: CheckRecord[] = [];
   for (const file of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
-    if (!file.endsWith(".json")) continue;
+    if (!pipe_(file, Str.endsWith(".json"))) continue;
     const text = yield* fs.readFileString(`${dir}/${file}`).pipe(Effect.orElseSucceed(() => ""));
     const read = decodeRecord(text);
     if (Option.isSome(read)) found.push(read.value);
@@ -292,8 +300,21 @@ export const endCheck = Effect.fn("CheckProcesses.endCheck")(function* (
 });
 
 /** A check id is `<run>@<epoch ms>-<random hex>`. */
-const runOfId = (id: string) => id.slice(0, id.lastIndexOf("@"));
-const startOfId = (id: string) => Number(id.slice(id.lastIndexOf("@") + 1).split("-")[0]);
+const runOfId = (id: string) =>
+  pipe_(
+    id,
+    Str.slice(
+      0,
+      Option.getOrElse(pipe_(id, Str.lastIndexOf("@")), () => -1),
+    ),
+  );
+const startOfId = (id: string) =>
+  Number(
+    Str.split(
+      pipe_(id, Str.slice(Option.getOrElse(pipe_(id, Str.lastIndexOf("@")), () => -1) + 1)),
+      "-",
+    )[0],
+  );
 
 const checkNamed = (leftover: Leftover) =>
   leftover.name === null
@@ -378,7 +399,11 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     }
     for (const [id, ones] of yield* markedBy(installation)) {
       if (found.has(id) || ours.has(id)) continue;
-      const first = ones.reduce((least, one) => (one.pid < least.pid ? one : least));
+      const first = Arr.reduce(
+        Arr.drop(ones, 1),
+        Option.getOrThrow(Arr.head(ones)),
+        (least, one) => (one.pid < least.pid ? one : least),
+      );
       found.set(id, {
         id,
         run: runOfId(id),
@@ -446,7 +471,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       Effect.gen(function* () {
         const ones = look.get(id) ?? [];
         yield* signal({ group: null, marked: ones }, name, kill);
-        const known = new Map((found.get(id) ?? []).map((one) => [one.pid, one]));
+        const known = new Map(Arr.map(found.get(id) ?? [], (one) => [one.pid, one]));
         for (const one of ones) known.set(one.pid, one);
         found.set(id, [...known.values()]);
       }),
@@ -481,7 +506,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const clearOf = (run: string, say: (line: string) => Effect.Effect<void>) =>
     Effect.gen(function* () {
       if (stopping) return;
-      const leftovers = (yield* left).filter((leftover) => leftover.run === run);
+      const leftovers = Arr.filter(yield* left, (leftover) => leftover.run === run);
       const surviving = yield* Effect.forEach(
         leftovers,
         (leftover) =>
@@ -507,8 +532,8 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   ) =>
     Effect.gen(function* () {
       if (stopping) return null;
-      const began = yield* nowIso();
-      const salt = (yield* Random.next).toString(16).slice(2);
+      const began = yield* nowIso;
+      const salt = pipe_((yield* Random.next).toString(16), Str.slice(2));
       const id = `${check.run}@${epochMs(began)}-${salt}`;
       ours.add(id);
       yield* Effect.addFinalizer(() => Effect.sync(() => ours.delete(id)));
@@ -553,8 +578,10 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true }).pipe(Effect.ignore);
           yield* fs
             .writeFileString(`${recordPath(dir, id)}.new`, encodeCheckRecord(record))
-            .pipe(Effect.andThen(fs.rename(`${recordPath(dir, id)}.new`, recordPath(dir, id))))
-            .pipe(Effect.ignore);
+            .pipe(
+              Effect.andThen(fs.rename(`${recordPath(dir, id)}.new`, recordPath(dir, id))),
+              Effect.ignore,
+            );
           return { handle, entry };
         }),
       );

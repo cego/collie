@@ -1,7 +1,7 @@
 // Where work starts when its preferred agent's Subscription is spent (ADR-0049 D7, D10).
 
 import { describe, expect, test } from "bun:test";
-import { Schema } from "effect";
+import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
 import { foldCeiling, type Preferences, resolveWithRoom } from "../src/harness";
 import { parseSetting } from "../src/settings";
@@ -197,6 +197,9 @@ describe("the fallbacks setting", () => {
 
 test("a choice recorded by an earlier build decodes, saying it fell back from nothing", () => {
   expect(
-    Schema.decodeUnknownSync(AgentChoiceSchema)({ harness: "claude", model: "opus", effort: null }),
+    flow(
+      Schema.decodeResult(AgentChoiceSchema),
+      Result.getOrThrow,
+    )({ harness: "claude", model: "opus", effort: null }),
   ).toEqual({ harness: "claude", model: "opus", effort: null });
 });

@@ -1,5 +1,8 @@
 // ADR-draft-a-blocked-link-rides-the-machines-ssh-connection, against the fake ssh.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { createConnection, createServer, type Server } from "node:net";
 import { Clock, Deferred, type Duration, Effect, FileSystem } from "effect";
@@ -35,7 +38,7 @@ const opens = (state: string, ssh: string, bound: Duration.Input = "2 minutes") 
       said: (text) => Effect.sync(() => void stderr.push(text)),
       bound,
     });
-    return { ...opened, stderr: stderr.join("") };
+    return { ...opened, stderr: Arr.join(stderr, "") };
   });
 
 /** Runs an argv to its end, answering its exit code. */
@@ -56,14 +59,14 @@ test("a Machine's control path is its own, private, and refused where a socket c
       const fs = yield* FileSystem.FileSystem;
       const { dir, state, fake } = yield* rig;
       const path = yield* controlPath(state, vm);
-      expect(path.startsWith(`${state}/ssh/`)).toBe(true);
-      expect(path.slice(`${state}/ssh/`.length)).toMatch(/^[0-9a-f]{16}$/);
+      expect(pipe(path, Str.startsWith(`${state}/ssh/`))).toBe(true);
+      expect(pipe(path, Str.slice(`${state}/ssh/`.length))).toMatch(/^[0-9a-f]{16}$/);
       expect((yield* fs.stat(`${state}/ssh`)).mode & 0o777).toBe(0o700);
       expect(controlPathOf(state, { ...vm, label: "other" })).not.toBe(path);
       expect(controlPathOf(state, { ...vm, target: "mk@elsewhere" })).not.toBe(path);
       expect(controlPathOf(`${state}x`, vm).length).toBe(path.length + 1);
 
-      const deep = `${dir}/${"d".repeat(80)}`;
+      const deep = `${dir}/${pipe("d", Str.repeat(80))}`;
       const refused = yield* controlPath(deep, vm).pipe(Effect.flip);
       expect(refused.reason).toContain(controlPathOf(deep, vm));
       expect(yield* fs.exists(`${deep}/ssh`)).toBe(false);
@@ -83,13 +86,15 @@ test("the opener starts one master, says what it said, and answers the path once
         opened: true,
       });
       expect(opened.stderr).toContain("Authenticated to mk@vm-mk");
-      expect((yield* fake.calls).filter((line) => line.startsWith("master"))).toEqual([
-        "master mk@vm-mk",
-      ]);
+      expect(Arr.filter(yield* fake.calls, (line) => pipe(line, Str.startsWith("master")))).toEqual(
+        ["master mk@vm-mk"],
+      );
 
       const again = yield* opens(state, ssh);
       expect(again).toMatchObject({ path: opened.path, opened: false });
-      expect((yield* fake.calls).filter((line) => line.startsWith("master"))).toHaveLength(1);
+      expect(
+        Arr.filter(yield* fake.calls, (line) => pipe(line, Str.startsWith("master"))),
+      ).toHaveLength(1);
     }),
   ));
 
@@ -119,7 +124,7 @@ await Bun.write(out!, String(opened));
         );
         // Its answer goes to a file: the master it starts keeps a stdout pipe open.
         const codes = yield* Effect.all(
-          [0, 1].map((one) =>
+          Arr.map([0, 1], (one) =>
             Effect.promise(
               () =>
                 Bun.spawn(
@@ -137,10 +142,16 @@ await Bun.write(out!, String(opened));
         const opened = yield* Effect.forEach([0, 1], (one) =>
           fs.readFileString(`${dir}/opened-${one}`),
         );
-        expect(opened.toSorted((a, b) => a.localeCompare(b))).toEqual(["false", "true"]);
-        expect((yield* fake.calls).filter((line) => line.startsWith("master"))).toEqual([
-          "master mk@vm-mk",
-        ]);
+        expect(
+          Arr.sortWith(
+            opened,
+            (value) => value,
+            (a, b) => pipe(a, Str.localeCompare(b)),
+          ),
+        ).toEqual(["false", "true"]);
+        expect(
+          Arr.filter(yield* fake.calls, (line) => pipe(line, Str.startsWith("master"))),
+        ).toEqual(["master mk@vm-mk"]);
       }),
     ),
   30_000,
@@ -244,7 +255,7 @@ test("the host's handle only asks an open master, and cancels its forward when i
       expect(yield* handle.check).toBe(false);
       const refused = yield* Effect.scoped(handle.forward(1, 2)).pipe(Effect.flip);
       expect(refused._tag).toBe("HostRefused");
-      expect((yield* fake.calls).every((line) => line.startsWith("mux "))).toBe(true);
+      expect(Arr.every(yield* fake.calls, (line) => pipe(line, Str.startsWith("mux ")))).toBe(true);
 
       yield* opens(state, ssh);
       expect(yield* handle.check).toBe(true);
@@ -274,8 +285,13 @@ test("the host's handle only asks an open master, and cancels its forward when i
       const spec = `127.0.0.1:${local}:127.0.0.1:${farPort}`;
       expect(calls).toContain(`mux forward ${spec} mk@vm-mk`);
       expect(calls.at(-1)).toBe(`mux cancel ${spec} mk@vm-mk`);
-      expect(calls.filter((line) => line.startsWith("master"))).toHaveLength(1);
-      expect(calls.some((line) => line.startsWith("login") || line.startsWith("ride"))).toBe(false);
+      expect(Arr.filter(calls, (line) => pipe(line, Str.startsWith("master")))).toHaveLength(1);
+      expect(
+        Arr.some(
+          calls,
+          (line) => pipe(line, Str.startsWith("login")) || pipe(line, Str.startsWith("ride")),
+        ),
+      ).toBe(false);
     }),
   ));
 
@@ -293,7 +309,9 @@ test("`exit` ends an open master and its path, and only removes a path left behi
       yield* fs.writeFileString(path, "");
       yield* handle.exit;
       expect(yield* fs.exists(path)).toBe(false);
-      expect((yield* fake.calls).some((line) => line.startsWith("login"))).toBe(false);
+      expect(Arr.some(yield* fake.calls, (line) => pipe(line, Str.startsWith("login")))).toBe(
+        false,
+      );
     }),
   ));
 
@@ -308,15 +326,17 @@ test("the host closes every connection under its state but those of the machines
         ssh,
         said: () => Effect.void,
       });
-      yield* fs.writeFileString(`${state}/ssh/${"0".repeat(16)}.binding`, "");
+      yield* fs.writeFileString(`${state}/ssh/${pipe("0", Str.repeat(16))}.binding`, "");
       const closed = yield* closeConnections(state, [vm], ssh);
       expect(closed).toEqual([gone.path]);
       expect(yield* fs.exists(gone.path)).toBe(false);
       expect(yield* fs.exists(kept)).toBe(true);
-      expect(yield* fs.exists(`${state}/ssh/${"0".repeat(16)}.binding`)).toBe(true);
+      expect(yield* fs.exists(`${state}/ssh/${pipe("0", Str.repeat(16))}.binding`)).toBe(true);
       expect(
-        (yield* fake.calls).filter(
-          (line) => !line.startsWith("master") && !line.startsWith("mux check"),
+        Arr.filter(
+          yield* fake.calls,
+          (line) =>
+            !pipe(line, Str.startsWith("master")) && !pipe(line, Str.startsWith("mux check")),
         ),
       ).toEqual(["mux exit collie"]);
     }),
@@ -328,7 +348,9 @@ test("a session built from the rider argv rides an open master and never logs in
       const { state, ssh, fake } = yield* rig;
       const path = controlPathOf(state, vm);
       expect(yield* run(riderArgv(path, vm.target, "true", ssh))).toBe(255);
-      expect((yield* fake.calls).some((line) => line.startsWith("login"))).toBe(false);
+      expect(Arr.some(yield* fake.calls, (line) => pipe(line, Str.startsWith("login")))).toBe(
+        false,
+      );
 
       yield* opens(state, ssh);
       expect(yield* run(riderArgv(path, vm.target, "true", ssh))).toBe(0);

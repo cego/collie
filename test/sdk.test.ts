@@ -5,6 +5,8 @@
 // every conflict rather than the first — an author fixing one at a time learns the rules
 // one round trip each.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import {
@@ -27,7 +29,7 @@ import { loadEntry } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { fixtures } from "./support/host";
 
-const requestable: ReadonlyArray<Outcome> = REQUESTABLE.filter(isOutcome);
+const requestable: ReadonlyArray<Outcome> = Arr.filter(REQUESTABLE, isOutcome);
 
 /** Checking what a module declares never builds one, which is the point of doing it first. */
 const registration = (): Registration => {
@@ -54,9 +56,9 @@ test("the identity is an identity, and a title is there for a human to read", ()
 });
 
 test("an input may not take a name the host supplies at launch", () => {
-  for (const reserved of Object.keys(RESERVED_INPUTS)) {
+  for (const reserved of Rec.keys(RESERVED_INPUTS)) {
     const problems = checkEntry(entry({ input: { [reserved]: Schema.String } }));
-    expect(problems.join("\n")).toContain(`input "${reserved}" collides with a host option`);
+    expect(Arr.join(problems, "\n")).toContain(`input "${reserved}" collides with a host option`);
   }
 });
 
@@ -115,9 +117,9 @@ test("a hint names an input this workflow takes, and a strategy that exists", ()
   expect(checkEntry(entry({ metadata: { hints: { text: "goal", nope: "optional" } } }))).toEqual([
     'hint for "nope", which is not an input',
   ]);
-  expect(checkEntry(entry({ metadata: { hints: { text: "telepathy" } } })).join("\n")).toContain(
-    'no strategy called "telepathy"',
-  );
+  expect(
+    Arr.join(checkEntry(entry({ metadata: { hints: { text: "telepathy" } } })), "\n"),
+  ).toContain('no strategy called "telepathy"');
 });
 
 test("an outcome is fixed or selectable, and never contradicts itself", () => {
@@ -213,9 +215,9 @@ test("the envelope is the host's runId and the author's input, keyed on the run"
       expect(workflow.idempotencyKey({ runId: "r1", input: { name: "mk" } })).toBe("r1");
       // Different input, same run: the same execution, which is what a retry has to be.
       expect(workflow.idempotencyKey({ runId: "r1", input: { name: "other" } })).toBe("r1");
-      expect(
-        Schema.decodeUnknownExit(workflow.payloadSchema)({ runId: "r1", input: {} })._tag,
-      ).toBe("Failure");
+      expect(Schema.decodeExit(workflow.payloadSchema)({ runId: "r1", input: {} })._tag).toBe(
+        "Failure",
+      );
     }),
   ));
 

@@ -2,6 +2,11 @@
 // anything a human or an agent gave Collie is written or forwarded. One list, for every
 // place that does it: chat, cards and the host's front doors.
 
+import * as Struct from "effect/Struct";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { isBoolean, isNumber, isString } from "./schema";
 
 /**
@@ -56,9 +61,10 @@ export function scrub(text: string): ScrubbedText {
   const removed: string[] = [];
   let out = text;
   for (const [looksLike, replacement, kind] of SECRETS)
+    // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
     out = out.replace(looksLike, (...match) => {
       removed.push(kind);
-      return replacement.replace("$1", String(match[1]));
+      return pipe(replacement, Str.replace("$1", String(match[1])));
     });
   return { text: out, removed };
 }
@@ -76,8 +82,13 @@ export function scrubJson<A extends Given>(value: A): Scrubbed<A> {
       return done.text;
     }
     if (one === null || one === undefined || isNumber(one) || isBoolean(one)) return one;
-    if (Array.isArray(one)) return one.map(walk);
-    return Object.fromEntries(Object.entries(one).map(([key, inner]) => [key, walk(inner)]));
+    if (Arr.isArray<typeof one>(one)) return Arr.map(one, walk);
+    return Rec.fromEntries(
+      Arr.map(
+        Arr.map(Struct.keys(one), (key) => [key, one[key]] as const),
+        ([key, inner]) => [key, walk(inner)] as const,
+      ),
+    );
   };
   // SAFETY: `walk` keeps every key and element and replaces a string only with a string.
   return { value: walk(value) as A, removed };
@@ -89,7 +100,7 @@ export const CREDENTIALS_DOCS = "docs/using.md#credentials-never-go-in-a-goal-or
 export const removedNotice = (removed: ReadonlyArray<string>): string | null =>
   removed.length === 0
     ? null
-    : `removed ${removed.length} credential-shaped value(s): ${[...new Set(removed)].join(", ")}. ` +
+    : `removed ${removed.length} credential-shaped value(s): ${Arr.join([...new Set(removed)], ", ")}. ` +
       `Give an agent a credential through its forge login instead: ${CREDENTIALS_DOCS}`;
 
 /** A front door's words, followed by what was removed where anything was. */
@@ -99,7 +110,7 @@ export const withNotice = (
   between = "\n",
 ): string => {
   const notice = removedNotice(removed ?? []);
-  return notice === null ? said : [said, notice].filter(Boolean).join(between);
+  return notice === null ? said : Arr.join(Arr.filter([said, notice], Boolean), between);
 };
 
 /** The notice a result's note carries, where it carries one. */

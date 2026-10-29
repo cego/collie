@@ -5,6 +5,9 @@
 // being asked — does a completed Activity come back, does a pending decision survive, does
 // a missing module leave work recoverable — have no answer in an in-memory engine.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -14,7 +17,8 @@ import { engineLayer, loadEntry, TOOLCHAIN } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { HostReply, events, fixtures, openHost, root, until, workspace } from "./support/host";
 
-const stopsIn = (log: ReadonlyArray<string>) => log.filter((line) => line === "stopped").length;
+const stopsIn = (log: ReadonlyArray<string>) =>
+  Arr.filter(log, (line) => line === "stopped").length;
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
 
@@ -67,8 +71,8 @@ test(
         // One launch across both hosts: the completed Activity came back rather than
         // running again. The wait re-entered, which is what a wait is for.
         const log = yield* events(state, "r1");
-        expect(log.filter((line) => line.startsWith("launch"))).toHaveLength(1);
-        expect(log.filter((line) => line === "wait").length).toBeGreaterThan(1);
+        expect(Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")))).toHaveLength(1);
+        expect(Arr.filter(log, (line) => line === "wait").length).toBeGreaterThan(1);
       }).pipe(Effect.scoped),
     ),
   120_000,
@@ -108,7 +112,7 @@ test(
         yield* host.stop;
 
         const log = yield* events(state, "r1");
-        expect(log.filter((line) => line.startsWith("launch"))).toHaveLength(1);
+        expect(Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")))).toHaveLength(1);
       }).pipe(Effect.scoped),
     ),
   120_000,
@@ -153,7 +157,7 @@ test(
         // per stop and once per resume, and the launch happened once.
         const log = yield* events(state, "r1");
         expect(stopsIn(log)).toBe(2);
-        const launches = log.filter((line) => line.startsWith("launch"));
+        const launches = Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch")));
         expect(launches).toHaveLength(1);
         expect(launches[0]).toMatch(/^launch note:stopped /);
       }).pipe(Effect.scoped),
@@ -179,7 +183,13 @@ test(
         const second = yield* openHost(state);
         const registrations = yield* second.ask({ op: "registrations" });
         expect(registrations.registrations).toEqual(["plain@1"]);
-        expect(registrations.diagnostics?.join("\n")).toContain("proof.workflow.ts");
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(registrations.diagnostics), (present) =>
+              Arr.join(present, "\n"),
+            ),
+          ),
+        ).toContain("proof.workflow.ts");
 
         // Pending, with the file to repair named — not failed, and not run on some other
         // generation's code.
@@ -213,7 +223,7 @@ test(
         expect(done.value).toBe("note:orphan=back");
         yield* third.stop;
         expect(
-          (yield* events(state, "r1")).filter((line) => line.startsWith("launch")),
+          Arr.filter(yield* events(state, "r1"), (line) => pipe_(line, Str.startsWith("launch"))),
         ).toHaveLength(1);
       }).pipe(Effect.scoped),
     ),
@@ -362,11 +372,19 @@ test(
         ];
         const checked = yield* host.ask({
           op: "checks",
-          entries: ["broken", ...beside].map((name) => `${wf}/${name}.workflow.ts`),
+          entries: Arr.map(["broken", ...beside], (name) => `${wf}/${name}.workflow.ts`),
         });
         expect(checked.ok).toBe(true);
-        const problems = Schema.decodeUnknownSync(Problems)(checked.value);
-        expect(problems[`${wf}/broken.workflow.ts`]?.join("\n")).toContain("broken.workflow.ts(");
+        const problems = yield* Schema.decodeUnknownEffect(Problems)(checked.value).pipe(
+          Effect.orDie,
+        );
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(problems[`${wf}/broken.workflow.ts`]), (present_) =>
+              Arr.join(present_, "\n"),
+            ),
+          ),
+        ).toContain("broken.workflow.ts(");
         for (const name of beside) {
           expect([name, problems[`${wf}/${name}.workflow.ts`]]).toEqual([name, []]);
         }
@@ -389,7 +407,10 @@ test(
         const done = yield* host.until({ op: "poll", id: "paths", runId: "r1" }, complete);
         // One set of objects, not a copy the host's services would not recognise.
         expect(done.value).toBe("n:before+after:same");
-        const ran = (yield* events(state, "r1")).filter((line) => !line.startsWith("aligned"));
+        const ran = Arr.filter(
+          yield* events(state, "r1"),
+          (line) => !pipe_(line, Str.startsWith("aligned")),
+        );
         expect(ran).toEqual(["before", "after"]);
         yield* host.stop;
       }).pipe(Effect.scoped),
@@ -405,7 +426,7 @@ test("the Effect an author's declarations come from is the one the host runs", (
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const manifest = yield* Schema.decodeUnknownEffect(Manifest)(
+      const manifest = yield* Schema.decodeEffect(Manifest)(
         yield* fs.readFileString(`${root}package.json`),
       );
       expect(manifest.dependencies.effect).toBe(TOOLCHAIN.effect);
@@ -445,9 +466,16 @@ test("work for a workflow nobody has registered waits past upstream's deadline f
         body: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | TestClock.TestClock>,
       ) =>
         body.pipe(
-          Effect.provide(registered),
-          Effect.provide(engineLayer({ dir })),
-          Effect.provide(TestClock.layer()),
+          Effect.provide(
+            registered.pipe(
+              Layer.provideMerge(
+                engineLayer({
+                  dir,
+                }),
+              ),
+              Layer.provideMerge(TestClock.layer()),
+            ),
+          ),
           Effect.scoped,
           Effect.orDie,
         );
@@ -515,7 +543,7 @@ test(
         expect(done.value).toBe("note:crashed=after");
         yield* second.stop;
         expect(
-          (yield* events(state, "r1")).filter((line) => line.startsWith("launch")),
+          Arr.filter(yield* events(state, "r1"), (line) => pipe_(line, Str.startsWith("launch"))),
         ).toHaveLength(1);
       }).pipe(Effect.scoped),
     ),

@@ -1,6 +1,9 @@
 // A check left to CI waits on its job through the forge, and says what it waits on while it
 // does (ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job).
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schedule } from "effect";
 import { ciJob } from "../src/ci-job";
@@ -56,10 +59,10 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
     ],
   ])
     yield* exec(["git", ...args], { cwd });
-  const at = (yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout.trim();
+  const at = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
   const forge = forgeOn(name, head ?? at, { jobs: [{ name: "nuxi-typecheck", state }], ...over });
   const run: Runner = (cmd, args, where) =>
-    cmd === "git" && args.join(" ") === "rev-parse HEAD"
+    cmd === "git" && Arr.join(args, " ") === "rev-parse HEAD"
       ? Effect.succeed({ code: 0, stdout: `${at}\n` })
       : forge.run(cmd, args, where);
   const command: CheckCommand = { ...NUXI, executable: "/usr/bin/bunx", cwd };
@@ -156,15 +159,15 @@ test("a job not finished after 2 hours leaves its check unproved, saying so", ()
       Effect.gen(function* () {
         const { asked, at, forge } = yield* waiting("pending");
         expect(yield* read(asked, forge)).toEqual({
-          unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} is still pending after 2 hours`,
+          unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} is still pending after 2 hours`,
           state: "pending",
           url: `https://${PROJECT.gitlab}/-/jobs/1`,
           log: LOG,
         });
         // Every 30 s, so about 240 reads.
-        expect(forge.requests.filter((one) => one.url.includes("/jobs")).length).toBeGreaterThan(
-          200,
-        );
+        expect(
+          Arr.filter(forge.requests, (one) => pipe_(one.url, Str.includes("/jobs"))).length,
+        ).toBeGreaterThan(200);
         expect(yield* verifyingIn(asked.runDir)).toBeNull();
       }),
       60_000,
@@ -195,7 +198,7 @@ test("a job that passes for a commit the checkout has left while it was waited o
     Effect.gen(function* () {
       const { asked, at, forge } = yield* waiting("passed");
       expect(yield* read({ ...asked, run: committing(asked) }, forge)).toEqual({
-        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} passed, but ${asked.cwd} has moved off it since`,
+        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} passed, but ${asked.cwd} has moved off it since`,
         state: null,
         url: null,
         log: null,
@@ -212,7 +215,7 @@ test("a recorded pass is not returned for a checkout that moves while the job is
       const { asked, at, forge } = yield* waiting("passed");
       expect(yield* read(asked, forge)).toMatchObject({ proved: { pass: "ci" } });
       expect(yield* read({ ...asked, run: committing(asked) }, forge)).toMatchObject({
-        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} passed, but ${asked.cwd} has moved off it since`,
+        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} passed, but ${asked.cwd} has moved off it since`,
       });
       expect(yield* readVerifications(asked.journal)).toHaveLength(1);
     }),
@@ -227,7 +230,7 @@ test("a job that passes for a checkout with changes it never saw proves nothing"
       yield* exec(["git", "config", "status.showUntrackedFiles", "no"], { cwd: asked.cwd });
       yield* fs.writeFileString(`${asked.cwd}/unseen.txt`, "x");
       expect(yield* read(asked, forge)).toEqual({
-        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} passed, but ${asked.cwd} has changes it never saw`,
+        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} passed, but ${asked.cwd} has changes it never saw`,
         state: null,
         url: null,
         log: null,
@@ -243,7 +246,7 @@ test("a Run with no merge request has its check left to CI unproved, and the for
     Effect.gen(function* () {
       const { asked, at, forge } = yield* waiting("passed", null);
       expect(yield* read(asked, forge)).toEqual({
-        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} was never read: this Run has no merge request`,
+        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} was never read: this Run has no merge request`,
         state: null,
         url: null,
         log: null,
@@ -253,10 +256,10 @@ test("a Run with no merge request has its check left to CI unproved, and the for
     }),
   ));
 
-const BASE = "b".repeat(40);
+const BASE = pipe_("b", Str.repeat(40));
 const LOG = `glab ci trace 1 --repo ${PROJECT.gitlab}`;
 const retries = (requests: ReadonlyArray<FakeRequest>) =>
-  requests.filter((one) => one.url.includes("/retry"));
+  Arr.filter(requests, (one) => pipe_(one.url, Str.includes("/retry")));
 
 test("a failed job that also fails where the branch leaves its target is reported, and not retried", () =>
   runEffect(
@@ -265,7 +268,7 @@ test("a failed job that also fails where the branch leaves its target is reporte
         base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "failed" }] },
       });
       expect(yield* read({ ...asked, settle: true }, forge)).toEqual({
-        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} is failed`,
+        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} is failed`,
         state: "failed",
         url: `https://${PROJECT.gitlab}/-/jobs/1`,
         log: LOG,
@@ -303,7 +306,7 @@ test("a failed job that fails its retry, or with no base to compare, is the Run'
           ...over,
         });
         expect(yield* read({ ...asked, settle: true }, forge)).toEqual({
-          unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${at.slice(0, 12)} is failed`,
+          unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} is failed`,
           state: "failed",
           // The retry's own job.
           url: `https://${PROJECT.gitlab}/-/jobs/101`,
@@ -314,7 +317,9 @@ test("a failed job that fails its retry, or with no base to compare, is the Run'
       // Without `settle`, a failure is only read.
       const { asked, forge } = yield* waiting("failed");
       expect(yield* read(asked, forge)).toMatchObject({ state: "failed", log: LOG });
-      expect(forge.requests.some((one) => one.url.includes("pipelines?sha="))).toBe(false);
+      expect(
+        Arr.some(forge.requests, (one) => pipe_(one.url, Str.includes("pipelines?sha="))),
+      ).toBe(false);
       expect(retries(forge.requests)).toEqual([]);
     }),
   ));
@@ -326,7 +331,7 @@ const GATE: VerifySpec = { ...NUXI, ci: "test" };
 const thenLater = (now: { readonly fetch: FetchLike }, later: { readonly fetch: FetchLike }) => {
   let reads = 0;
   const fetch: FetchLike = (input, init) => {
-    if (input.endsWith("/pulls/31")) reads++;
+    if (pipe_(input, Str.endsWith("/pulls/31"))) reads++;
     return (reads > 1 ? later : now).fetch(input, init);
   };
   return { fetch };
@@ -368,7 +373,7 @@ test("a GitHub job absent from a head whose check runs have all completed is not
         "github",
       );
       expect(yield* read({ ...asked, spec: GATE }, forge)).toEqual({
-        unproved: `nuxi is left to CI and unproved: job test on ${at.slice(0, 12)} is not in its pipeline`,
+        unproved: `nuxi is left to CI and unproved: job test on ${pipe_(at, Str.slice(0, 12))} is not in its pipeline`,
         state: "missing",
         url: null,
         log: null,
@@ -387,7 +392,7 @@ test("a GitHub head with no check runs yet reads as pending", () =>
         "github",
       );
       expect(yield* read({ ...asked, spec: GATE, wait: false }, forge)).toEqual({
-        unproved: `nuxi is left to CI and unproved: job test on ${at.slice(0, 12)} is pending`,
+        unproved: `nuxi is left to CI and unproved: job test on ${pipe_(at, Str.slice(0, 12))} is pending`,
         state: "pending",
         url: null,
         log: null,
@@ -410,7 +415,7 @@ test("a GitHub job absent from a head whose first hundred check runs completed w
         "github",
       );
       expect(yield* read({ ...asked, spec: GATE, wait: false }, forge)).toMatchObject({
-        unproved: `nuxi is left to CI and unproved: job test on ${at.slice(0, 12)} is pending`,
+        unproved: `nuxi is left to CI and unproved: job test on ${pipe_(at, Str.slice(0, 12))} is pending`,
         state: "pending",
       });
     }),

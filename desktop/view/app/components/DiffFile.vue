@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Cause from "effect/Cause";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import {
   FileDiff,
   type FileDiffMetadata,
@@ -49,24 +54,33 @@ const parse = (patch: string) => {
 // is missed until the host sends each file's fingerprint.
 watch(
   () => [open.value, props.file.added, props.file.removed, props.file.status, props.base] as const,
-  async ([isOpen], _, onCleanup) => {
+  (input, _, onCleanup) => {
+    const [isOpen] = input;
     if (!isOpen) return;
     let stale = false;
-    const wanted = new AbortController();
+    const reading = Effect.runFork(
+      Effect.gen(function* () {
+        const patch = yield* Effect.promise((signal) =>
+          textOf(props.installation, props.runId, `diff:${props.file.path}`, {
+            within,
+            signal,
+          }),
+        );
+        if (stale) return;
+        failed.value = patch === null;
+        if (patch === null) return;
+        const diff = parse(patch);
+        unparsed.value = diff === null;
+        parsed.value = diff;
+      }),
+    );
     onCleanup(() => {
       stale = true;
-      wanted.abort();
+      Effect.runFork(Fiber.interrupt(reading));
     });
-    const patch = await textOf(props.installation, props.runId, `diff:${props.file.path}`, {
-      within,
-      signal: wanted.signal,
-    });
-    if (stale) return;
-    failed.value = patch === null;
-    if (patch === null) return;
-    const diff = parse(patch);
-    unparsed.value = diff === null;
-    parsed.value = diff;
+    return Effect.runPromise(
+      Fiber.join(reading).pipe(Effect.catchCauseIf(Cause.hasInterruptsOnly, () => Effect.void)),
+    );
   },
   { immediate: true },
 );
@@ -87,7 +101,8 @@ const slotFor = (id: string) => {
   slots.set(id, made);
   return made;
 };
-const draftOf = (id: string): Draft | undefined => drafts.value.find((draft) => draft.id === id);
+const draftOf = (id: string): Draft | undefined =>
+  Option.getOrUndefined(Arr.findFirst(drafts.value, (draft) => draft.id === id));
 
 /** The finding's row, once drawn: shown and marked, then let go. */
 let wanted: { readonly line: number; readonly side: SelectionSide } | null = null;
@@ -141,7 +156,7 @@ watch([() => props.split, () => props.wrap, () => colorMode.value], () => {
 });
 watch(annotations, (now) => {
   view?.render({ lineAnnotations: now });
-  const kept = new Set(now.map((annotation) => annotation.metadata));
+  const kept = new Set(Arr.map(now, (annotation) => annotation.metadata));
   for (const id of slots.keys()) if (!kept.has(id)) slots.delete(id);
 });
 

@@ -1,6 +1,9 @@
 // The GitLab adapter: everything Collie asks GitLab, through `glab` or over HTTP with
 // glab's token.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { DateTime, Effect, FileSystem, Option, Path, Redacted, Result, Schema } from "effect";
 import { CommandLine } from "effect/process";
 import {
@@ -54,8 +57,10 @@ const whereOf = (ref: MrRef) => (ref.project ? `${ref.project}!${ref.iid}` : `!$
 
 /** The host part of `host/group/project`, which is what glab authenticates against. */
 export function hostOf(project: string | null): string | null {
-  const host = project?.split("/")[0];
-  return host && host.includes(".") ? host : null;
+  const host = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(project), (present) => Str.split(present, "/")[0]),
+  );
+  return host && pipe(host, Str.includes(".")) ? host : null;
 }
 
 /**
@@ -68,13 +73,13 @@ export function hostOf(project: string | null): string | null {
  */
 const optionalText = Schema.optionalKey(Schema.NullOr(Schema.String));
 const optionalFlag = Schema.optionalKey(Schema.NullOr(Schema.Boolean));
-const optionalCount = Schema.optionalKey(Schema.NullOr(Schema.Number));
+const optionalCount = Schema.optionalKey(Schema.NullOr(Schema.Finite));
 const optionalStatus = Schema.optionalKey(
   Schema.NullOr(Schema.Struct({ status: optionalText, sha: optionalText, web_url: optionalText })),
 );
 
 const MrFields = Schema.Struct({
-  iid: Schema.optionalKey(Schema.NullOr(Schema.Union([Schema.String, Schema.Number]))),
+  iid: Schema.optionalKey(Schema.NullOr(Schema.Union([Schema.String, Schema.Finite]))),
   title: optionalText,
   state: optionalText,
   draft: optionalFlag,
@@ -132,7 +137,7 @@ function mergeabilityOf(
 ): Mergeability | undefined {
   const said = detailed ?? (legacy === "can_be_merged" ? "mergeable" : legacy);
   if (said === undefined || said === null || said === "") return undefined;
-  const words = said.replaceAll("_", " ");
+  const words = pipe(said, Str.replaceAll("_", " "));
   if (said === "mergeable") return { state: "mergeable", said: words };
   return { state: SETTLING_MERGE.has(said) ? "unknown" : "blocked", said: words };
 }
@@ -181,9 +186,10 @@ export function mrDetails<R>(
       title: mr.title ?? "",
       state: draft && mr.state === "opened" ? "draft" : (mr.state ?? ""),
       author: mr.author?.username ?? "",
-      assignees: (mr.assignees ?? [])
-        .map((one) => one.username ?? "")
-        .filter((name) => name !== ""),
+      assignees: Arr.filter(
+        Arr.map(mr.assignees ?? [], (one) => one.username ?? ""),
+        (name) => name !== "",
+      ),
       sourceBranch: mr.source_branch ?? "",
       fork: mr.source_project_id !== mr.target_project_id,
       targetBranch: mr.target_branch ?? "",
@@ -193,12 +199,12 @@ export function mrDetails<R>(
         ? approvalsOf(approvals.value)
         : approvalsLine(mr.approvals_required, mr.approvals_left),
       unresolved: discussions.ok
-        ? discussions.value.some((one) =>
-            one.notes.some((note) => note.resolvable === true && note.resolved !== true),
+        ? Arr.some(discussions.value, (one) =>
+            Arr.some(one.notes, (note) => note.resolvable === true && note.resolved !== true),
           )
         : mr.blocking_discussions_resolved === false,
       notes: mr.user_notes_count ?? 0,
-      headSha: (mr.sha ?? "").slice(0, 7),
+      headSha: pipe(mr.sha ?? "", Str.slice(0, 7)),
       head: mr.sha ?? "",
       mergedSha:
         mr.state === "merged" ? (mr.merge_commit_sha ?? mr.squash_commit_sha ?? mr.sha ?? "") : "",
@@ -388,7 +394,9 @@ function deployed(
         `deployments?status=success&order_by=created_at&sort=desc&per_page=100&page=${page}`,
       );
       if (!newest.ok) return newest;
-      const found = newest.value.find((one) => names.has(one.environment.name));
+      const found = Option.getOrUndefined(
+        Arr.findFirst(newest.value, (one) => names.has(one.environment.name)),
+      );
       if (found !== undefined) return { ok: true, sha: found.sha };
       if (newest.value.length < 100) return { ok: true, sha: null };
     }
@@ -472,7 +480,7 @@ function stagingEnvironments<R>(
 }
 
 const BranchMr = Schema.Struct({
-  iid: Schema.Union([Schema.String, Schema.Number]),
+  iid: Schema.Union([Schema.String, Schema.Finite]),
   web_url: optionalText,
   merge_when_pipeline_succeeds: optionalFlag,
   state: Schema.String,
@@ -512,7 +520,9 @@ function forBranch(
   return Effect.map(mrsFrom(project, branch, "opened", cwd), (listed) => {
     if (!listed.ok) return listed;
     const mr =
-      listed.value.find((one) => one.merge_when_pipeline_succeeds === true) ?? listed.value[0];
+      Option.getOrUndefined(
+        Arr.findFirst(listed.value, (one) => one.merge_when_pipeline_succeeds === true),
+      ) ?? listed.value[0];
     if (mr === undefined) return { ok: true, open: null };
     const iid = String(mr.iid);
     return {
@@ -532,7 +542,9 @@ const PAGE = 100;
 
 /** GitLab's `*` stands for any run of characters, `/` included. */
 const wildcard = (pattern: string) =>
-  new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*")}$`);
+  new RegExp(
+    `^${pipe(pattern, Str.replace(/[.+?^${}()|[\]\\]/g, "\\$&"), Str.replaceAll("*", ".*"))}$`,
+  );
 
 /** The default branch, or a protected branch as listed, wildcards matched; null where either is unread. */
 function protects(
@@ -543,14 +555,14 @@ function protects(
   return Effect.gen(function* () {
     const host = hostOf(project);
     if (host === null) return null;
-    const route = `projects/${encodeURIComponent(project.slice(host.length + 1))}`;
+    const route = `projects/${encodeURIComponent(pipe(project, Str.slice(host.length + 1)))}`;
     const login = glabLoginTo(host);
     const repo = yield* requestAs(DefaultBranch, login, cwd, route);
     if (!repo.ok) return null;
     if (repo.value.default_branch === branch) return true;
     const rules = yield* pagesAs(ProtectedBranch, login, cwd, `${route}/protected_branches`);
     if (!rules.ok) return null;
-    return rules.value.some((rule) => wildcard(rule.name).test(branch));
+    return Arr.some(rules.value, (rule) => wildcard(rule.name).test(branch));
   });
 }
 
@@ -564,7 +576,7 @@ function fromBranch(
     if (!listed.ok) return listed;
     return {
       ok: true,
-      mrs: listed.value.map((mr): FromBranch => {
+      mrs: Arr.map(listed.value, (mr): FromBranch => {
         const iid = String(mr.iid);
         return {
           iid,
@@ -581,19 +593,19 @@ function fromBranch(
 const MrHead = Schema.Struct({
   sha: optionalText,
   head_pipeline: Schema.optionalKey(
-    Schema.NullOr(Schema.Struct({ id: Schema.Number, sha: optionalText })),
+    Schema.NullOr(Schema.Struct({ id: Schema.Finite, sha: optionalText })),
   ),
 });
 const Commit = Schema.Struct({ parent_ids: Schema.Array(Schema.String) });
 const Jobs = Schema.Array(
   Schema.Struct({
-    id: Schema.Number,
+    id: Schema.Finite,
     name: Schema.String,
     status: Schema.String,
     web_url: optionalText,
   }),
 );
-const Pipelines = Schema.Array(Schema.Struct({ id: Schema.Number, sha: Schema.String }));
+const Pipelines = Schema.Array(Schema.Struct({ id: Schema.Finite, sha: Schema.String }));
 const MrBase = Schema.Struct({
   target_branch: optionalText,
   diff_refs: Schema.optionalKey(Schema.NullOr(Schema.Struct({ base_sha: optionalText }))),
@@ -661,7 +673,7 @@ export function glabLoginTo(host: string, stored = false): ForgeLogin {
       : run("glab", [...args], cwd);
   const value = (key: string, run: Runner, cwd: string) =>
     Effect.map(glab(["config", "get", key, "--host", host], run, cwd), (ran) =>
-      ran.code === 0 ? ran.stdout.trim() : "",
+      ran.code === 0 ? Str.trim(ran.stdout) : "",
     );
   return {
     forge: "gitlab",
@@ -704,7 +716,7 @@ export const MONTHS = [
  * the Machine's own zone, so a zone named by its abbreviation is this Machine's.
  */
 export function glabExpiry(said: string): number | null {
-  const m = /^(\d{2}) (\w{3}) (\d{2}) (\d{2}):(\d{2}) (\S+)$/.exec(said.trim());
+  const m = /^(\d{2}) (\w{3}) (\d{2}) (\d{2}):(\d{2}) (\S+)$/.exec(Str.trim(said));
   if (m === null) return null;
   const [, day, month, year, hour, minute, zone = ""] = m;
   const offset = /^([+-])(\d{2})(\d{2})$/.exec(zone);
@@ -739,7 +751,7 @@ const projectRest = (ref: MrRef, cwd: string) => {
   if (host === null || ref.project === null)
     return { ok: false, reason: `${whereOf(ref)} names no GitLab project` } as const;
   const login = glabLoginTo(host);
-  const project = `projects/${encodeURIComponent(ref.project.slice(host.length + 1))}`;
+  const project = `projects/${encodeURIComponent(pipe(ref.project, Str.slice(host.length + 1)))}`;
   const rest: Rest = (schema, route) => requestAs(schema, login, cwd, `${project}/${route}`);
   return { ok: true, login, project, rest } as const;
 };
@@ -750,7 +762,7 @@ const jobIn = (rest: Rest, id: number, name: string) =>
     for (let page = 1; found === undefined; page++) {
       const jobs = yield* rest(Jobs, `pipelines/${id}/jobs?per_page=100&page=${page}`);
       if (!jobs.ok) return jobs;
-      found = jobs.value.find((one) => one.name === name);
+      found = Option.getOrUndefined(Arr.findFirst(jobs.value, (one) => one.name === name));
       if (jobs.value.length < 100) break;
     }
     return {
@@ -798,7 +810,10 @@ function baseJob(
       };
     const pipeline = tip.value;
     if (pipeline === undefined)
-      return { ok: false, reason: `no pipeline at ${base.slice(0, 12)} or on ${target}` };
+      return {
+        ok: false,
+        reason: `no pipeline at ${pipe(base, Str.slice(0, 12))} or on ${target}`,
+      };
     const found = yield* jobIn(rest, pipeline.id, name);
     if (!found.ok)
       return {
@@ -828,7 +843,7 @@ const ApprovalState = Schema.Struct({
   rules: Schema.Array(
     Schema.Struct({
       name: Schema.String,
-      approvals_required: Schema.Number,
+      approvals_required: Schema.Finite,
       approved_by: Schema.optionalKey(Schema.NullOr(Schema.Array(Username))),
     }),
   ),
@@ -843,7 +858,7 @@ const Discussions = Schema.Array(
     individual_note: Schema.Boolean,
     notes: Schema.Array(
       Schema.Struct({
-        id: Schema.Number,
+        id: Schema.Finite,
         body: Schema.String,
         author: Schema.Struct({ username: Schema.String, bot: optionalFlag }),
         created_at: Schema.String,
@@ -878,18 +893,19 @@ function approvalOf(
   login: string,
   changesRequested: boolean,
 ): string {
-  const requiring = rules.filter((rule) => rule.required > 0);
+  const requiring = Arr.filter(rules, (rule) => rule.required > 0);
   if (requiring.length === 0) return changesRequested ? "changes were requested" : "";
-  return requiring
-    .flatMap((rule) => {
-      const others = rule.by.filter((who) => who !== login).length;
+  return Arr.join(
+    Arr.flatMap(requiring, (rule) => {
+      const others = Arr.filter(rule.by, (who) => who !== login).length;
       return others >= rule.required
         ? []
         : [
             `${rule.name} needs ${rule.required} approval(s) and has ${others} besides ${login}'s own`,
           ];
-    })
-    .join("; ");
+    }),
+    "; ",
+  );
 }
 
 /**
@@ -909,7 +925,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
     if (!mr.ok) return mr;
     const approved = yield* rest(ReviewApprovals, `${route}/approvals`);
     if (!approved.ok) return approved;
-    const approvers = (approved.value.approved_by ?? []).map((one) => one.user.username);
+    const approvers = Arr.map(approved.value.approved_by ?? [], (one) => one.user.username);
     // Approval state is Premium's and Ultimate's; elsewhere the approvals read is one rule.
     const state = yield* rest(ApprovalState, `${route}/approval_state`);
     const rules = !state.ok
@@ -920,10 +936,10 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
             by: approvers,
           },
         ]
-      : state.value.rules.map((rule) => ({
+      : Arr.map(state.value.rules, (rule) => ({
           name: `rule "${rule.name}"`,
           required: rule.approvals_required,
-          by: (rule.approved_by ?? []).map((one) => one.username),
+          by: Arr.map(rule.approved_by ?? [], (one) => one.username),
         }));
     const comments: ForgeComment[] = [];
     const resolved = new Set<string>();
@@ -940,8 +956,12 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
         };
       for (const discussion of discussions.value) {
         const thread = discussion.individual_note ? null : discussion.id;
-        const resolvable = discussion.notes.filter((note) => note.resolvable === true);
-        if (thread !== null && resolvable.length > 0 && resolvable.every((note) => note.resolved))
+        const resolvable = Arr.filter(discussion.notes, (note) => note.resolvable === true);
+        if (
+          thread !== null &&
+          resolvable.length > 0 &&
+          Arr.every(resolvable, (note) => Boolean(note.resolved))
+        )
           resolved.add(thread);
         for (const note of discussion.notes)
           comments.push({
@@ -981,7 +1001,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
           : null,
       approved: unapproved === "",
       unapproved,
-      approvers: approvers.filter((who) => who !== login),
+      approvers: Arr.filter(approvers, (who) => who !== login),
       changesRequested,
       mergeable: mergeabilityOf(said.detailed_merge_status, said.merge_status) ?? null,
       pipeline: headChecks(said.head_pipeline ?? said.pipeline ?? null, head),
@@ -1083,7 +1103,7 @@ const PipelineState = Schema.Struct({ status: Schema.String });
 /** `https://host/group/project/-/pipelines/7`'s status, or null where GitLab does not say. */
 function pipelineStatus(url: string, cwd: string): Effect.Effect<string | null, never, ForgeHttp> {
   return Effect.gen(function* () {
-    const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(url.trim());
+    const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
     if (!m) return null;
     const [, host, project, id] = m;
     // The address is agent text: only a host the human signed glab in to is asked.
@@ -1128,7 +1148,7 @@ function tagPipeline(
 /** `https://host/group/project/-/pipelines/7` and its jobs, a manual one as waiting by hand. */
 function pipeline(url: string, cwd: string): Effect.Effect<PipelineRead, never, ForgeHttp> {
   return Effect.gen(function* () {
-    const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(url.trim());
+    const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
     if (!m) return { ok: false, reason: `${url} is not a GitLab pipeline` };
     const [, host, project, id] = m;
     const login = glabLoginTo(host!, true);
@@ -1148,7 +1168,7 @@ function pipeline(url: string, cwd: string): Effect.Effect<PipelineRead, never, 
       project: `${host}/${project}`,
       ref: status.value.ref,
       sha: status.value.sha,
-      jobs: jobs.map((one) => ({
+      jobs: Arr.map(jobs, (one) => ({
         name: one.name,
         state: one.status === "manual" ? "manual" : (JOB_STATES.get(one.status) ?? "pending"),
         url: one.web_url ?? null,
@@ -1165,12 +1185,10 @@ function clone<R>(
   run: Runner<R>,
 ): Effect.Effect<Readiness, never, R> {
   return Effect.gen(function* () {
-    const host = hostOf(project) ?? project.split("/")[0]!;
-    const token = (yield* run(
-      "glab",
-      ["config", "get", "token", "--host", host],
-      cwd,
-    )).stdout.trim();
+    const host = hostOf(project) ?? Str.split(project, "/")[0]!;
+    const token = Str.trim(
+      (yield* run("glab", ["config", "get", "token", "--host", host], cwd)).stdout,
+    );
     if (token === "") return { ok: false, reason: `could not authenticate to ${host}` };
     const credentials = Buffer.from(`oauth2:${token}`).toString("base64");
     const cloned = yield* run("git", ["clone", "--quiet", `https://${project}.git`, into], cwd, {
@@ -1195,7 +1213,7 @@ export const gitlab: Forge = {
   tagPipeline,
   clone,
   credentials: (project, into, run) => {
-    const host = hostOf(project) ?? project.split("/")[0]!;
+    const host = hostOf(project) ?? Str.split(project, "/")[0]!;
     return keepCredentialHelper(
       into,
       host,
@@ -1234,10 +1252,13 @@ export const gitlab: Forge = {
       );
     const route = `projects/${encodeURIComponent(mrPath({ project, iid: "" }))}/merge_requests`;
     return {
-      create: [
-        `${Result.getOrThrow(CommandLine.join(["glab", "mr", "create", "--assignee", assignee]))} --title "<title>" --description "<title>" --yes`,
-        `${api("PUT", `${route}/<iid>`)} -F description=@<file>`,
-      ].join("\n"),
+      create: Arr.join(
+        [
+          `${Result.getOrThrow(CommandLine.join(["glab", "mr", "create", "--assignee", assignee]))} --title "<title>" --description "<title>" --yes`,
+          `${api("PUT", `${route}/<iid>`)} -F description=@<file>`,
+        ],
+        "\n",
+      ),
       comment:
         existing === null ? "" : `${api("POST", `${route}/${existing}/notes`)} -F body=@<file>`,
     };

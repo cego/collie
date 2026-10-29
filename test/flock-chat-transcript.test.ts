@@ -2,6 +2,9 @@
 // transcript Claude Code keeps: the human's words, the answers, and each tool call with
 // what it came back with.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { transcriptOf } from "../desktop/src/bun/transcript";
 import { attachmentPart, listing } from "../desktop/src/shared/attachments";
@@ -10,7 +13,7 @@ import recorded from "./fixtures/flock-chat-transcript.json";
 
 test("a recorded conversation reads back as the human's message and one answer with its tool call", () => {
   const messages = transcriptOf(recorded);
-  expect(messages.map(({ role }) => role)).toEqual(["user", "assistant"]);
+  expect(Arr.map(messages, ({ role }) => role)).toEqual(["user", "assistant"]);
   expect(messages[0]!.parts).toEqual([
     {
       type: "text",
@@ -96,11 +99,11 @@ test("Claude Code's note that a turn was interrupted is not read back as the hum
       message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] },
     },
   ]);
-  expect(messages.map(({ id }) => id)).toEqual(["u1"]);
+  expect(Arr.map(messages, ({ id }) => id)).toEqual(["u1"]);
 });
 
 test("Desktop's listing of a message's files reads back as attachments, and a message of files alone is kept", () => {
-  const sha = "b".repeat(64);
+  const sha = pipe("b", Str.repeat(64));
   const shot = {
     id: `${sha}/shot.png`,
     name: "shot.png",
@@ -142,7 +145,7 @@ test("Desktop's listing of a message's files reads back as attachments, and a me
 
 test("Desktop's note of a message's card reads back as the message's card, never as its words", () => {
   const about = { machine: "vm-mk", task: "t-1", run: "r-2", name: "Fix board bugs" };
-  const sha = "c".repeat(64);
+  const sha = pipe("c", Str.repeat(64));
   const shot = {
     id: `${sha}/shot.png`,
     name: "shot.png",

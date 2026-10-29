@@ -1,13 +1,17 @@
 // A Hold or Stop an operator sets through `collie run` ends the wait a Run is in. The host
 // here is a real one over a fake herdr.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 /** The world's host, started from this process with `set` in its environment. */
 const hostWith = Effect.fn("test.hostWith")(function* (
@@ -17,13 +21,13 @@ const hostWith = Effect.fn("test.hostWith")(function* (
   const all = { ...set, HERDR_PLUGIN_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const before = Object.fromEntries(Object.keys(all).map((key) => [key, Bun.env[key]]));
+      const before = Rec.fromEntries(Arr.map(Rec.keys(all), (key) => [key, Bun.env[key]] as const));
       Object.assign(Bun.env, all);
       return before;
     }),
     (before) =>
       Effect.sync(() => {
-        for (const [key, value] of Object.entries(before))
+        for (const [key, value] of Rec.toEntries(before))
           if (value === undefined) delete Bun.env[key];
           else Bun.env[key] = value;
       }),
@@ -69,7 +73,7 @@ test(
           const log = `${world.state}/agents/${runId}/agents.log`;
           yield* until(
             () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
-            (text) => text.includes("second-step waits for its turn to end"),
+            (text) => pipe_(text, Str.includes("second-step waits for its turn to end")),
           );
 
           const stopped = yield* collie(world, ["run", "stop", runId]);

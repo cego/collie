@@ -1,6 +1,8 @@
 // The default branch merged into a Run's branch where it has moved: a merge commit, never a
 // rebase, and never over work the builder has not committed.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { Effect, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { defaultBase } from "./inputs";
@@ -27,7 +29,7 @@ export const integratedLine = (done: Integration): string | null => {
   const at = `integrated ${done.branch}@${done.sha}`;
   if (done.status === "merged") return at;
   if (done.status === "conflicted")
-    return `${at}, conflicts left to the builder: ${done.files.join(", ")}`;
+    return `${at}, conflicts left to the builder: ${Arr.join(done.files, ", ")}`;
   return null;
 };
 
@@ -62,9 +64,9 @@ export const integrateDefault = (
         branch,
         reason: `${ref} cannot be read`,
       } satisfies Integration;
-    const at = { ...none, branch, ref, sha: resolved.stdout.trim() };
+    const at = { ...none, branch, ref, sha: Str.trim(resolved.stdout) };
     const unmerged = Effect.map(git("diff", "--name-only", "--diff-filter=U"), (said) =>
-      said.stdout.split("\n").filter((file) => file !== ""),
+      Arr.filter(Str.split(said.stdout, "\n"), (file) => file !== ""),
     );
     const merging = yield* git("rev-parse", "-q", "--verify", "MERGE_HEAD");
     // An unfinished merge is still the builder's, however often it is asked about.
@@ -74,11 +76,11 @@ export const integrateDefault = (
         return {
           ...at,
           status: "conflicted",
-          sha: merging.stdout.trim(),
+          sha: Str.trim(merging.stdout),
           files,
         } satisfies Integration;
     }
-    if (merging.code === 0 || (yield* git("status", "--porcelain")).stdout.trim() !== "")
+    if (merging.code === 0 || Str.trim((yield* git("status", "--porcelain")).stdout) !== "")
       return {
         ...at,
         status: "waiting",

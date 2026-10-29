@@ -10,7 +10,10 @@
 // there is one connection and one thing to back up.
 // `docs/adr/0017-one-request-is-one-run.md` is why each of these is the way it is.
 
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import * as Struct from "effect/Struct";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import { Context, Effect, Layer, Schema, Stream, flow, Result } from "effect";
 import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
 import * as Migrator from "effect/sql/Migrator";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -325,7 +328,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
     return {
       remember: (generation: GenerationRow) =>
         Effect.gen(function* () {
-          const at = yield* nowIso();
+          const at = yield* nowIso;
           yield* sql`
             INSERT INTO collie_generations (name, workflow, entry, at)
             VALUES (${generation.name}, ${generation.workflow}, ${generation.entry}, ${at})
@@ -337,7 +340,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
       asking: (question) =>
         Effect.gen(function* () {
-          const at = yield* nowIso();
+          const at = yield* nowIso;
           yield* sql`
               INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker)
               VALUES (
@@ -352,7 +355,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       asked: (run: string) => decisionsOf(run).pipe(Effect.orDie),
 
       settle: Effect.fn("Store.settle")(function* (answer) {
-        const at = yield* nowIso();
+        const at = yield* nowIso;
         // One write over the row while it is still unanswered. Whoever it returns a row
         // to is the answer; everybody else reads what landed and is told so.
         const settled = yield* reactivity
@@ -395,7 +398,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         };
         if (admission.attachments?.length) askedFor.attachments = [...admission.attachments];
         const asked = canonical(askedFor);
-        const at = yield* nowIso();
+        const at = yield* nowIso;
         // The claim is the insert, and what it returns is whether this caller made it:
         // one request id, one row, decided by the database rather than by a read another
         // caller could be between.
@@ -440,7 +443,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
       accepted: (run: string) =>
         Effect.gen(function* () {
-          const at = yield* nowIso();
+          const at = yield* nowIso;
           yield* reactivity.mutation(
             RUNS,
             sql`UPDATE collie_runs SET accepted = ${at} WHERE run = ${run}`,
@@ -515,8 +518,11 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 }
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
-const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
-const answererText = Schema.encodeSync(Schema.fromJsonString(AuditLine.fields.actor));
+const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
+const answererText = flow(
+  Schema.encodeResult(Schema.fromJsonString(AuditLine.fields.actor)),
+  Result.getOrThrow,
+);
 
 /**
  * The same arguments written the same way, so a retry is compared rather than guessed at:
@@ -525,11 +531,9 @@ const answererText = Schema.encodeSync(Schema.fromJsonString(AuditLine.fields.ac
 const canonical = (value: Schema.Json): string => asJsonText(ordered(value));
 
 const ordered = (value: Schema.Json): Schema.Json => {
-  if (Array.isArray(value)) return value.map(ordered);
+  if (Arr.isArray<typeof value>(value)) return Arr.map(value, ordered);
   if (!isRecord(value)) return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort()
-      .map((key) => [key, ordered(value[key] ?? null)]),
+  return Rec.fromEntries(
+    Arr.map(Struct.keys(value).sort(), (key) => [key, ordered(value[key] ?? null)] as const),
   );
 };

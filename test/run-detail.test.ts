@@ -1,6 +1,9 @@
 // One Run's details as the host serves them while a drawer is open: followed as they
 // change, with large items fetched by reference.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import {
   Cause,
@@ -36,6 +39,7 @@ import { forgeOnPath, serveForges } from "./support/forge";
 import { focus } from "./support/focus";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
+import * as Layer from "effect/Layer";
 
 const runIdOf = (envelope: { readonly data?: unknown }) =>
   Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(envelope.data).pipe(
@@ -69,8 +73,8 @@ test(
                 (detail) =>
                   detail !== null &&
                   detail.tail?._tag === "Text" &&
-                  detail.tail.text.includes("later line") &&
-                  detail.evidence.some((one) => one.name === "shot.png"),
+                  pipe_(detail.tail.text, Str.includes("later line")) &&
+                  Arr.some(detail.evidence, (one) => one.name === "shot.png"),
               ),
               Stream.runLast,
               Effect.forkScoped,
@@ -266,7 +270,7 @@ test(
             Effect.repeat({
               until: (state) =>
                 state.detail?.tail?._tag === "Text" &&
-                state.detail.tail.text.includes("from the host"),
+                pipe_(state.detail.tail.text, Str.includes("from the host")),
               schedule: Schedule.spaced("250 millis"),
               times: 80,
             }),
@@ -313,7 +317,8 @@ test.skipIf(process.getuid?.() === 0)(
             const after = yield* detailOf(key).pipe(
               Effect.repeat({
                 until: (detail) =>
-                  detail?.tail?._tag === "Text" && detail.tail.text.includes("after the defect"),
+                  detail?.tail?._tag === "Text" &&
+                  pipe_(detail.tail.text, Str.includes("after the defect")),
                 schedule: Schedule.spaced("250 millis"),
                 times: 80,
               }),
@@ -340,7 +345,7 @@ const branched = Effect.gen(function* () {
       Effect.flatMap((done) =>
         done.exitCode === 0
           ? Effect.void
-          : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+          : Effect.die(new Error(`git ${Arr.join(args, " ")}: ${done.stderr}`)),
       ),
     );
   yield* git("init", "-q", "-b", "main");
@@ -374,7 +379,13 @@ test("a Run's diff is its branch against the merge base, per file, and live whil
         // Live: what the checkout holds now, committed or not.
         yield* fs.writeFileString(`${repo}/wip.txt`, "draft\n");
         const live = yield* runDiff({ cwd: repo, branch: "feature", live: true });
-        expect(live?.files.map((file) => file.path)).toContain("wip.txt");
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(live), (present) =>
+              Arr.map(present.files, (file) => file.path),
+            ),
+          ),
+        ).toContain("wip.txt");
         expect(yield* runDiff({ cwd: `${repo}/nowhere`, branch: "feature", live: false })).toBe(
           null,
         );
@@ -395,7 +406,13 @@ test("an ended Run keeps its diff once its checkout has gone, file by file", () 
         const run = yield* madeRun(state, { cwd: repo, branch: "feature", state: "succeeded" });
 
         const first = yield* diffOf(run);
-        expect(first?.files.map((file) => file.path)).toContain("tab\there.txt");
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(first), (present_) =>
+              Arr.map(present_.files, (file) => file.path),
+            ),
+          ),
+        ).toContain("tab\there.txt");
         const pruned = { ...run, cwd: `${repo}/pruned` };
 
         expect(yield* diffOf(pruned)).toEqual(first);
@@ -409,7 +426,9 @@ test("an ended Run keeps its diff once its checkout has gone, file by file", () 
         const head = yield* fetchRef(pruned, "diff:kept.txt", { offset: 0, length: 10 });
         yield* fs.remove(`${run.dir}/diff.json`);
         const tail = yield* fetchRef(pruned, "diff:kept.txt", { offset: 10, length: 1 << 20 });
-        const joined = Buffer.concat([head, tail].map((one) => Buffer.from(one.content, "base64")));
+        const joined = Buffer.concat(
+          Arr.map([head, tail], (one) => Buffer.from(one.content, "base64")),
+        );
         expect(joined.toString()).toBe(kept.content);
       }),
     ).pipe(Effect.provide(forgeHttpLayer)),
@@ -423,14 +442,26 @@ test("a kept diff is taken again once its branch has moved on", () =>
         const { repo, git } = yield* branched;
         const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-diff-state-" });
         const stopped = yield* madeRun(state, { cwd: repo, branch: "feature", state: "stopped" });
-        expect((yield* diffOf(stopped))?.files.map((file) => file.path)).not.toContain("more.txt");
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(yield* diffOf(stopped)), (present__) =>
+              Arr.map(present__.files, (file) => file.path),
+            ),
+          ),
+        ).not.toContain("more.txt");
 
         // Resumed, it committed more and succeeded.
         yield* fs.writeFileString(`${repo}/more.txt`, "more\n");
         yield* git("add", "-A");
         yield* git("commit", "-qm", "more");
         const done = { ...stopped, state: "succeeded" as const };
-        expect((yield* diffOf(done))?.files.map((file) => file.path)).toContain("more.txt");
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(yield* diffOf(done)), (present___) =>
+              Arr.map(present___.files, (file) => file.path),
+            ),
+          ),
+        ).toContain("more.txt");
       }),
     ),
   ));
@@ -476,8 +507,10 @@ test("a live diff never reads through a link or into a device or FIFO", () =>
         const live = yield* runDiff({ cwd: repo, branch: "feature", live: true }).pipe(
           Effect.timeout("10 seconds"),
         );
-        const untracked = live?.files.filter(
-          (file) => file.path === "zero" || file.path === "pipe",
+        const untracked = Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(live), (present____) =>
+            Arr.filter(present____.files, (file) => file.path === "zero" || file.path === "pipe"),
+          ),
         );
         expect(untracked).toEqual([
           { path: "pipe", status: "added", added: null, removed: null },
@@ -514,8 +547,8 @@ test("a reference never follows a link out of the directory it belongs to", () =
         const parts = [];
         for (const offset of [0, 2, 4])
           parts.push(yield* fetchRef(run, "plan:issues/02-b.md", { offset, length: 2 }));
-        expect(parts.every((part) => part.encoding === "base64")).toBe(true);
-        const joined = parts.flatMap((part) => [...Buffer.from(part.content, "base64")]);
+        expect(Arr.every(parts, (part) => part.encoding === "base64")).toBe(true);
+        const joined = Arr.flatMap(parts, (part) => [...Buffer.from(part.content, "base64")]);
         expect(new TextDecoder().decode(new Uint8Array(joined))).toBe("a—b");
       }),
     ).pipe(Effect.provide(forgeHttpLayer)),
@@ -573,9 +606,16 @@ test("a pipeline: reference says how a GitLab pipeline or a GitHub Actions run w
           fetchRef(run, ref).pipe(
             Effect.map((file) => file.content),
             Effect.catch((refused) => Effect.succeed(`refused: ${refused.reason}`)),
-            Effect.provide(forgeHttpLayer),
             Effect.provide(
-              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+              forgeHttpLayer.pipe(
+                Layer.provideMerge(
+                  ConfigProvider.layerAdd(
+                    ConfigProvider.fromUnknown({
+                      COLLIE_FORGE_API: api,
+                    }),
+                  ),
+                ),
+              ),
             ),
           );
         expect(yield* said("pipeline:https://github.com/cego/collie/actions/runs/7")).toBe(
@@ -626,7 +666,7 @@ test("a rewritten ticket, and a finished Run's rewritten plan, reach the record'
         expect(respecced?.spec).toMatchObject({ _tag: "Text", text: "# Spec, rewritten\n" });
         expect(yield* planOf()).toBe(respecced);
 
-        const prefix = "x".repeat(64 * 1024);
+        const prefix = Str.repeat(64 * 1024)("x");
         yield* fs.writeFileString(`${run.dir}/plan/SPEC.md`, `${prefix}old tail`);
         const long = yield* planOf();
         expect(long?.spec).toEqual({ _tag: "Text", text: prefix, truncated: true });

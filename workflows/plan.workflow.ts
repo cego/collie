@@ -11,6 +11,10 @@
 // The Markdown beside this file is the content: the interview, the two skills the spec
 // and the tickets are written with, and what each of the menu's rounds asks for.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import {
   FindingSchema,
   Children,
@@ -107,7 +111,7 @@ const Offloaded = Schema.Struct({
 /** The host's own options for a child, with the ones nobody settled left out: absent
  *  rather than empty, exactly as a front door passes them. */
 const launch = (options: Record<string, string>): Record<string, string> =>
-  Object.fromEntries(Object.entries(options).filter(([, value]) => value !== ""));
+  Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 
 /** What a planner rooted at the Projects root is told about it, and nothing elsewhere. */
 const rootingOf = (options: Readonly<Record<string, string>>) =>
@@ -253,9 +257,10 @@ export default defineWorkflow({
         run: { dir: place.dir, id: run.id },
         rooting: rootingOf(place.options),
         // A section's text is sent as it is, so the one name it carries is filled here.
-        attendance: (
-          content.sections.get(nobodyAsked ? "unattended" : "attended") ?? ""
-        ).replaceAll("{{run.id}}", run.id),
+        attendance: pipe_(
+          content.sections.get(nobodyAsked ? "unattended" : "attended") ?? "",
+          Str.replaceAll("{{run.id}}", run.id),
+        ),
       };
       const planDir = `${place.dir}/plan`;
       // Why the plan's tickets cannot be built, recorded so a replay is handed the same answer.
@@ -326,7 +331,8 @@ export default defineWorkflow({
               ask({
                 name: `next-${round}`,
                 prompt: "What next?",
-                options: opinions < OPINIONS ? CHOICES : CHOICES.filter((one) => one !== OPINION),
+                options:
+                  opinions < OPINIONS ? CHOICES : Arr.filter(CHOICES, (one) => one !== OPINION),
               }),
               { round },
             );

@@ -1,6 +1,9 @@
 // The GitHub adapter: everything Collie asks GitHub, through `gh` or over HTTP with gh's
 // token. Only github.com.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { CommandLine } from "effect/process";
 import {
@@ -76,7 +79,7 @@ function mergeabilityOf(
   }
   if (status === "UNKNOWN") return { state: "unknown", said: "unknown" };
   if (MERGES.has(status)) return { state: "mergeable", said: "mergeable" };
-  return { state: "blocked", said: status.toLowerCase().replaceAll("_", " ") };
+  return { state: "blocked", said: pipe(Str.toLowerCase(status), Str.replaceAll("_", " ")) };
 }
 type Pull = PanelPull;
 
@@ -94,7 +97,7 @@ const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 export function rollupChecks(rollup: typeof Rollup.Type | null | undefined): ForgeChecks {
   const checks = rollup ?? [];
   if (checks.length === 0) return { state: "none" };
-  const verdicts = checks.map((one) => ({
+  const verdicts = Arr.map(checks, (one) => ({
     name: one.name ?? one.context ?? "a check",
     url: one.detailsUrl ?? one.targetUrl,
     // A check run has a conclusion once it completes; a status context has only a state.
@@ -102,8 +105,8 @@ export function rollupChecks(rollup: typeof Rollup.Type | null | undefined): For
       one.conclusion ??
       (one.status != null && one.status !== "COMPLETED" ? "PENDING" : (one.state ?? "PENDING")),
   }));
-  const red = verdicts.find((one) => RED.has(one.said));
-  const waiting = verdicts.find((one) => !GREEN.has(one.said));
+  const red = Option.getOrUndefined(Arr.findFirst(verdicts, (one) => RED.has(one.said)));
+  const waiting = Option.getOrUndefined(Arr.findFirst(verdicts, (one) => !GREEN.has(one.said)));
   const result: ForgeChecks =
     red !== undefined
       ? { state: "failed", name: red.name }
@@ -147,7 +150,7 @@ const PanelData = Schema.Struct({
           mergedAt: optionalText,
           mergedBy: Schema.optionalKey(Schema.NullOr(Login)),
           reviewDecision: optionalText,
-          comments: Schema.optionalKey(Schema.NullOr(Schema.Struct({ totalCount: Schema.Number }))),
+          comments: Schema.optionalKey(Schema.NullOr(Schema.Struct({ totalCount: Schema.Finite }))),
           updatedAt: optionalText,
           url: optionalText,
           autoMergeRequest: Schema.optionalKey(Schema.NullOr(Schema.Struct({}))),
@@ -203,7 +206,7 @@ const APPROVALS = new Map([
 
 /** One page of `ref`'s panel, its checks from `after`. */
 const panelPage = (ref: MrRef, cwd: string, after: string | null) => {
-  const [owner = "", name = ""] = mrPath(ref).split("/");
+  const [owner = "", name = ""] = Str.split(mrPath(ref), "/");
   return graphqlAs(PanelData, LOGIN, cwd, PANEL, { owner, name, number: Number(ref.iid), after });
 };
 
@@ -253,11 +256,12 @@ function details(ref: MrRef, cwd: string): Effect.Effect<MrPanel, never, ForgeHt
       iid: ref.iid,
       project: ref.project,
       title: pull.title ?? "",
-      state: pull.isDraft === true && pull.state === "OPEN" ? "draft" : pull.state.toLowerCase(),
+      state: pull.isDraft === true && pull.state === "OPEN" ? "draft" : Str.toLowerCase(pull.state),
       author: pull.author?.login ?? "",
-      assignees: (pull.assignees?.nodes ?? [])
-        .map((one) => one.login ?? "")
-        .filter((login) => login !== ""),
+      assignees: Arr.filter(
+        Arr.map(pull.assignees?.nodes ?? [], (one) => one.login ?? ""),
+        (login) => login !== "",
+      ),
       sourceBranch: pull.headRefName ?? "",
       fork: pull.isCrossRepository === true,
       targetBranch: pull.baseRefName ?? "",
@@ -266,7 +270,7 @@ function details(ref: MrRef, cwd: string): Effect.Effect<MrPanel, never, ForgeHt
       approvals: APPROVALS.get(pull.reviewDecision ?? "") ?? "",
       unresolved: false,
       notes: pull.comments?.totalCount ?? 0,
-      headSha: head.slice(0, 7),
+      headSha: pipe(head, Str.slice(0, 7)),
       head,
       mergedSha: pull.mergeCommit?.oid ?? "",
       updatedAt: Number.isFinite(updated) ? updated : 0,
@@ -294,11 +298,11 @@ function ready<R>(
     const repository = project === null ? "" : mrPath({ project, iid: "" });
     if (repository === "" || repository === project) return { ok: true, reason: "" };
     const repo = yield* run("gh", ["repo", "view", repository, "--json", "nameWithOwner"], cwd);
-    const decoded = Schema.decodeUnknownOption(RepoJson)(repo.stdout);
+    const decoded = Schema.decodeOption(RepoJson)(repo.stdout);
     if (
       repo.code !== 0 ||
       Option.isNone(decoded) ||
-      decoded.value.nameWithOwner.toLowerCase() !== repository.toLowerCase()
+      Str.toLowerCase(decoded.value.nameWithOwner) !== Str.toLowerCase(repository)
     )
       return no(`gh cannot read ${repository}`);
     return { ok: true, reason: "" };
@@ -308,7 +312,7 @@ function ready<R>(
 const login = (cwd: string) => viewerLogin(LOGIN, cwd);
 
 const BranchPull = Schema.Struct({
-  number: Schema.Number,
+  number: Schema.Finite,
   html_url: optionalText,
   state: Schema.String,
   created_at: Schema.String,
@@ -320,7 +324,7 @@ const BranchPull = Schema.Struct({
 /** The pull requests from `branch` of the repository's own, in `state`, every page of them. */
 const pullsFrom = (project: string, branch: string, state: "open" | "all", cwd: string) => {
   const repo = mrPath({ project, iid: "" });
-  const head = encodeURIComponent(`${repo.split("/")[0]}:${branch}`);
+  const head = encodeURIComponent(`${Str.split(repo, "/")[0]}:${branch}`);
   return Effect.map(
     pagesAs(BranchPull, LOGIN, cwd, `repos/${repo}/pulls?head=${head}&state=${state}`),
     (listed) =>
@@ -365,13 +369,13 @@ function protects(
     );
     if (!active.ok) return null;
     if (active.value.length > 0) return true;
-    const [owner = "", name = ""] = repo.split("/");
+    const [owner = "", name = ""] = Str.split(repo, "/");
     const classic = yield* graphqlAs(ClassicRules, LOGIN, cwd, CLASSIC_RULES, { owner, name });
     if (!classic.ok) return null;
     const nodes = classic.value.repository.branchProtectionRules.nodes;
     // A full page leaves protection unknown.
     if (nodes.length >= PAGE) return null;
-    return nodes.some((rule) => new Bun.Glob(rule.pattern).match(branch));
+    return Arr.some(nodes, (rule) => new Bun.Glob(rule.pattern).match(branch));
   });
 }
 
@@ -383,7 +387,9 @@ function forBranch(
 ): Effect.Effect<ForBranch, never, ForgeHttp> {
   return Effect.map(pullsFrom(project, branch, "open", cwd), (listed) => {
     if (!listed.ok) return listed;
-    const pull = listed.value.find((one) => one.auto_merge != null) ?? listed.value[0];
+    const pull =
+      Option.getOrUndefined(Arr.findFirst(listed.value, (one) => one.auto_merge != null)) ??
+      listed.value[0];
     if (pull === undefined) return { ok: true, open: null };
     const iid = String(pull.number);
     return {
@@ -407,7 +413,7 @@ function fromBranch(
     if (!listed.ok) return listed;
     return {
       ok: true,
-      mrs: listed.value.map((pull): FromBranch => {
+      mrs: Arr.map(listed.value, (pull): FromBranch => {
         const iid = String(pull.number);
         return {
           iid,
@@ -425,7 +431,7 @@ function fromBranch(
 const CheckRuns = Schema.Struct({
   check_runs: Schema.Array(
     Schema.Struct({
-      id: Schema.Number,
+      id: Schema.Finite,
       head_sha: Schema.String,
       status: Schema.String,
       conclusion: optionalText,
@@ -464,7 +470,7 @@ const LOGIN: ForgeLogin = {
   expiry: () => Effect.succeed(null),
   token: (run, cwd) =>
     Effect.map(run("gh", ["auth", "token", "--hostname", HOST], cwd), (ran) =>
-      ran.code === 0 && ran.stdout.trim() !== "" ? ran.stdout.trim() : null,
+      ran.code === 0 && Str.trim(ran.stdout) !== "" ? Str.trim(ran.stdout) : null,
     ),
   refresh: () => Effect.succeed(false),
 };
@@ -492,7 +498,7 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
         const some = yield* checkRuns(repo, head, `per_page=100&page=${page}`, cwd);
         if (!some.ok) return unread(some.reason);
         listed += some.value.length;
-        if (some.value.some((one) => one.status !== "completed")) absent = "pending";
+        if (Arr.some(some.value, (one) => one.status !== "completed")) absent = "pending";
         else if (some.value.length < 100) break;
       }
       if (listed === 0) absent = "pending";
@@ -575,7 +581,7 @@ function baseJob(
     if (found === undefined)
       return {
         ok: false,
-        reason: `no check run ${name} at ${base.slice(0, 12)} or on ${target}`,
+        reason: `no check run ${name} at ${pipe(base, Str.slice(0, 12))} or on ${target}`,
       };
     return { ok: true, at: found.head_sha, state: stateOf(found), url: found.html_url ?? null };
   });
@@ -583,25 +589,25 @@ function baseJob(
 
 const User = Schema.Struct({ login: Schema.String, type: optionalText });
 const IssueComment = Schema.Struct({
-  id: Schema.Number,
+  id: Schema.Finite,
   html_url: Schema.String,
   user: Schema.NullOr(User),
   created_at: Schema.String,
   body: optionalText,
 });
 const ReviewComment = Schema.Struct({
-  id: Schema.Number,
+  id: Schema.Finite,
   html_url: Schema.String,
   user: Schema.NullOr(User),
   created_at: Schema.String,
   body: optionalText,
   path: optionalText,
-  line: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-  original_line: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-  in_reply_to_id: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  line: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  original_line: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  in_reply_to_id: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 });
 const Review = Schema.Struct({
-  id: Schema.Number,
+  id: Schema.Finite,
   html_url: Schema.String,
   user: Schema.NullOr(User),
   state: Schema.String,
@@ -616,7 +622,7 @@ const Threads = Schema.Struct({
           Schema.Struct({
             isResolved: Schema.Boolean,
             comments: Schema.Struct({
-              nodes: Schema.Array(Schema.Struct({ databaseId: Schema.NullOr(Schema.Number) })),
+              nodes: Schema.Array(Schema.Struct({ databaseId: Schema.NullOr(Schema.Finite) })),
             }),
           }),
         ),
@@ -632,7 +638,7 @@ const Protection = Schema.Struct({
       Schema.Struct({
         refUpdateRule: Schema.NullOr(
           Schema.Struct({
-            requiredApprovingReviewCount: Schema.NullOr(Schema.Number),
+            requiredApprovingReviewCount: Schema.NullOr(Schema.Finite),
             requiresCodeOwnerReviews: Schema.Boolean,
           }),
         ),
@@ -646,7 +652,7 @@ const BranchRule = Schema.Struct({
   parameters: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
-        required_approving_review_count: Schema.optionalKey(Schema.Number),
+        required_approving_review_count: Schema.optionalKey(Schema.Finite),
         require_code_owner_review: optionalFlag,
       }),
     ),
@@ -656,7 +662,7 @@ const BranchRule = Schema.Struct({
 /** The approving reviews `base` requires, or why that cannot be counted. */
 const requiredReviews = (repo: string, base: string, cwd: string) =>
   Effect.gen(function* () {
-    const [owner = "", name = ""] = repo.split("/");
+    const [owner = "", name = ""] = Str.split(repo, "/");
     const protection = yield* graphqlAs(Protection, LOGIN, cwd, PROTECTION, {
       owner,
       name,
@@ -674,17 +680,17 @@ const requiredReviews = (repo: string, base: string, cwd: string) =>
         reason: `GitHub would not say how many approvals ${base} requires: ${!protection.ok ? protection.reason : !rulesets.ok ? rulesets.reason : ""}`,
       } as const;
     const rule = protection.value.repository.ref?.refUpdateRule ?? null;
-    const pullRules = rulesets.value.filter((one) => one.type === "pull_request");
+    const pullRules = Arr.filter(rulesets.value, (one) => one.type === "pull_request");
     if (
       rule?.requiresCodeOwnerReviews === true ||
-      pullRules.some((one) => one.parameters?.require_code_owner_review === true)
+      Arr.some(pullRules, (one) => one.parameters?.require_code_owner_review === true)
     )
       return { ok: false, reason: `${base} requires code owners' review` } as const;
     return {
       ok: true,
       count: Math.max(
         rule?.requiredApprovingReviewCount ?? 0,
-        ...pullRules.map((one) => one.parameters?.required_approving_review_count ?? 0),
+        ...Arr.map(pullRules, (one) => one.parameters?.required_approving_review_count ?? 0),
       ),
     } as const;
   });
@@ -717,7 +723,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
     if (!reviewComments.ok) return reviewComments;
     const reviews = yield* pagesAs(Review, LOGIN, cwd, `repos/${repo}/pulls/${ref.iid}/reviews`);
     if (!reviews.ok) return reviews;
-    const [owner = "", name = ""] = repo.split("/");
+    const [owner = "", name = ""] = Str.split(repo, "/");
     const resolved = new Set<string>();
     let endCursor: string | null = null;
     for (;;) {
@@ -751,7 +757,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
     const kindOf = (user: typeof User.Type | null): CommentKind =>
       user?.type === "Bot" ? "bot" : "person";
     const comments: ForgeComment[] = [
-      ...issueComments.value.map((one) => ({
+      ...Arr.map(issueComments.value, (one) => ({
         id: String(one.id),
         url: one.html_url,
         thread: null,
@@ -762,7 +768,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
         file: null,
         line: null,
       })),
-      ...reviewComments.value.map((one) => ({
+      ...Arr.map(reviewComments.value, (one) => ({
         id: String(one.id),
         url: one.html_url,
         thread: String(one.in_reply_to_id ?? one.id),
@@ -773,7 +779,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
         file: one.path ?? null,
         line: one.line ?? one.original_line ?? null,
       })),
-      ...reviews.value.flatMap((one) =>
+      ...Arr.flatMap(reviews.value, (one) =>
         (one.body ?? "") === ""
           ? []
           : [
@@ -796,11 +802,13 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
     for (const one of reviews.value)
       if (one.user !== null && one.state !== "COMMENTED" && one.state !== "PENDING")
         standing.set(one.user.login, { state: one.state, bot: one.user.type === "Bot" });
-    const approvers = [...standing]
-      .filter(([, review]) => review.state === "APPROVED")
-      .map(([who]) => who);
-    const others = approvers.filter((who) => who !== me);
-    const changesRequested = [...standing].some(
+    const approvers = Arr.map(
+      Arr.filter([...standing], ([, review]) => review.state === "APPROVED"),
+      ([who]) => who,
+    );
+    const others = Arr.filter(approvers, (who) => who !== me);
+    const changesRequested = Arr.some(
+      [...standing],
       ([who, review]) => review.state === "CHANGES_REQUESTED" && !review.bot && who !== me,
     );
     const said = pull.value.pull;
@@ -893,7 +901,7 @@ function merge(
   return Effect.gen(function* () {
     const where = mrWords(ref).label;
     const repo = mrPath(ref);
-    const [owner = "", name = ""] = repo.split("/");
+    const [owner = "", name = ""] = Str.split(repo, "/");
     const method = yield* graphqlAs(MergeMethod, LOGIN, cwd, MERGE_METHOD, { owner, name });
     if (!method.ok || method.value.repository === null)
       return {
@@ -902,7 +910,7 @@ function merge(
       };
     const merging = yield* request(LOGIN, cwd, "PUT", `repos/${repo}/pulls/${ref.iid}/merge`, {
       sha: head,
-      merge_method: method.value.repository.viewerDefaultMergeMethod.toLowerCase(),
+      merge_method: Str.toLowerCase(method.value.repository.viewerDefaultMergeMethod),
     });
     const after = yield* graphqlAs(MergedData, LOGIN, cwd, MERGED_PULL, {
       owner,
@@ -941,7 +949,7 @@ function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness,
   );
 }
 
-const runOf = (id: string) => id.split("/")[0]!;
+const runOf = (id: string) => Str.split(id, "/")[0]!;
 
 const jobLog = (ref: MrRef, id: string) =>
   Result.getOrThrow(
@@ -977,7 +985,7 @@ function template(cwd: string) {
 }
 
 const Deployment = Schema.Struct({
-  id: Schema.Number,
+  id: Schema.Finite,
   sha: Schema.String,
   environment: Schema.String,
   production_environment: optionalFlag,
@@ -988,7 +996,7 @@ const RunState = Schema.Struct({ status: Schema.String, conclusion: optionalText
 
 /** Production by the flag or by name, staging by name; any other environment is neither. */
 function tierOf(environment: string, production: boolean): DeployTier | null {
-  const name = environment.toLowerCase();
+  const name = Str.toLowerCase(environment);
   if (production || name === "production" || name === "prod") return "production";
   if (name === "staging" || name === "stage") return "staging";
   return null;
@@ -1140,7 +1148,9 @@ function stagingEnvironments<R>(
           candidate &&
           (jobs === undefined ||
             (link !== null &&
-              link[1]?.toLowerCase() === mrPath(ref).toLowerCase() &&
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(link[1]), (present) => Str.toLowerCase(present)),
+              ) === Str.toLowerCase(mrPath(ref)) &&
               selected.has(Number(link[2]))))
         )
           hasCommit = true;
@@ -1156,7 +1166,7 @@ function runStatus(url: string, cwd: string): Effect.Effect<string | null, never
   return Effect.gen(function* () {
     const m =
       /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/(\d+)(?:[/?#]\S*)?$/.exec(
-        url.trim(),
+        Str.trim(url),
       );
     if (!m) return null;
     const said = yield* rest(RunState, cwd, `repos/${m[1]}/actions/runs/${m[2]}`);
@@ -1204,7 +1214,7 @@ function pipeline(url: string, cwd: string): Effect.Effect<PipelineRead, never, 
   return Effect.gen(function* () {
     const m =
       /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/(\d+)(?:[/?#]\S*)?$/.exec(
-        url.trim(),
+        Str.trim(url),
       );
     if (!m) return { ok: false, reason: `${url} is not a GitHub Actions run` };
     const route = `repos/${m[1]}/actions/runs/${m[2]}`;
@@ -1223,7 +1233,7 @@ function pipeline(url: string, cwd: string): Effect.Effect<PipelineRead, never, 
       project: `${HOST}/${m[1]}`,
       ref: status.value.head_branch ?? "",
       sha: status.value.head_sha,
-      jobs: jobs.map((one) => ({
+      jobs: Arr.map(jobs, (one) => ({
         name: one.name,
         state:
           one.status === "waiting"

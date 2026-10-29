@@ -1,6 +1,11 @@
 // The Flock's settings as Desktop keeps them: each key decided by its latest edit, wherever
 // that was made, and given to every Machine through its host.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, Fiber, FileSystem, Stream, SubscriptionRef } from "effect";
@@ -30,7 +35,7 @@ import {
   writeSettings,
 } from "../desktop/src/bun/settings";
 
-const at = (hour: number) => `2026-10-07T${String(hour).padStart(2, "0")}:00:00.000Z`;
+const at = (hour: number) => `2026-10-07T${pipe_(String(hour), Str.padStart(2, "0"))}:00:00.000Z`;
 const set = (key: string, value: SharedSetting["value"], hour: number): SharedSetting => ({
   key,
   value,
@@ -114,11 +119,11 @@ test("Settings shows every setting with its control, its value and its default",
   const sections = settingSections(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock, {
     proactive: false,
   });
-  const rows = sections.flatMap((section) => section.rows);
+  const rows = Arr.flatMap(sections, (section) => section.rows);
   const row = (key: string, shared = true) =>
-    rows.find((one) => one.key === key && one.shared === shared);
+    Option.getOrUndefined(Arr.findFirst(rows, (one) => one.key === key && one.shared === shared));
 
-  expect(sections.map((section) => section.group)).toEqual([
+  expect(Arr.map(sections, (section) => section.group)).toEqual([
     "Agents",
     "Runs",
     "Board",
@@ -165,7 +170,9 @@ test("Settings shows every setting with its control, its value and its default",
   expect(row("models.claude")).toMatchObject({ value: "claude-x" });
   expect(row("proactive")).toMatchObject({ kind: "boolean", shared: true });
   // The Flock chat's own switch is this computer's, under Chat.
-  expect(sections.find((section) => section.group === "Chat")!.rows).toContainEqual(
+  expect(
+    Option.getOrUndefined(Arr.findFirst(sections, (section) => section.group === "Chat"))!.rows,
+  ).toContainEqual(
     expect.objectContaining({
       key: "proactive",
       shared: false,
@@ -184,20 +191,26 @@ test("Settings shows every setting with its control, its value and its default",
     multiline: true,
   });
   expect(
-    sections
-      .find((section) => section.group === "Chat")!
-      .rows.filter((one) => !one.shared)
-      .map((one) => one.key),
+    Arr.map(
+      Arr.filter(
+        Option.getOrUndefined(Arr.findFirst(sections, (section) => section.group === "Chat"))!.rows,
+        (one) => !one.shared,
+      ),
+      (one) => one.key,
+    ),
   ).toEqual(["proactive", "machineRule"]);
   // The GitLab host is shared too, but beside the tokens made for it.
-  expect(rows.map((one) => one.key)).not.toContain("gitlab_host");
+  expect(Arr.map(rows, (one) => one.key)).not.toContain("gitlab_host");
 });
 
 test("a duration typed in minutes is the Flock's in milliseconds, and Reset unsets it", () => {
   const quiet = (flock: FlockSettings) =>
-    settingSections(flock, { proactive: true })
-      .flatMap((section) => section.rows)
-      .find((row) => row.key === "quiet_ms")!;
+    Option.getOrUndefined(
+      Arr.findFirst(
+        Arr.flatMap(settingSections(flock, { proactive: true }), (section) => section.rows),
+        (row) => row.key === "quiet_ms",
+      ),
+    )!;
   const typed = settingStored("quiet_ms", "15");
   if ("refused" in typed) throw new Error(typed.refused);
   const edited = editSetting(NO_FLOCK_SETTINGS, "quiet_ms", typed.stored, at(12));
@@ -217,7 +230,7 @@ test("a Machine's GitLab host and a value its setting refuses are not the Flock'
     set("model", "sonnet", 9),
     set("claude_auto_compact_window", 50000, 9),
   ]);
-  expect(Object.keys(flock.settings)).toEqual(["model"]);
+  expect(Rec.keys(flock.settings)).toEqual(["model"]);
 });
 
 test("the agent profile is one shared JSON text: an edit is checked, synced as written, and typed over lines", () => {
@@ -236,9 +249,12 @@ test("the agent profile is one shared JSON text: an edit is checked, synced as w
       at(12),
     ),
   ).toEqual({ refused: "*.claude.disableAllHooks would switch off Collie's own hooks" });
-  const row = settingSections(edited, { proactive: true })
-    .flatMap(({ rows }) => rows)
-    .find(({ key }) => key === "agent_profile");
+  const row = Option.getOrUndefined(
+    Arr.findFirst(
+      Arr.flatMap(settingSections(edited, { proactive: true }), ({ rows }) => rows),
+      ({ key }) => key === "agent_profile",
+    ),
+  );
   expect(row).toMatchObject({ value: profile, multiline: true, shared: true });
 });
 
@@ -248,14 +264,14 @@ const machine = (name: string, held: ReadonlyArray<SharedSetting>, meanwhile = E
   let has = [...held];
   const answer = (): SharedSettings => ({ settings: has, flock: null });
   const door = {
-    settings: () => meanwhile.pipe(Effect.map(answer)),
+    settings: meanwhile.pipe(Effect.map(answer)),
     setSettings: ({ settings }: { settings: ReadonlyArray<SharedSetting> }) =>
       Effect.sync(() => {
         asked.push(settings);
         for (const given of settings) {
-          const own = has.find(({ key }) => key === given.key);
+          const own = Option.getOrUndefined(Arr.findFirst(has, ({ key }) => key === given.key));
           if (own === undefined || own.at < given.at)
-            has = [...has.filter(({ key }) => key !== given.key), given];
+            has = [...Arr.filter(has, ({ key }) => key !== given.key), given];
         }
         return answer();
       }),
@@ -292,7 +308,7 @@ test("a Machine is synced through its host: given what it lacks, and asked even 
 
       yield* syncOn(vmA);
       expect(vmA.asked).toEqual([[set("scope", "all", 12)]]);
-      expect(Object.keys((yield* SubscriptionRef.get(flock)).settings).sort()).toEqual([
+      expect(Rec.keys((yield* SubscriptionRef.get(flock)).settings).sort()).toEqual([
         "model",
         "scope",
       ]);
@@ -365,7 +381,7 @@ const definer = (name: string, held: ReadonlyArray<SharedDefinition>, refused?: 
   const asked: Array<ReadonlyArray<SharedDefinition>> = [];
   let has = [...held];
   const door = {
-    sharedDefinitions: () =>
+    sharedDefinitions:
       refused === undefined
         ? Effect.sync(() => has)
         : Effect.fail(new HostRefused({ reason: refused })),
@@ -373,9 +389,9 @@ const definer = (name: string, held: ReadonlyArray<SharedDefinition>, refused?: 
       Effect.sync(() => {
         asked.push(definitions);
         for (const given of definitions) {
-          const own = has.find(({ path }) => path === given.path);
+          const own = Option.getOrUndefined(Arr.findFirst(has, ({ path }) => path === given.path));
           if (own === undefined || own.at < given.at)
-            has = [...has.filter(({ path }) => path !== given.path), given];
+            has = [...Arr.filter(has, ({ path }) => path !== given.path), given];
         }
         return has;
       }),
@@ -486,9 +502,17 @@ test("Zoom is this computer's, under Board, 100% until set, and kept as a number
   Effect.runPromise(
     Effect.gen(function* () {
       const zoom = (zoom?: number) =>
-        settingSections(NO_FLOCK_SETTINGS, { proactive: true, ...(zoom && { zoom }) })
-          .find((section) => section.group === "Board")!
-          .rows.find((row) => row.key === "zoom")!;
+        Option.getOrUndefined(
+          Arr.findFirst(
+            Option.getOrUndefined(
+              Arr.findFirst(
+                settingSections(NO_FLOCK_SETTINGS, { proactive: true, ...(zoom && { zoom }) }),
+                (section) => section.group === "Board",
+              ),
+            )!.rows,
+            (row) => row.key === "zoom",
+          ),
+        )!;
       expect(zoom()).toMatchObject({
         kind: "choice",
         choices: ["80%", "90%", "100%", "110%", "125%", "150%"],

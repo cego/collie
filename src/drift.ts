@@ -10,8 +10,12 @@
 // was made from, and the journal is append-only, so a resolution is a new line rather
 // than an edit — the account of what Collie thought and when survives being wrong.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
 import type { PlatformServices } from "./platform";
-import { Data, Effect, FileSystem, Path, Schema } from "effect";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { Constraint, Intent, RuleSpec } from "./intent";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
@@ -36,7 +40,7 @@ export const MAX_FILES = 20;
 const SECRET_FILES = [/(^|\/)\.env($|\.)/, /\.pem$/, /\.key$/, /token/i, /secret/i, /credential/i];
 
 export function looksSecret(path: string): boolean {
-  return SECRET_FILES.some((looksLike) => looksLike.test(path));
+  return Arr.some(SECRET_FILES, (looksLike) => looksLike.test(path));
 }
 
 const SkippedSchema = Schema.Struct({
@@ -73,7 +77,8 @@ export function currentReports(lines: ReadonlyArray<DriftLine>): DriftReport[] {
 }
 
 export function openReports(lines: ReadonlyArray<DriftLine>): DriftReport[] {
-  return currentReports(lines).filter(
+  return Arr.filter(
+    currentReports(lines),
     (report) => report.resolution === "open" || report.resolution === "correction_submitted",
   );
 }
@@ -86,7 +91,10 @@ export function openReports(lines: ReadonlyArray<DriftLine>): DriftReport[] {
  */
 export function findingKey(constraint: string, evidence: ReadonlyArray<Ref>): string {
   return Bun.hash(
-    `${constraint}\n${evidence.map((ref) => `${ref.kind}:${ref.path ?? ""}:${ref.line ?? ""}`).join("\n")}`,
+    `${constraint}\n${Arr.join(
+      Arr.map(evidence, (ref) => `${ref.kind}:${ref.path ?? ""}:${ref.line ?? ""}`),
+      "\n",
+    )}`,
   ).toString(16);
 }
 
@@ -107,15 +115,17 @@ export interface RuleFacts {
 
 /** `src/**` against `src/a/b.ts`, without pulling in a matcher for it. */
 export function matchesGlob(glob: string, path: string): boolean {
-  const pattern = glob
-    .split("**")
-    .map((part) =>
-      part
-        .split("*")
-        .map((piece) => piece.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-        .join("[^/]*"),
-    )
-    .join(".*");
+  const pattern = Arr.join(
+    Arr.map(Str.split(glob, "**"), (part) =>
+      Arr.join(
+        Arr.map(Str.split(part, "*"), (piece) =>
+          pipe(piece, Str.replace(/[.+?^${}()|[\]\\]/g, "\\$&")),
+        ),
+        "[^/]*",
+      ),
+    ),
+    ".*",
+  );
   return new RegExp(`^${pattern}$`).test(path);
 }
 
@@ -136,7 +146,7 @@ export function flattenOutput(json: string) {
     const { prefix, node } = stack.pop()!;
     if (isRecord(node)) {
       if (prefix !== "") flat[prefix] = encodeUnknown(node);
-      for (const [key, child] of Object.entries(node))
+      for (const [key, child] of Rec.toEntries(node))
         stack.push({ prefix: prefix === "" ? key : `${prefix}.${key}`, node: child });
       continue;
     }
@@ -148,7 +158,10 @@ export function flattenOutput(json: string) {
 
 const decodeUnknown = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
-const encodeUnknown = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeUnknown = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 function violation(
   constraint: Constraint,
@@ -203,13 +216,14 @@ function breachOf(rule: RuleSpec, facts: RuleFacts): Breach | null {
   if (rule.kind !== "protected_paths") return whole(refsOf(rule, facts));
   // Not "these paths may not change": the globs are where change is allowed, and what
   // is reported is every file outside them.
-  const outside = facts.changedFiles.filter(
-    (file) => !rule.globs.some((glob) => matchesGlob(glob, file)),
+  const outside = Arr.filter(
+    facts.changedFiles,
+    (file) => !Arr.some(rule.globs, (glob) => matchesGlob(glob, file)),
   );
   return outside.length === 0
     ? null
     : {
-        evidence: outside.slice(0, MAX_FILES).map((path) => ({ kind: "diff" as const, path })),
+        evidence: Arr.map(outside.slice(0, MAX_FILES), (path) => ({ kind: "diff" as const, path })),
         truncated: outside.length > MAX_FILES,
       };
 }
@@ -269,9 +283,10 @@ function refsOf(
 
 /** The log line a drift report found at `where` leaves, saying when its evidence was cut. */
 export const driftSaid = (report: DriftReport, where: string) =>
-  `drift at ${where}: ${report.constraint} (${report.severity}) — ${report.evidence
-    .map((ref) => ref.path ?? ref.excerpt ?? ref.kind)
-    .join(", ")}${report.evidence_truncated ? " (evidence truncated)" : ""}`;
+  `drift at ${where}: ${report.constraint} (${report.severity}) — ${Arr.join(
+    Arr.map(report.evidence, (ref) => ref.path ?? ref.excerpt ?? ref.kind),
+    ", ",
+  )}${report.evidence_truncated ? " (evidence truncated)" : ""}`;
 
 export interface EvidenceBlock {
   readonly path: string;
@@ -286,7 +301,7 @@ export const gitOutput = Effect.fn("Drift.gitOutput")(function* (args: string[],
   const ran = yield* shell("git", args, cwd);
   if (ran.code === 0) return ran.stdout;
   return yield* new TreeUnread({
-    reason: `git ${args.join(" ")} exited ${ran.code}: ${(ran.stderr ?? "").trim().split("\n")[0]}`,
+    reason: `git ${Arr.join(args, " ")} exited ${ran.code}: ${Str.split(Str.trim(ran.stderr ?? ""), "\n")[0]}`,
   });
 });
 
@@ -301,7 +316,9 @@ export const merging = Effect.fn("Drift.merging")(function* (worktree: string) {
 /** Whether `dir` is in no git checkout at all, which is a Run with no diff to read. */
 const outsideGit = (dir: string) =>
   shell("git", ["rev-parse", "--git-dir"], dir).pipe(
-    Effect.map((ran) => ran.code !== 0 && (ran.stderr ?? "").includes("not a git repository")),
+    Effect.map(
+      (ran) => ran.code !== 0 && pipe(ran.stderr ?? "", Str.includes("not a git repository")),
+    ),
   );
 
 /**
@@ -318,14 +335,17 @@ export const evidenceFor = Effect.fn("Drift.evidenceFor")(function* (
   const scope = paths.length === 0 ? [] : ["--", ...paths];
   const diff = (yield* merging(worktree))
     ? yield* gitOutput(["diff", "MERGE_HEAD", "--unified=3", ...scope], worktree)
-    : [
-        yield* gitOutput(["diff", `${base}..HEAD`, "--unified=3", ...scope], worktree),
-        yield* gitOutput(["diff", "HEAD", "--unified=3", ...scope], worktree),
-      ].join("\n");
+    : Arr.join(
+        [
+          yield* gitOutput(["diff", `${base}..HEAD`, "--unified=3", ...scope], worktree),
+          yield* gitOutput(["diff", "HEAD", "--unified=3", ...scope], worktree),
+        ],
+        "\n",
+      );
   const blocks = splitDiff(diff);
   return {
     blocks: blocks.slice(0, MAX_FILES),
-    truncated: blocks.length > MAX_FILES || blocks.some((block) => block.truncated),
+    truncated: blocks.length > MAX_FILES || Arr.some(blocks, (block) => block.truncated),
   };
 });
 
@@ -340,12 +360,12 @@ export function splitDiff(diff: string): EvidenceBlock[] {
     else
       blocks.push({
         path,
-        diff: lines.slice(0, MAX_LINES_PER_FILE).join("\n"),
+        diff: Arr.join(lines.slice(0, MAX_LINES_PER_FILE), "\n"),
         truncated: lines.length > MAX_LINES_PER_FILE,
       });
     lines = [];
   };
-  for (const line of diff.split("\n")) {
+  for (const line of Str.split(diff, "\n")) {
     const header = /^diff --git a\/(\S+) b\/(\S+)/.exec(line);
     if (header) {
       flush();
@@ -367,17 +387,23 @@ export interface ShownOutput {
 const NOT_OUTPUTS = [".launch.json", ".mcp.json", ".settings.json"];
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
-const printJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown, { space: 2 }));
+const printJson = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown, { space: 2 })),
+  Result.getOrThrow,
+);
 
 /** Each Output in `agentsDir`, printed with a two-space indent, by operation; one named like a credential is not quoted. */
 export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const names = (yield* fs.readDirectory(agentsDir).pipe(Effect.orElseSucceed(() => [])))
-    .filter((name) => name.endsWith(".json") && !NOT_OUTPUTS.some((not) => name.endsWith(not)))
-    .sort();
+  const names = Arr.filter(
+    yield* fs.readDirectory(agentsDir).pipe(Effect.orElseSucceed(() => [])),
+    (name) =>
+      pipe(name, Str.endsWith(".json")) &&
+      !Arr.some(NOT_OUTPUTS, (not) => pipe(name, Str.endsWith(not))),
+  ).sort();
   const outputs: Array<ShownOutput & { readonly truncated: boolean }> = [];
   for (const name of names.slice(0, MAX_FILES)) {
-    const operation = name.slice(0, -".json".length);
+    const operation = pipe(name, Str.slice(0, -".json".length));
     if (looksSecret(name)) {
       outputs.push({ operation, text: "<redacted>", truncated: false });
       continue;
@@ -387,16 +413,16 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: stri
       .pipe(Effect.orElseSucceed(() => ""));
     const decoded = decodeJson(raw);
     const printed = decoded._tag === "None" ? raw : printJson(decoded.value);
-    const lines = printed.split("\n");
+    const lines = Str.split(printed, "\n");
     outputs.push({
       operation,
-      text: lines.slice(0, MAX_LINES_PER_FILE).join("\n"),
+      text: Arr.join(lines.slice(0, MAX_LINES_PER_FILE), "\n"),
       truncated: lines.length > MAX_LINES_PER_FILE,
     });
   }
   return {
-    outputs: outputs.map(({ operation, text }) => ({ operation, text })),
-    truncated: names.length > MAX_FILES || outputs.some((one) => one.truncated),
+    outputs: Arr.map(outputs, ({ operation, text }) => ({ operation, text })),
+    truncated: names.length > MAX_FILES || Arr.some(outputs, (one) => one.truncated),
   };
 });
 
@@ -411,7 +437,10 @@ export function newReports(
   existing: ReadonlyArray<DriftLine>,
 ): DriftReport[] {
   const known = new Map(
-    openReports(existing).map((report) => [findingKey(report.constraint, report.evidence), report]),
+    Arr.map(openReports(existing), (report) => [
+      findingKey(report.constraint, report.evidence),
+      report,
+    ]),
   );
   const fresh: DriftReport[] = [];
   for (const report of found) {
@@ -452,7 +481,7 @@ export const recordSkipped = Effect.fn("Drift.recordSkipped")(function* (
 ) {
   yield* appendDrift(runDir, {
     kind: "skipped",
-    at: yield* nowIso(),
+    at: yield* nowIso,
     run,
     reason,
     ...(check && { check }),
@@ -496,9 +525,11 @@ export interface JudgementDeps {
 
 /** Which files a judgement is about: what the semantic constraints name, else everything. */
 export function judgementPaths(intent: Intent): string[] {
-  const named = intent.constraints
-    .filter((constraint) => constraint.kind === "semantic")
-    .flatMap((constraint) => [...(constraint.paths ?? [])]);
+  const named = pipe(
+    intent.constraints,
+    Arr.filter((constraint) => constraint.kind === "semantic"),
+    Arr.flatMap((constraint) => [...(constraint.paths ?? [])]),
+  );
   return [...new Set(named)];
 }
 
@@ -524,30 +555,35 @@ export function judgementPack(
     readonly truncated: boolean;
   },
 ): string {
-  const semantic = intent.constraints.filter((constraint) => constraint.kind === "semantic");
-  return [
-    `run: ${intent.run}`,
-    `intent_version: ${intent.version}`,
-    `goal: ${intent.goal ?? "(none stated)"}`,
-    "",
-    ...PLAN_NARROWS_GOAL,
-    "",
-    "constraints to judge:",
-    ...semantic.map(
-      (constraint) => `- ${constraint.id} (${constraint.severity}): ${constraint.text}`,
+  const semantic = Arr.filter(intent.constraints, (constraint) => constraint.kind === "semantic");
+  return Arr.join(
+    Arr.filter(
+      [
+        `run: ${intent.run}`,
+        `intent_version: ${intent.version}`,
+        `goal: ${intent.goal ?? "(none stated)"}`,
+        "",
+        ...PLAN_NARROWS_GOAL,
+        "",
+        "constraints to judge:",
+        ...Arr.map(
+          semantic,
+          (constraint) => `- ${constraint.id} (${constraint.severity}): ${constraint.text}`,
+        ),
+        "",
+        evidence.truncated
+          ? "evidence (TRUNCATED to the cap; judge only what is here):"
+          : "evidence (the whole change):",
+        ...Arr.map(evidence.blocks, (block) => `--- ${block.path}\n${block.diff}`),
+        ...Arr.map(evidence.outputs, (output) => `--- output ${output.operation}\n${output.text}`),
+        evidence.blocks.length === 0 && evidence.outputs.length === 0
+          ? "(nothing has changed yet)"
+          : "",
+      ],
+      (line) => line !== "",
     ),
-    "",
-    evidence.truncated
-      ? "evidence (TRUNCATED to the cap; judge only what is here):"
-      : "evidence (the whole change):",
-    ...evidence.blocks.map((block) => `--- ${block.path}\n${block.diff}`),
-    ...evidence.outputs.map((output) => `--- output ${output.operation}\n${output.text}`),
-    evidence.blocks.length === 0 && evidence.outputs.length === 0
-      ? "(nothing has changed yet)"
-      : "",
-  ]
-    .filter((line) => line !== "")
-    .join("\n");
+    "\n",
+  );
 }
 
 /** The work a pack showed: the files whose diff it quoted, and the Outputs by operation. */
@@ -566,8 +602,8 @@ export const citedIn =
     if (ref.path === undefined) return null;
     if (ref.kind === "output") return shown.outputs.includes(ref.path) ? ref : null;
     if (ref.kind !== "diff") return null;
-    const file = ref.path.startsWith(`${worktree}/`)
-      ? ref.path.slice(worktree.length + 1)
+    const file = pipe(ref.path, Str.startsWith(`${worktree}/`))
+      ? pipe(ref.path, Str.slice(worktree.length + 1))
       : ref.path;
     return shown.files.includes(file) ? { ...ref, path: file } : null;
   };
@@ -589,7 +625,7 @@ export function judgedReport(
   truncated: boolean,
   cited: (ref: Ref) => Ref | null = () => null,
 ): DriftReport {
-  const evidence = report.evidence.flatMap((ref) => {
+  const evidence = Arr.flatMap(report.evidence, (ref) => {
     const work = cited(ref);
     if (work !== null) return [work];
     return ref.path === undefined || insideKnown(ref.path, roots) ? [ref] : [];
@@ -630,7 +666,7 @@ export const askJudgement = Effect.fn("Drift.askJudgement")(function* (
   if (checked._tag === "Failure")
     return notAsked(`the evaluator is unavailable: ${checked.failure.reason}`);
   const missing = checked.success;
-  if (missing.length > 0) return notAsked(`the evaluator is missing ${missing.join(", ")}`);
+  if (missing.length > 0) return notAsked(`the evaluator is missing ${Arr.join(missing, ", ")}`);
 
   // Written down before and after, as usage: what was asked, how long it took and what
   // it cost. Nothing here refuses a call over a count.
@@ -673,7 +709,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
     readonly boundary?: string;
   },
 ) {
-  const semantic = intent.constraints.filter((constraint) => constraint.kind === "semantic");
+  const semantic = Arr.filter(intent.constraints, (constraint) => constraint.kind === "semantic");
   // Only a semantic constraint can be reported against, so without one a call buys nothing.
   if (semantic.length === 0) return NOTHING;
 
@@ -715,20 +751,21 @@ export const judge = Effect.fn("Drift.judge")(function* (
 
   // Only the constraints this Intent actually has, and only a report citing the change it
   // was shown: one about something nobody asked for is a model inventing a rule.
-  const known = new Set(semantic.map((constraint) => constraint.id));
+  const known = new Set(Arr.map(semantic, (constraint) => constraint.id));
   const cited = citedIn(
     {
-      files: evidence.blocks.map((block) => block.path),
-      outputs: evidence.outputs.map((output) => output.operation),
+      files: Arr.map(evidence.blocks, (block) => block.path),
+      outputs: Arr.map(evidence.outputs, (output) => output.operation),
     },
     what.worktree,
   );
-  const reports = asked.reports
-    .filter(
+  const reports = Arr.map(
+    Arr.filter(
+      asked.reports,
       (report) =>
-        known.has(report.constraint) && report.evidence.some((ref) => cited(ref) !== null),
-    )
-    .map((report) =>
+        known.has(report.constraint) && Arr.some(report.evidence, (ref) => cited(ref) !== null),
+    ),
+    (report) =>
       judgedReport(
         report,
         intent,
@@ -737,7 +774,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
         evidence.truncated,
         cited,
       ),
-    );
+  );
   yield* deps.log(
     `judged ${semantic.length} semantic constraint(s) at ${what.at}: ${reports.length} report(s)${
       evidence.truncated ? ", on truncated evidence" : ""
@@ -820,18 +857,23 @@ export function correctionText(
   constraint: Constraint,
   report: DriftReport,
 ): string {
-  const evidence = report.evidence
-    .map(
+  const evidence = Arr.join(
+    Arr.map(
+      report.evidence,
       (ref) =>
         `${ref.path ?? ref.kind}${ref.line === undefined ? "" : `:${ref.line}`}${ref.excerpt === undefined ? "" : ` (${ref.excerpt})`}`,
-    )
-    .join("; ");
-  return [
-    `Steering correction ${deliveryId} for constraint ${constraint.id}: ${constraint.text}.`,
-    `Evidence: ${evidence || "none recorded"}.`,
-    "Bring the work back within this constraint; if that conflicts with the goal, say so",
-    "in your Output instead of choosing.",
-  ].join(" ");
+    ),
+    "; ",
+  );
+  return Arr.join(
+    [
+      `Steering correction ${deliveryId} for constraint ${constraint.id}: ${constraint.text}.`,
+      `Evidence: ${evidence || "none recorded"}.`,
+      "Bring the work back within this constraint; if that conflicts with the goal, say so",
+      "in your Output instead of choosing.",
+    ],
+    " ",
+  );
 }
 
 /** How many corrections have gone out per constraint, from the ledger's own account. */
@@ -867,7 +909,7 @@ export function standingSkips(
 ): string[] {
   const answered = (line: Schema.Schema.Type<typeof SkippedSchema>) =>
     line.check === undefined && judged.at !== undefined && line.at < judged.at;
-  const reasons = lines.flatMap((line) =>
+  const reasons = Arr.flatMap(lines, (line) =>
     line.kind === "skipped" && !answered(line) ? [line.reason] : [],
   );
   return [...new Set(reasons)];
@@ -881,7 +923,7 @@ export function alignment(
   if (intent === null) return { aligned: "unverified", why: "the Run has no Intent to compare to" };
   if (intent.constraints.length === 0) return { aligned: "unverified", why: "nothing was judged" };
   const open = openReports(lines);
-  if (open.some((report) => report.severity === "block"))
+  if (Arr.some(open, (report) => report.severity === "block"))
     return { aligned: "false", why: `${open.length} open report(s), at least one blocking` };
   const skippedReasons = standingSkips(lines, judged);
   if (skippedReasons.length > 0)
@@ -889,7 +931,7 @@ export function alignment(
       aligned: "unverified",
       why: `a judgement was skipped: ${skippedReasons.at(-1) ?? ""}`,
     };
-  const hasSemantic = intent.constraints.some((c) => c.kind === "semantic");
+  const hasSemantic = Arr.some(intent.constraints, (c) => c.kind === "semantic");
   if (hasSemantic && !judged.semantic)
     return { aligned: "unverified", why: "the semantic constraints were never judged" };
   if (judged.truncated)
@@ -908,8 +950,9 @@ export function alignment(
  * asks for, and its correction argues for the old text.
  */
 export function supersededBy(reports: ReadonlyArray<DriftReport>, intent: Intent): DriftReport[] {
-  const live = new Set(intent.constraints.map((constraint) => constraint.id));
-  return reports.filter(
+  const live = new Set(Arr.map(intent.constraints, (constraint) => constraint.id));
+  return Arr.filter(
+    reports,
     (report) => report.intent_version < intent.version || !live.has(report.constraint),
   );
 }
@@ -981,7 +1024,8 @@ export function shouldStand(lines: ReadonlyArray<ElectionLine>, hasSiblings: boo
 export function alreadyStood(lines: ReadonlyArray<ElectionLine>, run: string): boolean {
   const pending = pendingEvaluation(lines);
   if (pending === null) return false;
-  return lines.some(
+  return Arr.some(
+    lines,
     (line) => line.kind === "candidate" && line.run === run && line.at >= pending.since,
   );
 }
@@ -1000,7 +1044,7 @@ export function pendingEvaluation(lines: ReadonlyArray<ElectionLine>): PendingEv
     else if (
       line.kind === "evaluated" &&
       latest !== null &&
-      latest.runs.every((run) => line.runs.includes(run))
+      Arr.every(latest.runs, (run) => line.runs.includes(run))
     )
       latest = null;
   }
@@ -1009,7 +1053,7 @@ export function pendingEvaluation(lines: ReadonlyArray<ElectionLine>): PendingEv
 
 /** Whether something moved in the Herd after this snapshot: a loser's `dirty` newer than it. */
 export function staleSince(lines: ReadonlyArray<ElectionLine>, snapshotAt: string): boolean {
-  return lines.some((line) => line.kind === "dirty" && line.at > snapshotAt);
+  return Arr.some(lines, (line) => line.kind === "dirty" && line.at > snapshotAt);
 }
 
 /** How many times a winner re-snapshots and judges again before it writes `pending` (§9.6). */

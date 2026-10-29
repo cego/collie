@@ -16,10 +16,11 @@ import {
   Effect,
   Exit,
   Fiber,
-  FileSystem,
   Logger,
   Ref,
   Schema,
+  flow,
+  Result,
 } from "effect";
 import * as McpProtocol from "effect/ai/McpProtocol";
 import * as McpSchema from "effect/ai/McpSchema";
@@ -127,12 +128,15 @@ const Answered = Schema.fromJsonString(
     }),
   ]),
 );
-const encodeInput = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject));
+const encodeInput = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.JsonObject)),
+  Result.getOrThrow,
+);
 
 /** One tool call made by the binary now on disk, through the `tools call` a human can run. */
 export const rebuiltAnswer = (binary: string, cwd: string, name: string, input: JsonObject) =>
   shell(binary, ["--json", "tools", "call", name, "--input", encodeInput(input)], cwd).pipe(
-    Effect.flatMap((ran) => Schema.decodeUnknownEffect(Answered)(ran.stdout)),
+    Effect.flatMap((ran) => Schema.decodeEffect(Answered)(ran.stdout)),
     Effect.map((answered) =>
       answered.ok ? answered.data.text : `Collie could not answer: ${answered.error.message}`,
     ),

@@ -2,6 +2,9 @@
 // under `schedules/`, the one write and the read every door uses, and the `Schedule`
 // workflow on the host's engine, one execution per occurrence.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { hostname } from "node:os";
 import {
   Cause,
@@ -17,6 +20,7 @@ import {
   Schedule as Retry,
   Schema,
   Semaphore,
+  flow,
 } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import * as DurableClock from "effect/workflow/DurableClock";
@@ -89,8 +93,8 @@ const Woke = Schema.Union([
 
 const RecordJson = Schema.fromJsonString(ScheduleRecord);
 const decodeRecord = Schema.decodeUnknownEffect(RecordJson);
-const encodeRecord = Schema.encodeSync(RecordJson);
-const asJson = Schema.decodeUnknownSync(Schema.Json);
+const encodeRecord = flow(Schema.encodeResult(RecordJson), Result.getOrThrow);
+const asJson = flow(Schema.decodeUnknownResult(Schema.Json), Result.getOrThrow);
 
 /** Who asks for a change, as the channel declared it. */
 export type ScheduleAsker = Voice & {
@@ -244,11 +248,14 @@ export const schedulesLayer = (options: {
         start: SavedStart,
         request: string,
       ) {
-        if (start.workspace.trim() === "")
+        if (Str.trim(start.workspace) === "")
           return yield* new HostRefused({
             reason: `${NEEDS_INPUT}: a Schedule names its checkout: an absolute path, or ${SCHEDULE_PROJECTS_ROOT}`,
           });
-        if (start.workspace !== SCHEDULE_PROJECTS_ROOT && !start.workspace.startsWith("/"))
+        if (
+          start.workspace !== SCHEDULE_PROJECTS_ROOT &&
+          !pipe_(start.workspace, Str.startsWith("/"))
+        )
           return yield* refusedInput(
             `workspace: "${start.workspace}" is neither an absolute path nor ${SCHEDULE_PROJECTS_ROOT}`,
           );
@@ -258,9 +265,13 @@ export const schedulesLayer = (options: {
           );
         const where = yield* placed(start);
         const saved = yield* savedModules({ ...env, cwd: where.project });
-        const fault = saved.problems.find((one) => one.id === start.workflow);
+        const fault = Option.getOrUndefined(
+          Arr.findFirst(saved.problems, (one) => one.id === start.workflow),
+        );
         if (fault !== undefined) return yield* refusedInput(`${fault.path}: ${fault.message}`);
-        const entry = saved.entries.find((one) => one.id === start.workflow);
+        const entry = Option.getOrUndefined(
+          Arr.findFirst(saved.entries, (one) => one.id === start.workflow),
+        );
         if (entry === undefined)
           return yield* refusedInput(
             `no workflow "${start.workflow}" is saved for ${where.project}`,
@@ -304,13 +315,18 @@ export const schedulesLayer = (options: {
           options: where.options,
           taskLabel: yield* freshTaskLabel(
             { ...env, cwd: where.project },
-            { workflow: start.workflow, inputs: where.text, goal: by.name.replace(/[-_]+/g, " ") },
+            {
+              workflow: start.workflow,
+              inputs: where.text,
+              goal: pipe_(by.name, Str.replace(/[-_]+/g, " ")),
+            },
           ),
           verify: start.verify,
           handsOver: true,
         });
         const trail = runDir(dir, admitted.runId);
-        const recorded = (yield* readAudit(trail).pipe(Effect.orElseSucceed(() => []))).some(
+        const recorded = Arr.some(
+          yield* readAudit(trail).pipe(Effect.orElseSucceed(() => [])),
           (line) => line.request === request,
         );
         if (!recorded)
@@ -537,10 +553,18 @@ export const schedulesLayer = (options: {
             .readFileString(removedOf(dir, change.name))
             .pipe(Effect.orElseSucceed(() => ""));
           // Each line is a removal's request and the `added` of the record it removed.
-          const removed = removals
-            .split("\n")
-            .find((line) => line.startsWith(`${request} `))
-            ?.slice(request.length + 1);
+          const removed = Option.getOrUndefined(
+            Option.map(
+              Option.fromNullishOr(
+                Option.getOrUndefined(
+                  Arr.findFirst(Str.split(removals, "\n"), (line) =>
+                    pipe_(line, Str.startsWith(`${request} `)),
+                  ),
+                ),
+              ),
+              (present) => pipe_(present, Str.slice(request.length + 1)),
+            ),
+          );
           if (removed !== undefined && removed !== record?.added) return yield* done(null);
         }
         // This request's own write, from an attempt that stopped before its receipt.

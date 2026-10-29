@@ -14,6 +14,10 @@
 // reads share one ForgeHttp, as a host's poll does: its first read pays the credential
 // read and the connection.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { parseArgs } from "node:util";
@@ -22,6 +26,7 @@ import { mrRefOf, type MrRef } from "../src/board-model";
 import { forgeOf } from "../src/forge/forge";
 import { forgeHttpLayer } from "../src/forge/http";
 import { shell } from "../src/mr";
+import * as Layer from "effect/Layer";
 
 const { values } = parseArgs({
   options: {
@@ -38,11 +43,11 @@ const reading = values.read === "details" ? "details" : "job";
 
 const run = (cmd: string, args: string[]) => shell(cmd, args, process.cwd());
 const decoded = <S extends Schema.Decoder<unknown>>(schema: S, text: string) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text));
+  Option.getOrUndefined(Schema.decodeOption(Schema.fromJsonString(schema))(text));
 
 /** The CLI's `job` before the move: the commands `src/forge/github.ts` ran. */
 const githubCli = Effect.fn("benchmark.githubCli")(function* (ref: MrRef, name: string) {
-  const repo = ref.project!.slice("github.com/".length);
+  const repo = pipe_(ref.project!, Str.slice("github.com/".length));
   const view = yield* run("gh", ["pr", "view", ref.iid, "--repo", repo, "--json", "headRefOid"]);
   const head = decoded(Schema.Struct({ headRefOid: Schema.String }), view.stdout)?.headRefOid;
   if (head === undefined) return yield* Effect.die(`gh could not read ${repo}#${ref.iid}`);
@@ -55,7 +60,7 @@ const GitlabMr = Schema.Struct({
   sha: Schema.optionalKey(Schema.NullOr(Schema.String)),
   head_pipeline: Schema.optionalKey(
     Schema.NullOr(
-      Schema.Struct({ id: Schema.Number, sha: Schema.optionalKey(Schema.NullOr(Schema.String)) }),
+      Schema.Struct({ id: Schema.Finite, sha: Schema.optionalKey(Schema.NullOr(Schema.String)) }),
     ),
   ),
 });
@@ -64,8 +69,8 @@ const GitlabJobs = Schema.Array(Schema.Struct({ name: Schema.String }));
 /** The CLI's `job` before the move: the commands `src/forge/gitlab.ts` ran. */
 const gitlabCli = Effect.fn("benchmark.gitlabCli")(function* (ref: MrRef, name: string) {
   const project = ref.project!;
-  const host = project.split("/")[0]!;
-  const path = encodeURIComponent(project.slice(host.length + 1));
+  const host = Str.split(project, "/")[0]!;
+  const path = encodeURIComponent(pipe_(project, Str.slice(host.length + 1)));
   yield* run("glab", ["--version"]);
   if ((yield* run("glab", ["auth", "status", "--hostname", host])).code !== 0)
     return yield* Effect.die(`glab is not logged in to ${host}`);
@@ -82,35 +87,38 @@ const gitlabCli = Effect.fn("benchmark.gitlabCli")(function* (ref: MrRef, name: 
     const jobs = decoded(GitlabJobs, listed.stdout);
     if (jobs === undefined)
       return yield* Effect.die(`glab could not list the jobs of ${pipeline.id}`);
-    if (jobs.some((one) => one.name === name) || jobs.length < 100) return;
+    if (Arr.some(jobs, (one) => one.name === name) || jobs.length < 100) return;
   }
 });
 
-const GITHUB_FIELDS = [
-  "title",
-  "state",
-  "isDraft",
-  "author",
-  "assignees",
-  "headRefName",
-  "isCrossRepository",
-  "baseRefName",
-  "headRefOid",
-  "mergeCommit",
-  "mergedAt",
-  "statusCheckRollup",
-  "reviewDecision",
-  "comments",
-  "updatedAt",
-  "url",
-  "autoMergeRequest",
-  "mergeable",
-  "mergeStateStatus",
-].join(",");
+const GITHUB_FIELDS = Arr.join(
+  [
+    "title",
+    "state",
+    "isDraft",
+    "author",
+    "assignees",
+    "headRefName",
+    "isCrossRepository",
+    "baseRefName",
+    "headRefOid",
+    "mergeCommit",
+    "mergedAt",
+    "statusCheckRollup",
+    "reviewDecision",
+    "comments",
+    "updatedAt",
+    "url",
+    "autoMergeRequest",
+    "mergeable",
+    "mergeStateStatus",
+  ],
+  ",",
+);
 
 /** The CLI's `details` before the move: the one `gh pr view` `src/forge/github.ts` ran. */
 const githubDetailsCli = Effect.fn("benchmark.githubDetailsCli")(function* (ref: MrRef) {
-  const repo = ref.project!.slice("github.com/".length);
+  const repo = pipe_(ref.project!, Str.slice("github.com/".length));
   const view = yield* run("gh", ["pr", "view", ref.iid, "--repo", repo, "--json", GITHUB_FIELDS]);
   if (view.code !== 0) return yield* Effect.die(`gh could not read ${repo}#${ref.iid}`);
 });
@@ -118,7 +126,7 @@ const githubDetailsCli = Effect.fn("benchmark.githubDetailsCli")(function* (ref:
 /** The CLI's `details` before the move: the commands `src/forge/gitlab.ts` ran. */
 const gitlabDetailsCli = Effect.fn("benchmark.gitlabDetailsCli")(function* (ref: MrRef) {
   const project = ref.project!;
-  const host = project.split("/")[0]!;
+  const host = Str.split(project, "/")[0]!;
   yield* run("glab", ["--version"]);
   if ((yield* run("glab", ["auth", "status", "--hostname", host])).code !== 0)
     return yield* Effect.die(`glab is not logged in to ${host}`);
@@ -135,7 +143,7 @@ const timed = <R>(read: Effect.Effect<void, never, R>) =>
   });
 
 const quantile = (times: ReadonlyArray<number>, q: number) => {
-  const sorted = times.toSorted((a, b) => a - b);
+  const sorted = Arr.sort(times, Order.Number);
   return sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)]!;
 };
 
@@ -182,18 +190,21 @@ const forgesProgram = Effect.gen(function* () {
         `| ${forge.display} | ${url} | ${transport} | ${reads} | ${quantile(times, 0.5).toFixed(0)} ms | ${quantile(times, 0.9).toFixed(0)} ms |`,
       );
   }
-  const go = medians.every((one) => one.library <= one.cli);
+  const go = Arr.every(medians, (one) => one.library <= one.cli);
   yield* Console.log(
-    [
-      "| Forge | Merge request | Transport | Reads | Median | p90 |",
-      "| --- | --- | --- | --- | --- | --- |",
-      ...rows,
-      "",
-      `${go ? "Go" : "No-go"}: the library's median \`${reading}\` is ${go ? "no slower than" : "slower than"} the CLI's on ${go ? "every forge measured" : "a forge measured"}.`,
-    ].join("\n"),
+    Arr.join(
+      [
+        "| Forge | Merge request | Transport | Reads | Median | p90 |",
+        "| --- | --- | --- | --- | --- | --- |",
+        ...rows,
+        "",
+        `${go ? "Go" : "No-go"}: the library's median \`${reading}\` is ${go ? "no slower than" : "slower than"} the CLI's on ${go ? "every forge measured" : "a forge measured"}.`,
+      ],
+      "\n",
+    ),
   );
 });
 
 BunRuntime.runMain(
-  forgesProgram.pipe(Effect.provide(forgeHttpLayer), Effect.provide(BunServices.layer)),
+  forgesProgram.pipe(Effect.provide(forgeHttpLayer.pipe(Layer.provideMerge(BunServices.layer)))),
 );

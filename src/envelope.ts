@@ -1,5 +1,16 @@
 import type { PlatformServices } from "./platform";
-import { Config, Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
+import {
+  Config,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Schema,
+  Stdio,
+  Stream,
+  flow,
+  Result,
+} from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import type { HerdrError } from "./herdr";
@@ -55,18 +66,18 @@ export const printResult = Effect.fn("collie.printResult")(function* (
 ) {
   yield* say(
     json
-      ? Schema.encodeSync(ResultJson)(
+      ? yield* Schema.encodeEffect(ResultJson)(
           result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error },
         )
       : result.ok
         ? result.human
         : result.error.message,
-  ).pipe(Effect.orDie);
+  );
   // No Effect equivalent: the runtime decides its own exit status from the program's
   // outcome, and these commands report failure in the envelope while still exiting
   // non-zero, so the status is set on the process directly.
   if (!result.ok) process.exitCode = REJECTED.includes(result.error.code) ? 2 : 1;
-});
+}, Effect.orDie);
 
 /**
  * Every command ends in exactly one envelope. `Effect.catch` sees typed failures only,
@@ -112,7 +123,7 @@ const receiptPath = Effect.fn("collie.receiptPath")(function* (
 /** A receipt this version cannot read is a failure to report, never a defect to die on. */
 const readReceipt = Effect.fn("collie.readReceipt")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  return yield* Schema.decodeUnknownEffect(ResultBoundaryJson)(yield* fs.readFileString(file));
+  return yield* Schema.decodeEffect(ResultBoundaryJson)(yield* fs.readFileString(file));
 });
 
 /**
@@ -154,7 +165,10 @@ export const mutation = Effect.fn("collie.mutation")(function* (
       const tmp = `${path}.${yield* currentPid}.tmp`;
       const save = (value: Result) =>
         fs
-          .writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(value)}\n`)
+          .writeFileString(
+            tmp,
+            `${flow(Schema.encodeResult(ResultBoundaryJson), Result.getOrThrow)(value)}\n`,
+          )
           .pipe(Effect.andThen(fs.rename(tmp, path)));
       // Persist before applying: a process lost after taking effect must not execute
       // the same request again just because it never wrote the final receipt.

@@ -1,5 +1,6 @@
 // The host's own log, kept beside its state, so a host that wedges leaves a trail.
 
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Logger } from "effect";
 
 /** The log is never larger than this; what came before is kept once, as `<file>.1`. */
@@ -11,7 +12,7 @@ export const hostLogger = (file: string, maxBytes: number = MAX_BYTES) =>
     const fs = yield* FileSystem.FileSystem;
     const append = (lines: ReadonlyArray<string>) =>
       Effect.gen(function* () {
-        const bytes = new TextEncoder().encode(`${lines.join("\n")}\n`);
+        const bytes = new TextEncoder().encode(`${Arr.join(lines, "\n")}\n`);
         const size = yield* fs.stat(file).pipe(
           Effect.map((info) => Number(info.size)),
           Effect.orElseSucceed(() => 0),

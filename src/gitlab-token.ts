@@ -1,6 +1,7 @@
 // The one GitLab token a Machine pushes and asks GitLab with: where it is made, and when it
 // is due to be renewed. Pure, so Desktop shares it with doctor.
 
+import * as Arr from "effect/Array";
 import { Schema } from "effect";
 import { epochMs } from "./time";
 
@@ -15,7 +16,7 @@ export const SCOPES = ["api", "write_repository"];
 
 /** GitLab's page for a new token, with its name and the scopes Collie needs filled in. */
 export const tokenPage = (host: string) =>
-  `https://${host}/-/user_settings/personal_access_tokens?name=collie&scopes=${SCOPES.join(",")}`;
+  `https://${host}/-/user_settings/personal_access_tokens?name=collie&scopes=${Arr.join(SCOPES, ",")}`;
 
 export const RENEW_WITHIN_DAYS = 14;
 const DAY_MS = 86_400_000;

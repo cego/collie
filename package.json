@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch --oxlint",
-    "lint": "oxlint",
-    "lint:fix": "oxlint --fix",
+    "lint": "bun run lint:ts && bun run lint:vue",
+    "lint:ts": "effect-tsgo oxlint --vue-plugin",
+    "lint:vue": "bun tools/lint-vue.ts",
+    "lint:fix": "effect-tsgo oxlint --vue-plugin --fix && bun run lint:vue",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun run tools/test.ts",

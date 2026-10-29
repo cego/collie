@@ -1,5 +1,7 @@
 // A Usage reading from each source's recorded answer, and what is judged from it.
 
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { DateTime } from "effect";
 import { epochMs } from "../src/time";
@@ -110,11 +112,23 @@ describe("parsing", () => {
         secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: 1791973608 },
       },
     });
-    expect(codexUsage(limits(100))?.windows.map((w) => [w.kind, w.reached])).toEqual([
+    expect(
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(codexUsage(limits(100))), (present) =>
+          Arr.map(present.windows, (w) => [w.kind, w.reached]),
+        ),
+      ),
+    ).toEqual([
       ["session", true],
       ["weekly", false],
     ]);
-    expect(codexUsage(limits(70))?.windows.map((w) => [w.kind, w.reached])).toEqual([
+    expect(
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(codexUsage(limits(70))), (present_) =>
+          Arr.map(present_.windows, (w) => [w.kind, w.reached]),
+        ),
+      ),
+    ).toEqual([
       ["session", true],
       ["weekly", true],
     ]);
@@ -131,7 +145,7 @@ describe("parsing", () => {
       ...codexRateLimits.result,
       rateLimitsByLimitId: { ...codexRateLimits.result.rateLimitsByLimitId, spark },
     });
-    expect(usage.windows.map((w) => [w.label, w.model, w.reached])).toEqual([
+    expect(Arr.map(usage.windows, (w) => [w.label, w.model, w.reached])).toEqual([
       ["Weekly", null, false],
       ["Weekly GPT-5.3-Codex-Spark", "GPT-5.3-Codex-Spark", true],
     ]);
@@ -190,15 +204,18 @@ describe("accounts", () => {
 });
 
 test("subscriptionOf is the provider a choice draws on", () => {
-  const drawn = [
-    ["claude", "opus"],
-    ["codex", "default"],
-    ["pi", "anthropic/claude-sonnet-4-5"],
-    ["opencode", "openai-codex/gpt-5.6-sol"],
-    ["pi", "openrouter/qwen3"],
-    ["pi", "default"],
-    ["aider", "default"],
-  ].map(([harness = "", model = ""]) => subscriptionOf({ harness, model }));
+  const drawn = Arr.map(
+    [
+      ["claude", "opus"],
+      ["codex", "default"],
+      ["pi", "anthropic/claude-sonnet-4-5"],
+      ["opencode", "openai-codex/gpt-5.6-sol"],
+      ["pi", "openrouter/qwen3"],
+      ["pi", "default"],
+      ["aider", "default"],
+    ],
+    ([harness = "", model = ""]) => subscriptionOf({ harness, model }),
+  );
   expect(drawn).toEqual(["claude", "chatgpt", "claude", "chatgpt", null, null, null]);
 });
 

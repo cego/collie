@@ -1,6 +1,11 @@
 // What the human set in Desktop, kept on this computer beside the Flock chat's session.
 
-import { Effect, FileSystem, Path, Schema, Semaphore, SubscriptionRef } from "effect";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import { Effect, FileSystem, Path, Schema, Semaphore, SubscriptionRef, flow, Result } from "effect";
 import { DEFAULT_MODEL, HARNESS_MODELS, resolveChoice } from "../../../src/harness-choice";
 import { isString } from "../../../src/schema";
 import { effortsOf, type Offer } from "../shared/chat-choices";
@@ -15,7 +20,7 @@ export const readSettings = Effect.fn("Settings.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString((yield* Path.Path).join(dir, FILE)).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(SettingsFile)),
-    Effect.orElseSucceed(() => Schema.decodeUnknownSync(DesktopSettings)({})),
+    Effect.orElseSucceed(() => flow(Schema.decodeResult(DesktopSettings), Result.getOrThrow)({})),
   );
 });
 
@@ -27,7 +32,7 @@ export const writeSettings = Effect.fn("Settings.write")(function* (
   yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(
     (yield* Path.Path).join(dir, FILE),
-    Schema.encodeSync(SettingsFile)(settings),
+    yield* Schema.encodeEffect(SettingsFile)(settings).pipe(Effect.orDie),
   );
 });
 
@@ -42,7 +47,19 @@ const modelOf = (settings: DesktopSettings, offers: Offers) => {
       ? offer?.unset.model
       : (settings.chatModel ?? offer?.unset.model);
   return {
-    label: offer?.models.find((model) => model.id === id)?.label ?? id ?? harness,
+    label:
+      Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(offer), (present) =>
+          Option.map(
+            Option.fromNullishOr(
+              Option.getOrUndefined(Arr.findFirst(present.models, (model) => model.id === id)),
+            ),
+            (present_) => present_.label,
+          ),
+        ),
+      ) ??
+      id ??
+      harness,
     efforts:
       id === undefined
         ? (HARNESS_MODELS[harness]?.efforts ?? [])
@@ -88,10 +105,10 @@ export const applyChange = (
 
 /** Extra models per harness, from the Flock's `models.<harness>`. */
 export const extraModels = (flock: FlockSettings) =>
-  Object.fromEntries(
-    Object.entries(flock.settings).flatMap(([key, { value }]) =>
-      key.startsWith("models.") && Array.isArray(value) && value.every(isString)
-        ? [[key.slice("models.".length), value]]
+  Rec.fromEntries(
+    Arr.flatMap(Rec.toEntries(flock.settings), ([key, { value }]) =>
+      pipe_(key, Str.startsWith("models.")) && Arr.isArray(value) && Arr.every(value, isString)
+        ? [[pipe_(key, Str.slice("models.".length)), value]]
         : [],
     ),
   );
@@ -106,7 +123,7 @@ export const chatChoice = (
   if (!CHAT_HARNESSES.includes(harness))
     return {
       ok: false as const,
-      problem: `the Flock chat has no harness called "${harness}" (${CHAT_HARNESSES.join(", ")})`,
+      problem: `the Flock chat has no harness called "${harness}" (${Arr.join(CHAT_HARNESSES, ", ")})`,
     };
   const resolved = resolveChoice(
     [{ harness, model: settings.chatModel, effort: settings.chatEffort }],
@@ -116,7 +133,7 @@ export const chatChoice = (
     !resolved.ok &&
     harness === "pi" &&
     settings.chatModel !== undefined &&
-    !settings.chatModel.includes("/")
+    !pipe_(settings.chatModel, Str.includes("/"))
   )
     return {
       ok: false as const,
@@ -134,7 +151,7 @@ export const chatChoice = (
     ? resolved
     : {
         ok: false as const,
-        problem: `"${effort}" is not an effort ${label} takes (${efforts.join(", ")})`,
+        problem: `"${effort}" is not an effort ${label} takes (${Arr.join(efforts, ", ")})`,
       };
 };
 

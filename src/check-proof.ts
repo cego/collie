@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import {
   passed,
   ranCommand,
@@ -44,10 +46,21 @@ export function checkProof(
   name: string,
   unmatched: Unmatched = "anyone",
 ): CheckProof {
-  const command = got.commands?.find((one) => one.name === name);
-  const check = command ?? got.approved?.find((one) => one.name === name);
+  const command = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(got.commands), (present) =>
+      Option.getOrUndefined(Arr.findFirst(present, (one) => one.name === name)),
+    ),
+  );
+  const check =
+    command ??
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(got.approved), (present_) =>
+        Option.getOrUndefined(Arr.findFirst(present_, (one) => one.name === name)),
+      ),
+    );
   if (check?.ci !== undefined) {
-    const jobs = got.verifications.filter(
+    const jobs = Arr.filter(
+      got.verifications,
       (v) =>
         v.name === name &&
         v.pass === "ci" &&
@@ -57,17 +70,20 @@ export function checkProof(
           ? check.argv === undefined || sameCommand(v, { ...v, argv: check.argv })
           : sameCommand(v, { ...command, executable: command.executable ?? v.executable })),
     );
-    const proof = jobs.findLast((v) => !staleAgainst(v, got.final) && passed(v));
+    const proof = Option.getOrUndefined(
+      Arr.findLast(jobs, (v) => !staleAgainst(v, got.final) && passed(v)),
+    );
     return { state: proof === undefined ? "waiting" : "proved", runs: jobs, last: proof };
   }
-  const runs = got.verifications.filter(
+  const runs = Arr.filter(
+    got.verifications,
     (v) =>
       !ranOneTest(v) &&
       (command === undefined
         ? v.name === name && (unmatched === "anyone" || v.by === "collie")
         : ranCommand(v, command)),
   );
-  const last = runs.findLast((v) => !staleAgainst(v, got.final));
+  const last = Option.getOrUndefined(Arr.findLast(runs, (v) => !staleAgainst(v, got.final)));
   return { state: stateOf(runs, last), runs, last };
 }
 
@@ -86,4 +102,4 @@ export const owesNothingHere = (proof: CheckProof) =>
 
 /** The Checks a Run runs itself: all but those left to CI. */
 export const owedLocally = <C extends LeftToCi>(checks: ReadonlyArray<C>): ReadonlyArray<C> =>
-  checks.filter((check) => check.ci === undefined);
+  Arr.filter(checks, (check) => check.ci === undefined);

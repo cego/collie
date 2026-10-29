@@ -13,7 +13,16 @@
 // directories, reach a test unless it sets them itself. HOME is the suite's own, so a suite
 // run from a herdr pane cannot reach the live herd.
 
+import * as Arr from "effect/Array";
+import * as Struct from "effect/Struct";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
 import { afterAll, afterEach, beforeAll, beforeEach } from "bun:test";
+import { Clock, Effect, Path, Schedule } from "effect";
+// Bun's preload mutates the environment inherited by tests; Config is read-only.
+/* oxlint-disable effecttsgo/process-env */
+// The exit listener must finish cleanup synchronously; Effect FileSystem is asynchronous.
 import {
   existsSync,
   mkdirSync,
@@ -22,8 +31,8 @@ import {
   readFileSync,
   rmSync,
   writeFileSync,
-} from "node:fs";
-import { dirname, join, relative } from "node:path";
+} from "node:fs"; // oxlint-disable-line effecttsgo/node-builtin-import
+const { dirname, join, relative } = Effect.runSync(Path.Path.pipe(Effect.provide(Path.layer)));
 import { GIT_QUIET } from "./git-quiet";
 import { alive, kill, MARKER, marked, rootBase } from "./sweep";
 import { testBunfig } from "./packages";
@@ -55,8 +64,8 @@ process.env.COLLIE_HOST_WATCH_PID = String(process.pid);
 // A stopped host waits this long for its steps before exiting; well inside `settled` below,
 // so a host told to stop is gone before the check, not reported as left behind.
 process.env.COLLIE_HOST_STOP_GRACE ??= "500 millis";
-for (const key of Object.keys(process.env))
-  if (key.startsWith("HERDR_") && key !== "HERDR_API_SCHEMA") delete process.env[key];
+for (const key of Struct.keys(process.env))
+  if (pipe(key, Str.startsWith("HERDR_")) && key !== "HERDR_API_SCHEMA") delete process.env[key];
 delete process.env.COLLIE_USER_DIR;
 // Never GitHub's: a release source nothing listens on, refused at once.
 process.env.COLLIE_RELEASES = "http://127.0.0.1:9";
@@ -77,11 +86,16 @@ writeFileSync(
 process.env.COLLIE_PROC = proc;
 
 // Bun.spawn's default environment is the one this process started with, not process.env.
+// Bun overloads have different argument/result types; the forwarding shim treats them as opaque.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns
 type Spawn = (first: unknown, options?: { env?: unknown }) => unknown;
-const inherit = <F>(spawn: F) => {
+const inherit = <F extends typeof Bun.spawn | typeof Bun.spawnSync>(spawn: F) => {
+  // SAFETY: only Bun's spawn functions enter this adapter, with their original receiver-free arguments.
   const call = spawn as Spawn;
+  // SAFETY: each overload's result is returned unchanged; only the default environment is replaced.
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters
   return ((first: unknown, options?: { env?: unknown }) =>
-    Array.isArray(first)
+    Arr.isArray(first)
       ? call(first, { ...options, env: options?.env ?? process.env })
       : call({ ...(first as object), env: (first as { env?: unknown }).env ?? process.env })) as F;
 };
@@ -94,30 +108,52 @@ Bun.spawnSync = inherit(Bun.spawnSync);
  * is too slow to read after every test.
  */
 const hosts = () =>
-  [...new Bun.Glob("**/host.lock").scanSync({ cwd: root, dot: true, absolute: true })].flatMap(
+  Arr.flatMap(
+    [
+      ...new Bun.Glob("**/host.lock").scanSync({
+        cwd: root,
+        dot: true,
+        absolute: true,
+      }),
+    ],
     (lock) => {
-      const pid = Number(/"pid":\s*(\d+)/.exec(readFileSync(lock, "utf8"))?.[1] ?? 0);
-      return pid > 0 && pid !== process.pid && alive(pid) ? [{ pid, dir: dirname(lock) }] : [];
+      const pid = Number(
+        Option.getOrUndefined(
+          Option.map(
+            Option.fromNullishOr(/"pid":\s*(\d+)/.exec(readFileSync(lock, "utf8"))),
+            (present) => present[1],
+          ),
+        ) ?? 0,
+      );
+      return pid > 0 && pid !== process.pid && alive(pid)
+        ? [
+            {
+              pid,
+              dir: dirname(lock),
+            },
+          ]
+        : [];
     },
   );
 
 /** What is directly under the root, but the isolated home. */
-const entries = () => readdirSync(root).filter((name) => name !== "home");
+const entries = () => Arr.filter(readdirSync(root), (name) => name !== "home");
 
 /**
  * What `find` still returns once a moment has passed: a host told to stop, or a process
  * whose directory went, is still exiting for a moment. Well inside a hook's own timeout,
  * so what is left is reported rather than timed out.
  */
-const settled = async <A>(find: () => ReadonlyArray<A>) => {
-  const deadline = Date.now() + 2_500;
-  let left = find();
-  while (left.length > 0 && Date.now() < deadline) {
-    await Bun.sleep(100);
-    left = find();
-  }
-  return left;
-};
+const settled = <A>(find: () => ReadonlyArray<A>) =>
+  Effect.gen(function* () {
+    const deadline = (yield* Clock.currentTimeMillis) + 2_500;
+    return yield* Effect.sync(find).pipe(
+      Effect.repeat({
+        until: (left) => left.length === 0,
+        schedule: Schedule.spaced(100).pipe(Schedule.while(({ now }) => now < deadline)),
+      }),
+    );
+  });
 
 // The next `--rerun-each` run's, its last one having been removed.
 beforeAll(() => {
@@ -130,32 +166,48 @@ beforeEach(() => {
   before = new Set(entries());
 });
 
-afterEach(async () => {
-  const left = await settled(hosts);
-  for (const one of left) kill(one.pid);
-  const made = entries().filter((name) => !before.has(name));
-  for (const name of made) rmSync(join(root, name), { recursive: true, force: true });
-  const problems = [
-    ...left.map((one) => `host pid ${one.pid} on ${one.dir}`),
-    ...made.map((name) => `directory ${join(root, name)}`),
-  ];
-  // Bun counts a test that already failed once, so this only adds what it left.
-  if (problems.length > 0)
-    throw new Error(`The test left ${problems.length} thing(s) behind: ${problems.join("; ")}`);
-});
+afterEach(() =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const left = yield* settled(hosts);
+      for (const one of left) kill(one.pid);
+      const made = Arr.filter(entries(), (name) => !before.has(name));
+      for (const name of made) rmSync(join(root, name), { recursive: true, force: true });
+      const problems = [
+        ...Arr.map(left, (one) => `host pid ${one.pid} on ${one.dir}`),
+        ...Arr.map(made, (name) => `directory ${join(root, name)}`),
+      ];
+      // Bun counts a test that already failed once, so this only adds what it left.
+      if (problems.length > 0)
+        return yield* Effect.die(
+          new Error(
+            `The test left ${problems.length} thing(s) behind: ${Arr.join(problems, "; ")}`,
+          ),
+        );
+    }),
+  ),
+);
 
-afterAll(async () => {
-  const left = await settled(() => marked(root));
-  for (const one of left) kill(one.pid);
-  const made = entries();
-  rmSync(root, { recursive: true, force: true });
-  const problems = [
-    ...left.map((one) => `process pid ${one.pid} (${one.command})`),
-    ...made.map((name) => `directory ${join(root, name)}`),
-  ];
-  if (problems.length > 0)
-    throw new Error(`The file left ${problems.length} thing(s) behind: ${problems.join("; ")}`);
-});
+afterAll(() =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const left = yield* settled(() => marked(root));
+      for (const one of left) kill(one.pid);
+      const made = entries();
+      rmSync(root, { recursive: true, force: true });
+      const problems = [
+        ...Arr.map(left, (one) => `process pid ${one.pid} (${one.command})`),
+        ...Arr.map(made, (name) => `directory ${join(root, name)}`),
+      ];
+      if (problems.length > 0)
+        return yield* Effect.die(
+          new Error(
+            `The file left ${problems.length} thing(s) behind: ${Arr.join(problems, "; ")}`,
+          ),
+        );
+    }),
+  ),
+);
 
 process.on("exit", () => {
   for (const one of hosts()) kill(one.pid);

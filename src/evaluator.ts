@@ -8,7 +8,11 @@
 // proposal; `validate` says which of a proposal's actions the target's own authority
 // already grants and which need a human. Running them is somebody else's module.
 
-import { Clock, Data, Effect, FileSystem, Path, Schema, Option } from "effect";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import { Clock, Data, Effect, FileSystem, Path, Schema, Option, flow, Result } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { budgetPath, herdOf, reserve, settle } from "./steering";
 import { isArray, isRecord, isString } from "./schema";
@@ -56,7 +60,7 @@ export const ProposalSchema = Schema.Struct({
   interpretation: Schema.String,
   targets: Schema.Array(Schema.Struct({ run: Schema.String })),
   actions: Schema.Array(ActionSchema),
-  confidence: Schema.Number,
+  confidence: Schema.Finite,
 });
 export type Proposal = Schema.Schema.Type<typeof ProposalSchema>;
 
@@ -97,7 +101,10 @@ export function jsonSchemaFor(kind: EvaluationKind): string {
   return encodeJson({ ...document.schema, $defs: document.definitions });
 }
 
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown, { space: 2 }));
+const encodeJson = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown, { space: 2 })),
+  Result.getOrThrow,
+);
 
 export class EvaluatorUnavailable extends Data.TaggedError("EvaluatorUnavailable")<{
   reason: string;
@@ -193,7 +200,7 @@ export function structuredFrom<A, I>(
       continue;
     }
     if (isArray(node)) queue.push(...node);
-    else if (isRecord(node)) queue.push(...Object.values(node));
+    else if (isRecord(node)) queue.push(...Rec.values(node));
   }
   return { error: "nothing in the CLI's envelope matched the schema it was given" };
 }
@@ -217,8 +224,8 @@ export interface EvaluatorDeps {
  * takes both spellings — so a bracketed suffix is read as naming both.
  */
 export function missingFlags(help: string): string[] {
-  const named = help.replace(/(--[a-z-]+)\[(-[a-z-]+)\]/g, "$1 $1$2");
-  return REQUIRED_FLAGS.filter((flag) => !named.includes(flag));
+  const named = pipe_(help, Str.replace(/(--[a-z-]+)\[(-[a-z-]+)\]/g, "$1 $1$2"));
+  return Arr.filter(REQUIRED_FLAGS, (flag) => !pipe_(named, Str.includes(flag)));
 }
 
 const HELP_TAIL = 500;
@@ -242,15 +249,15 @@ export const helpOf = (command: ReadonlyArray<string>) =>
     Effect.mapError(
       (cause) =>
         new EvaluatorUnavailable({
-          reason: `${command.join(" ")} --help did not start: ${String(cause)}`,
+          reason: `${Arr.join(command, " ")} --help did not start: ${String(cause)}`,
         }),
     ),
     Effect.flatMap((ran) => {
-      if (ran.exitCode === 0 && ran.stdout.trim() !== "") return Effect.succeed(ran.stdout);
-      const said = ran.stderr.trim().slice(-HELP_TAIL);
+      if (ran.exitCode === 0 && Str.trim(ran.stdout) !== "") return Effect.succeed(ran.stdout);
+      const said = pipe_(Str.trim(ran.stderr), Str.slice(-HELP_TAIL));
       return Effect.fail(
         new EvaluatorUnavailable({
-          reason: `${command.join(" ")} --help exited ${ran.exitCode}${said === "" ? " and printed nothing" : `: ${said}`}`,
+          reason: `${Arr.join(command, " ")} --help exited ${ran.exitCode}${said === "" ? " and printed nothing" : `: ${said}`}`,
         }),
       );
     }),
@@ -306,7 +313,7 @@ export const call = Effect.fn("Evaluator.call")(function* (
   const missing = yield* flagsPresent(deps);
   if (missing.length > 0)
     return yield* new EvaluatorUnavailable({
-      reason: `the installed claude does not take ${missing.join(", ")}`,
+      reason: `the installed claude does not take ${Arr.join(missing, ", ")}`,
     });
 
   const argv = argvFor(deps.limits, jsonSchemaFor(kind), deps.systemPromptFile);
@@ -334,11 +341,11 @@ export const call = Effect.fn("Evaluator.call")(function* (
       ],
       { concurrency: "unbounded" },
     );
-    return { read, stderr: failed.text.slice(-STDERR_TAIL_BYTES), code: Number(exit) };
+    return { read, stderr: pipe_(failed.text, Str.slice(-STDERR_TAIL_BYTES)), code: Number(exit) };
   }).pipe(
     Effect.scoped,
     Effect.timeoutOption(deps.limits.maxSeconds * 1000),
-    Effect.catch(() => Effect.succeed(undefined)),
+    Effect.catch(() => Effect.void),
   );
 
   const seconds = ((yield* Clock.currentTimeMillis) - started) / 1000;
@@ -362,9 +369,9 @@ export const call = Effect.fn("Evaluator.call")(function* (
  * Telemetry, written beside the call's record for a human to see; nothing reads it back
  * to decide anything.
  */
-const CostEnvelope = Schema.Struct({ total_cost_usd: Schema.Number });
+const CostEnvelope = Schema.Struct({ total_cost_usd: Schema.Finite });
 const costOf = (stdout: string): number | undefined =>
-  Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(stdout).pipe(
+  Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(stdout).pipe(
     Option.flatMap((json) => Schema.decodeUnknownOption(CostEnvelope)(json)),
     Option.map((envelope) => envelope.total_cost_usd),
     Option.getOrUndefined,
@@ -387,7 +394,7 @@ export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
     return {
       spent: ran,
       value: null,
-      error: ran.stderr === "" ? ran.outcome : `${ran.outcome}: ${ran.stderr.trim()}`,
+      error: ran.stderr === "" ? ran.outcome : `${ran.outcome}: ${Str.trim(ran.stderr)}`,
     };
   // Per kind rather than from `SCHEMAS`: inference over that union picks one member's
   // type, and callers narrow the union of both.
@@ -464,7 +471,7 @@ function runOf(action: Action): string | null {
  * answer they need to see.
  */
 export function validate(proposal: Proposal, ctx: ValidationContext): Validated[] {
-  return proposal.actions.map((action) => {
+  return Arr.map(proposal.actions, (action) => {
     const refused = refusalFor(action, ctx);
     if (refused !== null)
       return {
@@ -550,7 +557,7 @@ export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const herd = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const herd = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   if (herd === null) return null;
   const systemPromptFile = path.join(env.pluginRoot, "prompts", prompt);
   if (!(yield* fs.exists(systemPromptFile).pipe(Effect.orElseSucceed(() => false)))) return null;

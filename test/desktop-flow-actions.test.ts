@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import {
   desktopFlowAction,
@@ -141,7 +142,7 @@ test("Retry names the Steps it keeps, shortening after three", () => {
     retryCaption(
       {
         ...lane,
-        nodes: ["grill", "spec", "tickets", "build", "review"].map((id) =>
+        nodes: Arr.map(["grill", "spec", "tickets", "build", "review"], (id) =>
           flowNode(id, { state: "done" }),
         ),
       },
@@ -154,9 +155,9 @@ test("the next move is the current node's primary, and saved Flows offer no acti
   const base = mainFlow();
   const flow = {
     ...base,
-    lanes: base.lanes.map((row) => ({
+    lanes: Arr.map(base.lanes, (row) => ({
       ...row,
-      nodes: row.nodes.map((one) =>
+      nodes: Arr.map(row.nodes, (one) =>
         one.id === "build" ? { ...one, primary: "terminal" as const } : one,
       ),
     })),

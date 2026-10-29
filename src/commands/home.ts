@@ -4,6 +4,7 @@
 // herdr has now, and which proof — if any — makes the first still true of the second.
 // When there is none and healing is not safe, `reconcile` is how a person settles it.
 
+import * as Arr from "effect/Array";
 import { Effect } from "effect";
 import { Command, Flag } from "effect/cli";
 import { Herdr } from "../herdr";
@@ -32,31 +33,34 @@ const show = Command.make("show", {}, () =>
       const herdr = new Herdr(env);
       const key = yield* herdOf(env.socketPath);
       const record = yield* readHome(yield* homePath(env.stateDir, key));
-      const workspaces = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
-      const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
+      const workspaces = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
+      const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
       const decision = decide(record, workspaces, panes, key);
-      const schema = yield* herdr.apiSchema().pipe(Effect.catch(() => Effect.succeed("")));
+      const schema = yield* herdr.apiSchema().pipe(Effect.orElseSucceed(() => ""));
       const missing = schema === "" ? ["herdr could not be asked"] : missingRuntime(schema);
 
       return {
         ok: true,
         data: { herd: key, record, decision, missing },
-        human: [
-          `herd\t${key}`,
-          record === null
-            ? "record\tnone"
-            : record === UNREADABLE
-              ? "record\tunreadable"
-              : `record\t${record.workspaceId}\t${record.state}`,
-          `ownership\t${decision.kind}${decision.kind === "ownership_unknown" ? `\t${decision.why}` : ""}`,
-          ...healedLines(record, decision),
-          ...(decision.kind === "ownership_unknown"
-            ? decision.candidates.map((id) => `candidate\t${id}`)
-            : []),
-          missing.length === 0
-            ? "herdr\thas everything the Home needs"
-            : `herdr\tmissing ${missing.join(", ")}`,
-        ].join("\n"),
+        human: Arr.join(
+          [
+            `herd\t${key}`,
+            record === null
+              ? "record\tnone"
+              : record === UNREADABLE
+                ? "record\tunreadable"
+                : `record\t${record.workspaceId}\t${record.state}`,
+            `ownership\t${decision.kind}${decision.kind === "ownership_unknown" ? `\t${decision.why}` : ""}`,
+            ...healedLines(record, decision),
+            ...(decision.kind === "ownership_unknown"
+              ? Arr.map(decision.candidates, (id) => `candidate\t${id}`)
+              : []),
+            missing.length === 0
+              ? "herdr\thas everything the Home needs"
+              : `herdr\tmissing ${Arr.join(missing, ", ")}`,
+          ],
+          "\n",
+        ),
       };
     }),
   ),
@@ -91,7 +95,7 @@ const reconcile = Command.make(
             const key = yield* herdOf(env.socketPath);
             const file = yield* homePath(env.stateDir, key);
             const record = yield* readHome(file);
-            const at = yield* nowIso();
+            const at = yield* nowIso;
             if (chosen === null) {
               if (record === null)
                 return err("invalid_state", "There is no Home record to forget.");
@@ -120,7 +124,7 @@ const reconcile = Command.make(
             // human said this workspace is the Home, so it now says so itself.
             yield* new Herdr(env)
               .workspaceReportMetadata(chosen, { [HOME_TOKEN]: key }, TOKEN_TTL_MS)
-              .pipe(Effect.catch(() => Effect.void));
+              .pipe(Effect.ignore);
             yield* writeHome(file, {
               workspaceId: chosen,
               tabId: null,
@@ -163,12 +167,15 @@ const cleanup = Command.make(
     answering((env) =>
       Effect.gen(function* () {
         const herdr = new Herdr(env);
-        const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
+        const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
         const { close, listed } = closable(panes);
-        const human = [
-          ...close.map((id) => `${confirm ? "closed" : "would close"}\t${id}`),
-          ...listed.map((id) => `left\t${id}\tshares its tab with something else`),
-        ].join("\n");
+        const human = Arr.join(
+          [
+            ...Arr.map(close, (id) => `${confirm ? "closed" : "would close"}\t${id}`),
+            ...Arr.map(listed, (id) => `left\t${id}\tshares its tab with something else`),
+          ],
+          "\n",
+        );
         if (!confirm)
           return {
             ok: true as const,
@@ -177,8 +184,7 @@ const cleanup = Command.make(
           };
         return yield* mutation(env, "home-cleanup", requestId, () =>
           Effect.gen(function* () {
-            for (const paneId of close)
-              yield* herdr.paneClose(paneId).pipe(Effect.catch(() => Effect.void));
+            for (const paneId of close) yield* herdr.paneClose(paneId).pipe(Effect.ignore);
             return { ok: true as const, data: { closed: close, listed }, human };
           }),
         );

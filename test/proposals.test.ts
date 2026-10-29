@@ -3,6 +3,8 @@
 // has aged out, a Run whose Intent moved, a caller that is not a person, and an action
 // nobody can say whether it already happened.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, FileSystem, Path, type Scope } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -102,8 +104,8 @@ test("a card-bound proposal carries the revision it was asked about", () =>
       });
       expect(bound.card).toEqual({ id: "card-1", revision: "sha:fingerprint" });
       // And it survives the journal, which is where a confirmation reads it from.
-      const back = (yield* read(file)).find(
-        (line): line is typeof bound => line.kind === "proposal",
+      const back = Option.getOrUndefined(
+        Arr.findFirst(yield* read(file), (line): line is typeof bound => line.kind === "proposal"),
       );
       expect(back?.card?.revision).toBe("sha:fingerprint");
       // Unbound proposals stay unbound: nothing invents a revision to compare.
@@ -221,7 +223,7 @@ test("an action that started and never settled stops the next confirmation", () 
       const later = yield* written();
       const lines = yield* read(file);
       const judged = judgeConfirmation(
-        lines.map((line) => (line.kind === "step" ? { ...line, proposal: later.id } : line)),
+        Arr.map(lines, (line) => (line.kind === "step" ? { ...line, proposal: later.id } : line)),
         later.id,
         later.content_hash,
         human,
@@ -240,7 +242,8 @@ test("an action that started and never settled stops the next confirmation", () 
       expect(yield* reconcileStep(file, proposal.id, 1, "not-applied", driver)).toMatchObject({
         refused: null,
       });
-      const settled = (yield* read(file)).filter(
+      const settled = Arr.filter(
+        yield* read(file),
         (line): line is Extract<ProposalLine, { kind: "step" }> => line.kind === "step",
       );
       expect(settled.at(-1)).toMatchObject({
@@ -520,7 +523,7 @@ test(
         expect(started.ok).toBe(true);
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-        expect(runs.map((one) => one.cwd)).toEqual([root]);
+        expect(Arr.map(runs, (one) => one.cwd)).toEqual([root]);
 
         const short = yield* carry({
           kind: "start",
@@ -693,7 +696,7 @@ test("a proposal is pending until it is answered or it expires", () => {
     by: "evaluator:call-1",
     state: "pending",
   };
-  expect(pendingFor([proposal], "r1", now).map((line) => line.id)).toEqual(["p1"]);
+  expect(Arr.map(pendingFor([proposal], "r1", now), (line) => line.id)).toEqual(["p1"]);
   // Somebody else's Run is not this Run's decision.
   expect(pendingFor([proposal], "r2", now)).toEqual([]);
   // Answered either way, and expired, are all "nobody is being waited on".
@@ -720,12 +723,12 @@ test("a proposal about the installation is waiting on the Herd, not on any Run",
       });
       const lines = yield* read(file);
       const now = epochMs(herdWide.expires_at) - 1;
-      expect(pendingHerdWide(lines, now).map((p) => p.id)).toEqual([herdWide.id]);
+      expect(Arr.map(pendingHerdWide(lines, now), (p) => p.id)).toEqual([herdWide.id]);
       // And a proposal about a Run is that Run's, never the Herd's: the two lists do not
       // overlap, so confirming one is never confirming the other.
       yield* written();
       const both = yield* read(file);
-      expect(pendingHerdWide(both, now).map((p) => p.id)).toEqual([herdWide.id]);
-      expect(pendingFor(both, "r1", now).map((p) => p.id)).not.toContain(herdWide.id);
+      expect(Arr.map(pendingHerdWide(both, now), (p) => p.id)).toEqual([herdWide.id]);
+      expect(Arr.map(pendingFor(both, "r1", now), (p) => p.id)).not.toContain(herdWide.id);
     }),
   ));

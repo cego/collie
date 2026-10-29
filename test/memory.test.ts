@@ -1,6 +1,7 @@
 // Whether this Machine is Short of memory, read from its own sources
 // (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D1).
 
+import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -61,7 +62,7 @@ const proc = (files: Record<string, string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(`${dir}/proc/pressure`, { recursive: true });
-    for (const [name, text] of Object.entries(files))
+    for (const [name, text] of Rec.toEntries(files))
       yield* fs.writeFileString(`${dir}/proc/${name}`, text);
     return `${dir}/proc`;
   });

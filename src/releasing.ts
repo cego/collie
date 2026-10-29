@@ -1,12 +1,16 @@
 // A Release Run's checkout and its tag, stage and production, read from git and the forge.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, Schema } from "effect";
 import type { MrRef } from "./board-model";
 import { forgeOf, forgeOfUrl, type DeployTier } from "./forge/forge";
 import { whatItSaid, type Ran, type Runner } from "./mr";
 import { appendLog } from "./oversight";
 
-const short = (sha: string) => sha.slice(0, 8);
+const short = (sha: string) => pipe(sha, Str.slice(0, 8));
 
 /** Where a fast-forward left the checkout, or why it left it alone. */
 export const FastForwardSchema = Schema.Union([
@@ -33,10 +37,10 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   const git = (args: string[]) => opts.run("git", args, opts.cwd);
   const refused = (why: string): FastForward => ({ _tag: "Refused", why });
   const status = yield* git(["status", "--porcelain"]);
-  const from = (yield* git(["rev-parse", "HEAD"])).stdout.trim();
+  const from = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
   if (status.code !== 0 || from === "")
     return refused(`git could not read the checkout at ${opts.cwd}`);
-  if (status.stdout.trim() !== "")
+  if (Str.trim(status.stdout) !== "")
     return refused(
       `the checkout at ${opts.cwd} has uncommitted changes, so it is not taken as ${short(opts.head)}`,
     );
@@ -52,11 +56,11 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     // holds a stale head, so answer `At` and let the next read see the real
     // head instead of parking on the same journaled head forever.
     const carries = (yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0;
-    const branch = (yield* git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+    const branch = Str.trim((yield* git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout);
     const atOrigin =
       branch !== "" &&
       branch !== "HEAD" &&
-      (yield* git(["rev-parse", "--verify", `refs/remotes/origin/${branch}`])).stdout.trim() ===
+      Str.trim((yield* git(["rev-parse", "--verify", `refs/remotes/origin/${branch}`])).stdout) ===
         from;
     if (carries && atOrigin) {
       yield* appendLog(
@@ -163,16 +167,19 @@ const unsettled = (
   production: ReadonlyArray<string>,
   on: string,
 ) => {
-  const others = jobs.filter((job) => !production.includes(job.name));
+  const others = Arr.filter(jobs, (job) => !production.includes(job.name));
   const named = (states: Set<string>) =>
-    others.filter((job) => states.has(job.state)).map((job) => `\`${job.name}\``);
+    Arr.map(
+      Arr.filter(others, (job) => states.has(job.state)),
+      (job) => `\`${job.name}\``,
+    );
   const failed = named(failing);
-  if (failed.length > 0) return `${failed.join(", ")} failed ${on}`;
+  if (failed.length > 0) return `${Arr.join(failed, ", ")} failed ${on}`;
   const running = named(unfinished);
-  if (running.length > 0) return `${running.join(", ")} has not finished ${on}`;
+  if (running.length > 0) return `${Arr.join(running, ", ")} has not finished ${on}`;
   const waiting = named(new Set(["manual"]));
   if (waiting.length > 0)
-    return `${waiting.join(", ")} waits ${on} for somebody to start it, and is not a production job`;
+    return `${Arr.join(waiting, ", ")} waits ${on} for somebody to start it, and is not a production job`;
   return null;
 };
 
@@ -204,13 +211,13 @@ const tagOn = <R>(
     const ref = `refs/tags/${tag}`;
     const listed = yield* git(["ls-remote", "--tags", "origin", ref]);
     if (listed.code !== 0) return lacks(`origin could not be read: ${whatItSaid(listed)}`);
-    const at = listed.stdout.trim().split(/\s+/)[0] ?? "";
+    const at = Str.split(Str.trim(listed.stdout), /\s+/)[0] ?? "";
     if (at === "") return lacks(`${tag} is not on origin`);
     yield* git(["fetch", "--quiet", "--force", "origin", `${ref}:${ref}`]);
     yield* git(["fetch", "--quiet", "origin"]);
     if ((yield* git(["merge-base", "--is-ancestor", merged, ref])).code !== 0)
       return lacks(`${tag} on origin does not carry the merged commit ${short(merged)}`);
-    const commit = (yield* git(["rev-parse", `${ref}^{commit}`])).stdout.trim();
+    const commit = Str.trim((yield* git(["rev-parse", `${ref}^{commit}`])).stdout);
     return { ok: true, at, commit } as const;
   });
 
@@ -227,7 +234,7 @@ const tagsPipeline = <R>(opts: {
     const not = (why: string) => ({ ok: false, why }) as const;
     const read = yield* forgeOfUrl(opts.url).pipeline(opts.url, opts.cwd, opts.run);
     if (!read.ok) return not(`${opts.tag}'s pipeline could not be read: ${read.reason}`);
-    if (read.project.toLowerCase() !== (opts.ref.project ?? "").toLowerCase())
+    if (Str.toLowerCase(read.project) !== Str.toLowerCase(opts.ref.project ?? ""))
       return not(`${opts.url} is a pipeline of ${read.project}, not of ${opts.ref.project}`);
     if (read.ref !== opts.tag) return not(`${opts.url} ran for ${read.ref}, not for ${opts.tag}`);
     if (read.sha !== opts.commit)
@@ -297,12 +304,13 @@ export const readTag = Effect.fn("Releasing.readTag")(function* <R>(opts: {
     const tags = yield* pipelineAt(pipeline);
     if (!tags.ok) return unproved(tags.why);
     const read = tags.read;
-    const manual = read.jobs
-      .filter((job) => job.state === "manual")
-      .map((job) => `\`${job.name}\``);
+    const manual = Arr.map(
+      Arr.filter(read.jobs, (job) => job.state === "manual"),
+      (job) => `\`${job.name}\``,
+    );
     if (manual.length > 0)
       return unproved(
-        `${opts.tag}'s pipeline at ${pipeline} has not finished: ${manual.join(", ")} waits for somebody to start it by hand`,
+        `${opts.tag}'s pipeline at ${pipeline} has not finished: ${Arr.join(manual, ", ")} waits for somebody to start it by hand`,
       );
     if (!read.succeeded)
       return unproved(`${opts.tag}'s pipeline at ${pipeline} has not finished and succeeded`);
@@ -317,7 +325,8 @@ export const readTag = Effect.fn("Releasing.readTag")(function* <R>(opts: {
   if (!tags.ok) return unproved(tags.why);
   const read = tags.read;
   const on = `on ${opts.tag}'s pipeline at ${pipeline}`;
-  const jobNamed = (name: string) => read.jobs.find((job) => job.name === name);
+  const jobNamed = (name: string) =>
+    Option.getOrUndefined(Arr.findFirst(read.jobs, (job) => job.name === name));
   if (opts.stage.length > 0) {
     for (const name of opts.stage) {
       const job = jobNamed(name);
@@ -392,7 +401,7 @@ export const readProduction = Effect.fn("Releasing.readProduction")(function* <R
   if (settled !== null) return unproved(settled);
   const jobs: JobLink[] = [];
   for (const name of opts.jobs) {
-    const job = read.jobs.find((one) => one.name === name);
+    const job = Option.getOrUndefined(Arr.findFirst(read.jobs, (one) => one.name === name));
     if (job === undefined) return unproved(`\`${name}\` is no longer a job ${on}`);
     if (failing.has(job.state)) return unproved(`\`${name}\` failed ${on}`);
     if (job.state === "manual") jobs.push({ name, url: job.url ?? opts.pipeline });
@@ -400,7 +409,11 @@ export const readProduction = Effect.fn("Releasing.readProduction")(function* <R
   return { _tag: "Play", jobs } satisfies ProductionRead;
 });
 
-const named = (names: ReadonlyArray<string>) => names.map((one) => `\`${one}\``).join(", ");
+const named = (names: ReadonlyArray<string>) =>
+  Arr.join(
+    Arr.map(names, (one) => `\`${one}\``),
+    ", ",
+  );
 
 /**
  * A merge request's head on stage: each of `jobs`, one at least, passed on the pipeline of its
@@ -445,8 +458,8 @@ export const readStage = Effect.fn("Releasing.readStage")(function* <R>(opts: {
     opts.jobs,
   );
   if (!staging.ok) return failed(unpassed ?? `stage could not be read: ${staging.reason}`);
-  const reached = staging.environments.filter((env) => env.hasCommit);
-  const environments = reached.map((env) => env.name);
+  const reached = Arr.filter(staging.environments, (env) => env.hasCommit);
+  const environments = Arr.map(reached, (env) => env.name);
   if (moved !== null) return { _tag: "Moved", head: moved, environments } satisfies StageRead;
   if (unpassed !== null) return failed(unpassed, environments);
   if (reached.length === 0)
@@ -500,7 +513,9 @@ export const readRollback = Effect.fn("Releasing.readRollback")(function* <R>(op
     for (const name of opts.environments)
       lives.push({
         where: ` in \`${name}\``,
-        live: staging.environments.find((env) => env.name === name)?.live ?? null,
+        live:
+          Option.getOrUndefined(Arr.findFirst(staging.environments, (env) => env.name === name))
+            ?.live ?? null,
       });
   }
   if (lives.length === 0) return { _tag: "Shown" } satisfies RollbackRead;
@@ -519,11 +534,13 @@ export const readRollback = Effect.fn("Releasing.readRollback")(function* <R>(op
       if (carried === null) return unshown(`stage's ${short(live)}${where} could not be compared`);
       if (carried) still.push(short(head));
     }
-    if (still.length > 0) why.push(`stage still carries ${still.join(", ")}${where}`);
+    if (still.length > 0) why.push(`stage still carries ${Arr.join(still, ", ")}${where}`);
     else if ((yield* carries(git, live, production.sha)) !== true)
       why.push(
         `stage's ${short(live)}${where} does not carry production's ${short(production.sha)}`,
       );
   }
-  return why.length === 0 ? ({ _tag: "Shown" } satisfies RollbackRead) : unshown(why.join("; "));
+  return why.length === 0
+    ? ({ _tag: "Shown" } satisfies RollbackRead)
+    : unshown(Arr.join(why, "; "));
 });

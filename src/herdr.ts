@@ -4,6 +4,10 @@
 // fact about herdr is behind this one interface, which is what makes the fake herdr in
 // `test/support/` enough to test everything above it.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import type { PlatformServices } from "./platform";
 import {
   Data,
@@ -16,6 +20,7 @@ import {
   Schedule,
   Schema,
   Stream,
+  flow,
 } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Socket from "effect/socket/Socket";
@@ -58,7 +63,7 @@ type BoundaryValue = Schema.Json | string | undefined;
 type HerdrParams = Schema.JsonObject;
 
 const JsonString = Schema.fromJsonString(Schema.Json);
-const encodeJson = Schema.encodeSync(JsonString);
+const encodeJson = flow(Schema.encodeResult(JsonString), Result.getOrThrow);
 
 const ErrorReply = Schema.Struct({
   message: Schema.optionalKey(Schema.String),
@@ -290,7 +295,10 @@ export const replySchemas = {
   PluginPaneReply,
 } as const;
 
-const encodeJsonValue = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeJsonValue = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /**
  * What each binary has said it can do, by its path. A capability declaration cannot change
@@ -350,7 +358,7 @@ const STATUS_WAIT = { every: Duration.millis(500), times: 20 } as const;
 
 /** The code herdr named, where a failed call printed an error envelope as its output. */
 function envelopeCode(text: string): string | undefined {
-  return Schema.decodeUnknownOption(JsonString)(text).pipe(
+  return Schema.decodeOption(JsonString)(text).pipe(
     Option.flatMap((json) => Schema.decodeUnknownOption(ErrorEnvelope)(json)),
     Option.map((envelope) => envelope.error.code),
     Option.getOrUndefined,
@@ -394,7 +402,7 @@ export interface HerdrSession {
 }
 
 const decodeBoundary = <S extends Schema.Top>(operation: string, schema: S, value: BoundaryValue) =>
-  Schema.decodeUnknownEffect(schema)(value).pipe(
+  Schema.decodeEffect(schema)(value).pipe(
     Effect.mapError((cause) =>
       herdrError(`${operation} returned an invalid response`, String(cause)),
     ),
@@ -408,7 +416,7 @@ const decodeReply = (
   method: string,
   line: string,
 ): Effect.Effect<Schema.Json | undefined, HerdrError> =>
-  Schema.decodeUnknownEffect(JsonString)(line).pipe(
+  Schema.decodeEffect(JsonString)(line).pipe(
     Effect.mapError(() => herdrError(`${method} failed`, "invalid json response")),
     Effect.flatMap((message) => decodeBoundary(method, SocketReply, message)),
     Effect.flatMap((message) =>
@@ -566,7 +574,7 @@ export interface AgentInfo {
 export const LEADING_GLYPH = /^[^\p{L}\p{N}\s]+\s+/u;
 
 function agentTitle(raw: string | null | undefined): string | null {
-  const title = (raw ?? "").replace(LEADING_GLYPH, "").trim();
+  const title = Str.trim(pipe_(raw ?? "", Str.replace(LEADING_GLYPH, "")));
   return title === "" ? null : title;
 }
 
@@ -574,7 +582,7 @@ function agentTitle(raw: string | null | undefined): string | null {
 export const decodeAgentList = (res: BoundaryValue) =>
   decodeBoundary("herdr agent list", AgentListReply, res).pipe(
     Effect.map(({ result }) =>
-      result.agents.flatMap((agent): AgentInfo[] =>
+      Arr.flatMap(result.agents, (agent): AgentInfo[] =>
         agent.name
           ? [
               {
@@ -607,7 +615,7 @@ const decodeWorkspaceCreate = (res: BoundaryValue) =>
 export const decodeWorkspaceList = (res: BoundaryValue) =>
   decodeBoundary("herdr workspace list", WorkspaceListReply, res).pipe(
     Effect.map(({ result }) =>
-      result.workspaces.map((workspace): WorkspaceInfo => {
+      Arr.map(result.workspaces, (workspace): WorkspaceInfo => {
         const worktree =
           workspace.worktree?.checkout_path ??
           workspace.worktree?.path ??
@@ -645,18 +653,18 @@ export class Herdr {
     return Effect.gen(function* () {
       const { code, stdout, stderr } = yield* exec(args);
       if (code !== 0) {
-        const detail = stderr.trim() || stdout.trim();
+        const detail = Str.trim(stderr) || Str.trim(stdout);
         return yield* new HerdrError({
-          message: `herdr ${args.slice(0, 2).join(" ")} failed (exit ${code})`,
+          message: `herdr ${Arr.join(args.slice(0, 2), " ")} failed (exit ${code})`,
           detail,
           // Named even on a non-zero exit, where herdr still prints its envelope.
           code: envelopeCode(detail),
           answered: true,
         });
       }
-      const text = stdout.trim();
-      if (!text.startsWith("{") && !text.startsWith("[")) return text;
-      return yield* Schema.decodeUnknownEffect(JsonString)(text).pipe(
+      const text = Str.trim(stdout);
+      if (!pipe_(text, Str.startsWith("{")) && !pipe_(text, Str.startsWith("["))) return text;
+      return yield* Schema.decodeEffect(JsonString)(text).pipe(
         Effect.catchTag("SchemaError", () => Effect.succeed(text)),
       );
     });
@@ -729,9 +737,9 @@ export class Herdr {
       let buffered = "";
       // A herdr that closes without answering fails the pull rather than hanging here.
       while (true) {
-        buffered += (yield* pull).join("");
-        const newline = buffered.indexOf("\n");
-        if (newline >= 0) return yield* decodeReply(method, buffered.slice(0, newline));
+        buffered += Arr.join(yield* pull, "");
+        const newline = Option.getOrElse(pipe_(buffered, Str.indexOf("\n")), () => -1);
+        if (newline >= 0) return yield* decodeReply(method, pipe_(buffered, Str.slice(0, newline)));
       }
     }).pipe(
       Effect.scoped,
@@ -788,7 +796,7 @@ export class Herdr {
       if (workspaceId) args.push("--workspace", workspaceId);
       const res = yield* cli(args);
       const decoded = yield* decodeBoundary("herdr tab list", TabListReply, res);
-      return decoded.result.tabs.map((tab) => ({
+      return Arr.map(decoded.result.tabs, (tab) => ({
         tabId: tab.tab_id,
         label: tab.label,
       }));
@@ -822,7 +830,7 @@ export class Herdr {
     return this.cli(["pane", "list"]).pipe(
       Effect.flatMap((res) => decodeBoundary("herdr pane list", PaneListReply, res)),
       Effect.map(({ result }) => {
-        return result.panes.map((pane) => ({
+        return Arr.map(result.panes, (pane) => ({
           paneId: pane.pane_id,
           tabId: pane.tab_id,
           label: pane.label ?? null,
@@ -952,7 +960,7 @@ export class Herdr {
    */
   agentPrompt(target: string, text: string): HerdrEffect<Submission> {
     const statusNow = () =>
-      this.agentStatus(target).pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
+      this.agentStatus(target).pipe(Effect.orElseSucceed(() => "unknown" as const));
     const submit = this.cli([
       "agent",
       "prompt",
@@ -979,7 +987,7 @@ export class Herdr {
       if (Result.isSuccess(outcome)) return settled ? "observed" : "unobserved";
       const { code } = outcome.failure;
       if (code !== "timeout" && code !== "agent_prompt_stalled") {
-        return yield* Effect.fail(outcome.failure);
+        return yield* outcome.failure;
       }
       // No turn was seen, so the text may be in the editor unsent. One Enter sends it:
       // never the text again — the work would run twice — and never at an agent whose
@@ -998,7 +1006,7 @@ export class Herdr {
       // wait, so this is unobserved like any other and the Output is still collected.
       return yield* startedATurn.pipe(
         Effect.as<Submission>("observed"),
-        Effect.catch(() => Effect.succeed<Submission>("unobserved")),
+        Effect.orElseSucceed(() => "unobserved" as const),
       );
     });
   }
@@ -1019,8 +1027,9 @@ export class Herdr {
         Option.match(Schema.decodeUnknownOption(ExplainReply)(res), {
           onNone: () => null,
           onSome: (explained) =>
-            explained.evaluated_rules.find((rule) => rule.region === "prompt_box_body")?.evidence
-              ?.region_preview ?? null,
+            Option.getOrUndefined(
+              Arr.findFirst(explained.evaluated_rules, (rule) => rule.region === "prompt_box_body"),
+            )?.evidence?.region_preview ?? null,
         }),
       ),
     );
@@ -1052,13 +1061,14 @@ export class Herdr {
     return this.cli(["session", "list", "--json"]).pipe(
       Effect.flatMap((reply) => decodeBoundary("session list", SessionListReply, reply)),
       Effect.map((reply) =>
-        reply.sessions
-          .filter((one) => one.running)
-          .map((one) => ({
+        Arr.map(
+          Arr.filter(reply.sessions, (one) => one.running),
+          (one) => ({
             name: one.name,
             socketPath: one.socket_path,
             default: one.default ?? false,
-          })),
+          }),
+        ),
       ),
     );
   }
@@ -1093,16 +1103,16 @@ export class Herdr {
       let buffered = "";
       let acknowledged = false;
       while (true) {
-        buffered += (yield* pull).join("");
-        let newline = buffered.indexOf("\n");
+        buffered += Arr.join(yield* pull, "");
+        let newline = Option.getOrElse(pipe_(buffered, Str.indexOf("\n")), () => -1);
         while (newline >= 0) {
-          const line = buffered.slice(0, newline);
-          buffered = buffered.slice(newline + 1);
+          const line = pipe_(buffered, Str.slice(0, newline));
+          buffered = pipe_(buffered, Str.slice(newline + 1));
           // The first line answers the subscription; any after it is an event.
           if (acknowledged) return;
           yield* decodeReply("events.subscribe", line);
           acknowledged = true;
-          newline = buffered.indexOf("\n");
+          newline = Option.getOrElse(pipe_(buffered, Str.indexOf("\n")), () => -1);
         }
       }
     }).pipe(
@@ -1137,7 +1147,7 @@ export class Herdr {
       if (!verifyIncarnation(entry, [candidate]).ok) return false;
       const renamed = yield* rename;
       const failure = envelopeError("herdr agent rename", renamed);
-      if (failure) return yield* Effect.fail(failure);
+      if (failure) return yield* failure;
       return true;
     });
   }
@@ -1207,7 +1217,7 @@ export class Herdr {
     return this.cli(["worktree", "list", "--cwd", cwd]).pipe(
       Effect.flatMap((res) => decodeOrNamed("herdr worktree list", WorktreeListReply, res)),
       Effect.map(({ result }) => ({
-        worktrees: result.worktrees.map(worktreeInfo),
+        worktrees: Arr.map(result.worktrees, worktreeInfo),
         source: result.source?.source_checkout_path ?? result.source?.repo_root ?? null,
       })),
     );
@@ -1238,11 +1248,11 @@ export class Herdr {
         .pipe(
           Effect.flatMap((text) => Effect.try(() => Bun.TOML.parse(text))),
           Effect.map((parsed) =>
-            Schema.decodeUnknownOption(HerdrConfig)(parsed).pipe(Option.getOrUndefined),
+            Schema.decodeOption(HerdrConfig)(parsed).pipe(Option.getOrUndefined),
           ),
           // No config file, one that will not parse, and one herdr itself would reject
           // are the same answer: nothing here has moved the worktrees.
-          Effect.catch(() => Effect.succeed(undefined)),
+          Effect.catch(() => Effect.void),
         );
       return configured?.worktrees?.directory ?? path.join(home, ".herdr", "worktrees");
     });
@@ -1347,7 +1357,7 @@ export class Herdr {
       if (opts.targetPaneId) args.push("--target-pane", opts.targetPaneId);
       if (opts.direction) args.push("--direction", opts.direction);
       if (opts.cwd) args.push("--cwd", opts.cwd);
-      for (const [k, v] of Object.entries(opts.env ?? {})) args.push("--env", `${k}=${v}`);
+      for (const [k, v] of Rec.toEntries(opts.env ?? {})) args.push("--env", `${k}=${v}`);
       args.push(opts.focus === false ? "--no-focus" : "--focus");
       const res = yield* cli(args);
       const decoded = yield* decodeBoundary("herdr plugin pane open", PluginPaneReply, res);

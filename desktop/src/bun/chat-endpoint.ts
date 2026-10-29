@@ -18,7 +18,9 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
   const matching = (input: JsonObject) =>
     Effect.gen(function* () {
       const questions = yield* Schema.decodeUnknownEffect(Questions)(input);
-      const key = Schema.encodeSync(Schema.fromJsonString(Questions))(questions);
+      const key = yield* Schema.encodeEffect(Schema.fromJsonString(Questions))(questions).pipe(
+        Effect.orDie,
+      );
       let queue = calls.get(key);
       if (queue === undefined) {
         queue = yield* Queue.unbounded<string>();
@@ -41,9 +43,9 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
         const answers = yield* Effect.tryPromise(() => context.ask(id, signal));
         return answers === null
           ? NO_HUMAN
-          : Schema.encodeSync(Schema.fromJsonString(Schema.Struct({ answers: Answers })))({
+          : yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Struct({ answers: Answers })))({
               answers,
-            });
+            }).pipe(Effect.orDie);
       }).pipe(Effect.catchCause(() => Effect.succeed("The question ended with its turn."))),
     );
   };

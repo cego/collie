@@ -2,6 +2,8 @@
 // the `--help` a launch reads its flags from. Its own file, because the gate's answers are
 // kept for the process and must not reach the tests that gate a real harness.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Clock, Effect, Fiber, FileSystem, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/process";
@@ -47,7 +49,7 @@ test("a harness whose --version failed is asked again once the failure has expir
         { code: 1, stdout: "" },
         { code: 0, stdout: "99.0.0\n" },
       ]);
-      const gate = COMPACTION_PORTS.opencode!.gate().pipe(
+      const gate = COMPACTION_PORTS.opencode!.gate.pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(Clock.Clock, clock),
       );
@@ -77,7 +79,7 @@ test("two launches of one harness at once share one --version probe", () =>
         ],
         Effect.sleep("50 millis"),
       );
-      const gate = COMPACTION_PORTS.pi!.gate().pipe(
+      const gate = COMPACTION_PORTS.pi!.gate.pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
       yield* Effect.all([gate, gate], { concurrency: "unbounded" });
@@ -109,7 +111,7 @@ test("a harness whose --help never exits is stopped with the fiber that asked it
       const pid = Number(
         yield* until(
           () => fs.readFileString(`${dir}/pid`).pipe(Effect.orElseSucceed(() => "")),
-          (text) => text.endsWith("\n"),
+          (text) => pipe_(text, Str.endsWith("\n")),
         ),
       );
       yield* Effect.addFinalizer(() => Effect.sync(() => alive(pid) && process.kill(pid)));

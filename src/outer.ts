@@ -7,6 +7,10 @@
 // outer terminal's TERM. Every attached client has to paint, because a viewer whose
 // terminal does not would see a blank where the mark is.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, FileSystem, Path } from "effect";
 
 /** TERM values of terminals that implement the Kitty graphics protocol. */
@@ -20,8 +24,10 @@ export function paintsGraphics(term: string): boolean {
 const termOf = Effect.fn("Outer.termOf")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const environ = yield* fs.readFileString(`${dir}/environ`);
-  const found = environ.split("\0").find((entry) => entry.startsWith("TERM="));
-  return found === undefined ? null : found.slice("TERM=".length);
+  const found = Option.getOrUndefined(
+    Arr.findFirst(Str.split(environ, "\0"), (entry) => pipe_(entry, Str.startsWith("TERM="))),
+  );
+  return found === undefined ? null : pipe_(found, Str.slice("TERM=".length));
 });
 
 /**
@@ -32,17 +38,15 @@ const termOf = Effect.fn("Outer.termOf")(function* (dir: string) {
 export const attachedTerms = Effect.fn("Outer.attachedTerms")(function* (proc = "/proc") {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const entries = yield* fs.readDirectory(proc).pipe(Effect.catch(() => Effect.succeed([])));
+  const entries = yield* fs.readDirectory(proc).pipe(Effect.orElseSucceed(() => []));
   const terms: string[] = [];
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     const dir = path.join(proc, entry);
-    const cmdline = yield* fs
-      .readFileString(`${dir}/cmdline`)
-      .pipe(Effect.catch(() => Effect.succeed("")));
+    const cmdline = yield* fs.readFileString(`${dir}/cmdline`).pipe(Effect.orElseSucceed(() => ""));
     // The client and only the client: `herdr server` and `herdr pane …` are not viewers.
-    if (cmdline.replace(/\0+$/, "").split("\0").at(-1) !== "herdr") continue;
-    const term = yield* termOf(dir).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (Str.split(pipe_(cmdline, Str.replace(/\0+$/, "")), "\0").at(-1) !== "herdr") continue;
+    const term = yield* termOf(dir).pipe(Effect.orElseSucceed(() => null));
     if (term !== null) terms.push(term);
   }
   return terms;
@@ -51,5 +55,5 @@ export const attachedTerms = Effect.fn("Outer.attachedTerms")(function* (proc = 
 /** Whether a picture drawn in a pane reaches every human looking at it. */
 export const everyViewerPaints = Effect.fn("Outer.everyViewerPaints")(function* (proc = "/proc") {
   const terms = yield* attachedTerms(proc);
-  return terms.length > 0 && terms.every(paintsGraphics);
+  return terms.length > 0 && Arr.every(terms, paintsGraphics);
 });

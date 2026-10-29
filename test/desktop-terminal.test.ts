@@ -1,6 +1,10 @@
 // Going to a pane: herdr's terminal controller Desktop runs and what it reads from it; and the
 // herdr client Desktop attaches instead, and the terminal on this computer it opens in.
 
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Option, Result, Schedule, Stream } from "effect";
@@ -262,14 +266,14 @@ FAKE_TARGET="\${args[-2]}" SHELL='${dir}/shell' exec /bin/sh -c "\${args[-1]}"
 `,
   };
   yield* fs.makeDirectory(`${dir}/bin`);
-  for (const [name, script] of Object.entries(scripts)) {
+  for (const [name, script] of Rec.toEntries(scripts)) {
     yield* fs.writeFileString(`${dir}/${name}`, script);
     yield* fs.chmod(`${dir}/${name}`, 0o755);
   }
   const log = (name: string) =>
     fs.readFileString(`${dir}/${name}`).pipe(
       Effect.orElseSucceed(() => ""),
-      Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+      Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
     );
   return { dir, log };
 });
@@ -288,7 +292,14 @@ const visit = (opened: Effect.Success<ReturnType<typeof openTerminal>>, typed: s
 
 const settledLog = (log: Effect.Effect<ReadonlyArray<string>>, last: string) =>
   log.pipe(
-    Effect.filterOrFail((lines) => lines.at(-1)?.endsWith(last) === true),
+    Effect.filterOrFail(
+      (lines) =>
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(lines.at(-1)), (present) =>
+            pipe_(present, Str.endsWith(last)),
+          ),
+        ) === true,
+    ),
     Effect.retry({ times: 50, schedule: Schedule.spaced("100 millis") }),
   );
 

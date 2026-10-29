@@ -8,6 +8,11 @@
 // Nothing else is imported: this is read from definitions, records, launches and labels
 // alike, and a dependency in either direction would put a cycle between two of them.
 
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { parseMrTarget } from "./board-model";
 
 /** The name of one of `INPUT_STRATEGIES`; `definitions.ts` is where they are listed. */
@@ -36,9 +41,7 @@ export function fieldsWithStrategy(
   inputs: Readonly<Record<string, InputStrategy>>,
   strategy: InputStrategy,
 ): ReadonlyArray<string> {
-  return Object.keys(inputs)
-    .filter((name) => inputs[name] === strategy)
-    .sort();
+  return Arr.filter(Rec.keys(inputs), (name) => inputs[name] === strategy).sort();
 }
 
 /** What a review is pointed at, which its value's own shape says. */
@@ -51,8 +54,8 @@ export type TargetKind = "mr" | "branch" | "worktree";
  */
 export function targetKind(value: string): TargetKind | "" {
   if (parseMrTarget(value) !== null) return "mr";
-  if (value.startsWith("branch:")) return "branch";
-  return value.trim() === "worktree" ? "worktree" : "";
+  if (pipe(value, Str.startsWith("branch:"))) return "branch";
+  return Str.trim(value) === "worktree" ? "worktree" : "";
 }
 
 /**
@@ -63,7 +66,10 @@ export function targetKind(value: string): TargetKind | "" {
 export function settledBy(where: Settled, strategy: InputStrategy): SettledInput | null {
   const name = fieldsWithStrategy(where.strategies ?? {}, strategy)[0];
   if (name === undefined) return null;
-  const value = where.inputs[name]?.trim() ?? "";
+  const value =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(where.inputs[name]), (present) => Str.trim(present)),
+    ) ?? "";
   if (value === "") return null;
   return {
     name,
@@ -125,7 +131,9 @@ export const EXCLUSIVE_STRATEGIES: ReadonlyArray<InputStrategy> = [
 
 /** Hints under their current names, so an old name is held to what its new one is. */
 const named = (hints: Readonly<Record<string, InputStrategy>>) =>
-  Object.fromEntries(Object.entries(hints).map(([name, hint]) => [name, strategyNamed(hint)]));
+  Rec.fromEntries(
+    Arr.map(Rec.toEntries(hints), ([name, hint]) => [name, strategyNamed(hint)] as const),
+  );
 
 /** Why these inputs do not name exactly one launch Input, or null where they do. */
 export function launchInputProblem(
@@ -134,19 +142,20 @@ export function launchInputProblem(
 ): string | null {
   if (fields.length === 0) return null;
   const hints = named(given);
-  const launch = Object.keys(hints)
-    .filter((name) => EXCLUSIVE_STRATEGIES.includes(hints[name] ?? ""))
-    .sort();
+  const launch = Arr.filter(Rec.keys(hints), (name) =>
+    EXCLUSIVE_STRATEGIES.includes(hints[name] ?? ""),
+  ).sort();
   if (launch.length === 0)
-    return `no input is the launch Input: hint one of ${[...fields]
-      .sort()
-      .map((name) => `"${name}"`)
-      .join(
-        ", ",
-      )} as ${EXCLUSIVE_STRATEGIES.slice(0, -1).join(", ")} or ${EXCLUSIVE_STRATEGIES.at(-1)}`;
+    return `no input is the launch Input: hint one of ${Arr.join(
+      Arr.map([...fields].sort(), (name) => `"${name}"`),
+      ", ",
+    )} as ${Arr.join(EXCLUSIVE_STRATEGIES.slice(0, -1), ", ")} or ${EXCLUSIVE_STRATEGIES.at(-1)}`;
   // Two fields of one strategy are that strategy's clash, said once by `exclusiveClashes`.
-  if (new Set(launch.map((name) => hints[name])).size > 1)
-    return `${launch.map((name) => `"${name}"`).join(" and ")} are both launch Inputs; a workflow has one`;
+  if (new Set(Arr.map(launch, (name) => hints[name])).size > 1)
+    return `${Arr.join(
+      Arr.map(launch, (name) => `"${name}"`),
+      " and ",
+    )} are both launch Inputs; a workflow has one`;
   return null;
 }
 
@@ -155,10 +164,15 @@ export function exclusiveClashes(
   given: Readonly<Record<string, InputStrategy>>,
 ): ReadonlyArray<string> {
   const inputs = named(given);
-  return EXCLUSIVE_STRATEGIES.flatMap((strategy) => {
+  return Arr.flatMap(EXCLUSIVE_STRATEGIES, (strategy) => {
     const owners = fieldsWithStrategy(inputs, strategy);
     return owners.length > 1
-      ? [`${owners.map((name) => `"${name}"`).join(" and ")} both claim ${strategy}`]
+      ? [
+          `${Arr.join(
+            Arr.map(owners, (name) => `"${name}"`),
+            " and ",
+          )} both claim ${strategy}`,
+        ]
       : [];
   });
 }

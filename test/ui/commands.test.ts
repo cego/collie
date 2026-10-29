@@ -1,6 +1,10 @@
 // The Settings commands: what a value the human typed does to config.json, which is what
 // every later Run reads its defaults from.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, PlatformError } from "effect";
@@ -182,7 +186,7 @@ effectTest("a setting records when it was set, and proactive is one", function* 
 
   expect((yield* loadDefaults(userDir)).proactive).toBe(false);
   // When, because the latest edit of a key is what a Flock shares.
-  expect(Object.keys((yield* readSettingsSet(userDir)).set)).toEqual(["proactive"]);
+  expect(Rec.keys((yield* readSettingsSet(userDir)).set)).toEqual(["proactive"]);
   expect(yield* set("models.claude", "claude-x, claude-y")).toContain("claude-x, claude-y");
   expect((yield* loadDefaults(userDir)).models).toEqual({ claude: ["claude-x", "claude-y"] });
   // A remembered answer is a Run's own note, never a setting.
@@ -237,14 +241,14 @@ effectTest("Enter goes where the row points, in one call, and says where it went
   expect(yield* jump({ kind: "run", runId: run.id, label: "Implement · glass" })).toBe(
     "went to Implement · glass",
   );
-  const focused = (yield* rig.calls()).filter((c) => c.cmd === "agent focus");
-  expect(focused.map((c) => c.argv!.at(-1))).toEqual(["impl-9"]);
+  const focused = Arr.filter(yield* rig.calls(), (c) => c.cmd === "agent focus");
+  expect(Arr.map(focused, (c) => c.argv!.at(-1))).toEqual(["impl-9"]);
 
   // An agent row: by name, which selects the workspace, the tab and the pane at once.
   expect(yield* jump({ kind: "agent", agent: "impl-9", label: "Implementer" })).toBe(
     "went to Implementer",
   );
-  expect((yield* rig.calls()).filter((c) => c.cmd === "agent focus")).toHaveLength(2);
+  expect(Arr.filter(yield* rig.calls(), (c) => c.cmd === "agent focus")).toHaveLength(2);
 });
 
 effectTest("Enter on an Elsewhere row says so and asks herdr nothing", function* () {
@@ -276,7 +280,7 @@ effectTest("w on another workspace's run opens its merge request, not this repo'
   );
 
   expect(note).toContain("opened");
-  expect((yield* fs.readFileString(marker)).trim()).toBe(checkout);
+  expect(Str.trim(yield* fs.readFileString(marker))).toBe(checkout);
 });
 
 effectTest("questions is refused unless it is a way of presenting one", function* () {
@@ -307,11 +311,12 @@ effectTest(
 
     expect(note).toBe("following r-check's check");
     const calls = yield* rig.calls();
-    const tab = calls.find((call) => call.cmd === "tab create")?.argv ?? [];
+    const tab =
+      Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "tab create"))?.argv ?? [];
     expect(tab[tab.indexOf("--workspace") + 1]).toBe("w7");
-    const ran = calls.find((call) => call.cmd === "pane run");
-    expect((ran?.argv ?? []).join(" ")).toContain("'run' 'checks' 'r-check' '--follow'");
-    expect((ran?.argv ?? []).join(" ")).toContain(
+    const ran = Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "pane run"));
+    expect(Arr.join(ran?.argv ?? [], " ")).toContain("'run' 'checks' 'r-check' '--follow'");
+    expect(Arr.join(ran?.argv ?? [], " ")).toContain(
       `HERDR_PLUGIN_STATE_DIR=${rig.pluginEnv().stateDir}`,
     );
   },

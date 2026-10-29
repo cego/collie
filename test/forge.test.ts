@@ -1,3 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { describe, expect, test } from "bun:test";
 import {
   Clock,
@@ -35,6 +40,7 @@ import {
   type FakeMr,
   type ForgeModel,
 } from "./support/forge";
+import * as Layer from "effect/Layer";
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
 const MERGED = "35ae2cea5e5848602729dbc0e8a87ed0d9049c46";
@@ -118,7 +124,7 @@ for (const name of ["gitlab", "github"] as const) {
             url: `https://${PROJECT[name]}/${name === "gitlab" ? "-/issues" : "issues"}/1`,
           });
           expect(fake.model().issues).toMatchObject([{ title: "Problem", body: "Evidence" }]);
-          expect(fake.requests.filter((one) => one.method === "POST")).toHaveLength(1);
+          expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
           expect(fake.calls).toEqual([...READ_ONCE[name]]);
         }).pipe(Effect.provide(fake.layer)),
       );
@@ -142,7 +148,7 @@ for (const name of ["gitlab", "github"] as const) {
             expect(filed.ok).toBe(false);
             if (filed.ok) throw new Error("issue creation should be unavailable");
             expect(filed.reason).toContain("before retrying");
-            expect(fake.requests.filter((one) => one.method === "POST")).toHaveLength(1);
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
           }).pipe(Effect.provide(fake.layer)),
         );
       });
@@ -168,7 +174,7 @@ for (const name of ["gitlab", "github"] as const) {
             yield* forge.commentIssue(PROJECT[name], 1, "More evidence", "/w", fake.run),
           ).toEqual({ ok: true, reason: "" });
           expect(fake.model().issueNotes).toEqual({ [`${PROJECT[name]}#1`]: ["More evidence"] });
-          expect(fake.requests.filter((one) => one.method === "POST")).toHaveLength(1);
+          expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
           expect(fake.calls).toEqual([...READ_ONCE[name]]);
         }).pipe(Effect.provide(fake.layer)),
       );
@@ -234,7 +240,7 @@ for (const name of ["gitlab", "github"] as const) {
           const fake = fakeForge(
             name,
             model(name, {
-              issues: [1, 2, 3].map((number) => ({
+              issues: Arr.map([1, 2, 3], (number) => ({
                 project: PROJECT[name],
                 number,
                 title: `Issue ${number}`,
@@ -516,9 +522,9 @@ for (const name of ["gitlab", "github"] as const) {
           Effect.gen(function* () {
             const posted = yield* forge.post(ref(name), "Clean", approve, "/w", fake.run);
             expect(posted.ok).toBe(true);
-            expect(Object.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
+            expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
             expect(fake.model().approved ?? []).toHaveLength(approve ? 1 : 0);
-            expect(fake.requests.filter((one) => one.method === "POST")).toHaveLength(
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(
               approve ? 2 : 1,
             );
             expect(fake.calls).toEqual([...READ_ONCE[name]]);
@@ -533,7 +539,7 @@ for (const name of ["gitlab", "github"] as const) {
       test(`keeps the posted note when approval has a ${failure} failure, without sending it again`, () => {
         const fake = fakeForge(name, model(name));
         const layer = forgeHttpTest(fake.run, (url, init) => {
-          if (url.endsWith(name === "github" ? "/reviews" : "/approve"))
+          if (pipe(url, Str.endsWith(name === "github" ? "/reviews" : "/approve")))
             fake.set({ ...fake.model(), httpFault: fault });
           return fake.fetch(url, init);
         });
@@ -543,9 +549,9 @@ for (const name of ["gitlab", "github"] as const) {
             expect(posted.ok).toBe(true);
             expect(posted.message).toContain("and did not approve it");
             expect(posted.message).toContain("before approving again");
-            expect(Object.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
+            expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
             expect(fake.model().approved ?? []).toEqual([]);
-            expect(fake.requests.filter((one) => one.method === "POST")).toHaveLength(2);
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(2);
           }).pipe(Effect.provide(layer)),
         );
       });
@@ -564,7 +570,7 @@ for (const name of ["gitlab", "github"] as const) {
             .post(ref(name), "Clean", true, "/w", fake.run)
             .pipe(Effect.provide(fake.layer));
           expect(approved.message).toContain("and approved it");
-          expect(Object.values(fake.model().notes ?? {})).toEqual([["LGTM", "Clean"]]);
+          expect(Rec.values(fake.model().notes ?? {})).toEqual([["LGTM", "Clean"]]);
           expect(fake.model().approved?.length).toBe(1);
           const missed = yield* forge
             .post({ project: PROJECT[name], iid: "99" }, "LGTM", false, "/w", fake.run)
@@ -582,7 +588,7 @@ for (const name of ["gitlab", "github"] as const) {
             .pipe(Effect.provide(fake.layer));
           expect(posted.ok).toBe(true);
           expect(posted.message).toContain("and did not approve it");
-          expect(Object.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
+          expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
         }),
       ));
 
@@ -639,7 +645,7 @@ for (const name of ["gitlab", "github"] as const) {
     test("writes the commands a reviewer reads and checks one out with, for its own CLI", () => {
       const said = forge.review(ref(name));
       for (const line of [said.diff, said.view, said.checkout]) {
-        expect(line.startsWith(`${CLI[name]} `)).toBe(true);
+        expect(pipe(line, Str.startsWith(`${CLI[name]} `))).toBe(true);
         expect(line).toContain("30");
       }
     });
@@ -657,20 +663,22 @@ for (const name of ["gitlab", "github"] as const) {
             const assignee = `account${SHELL_WORD}`;
             const existing = `https://${PROJECT[name]}/30?query=${SHELL_WORD}`;
             const commands = forge.commands({ project: PROJECT[name], branch, assignee, existing });
-            const lines = commands.create.split("\n");
+            const lines = Str.split(commands.create, "\n");
             const created = yield* shell(
               "sh",
               [
                 "-c",
-                lines[0]!
-                  .replaceAll("<title>", "Change")
-                  .replace("<file>", "body.txt")
-                  .replace("<iid>", "7"),
+                pipe(
+                  lines[0]!,
+                  Str.replaceAll("<title>", "Change"),
+                  Str.replace("<file>", "body.txt"),
+                  Str.replace("<iid>", "7"),
+                ),
               ],
               cwd,
             );
             expect(created.code).toBe(0);
-            const args = created.stdout.trimEnd().split("\n");
+            const args = Str.split(Str.trimEnd(created.stdout), "\n");
             expect(args[args.indexOf("--assignee") + 1]).toBe(assignee);
             if (name === "github") {
               expect(lines).toHaveLength(1);
@@ -679,10 +687,13 @@ for (const name of ["gitlab", "github"] as const) {
             } else {
               const described = yield* shell(
                 "sh",
-                ["-c", lines[1]!.replace("<file>", "body.txt").replace("<iid>", "7")],
+                [
+                  "-c",
+                  pipe(lines[1]!, Str.replace("<file>", "body.txt"), Str.replace("<iid>", "7")),
+                ],
                 cwd,
               );
-              expect(described.stdout.trimEnd().split("\n")).toEqual([
+              expect(Str.split(Str.trimEnd(described.stdout), "\n")).toEqual([
                 "api",
                 "--hostname",
                 "gitlab.example.com",
@@ -695,11 +706,11 @@ for (const name of ["gitlab", "github"] as const) {
             }
             const noted = yield* shell(
               "sh",
-              ["-c", commands.comment.replace("<file>", "body.txt")],
+              ["-c", pipe(commands.comment, Str.replace("<file>", "body.txt"))],
               cwd,
             );
             expect(noted.code).toBe(0);
-            const said = noted.stdout.trimEnd().split("\n");
+            const said = Str.split(Str.trimEnd(noted.stdout), "\n");
             if (name === "github") expect(said[2]).toBe(existing);
             else
               expect(said.slice(-3)).toEqual([
@@ -723,7 +734,7 @@ for (const name of ["gitlab", "github"] as const) {
       for (const line of [commands.create, commands.comment]) {
         expect(line).not.toContain("$(");
         expect(line).not.toContain("`");
-        expect(line.startsWith(`${CLI[name]} `)).toBe(true);
+        expect(pipe(line, Str.startsWith(`${CLI[name]} `))).toBe(true);
       }
     });
 
@@ -742,7 +753,7 @@ for (const name of ["gitlab", "github"] as const) {
             for (const line of [commands.diff, commands.view, commands.checkout]) {
               const result = yield* shell("sh", ["-c", line], cwd);
               expect(result.code).toBe(0);
-              const args = result.stdout.trimEnd().split("\n");
+              const args = Str.split(Str.trimEnd(result.stdout), "\n");
               expect(args[args.indexOf("--repo") + 1]).toBe(
                 name === "github"
                   ? `owner/repo${SHELL_WORD}`
@@ -1092,7 +1103,7 @@ for (const name of ["gitlab", "github"] as const) {
         });
         expect(fake.requests.length).toBeGreaterThan(0);
         expect(fake.calls).toEqual(
-          READ_ONCE[name].map((command) =>
+          Arr.map(READ_ONCE[name], (command) =>
             name === "gitlab"
               ? `env -u GITLAB_TOKEN -u GITLAB_ACCESS_TOKEN -u OAUTH_TOKEN ${command}`
               : command,
@@ -1146,7 +1157,9 @@ test("GitHub finds production beyond a full page of newer deployments over HTTP"
       expect(yield* FORGES.github.liveTier(ref("github"), MERGED, "/w", fake.run)).toBe(
         "production",
       );
-      expect(fake.requests.some((request) => request.url.includes("page=2"))).toBe(true);
+      expect(Arr.some(fake.requests, (request) => pipe(request.url, Str.includes("page=2")))).toBe(
+        true,
+      );
       expect(fake.calls).toEqual([...READ_ONCE.github]);
     }).pipe(Effect.provide(fake.layer)),
   );
@@ -1188,7 +1201,7 @@ for (const name of ["gitlab", "github"] as const) {
           FORGES[name].tagPipeline(ref(name), tag, "/w", fake.run).pipe(Effect.provide(fake.layer));
         expect(yield* found("v1.2.0")).toEqual({
           ok: true,
-          url: URLS[name].run.replace(/7$/, "9"),
+          url: pipe(URLS[name].run, Str.replace(/7$/, "9")),
         });
         expect(yield* found("v9.9.9")).toEqual({ ok: true, url: null });
         expect(
@@ -1214,7 +1227,7 @@ test("GitHub finds a tag's newest run whatever event started it, a release's amo
           .pipe(Effect.provide(fake.layer)),
       ).toEqual({
         ok: true,
-        url: URLS.github.run.replace(/7$/, "9"),
+        url: pipe(URLS.github.run, Str.replace(/7$/, "9")),
       });
     }),
   ));
@@ -1424,7 +1437,9 @@ test("GitHub reads every page of an Actions run's jobs", () =>
       const read = yield* FORGES.github
         .pipeline(URLS.github.run, "/w", fake.run)
         .pipe(Effect.provide(fake.layer));
-      expect(read.ok && read.jobs.map((job) => job.state)).toEqual(jobs.map((job) => job.state));
+      expect(read.ok && Arr.map(read.jobs, (job) => job.state)).toEqual(
+        Arr.map(jobs, (job) => job.state),
+      );
     }),
   ));
 
@@ -1462,7 +1477,7 @@ test(
                 .post(ref(name), "LGTM", false, "/", shell)
                 .pipe(Effect.provide(forgeHttpOnPath))).ok,
             ).toBe(true);
-            expect(Object.values((yield* onPath.model()).notes ?? {})).toEqual([["LGTM"]]);
+            expect(Rec.values((yield* onPath.model()).notes ?? {})).toEqual([["LGTM"]]);
             expect((yield* onPath.calls()).length).toBeGreaterThan(0);
             yield* forgeOnPath(bin, name, model(name, { installed: false }));
             expect(yield* exec([CLI[name], "--version"])).toMatchObject({
@@ -1539,7 +1554,7 @@ test("the suite's compiled forge fake receives its model and arguments literally
         const args = ["--version", "words with spaces", "a'b", "line one\nline two", "$literal"];
         expect(yield* exec([CLI.github, ...args])).toEqual({
           exitCode: 0,
-          stdout: ["github", `${bin.dir}/github.model.json`, ...args].join("\n") + "\n",
+          stdout: Arr.join(["github", `${bin.dir}/github.model.json`, ...args], "\n") + "\n",
           stderr: "",
         });
       } finally {
@@ -1553,7 +1568,7 @@ test("a forge call that changes nothing leaves the model as a test last wrote it
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const file = `${yield* fs.makeTempDirectoryScoped({ prefix: "forge-bin-" })}/gitlab.model.json`;
-      const written = `${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(model("gitlab"))}\n`;
+      const written = `${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(model("gitlab")).pipe(Effect.orDie)}\n`;
       yield* fs.writeFileString(file, written);
       yield* forgeBin("gitlab", file, ["api", "--hostname", FORGE_HOST.gitlab, "environments"]);
       expect(yield* fs.readFileString(file)).toBe(written);
@@ -1762,8 +1777,8 @@ for (const name of ["gitlab", "github"] as const) {
   test(`the ${name} forge reads a job where the branch leaves its target, else on the target's latest, and fails safe`, () =>
     runEffect(
       Effect.gen(function* () {
-        const BASE = "b".repeat(40);
-        const TIP = "c".repeat(40);
+        const BASE = pipe("b", Str.repeat(40));
+        const TIP = pipe("c", Str.repeat(40));
         const failed = [{ name: "nuxi-typecheck", state: "failed" as const }];
         const passed = [{ name: "nuxi-typecheck", state: "passed" as const }];
         const read = (over: Partial<FakeMr>) => {
@@ -1828,7 +1843,7 @@ for (const name of ["gitlab", "github"] as const) {
         for (const where of TEMPLATES[name]) {
           const dir = yield* fs.makeTempDirectoryScoped({ prefix: "forge-template-" });
           expect(yield* forge.template(dir)).toBe(null);
-          const parent = where.split("/").slice(0, -1).join("/");
+          const parent = Arr.join(Str.split(where, "/").slice(0, -1), "/");
           if (parent !== "") yield* fs.makeDirectory(`${dir}/${parent}`, { recursive: true });
           yield* fs.writeFileString(`${dir}/${where}`, "## Description\n");
           expect(yield* forge.template(dir)).toBe(where);
@@ -1879,16 +1894,20 @@ test("a gitlab clone that cannot start shows glab's token in neither its command
       const cloned = yield* FORGES.gitlab.clone(PROJECT.gitlab, `${cwd}/into`, cwd, run);
 
       expect(cloned.ok).toBe(false);
-      const at = fake.calls.findIndex((call) => call.includes(" clone "));
+      const at = Option.getOrElse(
+        Arr.findFirstIndex(fake.calls, (call) => pipe(call, Str.includes(" clone "))),
+        () => -1,
+      );
       expect(at).toBeGreaterThan(-1);
       const shown = `${fake.calls[at]}\n${cloned.reason}`;
       expect(shown).not.toContain(token);
-      expect(shown).not.toContain(header.slice("Authorization: Basic ".length));
-      const env = Object.entries(fake.environments[at] ?? {}).map(([key, value]) => [
-        key,
-        Redacted.isRedacted(value) ? `redacted ${Redacted.value(value)}` : value,
-      ]);
-      expect(Object.fromEntries(env)).toEqual({
+      expect(shown).not.toContain(pipe(header, Str.slice("Authorization: Basic ".length)));
+      const env = Arr.map(
+        Rec.toEntries(fake.environments[at] ?? {}),
+        ([key, value]) =>
+          [key, Redacted.isRedacted(value) ? `redacted ${Redacted.value(value)}` : value] as const,
+      );
+      expect(Rec.fromEntries(env)).toEqual({
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "http.extraHeader",
         GIT_CONFIG_VALUE_0: `redacted ${header}`,
@@ -1936,13 +1955,14 @@ for (const name of ["gitlab", "github"] as const) {
 
           const config = yield* fs.readFileString(`${clone}/.git/config`);
           expect(config).not.toContain("-token");
-          expect(config.toLowerCase()).not.toContain("extraheader");
-          const helpers = (yield* exec(
-            ["git", "config", "--local", "--get-all", `credential.https://${host}.helper`],
-            { cwd: clone },
-          )).stdout
-            .split("\n")
-            .slice(0, -1);
+          expect(Str.toLowerCase(config)).not.toContain("extraheader");
+          const helpers = Str.split(
+            (yield* exec(
+              ["git", "config", "--local", "--get-all", `credential.https://${host}.helper`],
+              { cwd: clone },
+            )).stdout,
+            "\n",
+          ).slice(0, -1);
           expect(helpers).toHaveLength(2);
           expect(helpers[0]).toBe("");
         } finally {
@@ -2043,7 +2063,7 @@ for (const name of ["gitlab", "github"] as const) {
     name === "gitlab"
       ? `${WEB.gitlab}#note_${id}`
       : `${WEB.github}#${threaded ? "discussion_r" : "issuecomment-"}${id}`;
-  const at = (minute: number) => `2026-10-20T10:${String(minute).padStart(2, "0")}:00Z`;
+  const at = (minute: number) => `2026-10-20T10:${pipe(String(minute), Str.padStart(2, "0"))}:00Z`;
   const read = (over: Partial<FakeMr>, rest: Partial<ForgeModel> = {}) =>
     against(name, model(name, { mrs: [mr(name, over)], ...rest }), (run) =>
       forge.readReview(ref(name), "/w", run),
@@ -2064,7 +2084,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(fake.model().merges).toMatchObject([
             { sha: HEAD, method: name === "github" ? "squash" : null },
           ]);
-          expect(fake.requests.filter((one) => one.method === "PUT")).toHaveLength(1);
+          expect(Arr.filter(fake.requests, (one) => one.method === "PUT")).toHaveLength(1);
           expect(fake.calls).toEqual([...READ_ONCE[name]]);
         }).pipe(Effect.provide(fake.layer)),
       );
@@ -2074,7 +2094,7 @@ for (const name of ["gitlab", "github"] as const) {
       test(`a merge returning 503 is sent once and reads that it ${outcome}`, () => {
         const fake = fakeForge(name, model(name, { mrs: [mr(name, { mergedSha: MERGED })] }));
         const layer = forgeHttpTest(fake.run, (input, init = {}) => {
-          const merging = init.method === "PUT" && input.endsWith("/merge");
+          const merging = init.method === "PUT" && pipe(input, Str.endsWith("/merge"));
           if (merging && outcome === "head moved")
             fake.set({ ...fake.model(), mrs: [mr(name, { head: "new-head" })] });
           return fake
@@ -2098,7 +2118,7 @@ for (const name of ["gitlab", "github"] as const) {
                   }
                 : { _tag: "HeadMoved", head: "new-head" },
             );
-            expect(fake.requests.filter((one) => one.method === "PUT")).toHaveLength(1);
+            expect(Arr.filter(fake.requests, (one) => one.method === "PUT")).toHaveLength(1);
             expect(fake.model().merges?.length ?? 0).toBe(outcome === "merged" ? 1 : 0);
             expect(fake.calls).toEqual([...READ_ONCE[name]]);
           }).pipe(Effect.provide(layer)),
@@ -2131,10 +2151,10 @@ for (const name of ["gitlab", "github"] as const) {
                 fake.run,
               ),
             ).toEqual({ ok: true, reason: "" });
-            expect(Object.values(fake.model().replies ?? {})).toEqual([
+            expect(Rec.values(fake.model().replies ?? {})).toEqual([
               [{ thread: to, body: "Fixed\nSee the commit." }],
             ]);
-            expect(fake.requests.filter((one) => one.method === "POST")).toHaveLength(1);
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
             expect(fake.calls).toEqual([...READ_ONCE[name]]);
           }).pipe(Effect.provide(fake.layer)),
         );
@@ -2258,8 +2278,11 @@ for (const name of ["gitlab", "github"] as const) {
             resolved: [thread(31)],
           });
           if (!review.ok) throw new Error(review.reason);
-          const answered = Object.fromEntries(
-            review.comments.filter((one) => one.external).map((one) => [one.id, one.answered]),
+          const answered = Rec.fromEntries(
+            Arr.map(
+              Arr.filter(review.comments, (one) => one.external),
+              (one) => [one.id, one.answered] as const,
+            ),
           );
           expect(answered).toEqual({
             "11": true,
@@ -2320,7 +2343,10 @@ for (const name of ["gitlab", "github"] as const) {
             .pipe(Effect.provide(fake.layer));
           if (!review.ok) throw new Error(review.reason);
           expect(
-            review.comments.filter((one) => one.external).map((one) => [one.id, one.answered]),
+            Arr.map(
+              Arr.filter(review.comments, (one) => one.external),
+              (one) => [one.id, one.answered],
+            ),
           ).toEqual([
             ["11", true],
             ["21", true],
@@ -2359,7 +2385,7 @@ for (const name of ["gitlab", "github"] as const) {
               at: at(55),
             },
           ]);
-          const said = fake.calls.join("\n");
+          const said = Arr.join(fake.calls, "\n");
           expect(said).not.toMatch(/mr merge|pr merge|--admin|auto/);
         }),
       ));
@@ -2490,7 +2516,9 @@ test("GitHub reads a review comment beyond the first HTTP page", () => {
         answered: false,
       });
       expect(
-        fake.requests.some((one) => one.url.includes("/pulls/30/comments?per_page=100&page=2")),
+        Arr.some(fake.requests, (one) =>
+          pipe(one.url, Str.includes("/pulls/30/comments?per_page=100&page=2")),
+        ),
       ).toBe(true);
       expect(fake.calls).toEqual([...READ_ONCE.github]);
     }).pipe(Effect.provide(fake.layer)),
@@ -2557,7 +2585,7 @@ test("GitLab's system notes and access-token bots are not external", () =>
         ],
       });
       if (!review.ok) throw new Error(review.reason);
-      expect(review.comments.map((one) => [one.kind, one.external])).toEqual([
+      expect(Arr.map(review.comments, (one) => [one.kind, one.external])).toEqual([
         ["system", false],
         ["bot", false],
         ["bot", false],
@@ -2704,7 +2732,7 @@ const RELOGIN = {
 
 for (const name of ["gitlab", "github"] as const) {
   const forge = FORGES[name];
-  const BASE = "b".repeat(40);
+  const BASE = pipe("b", Str.repeat(40));
   const jobbed = (over: Partial<ForgeModel> = {}) =>
     fakeForge(
       name,
@@ -2747,14 +2775,14 @@ for (const name of ["gitlab", "github"] as const) {
   };
 
   describe(`the ${name} forge over HTTP`, () => {
-    for (const [operation, ask] of Object.entries(asked))
+    for (const [operation, ask] of Rec.toEntries(asked))
       test(`answers ${operation} from a cold start with requests, running only credential reads`, () => {
         const fake = jobbed();
         return runEffect(
           Effect.gen(function* () {
             expect(yield* ask(fake)).toBe(true);
             expect(fake.requests.length).toBeGreaterThan(0);
-            expect(fake.calls.filter((call) => !CREDENTIAL_READ.test(call))).toEqual([]);
+            expect(Arr.filter(fake.calls, (call) => !CREDENTIAL_READ.test(call))).toEqual([]);
           }).pipe(Effect.provide(fake.layer)),
         );
       });
@@ -2787,7 +2815,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(fake.calls).toEqual([...READ_ONCE[name]]);
           const [refused, resent, ...rest] = fake.requests;
           expect(resent?.url).toBe(refused?.url);
-          expect([refused?.token, resent?.token, ...rest.map((one) => one.token)]).toEqual([
+          expect([refused?.token, resent?.token, ...Arr.map(rest, (one) => one.token)]).toEqual([
             FIRST_TOKEN[name],
             ...Array.from({ length: rest.length + 1 }, () => "rotated"),
           ]);
@@ -2819,7 +2847,7 @@ for (const name of ["gitlab", "github"] as const) {
             ok: true,
             reason: "",
           });
-          expect(fake.requests.map((one) => [one.method, one.token])).toEqual([
+          expect(Arr.map(fake.requests, (one) => [one.method, one.token])).toEqual([
             ["POST", FIRST_TOKEN[name]],
             ["POST", "rotated"],
           ]);
@@ -2905,7 +2933,7 @@ const overHttp = <A>(
   return Effect.gen(function* () {
     const answer = yield* read(fake);
     expect(fake.requests.length).toBeGreaterThan(0);
-    expect(fake.calls.filter((call) => !CREDENTIAL_READ.test(call))).toEqual([]);
+    expect(Arr.filter(fake.calls, (call) => !CREDENTIAL_READ.test(call))).toEqual([]);
     return answer;
   }).pipe(Effect.provide(fake.layer));
 };
@@ -3033,7 +3061,9 @@ describe("GitLab's merge request reads over HTTP", () => {
           (fake) => gitlab.fromBranch(PROJECT.gitlab, "me/x", "/w", fake.run),
         );
         expect(listed.ok && listed.mrs.length).toBe(101);
-        expect(listed.ok && listed.mrs.find((one) => one.iid === "300")).toEqual({
+        expect(
+          listed.ok && Option.getOrUndefined(Arr.findFirst(listed.mrs, (one) => one.iid === "300")),
+        ).toEqual({
           iid: "300",
           url: "https://gitlab.example.com/group/app/-/merge_requests/300",
           state: "merged",
@@ -3056,14 +3086,19 @@ test("GitHub reads its panel through the served HTTP face", () =>
           model("github", { mrs: [mr("github", { draft: true, title: "Release health" })] }),
         );
         const api = yield* serveForges(fake);
-        const panel = yield* FORGES.github
-          .details(ref("github"), bin.dir, shell)
-          .pipe(
-            Effect.provide(forgeHttpLayer),
-            Effect.provide(
-              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+        const panel = yield* FORGES.github.details(ref("github"), bin.dir, shell).pipe(
+          Effect.provide(
+            forgeHttpLayer.pipe(
+              Layer.provideMerge(
+                ConfigProvider.layerAdd(
+                  ConfigProvider.fromUnknown({
+                    COLLIE_FORGE_API: api,
+                  }),
+                ),
+              ),
             ),
-          );
+          ),
+        );
         expect(panel).toMatchObject({ _tag: "Details", title: "Release health", state: "draft" });
         expect(yield* fake.calls()).toEqual([...READ_ONCE.github]);
       } finally {
@@ -3209,7 +3244,7 @@ describe("GitLab's OAuth login over HTTP", () => {
         expect(status).toBe("success");
         expect(pipeline).toMatchObject({ ok: true, succeeded: true });
         expect(mostActive).toBe(1);
-        expect(new Set(fake.requests.map((one) => one.token))).toEqual(
+        expect(new Set(Arr.map(fake.requests, (one) => one.token))).toEqual(
           new Set(["oauth-1-refreshed"]),
         );
       }).pipe(Effect.provide(forgeHttpTest(run, fake.fetch))),
@@ -3232,7 +3267,7 @@ describe("GitLab's OAuth login over HTTP", () => {
         expect(refreshed).toBeLessThan(
           fake.calls.indexOf("glab config get token --host gitlab.example.com"),
         );
-        expect(new Set(fake.requests.map((one) => one.token))).toEqual(
+        expect(new Set(Arr.map(fake.requests, (one) => one.token))).toEqual(
           new Set(["oauth-1-refreshed"]),
         );
       }).pipe(Effect.provide(fake.layer)),
@@ -3254,7 +3289,7 @@ describe("GitLab's OAuth login over HTTP", () => {
           expect(yield* job(fake)).toMatchObject({ ok: true });
           expect(fake.calls).toContain("glab auth status --hostname gitlab.example.com");
           expect(fake.requests).toHaveLength(first);
-          expect(new Set(fake.requests.map((one) => one.token))).toEqual(
+          expect(new Set(Arr.map(fake.requests, (one) => one.token))).toEqual(
             new Set(["oauth-1-refreshed"]),
           );
         }).pipe(Effect.provideService(Clock.Clock, clock));
@@ -3313,9 +3348,10 @@ test("a failed GitHub gate job is retried by rerunning its workflow run's failed
       expect(yield* job("suite (1)")).toMatchObject({ state: "passed" });
       expect(yield* job("test")).toMatchObject({ state: "passed" });
       expect(
-        fake.requests
-          .filter((one) => one.method === "POST")
-          .map((one) => new URL(one.url).pathname),
+        Arr.map(
+          Arr.filter(fake.requests, (one) => one.method === "POST"),
+          (one) => new URL(one.url).pathname,
+        ),
       ).toEqual(["/repos/owner/repo/actions/runs/4030/rerun-failed-jobs"]);
     }).pipe(Effect.provide(fake.layer)),
   );

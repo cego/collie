@@ -6,8 +6,12 @@
 // away, one whose facts no longer hold, and arguments the child will not take. None of
 // those may leave a Run behind.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { makeOffer, type FlowPrompts } from "../src/flows";
@@ -18,7 +22,7 @@ import { stopHost, until } from "./support/host";
 import { collie, proves, save, type World } from "./support/world";
 
 /** The envelope's payload as text, for asking whether an offer is in it at all. */
-const asText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 const MODULES = [
   "offered.workflow.ts",
@@ -62,7 +66,7 @@ test(
           const runId = yield* finished(client, project).pipe(Effect.orDie);
 
           const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
-          expect(offers.map((one) => [one.id, one.primary, one.unavailable])).toEqual([
+          expect(Arr.map(offers, (one) => [one.id, one.primary, one.unavailable])).toEqual([
             ["grade-it", true, null],
             ["look-again", false, null],
           ]);
@@ -149,10 +153,14 @@ test(
           expect(done).toMatchObject({ state: "applied" });
           const child = yield* until(
             () => client.runs({ task: null }).pipe(Effect.orDie),
-            (rows) => rows.some((row) => row.parent === runId),
+            (rows) => Arr.some(rows, (row) => row.parent === runId),
           );
-          expect(child.find((row) => row.parent === runId)?.workflow).toBe("offered");
-          expect(child.find((row) => row.parent === runId)?.input).toEqual({
+          expect(
+            Option.getOrUndefined(Arr.findFirst(child, (row) => row.parent === runId))?.workflow,
+          ).toBe("offered");
+          expect(
+            Option.getOrUndefined(Arr.findFirst(child, (row) => row.parent === runId))?.input,
+          ).toEqual({
             note: "the other half",
           });
           yield* stopHost(world.state);
@@ -198,7 +206,7 @@ test(
           expect(note).toContain("recovery required");
 
           const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
-          expect(offers.map((one) => [one.id, one.unavailable, one.arguments])).toEqual([
+          expect(Arr.map(offers, (one) => [one.id, one.unavailable, one.arguments])).toEqual([
             ["recover", null, null],
           ]);
           const recovering = yield* client
@@ -249,7 +257,7 @@ test(
             .pipe(Effect.flip, Effect.orDie);
           expect(refused.reason).toContain("is still going");
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-          expect(runs.map((row) => row.runId)).toEqual([runId]);
+          expect(Arr.map(runs, (row) => row.runId)).toEqual([runId]);
 
           yield* client
             .control({ runId, control: "stop", set: true, request: "stop-1" })
@@ -278,9 +286,9 @@ test(
           const project = yield* projectOf(world);
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const runId = yield* finished(client, project).pipe(Effect.orDie);
-          expect((yield* client.offers({ runId }).pipe(Effect.orDie)).map((one) => one.id)).toEqual(
-            ["grade-it", "look-again"],
-          );
+          expect(
+            Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),
+          ).toEqual(["grade-it", "look-again"]);
 
           // The author edits the module: the action is gone, and the card a moment ago
           // is not authority for anything.
@@ -288,12 +296,12 @@ test(
           const source = yield* fs.readFileString(entry);
           yield* fs.writeFileString(
             entry,
-            source.replace(/actions: \[[\s\S]*?\],\n/, "actions: [],\n"),
+            pipe_(source, Str.replace(/actions: \[[\s\S]*?\],\n/, "actions: [],\n")),
           );
 
-          expect((yield* client.offers({ runId }).pipe(Effect.orDie)).map((one) => one.id)).toEqual(
-            ["look-again"],
-          );
+          expect(
+            Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),
+          ).toEqual(["look-again"]);
           const refused = yield* client
             .invoke({ runId, offer: "grade-it", input: {}, request: "act-1" })
             .pipe(Effect.result);
@@ -327,7 +335,7 @@ test(
 
           // The follow-up is gone, and the action is shown as the reason it cannot be taken.
           const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
-          expect(offers.map((one) => [one.id, one.unavailable !== null])).toEqual([
+          expect(Arr.map(offers, (one) => [one.id, one.unavailable !== null])).toEqual([
             ["grade-it", true],
           ]);
           for (const [offer, request] of [
@@ -409,7 +417,7 @@ test(
           ]);
           expect(done.envelope.ok).toBe(true);
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-          expect(runs.map((one) => one.workflow).sort()).toEqual(["graded", "offered"]);
+          expect(Arr.map(runs, (one) => one.workflow).sort()).toEqual(["graded", "offered"]);
 
           // And the same refusal from this door: an offer nobody declares starts nothing.
           const refused = yield* collie({ ...world, project }, [

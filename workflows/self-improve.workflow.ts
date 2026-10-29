@@ -1,6 +1,9 @@
 // One day of Runs, read for what is wrong with the project it runs in (ADR-0053): filed on
 // that project's forge, and up to `improvements` of it planned and built, with nobody asked.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import {
   Children,
   Host,
@@ -12,7 +15,7 @@ import {
   step,
 } from "collie";
 import { hostname } from "node:os";
-import { DateTime, Duration, Effect, FileSystem, Option, Result, Schema } from "effect";
+import { DateTime, Duration, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./self-improve.md" with { type: "text" };
 import {
@@ -48,10 +51,10 @@ const triage = content.template("triage", {
 
 const DAY = Duration.hours(24);
 const LOOKBACK = Duration.days(7);
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const KeptJson = Schema.fromJsonString(Schema.Array(Ended));
 const decodeKept = Schema.decodeUnknownOption(KeptJson);
-const encodeKept = Schema.encodeSync(KeptJson);
+const encodeKept = flow(Schema.encodeResult(KeptJson), Result.getOrThrow);
 const KeptRuns = Schema.Struct({
   earlier: Schema.Array(Schema.Struct({ created: Schema.String, ended: Schema.Array(Ended) })),
   since: Schema.Array(Schema.Struct({ created: Schema.String, closes: Schema.Array(Schema.Int) })),
@@ -154,20 +157,23 @@ export default defineWorkflow({
           execute: Effect.gen(function* () {
             const since = DateTime.formatIso(DateTime.subtractDuration(yield* DateTime.now, DAY));
             const report = yield* host.report(since);
-            const own = report.runs.find(({ runId }) => runId === run.id);
+            const own = Option.getOrUndefined(
+              Arr.findFirst(report.runs, ({ runId }) => runId === run.id),
+            );
             if (own === undefined)
               return yield* new WorkflowError({
                 reason: `${run.id} is not in its Machine's report`,
               });
-            const kept = report.runs.filter(
+            const kept = Arr.filter(
+              report.runs,
               ({ runId, parent, project }) =>
                 runId !== run.id &&
                 parent !== run.id &&
                 (input.runs === "machine" || project === own.project),
             );
-            const ids = new Set(kept.map(({ runId }) => runId));
+            const ids = new Set(Arr.map(kept, ({ runId }) => runId));
             const read = <A extends { readonly runId: string }>(list: ReadonlyArray<A>) =>
-              list.filter(({ runId }) => ids.has(runId));
+              Arr.filter(list, ({ runId }) => ids.has(runId));
             return {
               since,
               machine: hostname(),
@@ -203,10 +209,13 @@ export default defineWorkflow({
                   DateTime.subtractDuration(yield* DateTime.now, LOOKBACK),
                 );
                 const report = yield* host.report(since);
-                const own = report.runs.find(({ runId }) => runId === run.id);
-                const project = report.runs.filter(({ project }) => project === own?.project);
+                const own = Option.getOrUndefined(
+                  Arr.findFirst(report.runs, ({ runId }) => runId === run.id),
+                );
+                const project = Arr.filter(report.runs, ({ project }) => project === own?.project);
                 const earlier = yield* Effect.forEach(
-                  project.filter(
+                  Arr.filter(
+                    project,
                     ({ runId, workflow }) => runId !== run.id && workflow === own?.workflow,
                   ),
                   ({ runId, created }) =>
@@ -220,13 +229,13 @@ export default defineWorkflow({
                     ),
                 );
                 return {
-                  earlier: earlier.flatMap(Option.toArray),
-                  since: project.map(({ created, closes }) => ({ created, closes })),
+                  earlier: Arr.flatMap(earlier, Option.toArray),
+                  since: Arr.map(project, ({ created, closes }) => ({ created, closes })),
                 };
               }),
             });
-      const failedToStart = kept.earlier.some(({ ended }) =>
-        ended.some((one) => one.ended.startsWith(FAILED_TO_START)),
+      const failedToStart = Arr.some(kept.earlier, ({ ended }) =>
+        Arr.some(ended, (one) => pipe_(one.ended, Str.startsWith(FAILED_TO_START))),
       );
       if (quiet && !failedToStart) return `No Runs since ${window.since}`;
 
@@ -256,7 +265,9 @@ export default defineWorkflow({
         execute: host
           .issues(run.id)
           .pipe(
-            Effect.map((issues) => issues.map((issue) => ({ ...issue, keys: keysIn(issue.body) }))),
+            Effect.map((issues) =>
+              Arr.map(issues, (issue) => ({ ...issue, keys: keysIn(issue.body) })),
+            ),
           ),
       });
 
@@ -270,17 +281,19 @@ export default defineWorkflow({
             state: host.dir,
             release: host.build,
             since: window.since,
-            runs: window.runs.join("\n"),
+            runs: Arr.join(window.runs, "\n"),
             report: asJson(window.report),
             issues:
               open.length === 0
                 ? "None."
-                : open
-                    .map(
+                : Arr.join(
+                    Arr.map(
+                      open,
                       ({ number, title, url, body }) =>
                         `### #${number} ${title}\n\n${url}\n\n${body}`,
-                    )
-                    .join("\n\n"),
+                    ),
+                    "\n\n",
+                  ),
             bound: String(bound),
             scope: content.sections.get(input.runs) ?? "",
           },
@@ -310,18 +323,21 @@ export default defineWorkflow({
                     .fileIssue({
                       runId: run.id,
                       title: finding.title,
-                      body: [
-                        finding.body,
-                        markerOf(finding.key),
-                        `Filed by Collie's self-improve Run ${run.id} on ${window.machine}.`,
-                      ].join("\n\n"),
+                      body: Arr.join(
+                        [
+                          finding.body,
+                          markerOf(finding.key),
+                          `Filed by Collie's self-improve Run ${run.id} on ${window.machine}.`,
+                        ],
+                        "\n\n",
+                      ),
                     })
                     .pipe(Effect.map((filed): Outcome => ({ kind: "filed", ...filed })))
                 : host
                     .commentIssue({
                       runId: run.id,
                       number: target.number,
-                      body: `Seen again in ${finding.runs.join(", ")} on ${window.machine}, by self-improve Run ${run.id}.\n\n${markerOf(finding.key)}`,
+                      body: `Seen again in ${Arr.join(finding.runs, ", ")} on ${window.machine}, by self-improve Run ${run.id}.\n\n${markerOf(finding.key)}`,
                     })
                     .pipe(
                       Effect.as<Outcome>({
@@ -343,16 +359,17 @@ export default defineWorkflow({
 
       const restarts = restartsOf(kept.earlier, kept.since, open);
       if (quiet && restarts.length === 0) return `No Runs since ${window.since}`;
-      const outcomes = new Map(acted.map(({ finding, outcome }) => [finding.key, outcome]));
+      const outcomes = new Map(Arr.map(acted, ({ finding, outcome }) => [finding.key, outcome]));
       const filedNumber = (key: string) => {
         const outcome = outcomes.get(key);
         return outcome?.kind === "filed" ? [outcome.number] : [];
       };
-      const fresh = chosen(triaged.improvements, outcomes, bound).map(
-        ({ name, keys }): Starting => ({ name, issues: keys.flatMap(filedNumber) }),
+      const fresh = Arr.map(
+        chosen(triaged.improvements, outcomes, bound),
+        ({ name, keys }): Starting => ({ name, issues: Arr.flatMap(keys, filedNumber) }),
       );
       const starting = [
-        ...restarts.filter(({ name }) => !fresh.some((one) => one.name === name)),
+        ...Arr.filter(restarts, ({ name }) => !Arr.some(fresh, (one) => one.name === name)),
         ...fresh,
       ].slice(0, bound);
       // The issues as the forge holds them, so a goal carries only what the host let out. Read
@@ -366,17 +383,19 @@ export default defineWorkflow({
                 success: Opened,
                 error: WorkflowError,
                 execute: host
-                  .issues(run.id, [...new Set(starting.flatMap(({ issues }) => issues))])
-                  .pipe(Effect.map((issues) => issues.map((issue) => ({ ...issue, keys: [] })))),
+                  .issues(run.id, [...new Set(Arr.flatMap(starting, ({ issues }) => issues))])
+                  .pipe(
+                    Effect.map((issues) => Arr.map(issues, (issue) => ({ ...issue, keys: [] }))),
+                  ),
               }),
             );
       const improvements: ReadonlyArray<Ended> = yield* Effect.all(
-        starting.map((improvement) =>
+        Arr.map(starting, (improvement) =>
           improvementsStep(
             Effect.gen(function* () {
               if (Result.isFailure(published)) return yield* published.failure;
-              const issues = improvement.issues.flatMap((number) =>
-                published.success.filter((one) => one.number === number),
+              const issues = Arr.flatMap(improvement.issues, (number) =>
+                Arr.filter(published.success, (one) => one.number === number),
               );
               if (issues.length < improvement.issues.length)
                 return yield* new WorkflowError({
@@ -418,7 +437,7 @@ export default defineWorkflow({
                 }),
               ),
             ),
-            { item: improvement.name, items: starting.map((one) => one.name) },
+            { item: improvement.name, items: Arr.map(starting, (one) => one.name) },
           ),
         ),
         { concurrency: "unbounded" },
@@ -449,8 +468,8 @@ export default defineWorkflow({
         ),
       });
       const count = (kind: Outcome["kind"]) =>
-        acted.filter(({ outcome }) => outcome.kind === kind).length;
-      const failed = improvements.filter(({ ended }) => ended !== "succeeded").length;
+        Arr.filter(acted, ({ outcome }) => outcome.kind === kind).length;
+      const failed = Arr.filter(improvements, ({ ended }) => ended !== "succeeded").length;
       return `Filed ${count("filed")}, commented ${count("commented")}, refused ${count("refused")}; ${improvements.length} Improvements, ${failed} failed. ${file}`;
     }),
 });

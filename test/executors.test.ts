@@ -11,7 +11,12 @@
 // confirmation is in the Home — so "it wrote a defaults file" and "a Run will read it"
 // are two different facts.
 
-import { Effect, FileSystem, Path, Schema } from "effect";
+import * as Option from "effect/Option";
+import { pipe as pipe_ } from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { readEnv, type PluginEnv } from "../src/env";
 import { defaultsPath, readDefaults } from "../src/intent";
@@ -28,7 +33,7 @@ let env: PluginEnv;
 let logPath: string;
 
 /** What the fake herdr reads back as its own state, and as the metadata on each pane. */
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Any));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Any)), Result.getOrThrow);
 
 /** The workspace the fake herdr has, and the one every action below names. */
 const WORKSPACE = { workspace_id: "w1", label: "picker", cwd: "" };
@@ -52,10 +57,11 @@ const fakeHerdrOn = Effect.fn("test.fakeHerdrOn")(function* (
     `${logPath}.tokens.json`,
     asJson({
       workspaces: {},
-      panes: Object.fromEntries(
-        panes
-          .filter((pane) => pane.label === "collie")
-          .map((pane) => [pane.pane_id, { [LEGACY_PANE_TOKEN]: "legacy" }]),
+      panes: Rec.fromEntries(
+        Arr.map(
+          Arr.filter(panes, (pane) => pane.label === "collie"),
+          (pane) => [pane.pane_id, { [LEGACY_PANE_TOKEN]: "legacy" }] as const,
+        ),
       ),
     }),
   );
@@ -137,7 +143,13 @@ test("a default constraint is written where the workspace's own Runs read it", (
       // Under the named workspace's key, which is where a Run started there looks — not
       // under the board's own, which is the Home's and which no Run ever opens.
       const written = yield* readDefaults(yield* defaultsOfW1());
-      expect(written?.constraints.map((c) => c.text)).toEqual(["no force pushes"]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(written), (present) =>
+            Arr.map(present.constraints, (c) => c.text),
+          ),
+        ),
+      ).toEqual(["no force pushes"]);
       expect(written?.constraints.at(0)?.source).toBe("workspace-default");
     }),
   ));
@@ -155,7 +167,13 @@ test("a default lands in the asker's herdr session, not the one the executors we
         stateDir,
         scopeKey({ session: other, workspaceId: "w1", cwd: stateDir }),
       );
-      expect((yield* readDefaults(theirs))?.constraints.map((c) => c.text)).toEqual(["no rebase"]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(yield* readDefaults(theirs)), (present_) =>
+            Arr.map(present_.constraints, (c) => c.text),
+          ),
+        ),
+      ).toEqual(["no rebase"]);
       expect(yield* readDefaults(yield* defaultsOfW1())).toBeNull();
     }),
   ));
@@ -219,7 +237,12 @@ test("a persona fork writes into the layer it named", () =>
         as: "implementer-ours",
       });
       expect(done.state).toBe("applied");
-      const written = done.note?.replace("forked to ", "") ?? "";
+      const written =
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(done.note), (present__) =>
+            pipe_(present__, Str.replace("forked to ", "")),
+          ),
+        ) ?? "";
       expect(yield* fs.exists(written)).toBe(true);
       expect(written).toContain("implementer-ours");
     }),
@@ -260,9 +283,7 @@ test("a cleanup closes the panes that are Collie's alone, and leaves the shared 
       expect(done.state).toBe("applied");
       // Taking somebody's window away is not cleanup: the pane sharing a tab with an
       // editor is listed, never closed.
-      const log = yield* fs
-        .readFileString(logPath, "utf8")
-        .pipe(Effect.catch(() => Effect.succeed("")));
+      const log = yield* fs.readFileString(logPath, "utf8").pipe(Effect.orElseSucceed(() => ""));
       expect(log).toContain("p-collie");
       expect(log).not.toContain("p-other");
       expect(done.note).toContain("left 1 sharing a tab");
@@ -277,7 +298,7 @@ test("a cleanup forgets the Tasks whose workspace herdr no longer has, and keeps
       yield* writeTask(stateDir, { ...at, id: "gone", workspace: "w-closed" });
       const done = yield* carry({ kind: "home_cleanup" });
       expect(done.note).toContain("forgot 1 Tasks");
-      expect((yield* listTasks(stateDir)).map((task) => task.id)).toEqual(["kept"]);
+      expect(Arr.map(yield* listTasks(stateDir), (task) => task.id)).toEqual(["kept"]);
     }),
   ));
 

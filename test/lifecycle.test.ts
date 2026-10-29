@@ -8,6 +8,9 @@
 //
 // Real hosts, real SQLite, real processes: none of those questions has an answer in a map.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Option, Schema, Scope, Stream } from "effect";
 import type { PlatformServices } from "../src/platform";
@@ -81,7 +84,7 @@ test(
 
         // The same run in the listing, and only the task's when a task is named.
         expect(
-          (yield* client.runs({ task: null }).pipe(Effect.orDie)).map((one) => one.runId),
+          Arr.map(yield* client.runs({ task: null }).pipe(Effect.orDie), (one) => one.runId),
         ).toEqual([started.runId]);
         expect(yield* client.runs({ task: "task-other" }).pipe(Effect.orDie)).toEqual([]);
         // Nothing was started here: an id nobody admitted is nothing, not a failure.
@@ -157,7 +160,9 @@ test(
         // What ran before the module went is not run again: the Activity's result is
         // durable, and recovery re-enters the code rather than starting the work over.
         expect(
-          (yield* events(world.state, runId)).filter((line) => line.startsWith("launch")),
+          Arr.filter(yield* events(world.state, runId), (line) =>
+            pipe_(line, Str.startsWith("launch")),
+          ),
         ).toHaveLength(1);
         yield* stopHost(world.state);
       }),
@@ -287,7 +292,13 @@ test(
         expect(view?.runId).toBe(runId);
 
         const listed = yield* collie(world, ["run", "list"]);
-        expect((yield* payloadOf(listed.envelope)).runs?.map((one) => one.runId)).toEqual([runId]);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr((yield* payloadOf(listed.envelope)).runs), (present) =>
+              Arr.map(present, (one) => one.runId),
+            ),
+          ),
+        ).toEqual([runId]);
 
         // A wait that ends on the question, and then one that ends on the answer.
         const asked = yield* collie(world, ["run", "wait", runId, "--until", "attention"]);
@@ -507,10 +518,11 @@ test(
           expect((yield* grant(...e2e)).envelope.ok).toBe(true);
           // A retry is the same grant, recorded once under the request it was given.
           expect((yield* grant(...e2e)).envelope.ok).toBe(true);
-          const grants = (yield* readAudit(runDir(world.state, runId))).filter(
+          const grants = Arr.filter(
+            yield* readAudit(runDir(world.state, runId)),
             (one) => one.operation === "grant",
           );
-          expect(grants.map((one) => one.request)).toEqual(["g-e2e"]);
+          expect(Arr.map(grants, (one) => one.request)).toEqual(["g-e2e"]);
           // Withdrawn by name, as a human who granted the wrong thing would.
           const withdrawn = yield* grant("--name", "lint", "--remove");
           expect(withdrawn.envelope.data).toMatchObject({
@@ -612,7 +624,9 @@ const answering = (script: ReadonlyArray<string>) => {
     menu: (items, options) => {
       asked.push(options.header);
       const wanted = answers.shift();
-      return Effect.succeed(items.find((item) => item.id === wanted) ?? null);
+      return Effect.succeed(
+        Option.getOrUndefined(Arr.findFirst(items, (item) => item.id === wanted)) ?? null,
+      );
     },
     ask: (question) => {
       asked.push(question);
@@ -631,7 +645,9 @@ test(
         const { prompts, asked } = answering(["proof", "picked"]);
         expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
         // Offered by the picker, and the one question is what the human wants.
-        expect(asked.some((question) => question.includes("Workflows"))).toBe(true);
+        expect(Arr.some(asked, (question) => pipe_(question, Str.includes("Workflows")))).toBe(
+          true,
+        );
         expect(asked.at(-1)).toBe("What do you want?");
 
         // The Run it started is the host's, with this project's and this module's marks
@@ -660,7 +676,10 @@ test(
 
 /** The question this run is waiting on, as the read model both doors show it. */
 const waitingOn = (view: RunView | null) =>
-  (view?.waiting ?? []).filter((one) => one.answer === null).map((one) => one.name);
+  Arr.map(
+    Arr.filter(view?.waiting ?? [], (one) => one.answer === null),
+    (one) => one.name,
+  );
 
 test(
   "two answers racing settle the question once, and both front doors refuse the loser alike",
@@ -692,11 +711,13 @@ test(
           { concurrency: "unbounded" },
         ).pipe(Effect.orDie);
         const outcomes = [first, second];
-        expect(outcomes.filter((one) => one._tag === "Success")).toHaveLength(1);
-        const refused = outcomes.find((one) => one._tag === "Failure");
+        expect(Arr.filter(outcomes, (one) => one._tag === "Success")).toHaveLength(1);
+        const refused = Option.getOrUndefined(
+          Arr.findFirst(outcomes, (one) => one._tag === "Failure"),
+        );
         expect(refused?._tag === "Failure" && refused.failure.reason).toContain("already answered");
 
-        const won = outcomes.find((one) => one._tag === "Success");
+        const won = Option.getOrUndefined(Arr.findFirst(outcomes, (one) => one._tag === "Success"));
         const value = won?._tag === "Success" ? won.success.value : "";
         expect(
           yield* until(
@@ -830,11 +851,13 @@ test(
           "-c",
           "echo $$",
         ]);
-        const printed = Schema.decodeUnknownSync(
-          Schema.Struct({
-            verification: Schema.Struct({ tail: Schema.Struct({ stdout: Schema.String }) }),
-          }),
-        )(announced.envelope.data).verification.tail.stdout.trim();
+        const printed = Str.trim(
+          (yield* Schema.decodeUnknownEffect(
+            Schema.Struct({
+              verification: Schema.Struct({ tail: Schema.Struct({ stdout: Schema.String }) }),
+            }),
+          )(announced.envelope.data).pipe(Effect.orDie)).verification.tail.stdout,
+        );
         expect(printed).toMatch(/^\d+$/);
         const line = `"pid-of" started, pid ${printed}`;
         expect(announced.stderr).toContain(line);
@@ -877,12 +900,12 @@ const checkedRun = (world: World, workflow: string, command: ReadonlyArray<strin
       "--input",
       "note=x",
       "--verify",
-      Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+      yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
         name: "unit",
         executable: command[0],
         argv: command.slice(1),
         cwd: "worktree",
-      }),
+      }).pipe(Effect.orDie),
     ]);
     expect(started.envelope.ok).toBe(true);
     const runId = (yield* payloadOf(started.envelope)).runId ?? "";
@@ -898,7 +921,7 @@ const counted = (world: World) =>
     return {
       counter,
       runs: fs.readFileString(counter).pipe(
-        Effect.map((text) => text.split("\n").length - 1),
+        Effect.map((text) => Str.split(text, "\n").length - 1),
         Effect.orElseSucceed(() => 0),
       ),
     };
@@ -922,7 +945,7 @@ const Answer = Schema.Struct({
   verification: Schema.Struct({
     id: Schema.String,
     result: Schema.String,
-    exit: Schema.Number,
+    exit: Schema.Finite,
     by: Schema.String,
     pass: Schema.optional(Schema.String),
   }),
@@ -945,7 +968,9 @@ test(
           const again = yield* verify("--", ...command);
           expect(again.exit).toBe(0);
           expect(yield* runs).toBe(1);
-          const answer = Schema.decodeUnknownSync(Answer)(again.envelope.data);
+          const answer = yield* Schema.decodeUnknownEffect(Answer)(again.envelope.data).pipe(
+            Effect.orDie,
+          );
           expect(answer).toMatchObject({
             ran: false,
             verification: { result: "pass", pass: "gate" },

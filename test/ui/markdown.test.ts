@@ -1,5 +1,9 @@
 // Comark's ANSI output as the drawer's chunks: styles, colours and what the agent wrote.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { RGBA, TextAttributes } from "@opentui/core";
@@ -19,8 +23,9 @@ test("markdown keeps headings and emphasis when CLI colour is disabled", () =>
         const chunks = styled?.chunks ?? [];
         for (const text of ["Heading", "emphasis"])
           expect(
-            (chunks.find((chunk) => chunk.text.includes(text))?.attributes ?? 0) &
-              TextAttributes.BOLD,
+            (Option.getOrUndefined(
+              Arr.findFirst(chunks, (chunk) => pipe(chunk.text, Str.includes(text))),
+            )?.attributes ?? 0) & TextAttributes.BOLD,
           ).toBe(TextAttributes.BOLD);
       } finally {
         if (previous === undefined) delete Bun.env.NO_COLOR;
@@ -33,7 +38,7 @@ test("SGR codes become attributes and the board's colours, and a reset clears bo
   const chunks = ansiText(
     "\x1b[1;31mbad\x1b[22mstill red\x1b[0mplain\x1b[38;2;1;3;4mrgb\x1b[39m",
   ).chunks;
-  expect(chunks.map((c) => [c.text, c.attributes, c.fg])).toEqual([
+  expect(Arr.map(chunks, (c) => [c.text, c.attributes, c.fg])).toEqual([
     ["bad", TextAttributes.BOLD, RED],
     ["still red", 0, RED],
     ["plain", 0, undefined],
@@ -47,7 +52,9 @@ test("an escape the agent wrote is text, never a style", () =>
     Effect.gen(function* () {
       const styled = yield* Effect.promise(() => styledMarkdown("\x1b[1mloud", 40));
       const chunks = styled?.chunks ?? [];
-      expect(chunks.some((c) => c.text.includes("\x1b"))).toBe(false);
-      expect(chunks.some((c) => (c.attributes ?? 0) & TextAttributes.BOLD)).toBe(false);
+      expect(Arr.some(chunks, (c) => pipe(c.text, Str.includes("\x1b")))).toBe(false);
+      expect(Arr.some(chunks, (c) => Boolean((c.attributes ?? 0) & TextAttributes.BOLD))).toBe(
+        false,
+      );
     }),
   ));

@@ -1,5 +1,8 @@
 // The user Layer's files as one host shares them: what it reads, and what it takes.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option } from "effect";
 import { readAudit } from "../src/audit";
@@ -7,7 +10,7 @@ import { fileTime, nowIso } from "../src/time";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { proves } from "./support/world";
 
-const at = (hour: number) => `2099-10-14T${String(hour).padStart(2, "0")}:00:00.000Z`;
+const at = (hour: number) => `2099-10-14T${pipe_(String(hour), Str.padStart(2, "0"))}:00:00.000Z`;
 const b64 = (text: string) => Buffer.from(text).toString("base64");
 
 test(
@@ -59,16 +62,24 @@ test(
           ]);
 
           // A file seen and gone since is a removal, from when it was first missed.
-          const before = yield* nowIso();
+          const before = yield* nowIso;
           yield* fs.remove(`${user}/workflows/helper.ts`);
-          const removed = (yield* door.sharedDefinitions()).find(
-            (one) => one.path === "workflows/helper.ts",
+          const removed = Option.getOrUndefined(
+            Arr.findFirst(
+              yield* door.sharedDefinitions(),
+              (one) => one.path === "workflows/helper.ts",
+            ),
           );
           expect(removed?.base64).toBeNull();
           expect(removed!.at >= before).toBe(true);
           // And it keeps that time, rather than being removed again at every read.
           expect(
-            (yield* door.sharedDefinitions()).find((one) => one.path === "workflows/helper.ts"),
+            Option.getOrUndefined(
+              Arr.findFirst(
+                yield* door.sharedDefinitions(),
+                (one) => one.path === "workflows/helper.ts",
+              ),
+            ),
           ).toEqual(removed);
 
           const held = yield* door.setSharedDefinitions({
@@ -118,8 +129,11 @@ test(
 
           // Both are recorded under the Actor that asked.
           const audited = yield* readAudit(`${world.state}/definitions`);
-          expect(audited.map((line) => line.operation)).toContain("definitions");
-          expect(audited.find((line) => line.request === "share-1")?.actor).toMatchObject({
+          expect(Arr.map(audited, (line) => line.operation)).toContain("definitions");
+          expect(
+            Option.getOrUndefined(Arr.findFirst(audited, (line) => line.request === "share-1"))
+              ?.actor,
+          ).toMatchObject({
             origin: "desktop",
             from: { client: "test-desktop" },
           });

@@ -7,8 +7,13 @@
 // interface appends to, and a channel that asks it to compact — because the shared
 // policy owns the threshold, the budget and what counts as an outcome.
 
+import * as Num from "effect/Number";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
 import {
   Cache,
+  Cause,
   Clock,
   Data,
   Duration,
@@ -20,6 +25,7 @@ import {
   Result,
   Schedule,
   Schema,
+  flow,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
@@ -81,27 +87,25 @@ import { carriedDelivery } from "./dispatcher";
  * is in flight and the waiting work may be released. Anything else may already have
  * reached the harness, so it is an ordinary failure and the attempt's budget runs.
  */
-const submitCompaction = (ctx: AgentContext, requestId: string, text: string) =>
-  ctx.channel
-    .submit(text, {
-      run: ctx.run,
-      cause: { kind: "compaction", ref: requestId },
-      mode: "boundary",
-      intentVersion: 0,
-      attempt: 1,
-      requestId,
-    })
-    .pipe(
-      Effect.flatMap((outcome) =>
-        outcome.ok
-          ? Effect.succeed(outcome.submission ?? null)
-          : outcome.reason === "unknown"
-            ? Effect.succeed(null)
-            : outcome.reason === "failed"
-              ? Effect.fail(new Error(outcome.detail))
-              : Effect.fail(new Unsubmitted({ message: outcome.detail })),
-      ),
-    );
+const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
+  ctx: AgentContext,
+  requestId: string,
+  text: string,
+) {
+  const outcome = yield* ctx.channel.submit(text, {
+    run: ctx.run,
+    cause: { kind: "compaction", ref: requestId },
+    mode: "boundary",
+    intentVersion: 0,
+    attempt: 1,
+    requestId,
+  });
+  if (outcome.ok) return outcome.submission ?? null;
+  if (outcome.reason === "unknown") return null;
+  if (outcome.reason === "failed")
+    return yield* new Submitting({ message: outcome.detail, cause: outcome });
+  return yield* new Unsubmitted({ message: outcome.detail, cause: outcome });
+});
 import { selfCommand } from "./env";
 import { shell } from "./mr";
 import { reason } from "./naming";
@@ -143,12 +147,12 @@ const TELEMETRY_CLAIMS = 200;
  * rather than allowed to decide whether an agent gets its next piece of work.
  */
 const EventSchema = Schema.Struct({
-  at: Schema.Number,
+  at: Schema.Finite,
   /** The harness's own session identity, so a `/new` in the pane invalidates the rest. */
   session: Schema.NullOr(Schema.String),
   kind: Schema.Literals(["session", "usage", "start", "done", "failed", "auto", "submit", "out"]),
   /** Current-context total. `null` where the harness has not measured this context. */
-  tokens: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  tokens: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   /** Collie's own request id, which is what correlates an outcome to an attempt. */
   request: Schema.optionalKey(Schema.String),
   /** On a `submit`: the delivery whose token the prompt carried. */
@@ -176,11 +180,11 @@ const EventSchema = Schema.Struct({
 interface TelemetryEvent extends Schema.Schema.Type<typeof EventSchema> {}
 const EventJson = Schema.fromJsonString(EventSchema);
 const decodeEvent = Schema.decodeUnknownOption(EventJson);
-const encodeEvent = Schema.encodeSync(EventJson);
+const encodeEvent = flow(Schema.encodeResult(EventJson), Result.getOrThrow);
 
-const LossJson = Schema.fromJsonString(Schema.Struct({ at: Schema.Number }));
+const LossJson = Schema.fromJsonString(Schema.Struct({ at: Schema.Finite }));
 const decodeLoss = Schema.decodeUnknownOption(LossJson);
-const encodeLoss = Schema.encodeSync(LossJson);
+const encodeLoss = flow(Schema.encodeResult(LossJson), Result.getOrThrow);
 
 /**
  * Whether anything went unrecorded since `since`. A correlation that reads absence —
@@ -193,7 +197,7 @@ const lostSince = Effect.fn("Compactors.lostSince")(function* (dir: string, sinc
   const file = path.join(dir, LOSSES);
   if (!(yield* fs.exists(file))) return false;
   const lines = yield* fs.readFileString(file);
-  return lines.split("\n").some((line) => {
+  return Arr.some(Str.split(lines, "\n"), (line) => {
     const decoded = decodeLoss(line);
     return decoded._tag === "Some" && decoded.value.at >= since;
   });
@@ -212,7 +216,7 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
   if (!(yield* fs.exists(file))) return [];
   const lines = yield* fs
     .readFileString(file)
-    .pipe(Effect.map((text) => text.split("\n").filter((line) => line.trim() !== "")));
+    .pipe(Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "")));
   const bound = boundSession(lines);
   // Nothing has said which session this agent is on, so nothing here describes a
   // context Collie can vouch for.
@@ -263,7 +267,7 @@ function trimmed(lines: ReadonlyArray<string>, room: number): ReadonlyArray<stri
   if (lines.length <= room) return lines;
   let excess = lines.length - room;
   const keep = protectedLines(lines);
-  const kept = lines.filter((line, at) => {
+  const kept = Arr.filter(lines, (line, at) => {
     if (excess === 0 || keep.has(at)) return true;
     excess -= 1;
     return false;
@@ -298,7 +302,7 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
       const existing = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
       // Room for the event and for an identity line in front of it.
       const older = trimmed(
-        existing.split("\n").filter((text) => text.trim() !== ""),
+        Arr.filter(Str.split(existing, "\n"), (text) => Str.trim(text) !== ""),
         KEEP_LINES - 2,
       );
       // Identity is the writer's job, once, rather than every adapter's: an event on a
@@ -311,7 +315,7 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
       const session = rebinds
         ? [encodeEvent({ at: event.at, session: event.session, kind: "session" })]
         : [];
-      yield* fs.writeFileString(file, `${[...older, ...session, line].join("\n")}\n`);
+      yield* fs.writeFileString(file, `${Arr.join([...older, ...session, line], "\n")}\n`);
     }),
     TELEMETRY_CLAIMS,
   );
@@ -336,7 +340,7 @@ const reported = (ctx: ReadyContext) =>
 /** The harness's own latest current-context total, or null where it has none. */
 const latestUsage = Effect.fn("Compactors.latestUsage")(function* (dir: string) {
   const events = yield* readEvents(dir);
-  return events.filter((event) => event.kind === "usage").at(-1)?.tokens ?? null;
+  return Arr.filter(events, (event) => event.kind === "usage").at(-1)?.tokens ?? null;
 });
 
 /**
@@ -346,9 +350,9 @@ const latestUsage = Effect.fn("Compactors.latestUsage")(function* (dir: string) 
  */
 const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, requestId: string) {
   const events = yield* readEvents(dir);
-  const mine = events.filter((event) => event.request === requestId);
-  if (mine.some((event) => event.kind === "done")) return { kind: "success" } as const;
-  const failed = mine.find((event) => event.kind === "failed");
+  const mine = Arr.filter(events, (event) => event.request === requestId);
+  if (Arr.some(mine, (event) => event.kind === "done")) return { kind: "success" } as const;
+  const failed = Option.getOrUndefined(Arr.findFirst(mine, (event) => event.kind === "failed"));
   if (failed)
     return { kind: "failure", reason: failed.message ?? "the harness reported an error" } as const;
   return null;
@@ -357,7 +361,10 @@ const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, requ
 /** `a.b.c` against `x.y.z`, numerically, missing parts as zero. */
 export function atLeast(installed: string, wanted: string): boolean {
   const parts = (text: string) =>
-    (/(\d+(?:\.\d+)*)/.exec(text)?.[1] ?? "").split(".").map((n) => Number.parseInt(n, 10) || 0);
+    Arr.map(
+      Str.split(/(\d+(?:\.\d+)*)/.exec(text)?.[1] ?? "", "."),
+      (n) => Number.parseInt(n, 10) || 0,
+    );
   const have = parts(installed);
   const need = parts(wanted);
   for (let i = 0; i < Math.max(have.length, need.length); i++) {
@@ -368,6 +375,11 @@ export function atLeast(installed: string, wanted: string): boolean {
 }
 
 const FAILED_PROBE_TTL = Duration.minutes(1);
+
+export class HarnessVersionError extends Data.TaggedError("HarnessVersionError")<{
+  readonly harness: string;
+  readonly message: string;
+}> {}
 
 /**
  * A harness's version, asked once per process: a gate runs before every launch, and the
@@ -380,8 +392,20 @@ const versions = Effect.runSync(
       shell(harness, ["--version"], process.cwd()).pipe(
         Effect.flatMap(({ code, stdout }) =>
           code === 0
-            ? Effect.succeed(stdout.trim().split("\n").at(-1)?.trim() ?? "")
-            : Effect.fail(new Error(`cannot ask ${harness} its version (exit ${code})`)),
+            ? Effect.succeed(
+                Option.getOrUndefined(
+                  Option.map(
+                    Option.fromNullishOr(Str.split(Str.trim(stdout), "\n").at(-1)),
+                    (present) => Str.trim(present),
+                  ),
+                ) ?? "",
+              )
+            : Effect.fail(
+                new HarnessVersionError({
+                  harness,
+                  message: `cannot ask ${harness} its version (exit ${code})`,
+                }),
+              ),
         ),
       ),
     {
@@ -401,10 +425,20 @@ export const installedVersion = Effect.fn("Compactors.installedVersion")(functio
   harness: string,
 ) {
   const { code, stdout } = yield* shell(harness, ["--version"], process.cwd()).pipe(
-    Effect.catch(() => Effect.succeed({ code: 1, stdout: "", stderr: "" })),
+    Effect.orElseSucceed(() => ({
+      code: 1,
+      stdout: "",
+      stderr: "",
+    })),
   );
   if (code !== 0) return null;
-  return stdout.trim().split("\n").at(-1)?.trim() || null;
+  return (
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(Str.split(Str.trim(stdout), "\n").at(-1)), (present_) =>
+        Str.trim(present_),
+      ),
+    ) || null
+  );
 });
 
 const gateVersion = Effect.fn("Compactors.gateVersion")(function* (harness: string) {
@@ -412,11 +446,10 @@ const gateVersion = Effect.fn("Compactors.gateVersion")(function* (harness: stri
   if (!wanted) return;
   const installed = yield* Cache.get(versions, harness);
   if (!atLeast(installed, wanted))
-    return yield* Effect.fail(
-      new Error(
-        `${harness} ${installed || "(no version)"} is older than the ${wanted} its compaction controls support`,
-      ),
-    );
+    return yield* new HarnessVersionError({
+      harness,
+      message: `${harness} ${installed || "(no version)"} is older than the ${wanted} its compaction controls support`,
+    });
 });
 
 /**
@@ -566,7 +599,7 @@ export default function (pi) {
 }
 
 const pi: CompactionPort = {
-  gate: () => gateVersion("pi"),
+  gate: gateVersion("pi"),
   install: (ctx) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -591,21 +624,24 @@ const pi: CompactionPort = {
  * needs to know which side a failure came from — a request that never left may release
  * the waiting work, and one that may have been accepted may not.
  */
-class Submitting extends Data.TaggedError("Submitting")<{ readonly message: string }> {}
+export class Submitting extends Data.TaggedError("Submitting")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
 /** The one call that hands the request to the harness. */
 const submitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(Effect.mapError((cause) => new Submitting({ message: reason(cause) })));
+  effect.pipe(Effect.mapError((cause) => new Submitting({ message: reason(cause), cause })));
 
 /**
  * Everything else in a `request`: connecting, binding, reading, recording. A
- * `Submitting` passes through as it is — it is already an `Error`, and keeping it says
+ * `Submitting` passes through as it is — keeping it says
  * in a log which side of the line the failure came from.
  */
 const beforeSubmitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.mapError((cause) =>
-      cause instanceof Submitting ? cause : new Unsubmitted({ message: reason(cause) }),
+      cause instanceof Submitting ? cause : new Unsubmitted({ message: reason(cause), cause }),
     ),
   );
 
@@ -635,9 +671,9 @@ const ClaudePayload = Schema.Struct({
   context_window: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
-        total_input_tokens: Schema.optionalKey(Schema.Number),
-        total_output_tokens: Schema.optionalKey(Schema.Number),
-        used_percentage: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+        total_input_tokens: Schema.optionalKey(Schema.Finite),
+        total_output_tokens: Schema.optionalKey(Schema.Finite),
+        used_percentage: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
         /**
          * Null before the first API call and again after a compaction until the next
          * one. That is the freshness signal: the totals beside it are `0` in both
@@ -645,7 +681,7 @@ const ClaudePayload = Schema.Struct({
          * context that is not empty.
          */
         current_usage: Schema.optionalKey(
-          Schema.NullOr(Schema.Struct({ input_tokens: Schema.optionalKey(Schema.Number) })),
+          Schema.NullOr(Schema.Struct({ input_tokens: Schema.optionalKey(Schema.Finite) })),
         ),
       }),
     ),
@@ -670,14 +706,17 @@ const decodeAsked = Schema.decodeUnknownOption(
 
 /** One `AskUserQuestion` call, as the hook recorded it for the agent's Run. */
 export const AskedCall = Schema.Struct({
-  at: Schema.Number,
+  at: Schema.Finite,
   session: Schema.NullOr(Schema.String),
   /** The call's `tool_use_id`, or the time where the payload had none. */
   id: Schema.String,
   questions: Schema.Array(AgentQuestion),
 });
 export type AskedCall = typeof AskedCall.Type;
-const encodeAskedCall = Schema.encodeSync(Schema.fromJsonString(AskedCall));
+const encodeAskedCall = flow(
+  Schema.encodeResult(Schema.fromJsonString(AskedCall)),
+  Result.getOrThrow,
+);
 const decodeAskedCall = Schema.decodeUnknownOption(Schema.fromJsonString(AskedCall));
 
 /** Apart from the telemetry, whose cap trims lines: a question must not be trimmed away. */
@@ -702,10 +741,10 @@ export const questionsSince = Effect.fn("Compactors.questionsSince")(function* (
   const text = yield* fs
     .readFileString(path.join(dir, QUESTIONS))
     .pipe(Effect.orElseSucceed(() => ""));
-  return text
-    .split("\n")
-    .flatMap((line) => Option.toArray(decodeAskedCall(line)))
-    .filter((call) => call.at >= since);
+  return Arr.filter(
+    Arr.flatMap(Str.split(text, "\n"), (line) => Option.toArray(decodeAskedCall(line))),
+    (call) => call.at >= since,
+  );
 });
 const decodeLimits = Schema.decodeUnknownOption(StatusLineLimits);
 
@@ -725,7 +764,7 @@ export const newestRateLimits = Effect.fn("Compactors.newestRateLimits")(functio
     const text = yield* fs
       .readFileString(path.join(root, agent, TELEMETRY))
       .pipe(Effect.orElseSucceed(() => ""));
-    for (const line of text.split("\n")) {
+    for (const line of Str.split(text, "\n")) {
       const event = Option.getOrNull(decodeEvent(line));
       if (event?.limits && (newest === null || event.at > newest.at))
         newest = { at: event.at, limits: event.limits };
@@ -786,7 +825,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     const delivery = carriedDelivery(prompt);
     yield* writeEvent(
       dir,
-      CLAUDE_INJECTED.some((tag) => prompt.startsWith(tag))
+      Arr.some(CLAUDE_INJECTED, (tag) => pipe(prompt, Str.startsWith(tag)))
         ? { session, kind: "submit", reason: "harness" }
         : delivery === null
           ? { session, kind: "submit", reason: "external" }
@@ -859,8 +898,10 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   // Once a session: a status line is redrawn on every event, and its `out` must not crowd
   // the compaction records out of the telemetry's cap.
   const now = yield* Clock.currentTimeMillis;
-  const full = limits && statusLineWindows(limits).some((window) => isFull(current(window, now)));
-  const told = (yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []))).some(
+  const full =
+    limits && Arr.some(statusLineWindows(limits), (window) => isFull(current(window, now)));
+  const told = Arr.some(
+    yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
     (one) => one.kind === "out",
   );
   if (full && !told)
@@ -930,7 +971,10 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
   requestId: string,
 ) {
   const events = yield* readEvents(dir);
-  const at = events.findIndex((event) => event.kind === "start" && event.request === requestId);
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(events, (event) => event.kind === "start" && event.request === requestId),
+    () => -1,
+  );
   if (at < 0) return null;
   for (const event of events.slice(at + 1)) {
     if (event.kind !== "auto" || event.reason !== "manual") continue;
@@ -947,18 +991,24 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
  * is said: `session 100%, resets 15:45 (in 2h 3m)`. Null where it reported none.
  */
 const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: string) {
-  const sampled = (yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []))).findLast(
-    (one) => one.limits !== undefined,
+  const sampled = Option.getOrUndefined(
+    Arr.findLast(
+      yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
+      (one) => one.limits !== undefined,
+    ),
   )?.limits;
   const now = yield* Clock.currentTimeMillis;
-  const [busiest] = sampled
-    ? statusLineWindows(sampled)
-        .map((window) => current(window, now))
-        .toSorted((a, b) => b.usedPercent - a.usedPercent)
+  const windows = sampled
+    ? Arr.map(statusLineWindows(sampled), (window) => current(window, now))
     : [];
+  const [busiest] = Arr.sortWith(
+    windows,
+    (value) => value,
+    (a, b) => Num.sign(b.usedPercent - a.usedPercent),
+  );
   if (busiest === undefined) return null;
   const reset = busiest.resetsAt === null ? "" : `, ${resetPhrase(busiest.resetsAt, now)}`;
-  return `${busiest.label.toLowerCase()} ${Math.round(busiest.usedPercent)}%${reset}`;
+  return `${Str.toLowerCase(busiest.label)} ${Math.round(busiest.usedPercent)}%${reset}`;
 });
 
 /**
@@ -975,8 +1025,11 @@ export const ranOutSince = Effect.fn("Compactors.ranOutSince")(function* (
   dir: string,
   since: number,
 ) {
-  const out = (yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []))).findLast(
-    (event) => event.kind === "out" && event.at >= since,
+  const out = Option.getOrUndefined(
+    Arr.findLast(
+      yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
+      (event) => event.kind === "out" && event.at >= since,
+    ),
   );
   return out === undefined
     ? null
@@ -992,11 +1045,14 @@ export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   const events = yield* readEvents(path.join(stateDir, CONTROL_DIR, agent)).pipe(
     Effect.orElseSucceed(() => []),
   );
-  return events.findLast((event) => event.transcript !== undefined)?.transcript ?? null;
+  return (
+    Option.getOrUndefined(Arr.findLast(events, (event) => event.transcript !== undefined))
+      ?.transcript ?? null
+  );
 });
 
 const claude: CompactionPort = {
-  gate: () => gateVersion("claude"),
+  gate: gateVersion("claude"),
   install: (ctx) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1063,7 +1119,7 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
       const handle = yield* spawner.spawn(
         ChildProcess.make(
           "sh",
-          ["-c", [...(opts.env ?? []), `exec ${opts.command} >${log} 2>&1`].join("\n")],
+          ["-c", Arr.join([...(opts.env ?? []), `exec ${opts.command} >${log} 2>&1`], "\n")],
           {
             cwd: opts.cwd,
             extendEnv: true,
@@ -1090,8 +1146,8 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
     }),
   );
   if (said) return { pid, found: said[1] ?? "" };
-  return yield* Effect.fail(
-    new Error(`${opts.what} did not come up within ${opts.startMs}ms — see ${opts.log}`),
+  return yield* new Cause.TimeoutError(
+    `${opts.what} did not come up within ${opts.startMs}ms — see ${opts.log}`,
   );
 });
 
@@ -1123,12 +1179,15 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
   const served = yield* servedEndpoint({
     cwd: ctx.cwd,
     log: path.join(ctx.dir, CODEX_LOG),
-    command: [
-      `${server} --listen ws://127.0.0.1:0`,
-      ...(yield* Effect.orDie(
-        Effect.forEach(ctx.mcp ?? [], (word) => Effect.fromResult(CommandLine.quote(word))),
-      )),
-    ].join(" "),
+    command: Arr.join(
+      [
+        `${server} --listen ws://127.0.0.1:0`,
+        ...(yield* Effect.orDie(
+          Effect.forEach(ctx.mcp ?? [], (word) => Effect.fromResult(CommandLine.quote(word))),
+        )),
+      ],
+      " ",
+    ),
     listening: CODEX_LISTENING,
     startMs: CODEX_START_MS,
     what: "codex app-server",
@@ -1140,7 +1199,9 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
 /** The endpoint this agent's controls talk to, or a failure naming what is missing. */
 const codexAt = (ctx: AgentContext) =>
   ctx.endpoint === null
-    ? Effect.fail(new Error(`${ctx.agent} has no Codex App Server endpoint recorded`))
+    ? Effect.fail(
+        new Cause.NoSuchElementError(`${ctx.agent} has no Codex App Server endpoint recorded`),
+      )
     : Effect.succeed(ctx.endpoint);
 
 /**
@@ -1159,7 +1220,7 @@ const stopCodex = (
     const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
     const signalled = [...target.signalled];
     const before = (one: SeenProcess) =>
-      signalled.some((seen) => seen.pid === one.pid && seen.started === one.started);
+      Arr.some(signalled, (seen) => seen.pid === one.pid && seen.started === one.started);
     /** One SIGTERM, never a second, even across stops. */
     const once = (one: SeenProcess) =>
       before(one)
@@ -1180,7 +1241,7 @@ const stopCodex = (
     });
     if (server === null)
       return yield* survivors(target.pid, target.noted, null, deadline, "failed", signalled, once);
-    if (!server.command.includes(target.command))
+    if (!pipe(server.command, Str.includes(target.command)))
       return refused(`pid ${target.pid} is \`${server.command}\`, not \`${target.command}\``);
     if (target.started !== null && server.started !== target.started)
       return refused(`pid ${target.pid} started at ${server.started}, not ${target.started}`);
@@ -1198,14 +1259,14 @@ const stopCodex = (
       turns,
       reason,
       signalled,
-      left: [server, ...session].map(seen),
+      left: Arr.map([server, ...session], seen),
       noted,
     });
     return yield* withCodex(target.endpoint, (client) =>
       Effect.gen(function* () {
         const threads = yield* agentThreads(client, target.cwd);
-        const running = threads.flatMap((thread) =>
-          thread.running.map((turn) => ({
+        const running = Arr.flatMap(threads, (thread) =>
+          Arr.map(thread.running, (turn) => ({
             thread: thread.id,
             turn,
             transcript: thread.transcript,
@@ -1214,7 +1275,7 @@ const stopCodex = (
         turns = running;
         session = yield* sessionOf(target.pid);
         for (const one of session)
-          if (!noted.some((seen) => seen.pid === one.pid && seen.started === one.started))
+          if (!Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started))
             noted.push(seen(one));
         yield* once(server);
         const interrupt = (one: (typeof running)[number]) =>
@@ -1238,7 +1299,7 @@ const stopCodex = (
           if (!(yield* stillRunning(server))) break;
           yield* interrupt(one);
         }
-        const busy = threads.filter((thread) => thread.running.length > 0);
+        const busy = Arr.filter(threads, (thread) => thread.running.length > 0);
         for (;;) {
           if (!(yield* stillRunning(server)))
             return yield* survivors(target.pid, noted, running, deadline, short(), signalled, once);
@@ -1249,11 +1310,16 @@ const stopCodex = (
             const now = yield* runningTurns(client, thread.id).pipe(Effect.result);
             if (now._tag === "Failure") {
               unread = reason(now.failure);
-              unended.push(...running.filter((one) => one.thread === thread.id));
+              unended.push(...Arr.filter(running, (one) => one.thread === thread.id));
               continue;
             }
             for (const turn of now.success) {
-              let one = running.find((asked) => asked.thread === thread.id && asked.turn === turn);
+              let one = Option.getOrUndefined(
+                Arr.findFirst(
+                  running,
+                  (asked) => asked.thread === thread.id && asked.turn === turn,
+                ),
+              );
               if (one === undefined) {
                 // A continuation the server started on an interrupt it read before its SIGTERM.
                 one = { thread: thread.id, turn, transcript: thread.transcript };
@@ -1269,7 +1335,10 @@ const stopCodex = (
               unread !== null
                 ? `its turns could not be read back (${unread}), and its server is still up after ${seconds}s`
                 : unended.length > 0
-                  ? `${unended.map((one) => `turn ${one.turn}`).join(", ")} still running after ${seconds}s`
+                  ? `${Arr.join(
+                      Arr.map(unended, (one) => `turn ${one.turn}`),
+                      ", ",
+                    )} still running after ${seconds}s`
                   : `its server is still up after ${seconds}s`,
             );
           }
@@ -1308,7 +1377,7 @@ const survivors = (
 ) =>
   Effect.gen(function* () {
     const proven = (one: SeenProcess) =>
-      noted.some((seen) => seen.pid === one.pid && seen.started === one.started);
+      Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started);
     const sessions = yield* readsSessions;
     const remaining = sessions ? sessionOf(root) : Effect.filter(noted, (one) => stillRunning(one));
     for (const one of yield* remaining) if (proven(one)) yield* once(one);
@@ -1328,23 +1397,24 @@ const survivors = (
         left: [],
         noted,
       } satisfies Stopped;
-    const named = left.map(
+    const named = Arr.map(
+      left,
       (one) =>
-        `pid ${one.pid}${proven(one) || signalled.some((seen) => seen.pid === one.pid && seen.started === one.started) ? "" : " (not signalled: not proven its)"}`,
+        `pid ${one.pid}${proven(one) || Arr.some(signalled, (seen) => seen.pid === one.pid && seen.started === one.started) ? "" : " (not signalled: not proven its)"}`,
     );
     return {
       state: short,
       turns,
-      reason: `its server exited, but ${named.join(", ")} of its session is still running`,
+      reason: `its server exited, but ${Arr.join(named, ", ")} of its session is still running`,
       signalled,
-      left: left.map((one) => ({ pid: one.pid, started: one.started })),
+      left: Arr.map(left, (one) => ({ pid: one.pid, started: one.started })),
       noted,
     } satisfies Stopped;
   });
 
 /** Codex's port, over the App Server `server` starts: `codex app-server`, or a test's stand-in. */
 export const codexPort = (server: string): CompactionPort => ({
-  gate: () => gateVersion("codex"),
+  gate: gateVersion("codex"),
   ready: (ctx) =>
     ctx.endpoint === null
       ? Effect.succeed(false)
@@ -1383,9 +1453,9 @@ export const codexPort = (server: string): CompactionPort => ({
         Effect.gen(function* () {
           const threadId = yield* boundThread(client, ctx.cwd);
           if (threadId === null) {
-            return yield* Effect.fail(
-              new Unsubmitted({ message: `${ctx.agent} has no Codex thread to compact` }),
-            );
+            return yield* new Unsubmitted({
+              message: `${ctx.agent} has no Codex thread to compact`,
+            });
           }
           // The compactions this thread already has, recorded before the request is
           // submitted. `thread/compact/start` carries no request id, so a compaction
@@ -1395,7 +1465,7 @@ export const codexPort = (server: string): CompactionPort => ({
             session: threadId,
             kind: "start",
             request: requestId,
-            items: before.map((item) => item.id),
+            items: Arr.map(before, (item) => item.id),
           });
           yield* submitting(startCompaction(client, threadId));
         }),
@@ -1407,7 +1477,9 @@ export const codexPort = (server: string): CompactionPort => ({
     Effect.gen(function* () {
       const url = yield* codexAt(ctx);
       const events = yield* readEvents(ctx.dir);
-      const started = events.find((event) => event.kind === "start" && event.request === requestId);
+      const started = Option.getOrUndefined(
+        Arr.findFirst(events, (event) => event.kind === "start" && event.request === requestId),
+      );
       // Nothing was recorded as submitted, so nothing here can have completed it.
       if (!started?.session) return null;
       const threadId = started.session;
@@ -1415,7 +1487,7 @@ export const codexPort = (server: string): CompactionPort => ({
       return yield* withCodex(url, (client) =>
         Effect.gen(function* () {
           const now = yield* compactionItems(client, threadId);
-          const mine = now.find((item) => !before.has(item.id));
+          const mine = Option.getOrUndefined(Arr.findFirst(now, (item) => !before.has(item.id)));
           if (!mine) return null;
           // A compaction runs as a turn of its own, so the turn's own status is the
           // protocol's terminal answer rather than an inference from idleness.
@@ -1447,7 +1519,8 @@ const OPENCODE_START_MS = 30_000;
 const openPort = Effect.fn("Compactors.openPort")(function* () {
   const listening = yield* Effect.try({
     try: () => Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data: () => {} } }),
-    catch: (cause) => new Error(`could not find a free loopback port: ${reason(cause)}`),
+    catch: (cause) =>
+      new Cause.UnknownError(cause, `could not find a free loopback port: ${reason(cause)}`),
   });
   const port = listening.port;
   yield* Effect.sync(() => listening.stop(true));
@@ -1456,7 +1529,9 @@ const openPort = Effect.fn("Compactors.openPort")(function* () {
 
 const opencodeAt = (ctx: AgentContext) =>
   ctx.endpoint === null
-    ? Effect.fail(new Error(`${ctx.agent} has no OpenCode server endpoint recorded`))
+    ? Effect.fail(
+        new Cause.NoSuchElementError(`${ctx.agent} has no OpenCode server endpoint recorded`),
+      )
     : Effect.succeed(ctx.endpoint);
 
 /**
@@ -1468,11 +1543,11 @@ const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
   ctx: LaunchContext,
   base: string,
 ) {
-  const bound = (yield* readEvents(ctx.dir))
-    .filter((event) => event.kind === "session")
-    .at(-1)?.session;
+  const bound = Arr.filter(yield* readEvents(ctx.dir), (event) => event.kind === "session").at(
+    -1,
+  )?.session;
   if (!bound) {
-    return yield* Effect.fail(new Error(`${ctx.agent} has no OpenCode session recorded`));
+    return yield* new Cause.NoSuchElementError(`${ctx.agent} has no OpenCode session recorded`);
   }
   yield* sessionIsHere(base, bound, ctx.cwd);
   return bound;
@@ -1516,7 +1591,7 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
 });
 
 const opencode: CompactionPort = {
-  gate: () => gateVersion("opencode"),
+  gate: gateVersion("opencode"),
   install: opencodeLaunch,
   // The TUI is the server, so its answering for Collie's session is the TUI being up.
   ready: (ctx) =>
@@ -1544,11 +1619,9 @@ const opencode: CompactionPort = {
       if (model === null) {
         // Nothing has run in this session, so it has no model to summarize in — and
         // no context worth compacting either.
-        return yield* Effect.fail(
-          new Unsubmitted({
-            message: `${ctx.agent}'s OpenCode session has not settled on a model yet`,
-          }),
-        );
+        return yield* new Unsubmitted({
+          message: `${ctx.agent}'s OpenCode session has not settled on a model yet`,
+        });
       }
       // Which compactions the session already had, before the request. Summarizing
       // carries no request id, so a compaction that was not there before is the only
@@ -1568,8 +1641,11 @@ const opencode: CompactionPort = {
   poll: (ctx, requestId) =>
     Effect.gen(function* () {
       const base = yield* opencodeAt(ctx);
-      const started = (yield* readEvents(ctx.dir)).find(
-        (event) => event.kind === "start" && event.request === requestId,
+      const started = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* readEvents(ctx.dir),
+          (event) => event.kind === "start" && event.request === requestId,
+        ),
       );
       if (!started?.session) return null;
       const state = compactionAfter(
@@ -1602,7 +1678,8 @@ export const COMPACTION_PORTS: CompactionPorts = {
 export const externalSubmissions = Effect.fn("Compactors.externalSubmissions")(function* (
   dir: string,
 ) {
-  return (yield* readEvents(dir)).filter(
+  return Arr.filter(
+    yield* readEvents(dir),
     (event) => event.kind === "submit" && event.reason === "external",
   ).length;
 });
@@ -1612,7 +1689,8 @@ export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(funct
   dir: string,
   delivery: string,
 ) {
-  return (yield* readEvents(dir)).some(
+  return Arr.some(
+    yield* readEvents(dir),
     (event) => event.kind === "submit" && event.delivery === delivery,
   );
 });

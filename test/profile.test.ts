@@ -1,6 +1,7 @@
 // What the operator's agent profile may say, and what it becomes at a launch: a pane's
 // environment lines and the Claude settings Collie merges into its own.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import {
@@ -13,7 +14,7 @@ import {
 import { parseSetting } from "../src/settings";
 import { runEffect } from "./support/effect";
 
-const GITLAB = ["glpat", "synthetic0000000000test"].join("-");
+const GITLAB = Arr.join(["glpat", "synthetic0000000000test"], "-");
 
 test("an empty profile is no overlay", () => {
   expect(parseProfile("")).toEqual({ profile: {} });

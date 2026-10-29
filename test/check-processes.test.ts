@@ -1,6 +1,9 @@
 // A check's processes, run by the host's adapter with real processes: what is left running,
 // by pid and start token, and what is recorded.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Clock, Deferred, Duration, Effect, Fiber, FileSystem, Option, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -15,7 +18,6 @@ import {
   hostCheckProcesses,
   KILL_CEILING,
   runningChecksDir,
-  type LeftoverEnd,
 } from "../src/check-processes";
 import {
   bindingsOf,
@@ -69,8 +71,8 @@ const startedIn = (notes: string) =>
     const pidIn = (file: string) =>
       until(
         () => fs.readFileString(`${notes}/${file}`).pipe(Effect.orElseSucceed(() => "")),
-        (text) => text.trim() !== "",
-      ).pipe(Effect.map((text) => Number(text.trim().split("\n").at(-1))));
+        (text) => Str.trim(text) !== "",
+      ).pipe(Effect.map((text) => Number(Str.split(Str.trim(text), "\n").at(-1))));
     const ones = [yield* pidIn("starts"), yield* pidIn("children")];
     return yield* Effect.forEach(ones, (pid) =>
       Effect.map(startedOf(pid), (started) => ({ pid, started: started ?? "" })),
@@ -78,7 +80,7 @@ const startedIn = (notes: string) =>
   });
 
 const noneRunning = (ones: ReadonlyArray<{ readonly pid: number; readonly started: string }>) =>
-  Effect.map(Effect.forEach(ones, stillRunning), (running) => !running.some(Boolean));
+  Effect.map(Effect.forEach(ones, stillRunning), (running) => !Arr.some(running, Boolean));
 
 const records = (state: string) =>
   FileSystem.FileSystem.pipe(
@@ -126,7 +128,7 @@ test.skipIf(process.platform !== "linux")(
         );
         const ones = yield* startedIn(notes);
 
-        expect((yield* checks.endAll).map((one) => one.name)).toEqual(["held"]);
+        expect(Arr.map(yield* checks.endAll, (one) => one.name)).toEqual(["held"]);
         yield* checks.killEnded;
         yield* until(() => noneRunning(ones), Boolean);
 
@@ -157,8 +159,8 @@ test.skipIf(process.platform !== "linux")(
         const [leader, child] = yield* Effect.forEach(["starts", "children"], (file) =>
           until(
             () => fs.readFileString(`${notes}/${file}`).pipe(Effect.orElseSucceed(() => "")),
-            (text) => text.trim() !== "",
-          ).pipe(Effect.map((text) => Number(text.trim()))),
+            (text) => Str.trim(text) !== "",
+          ).pipe(Effect.map((text) => Number(Str.trim(text)))),
         );
         yield* until(
           () => startedOf(leader!),
@@ -166,7 +168,7 @@ test.skipIf(process.platform !== "linux")(
         );
         const ones = [{ pid: child!, started: (yield* startedOf(child!)) ?? "" }];
 
-        expect((yield* checks.endAll).map((one) => one.name)).toEqual(["held"]);
+        expect(Arr.map(yield* checks.endAll, (one) => one.name)).toEqual(["held"]);
         yield* checks.killEnded;
         yield* until(() => noneRunning(ones), Boolean);
 
@@ -198,8 +200,8 @@ test.skipIf(process.platform !== "linux")(
         const bound = yield* Effect.forEach(ones, ({ pid }) =>
           bindingsOf(pid, [CHECK_INSTALLATION, CHECK_ID]),
         );
-        expect(bound.every((one) => one?.[CHECK_INSTALLATION] === installation)).toBe(true);
-        expect(new Set(bound.map((one) => one?.[CHECK_ID])).size).toBe(1);
+        expect(Arr.every(bound, (one) => one?.[CHECK_INSTALLATION] === installation)).toBe(true);
+        expect(new Set(Arr.map(bound, (one) => one?.[CHECK_ID])).size).toBe(1);
         expect(bound[0]?.[CHECK_ID]).toStartWith("run-1@");
 
         yield* fs.writeFileString(`${notes}/release`, "");
@@ -333,7 +335,7 @@ test.skipIf(process.platform !== "linux")(
         );
         yield* until(
           () => fs.readFileString(`${notes}/starts`),
-          (text) => text.trim().split("\n").length === 2,
+          (text) => Str.split(Str.trim(text), "\n").length === 2,
         );
 
         expect(yield* noneRunning(left)).toBe(true);
@@ -352,7 +354,7 @@ test.skipIf(process.platform !== "linux")(
 const withoutProc = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const hidden = (path: string) => path === "/proc" || path.startsWith("/proc/");
+  const hidden = (path: string) => path === "/proc" || pipe_(path, Str.startsWith("/proc/"));
   const noProc: FileSystem.FileSystem = {
     ...fs,
     exists: (path) => (hidden(path) ? Effect.succeed(false) : fs.exists(path)),
@@ -367,7 +369,7 @@ const withoutProc = Effect.gen(function* () {
       ? spawner.spawn(
           ChildProcess.make(
             "ps",
-            [...command.args.filter((arg) => arg !== "-E"), "e"],
+            [...Arr.filter(command.args, (arg) => arg !== "-E"), "e"],
             command.options,
           ),
         )
@@ -468,7 +470,7 @@ test.skipIf(process.platform !== "linux")(
         );
         yield* until(
           () => commandOf(quoting.pid),
-          (command) => command.startsWith("sleep"),
+          (command) => pipe_(command, Str.startsWith("sleep")),
         );
         const { noProc, macPs } = yield* withoutProc;
         const signalled: Array<number> = [];
@@ -776,7 +778,7 @@ test.skipIf(process.platform !== "linux")(
               .pipe(Effect.map((names) => (path === "/proc" ? [...unrelated, ...names] : names))),
           readFileString: (path, encoding) => {
             const read = fs.readFileString(path, encoding);
-            return slow && unrelated.some((pid) => path === `/proc/${pid}/stat`)
+            return slow && Arr.some(unrelated, (pid) => path === `/proc/${pid}/stat`)
               ? Effect.sleep("100 millis").pipe(Effect.andThen(read))
               : read;
           },
@@ -884,7 +886,7 @@ const statLine = (pid: number, started: string) => {
   fields[0] = "S";
   fields[2] = String(pid);
   fields[19] = started;
-  return `${pid} (worker) ${fields.join(" ")}`;
+  return `${pid} (worker) ${Arr.join(fields, " ")}`;
 };
 
 const markers = (id: string) => `${CHECK_INSTALLATION}=${installation}\0${CHECK_ID}=${id}\0`;
@@ -1005,7 +1007,7 @@ test("a look at a check still running when its SIGTERM's two seconds are up is w
           : Effect.void,
       );
       expect(gone).toBe(true);
-      expect(said.filter((one) => one.startsWith("SIG"))).toEqual(["SIGTERM@0"]);
+      expect(Arr.filter(said, (one) => pipe_(one, Str.startsWith("SIG")))).toEqual(["SIGTERM@0"]);
       expect(ended).toBe(2200);
     }),
   ));
@@ -1022,12 +1024,14 @@ test(
         let refused = 0;
         const noProc: FileSystem.FileSystem = {
           ...fs,
-          exists: (path) => Effect.succeed(!path.startsWith("/proc") && stored.has(path)),
+          exists: (path) =>
+            Effect.succeed(!pipe_(path, Str.startsWith("/proc")) && stored.has(path)),
           readDirectory: (path) =>
             Effect.succeed(
-              [...stored.keys()]
-                .filter((one) => one.startsWith(`${path}/`))
-                .map((one) => one.slice(path.length + 1)),
+              Arr.map(
+                Arr.filter([...stored.keys()], (one) => pipe_(one, Str.startsWith(`${path}/`))),
+                (one) => pipe_(one, Str.slice(path.length + 1)),
+              ),
             ),
           makeDirectory: () => Effect.void,
           writeFileString: (path, text) => Effect.sync(() => void stored.set(path, text)),
@@ -1081,7 +1085,7 @@ test(
 
         yield* Effect.scoped(checks.run(check, { executable: "check", argv: [], cwd: "/" }));
         expect(refused).toBeGreaterThan(0);
-        expect((yield* checks.left).map((one) => one.run)).toEqual([check.run]);
+        expect(Arr.map(yield* checks.left, (one) => one.run)).toEqual([check.run]);
       }),
     ),
   10_000,
@@ -1145,12 +1149,17 @@ test.skipIf(process.platform !== "linux")(
         const why = refused._tag === "CheckRefused" ? refused.why : "";
         expect(why).toContain("check held (pass gate) of run-1");
         expect(why).toContain(`pid ${leader.pid}`);
-        const announced = events.findIndex((one) => one.includes(`pid ${leader.pid}`));
+        const announced = Option.getOrElse(
+          Arr.findFirstIndex(events, (one) => pipe_(one, Str.includes(`pid ${leader.pid}`))),
+          () => -1,
+        );
         expect(announced).toBe(0);
         expect(events[0]).toContain("check held (pass gate) of run-1");
         expect(events[0]).toContain("host 4242");
         expect(events.indexOf("kill SIGTERM")).toBeGreaterThan(announced);
-        expect((yield* fs.readFileString(`${notes}/starts`)).trim().split("\n")).toHaveLength(1);
+        expect(Str.split(Str.trim(yield* fs.readFileString(`${notes}/starts`)), "\n")).toHaveLength(
+          1,
+        );
       }),
     ),
   30_000,

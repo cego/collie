@@ -8,6 +8,9 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { awaitingLine } from "./awaiting";
 import { redactedField, withNotice } from "./redact";
 import type { SettingValue } from "./settings";
@@ -93,7 +96,8 @@ export { savedModules } from "./discovery";
  * has never seen the module can still answer it.
  */
 export const neededInputs = (entry: Found, given: Given): Failure | null => {
-  const missing = entry.inputs.filter(
+  const missing = Arr.filter(
+    entry.inputs,
     (field) =>
       field.required &&
       given.text[field.name] === undefined &&
@@ -102,13 +106,16 @@ export const neededInputs = (entry: Found, given: Given): Failure | null => {
   if (missing.length === 0) return null;
   return err(
     "needs_input",
-    `${entry.id} needs ${missing.map((field) => `"${field.name}"`).join(", ")}.`,
+    `${entry.id} needs ${Arr.join(
+      Arr.map(missing, (field) => `"${field.name}"`),
+      ", ",
+    )}.`,
     {
       workflow: entry.id,
       // The file this is about, so a caller told to fill something in can read what it
       // is filling in for — the same path `workflow show` and the definitions tool name.
       path: entry.path,
-      inputs: missing.map((field) => ({
+      inputs: Arr.map(missing, (field) => ({
         name: field.name,
         question: `${entry.title} — ${field.name}?`,
         schema: field.schema,
@@ -130,8 +137,8 @@ export const moduleFor = (
   savedModules(env).pipe(
     Effect.map(
       (found) =>
-        found.entries.find((entry) => entry.id === id) ??
-        found.problems.find((problem) => problem.id === id) ??
+        Option.getOrUndefined(Arr.findFirst(found.entries, (entry) => entry.id === id)) ??
+        Option.getOrUndefined(Arr.findFirst(found.problems, (problem) => problem.id === id)) ??
         null,
     ),
   );
@@ -167,12 +174,15 @@ export const refusal = (cause: HostFailure): Failure => {
   switch (cause._tag) {
     case "HostRefused":
       // The host says so first where the input is why, and that is exit 2, not exit 1.
-      if (cause.reason.startsWith(`${REFUSED_INPUT}:`))
-        return err("invalid_input", cause.reason.slice(REFUSED_INPUT.length + 1).trim());
-      if (cause.reason.startsWith(`${NEEDS_INPUT}:`))
-        return err("needs_input", cause.reason.slice(NEEDS_INPUT.length + 1).trim());
-      return cause.reason.startsWith("invalid_state:")
-        ? err("invalid_state", cause.reason.slice("invalid_state:".length).trim())
+      if (pipe_(cause.reason, Str.startsWith(`${REFUSED_INPUT}:`)))
+        return err(
+          "invalid_input",
+          Str.trim(pipe_(cause.reason, Str.slice(REFUSED_INPUT.length + 1))),
+        );
+      if (pipe_(cause.reason, Str.startsWith(`${NEEDS_INPUT}:`)))
+        return err("needs_input", Str.trim(pipe_(cause.reason, Str.slice(NEEDS_INPUT.length + 1))));
+      return pipe_(cause.reason, Str.startsWith("invalid_state:"))
+        ? err("invalid_state", Str.trim(pipe_(cause.reason, Str.slice("invalid_state:".length))))
         : err("operation_failed", cause.reason);
     case "ProposalRefused":
       return err("invalid_input", cause.detail, { reason: cause.refused });
@@ -203,9 +213,9 @@ export type Door = FrontDoor | Asker;
 
 const isFrontDoor = Schema.is(FrontDoor);
 
-const declaring = (door: Door, session: string | null, stamp?: string): typeof Declaration.Type => {
+const declaring = (door: Door, session: string | null, stamp?: string): Declaration => {
   if (isFrontDoor(door)) return { frontDoor: door, session };
-  let declared: typeof Declaration.Type = { frontDoor: door.origin, session, ...voiceOf(door) };
+  let declared: Declaration = { frontDoor: door.origin, session, ...voiceOf(door) };
   if (door.from !== undefined) declared = { ...declared, from: door.from };
   if (stamp !== undefined) declared = { ...declared, stamp };
   return declared;
@@ -222,8 +232,10 @@ export const ensurePaired = Effect.fn("Lifecycle.ensurePaired")(function* (
   env: PluginEnv,
   name: string,
 ) {
-  if ((yield* peersOf(env.stateDir)).some((peer) => peer.name === name)) return;
-  const machine = (yield* herdrMachines(env)).find((one) => one.label === name);
+  if (Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name)) return;
+  const machine = Option.getOrUndefined(
+    Arr.findFirst(yield* herdrMachines(env), (one) => one.label === name),
+  );
   if (machine === undefined) return yield* notListed(name);
   if (env.pairs !== true)
     return yield* new HostRefused({
@@ -262,7 +274,9 @@ const herdrMachines = (env: PluginEnv) =>
  */
 const openAndWake = (env: PluginEnv, name: string, said: (text: string) => Effect.Effect<void>) =>
   Effect.gen(function* () {
-    const machine = (yield* herdrMachines(env)).find((one) => one.label === name);
+    const machine = Option.getOrUndefined(
+      Arr.findFirst(yield* herdrMachines(env), (one) => one.label === name),
+    );
     if (machine === undefined) return yield* notListed(name);
     const opened = yield* openConnection(env.stateDir, machine, { said });
     yield* asks({ ...env, machine: undefined }, (client) => client.wake({ machine: name }));
@@ -391,12 +405,13 @@ export const asksRun = <A>(
       const here = yield* tryOn(null);
       if (here !== null) return here;
     } else asked.push(machineName());
-    const peers = (yield* peersOf(env.stateDir)).map((peer) => peer.name);
+    const peers = Arr.map(yield* peersOf(env.stateDir), (peer) => peer.name);
     const unpaired =
       env.pairs === true
-        ? (yield* herdrMachines(env))
-            .map((machine) => machine.label)
-            .filter((label) => !peers.includes(label))
+        ? Arr.filter(
+            Arr.map(yield* herdrMachines(env), (machine) => machine.label),
+            (label) => !peers.includes(label),
+          )
         : [];
     for (const name of [...peers, ...unpaired]) {
       const there = yield* tryOn(name);
@@ -404,7 +419,7 @@ export const asksRun = <A>(
     }
     return err(
       "run_not_found",
-      `Run "${runId}" was not found on ${asked.join(" or ")}${away.length === 0 ? "" : `, and ${away.join(", ")} did not answer`}.`,
+      `Run "${runId}" was not found on ${Arr.join(asked, " or ")}${away.length === 0 ? "" : `, and ${Arr.join(away, ", ")} did not answer`}.`,
       { run: runId, machines: asked, away },
     );
   });
@@ -577,7 +592,7 @@ export const flockRuns = Effect.fn("Lifecycle.flockRuns")(function* (
   task: string | null,
 ) {
   const local = yield* runViews(env, task);
-  const runs: Array<RunView & { readonly machine: string }> = local.runs.map((view) => ({
+  const runs: Array<RunView & { readonly machine: string }> = Arr.map(local.runs, (view) => ({
     ...view,
     machine: env.machine ?? machineName(),
   }));
@@ -595,7 +610,7 @@ export const flockRuns = Effect.fn("Lifecycle.flockRuns")(function* (
       ),
     );
     if (read._tag === "Success")
-      runs.push(...read.success.map((view) => ({ ...view, machine: peer.name })));
+      runs.push(...Arr.map(read.success, (view) => ({ ...view, machine: peer.name })));
     else
       machines.push({
         machine: peer.name,
@@ -703,7 +718,9 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
   ).pipe(
     Effect.catchCause((cause) =>
       Effect.sync(() => {
-        lost = Cause.hasInterruptsOnly(cause) ? null : reason(Cause.squash(cause)).split("\n")[0]!;
+        lost = Cause.hasInterruptsOnly(cause)
+          ? null
+          : Str.split(reason(Cause.squash(cause)), "\n")[0]!;
       }),
     ),
     Effect.ensuring(
@@ -835,7 +852,7 @@ const shown =
     return {
       ok: true as const,
       data: { run: view },
-      human: describeRun(view).join("\n"),
+      human: Arr.join(describeRun(view), "\n"),
     };
   };
 
@@ -930,7 +947,7 @@ export const controlled = (
       human:
         done.closed.length === 0
           ? `Nothing of ${done.runId} was running.`
-          : `Closed ${done.closed.join(", ")}; ${done.runId} keeps the status it finished with.`,
+          : `Closed ${Arr.join(done.closed, ", ")}; ${done.runId} keeps the status it finished with.`,
     };
   }
   const what = `${done.set ? done.control : `un${done.control}`} ${done.runId}`;
@@ -1014,7 +1031,7 @@ export const grantRun = (
         ? {
             ok: true as const,
             data: { run: options.runId, approved: answered.value },
-            human: [`${options.runId}'s checks:`, renderApproved(answered.value)].join("\n"),
+            human: Arr.join([`${options.runId}'s checks:`, renderApproved(answered.value)], "\n"),
           }
         : answered,
     ),
@@ -1055,12 +1072,22 @@ export const rememberChecks = Effect.fn("lifecycle.rememberChecks")(function* (
       "invalid_state",
       `${file} already holds this repository's checks; overwrite it with replace (--replace)`,
     );
-  yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+  yield* fs.makeDirectory(
+    pipe_(
+      file,
+      Str.slice(
+        0,
+        Option.getOrElse(pipe_(file, Str.lastIndexOf("/")), () => -1),
+      ),
+    ),
+    { recursive: true },
+  );
   yield* fs.writeFileString(file, `${encodeApprovedFile(specs)}\n`);
   const result: OpResult = {
     ok: true,
     data: { file, project, remembered: specs },
-    human: [`Runs started in ${project} will begin with:`, renderApproved(specs), `(${file})`].join(
+    human: Arr.join(
+      [`Runs started in ${project} will begin with:`, renderApproved(specs), `(${file})`],
       "\n",
     ),
   };
@@ -1136,14 +1163,18 @@ export const steerRun = (
           ok: true as const,
           data,
           human: withNotice(
-            [
-              sent.note === undefined
-                ? deliveredLine(sent)
-                : `Note ${sent.note} kept for Step ${options.step}.`,
-              sent.kept,
-            ]
-              .filter((line) => line !== undefined)
-              .join(" "),
+            Arr.join(
+              Arr.filter(
+                [
+                  sent.note === undefined
+                    ? deliveredLine(sent)
+                    : `Note ${sent.note} kept for Step ${options.step}.`,
+                  sent.kept,
+                ],
+                (line) => line !== undefined,
+              ),
+              " ",
+            ),
             sent.redacted,
           ),
         };
@@ -1185,7 +1216,7 @@ const followUpRoute = (
     const offers = yield* client
       .offers({ runId: options.runId })
       .pipe(Effect.orElseSucceed((): ReadonlyArray<OfferView> => []));
-    const offered = offers.find((one) => one.kind === "follow-up");
+    const offered = Option.getOrUndefined(Arr.findFirst(offers, (one) => one.kind === "follow-up"));
     if (offered !== undefined)
       return `${options.runId} has finished and its agent is gone: carry this on with its follow-up offer "${offered.id}", giving the message as its input.`;
     return `${options.runId} has finished and its agent is gone, and it offers no follow-up: start a new Run on ${view.branch === null ? "its branch" : `its branch ${view.branch}`}.`;
@@ -1193,20 +1224,22 @@ const followUpRoute = (
 
 /** A carried-out proposal as a front door prints it: one line per action, failing on the first that did not apply. */
 export const carriedResult = ({ proposal, results }: ProposalCarried): OpResult => {
-  const message = results
-    .map((r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`)
-    .join("\n");
-  if (results.some((r) => r.state !== "applied")) {
-    const changed = results.some((r) => r.state === "applied" && r.kind !== "none");
+  const message = Arr.join(
+    Arr.map(results, (r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`),
+    "\n",
+  );
+  if (Arr.some(results, (r) => r.state !== "applied")) {
+    const changed = Arr.some(results, (r) => r.state === "applied" && r.kind !== "none");
     // needs_input is retryable without a receipt only when nothing has happened yet.
     const code =
       results.at(-1)?.kind === "ask_human" && !changed ? "needs_input" : "operation_failed";
-    return err(code, message, { proposal, results: results.map((r) => ({ ...r })) });
+    return err(code, message, { proposal, results: Arr.map(results, (r) => ({ ...r })) });
   }
   return { ok: true as const, data: { proposal, results }, human: message };
 };
 
-const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+const capitalised = (text: string) =>
+  Str.toUpperCase(Option.getOrElse(Str.charAt(text, 0), () => "")) + pipe_(text, Str.slice(1));
 
 /** A Run as a human reads one: what it is, where its module is, and what is wrong. */
 export const describeRun = (view: RunView): ReadonlyArray<string> => [
@@ -1214,7 +1247,7 @@ export const describeRun = (view: RunView): ReadonlyArray<string> => [
   view.entry,
   `proves ${view.outcome}${view.measurement ? `; ${view.measurement}` : ""}`,
   ...(view.parent === null ? [] : [`part of ${view.parent}`]),
-  ...(view.controls.length === 0 ? [] : [`under ${view.controls.join(", ")}`]),
+  ...(view.controls.length === 0 ? [] : [`under ${Arr.join(view.controls, ", ")}`]),
   ...describeWaiting(view),
   ...(view.diagnostic === null ? [] : [view.diagnostic]),
   ...(view.parked === null ? [] : [view.parked]),
@@ -1223,12 +1256,11 @@ export const describeRun = (view: RunView): ReadonlyArray<string> => [
 
 /** The questions a Run is still waiting on, with what each will take. */
 export const describeWaiting = (view: RunView): ReadonlyArray<string> =>
-  view.waiting
-    .filter((one) => one.answer === null)
-    .map(
-      (one) =>
-        `waiting on "${one.name}": ${one.prompt}${one.options.length === 0 ? "" : ` (${one.options.join(" | ")})`}`,
-    );
+  Arr.map(
+    Arr.filter(view.waiting, (one) => one.answer === null),
+    (one) =>
+      `waiting on "${one.name}": ${one.prompt}${one.options.length === 0 ? "" : ` (${Arr.join(one.options, " | ")})`}`,
+  );
 
 /** The one word a listing gives a Run, and the sentence behind it where there is one. */
 export const statusOf = (view: RunView): string => {
@@ -1259,7 +1291,7 @@ export const showOffers = (env: PluginEnv, runId: string): Effect.Effect<OpResul
       answered.ok
         ? {
             ok: true as const,
-            data: { run: runId, offers: answered.value.map((offer) => ({ ...offer })) },
+            data: { run: runId, offers: Arr.map(answered.value, (offer) => ({ ...offer })) },
             human:
               answered.value.length === 0 ? "Nothing is offered." : describeOffers(answered.value),
           }
@@ -1277,12 +1309,13 @@ export const offersOf = (
   );
 
 const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
-  offers
-    .map((offer) => {
+  Arr.join(
+    Arr.map(offers, (offer) => {
       const why = offer.unavailable === null ? "" : ` — unavailable: ${offer.unavailable}`;
       return `${offer.primary ? "▸" : " "} ${offer.id}  ${offer.title} (${offer.workflow})${why}`;
-    })
-    .join("\n");
+    }),
+    "\n",
+  );
 
 /** Carries out one of them, under the caller's own claim so a retry is one Run. */
 export const invokeOffer = (
@@ -1336,7 +1369,10 @@ export const invokeTypedOffer = (
   },
 ): Effect.Effect<OpResult, never, Client> =>
   Effect.flatMap(offersOf(env, options.runId), (listed) => {
-    const offer = "ok" in listed ? undefined : listed.find((one) => one.id === options.offer);
+    const offer =
+      "ok" in listed
+        ? undefined
+        : Option.getOrUndefined(Arr.findFirst(listed, (one) => one.id === options.offer));
     return invokeOffer(env, {
       ...options,
       input: givenOfferInput(offer?.arguments ?? null, options.input),
@@ -1517,7 +1553,7 @@ export const scheduleDoorOn = Effect.fn("Lifecycle.scheduleDoorOn")(function* (
     );
   return {
     name: machine ?? machineName(),
-    schedules: () => ask((client) => client.schedules()),
+    schedules: ask((client) => client.schedules()),
     changeSchedule: (asked: { readonly change: ScheduleChange; readonly request: string }) =>
       ask((client) => client.changeSchedule(asked)),
   } satisfies ScheduleDoor;
@@ -1663,7 +1699,7 @@ export const actAsked = (
     Effect.map((answered) =>
       answered.ok
         ? answered.value
-        : options.actions.slice(0, 1).map((action) => ({
+        : Arr.map(options.actions.slice(0, 1), (action) => ({
             kind: action.kind,
             state: "failed",
             note: answered.error.message,

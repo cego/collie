@@ -5,6 +5,8 @@
 // looking for a tool it does not have; so `startRun` asks the same two questions first,
 // and refuses with the fix rather than starting a Run it can already see failing.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { credentials, helleMe } from "./helle";
@@ -81,7 +83,7 @@ export const LINEAR_MCP_ADD = [
   "linear-server",
   "https://mcp.linear.app/mcp",
 ];
-export const LINEAR_MCP_FIX = `claude ${LINEAR_MCP_ADD.join(" ")}`;
+export const LINEAR_MCP_FIX = `claude ${Arr.join(LINEAR_MCP_ADD, " ")}`;
 
 const Servers = Schema.Record(
   Schema.String,
@@ -100,7 +102,7 @@ type McpConfig = Schema.Schema.Type<typeof McpConfig>;
 const decodeMcpConfig = Schema.decodeUnknownEffect(McpConfig);
 
 const linearAmong = (servers: Servers | undefined): string | null => {
-  for (const [name, server] of Object.entries(servers ?? {})) {
+  for (const [name, server] of Rec.toEntries(servers ?? {})) {
     if (/linear/i.test(name) || /linear/i.test(server.url ?? "")) return name;
   }
   return null;
@@ -122,7 +124,7 @@ export const probeLinearMcp = Effect.fn("Optional.probeLinearMcp")(function* (en
   for (const place of places) {
     if (!(yield* fs.exists(place.file))) continue;
     if (!seen.includes(place.file)) seen.push(place.file);
-    const text = yield* fs.readFileString(place.file).pipe(Effect.catch(() => Effect.succeed("")));
+    const text = yield* fs.readFileString(place.file).pipe(Effect.orElseSucceed(() => ""));
     const config = yield* decodeMcpConfig(text).pipe(Effect.result);
     if (Result.isFailure(config))
       return {
@@ -135,7 +137,7 @@ export const probeLinearMcp = Effect.fn("Optional.probeLinearMcp")(function* (en
   }
   return {
     state: "absent",
-    detail: `no Linear MCP server in Claude Code (looked in ${seen.length === 0 ? path.join(configDir, ".claude.json") : seen.join(", ")}); plan's "Offload to Linear" and a Linear issue as the work need one`,
+    detail: `no Linear MCP server in Claude Code (looked in ${seen.length === 0 ? path.join(configDir, ".claude.json") : Arr.join(seen, ", ")}); plan's "Offload to Linear" and a Linear issue as the work need one`,
     fix: LINEAR_MCP_FIX,
   } satisfies Probe;
 });

@@ -2,6 +2,8 @@
 // with it. Nothing here waits on its review: staging ships nothing, and its rollback takes it
 // back (ADR-draft-an-open-merge-request-is-staged-by-a-run-of-its-own).
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import {
   Host,
   HoldersSchema,
@@ -71,7 +73,7 @@ const naming =
   (clears: (url: string, jobs: string) => string[]) =>
   (url: string, jobs: ReadonlyArray<string>) => {
     const named = clears(url, quoted(jobs));
-    return named.join("; ").length <= CLEARANCE_CHARS
+    return Arr.join(named, "; ").length <= CLEARANCE_CHARS
       ? named
       : clears(url, `the ${jobs.length} stage jobs its task names`);
   };
@@ -98,19 +100,25 @@ const CLAIMS = { wait: "Wait for all", free: "Stage what is free", finish: "Fini
 type Read = Extract<Holders, { readonly _tag: "Read" }>;
 
 const named = (holders: ReadonlyMap<string, string>) =>
-  [...holders].map(([slug, holder]) => `${slug} (${holder})`).join(", ");
+  Arr.join(
+    Arr.map([...holders], ([slug, holder]) => `${slug} (${holder})`),
+    ", ",
+  );
 
 const holding = (read: Read, held: ReadonlySet<string>) =>
-  read.applications
-    .filter((one) => one.needs.every((slug) => held.has(slug)))
-    .map((one) => one.name);
+  Arr.map(
+    Arr.filter(read.applications, (one) => Arr.every(one.needs, (slug) => held.has(slug))),
+    (one) => one.name,
+  );
 
 /** Jobs without an application require every application. */
 const jobsOf = (read: Read, jobs: ReadonlyArray<string>, applications: ReadonlyArray<string>) =>
-  jobs.filter((job) => {
-    const named = read.jobs.find((one) => one.name === job)?.applications ?? [];
-    const owners = named.length > 0 ? named : read.applications.map((one) => one.name);
-    return owners.every((owner) => applications.includes(owner));
+  Arr.filter(jobs, (job) => {
+    const named =
+      Option.getOrUndefined(Arr.findFirst(read.jobs, (one) => one.name === job))?.applications ??
+      [];
+    const owners = named.length > 0 ? named : Arr.map(read.applications, (one) => one.name);
+    return Arr.every(owners, (owner) => applications.includes(owner));
   });
 
 const freeDeploys = (
@@ -120,7 +128,12 @@ const freeDeploys = (
 ) => {
   const applications = holding(
     read,
-    new Set(read.projects.map((one) => one.slug).filter((slug) => !others.has(slug))),
+    new Set(
+      Arr.filter(
+        Arr.map(read.projects, (one) => one.slug),
+        (slug) => !others.has(slug),
+      ),
+    ),
   );
   return { applications, jobs: jobsOf(read, jobs, applications) };
 };
@@ -316,7 +329,7 @@ export default defineWorkflow({
       const read =
         holders._tag === "Success" && holders.success._tag === "Read" ? holders.success : null;
       const others = new Map<string, string>(
-        (read?.projects ?? []).flatMap((one) =>
+        Arr.flatMap(read?.projects ?? [], (one) =>
           one.holder === null ? [] : [[one.slug, one.holder] as const],
         ),
       );
@@ -328,7 +341,7 @@ export default defineWorkflow({
             const offered = freeNow.jobs.length > 0;
             const answer = yield* ask({
               name: "claims-1",
-              prompt: `${mr}'s stage needs Helle projects someone else holds: ${named(others)}. ${CLAIMS.wait} queues for every project and stages everything once all are handed over${offered ? `; ${CLAIMS.free} takes only what is free and stages only ${freeNow.applications.join(", ")}, leaving every other application's stage as it is` : ""}; ${CLAIMS.finish} stops here, claiming nothing.`,
+              prompt: `${mr}'s stage needs Helle projects someone else holds: ${named(others)}. ${CLAIMS.wait} queues for every project and stages everything once all are handed over${offered ? `; ${CLAIMS.free} takes only what is free and stages only ${Arr.join(freeNow.applications, ", ")}, leaving every other application's stage as it is` : ""}; ${CLAIMS.finish} stops here, claiming nothing.`,
               options: [CLAIMS.wait, ...(offered ? [CLAIMS.free] : []), CLAIMS.finish],
             });
             if (answer === CLAIMS.finish) return null;
@@ -360,7 +373,7 @@ export default defineWorkflow({
                 kept.length === 0
                   ? Effect.void
                   : park(
-                      `Helle would not take back ${kept.join(", ")}, which this Run still holds`,
+                      `Helle would not take back ${Arr.join(kept, ", ")}, which this Run still holds`,
                     ),
               ),
             }),
@@ -423,15 +436,15 @@ export default defineWorkflow({
           return yield* fail(`${failed}; stage is back on what production carries`);
         }
         asks += 1;
-        const leftApps = deploys.applications.filter((app) => !staged().includes(app));
+        const leftApps = Arr.filter(deploys.applications, (app) => !staged().includes(app));
         const leftOff =
           leftApps.length === 0
             ? ""
-            : ` Left off stage: ${leftApps.join(", ")}. Their Helle projects are held by others: ${named(others)}.`;
+            : ` Left off stage: ${Arr.join(leftApps, ", ")}. Their Helle projects are held by others: ${named(others)}.`;
         const holds =
           held.size === 0
             ? "This Run holds no Helle claim."
-            : `This Run holds the Helle claims of ${[...held].join(", ")}.`;
+            : `This Run holds the Helle claims of ${Arr.join([...held], ", ")}.`;
         const answer = yield* testing(
           Effect.gen(function* () {
             const answer = yield* ask({

@@ -1,6 +1,8 @@
 // A Task's record: its tabs, the one shown, each tab's place and the Log's, where a jump lands,
 // its keys, and what its Summary says.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { RunDetail } from "../../../src/board-model";
 import type { Target } from "./board-clicks";
 
@@ -41,12 +43,12 @@ export const recordTabs = (facts: TabFacts): Array<Tab> => {
     [loaded && facts.mr !== null, { label: facts.mr ?? "", value: "mr" }],
     [true, { label: "Facts", value: "facts" }],
   ];
-  return present.flatMap(([shown, tab]) => (shown ? [tab] : []));
+  return Arr.flatMap(present, ([shown, tab]) => (shown ? [tab] : []));
 };
 
 /** The chosen tab while it is present, else the first. */
 export const tabShown = (tabs: ReadonlyArray<Tab>, chosen: string | undefined): string =>
-  (tabs.find(({ value }) => value === chosen) ?? tabs[0]!).value;
+  (Option.getOrUndefined(Arr.findFirst(tabs, ({ value }) => value === chosen)) ?? tabs[0]!).value;
 
 /** Each tab's scroll position, by the tab's value, while the record is open. */
 export type ScrollMemory = ReadonlyMap<string, number>;
@@ -117,8 +119,11 @@ export const landingOf = (
 
 /** The tab one step from the one shown, skipping Terminal, whose pane keeps the keys. */
 export const tabBeside = (tabs: ReadonlyArray<Tab>, shown: string, step: 1 | -1): string | null => {
-  const stops = tabs.filter(({ value }) => value !== UNSCROLLED || value === shown);
-  const at = stops.findIndex(({ value }) => value === shown);
+  const stops = Arr.filter(tabs, ({ value }) => value !== UNSCROLLED || value === shown);
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(stops, ({ value }) => value === shown),
+    () => -1,
+  );
   return at === -1 ? null : (stops[at + step]?.value ?? null);
 };
 
@@ -181,7 +186,7 @@ export type SummarySection =
 
 const saysSomething = ({ kind, gaps, obstacle, next, delivered, measurement }: Outcome) =>
   gaps.length > 0 ||
-  [kind, obstacle, next, delivered, measurement ?? null].some((said) => said !== null);
+  Arr.some([kind, obstacle, next, delivered, measurement ?? null], (said) => said !== null);
 
 /** In order, each left out when it has nothing to say; the status always says something. */
 export const summaryOf = (detail: SummaryFacts): ReadonlyArray<SummarySection> => {

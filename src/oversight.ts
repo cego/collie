@@ -3,6 +3,10 @@
 // is already recorded — the tree, the journal, the Intent and its drift — so nothing a
 // card or a report says is a claim nobody can check.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
 import { Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
 import { appendLogLine } from "./run-log";
@@ -116,12 +120,12 @@ type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildPro
 /** Where `rev` left the default branch: their merge-base, or `rev` itself. */
 export const baseOf = Effect.fn("Oversight.baseOf")(function* (cwd: string, rev = "HEAD") {
   const head = yield* shell("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], cwd);
-  const upstream = head.code === 0 ? head.stdout.trim() : "origin/main";
+  const upstream = head.code === 0 ? Str.trim(head.stdout) : "origin/main";
   const merged = yield* shell("git", ["merge-base", upstream, rev], cwd);
-  return merged.code === 0 && merged.stdout.trim() !== "" ? merged.stdout.trim() : rev;
+  return merged.code === 0 && Str.trim(merged.stdout) !== "" ? Str.trim(merged.stdout) : rev;
 });
 
-const lines = (text: string) => text.split("\n").filter((line) => line.trim() !== "");
+const lines = (text: string) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "");
 
 /** Whether the Herd still owes this Run a cross-run check, has made one, or has none to make. */
 const crossRunOf = Effect.fn("Oversight.crossRunOf")(function* (at: Watched) {
@@ -189,7 +193,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
   const missing: string[] = [];
   for (const constraint of intent?.constraints ?? []) {
     const rule = constraint.rule;
-    if (rule?.kind === "command_exit" && !verifications.some((one) => one.name === rule.name))
+    if (rule?.kind === "command_exit" && !Arr.some(verifications, (one) => one.name === rule.name))
       missing.push(`no verification named ${rule.name}`);
   }
   const judged = yield* judgedOf(at);
@@ -201,35 +205,44 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     kind: what.kind,
     step: what.step,
     iteration: 0,
-    at: yield* nowIso(),
+    at: yield* nowIso,
     intentVersion: intent?.version ?? 0,
     revision: tree,
     changes: { files: lines(files.stdout), commits: lines(commits.stdout) },
     requested: {
       goal: intent?.goal ?? null,
-      constraints: (intent?.constraints ?? []).map((constraint) => constraint.text),
+      constraints: Arr.map(intent?.constraints ?? [], (constraint) => constraint.text),
     },
     verifications,
-    claims: what.claims.map((text) => ({ text, ref: `${at.runId}:${what.step}` })),
+    claims: Arr.map(what.claims, (text) => ({ text, ref: `${at.runId}:${what.step}` })),
     missing,
     inspect: inspectFor({ worktree: at.worktree, base, mr: at.mr }),
     links: at.mr === null ? {} : { mr: at.mr },
-    drift: open.map((report) => report.id),
-    deliveries: (yield* deliveriesOf(at.stateDir, at.runId).pipe(
-      Effect.orElseSucceed(() => []),
-    )).map((entry) => entry.delivery.id),
+    drift: Arr.map(open, (report) => report.id),
+    deliveries: Arr.map(
+      yield* deliveriesOf(at.stateDir, at.runId).pipe(Effect.orElseSucceed(() => [])),
+      (entry) => entry.delivery.id,
+    ),
     aligned: alignment(intent, drift, judged).aligned,
     crossRun: yield* crossRunOf(at),
     significance: {
       readiness: "claimed",
       mrTouched: what.kind === "mr",
       pendingChoice: at.asking,
-      driftUnresolved: open.some((report) => report.resolution === "escalated"),
+      driftUnresolved: Arr.some(open, (report) => report.resolution === "escalated"),
       pendingProposal: (yield* pendingProposals(at)).length > 0,
-      correctionUnacknowledged: open.some((report) => report.resolution === "correction_submitted"),
-      blockingDrift: open.some((report) => report.severity === "block"),
-      correctionSent: open.some((report) => report.correction !== undefined),
-      intentChanged: intent?.history.some((entry) => entry.by !== PLAN_AUTHOR) ?? false,
+      correctionUnacknowledged: Arr.some(
+        open,
+        (report) => report.resolution === "correction_submitted",
+      ),
+      blockingDrift: Arr.some(open, (report) => report.severity === "block"),
+      correctionSent: Arr.some(open, (report) => report.correction !== undefined),
+      intentChanged:
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(intent), (present) =>
+            Arr.some(present.history, (entry) => entry.by !== PLAN_AUTHOR),
+          ),
+        ) ?? false,
       ended: null,
     },
     narrative: null,
@@ -268,10 +281,13 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
   const fs = yield* FileSystem.FileSystem;
   const changed = (yield* merging(at.cwd))
     ? yield* gitOutput(["diff", "--name-only", "MERGE_HEAD"], at.cwd)
-    : [
-        yield* gitOutput(["diff", "--name-only", `${yield* baseOf(at.cwd)}..HEAD`], at.cwd),
-        yield* gitOutput(["diff", "--name-only", "HEAD"], at.cwd),
-      ].join("\n");
+    : Arr.join(
+        [
+          yield* gitOutput(["diff", "--name-only", `${yield* baseOf(at.cwd)}..HEAD`], at.cwd),
+          yield* gitOutput(["diff", "--name-only", "HEAD"], at.cwd),
+        ],
+        "\n",
+      );
   // Untracked too: a file an agent created is exactly what a `protected_paths` rule is
   // for, and it is in no diff until somebody commits it.
   const untracked = yield* gitOutput(["ls-files", "--others", "--exclude-standard"], at.cwd);
@@ -279,11 +295,11 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
   const outputs: Record<string, Record<string, string>> = {};
   const names = yield* fs.readDirectory(at.agentsDir).pipe(Effect.orElseSucceed(() => []));
   for (const name of names) {
-    if (!name.endsWith(".json")) continue;
+    if (!pipe_(name, Str.endsWith(".json"))) continue;
     const text = yield* fs
       .readFileString(`${at.agentsDir}/${name}`)
       .pipe(Effect.orElseSucceed(() => ""));
-    if (text !== "") outputs[name.slice(0, -".json".length)] = flattenOutput(text);
+    if (text !== "") outputs[pipe_(name, Str.slice(0, -".json".length))] = flattenOutput(text);
   }
   const verifications: Record<string, { exit: number; ref: string }> = {};
   const verified = yield* readVerifications(at.evidenceDir).pipe(Effect.orElseSucceed(() => []));
@@ -292,7 +308,7 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
   const mr = parseMrUrl(at.mr ?? "");
   return {
     changedFiles: [...new Set(lines(`${changed}\n${untracked}`))],
-    branch: branch.code === 0 ? branch.stdout.trim() : null,
+    branch: branch.code === 0 ? Str.trim(branch.stdout) : null,
     mrTarget: mr?.project == null ? null : { project: mrPath(mr), iid: mr.iid },
     outputs,
     verifications,
@@ -313,7 +329,7 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
     );
     return yield* said(at, skipped);
   }
-  const found = checkRules(intent, facts.success, yield* nowIso());
+  const found = checkRules(intent, facts.success, yield* nowIso);
   const before = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
   for (const report of newReports(found, before)) {
     yield* appendDrift(at.runDir, report).pipe(Effect.ignore({ log: "Unhandled" }));
@@ -323,8 +339,8 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
   // only where the check found fewer things: an unchanged tree finds the same ones, and
   // calling that a fix would clear a report nobody acted on.
   for (const report of openReports(before)) {
-    if (found.some((still) => still.constraint === report.constraint)) continue;
-    yield* appendDrift(at.runDir, { ...report, at: yield* nowIso(), resolution: "verified" }).pipe(
+    if (Arr.some(found, (still) => still.constraint === report.constraint)) continue;
+    yield* appendDrift(at.runDir, { ...report, at: yield* nowIso, resolution: "verified" }).pipe(
       Effect.ignore({ log: "Unhandled" }),
     );
     yield* said(at, `drift ${report.constraint} cleared at ${where}`);
@@ -343,14 +359,14 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   judging: "boundary" | "finish",
   deps: JudgementDeps | null,
 ) {
-  if (!intent.constraints.some((constraint) => constraint.kind === "semantic")) return;
+  if (!Arr.some(intent.constraints, (constraint) => constraint.kind === "semantic")) return;
   if (deps === null) {
     yield* recordSkipped(at.runDir, at.runId, "there is no Herd to charge a judgement to").pipe(
       Effect.ignore({ log: "Unhandled" }),
     );
     return;
   }
-  const judgedAt = yield* nowIso();
+  const judgedAt = yield* nowIso;
   const outcome = yield* judge(deps, intent, {
     runDir: at.runDir,
     worktree: at.cwd,
@@ -372,10 +388,10 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   yield* fs
     .writeFileString(
       judgedPath(at.runDir),
-      Schema.encodeSync(JudgedJson)({
+      yield* Schema.encodeEffect(JudgedJson)({
         ...outcome.judged,
         ...(answeredAt !== undefined && { at: answeredAt }),
-      }),
+      }).pipe(Effect.orDie),
     )
     .pipe(Effect.ignore({ log: "Unhandled" }));
   const before = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
@@ -434,7 +450,7 @@ const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   yield* fs.writeFileString(file, String(seen)).pipe(Effect.ignore({ log: "Unhandled" }));
   yield* appendLine(ledger, {
     kind: "manual_override",
-    at: yield* nowIso(),
+    at: yield* nowIso,
     incarnation: to.terminalId,
     by: "hook:UserPromptSubmit",
   }).pipe(Effect.ignore({ log: "Unhandled" }));
@@ -467,15 +483,18 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
     held: at.held,
     sent: sentSoFar,
     inFlight: new Set(
-      deliveries
-        .filter((one) => one.cause.kind === "correction" && !SETTLED.has(one.state))
-        .map((one) => one.cause.ref),
+      Arr.map(
+        Arr.filter(deliveries, (one) => one.cause.kind === "correction" && !SETTLED.has(one.state)),
+        (one) => one.cause.ref,
+      ),
     ),
     nowProven: capabilities?.now.status === "proven",
   });
   const sent: string[] = [];
   for (const { report, mode } of decided) {
-    const constraint = intent.constraints.find((one) => one.id === report.constraint);
+    const constraint = Option.getOrUndefined(
+      Arr.findFirst(intent.constraints, (one) => one.id === report.constraint),
+    );
     if (constraint === undefined) continue;
     const requestId = `${at.runId}-correction-${report.constraint}-${intent.version}`;
     const went = yield* to.send({
@@ -489,7 +508,7 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
     if (!went) continue;
     yield* appendDrift(at.runDir, {
       ...report,
-      at: yield* nowIso(),
+      at: yield* nowIso,
       resolution: "correction_submitted",
       correction: requestId,
     }).pipe(Effect.ignore({ log: "Unhandled" }));
@@ -502,8 +521,8 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
     if (report.resolution === "escalated") continue;
     if ((sentSoFar[report.constraint] ?? 0) < intent.authority.max_corrections_per_constraint)
       continue;
-    if (decided.some((one) => one.report.constraint === report.constraint)) continue;
-    yield* appendDrift(at.runDir, { ...report, at: yield* nowIso(), resolution: "escalated" }).pipe(
+    if (Arr.some(decided, (one) => one.report.constraint === report.constraint)) continue;
+    yield* appendDrift(at.runDir, { ...report, at: yield* nowIso, resolution: "escalated" }).pipe(
       Effect.ignore({ log: "Unhandled" }),
     );
     yield* said(at, `drift ${report.constraint} escalated: the correction bound is spent`);
@@ -530,7 +549,7 @@ const followRunPlan = Effect.fn("Oversight.followRunPlan")(
       Effect.gen(function* () {
         const intent = yield* readIntent(at.runDir);
         if (intent === null) return null;
-        const next = followPlan(intent, found, yield* nowIso());
+        const next = followPlan(intent, found, yield* nowIso);
         if (next === intent) return null;
         yield* writeIntentHeld(at.runDir, next);
         return next;
@@ -563,7 +582,7 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   if (deferred)
     yield* said(at, `drift not judged at ${where}: an integration's conflicts are open`);
   else if (judging !== "none") yield* judgeDrift(at, intent, where, judging, deps);
-  const rules = intent.constraints.some((constraint) => constraint.kind === "rule");
+  const rules = Arr.some(intent.constraints, (constraint) => constraint.kind === "rule");
   if (rules) yield* checkRuleDrift(at, intent, where);
   // With no rule to check there may still be something to correct, from the judgement.
   if (to === null || !(rules || judging !== "none")) return NOTHING_CORRECTED;
@@ -607,7 +626,7 @@ const committedWork = Effect.fn("Oversight.committedWork")(function* (
   if (ran.code !== 0)
     return {
       kind: "unread",
-      why: (ran.stderr ?? "").trim().split("\n")[0] || `git diff exited ${ran.code}`,
+      why: Str.split(Str.trim(ran.stderr ?? ""), "\n")[0] || `git diff exited ${ran.code}`,
     };
   return { kind: "shown", blocks: splitDiff(ran.stdout) };
 });
@@ -617,14 +636,21 @@ export const mergeRequestFile = (runDir: string) => `${runDir}/merge-request`;
 
 const mrKey = (url: string) => {
   const ref = parseMrUrl(url);
-  return ref?.project == null ? null : `${ref.project.toLowerCase()}!${ref.iid}`;
+  return ref?.project == null ? null : `${Str.toLowerCase(ref.project)}!${ref.iid}`;
 };
 
 const namedIn = (goal: string | null) =>
-  (goal?.match(/https?:\/\/\S+/g) ?? []).flatMap((url) => {
-    const key = mrKey(url.replace(/[.,;:!?)\]'"]+$/, ""));
-    return key === null ? [] : [key];
-  });
+  Arr.flatMap(
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(goal), (present_) =>
+        Option.getOrNull(pipe_(present_, Str.match(/https?:\/\/\S+/g))),
+      ),
+    ) ?? [],
+    (url) => {
+      const key = mrKey(pipe_(url, Str.replace(/[.,;:!?)\]'"]+$/, "")));
+      return key === null ? [] : [key];
+    },
+  );
 
 /**
  * A Run and every Run the cross-run question relates it to: its children, its parent, that
@@ -645,7 +671,7 @@ export const familyOf = Effect.fn("Oversight.familyOf")(function* (
   const fs = yield* FileSystem.FileSystem;
   const recordedBy = (runId: string) =>
     fs.readFileString(mergeRequestFile(dirOf(runId))).pipe(
-      Effect.map((url) => mrKey(url.trim())),
+      Effect.map((url) => mrKey(Str.trim(url))),
       Effect.orElseSucceed(() => null),
     );
   const namedBy = (runId: string) =>
@@ -699,19 +725,20 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
       cwd,
       intentVersion: intent?.version ?? 0,
       goal: intent?.goal ?? null,
-      constraints: (intent?.constraints ?? []).map(
+      constraints: Arr.map(
+        intent?.constraints ?? [],
         (one) => `${one.id} (${one.kind}/${one.severity}): ${one.text}`,
       ),
-      constraintIds: (intent?.constraints ?? []).map((one) => one.id),
+      constraintIds: Arr.map(intent?.constraints ?? [], (one) => one.id),
       diff,
       outputs: outputs.outputs,
       replies: yield* readReplies(dir).pipe(Effect.orElseSucceed(() => [])),
       truncated:
         outputs.truncated ||
         (read.kind === "shown" &&
-          (read.blocks.length > MAX_FILES || read.blocks.some((block) => block.truncated))),
-      finished: cards.some((one) => one.kind === "final"),
-      line: `${id} v${intent?.version ?? 0} ${card === undefined ? "no card" : `${card.id}@${card.revision.head_sha.slice(0, 8)}`} drift ${open.length}`,
+          (read.blocks.length > MAX_FILES || Arr.some(read.blocks, (block) => block.truncated))),
+      finished: Arr.some(cards, (one) => one.kind === "final"),
+      line: `${id} v${intent?.version ?? 0} ${card === undefined ? "no card" : `${card.id}@${pipe_(card.revision.head_sha, Str.slice(0, 8))}`} drift ${open.length}`,
     });
   }
   return targets;
@@ -719,8 +746,8 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
 
 /** The work a target's section of the pack shows, which is all a report may cite. */
 const shownOf = (target: CrossRunTarget) => ({
-  files: target.diff.kind === "shown" ? target.diff.blocks.map((block) => block.path) : [],
-  outputs: target.outputs.map((output) => output.operation),
+  files: target.diff.kind === "shown" ? Arr.map(target.diff.blocks, (block) => block.path) : [],
+  outputs: Arr.map(target.outputs, (output) => output.operation),
 });
 
 const unshown = (diff: CrossRunDiff) =>
@@ -746,9 +773,10 @@ const workLines = (target: CrossRunTarget) => {
         ? [`diff: could not be read: ${diff.why}`]
         : diff.blocks.length === 0
           ? ["diff: no committed change yet"]
-          : diff.blocks.map((block) => `--- ${block.path}\n${block.diff}`)),
-    ...target.outputs.map((output) => `--- output ${output.operation}\n${output.text}`),
-    ...target.replies.map(
+          : Arr.map(diff.blocks, (block) => `--- ${block.path}\n${block.diff}`)),
+    ...Arr.map(target.outputs, (output) => `--- output ${output.operation}\n${output.text}`),
+    ...Arr.map(
+      target.replies,
       (reply) =>
         `--- reply to ${reply.comment}${reply.kind === undefined ? "" : ` (${reply.kind})`}\n${reply.body}`,
     ),
@@ -758,20 +786,23 @@ const workLines = (target: CrossRunTarget) => {
 
 /** The cross-run question: what each related Run is for, where it has got to, and its work. */
 const crossRunPack = (targets: ReadonlyArray<CrossRunTarget>) =>
-  [
-    "These Runs are related — a parent and its children, siblings of one parent, or Runs about one merge request.",
-    "Report only where one Run's work breaks what another Run was told to respect.",
-    "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work, or, where it has none yet, the reply as a record whose path is the comment it replied to.",
-    ...PLAN_NARROWS_GOAL,
-    "",
-    ...targets.flatMap((target) => [
-      `run: ${target.id}`,
-      `  vector: ${target.line}`,
-      `  goal: ${target.goal ?? "(none stated)"}`,
-      ...target.constraints.map((constraint) => `  constraint: ${constraint}`),
-      ...workLines(target),
-    ]),
-  ].join("\n");
+  Arr.join(
+    [
+      "These Runs are related — a parent and its children, siblings of one parent, or Runs about one merge request.",
+      "Report only where one Run's work breaks what another Run was told to respect.",
+      "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work, or, where it has none yet, the reply as a record whose path is the comment it replied to.",
+      ...PLAN_NARROWS_GOAL,
+      "",
+      ...Arr.flatMap(targets, (target) => [
+        `run: ${target.id}`,
+        `  vector: ${target.line}`,
+        `  goal: ${target.goal ?? "(none stated)"}`,
+        ...Arr.map(target.constraints, (constraint) => `  constraint: ${constraint}`),
+        ...workLines(target),
+      ]),
+    ],
+    "\n",
+  );
 
 /**
  * The Judgement an election exists to make: one call over the vector, and each report
@@ -789,7 +820,7 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   if (deps === null) return "no Herd to charge a cross-run judgement to";
   const asked = yield* askJudgement(deps, at.runId, crossRunPack(targets));
   if (asked.refused !== null) return asked.refused;
-  const byId = new Map(targets.map((target) => [target.id, target]));
+  const byId = new Map(Arr.map(targets, (target) => [target.id, target]));
   let filed = 0;
   for (const found of asked.reports) {
     // Only a Run this question was about, one of its own constraints, and its work or another
@@ -799,14 +830,14 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
     if (target === undefined || !target.constraintIds.includes(found.constraint)) continue;
     const work = citedIn(shownOf(target), target.cwd);
     const othersReplied = new Set(
-      targets.flatMap((one) =>
-        one.id === target.id ? [] : one.replies.map((reply) => reply.comment),
+      Arr.flatMap(targets, (one) =>
+        one.id === target.id ? [] : Arr.map(one.replies, (reply) => reply.comment),
       ),
     );
     const cited = (ref: Ref) =>
       work(ref) ??
       (ref.kind === "record" && ref.path !== undefined && othersReplied.has(ref.path) ? ref : null);
-    if (!found.evidence.some((ref) => cited(ref) !== null)) continue;
+    if (!Arr.some(found.evidence, (ref) => cited(ref) !== null)) continue;
     const report = judgedReport(
       found,
       { run: target.id, version: target.intentVersion },
@@ -824,21 +855,21 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
     }
     filed += 1;
   }
-  const notShown = targets.flatMap((target) => {
+  const notShown = Arr.flatMap(targets, (target) => {
     const why = unshown(target.diff);
     return why === null ? [] : [`${target.id}: ${why}`];
   });
   yield* said(
     at,
     `cross-run judged at ${snapshotAt}: ${filed} report(s) filed${
-      notShown.length === 0 ? "" : `; work not shown for ${notShown.join("; ")}`
+      notShown.length === 0 ? "" : `; work not shown for ${Arr.join(notShown, "; ")}`
     }`,
   );
   yield* appendElection(yield* electionsPath(at.stateDir, key), {
     kind: "evaluated",
     at: snapshotAt,
     by: at.runId,
-    runs: targets.map((target) => target.id),
+    runs: Arr.map(targets, (target) => target.id),
   }).pipe(Effect.ignore({ log: "Unhandled" }));
   return null;
 });
@@ -865,7 +896,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
   const file = yield* electionsPath(at.stateDir, key);
   const standing = yield* readElections(file).pipe(Effect.orElseSucceed(() => []));
   if (!shouldStand(standing, at.family.length > 1)) return;
-  const now = yield* nowIso();
+  const now = yield* nowIso;
   if (!alreadyStood(standing, at.runId))
     yield* appendElection(file, { kind: "candidate", at: now, by: where, run: at.runId }).pipe(
       Effect.ignore({ log: "Unhandled" }),
@@ -880,7 +911,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
       yield* appendElection(file, { kind: "pending", since: now, runs: [...at.family] }).pipe(
         Effect.ignore({ log: "Unhandled" }),
       );
-      yield* said(at, `cross-run evaluation pending for ${at.family.join(", ")}: ${why}`);
+      yield* said(at, `cross-run evaluation pending for ${Arr.join(at.family, ", ")}: ${why}`);
     });
   yield* withLock(
     `${file}.evaluator.lock`,
@@ -892,7 +923,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
       for (let passes = 0; ; passes += 1) {
         const targets = yield* versionVector(at, [...at.family, ...owed]);
         if (
-          targets.every((target) => {
+          Arr.every(targets, (target) => {
             const shown = shownOf(target);
             return (
               shown.files.length === 0 && shown.outputs.length === 0 && target.replies.length === 0
@@ -921,7 +952,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
         )
           return;
         if (passes >= EXTRA_PASSES) return yield* owe("the Herd kept moving through the passes");
-        snapshotAt = yield* nowIso();
+        snapshotAt = yield* nowIso;
       }
     }),
   ).pipe(Effect.ignore({ log: "Unhandled" }));
@@ -935,18 +966,20 @@ export const grantedToRun = Effect.fn("Oversight.grantedToRun")(function* (at: W
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return [];
   const wanted = new Set(
-    intent.constraints.flatMap((constraint) =>
+    Arr.flatMap(intent.constraints, (constraint) =>
       constraint.rule?.kind === "command_exit" ? [constraint.rule.name] : [],
     ),
   );
   const already = new Set(
-    (yield* readVerifications(at.evidenceDir).pipe(Effect.orElseSucceed(() => []))).map(
+    Arr.map(
+      yield* readVerifications(at.evidenceDir).pipe(Effect.orElseSucceed(() => [])),
       (one) => one.name,
     ),
   );
-  return owedLocally(intent.authority.run_verification)
-    .map((spec) => spec.name)
-    .filter((name) => wanted.has(name) && !already.has(name));
+  return Arr.filter(
+    Arr.map(owedLocally(intent.authority.run_verification), (spec) => spec.name),
+    (name) => wanted.has(name) && !already.has(name),
+  );
 });
 
 /**
@@ -961,19 +994,24 @@ export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (a
   const drift = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
   const verdict = alignment(intent, drift, yield* judgedOf(at));
   yield* said(at, `aligned: ${verdict.aligned} — ${verdict.why}`);
-  const blocking = openReports(drift).filter((report) => report.severity === "block");
+  const blocking = Arr.filter(openReports(drift), (report) => report.severity === "block");
   if (blocking.length === 0) return null;
   const key = at.herd;
   if (key === null) {
     yield* said(at, "no Herd to record a follow-up proposal in; drift is on the Run's journal");
     return null;
   }
-  const text = blocking
-    .map(
+  const text = Arr.join(
+    Arr.map(
+      blocking,
       (report) =>
-        `${report.constraint}: ${report.evidence.map((ref) => ref.path ?? ref.excerpt ?? ref.kind).join(", ")}`,
-    )
-    .join("\n");
+        `${report.constraint}: ${Arr.join(
+          Arr.map(report.evidence, (ref) => ref.path ?? ref.excerpt ?? ref.kind),
+          ", ",
+        )}`,
+    ),
+    "\n",
+  );
   return yield* recordProposal(yield* proposalsPath(at.stateDir, key), {
     interpretation: `${at.runId} finished with ${blocking.length} blocking constraint(s) still open`,
     targets: [{ run: at.runId }],
@@ -1003,7 +1041,7 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
 ): Effect.fn.Return<ReadonlyArray<Card>, never, Services> {
   const fs = yield* FileSystem.FileSystem;
   const found = yield* readCheckpoints(at.runDir).pipe(Effect.orElseSucceed(() => []));
-  const done = found.filter((one) => one.checkpoint.status === "done");
+  const done = Arr.filter(found, (one) => one.checkpoint.status === "done");
   if (done.length === 0) return [];
   yield* fs.makeDirectory(`${at.runDir}/steering`, { recursive: true }).pipe(Effect.ignore);
   const carded = new Set(

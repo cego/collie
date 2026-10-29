@@ -9,8 +9,20 @@
 // Driven through the host, because the schema that settles a value is the author's and
 // lives where their module was loaded.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
+import {
+  Config,
+  ConfigProvider,
+  Effect,
+  FileSystem,
+  Option,
+  Schema,
+  Scope,
+  flow,
+  Result,
+} from "effect";
 import type { PlatformServices } from "../src/platform";
 import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
@@ -31,7 +43,7 @@ const asEnvelope = Schema.decodeUnknownEffect(Envelope);
 
 /** `--input k=v` for each, which is the only shape a command line has for a value. */
 const asInputs = (given: Readonly<Record<string, string>>) =>
-  Object.entries(given).flatMap(([name, value]) => ["--input", `${name}=${value}`]);
+  Arr.flatMap(Rec.toEntries(given), ([name, value]) => ["--input", `${name}=${value}`]);
 
 /** The command itself, run as an operator runs it: another process, one JSON envelope. */
 const collie = Effect.fn("TypedTest.collie")(function* (world: World, args: ReadonlyArray<string>) {
@@ -64,7 +76,10 @@ const collie = Effect.fn("TypedTest.collie")(function* (world: World, args: Read
 
 const MODULE = ["typed.workflow.ts", "targeted.workflow.ts"] as const;
 
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
 
 interface World {
   readonly install: string;
@@ -387,23 +402,34 @@ test(
       Effect.gen(function* () {
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const found = yield* client.discover({ project: world.project }).pipe(Effect.orDie);
-        const typed = found.entries.find((entry) => entry.id === "typed");
+        const typed = Option.getOrUndefined(
+          Arr.findFirst(found.entries, (entry) => entry.id === "typed"),
+        );
 
-        expect(typed?.inputs.map((field) => field.name).sort()).toEqual([
-          "count",
-          "draft",
-          "labels",
-          "mode",
-          "note",
-          "ref",
-          "spec",
-          "ticket",
-        ]);
-        const mode = typed?.inputs.find((field) => field.name === "mode");
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(typed), (present) =>
+              Arr.map(present.inputs, (field) => field.name).sort(),
+            ),
+          ),
+        ).toEqual(["count", "draft", "labels", "mode", "note", "ref", "spec", "ticket"]);
+        const mode = Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(typed), (present_) =>
+            Option.getOrUndefined(Arr.findFirst(present_.inputs, (field) => field.name === "mode")),
+          ),
+        );
         // A closed set draws as one, which is what lets a picker offer a menu for it.
         expect(mode?.schema).toMatchObject({ enum: ["fast", "thorough"] });
         expect(mode?.required).toBe(true);
-        expect(typed?.inputs.find((field) => field.name === "spec")).toMatchObject({
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(typed), (present__) =>
+              Option.getOrUndefined(
+                Arr.findFirst(present__.inputs, (field) => field.name === "spec"),
+              ),
+            ),
+          ),
+        ).toMatchObject({
           required: false,
           strategy: "work-source",
         });
@@ -421,7 +447,9 @@ const answering = (script: ReadonlyArray<string>) => {
     menu: (items, options) => {
       asked.push(options.header);
       const wanted = answers.shift();
-      return Effect.succeed(items.find((item) => item.id === wanted) ?? null);
+      return Effect.succeed(
+        Option.getOrUndefined(Arr.findFirst(items, (item) => item.id === wanted)) ?? null,
+      );
     },
     ask: (question) => {
       asked.push(question);
@@ -486,8 +514,8 @@ test(
         expect(asked.at(-1)).toContain('typed needs "note"');
 
         const listed = (yield* runViews(env, null)).runs;
-        expect(listed.map((run) => run.input.count)).toEqual([2]);
-        expect(listed.every((run) => run.workflow === "typed")).toBe(true);
+        expect(Arr.map(listed, (run) => run.input.count)).toEqual([2]);
+        expect(Arr.every(listed, (run) => run.workflow === "typed")).toBe(true);
         yield* stopHost(world.state);
       }),
     ),

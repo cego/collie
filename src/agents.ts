@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 // An agent a workflow operates, and the Output it is held to.
 //
 // Three things a workflow must not be left to get right on its own. An agent is launched
@@ -13,6 +14,12 @@
 //
 // `docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md` is why.
 
+import * as Struct from "effect/Struct";
+import * as Num from "effect/Number";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import {
   Clock,
   Context,
@@ -27,6 +34,8 @@ import {
   Predicate,
   Schedule,
   Schema,
+  flow,
+  Result,
 } from "effect";
 import { CommandLine } from "effect/process";
 import type { PlatformServices } from "./platform";
@@ -229,7 +238,10 @@ export const Collected = Schema.Union([Schema.String, Schema.Null, RanOut]);
  * never rounded down to "nothing happened". A launch unsure whether it started its agent or
  * gave it its work parks instead: a resume lists herdr's agents before it starts one.
  */
-export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()("AgentUncertain", {
+export class AgentUncertain extends Schema.TaggedError<
+  AgentUncertain,
+  { readonly brand: unique symbol }
+>()("AgentUncertain", {
   operation: Schema.String,
   reason: Schema.String,
 }) {}
@@ -239,7 +251,10 @@ export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()("AgentU
  * take its prompt, a workspace and checkout that have both gone — and nothing about it is
  * uncertain. It parks for a resume rather than failing into a fresh agent.
  */
-export class AgentParked extends Schema.TaggedError<AgentParked>()("AgentParked", {
+export class AgentParked extends Schema.TaggedError<
+  AgentParked,
+  { readonly brand: unique symbol }
+>()("AgentParked", {
   operation: Schema.String,
   reason: Schema.String,
 }) {}
@@ -258,7 +273,12 @@ export const agentQuestionName = (operation: string, n: number) => `ask-${operat
 const bySender = (answerers: ReadonlyArray<Asker | undefined>) => {
   const groups = new Map<string, { by: Asker | undefined; at: number[] }>();
   for (const [at, by] of answerers.entries()) {
-    const key = [by?.origin, by?.from?.run, by?.from?.agent, by?.said].join("\0");
+    const key = Arr.join(
+      Arr.map([by?.origin, by?.from?.run, by?.from?.agent, by?.said], (part) =>
+        part === null || part === undefined ? "" : globalThis.String(part),
+      ),
+      "\0",
+    );
     const group = groups.get(key) ?? { by, at: [] };
     group.at.push(at);
     groups.set(key, group);
@@ -275,14 +295,17 @@ const goneAnswer = (agent: string) => `closed: ${agent} is gone`;
  */
 // ponytail: no option buttons; they need a Decision taking both options and words, worth it once typing a label is a burden.
 const questionPrompt = (question: AgentQuestion) =>
-  [
-    question.header ? `${question.header}: ${question.question}` : question.question,
-    ...question.options.map((option) =>
-      option.description ? `${option.label} — ${option.description}` : option.label,
-    ),
-    ...(question.multiSelect ? ["(choose any)"] : []),
-    "Answer with an option or in your own words.",
-  ].join("\n");
+  Arr.join(
+    [
+      question.header ? `${question.header}: ${question.question}` : question.question,
+      ...Arr.map(question.options, (option) =>
+        option.description ? `${option.label} — ${option.description}` : option.label,
+      ),
+      ...(question.multiSelect ? ["(choose any)"] : []),
+      "Answer with an option or in your own words.",
+    ],
+    "\n",
+  );
 
 /** What a host lends a workflow that needs an agent. */
 export interface AgentsApi {
@@ -603,11 +626,9 @@ export const agentWork = <
     // prompt and the recorded launch are all kept under it.
     const unsafe = unsafePathComponent(work.operation);
     if (unsafe !== null) {
-      return yield* Effect.fail(
-        new WorkflowError({
-          reason: `operation "${work.operation}" ${unsafe}`,
-        }),
-      );
+      return yield* new WorkflowError({
+        reason: `operation "${work.operation}" ${unsafe}`,
+      });
     }
     const unclear = clearanceProblem(given.clears ?? []);
     if (unclear !== null) {
@@ -631,7 +652,7 @@ export const agentWork = <
     const prompt = renderPrompt(parts);
     if (prompt.unfilled.length > 0) {
       return yield* new WorkflowError({
-        reason: `${work.operation}: its instructions name ${prompt.unfilled.join(", ")}, which nothing this work was given fills`,
+        reason: `${work.operation}: its instructions name ${Arr.join(prompt.unfilled, ", ")}, which nothing this work was given fills`,
       });
     }
     // An agent already running on this work's name is the conversation this continues, and
@@ -756,7 +777,7 @@ export const agentWork = <
       .halt(runId)
       .pipe(
         Effect.flatMap(({ left }) =>
-          left.length === 0 ? Effect.void : host.parked(runId, left.join("; ")),
+          left.length === 0 ? Effect.void : host.parked(runId, Arr.join(left, "; ")),
         ),
       );
     // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
@@ -782,10 +803,9 @@ export const agentWork = <
       const output = agents.collectedDuring(
         on,
         watching(agents.collect(on, null, questions)).pipe(
-          Effect.flatMap((text) =>
-            text !== null
-              ? Effect.succeed(text)
-              : host.parked(runId, waiting ?? pastBudget(on)).pipe(Effect.andThen(late)),
+          Effect.filterOrElse(
+            (text) => text !== null,
+            () => host.parked(runId, waiting ?? pastBudget(on)).pipe(Effect.andThen(late)),
           ),
         ),
       );
@@ -1029,10 +1049,18 @@ const agrees = (held: ChosenAgent, requested: Preferences): boolean => {
   if (
     held.harness === "claude" &&
     subagents !== undefined &&
-    !Object.entries(subagents).every(([key, value]) =>
-      Object.entries(held.claudeSubagents ?? {}).some(
-        ([name, actual]) => name === key && actual === value,
-      ),
+    !Arr.every(
+      Arr.map(Struct.keys(subagents), (key) => [key, subagents[key]] as const),
+      ([key, value]) =>
+        Boolean(
+          Arr.some(
+            Arr.map(
+              Struct.keys(held.claudeSubagents ?? {}),
+              (key) => [key, (held.claudeSubagents ?? {})[key]] as const,
+            ),
+            ([name, actual]) => name === key && actual === value,
+          ),
+        ),
     )
   )
     return false;
@@ -1136,11 +1164,13 @@ const stoppable = <A, E>(
 
 /** Waits for an operator to stop this run, and for nothing else. */
 const untilStopped = (host: HostApi, runId: string, pollMs: number) =>
-  host.stopRequested(runId).pipe(
-    Effect.flatMap((stop) => (stop ? Effect.void : Effect.fail(new Error("not stopped")))),
-    Effect.retry({ schedule: Schedule.spaced(Duration.millis(pollMs)) }),
-    Effect.orDie,
-  );
+  host
+    .stopRequested(runId)
+    .pipe(
+      Effect.repeat({ until: Boolean, schedule: Schedule.spaced(Duration.millis(pollMs)) }),
+      Effect.asVoid,
+      Effect.orDie,
+    );
 
 const unusable = (launched: Launched, what: string) =>
   Effect.fail(new WorkflowError({ reason: `output-unusable: ${launched.agent} ${what}` }));
@@ -1163,7 +1193,7 @@ export function decodeOutput<Output extends OutputContract>(
   plain = false,
 ): Read<Output["Type"]> {
   if (plain) {
-    const decoded = Schema.decodeUnknownResult(contract)(text.trim());
+    const decoded = Schema.decodeResult(contract)(Str.trim(text));
     return decoded._tag === "Success"
       ? { ok: true, value: decoded.success }
       : { ok: false, problem: decoded.failure.message };
@@ -1172,7 +1202,7 @@ export function decodeOutput<Output extends OutputContract>(
   if (parsed._tag === "Failure") {
     return { ok: false, problem: `it is not JSON: ${parsed.failure.message}` };
   }
-  const decoded = Schema.decodeUnknownResult(contract, { errors: "all" })(parsed.success);
+  const decoded = Schema.decodeResult(contract, { errors: "all" })(parsed.success);
   return decoded._tag === "Success"
     ? { ok: true, value: decoded.success }
     : { ok: false, problem: decoded.failure.message };
@@ -1218,18 +1248,22 @@ function renderPrompt(parts: PromptParts) {
     skill: skillMention(parts.skills ?? new Map()),
   });
   const unfilled = [
-    ...rendered.missing.map((name) => `{{${name}}}`),
+    ...Arr.map(rendered.missing, (name) => `{{${name}}}`),
     ...malformedIn(parts.instructions),
   ];
-  const text = [
-    rendered.text.trim(),
-    attachmentsSection(parts.attachments ?? []),
-    parts.handover ?? "",
-    `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
-    parts.contract === null ? "" : contractSection(parts.contract),
-  ]
-    .filter((part) => part !== "")
-    .join("\n\n");
+  const text = Arr.join(
+    Arr.filter(
+      [
+        Str.trim(rendered.text),
+        attachmentsSection(parts.attachments ?? []),
+        parts.handover ?? "",
+        `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
+        parts.contract === null ? "" : contractSection(parts.contract),
+      ],
+      (part) => part !== "",
+    ),
+    "\n\n",
+  );
   return { text, unfilled };
 }
 
@@ -1248,10 +1282,16 @@ export function handover(ranOut: {
 
 function attachmentsSection(attachments: ReadonlyArray<Attachment>): string {
   if (attachments.length === 0) return "";
-  return [
-    "Files given to this Run, which you can open like any other:",
-    ...attachments.map((one) => `- ${one.name} (${one.mediaType}, ${one.size} bytes): ${one.path}`),
-  ].join("\n");
+  return Arr.join(
+    [
+      "Files given to this Run, which you can open like any other:",
+      ...Arr.map(
+        attachments,
+        (one) => `- ${one.name} (${one.mediaType}, ${one.size} bytes): ${one.path}`,
+      ),
+    ],
+    "\n",
+  );
 }
 
 /**
@@ -1263,7 +1303,7 @@ function contractSection(contract: Projection): string {
   const limits =
     contract.limits.length === 0
       ? ""
-      : `\n\nThe drawing says less than the contract does at: ${contract.limits.join("; ")}. Those are still checked.`;
+      : `\n\nThe drawing says less than the contract does at: ${Arr.join(contract.limits, "; ")}. Those are still checked.`;
   if (contract.document === null) {
     return `That file is checked against a schema this build cannot draw${limits || "."}`;
   }
@@ -1369,7 +1409,7 @@ const blockedAtStartup = (error: HerdrError) => /blocked during startup/.test(er
 const inactive = (refusal: string) => /not an active named agent/.test(refusal);
 
 const isGone = (agent: string, listed: ReadonlyArray<AgentInfo>, refusal: string) =>
-  !listed.some((one) => one.name === agent) || inactive(refusal);
+  !Arr.some(listed, (one) => one.name === agent) || inactive(refusal);
 const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
 
 /**
@@ -1588,7 +1628,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const task = yield* readTask(stateDir, id);
         if (task === null) return null;
         const open = yield* host.herdr.workspaceList();
-        if (open.some((one) => one.workspaceId === task.workspace)) return task.workspace;
+        if (Arr.some(open, (one) => one.workspaceId === task.workspace)) return task.workspace;
         const fs = yield* FileSystem.FileSystem;
         if (!(yield* fs.exists(ask.cwd).pipe(Effect.orElseSucceed(() => false)))) {
           return yield* new AgentParked({
@@ -1636,7 +1676,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     );
     if (taken === null) return null;
     const panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-    const pane = panes.find((one) => one.paneId === taken && one.agent === null);
+    const pane = Option.getOrUndefined(
+      Arr.findFirst(panes, (one) => one.paneId === taken && one.agent === null),
+    );
     return pane === undefined ? null : { tabId: pane.tabId, paneId: pane.paneId };
   });
 
@@ -1698,7 +1740,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               .pipe(
                 // Refused before the request was submitted, so nothing left.
                 Effect.mapError((cause) =>
-                  ran ? new Error(reason(cause)) : new Unsubmitted({ message: reason(cause) }),
+                  ran
+                    ? new Cause.UnknownError(cause, reason(cause))
+                    : new Unsubmitted({ message: reason(cause) }),
                 ),
               );
             return yield* Effect.fromResult(done);
@@ -1810,7 +1854,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     if (
       adapter.id === "claude" &&
       ask.claudeSubagents !== undefined &&
-      Object.keys(ask.claudeSubagents).length > 0
+      Struct.keys(ask.claudeSubagents).length > 0
     ) {
       const needed = subagentVersion(ask.claudeSubagents);
       const installed = yield* (host.version ?? installedVersion)("claude");
@@ -1824,7 +1868,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     if (unreadable.length > 0)
       return yield* new AgentParked({
         operation: ask.operation,
-        reason: `agent_profile for ${ask.role}: ${unreadable.join("; ")}. Hold each value in a file of this Machine with mode 0600, then resume this Run`,
+        reason: `agent_profile for ${ask.role}: ${Arr.join(unreadable, "; ")}. Hold each value in a file of this Machine with mode 0600, then resume this Run`,
       });
     yield* ensureTrusted(ask.runId, adapter, ask.cwd);
     const persona = `${dirFor(ask.runId)}/${stemOf(ask)}.persona.md`;
@@ -1849,7 +1893,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         extension,
         piExtension(
           command,
-          TOOLS.map((tool) => ({
+          Arr.map(TOOLS, (tool) => ({
             name: tool.name,
             label: tool.title,
             description: tool.description,
@@ -1862,7 +1906,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       );
     const settings =
       adapter.id === "opencode" && host.env.raw.OPENCODE_CONFIG_CONTENT !== undefined
-        ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject))(
+        ? yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
             host.env.raw.OPENCODE_CONFIG_CONTENT,
           )
         : undefined;
@@ -1933,7 +1977,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           tab.paneId,
           yield* Effect.orDie(Effect.fromResult(CommandLine.join(["cd", ask.cwd]))),
         );
-        for (const [key, value] of Object.entries(mcp.env))
+        for (const [key, value] of Rec.toEntries(mcp.env))
           yield* host.herdr.paneRun(
             tab.paneId,
             `export ${key}=${yield* Effect.orDie(Effect.fromResult(CommandLine.quote(value)))}`,
@@ -2026,7 +2070,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // Derived, not minted: this is the name a replay looks for rather than starting
         // a second agent, and a run id is already unique.
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
-        const listedAt = yield* nowIso();
+        const listedAt = yield* nowIso;
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
           // Nothing is started on a question nobody answered: a second agent on the same
@@ -2036,7 +2080,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             `herdr cannot say which agents it has (${herdrFailureReason(listing.failure)})`,
           );
         }
-        const live = listing.success.find((one) => one.name === agent);
+        const live = Option.getOrUndefined(
+          Arr.findFirst(listing.success, (one) => one.name === agent),
+        );
         const alive = live !== undefined && !fresh;
         // Only a new agent's first work holds a steer; one reused takes it at its boundary.
         if (alive) yield* stepGoneOut(agent);
@@ -2064,11 +2110,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (memory === "waited") return yield* launch(ask, fresh, note);
         const fs = yield* FileSystem.FileSystem;
         // Work in the launch order already is this same work replayed, not new work for the agent.
-        const replayed = (yield* fs
-          .readFileString(launchOrder(ask.runId))
-          .pipe(Effect.orElseSucceed(() => "")))
-          .split("\n")
-          .includes(stemOf(ask));
+        const replayed = Str.split(
+          yield* fs.readFileString(launchOrder(ask.runId)).pipe(Effect.orElseSucceed(() => "")),
+          "\n",
+        ).includes(stemOf(ask));
         const landedOn = (incarnation: Incarnation | undefined) =>
           Effect.gen(function* () {
             const landed: Types.Mutable<Launched> = {
@@ -2195,9 +2240,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         );
         return launched;
       }).pipe(
-        Effect.catch((cause) =>
-          Effect.fail(isParked(cause) ? cause : asUncertain(ask.operation, cause)),
-        ),
+        Effect.mapError((cause) => (isParked(cause) ? cause : asUncertain(ask.operation, cause))),
       ),
     );
 
@@ -2214,16 +2257,21 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const kind = unless === null ? "step" : "repair";
       const key = causalKey(launched.runId, { kind, ref: stemOf(launched) }, 0);
       // Only this agent's own ledger: another incarnation's is listed in no time order.
-      const last = (yield* deliveriesOf(host.env.stateDir, launched.runId))
-        .filter(
-          ({ delivery }) =>
-            delivery.causal_key === key &&
-            delivery.incarnation === found.entry?.incarnation?.terminalId,
-        )
-        .at(-1)?.delivery;
+      const last = Arr.filter(
+        yield* deliveriesOf(host.env.stateDir, launched.runId),
+        ({ delivery }) =>
+          delivery.causal_key === key &&
+          delivery.incarnation === found.entry?.incarnation?.terminalId,
+      ).at(-1)?.delivery;
       // Settled as not sent, or refused by herdr on the last resend: not delivered either way.
       const resend =
-        last?.note?.startsWith("reconciled as not-sent") === true ||
+        Option.getOrUndefined(
+          Option.flatMap(Option.fromNullishOr(last), (present__) =>
+            Option.map(Option.fromNullishOr(present__.note), (present___) =>
+              pipe(present___, Str.startsWith("reconciled as not-sent")),
+            ),
+          ),
+        ) === true ||
         (last?.state === "failed" && last.attempt > 1);
       if (last !== undefined && resend) {
         const fs = yield* FileSystem.FileSystem;
@@ -2309,15 +2357,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return (closing: string | null) =>
         Effect.gen(function* () {
           let n = 0;
-          const calls = (yield* questionsSince(dir, launched.at ?? 0))
-            .filter((call) => call.at < until)
-            .map((call) => ({
+          const calls = Arr.map(
+            Arr.filter(yield* questionsSince(dir, launched.at ?? 0), (call) => call.at < until),
+            (call) => ({
               call,
-              names: call.questions.map(() => agentQuestionName(stem, ++n)),
-            }));
+              names: Arr.map(call.questions, () => agentQuestionName(stem, ++n)),
+            }),
+          );
           const asked = yield* questions.asked;
-          const answers = new Map(asked.map((one) => [one.name, one.answer]));
-          const answerers = new Map(asked.map((one) => [one.name, one.by]));
+          const answers = new Map(Arr.map(asked, (one) => [one.name, one.answer]));
+          const answerers = new Map(Arr.map(asked, (one) => [one.name, one.by]));
           let open = false;
           for (const { call, names } of calls) {
             for (const [at, question] of call.questions.entries()) {
@@ -2329,29 +2378,35 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               );
               answers.set(name, null);
             }
-            const given = names.map((name) => answers.get(name) ?? null);
+            const given = Arr.map(names, (name) => answers.get(name) ?? null);
             if (closing !== null) {
               for (const [at, name] of names.entries())
                 if (given[at] === null) yield* questions.close(name, closing);
               continue;
             }
-            if (given.some((answer) => answer === null)) {
+            if (Arr.some(given, (answer) => answer === null)) {
               open = true;
               continue;
             }
             const key = `${launched.agent}\n${call.id}`;
-            if (given.some((answer) => closings.includes(answer ?? "")) || answeredCalls.has(key))
+            if (
+              Arr.some(given, (answer) => closings.includes(answer ?? "")) ||
+              answeredCalls.has(key)
+            )
               continue;
             let sentAll = true;
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
               call.questions[at]?.header || call.questions[at]?.question || names[at];
-            for (const group of bySender(names.map((name) => answerers.get(name)))) {
+            for (const group of bySender(Arr.map(names, (name) => answerers.get(name)))) {
               const sent = yield* deliver(
                 launched,
                 group.at.length === 1
                   ? `Your question ${label(group.at[0]!)} is answered: ${given[group.at[0]!]}`
-                  : `Your questions are answered: ${group.at.map((at) => `${label(at)}: ${given[at]}`).join("; ")}`,
+                  : `Your questions are answered: ${Arr.join(
+                      Arr.map(group.at, (at) => `${label(at)}: ${given[at]}`),
+                      "; ",
+                    )}`,
                 {
                   kind: "steer",
                   ref: names[group.at[0]!] ?? stem,
@@ -2364,7 +2419,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 answeredCalls.add(key);
                 yield* log(
                   launched.runId,
-                  `${launched.agent}: was not sent the answers to ${group.at.map((at) => names[at]).join(", ")} (${sent.why})`,
+                  `${launched.agent}: was not sent the answers to ${Arr.join(
+                    Arr.map(
+                      Arr.map(group.at, (at) => names[at]),
+                      (part) =>
+                        part === null || part === undefined ? "" : globalThis.String(part),
+                    ),
+                    ", ",
+                  )} (${sent.why})`,
                 );
               }
             }
@@ -2399,12 +2461,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             const sessions =
               listed.length === 0
                 ? [host.herdr]
-                : listed.map((one) => host.herdr.inSession(one.socketPath));
+                : Arr.map(listed, (one) => host.herdr.inSession(one.socketPath));
             const agents = yield* Effect.forEach(
               sessions,
               (herdr) =>
                 Effect.map(herdr.agentList(), (listed) =>
-                  listed.map((one) => ({ name: one.name, herdr })),
+                  Arr.map(listed, (one) => ({ name: one.name, herdr })),
                 ),
               { concurrency: "unbounded" },
             );
@@ -2412,9 +2474,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           }).pipe(Effect.option),
         );
         for (const agent of asking) {
-          const own = launches
-            .filter((one) => one.agent === agent)
-            .toSorted((one, other) => (one.at ?? 0) - (other.at ?? 0));
+          const launchesOf = Arr.filter(launches, (one) => one.agent === agent);
+          const own = Arr.sortWith(
+            launchesOf,
+            (value) => value,
+            (one, other) => Num.sign((one.at ?? 0) - (other.at ?? 0)),
+          );
           // A collection reads its launch's questions and every later one's.
           let collected = false;
           for (const [at, launched] of own.entries()) {
@@ -2428,12 +2493,24 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               Effect.map(
                 alive,
                 (found) =>
-                  Option.getOrUndefined(found)?.find((one) => one.name === agent)?.herdr ??
-                  host.herdr,
+                  Option.getOrUndefined(
+                    Option.flatMap(Option.fromNullishOr(Option.getOrUndefined(found)), (present) =>
+                      Option.map(
+                        Option.fromNullishOr(
+                          Option.getOrUndefined(
+                            Arr.findFirst(present, (one) => one.name === agent),
+                          ),
+                        ),
+                        (present_) => present_.herdr,
+                      ),
+                    ),
+                  ) ?? host.herdr,
               ),
             );
             if (!(yield* tend(null))) continue;
-            if (Option.exists(yield* alive, (found) => !found.some((one) => one.name === agent)))
+            if (
+              Option.exists(yield* alive, (found) => !Arr.some(found, (one) => one.name === agent))
+            )
               yield* tend(goneAnswer(agent));
           }
         }
@@ -2484,7 +2561,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const fs = yield* FileSystem.FileSystem;
         const now = yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
         // Rewritten while nobody was asking, as across a stop: that Output is the one to read.
-        if (now.trim() !== "" && now !== unusable) return true;
+        if (Str.trim(now) !== "" && now !== unusable) return true;
         const text = repairText(launched.output, problem);
         const file = sentPath(launched, "repair");
         yield* write(file, text);
@@ -2507,13 +2584,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         }
         return sent.sent;
       }).pipe(
-        Effect.catch((cause) =>
-          isParked(cause)
-            ? Effect.fail(cause)
-            : log(
-                launched.runId,
-                `${launched.agent}: could not be asked to write it again (${reason(cause)})`,
-              ).pipe(Effect.as(false)),
+        Effect.catchIf(
+          (cause) => !isParked(cause),
+          (cause) =>
+            log(
+              launched.runId,
+              `${launched.agent}: could not be asked to write it again (${reason(cause)})`,
+            ).pipe(Effect.as(false)),
         ),
       ),
     );
@@ -2525,12 +2602,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
-        if (written.trim() !== "" && written !== unless) return false;
+        if (Str.trim(written) !== "" && written !== unless) return false;
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
         if (listing._tag === "None") return false;
         // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
-        const refusal = listing.value.some((one) => one.name === agent)
+        const refusal = Arr.some(listing.value, (one) => one.name === agent)
           ? yield* host.herdr
               .agentStatus(agent)
               .pipe(Effect.match({ onFailure: herdrFailureReason, onSuccess: () => "" }))
@@ -2554,17 +2631,28 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     under(
       Effect.gen(function* () {
         const alive = yield* host.herdr.agentList();
-        const others = options.lineage.filter((runId) => runId !== options.runId);
+        const others = Arr.filter(options.lineage, (runId) => runId !== options.runId);
         const entry = yield* lineageAgent(host.env.stateDir, alive, options.role, others);
         // Without a proven incarnation the entry names a pane, not the agent now in it.
         if (entry === null) return null;
         if (!verifyIncarnation(entry, alive).ok) return null;
         const handed = { agent: entry.agent, delivered: true, detail: "" };
-        const earlier = (yield* deliveriesOf(host.env.stateDir, entry.runId)).filter(
+        const earlier = Arr.filter(
+          yield* deliveriesOf(host.env.stateDir, entry.runId),
           ({ delivery }) =>
             delivery.cause.kind === "handoff" && delivery.cause.ref === options.runId,
         );
-        if (earlier.some(({ delivery }) => delivery.note?.startsWith("reconciled as sent"))) {
+        if (
+          Arr.some(earlier, ({ delivery }) =>
+            Boolean(
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(delivery.note), (present____) =>
+                  pipe(present____, Str.startsWith("reconciled as sent")),
+                ),
+              ),
+            ),
+          )
+        ) {
           return handed;
         }
         const outcome = yield* dispatch.transaction(deps, entry, (channel) =>
@@ -2593,15 +2681,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         );
         return { agent: entry.agent, delivered: false, detail: outcome.detail };
       }).pipe(
-        Effect.catch((cause) =>
-          isParked(cause)
-            ? Effect.fail(cause)
-            : Effect.fail(
-                new AgentParked({
-                  operation: "handoff",
-                  reason: `Whether an agent here can take this could not be read (${reason(cause)}).`,
-                }),
-              ),
+        Effect.catchIf(
+          (cause) => !isParked(cause),
+          (cause) =>
+            Effect.fail(
+              new AgentParked({
+                operation: "handoff",
+                reason: `Whether an agent here can take this could not be read (${reason(cause)}).`,
+              }),
+            ),
         ),
       ),
     );
@@ -2626,7 +2714,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             const readings =
               own === null
                 ? machine
-                : [own, ...machine.filter((one) => one.subscription !== own.subscription)];
+                : [own, ...Arr.filter(machine, (one) => one.subscription !== own.subscription)];
             const judged = roomFor(readings, now)(on, undefined);
             exhausted = judged.room ? null : judged.why;
             resetsAt = usedFor(readings, on, now)?.resetsAt ?? null;
@@ -2688,7 +2776,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const stopped: string[] = [];
         const left: string[] = [];
         // A start herdr never admitted has a server but no launch.
-        const launchedBefore = new Set((yield* launchesOf(runId)).map((one) => one.agent));
+        const launchedBefore = new Set(Arr.map(yield* launchesOf(runId), (one) => one.agent));
         const found = yield* serversOfRun(host.env.stateDir, `${dirFor(runId)}/agents.log`).pipe(
           Effect.catch((cause) =>
             Effect.succeed({
@@ -2698,7 +2786,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ),
         );
         left.push(...found.unread);
-        for (const name of found.servers.filter((one) => !launchedBefore.has(one))) {
+        for (const name of Arr.filter(found.servers, (one) => !launchedBefore.has(one))) {
           const reached = yield* stopUnlaunched(
             compactionDeps(host, runId),
             name,
@@ -2722,8 +2810,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           return yield* reported(runId, stopped, left);
         }
         // Every agent it launched, listed or not: a closed pane is not a stopped server.
-        for (const name of new Set(launches.map((launched) => launched.agent))) {
-          const ours = launches.findLast((launched) => launched.agent === name)!;
+        for (const name of new Set(Arr.map(launches, (launched) => launched.agent))) {
+          const ours = Option.getOrUndefined(
+            Arr.findLast(launches, (launched) => launched.agent === name),
+          )!;
           const ended = yield* endAgent(endsOf(runId), ours, why, "close", listing.success).pipe(
             Effect.result,
           );
@@ -2744,8 +2834,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   const reported = (runId: string, stopped: string[], left: string[]) =>
     Effect.gen(function* () {
-      if (stopped.length > 0) yield* log(runId, `stopped ${stopped.join(", ")}`);
-      if (left.length > 0) yield* log(runId, `not stopped: ${left.join("; ")}`);
+      if (stopped.length > 0) yield* log(runId, `stopped ${Arr.join(stopped, ", ")}`);
+      if (left.length > 0) yield* log(runId, `not stopped: ${Arr.join(left, "; ")}`);
       return { stopped, left };
     });
 
@@ -2874,13 +2964,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               Effect.orElseSucceed(() => []),
             );
           const read = roomFor(readings, yield* Clock.currentTimeMillis);
-          const out = spent.map(({ on, why }) => ({ on: pinned(on), why }));
+          const out = Arr.map(spent, ({ on, why }) => ({ on: pinned(on), why }));
           const resolved = resolveWithRoom(
             [configured, ...layers],
             yield* chain,
             (choice, upTo) => {
               const judged = read(choice, upTo);
-              const ran = out.find(({ on }) => sameUsage(on, choice));
+              const ran = Option.getOrUndefined(
+                Arr.findFirst(out, ({ on }) => sameUsage(on, choice)),
+              );
               return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
             },
             host.models,
@@ -2905,13 +2997,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     choiceOf: (runId, agent) =>
       under(
         Effect.gen(function* () {
-          const held = (yield* launchesOf(runId)).findLast(
-            (one) => one.agent === agentName(runId, agent, null, one.sequence ?? 1),
+          const held = Option.getOrUndefined(
+            Arr.findLast(
+              yield* launchesOf(runId),
+              (one) => one.agent === agentName(runId, agent, null, one.sequence ?? 1),
+            ),
           );
           if (held === undefined) return null;
           const listing = yield* host.herdr.agentList().pipe(Effect.option);
           const alive = Option.exists(listing, (agents) =>
-            agents.some((one) => one.name === held.agent),
+            Arr.some(agents, (one) => one.name === held.agent),
           );
           if (!alive || held.model === undefined) return null;
           const running: Types.Mutable<ChosenAgent & { sequence: number }> = {
@@ -3004,9 +3099,9 @@ const stepPointer = (file: string) =>
 const CLEARANCE_CHARS = 400;
 
 const clearanceProblem = (clears: ReadonlyArray<string>): string | null => {
-  if (clears.some((one) => /[\r\n]/.test(one)))
+  if (Arr.some(clears, (one) => /[\r\n]/.test(one)))
     return "a Clearance is one line, and this one has a line break";
-  const joined = Array.from(clears.join("; ")).length;
+  const joined = Array.from(Arr.join(clears, "; ")).length;
   return joined > CLEARANCE_CHARS
     ? `its Clearance is ${joined} characters, over the ${CLEARANCE_CHARS} a Clearance may be`
     : null;
@@ -3021,12 +3116,17 @@ const stepText = (
   const started = ask.skill === null ? "" : `${adapter.skillCommand(ask.skill)} `;
   const pointer = `${started}${stepPointer(file)}`;
   const clears = ask.clears ?? [];
-  return clears.length === 0 ? pointer : `${pointer}\nCleared for this step: ${clears.join("; ")}.`;
+  return clears.length === 0
+    ? pointer
+    : `${pointer}\nCleared for this step: ${Arr.join(clears, "; ")}.`;
 };
-const encodeLaunched = Schema.encodeSync(Schema.fromJsonString(Launched));
+const encodeLaunched = flow(
+  Schema.encodeResult(Schema.fromJsonString(Launched)),
+  Result.getOrThrow,
+);
 
 /** What a delivery is called in a log: one line of it, so the log stays readable. */
-const firstLine = (text: string) => text.split("\n")[0] ?? "";
+const firstLine = (text: string) => Str.split(text, "\n")[0] ?? "";
 
 /** A prompt that is waiting on its pane, said with what picks it up again. */
 const refusedWith = (
@@ -3085,10 +3185,13 @@ const EVERY_AGENT = "every-agent";
  * wrote a persona for is still a role: it is stated in one line rather than left blank.
  */
 export const personaText = Effect.fn("Agents.personaOf")(function* (env: PersonaEnv, role: string) {
-  const dirs = (yield* layers(env)).all.map((layer) => layer.dir).reverse();
+  const dirs = Arr.map((yield* layers(env)).all, (layer) => layer.dir).reverse();
   const own = unsafePathComponent(role) === null ? yield* layeredPersona(env, role, dirs) : null;
   const every = yield* layeredPersona(env, EVERY_AGENT, dirs);
-  return [own ?? roleBody(role), every].filter((part) => part !== null).join("\n\n");
+  return Arr.join(
+    Arr.filter([own ?? roleBody(role), every], (part) => part !== null),
+    "\n\n",
+  );
 });
 
 /** The `every-agent` text for the Home chat, which belongs to no project. */
@@ -3108,13 +3211,13 @@ const layeredPersona = Effect.fn("Agents.layeredPersona")(function* (
     const file = `${dir}/personas/${role}.md`;
     if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
     const markdown = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-    const body = bodySections(markdown.replace(PERSONA_FRONT_MATTER, "")).preamble;
-    if (body.trim() === "") continue;
+    const body = bodySections(pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, ""))).preamble;
+    if (Str.trim(body) === "") continue;
     const unfilled = personaHoles(body);
     if (unfilled.length > 0) {
       return yield* new AgentParked({
         operation: role,
-        reason: `the ${role} persona in ${file} names ${unfilled.join(", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
+        reason: `the ${role} persona in ${file} names ${Arr.join(unfilled, ", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
       });
     }
     const named = yield* installedSkills(env, skillsIn(body));
@@ -3142,7 +3245,7 @@ const compactionDeps = (host: AgentHost, runId: string): CompactionDeps => ({
   log: (line) => append(`${host.dir}/agents/${runId}/agents.log`, line),
   warn: (line) => append(`${host.dir}/agents/${runId}/agents.log`, line),
   sample: (at, tokens) =>
-    Effect.flatMap(nowIso(), (now) =>
+    Effect.flatMap(nowIso, (now) =>
       noteContext(`${host.dir}/evidence/${at.run}`, now, at.agent, tokens),
     ),
   waitMs: host.compactionWaitMs ?? COMPACTION_WAIT_MS,
@@ -3181,7 +3284,7 @@ const waitForOutput = <R>(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const read = fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
-    const fresh = (text: string) => text.trim() !== "" && text !== unless;
+    const fresh = (text: string) => Str.trim(text) !== "" && text !== unless;
     let spent = 0;
     for (;;) {
       const text = yield* read;
@@ -3202,12 +3305,15 @@ const waitForOutput = <R>(
 const write = (path: string, text: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const at = path.lastIndexOf("/");
-    if (at > 0) yield* fs.makeDirectory(path.slice(0, at), { recursive: true });
+    const at = Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1);
+    if (at > 0) yield* fs.makeDirectory(pipe(path, Str.slice(0, at)), { recursive: true });
     yield* fs.writeFileString(path, text);
   }).pipe(Effect.orDie);
 
-const encodeSettings = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const encodeSettings = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Json)),
+  Result.getOrThrow,
+);
 
 const NO_AUTHORITY: RunAuthority = { created: null, roaming: false, started: null };
 
@@ -3246,8 +3352,8 @@ const claudeSettings = (
 const append = (path: string, line: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const at = path.lastIndexOf("/");
-    if (at > 0) yield* fs.makeDirectory(path.slice(0, at), { recursive: true });
+    const at = Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1);
+    if (at > 0) yield* fs.makeDirectory(pipe(path, Str.slice(0, at)), { recursive: true });
     yield* fs.writeFileString(path, `${line}\n`, { flag: "a" });
   }).pipe(Effect.ignore);
 

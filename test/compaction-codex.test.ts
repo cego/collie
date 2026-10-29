@@ -7,6 +7,9 @@
 //     is the authority on what this release's protocol has, so the check is that every
 //     method and field the adapter uses is in it — not that a mock answered.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Result, Schema } from "effect";
 import { Rig } from "./support/recorder";
@@ -50,7 +53,7 @@ let server: FakeServer;
 
 const Request = Schema.fromJsonString(
   Schema.Struct({
-    id: Schema.Number,
+    id: Schema.Finite,
     method: Schema.String,
     params: Schema.optionalKey(Schema.Unknown),
   }),
@@ -135,7 +138,7 @@ function serve(): FakeServer {
           case "thread/items/list":
             return reply({
               data: [
-                ...fake.compactions.map((c) => ({
+                ...Arr.map(fake.compactions, (c) => ({
                   turnId: c.turnId,
                   item: { id: c.id, type: "contextCompaction" },
                 })),
@@ -422,7 +425,10 @@ onMachineWith("codex")(
           new URL("../src/codex.ts", import.meta.url).pathname,
         );
         const names = new Set(
-          Array.from(adapter.matchAll(/"(initialize|(?:thread|turn)\/[\w/]+)"/g), (m) => m[1]),
+          Array.from(
+            pipe_(adapter, Str.matchAll(/"(initialize|(?:thread|turn)\/[\w/]+)"/g)),
+            (m) => m[1],
+          ),
         );
         expect(names.size).toBeGreaterThan(5);
         for (const name of names) {
@@ -466,7 +472,7 @@ onMachineWith("codex")(
         const version = yield* Effect.promise(() => Bun.$`codex --version`.text());
         expect(wanted).not.toBe("");
         expect(atLeast(version, wanted)).toBe(true);
-        yield* codex.gate();
+        yield* codex.gate;
 
         // The launch topology: a server on a loopback port, and a TUI pointed at it.
         const help = yield* Effect.promise(() => Bun.$`codex --help`.text());

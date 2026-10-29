@@ -2,6 +2,9 @@
 // the human's terminal is left in. `bun test` has no terminal, so stdin is stubbed as one
 // and stdout, which is not one, sends the board to its text view.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Clock, Effect, Exit, Fiber, FileSystem, Option } from "effect";
 import { TestClock } from "effect/testing";
@@ -19,7 +22,9 @@ const terminalStdin = Effect.acquireRelease(
   Effect.sync(() => {
     const stdin = process.stdin;
     const names = ["isTTY", "setRawMode", "on", "off", "resume", "pause"] as const;
-    const own = new Map(names.map((name) => [name, Object.getOwnPropertyDescriptor(stdin, name)]));
+    const own = new Map(
+      Arr.map(names, (name) => [name, Object.getOwnPropertyDescriptor(stdin, name)]),
+    );
     const rawModes: boolean[] = [];
     let listener: ((...args: unknown[]) => void) | null = null;
     const on = stdin.on.bind(stdin);
@@ -87,8 +92,8 @@ const capturedStdout = Effect.acquireRelease(
 
 const drawn = (written: ReadonlyArray<string>) =>
   until(
-    () => Effect.sync(() => written.join("")),
-    (text) => text.includes(CLEAR),
+    () => Effect.sync(() => Arr.join(written, "")),
+    (text) => pipe_(text, Str.includes(CLEAR)),
   );
 
 test(
@@ -109,7 +114,7 @@ test(
           const failingFs: FileSystem.FileSystem = {
             ...fs,
             exists: (path) =>
-              failing && path.startsWith(`${world.state}/agents/`)
+              failing && pipe_(path, Str.startsWith(`${world.state}/agents/`))
                 ? Effect.die(new Error("the registry went away"))
                 : fs.exists(path),
           };

@@ -1,5 +1,6 @@
+// Electrobun's Cottontail config loader cannot parse Effect's modules.
 const has = (env: Record<string, string | undefined>, ...names: string[]) =>
-  names.every((name) => (env[name] ?? "") !== "");
+  names.every((name) => (env[name] ?? "") !== ""); // oxlint-disable-line effecttsgo/prefer-effect-array
 
 /**
  * Electrobun signs with `ELECTROBUN_DEVELOPER_ID`, `-` meaning ad hoc, after it writes the

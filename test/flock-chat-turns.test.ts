@@ -1,6 +1,10 @@
 // The Flock chat's turns, driven against a scripted Claude Code: one turn at a time, a turn
 // of Desktop's own only about News that matters, and every turn ending however it ends.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
 import {
@@ -14,6 +18,8 @@ import {
   type Scope,
   Stream,
   Queue,
+  flow,
+  Result,
 } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { TestClock } from "effect/testing";
@@ -46,7 +52,7 @@ type Item = (typeof NewsBatch.Type)["items"][number];
 
 const item = (key: string, significance: Significance): Item => ({
   key,
-  run: key.split(":")[0] ?? key,
+  run: Str.split(key, ":")[0] ?? key,
   text: `${key} happened.`,
   at: "2026-10-05T00:00:00Z",
   significance,
@@ -64,7 +70,7 @@ const machine = (
       Effect.sync(() => {
         if (as === "read") read.push(...(keys ?? []));
         return {
-          items: items.filter(({ key }) => !read.includes(key)),
+          items: Arr.filter(items, ({ key }) => !read.includes(key)),
           omitted: 0,
         };
       }),
@@ -117,7 +123,7 @@ const scripted = (
 ): ClaudeCode<string> => ({
   query: ({ prompt, options }) => {
     const id = "resume" in options ? options.resume : options.sessionId;
-    seen.servers.push(Object.keys(options.mcpServers));
+    seen.servers.push(Rec.keys(options.mcpServers));
     seen.efforts.push(options.effort ?? "none");
     seen.sessions.push({
       model: options.model,
@@ -143,7 +149,7 @@ const scripted = (
               : "",
           );
           // A human's turn would wait for their click; only Desktop's own is asked here.
-          if (text.startsWith(DESKTOP_SAID)) {
+          if (pipe_(text, Str.startsWith(DESKTOP_SAID))) {
             const asked = yield* Effect.promise(() =>
               options.canUseTool(
                 "AskUserQuestion",
@@ -176,7 +182,7 @@ const scripted = (
   getSessionMessages: (id) => Promise.resolve(seen.transcripts.get(id) ?? []),
   listSessions: () =>
     Promise.resolve(
-      [...seen.transcripts.keys()].map((sessionId) => ({
+      Arr.map([...seen.transcripts.keys()], (sessionId) => ({
         sessionId,
         summary: "Earlier",
         lastModified: 1,
@@ -402,8 +408,10 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
           yield* TestClock.withLive(Effect.sleep("10 millis"));
         const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
-        expect(usage.trim().split("\n")).toHaveLength(1);
-        expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(usage)).toMatchObject({
+        expect(Str.split(Str.trim(usage), "\n")).toHaveLength(1);
+        expect(
+          yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(usage).pipe(Effect.orDie),
+        ).toMatchObject({
           turn: "desktop",
           harness: "claude",
           model: "opus",
@@ -455,7 +463,7 @@ test("a message sent now interrupts the turn under way, even Desktop's own, and 
     {
       items: [item("r1:asking", "decision")],
       proactive: true,
-      holds: (text) => text.startsWith(DESKTOP_SAID),
+      holds: (text) => pipe_(text, Str.startsWith(DESKTOP_SAID)),
     },
     answered,
     ({ conversation, seen }) =>
@@ -552,7 +560,7 @@ const staged = (
   scaledOf?: string,
 ) =>
   Effect.gen(function* () {
-    const key = `${name.replaceAll(".", "-")}-${scaledOf === undefined ? "original" : "scaled"}`;
+    const key = `${pipe_(name, Str.replaceAll(".", "-"))}-${scaledOf === undefined ? "original" : "scaled"}`;
     const half = Math.ceil(bytes.length / 2);
     const first = yield* stageAttachment(dir, {
       key,
@@ -619,7 +627,7 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
           expect.objectContaining({ type: "image" }),
         ]);
         const gone = yield* Stream.runCollect(
-          conversation.send("and this?", null, false, [`${"0".repeat(64)}/gone.png`]),
+          conversation.send("and this?", null, false, [`${pipe_("0", Str.repeat(64))}/gone.png`]),
         );
         expect(gone).toEqual([expect.objectContaining({ type: "RUN_ERROR" })]);
       }),
@@ -639,16 +647,16 @@ test("a message's files are inlined only while their base64 fits the request, an
           "read these",
           null,
           false,
-          pdfs.map(({ id }) => id),
+          Arr.map(pdfs, ({ id }) => id),
         ),
       );
       // Four 4 MB PDFs fit the 24 MB of base64; the fifth would not.
       expect(seen.contents[0]).toEqual([
         { type: "text", text: "read these" },
         { type: "text", text: listing(pdfs) },
-        ...pdfs
-          .slice(0, 4)
-          .map(({ name }) => expect.objectContaining({ type: "document", title: name })),
+        ...Arr.map(pdfs.slice(0, 4), ({ name }) =>
+          expect.objectContaining({ type: "document", title: name }),
+        ),
       ]);
     }),
   ));
@@ -659,7 +667,12 @@ test("a PDF goes as a document, a small text as text headed with its name, and a
       const bytes = (text: string) => new TextEncoder().encode(text);
       const pdf = yield* staged(dir, "spec.pdf", "application/pdf", bytes("%PDF-1.7 tiny"));
       const log = yield* staged(dir, "app.log", "text/plain", bytes("one\ntwo\n"));
-      const big = yield* staged(dir, "big.txt", "text/plain", bytes("x".repeat(100 * 1024 + 1)));
+      const big = yield* staged(
+        dir,
+        "big.txt",
+        "text/plain",
+        bytes(Str.repeat(100 * 1024 + 1)("x")),
+      );
       const zip = yield* staged(dir, "trace.zip", "application/zip", bytes("PK\u0003\u0004"));
       const gif = yield* staged(dir, "rec.gif", "image/gif", new Uint8Array(4 * 1024 * 1024));
 
@@ -705,7 +718,7 @@ test("a new subscriber to Desktop's turns is told the one under way", () =>
     {
       items: [item("r1:asking", "decision")],
       proactive: true,
-      holds: (text) => text.startsWith(DESKTOP_SAID),
+      holds: (text) => pipe_(text, Str.startsWith(DESKTOP_SAID)),
     },
     answered,
     ({ conversation, seen }) =>
@@ -719,7 +732,9 @@ test("a new subscriber to Desktop's turns is told the one under way", () =>
   ));
 
 test("unset, the chat runs opus; a model changed mid-turn waits for it, then the same conversation goes on on the new model", () => {
-  const settings = { current: Schema.decodeUnknownSync(DesktopSettings)({ proactive: false }) };
+  const settings = {
+    current: flow(Schema.decodeResult(DesktopSettings), Result.getOrThrow)({ proactive: false }),
+  };
   const gate = Deferred.makeUnsafe<void>();
   return withChat(
     { items: [], proactive: false, settings, gate },
@@ -745,7 +760,7 @@ test("unset, the chat runs opus; a model changed mid-turn waits for it, then the
           { model: "sonnet", resume: current },
         ]);
         expect((yield* conversation.conversations).current).toBe(current);
-        expect((yield* conversation.transcript).map(({ parts }) => parts)).toEqual([
+        expect(Arr.map(yield* conversation.transcript, ({ parts }) => parts)).toEqual([
           [{ type: "text", content: "slow" }],
           [{ type: "text", content: "next" }],
         ]);
@@ -756,7 +771,9 @@ test("unset, the chat runs opus; a model changed mid-turn waits for it, then the
 });
 
 test("an effort changed mid-turn waits for it, then the same conversation goes on at the new effort", () => {
-  const settings = { current: Schema.decodeUnknownSync(DesktopSettings)({ proactive: false }) };
+  const settings = {
+    current: flow(Schema.decodeResult(DesktopSettings), Result.getOrThrow)({ proactive: false }),
+  };
   const gate = Deferred.makeUnsafe<void>();
   return withChat(
     { items: [], proactive: false, settings, gate },
@@ -846,7 +863,7 @@ test("a conversation file from before harnesses is claude's, resumed as before, 
           { model: "opus", resume: "5c1e6c8e-0000-4000-8000-000000000000" },
         ]);
         expect(seen.servers).toEqual([["linear-server", "collie"]]);
-        expect((yield* conversation.transcript).map(({ parts }) => parts)).toEqual([
+        expect(Arr.map(yield* conversation.transcript, ({ parts }) => parts)).toEqual([
           [{ type: "text", content: "before the change" }],
           [{ type: "text", content: "hello" }],
         ]);
@@ -856,9 +873,9 @@ test("a conversation file from before harnesses is claude's, resumed as before, 
         });
         const fs = yield* FileSystem.FileSystem;
         expect(
-          Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
+          yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(
             yield* fs.readFileString(`${dir}/flock-chat.json`),
-          ),
+          ).pipe(Effect.orDie),
         ).toEqual({
           session: "5c1e6c8e-0000-4000-8000-000000000000",
           harness: "claude",
@@ -889,7 +906,7 @@ test("a harness change saved mid-turn waits for the next message, which starts a
 
         expect(seen.interrupts).toEqual([]);
         expect((yield* conversation.conversations).current).toBe(first);
-        expect((yield* conversation.transcript).map(({ parts }) => parts)).toEqual([
+        expect(Arr.map(yield* conversation.transcript, ({ parts }) => parts)).toEqual([
           [{ type: "text", content: "slow" }],
         ]);
         expect((yield* conversation.conversations).earlier).toEqual([
@@ -903,9 +920,9 @@ test("a harness change saved mid-turn waits for the next message, which starts a
         expect(pi.opened).toEqual([second]);
         const fs = yield* FileSystem.FileSystem;
         expect(
-          Schema.decodeUnknownSync(SESSION_FILE)(
+          yield* Schema.decodeEffect(SESSION_FILE)(
             yield* fs.readFileString(`${dir}/flock-chat.json`),
-          ),
+          ).pipe(Effect.orDie),
         ).toEqual({ session: second, harness: "pi" });
         expect(seen.sessions).toHaveLength(1);
       }),
@@ -939,7 +956,7 @@ test("a conversation saved on Claude Code is kept while the settings name Pi, un
     ({ conversation, seen }) =>
       Effect.gen(function* () {
         expect((yield* conversation.conversations).current).toBe("claude-kept");
-        expect((yield* conversation.transcript).map(({ parts }) => parts)).toEqual([
+        expect(Arr.map(yield* conversation.transcript, ({ parts }) => parts)).toEqual([
           [{ type: "text", content: "on Claude Code" }],
         ]);
         yield* Stream.runDrain(conversation.send("hello", null, false));
@@ -1030,7 +1047,10 @@ test("Earlier conversations merges every installed harness's, newest first, ten 
 
 test("an earlier conversation on the set harness is reopened on it, with the settings as they were", () => {
   const settings = {
-    current: Schema.decodeUnknownSync(DesktopSettings)({
+    current: flow(
+      Schema.decodeResult(DesktopSettings),
+      Result.getOrThrow,
+    )({
       proactive: false,
       chatHarness: "claude",
       chatModel: "sonnet",
@@ -1061,7 +1081,7 @@ test("an earlier conversation on the set harness is reopened on it, with the set
       Effect.gen(function* () {
         yield* conversation.reopen({ session: "claude-earlier", harness: "claude" });
         expect((yield* conversation.conversations).current).toBe("claude-earlier");
-        expect((yield* conversation.transcript).map(({ parts }) => parts)).toEqual([
+        expect(Arr.map(yield* conversation.transcript, ({ parts }) => parts)).toEqual([
           [{ type: "text", content: "earlier on Claude Code" }],
         ]);
         expect(settings.current).toEqual({
@@ -1078,7 +1098,10 @@ test("an earlier conversation on the set harness is reopened on it, with the set
 
 test("reopening another harness's conversation moves the chat to that harness and holds it, and Start fresh stays on the set harness", () => {
   const settings = {
-    current: Schema.decodeUnknownSync(DesktopSettings)({
+    current: flow(
+      Schema.decodeResult(DesktopSettings),
+      Result.getOrThrow,
+    )({
       proactive: false,
       chatHarness: "claude",
       chatModel: "sonnet",
@@ -1107,9 +1130,9 @@ test("reopening another harness's conversation moves the chat to that harness an
         expect(settings.current).toEqual({ proactive: false, chatHarness: "pi" });
         const fs = yield* FileSystem.FileSystem;
         expect(
-          Schema.decodeUnknownSync(SESSION_FILE)(
+          yield* Schema.decodeEffect(SESSION_FILE)(
             yield* fs.readFileString(`${dir}/flock-chat.json`),
-          ),
+          ).pipe(Effect.orDie),
         ).toEqual({ session: fresh, harness: "pi" });
         yield* Stream.runDrain(conversation.send("fresh", null, false));
         expect(pi.opened).toEqual(["pi-earlier", fresh]);
@@ -1207,7 +1230,9 @@ test("Desktop's own turn on Pi records its harness, model and token counts", () 
         for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
           yield* TestClock.withLive(Effect.sleep("10 millis"));
         const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
-        expect(Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(usage)).toMatchObject({
+        expect(
+          yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(usage).pipe(Effect.orDie),
+        ).toMatchObject({
           turn: "desktop",
           harness: "pi",
           model: "openai-codex/gpt-6.1-sol",
@@ -1230,7 +1255,7 @@ test("the account says a turn is under way only while one is, Desktop's own or t
     {
       items: [item("r1:asking", "decision")],
       proactive: true,
-      holds: (text) => text.startsWith(DESKTOP_SAID),
+      holds: (text) => pipe_(text, Str.startsWith(DESKTOP_SAID)),
       gate,
     },
     answered,
@@ -1276,7 +1301,7 @@ test("runsOn is null until a session opens, then what the driver was opened with
         const before = yield* account(conversation);
         expect(before).toMatchObject({ heldOn: "claude", runsOn: null, turning: false });
         expect(
-          before.harnesses.map(({ harness, label, installed, offered }) => ({
+          Arr.map(before.harnesses, ({ harness, label, installed, offered }) => ({
             harness,
             label,
             installed,
@@ -1321,7 +1346,9 @@ test("heldOn changes with the next message after a harness change, not when the 
 });
 
 test("the account is told again when Desktop retells it, with each harness's list as it is then", () => {
-  const settings = { current: Schema.decodeUnknownSync(DesktopSettings)({ proactive: false }) };
+  const settings = {
+    current: flow(Schema.decodeResult(DesktopSettings), Result.getOrThrow)({ proactive: false }),
+  };
   const retold = Effect.runSync(Queue.unbounded<void>());
   return withChat(
     { items: [], proactive: false, settings, retold: Stream.fromQueue(retold) },
@@ -1339,7 +1366,7 @@ test("the account is told again when Desktop retells it, with each harness's lis
         yield* eventually(() => told.length === 2);
         const ids = (choices: ChatChoices) => {
           const offered = choices.harnesses[0]!.offered;
-          return offered.from === "reading" ? [] : offered.models.map(({ id }) => id);
+          return offered.from === "reading" ? [] : Arr.map(offered.models, ({ id }) => id);
         };
         expect(ids(told[0]!)).not.toContain("claude-opus-5");
         expect(ids(told[1]!)).toContain("claude-opus-5");
@@ -1348,7 +1375,9 @@ test("the account is told again when Desktop retells it, with each harness's lis
 });
 
 test("windows start the set harness's read, choosing another starts its read, and the chat tool retries a failed list", () => {
-  const settings = { current: Schema.decodeUnknownSync(DesktopSettings)({ proactive: false }) };
+  const settings = {
+    current: flow(Schema.decodeResult(DesktopSettings), Result.getOrThrow)({ proactive: false }),
+  };
   const changed = Effect.runSync(Queue.unbounded<void>());
   const reads = { claude: 0, pi: 0 };
   return withChat(
@@ -1424,7 +1453,9 @@ test("windows start the set harness's read, choosing another starts its read, an
 });
 
 test("a harness changed while the first message waits for its list applies to the following message", () => {
-  const settings = { current: Schema.decodeUnknownSync(DesktopSettings)({ proactive: false }) };
+  const settings = {
+    current: flow(Schema.decodeResult(DesktopSettings), Result.getOrThrow)({ proactive: false }),
+  };
   const pi = fakeDriver([]);
   return withChat(
     {

@@ -2,6 +2,11 @@
 // and count its cards, decide what each one offers and read what it names. No I/O and no
 // Bun-only import: a browser bundle imports this too.
 
+import * as Struct from "effect/Struct";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Effect, Option, Schema, SchemaGetter } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -72,7 +77,7 @@ export type FlowLaneAction = typeof FlowLaneAction.Type;
 export const FlowStrip = Schema.Struct({
   glyphs: Schema.Array(Schema.Struct({ title: Schema.String, state: FlowState })),
   /** How many of the glyphs, at the end, are the Release row's. */
-  release: Schema.Number,
+  release: Schema.Finite,
   current: Schema.NullOr(
     Schema.Struct({ title: Schema.String, said: Schema.NullOr(Schema.String) }),
   ),
@@ -238,7 +243,7 @@ export function readyToRelease(facts: ReleaseFacts): ReadyToRelease {
     if (facts.draft) lack("not-draft", `${label} is a draft`);
     const checks = facts.checks ?? { state: "unchecked" };
     if (checks.state === "failed")
-      lack("checks", `${checks.name} failed at ${checks.at.slice(0, 7)}`);
+      lack("checks", `${checks.name} failed at ${pipe(checks.at, Str.slice(0, 7))}`);
     else if (checks.state === "running") lack("checks", "Collie's checks are still running", true);
     else if (checks.state === "unchecked")
       lack("checks", "its checks have not all run at its head");
@@ -262,17 +267,17 @@ export function readyToRelease(facts: ReleaseFacts): ReadyToRelease {
 export const RunningCheck = Schema.Struct({
   name: Schema.String,
   pass: Pass,
-  round: Schema.NullOr(Schema.Number),
+  round: Schema.NullOr(Schema.Finite),
   revision: Schema.String,
   base: Schema.NullOr(Schema.String),
   /** The pipeline job a `ci` pass waits on. */
   job: Schema.optionalKey(Schema.String),
   /** How long it has run, or null where the marker does not say when it started. */
-  elapsedMs: Schema.NullOr(Schema.Number),
+  elapsedMs: Schema.NullOr(Schema.Finite),
   /** The median of its last five completed runs in this repository, or null for none. */
-  usualMs: Schema.NullOr(Schema.Number),
+  usualMs: Schema.NullOr(Schema.Finite),
   /** Other checks this host is running now. */
-  others: Schema.Number,
+  others: Schema.Finite,
   sentence: Schema.String,
   /** Where its output is being written, or null for a marker that does not say. */
   log: Schema.NullOr(Schema.String),
@@ -327,7 +332,7 @@ export const TaskView = Schema.Struct({
   /** Its leading Run reported something nobody has seen yet; absent from an older host. */
   unseen: Schema.optionalKey(Schema.Boolean),
   /** When the leading Run ended, or null while it has not. Orders Waiting on you. */
-  ended: Schema.NullOr(Schema.Number),
+  ended: Schema.NullOr(Schema.Finite),
   /** What the forge last said about the merge request, where Collie has asked. */
   mrState: Schema.NullOr(MrState),
   /** What checked the open merge request's branch, or null where no merge request waits. */
@@ -349,7 +354,7 @@ export const TaskView = Schema.Struct({
   /** Every Run of this Task, newest first, for the drawer. */
   runs: Schema.Array(Schema.String),
   /** When this Task last changed, in epoch milliseconds, which is what orders the board. */
-  at: Schema.Number,
+  at: Schema.Finite,
   /** The strip its card draws of its Flow; absent from an older host. */
   flow: Schema.optionalKey(FlowStrip),
 });
@@ -421,18 +426,18 @@ export type Attention = typeof Attention.Type;
 /** What a Run cost and how it went, for `run metrics` and the detail panel. */
 export const Metrics = Schema.Struct({
   /** From the Run's creation to the first collected verification, in seconds. */
-  timeToFirstEvidence: Schema.NullOr(Schema.Number),
+  timeToFirstEvidence: Schema.NullOr(Schema.Finite),
   verifications: Schema.Struct({
-    pass: Schema.Number,
-    fail: Schema.Number,
-    unstable: Schema.Number,
-    byCollie: Schema.Number,
+    pass: Schema.Finite,
+    fail: Schema.Finite,
+    unstable: Schema.Finite,
+    byCollie: Schema.Finite,
   }),
-  slices: Schema.Struct({ done: Schema.Number, total: Schema.Number }),
+  slices: Schema.Struct({ done: Schema.Finite, total: Schema.Finite }),
   /** Fix rounds plus halts: how much of this Run was doing work again. */
-  rework: Schema.Number,
+  rework: Schema.Finite,
   /** The largest context sample any agent reported, and which agent. */
-  peakContext: Schema.NullOr(Schema.Struct({ agent: Schema.String, tokens: Schema.Number })),
+  peakContext: Schema.NullOr(Schema.Struct({ agent: Schema.String, tokens: Schema.Finite })),
   halts: Schema.Array(Schema.String),
   obstacles: Schema.Array(Schema.String),
 });
@@ -467,7 +472,7 @@ export const MrDetails = Schema.TaggedStruct("Details", {
   approvals: Schema.String,
   /** Whether a discussion is still blocking, which is the one a reviewer chases. */
   unresolved: Schema.Boolean,
-  notes: Schema.Number,
+  notes: Schema.Finite,
   /** Seven characters: enough to tell two heads apart, short enough to read. */
   headSha: Schema.String,
   /** The head revision in full, which evidence is matched against, or "" where unsaid. */
@@ -477,7 +482,7 @@ export const MrDetails = Schema.TaggedStruct("Details", {
   /** When the forge says it merged, where it says. */
   mergedAt: Schema.optionalKey(Schema.String),
   /** When the forge last saw it change, in epoch milliseconds, or 0 when it did not say. */
-  updatedAt: Schema.Number,
+  updatedAt: Schema.Finite,
   url: Schema.String,
   /** Whether it merges itself once its checks are green. */
   autoMerge: Schema.optionalKey(Schema.Boolean),
@@ -535,7 +540,7 @@ export const ReviewFinding = Schema.Struct({
   severity: Schema.String,
   title: Schema.String,
   file: Schema.NullOr(Schema.String),
-  line: Schema.NullOr(Schema.Number),
+  line: Schema.NullOr(Schema.Finite),
   detail: Schema.NullOr(Schema.String),
 });
 export type ReviewFinding = typeof ReviewFinding.Type;
@@ -717,7 +722,7 @@ const FlowNodeFields = {
   ranOn: Schema.NullOr(Schema.String),
   questions: Schema.Array(FlowQuestion),
   /** The Wave a Repo run's repository is in. */
-  wave: Schema.optional(Schema.Number),
+  wave: Schema.optional(Schema.Finite),
   link: Schema.optional(FlowLink),
   agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
   primary: Schema.optionalKey(Schema.NullOr(FlowAction)),
@@ -727,7 +732,7 @@ const FlowNodeFields = {
   log: Schema.optional(Schema.NullOr(Schema.Int)),
   why: Schema.optional(Schema.NullOr(Schema.String)),
   evidence: Schema.optional(Schema.Int),
-  usual: Schema.optional(Schema.NullOr(Schema.Number)),
+  usual: Schema.optional(Schema.NullOr(Schema.Finite)),
   long: Schema.optional(Schema.Boolean),
   pauseTarget: Schema.optional(Schema.String),
   notes: Schema.optional(
@@ -861,7 +866,7 @@ export const RunDetail = Schema.Struct({
     metrics: Metrics,
   }),
   /** When this Run finished, so the merge-request panel can say what moved since. */
-  finishedAt: Schema.Number,
+  finishedAt: Schema.Finite,
   /** What the host's merge watch last read, for a Run that has a merge request. */
   mr: Schema.NullOr(MrPanel),
   findings: Schema.Array(ReviewFinding),
@@ -1021,7 +1026,10 @@ export const BoardMessage = Schema.Union([
 export type BoardMessage = typeof BoardMessage.Type;
 
 /** Anything else a host will not do, said in one sentence a caller can show. */
-export class HostRefused extends Schema.TaggedError<HostRefused>()("HostRefused", {
+export class HostRefused extends Schema.TaggedError<
+  HostRefused,
+  { readonly brand: unique symbol }
+>()("HostRefused", {
   reason: Schema.String,
 }) {}
 
@@ -1031,7 +1039,10 @@ export class HostRefused extends Schema.TaggedError<HostRefused>()("HostRefused"
  * it has changed its mind about, and changing an accepted request silently is the one
  * thing an idempotency key must never do.
  */
-export class RequestConflict extends Schema.TaggedError<RequestConflict>()("RequestConflict", {
+export class RequestConflict extends Schema.TaggedError<
+  RequestConflict,
+  { readonly brand: unique symbol }
+>()("RequestConflict", {
   request: Schema.String,
   reason: Schema.String,
 }) {}
@@ -1069,9 +1080,10 @@ export const Controlled = Schema.Struct({
  */
 export const leftSaid = (done: typeof Controlled.Type): string | null => {
   if (done.left.length === 0) return null;
-  if (done.closed !== undefined) return `${done.runId} has finished, but ${done.left.join("; ")}.`;
+  if (done.closed !== undefined)
+    return `${done.runId} has finished, but ${Arr.join(done.left, "; ")}.`;
   const what = `${done.set ? done.control : `un${done.control}`} ${done.runId}`;
-  return `Recorded ${what}, but ${done.left.join("; ")}.`;
+  return `Recorded ${what}, but ${Arr.join(done.left, "; ")}.`;
 };
 
 /** What a start became: the run it is, and whether this call is what made it. */
@@ -1120,7 +1132,10 @@ export const ProposalCarried = Schema.Struct({
 export type ProposalCarried = typeof ProposalCarried.Type;
 
 /** A yes or a no the proposals journal would not take, and which rule it broke. */
-export class ProposalRefused extends Schema.TaggedError<ProposalRefused>()("ProposalRefused", {
+export class ProposalRefused extends Schema.TaggedError<
+  ProposalRefused,
+  { readonly brand: unique symbol }
+>()("ProposalRefused", {
   refused: Schema.String,
   detail: Schema.String,
 }) {}
@@ -1165,7 +1180,7 @@ export type ActionResult = typeof ActionResult.Type;
 export const CleanupItem = Schema.Struct({
   kind: Schema.String,
   target: Schema.String,
-  bytes: Schema.Number,
+  bytes: Schema.Finite,
   reason: Schema.String,
 });
 export type CleanupItem = typeof CleanupItem.Type;
@@ -1182,7 +1197,7 @@ export type CleanupKept = typeof CleanupKept.Type;
 export const CleanupReport = Schema.Struct({
   remove: Schema.Array(CleanupItem),
   keep: Schema.Array(CleanupKept),
-  bytes: Schema.Number,
+  bytes: Schema.Finite,
 });
 export type CleanupReport = typeof CleanupReport.Type;
 
@@ -1507,7 +1522,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       change: IntentChangeSchema,
       propagate: Schema.Boolean,
       request: Schema.String,
-      expected: Schema.optionalKey(Schema.Number),
+      expected: Schema.optionalKey(Schema.Finite),
     },
     success: ChangedIntent,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -1781,7 +1796,15 @@ export interface MrRef {
 export type MrForge = "gitlab" | "github";
 
 export function forgeOfRef(ref: MrRef): MrForge {
-  return ref.project?.split("/")[0]?.toLowerCase() === "github.com" ? "github" : "gitlab";
+  return Option.getOrUndefined(
+    Option.flatMap(Option.fromNullishOr(ref.project), (present__) =>
+      Option.map(Option.fromNullishOr(Str.split(present__, "/")[0]), (present___) =>
+        Str.toLowerCase(present___),
+      ),
+    ),
+  ) === "github.com"
+    ? "github"
+    : "gitlab";
 }
 
 const MR_TARGET = /^mr:(?:(.*)([!#]))?(\d+)$/;
@@ -1797,7 +1820,7 @@ export function readMrRef(
   text: string,
   typedIn?: { readonly project: string | null },
 ): MrRef | null {
-  const said = text.trim();
+  const said = Str.trim(text);
   const target = MR_TARGET.exec(said);
   if (target) {
     const [, project = "", sign, iid] = target;
@@ -1816,12 +1839,12 @@ export function readMrRef(
 
 /** `mr:gitlab.example.com/group/project!42`, `mr:github.com/owner/repo#30` or the bare `mr:42`. */
 export function parseMrTarget(target: string): MrRef | null {
-  return target.startsWith("mr:") ? readMrRef(target) : null;
+  return pipe(target, Str.startsWith("mr:")) ? readMrRef(target) : null;
 }
 
 /** A merge request or pull request URL, the way a forge reports what it opened. */
 export function parseMrUrl(url: string): MrRef | null {
-  return url.trim().startsWith("mr:") ? null : readMrRef(url);
+  return pipe(Str.trim(url), Str.startsWith("mr:")) ? null : readMrRef(url);
 }
 
 /** `group/project` of `host/group/project`: the host is where, not what. */
@@ -1839,7 +1862,7 @@ export function mrWords(ref: MrRef) {
   return {
     target: ref.project === null ? `mr:${ref.iid}` : `mr:${project}${sign}${ref.iid}`,
     label: ref.project === null ? ref.iid : `${path}${sign}${ref.iid}`,
-    short: `${project.split("/").pop()}${sign}${ref.iid}`,
+    short: `${Str.split(project, "/").pop()}${sign}${ref.iid}`,
     url:
       ref.project === null
         ? null
@@ -1863,7 +1886,7 @@ export const offerInput = (drawn: Schema.Json | null, typed: Readonly<Record<str
   const takes = decodeArguments(drawn);
   const input: { [name: string]: Schema.Json } = {};
   if (takes._tag === "None") return input;
-  for (const [name, field] of Object.entries(takes.value.properties ?? {})) {
+  for (const [name, field] of Rec.toEntries(takes.value.properties ?? {})) {
     const text = typed[name] ?? "";
     if (text === "" && !(takes.value.required ?? []).includes(name)) continue;
     const parsed = isTextField(field) ? Option.none() : parseJson(text);
@@ -1878,11 +1901,11 @@ export const givenOfferInput = (
   given: Readonly<Record<string, string>>,
 ): { [name: string]: Schema.Json } => {
   const typed = offerInput(drawn, given);
-  return Object.fromEntries(
-    Object.entries(given).map(([name, text]) => [
-      name,
-      Object.hasOwn(typed, name) ? typed[name]! : text,
-    ]),
+  return Rec.fromEntries(
+    Arr.map(
+      Rec.toEntries(given),
+      ([name, text]) => [name, Rec.has(typed, name) ? typed[name]! : text] as const,
+    ),
   );
 };
 
@@ -1890,7 +1913,7 @@ export const givenOfferInput = (
 export const offerFields = (drawn: Schema.Json | null) => {
   const takes = decodeArguments(drawn);
   if (takes._tag === "None") return [];
-  return Object.keys(takes.value.properties ?? {}).map((name) => ({
+  return Arr.map(Struct.keys(takes.value.properties ?? {}), (name) => ({
     name,
     required: (takes.value.required ?? []).includes(name),
   }));
@@ -1939,7 +1962,7 @@ export function flowActions(
   const offered = (node: FlowRun, lane: FlowLane, facts: FlowActionFacts): FlowRun => {
     let primary: FlowAction | null = null;
     const actions: FlowAction[] = [];
-    const live = node.agent != null && view.agents.some((one) => one.name === node.agent);
+    const live = node.agent != null && Arr.some(view.agents, (one) => one.name === node.agent);
     const proposal = node.proposal ?? facts.proposal ?? undefined;
     if (node.link !== undefined) {
       if (node.link.run !== null) primary = "open";
@@ -1947,7 +1970,7 @@ export function flowActions(
     } else if (node.kind === "offer") {
       if (node.id === `offer:${view.offer?.id}` && lane.run === view.run) primary = "start";
     } else if (
-      node.questions.some((one) => one.id !== undefined && (one.open ?? one.answered === null))
+      Arr.some(node.questions, (one) => one.id !== undefined && (one.open ?? one.answered === null))
     ) {
       primary = "answer";
       if (live) actions.push("terminal");
@@ -1981,9 +2004,17 @@ export function flowActions(
       node.state === "expected"
         ? node
         : flow.current?.run === lane.run && flow.current.node === node.id
-          ? lane.nodes
-              .slice(lane.nodes.findIndex((one) => one.id === node.id) + 1)
-              .find((one) => one.declared && !one.offPath && one.state === "expected")
+          ? Option.getOrUndefined(
+              Arr.findFirst(
+                lane.nodes.slice(
+                  Option.getOrElse(
+                    Arr.findFirstIndex(lane.nodes, (one) => one.id === node.id),
+                    () => -1,
+                  ) + 1,
+                ),
+                (one) => one.declared && !one.offPath && one.state === "expected",
+              ),
+            )
           : undefined;
     if (running && step && target?.declared && !target.offPath) actions.push("pause");
     if (
@@ -1992,7 +2023,14 @@ export function flowActions(
       node.state !== "not-run" &&
       node.kind !== "question" &&
       (node.state !== "done" ||
-        lane.nodes.find((one) => one.id === node.id)?.runs.some((one) => one.state === "expected"))
+        Option.getOrUndefined(
+          Option.map(
+            Option.fromNullishOr(
+              Option.getOrUndefined(Arr.findFirst(lane.nodes, (one) => one.id === node.id)),
+            ),
+            (present) => Arr.some(present.runs, (one) => one.state === "expected"),
+          ),
+        ))
     )
       actions.push("note");
     if (primary === "retry" && step) actions.push("retry-noted");
@@ -2006,7 +2044,7 @@ export function flowActions(
       proposal: node.wait === "proposal" ? proposal : undefined,
     };
   };
-  const lanes = flow.lanes.map((lane): FlowLane => {
+  const lanes = Arr.map(flow.lanes, (lane): FlowLane => {
     const facts = factsOf(lane);
     const settled =
       lane.run === view.run
@@ -2019,18 +2057,22 @@ export function flowActions(
     return {
       ...lane,
       actions,
-      nodes: lane.nodes.map((node): FlowNode => ({
+      nodes: Arr.map(lane.nodes, (node): FlowNode => ({
         ...offered(node, lane, facts),
-        runs: node.runs.map((one) => offered(one, lane, facts)),
-        links: node.links?.map((one) => offered(one, lane, facts)),
+        runs: Arr.map(node.runs, (one) => offered(one, lane, facts)),
+        links: Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(node.links), (present_) =>
+            Arr.map(present_, (one) => offered(one, lane, facts)),
+          ),
+        ),
       })),
     };
   });
-  const leading = lanes.find((lane) => lane.run === view.run);
+  const leading = Option.getOrUndefined(Arr.findFirst(lanes, (lane) => lane.run === view.run));
   const release =
     flow.release === null || leading === undefined
       ? flow.release
-      : flow.release.map((node): FlowNode => ({
+      : Arr.map(flow.release, (node): FlowNode => ({
           ...offered(node, leading, factsOf(leading)),
           runs: node.runs,
         }));
@@ -2133,7 +2175,7 @@ export function dispositionActions(view: TaskView): CardAction[] {
   if (!isSettled(view.state)) return [];
   const kinds: DispositionKind[] = ["merged", "abandoned"];
   if (view.mrState === "closed") kinds.push("superseded");
-  return kinds.map((kind) => dispose(view, kind));
+  return Arr.map(kinds, (kind) => dispose(view, kind));
 }
 
 /**
@@ -2158,8 +2200,8 @@ export const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
   ["working", "Working"],
   ["finished", "Finished"],
 ];
-const SECTION_ORDER = new Map(SECTIONS.map(([section], at) => [section, at]));
-const STATE_RANK = new Map<TaskState, number>(STATE_ORDER.map((state, at) => [state, at]));
+const SECTION_ORDER = new Map(Arr.map(SECTIONS, ([section], at) => [section, at]));
+const STATE_RANK = new Map<TaskState, number>(Arr.map(STATE_ORDER, (state, at) => [state, at]));
 
 /**
  * The board's order: the sections, then the state order inside Needs you and what is
@@ -2194,32 +2236,35 @@ export interface Sections {
  */
 export function foldWaiting(waiting: ReadonlyArray<TaskView>, now: number) {
   const old = (view: TaskView) => !view.ready && (view.ended ?? view.at) < now - WAIT_FOLD_MS;
-  return { recent: waiting.filter((view) => !old(view)), older: waiting.filter(old) };
+  return { recent: Arr.filter(waiting, (view) => !old(view)), older: Arr.filter(waiting, old) };
 }
 
 /** Finished, split by whether a report in it is still unseen: those are drawn outside the collapsed list. */
 export function foldFinished(finished: ReadonlyArray<TaskView>) {
   return {
-    unseen: finished.filter((view) => view.unseen === true),
-    seen: finished.filter((view) => view.unseen !== true),
+    unseen: Arr.filter(finished, (view) => view.unseen === true),
+    seen: Arr.filter(finished, (view) => view.unseen !== true),
   };
 }
 
 /** What a search is matched against: what a human remembers about a Task, and no ids. */
 function haystack(view: TaskView): string {
-  return [
-    view.name,
-    view.project,
-    view.branch ?? "",
-    ...view.agents.flatMap((agent) => [agent.name, agent.now ?? ""]),
-  ]
-    .join(" ")
-    .toLowerCase();
+  return Str.toLowerCase(
+    Arr.join(
+      [
+        view.name,
+        view.project,
+        view.branch ?? "",
+        ...Arr.flatMap(view.agents, (agent) => [agent.name, agent.now ?? ""]),
+      ],
+      " ",
+    ),
+  );
 }
 
 export function matchesTask(view: TaskView, query: string): boolean {
-  const wanted = query.trim().toLowerCase();
-  return wanted === "" || haystack(view).includes(wanted);
+  const wanted = Str.toLowerCase(Str.trim(query));
+  return wanted === "" || pipe(haystack(view), Str.includes(wanted));
 }
 
 /**
@@ -2228,12 +2273,12 @@ export function matchesTask(view: TaskView, query: string): boolean {
  * section must not be visible in another.
  */
 export function sectionsOf(views: ReadonlyArray<TaskView>, query: string): Sections {
-  const found = views.filter((view) => matchesTask(view, query));
+  const found = Arr.filter(views, (view) => matchesTask(view, query));
   return {
-    needs: found.filter((view) => sectionOf(view) === "needs-you"),
-    working: found.filter((view) => sectionOf(view) === "working"),
-    waiting: found.filter((view) => sectionOf(view) === "waiting"),
-    finished: found.filter((view) => sectionOf(view) === "finished"),
+    needs: Arr.filter(found, (view) => sectionOf(view) === "needs-you"),
+    working: Arr.filter(found, (view) => sectionOf(view) === "working"),
+    waiting: Arr.filter(found, (view) => sectionOf(view) === "waiting"),
+    finished: Arr.filter(found, (view) => sectionOf(view) === "finished"),
   };
 }
 
@@ -2249,9 +2294,9 @@ export interface HeaderSentence {
  * because a header that says 56 over four cards worth a look reads as 56 obligations.
  */
 export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): HeaderSentence {
-  const needs = views.filter((view) => sectionOf(view) === "needs-you").length;
-  const working = views.filter((view) => sectionOf(view) === "working");
-  const quiet = working.filter((view) => view.state === "quiet").length;
+  const needs = Arr.filter(views, (view) => sectionOf(view) === "needs-you").length;
+  const working = Arr.filter(views, (view) => sectionOf(view) === "working");
+  const quiet = Arr.filter(working, (view) => view.state === "quiet").length;
   const opening =
     needs === 0
       ? "Nothing needs you."
@@ -2259,14 +2304,14 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
         // it is a pane to go to rather than anything this board can answer.
         `${needs === 1 ? "One task is" : `${needs} tasks are`} waiting on you.`;
   const gone = quiet === 0 ? "" : `, ${quiet} gone quiet`;
-  const waitingAll = views.filter((view) => sectionOf(view) === "waiting");
+  const waitingAll = Arr.filter(views, (view) => sectionOf(view) === "waiting");
   const waiting = now === undefined ? waitingAll : foldWaiting(waitingAll, now).recent;
-  const ready = waiting.filter((view) => view.ready).length;
+  const ready = Arr.filter(waiting, (view) => Boolean(view.ready)).length;
   const held = [
     ...(ready === 0 ? [] : [`${ready} ready to release`]),
     ...(waiting.length === ready ? [] : [`${waiting.length - ready} waiting on you`]),
   ];
-  const inHand = held.length === 0 ? "" : ` ${held.join(", ")}.`;
+  const inHand = held.length === 0 ? "" : ` ${Arr.join(held, ", ")}.`;
   return { text: `${opening}${inHand} ${working.length} working${gone}.`, urgent: needs > 0 };
 }
 
@@ -2277,7 +2322,7 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
 export function mrLabel(mr: string): string {
   const ref = readMrRef(mr);
   if (ref) return mrWords(ref).label;
-  const bare = mr.startsWith("mr:") ? mr.slice(3) : mr;
+  const bare = pipe(mr, Str.startsWith("mr:")) ? pipe(mr, Str.slice(3)) : mr;
   const host = /^[^/!]+\.[^/!]+\/(.+)$/.exec(bare);
   return host ? host[1]! : bare;
 }

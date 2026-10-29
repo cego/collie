@@ -1,6 +1,10 @@
 // The Flock chat's window hears AG-UI, which Desktop's main process makes from the Agent
 // SDK's messages. Tested against streams recorded from a real session.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { type SdkMessage, startState, step } from "../desktop/src/bun/agui";
 import type { AguiEvent } from "../desktop/src/shared/agui";
@@ -19,10 +23,13 @@ const eventsOf = (messages: ReadonlyArray<SdkMessage>) => {
 };
 
 /** Each run of deltas to one message as one entry, so a test reads a turn in order. */
-const sequence = (events: ReadonlyArray<AguiEvent>) =>
-  events
-    .map((event) => event.type)
-    .filter((type, at, all) => !(type.endsWith("_CONTENT") && all[at - 1] === type));
+const sequence = (events: ReadonlyArray<AguiEvent>) => {
+  const types = Arr.map(events, (event) => event.type);
+  return Arr.filter(
+    types,
+    (type, at) => !(pipe(type, Str.endsWith("_CONTENT")) && types[at - 1] === type),
+  );
+};
 
 test("a turn that calls a Collie tool is the call, its result and the answer, in one run", () => {
   const events = eventsOf(toolTurn);
@@ -42,14 +49,17 @@ test("a turn that calls a Collie tool is the call, its result and the answer, in
     toolCallId: "toolu_017VQNFZFbGXZjC6trgtC2uz",
     toolCallName: "mcp__collie__collie_herd",
   });
-  const result = events.find((event) => event.type === "TOOL_CALL_RESULT");
+  const result = Option.getOrUndefined(
+    Arr.findFirst(events, (event) => event.type === "TOOL_CALL_RESULT"),
+  );
   expect(result).toMatchObject({
     toolCallId: "toolu_017VQNFZFbGXZjC6trgtC2uz",
     content: expect.stringContaining("run vm-mk:run-04ab8fe5: Fix board bugs"),
   });
-  const answer = events
-    .flatMap((event) => (event.type === "TEXT_MESSAGE_CONTENT" ? [event.delta] : []))
-    .join("");
+  const answer = Arr.join(
+    Arr.flatMap(events, (event) => (event.type === "TEXT_MESSAGE_CONTENT" ? [event.delta] : [])),
+    "",
+  );
   expect(answer).toBe(
     'The board has one Run, vm-mk:run-04ab8fe5 ("Fix board bugs" on branch mk/board), which is working on round 2 of 5 of the review fixes, and nothing needs you right now.',
   );
@@ -74,15 +84,18 @@ test("thinking is a reasoning message of its own, before the answer", () => {
     "TEXT_MESSAGE_END",
     "RUN_FINISHED",
   ]);
-  const thought = events
-    .flatMap((event) => (event.type === "REASONING_MESSAGE_CONTENT" ? [event.delta] : []))
-    .join("");
+  const thought = Arr.join(
+    Arr.flatMap(events, (event) =>
+      event.type === "REASONING_MESSAGE_CONTENT" ? [event.delta] : [],
+    ),
+    "",
+  );
   expect(thought).toStartWith("Starting with 17 unfinished, I'm tracking each hour");
 });
 
 test("the next turn is a run of its own, and a failed one ends in an error", () => {
   const twice = eventsOf([...toolTurn, ...toolTurn]);
-  expect(twice.filter((event) => event.type === "RUN_STARTED")).toEqual([
+  expect(Arr.filter(twice, (event) => event.type === "RUN_STARTED")).toEqual([
     { type: "RUN_STARTED", threadId: "session-1", runId: "session-1:1" },
     { type: "RUN_STARTED", threadId: "session-1", runId: "session-1:2" },
   ]);

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import * as Cause from "effect/Cause";
 // Whether several Claude agents started at once each take their first prompt, against a
 // real herdr and a real Claude. A fake herdr cannot answer this: the race is herdr calling
 // an agent ready for input before Claude has drawn the prompt the pointer is typed into.
@@ -17,8 +18,13 @@
 // awaited, the prompt sent and confirmed — so what it proves is the shipped path. It costs
 // one short Haiku turn per agent.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { platformLayer } from "../src/platform";
-import { Clock, Effect, FileSystem, ManagedRuntime } from "effect";
+import { forgeHttpLayer } from "../src/forge/http";
+import { Clock, Effect, FileSystem, Layer, ManagedRuntime } from "effect";
 import { Agents, agentsLayer, type AgentAsk } from "../src/agents";
 import { controlDir } from "../src/compaction";
 import { readEnv } from "../src/env";
@@ -29,7 +35,7 @@ import { deliveriesOf } from "../src/steering";
 // this script is not Collie's CLI.
 Bun.argv[1] = new URL("../src/main.ts", import.meta.url).pathname;
 
-const runtime = ManagedRuntime.make(platformLayer);
+const runtime = ManagedRuntime.make(forgeHttpLayer.pipe(Layer.provideMerge(platformLayer)));
 
 const flag = (name: string) => process.argv.indexOf(name);
 /** More than this at once took the machine down: every probe carries its own MCP servers. */
@@ -47,14 +53,14 @@ const live = Effect.fn("live.promptRace")(function* (
   // A probe runs inside a herdr pane; this must never be started from one, or a probe's
   // own status line could start it again.
   if (processEnv.HERDR_ENV !== undefined || processEnv.HERDR_PANE_ID !== undefined) {
-    return yield* Effect.fail(
-      new Error("run this from outside herdr: unset HERDR_ENV and HERDR_PANE_ID"),
+    return yield* new Cause.IllegalArgumentError(
+      "run this from outside herdr: unset HERDR_ENV and HERDR_PANE_ID",
     );
   }
   const socket = processEnv.HERDR_SOCKET_PATH ?? "";
-  if (!socket.includes("/sessions/")) {
-    return yield* Effect.fail(
-      new Error(`HERDR_SOCKET_PATH must be a scratch session's socket, not "${socket}"`),
+  if (!pipe_(socket, Str.includes("/sessions/"))) {
+    return yield* new Cause.IllegalArgumentError(
+      `HERDR_SOCKET_PATH must be a scratch session's socket, not "${socket}"`,
     );
   }
   const fs = yield* FileSystem.FileSystem;
@@ -100,7 +106,7 @@ const live = Effect.fn("live.promptRace")(function* (
     const found = new Map<string, string>();
     for (const agent of yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []))) {
       const tail = yield* herdr.paneRead(agent.paneId, 12).pipe(Effect.orElseSucceed(() => ""));
-      found.set(agent.name, tail.trim().split("\n").slice(-6).join(" ⏎ "));
+      found.set(agent.name, Arr.join(Str.split(Str.trim(tail), "\n").slice(-6), " ⏎ "));
     }
     return found;
   });
@@ -143,24 +149,27 @@ const live = Effect.fn("live.promptRace")(function* (
   lines.push(`|---|---|---|---|---|---|`);
   let took = 0;
   for (const row of rows.done) {
-    const step = deliveries.find(
-      (one) => one.delivery.cause.kind === "step" && one.delivery.cause.ref === row.operation,
+    const step = Option.getOrUndefined(
+      Arr.findFirst(
+        deliveries,
+        (one) => one.delivery.cause.kind === "step" && one.delivery.cause.ref === row.operation,
+      ),
     )?.delivery;
     const agent = step?.agent ?? row.operation;
     const events = yield* fs
       .readFileString(`${yield* controlDir(stateDir, agent)}/events.jsonl`)
       .pipe(Effect.orElseSucceed(() => ""));
     // The submit hook recording this delivery's own id is the harness saying it took it.
-    const hooked = step !== undefined && events.includes(`"delivery":"${step.id}"`);
+    const hooked = step !== undefined && pipe_(events, Str.includes(`"delivery":"${step.id}"`));
     if (hooked) took += 1;
     const wrote = row.written === null ? `no${row.error ? ` (${row.error})` : ""}` : "yes";
     lines.push(
-      `| ${agent} | ${hooked ? "yes" : "no"} | ${step?.id ?? "-"} | ${step ? `${step.state}${step.note ? ` (${step.note})` : ""}` : "-"} | ${wrote} | ${(rows.shown.get(agent) ?? "").replaceAll("|", "¦")} |`,
+      `| ${agent} | ${hooked ? "yes" : "no"} | ${step?.id ?? "-"} | ${step ? `${step.state}${step.note ? ` (${step.note})` : ""}` : "-"} | ${wrote} | ${pipe_(rows.shown.get(agent) ?? "", Str.replaceAll("|", "¦"))} |`,
     );
   }
   lines.push(`\n${took} of ${count} agents took their first prompt. State: ${stateDir}`);
 
-  return { report: lines.join("\n"), passed: took === count };
+  return { report: Arr.join(lines, "\n"), passed: took === count };
 });
 
 const { report, passed } = await runtime.runPromise(live(process.env));

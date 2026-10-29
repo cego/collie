@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Deferred, Effect } from "effect";
 import { DEFAULT_MODEL } from "../../../src/harness-choice";
@@ -35,6 +36,7 @@ export const readClaudeModels = (
   claude = which("claude"),
 ) =>
   Effect.gen(function* () {
+    const run = Effect.runPromiseWith(yield* Effect.context<never>());
     const closed = yield* Deferred.make<void>();
     return yield* Effect.acquireUseRelease(
       Effect.try({
@@ -43,7 +45,7 @@ export const readClaudeModels = (
             prompt: {
               [Symbol.asyncIterator]: () => ({
                 next: () =>
-                  Effect.runPromise(
+                  run(
                     Deferred.await(closed).pipe(
                       Effect.as({ done: true as const, value: undefined }),
                     ),
@@ -59,18 +61,20 @@ export const readClaudeModels = (
     ).pipe(
       Effect.ensuring(Deferred.succeed(closed, undefined)),
       Effect.map((models): ReadonlyArray<ListedModel> =>
-        models
-          .filter(
+        Arr.map(
+          Arr.filter(
+            models,
             ({ value }) =>
               value !== DEFAULT_MODEL &&
               chatChoice({ proactive: true, chatHarness: "claude", chatModel: value }, flock).ok,
-          )
-          .map(({ value, displayName, description, supportsEffort, supportedEffortLevels }) => ({
+          ),
+          ({ value, displayName, description, supportsEffort, supportedEffortLevels }) => ({
             id: value,
             label: displayName,
             description,
             efforts: supportsEffort === false ? [] : (supportedEffortLevels ?? []),
-          })),
+          }),
+        ),
       ),
     );
   });

@@ -7,25 +7,58 @@
 //   bun run tools/herdr-schema.ts stable  --out /tmp/s.json
 //   bun run tools/herdr-schema.ts preview --out /tmp/s.json
 //
-// A plain Bun script, like tools/build.ts: it downloads, hashes and executes a binary
-// before any Effect program exists to do it in.
-//
 // This is the one place outside src/herdr.ts that runs a herdr binary, and the invariant
 // that says otherwise names it (AGENTS.md, docs/internals.md). It is not talking to the
 // session: no HERDR_BIN_PATH, no socket, no state, and a downloaded artifact in a temp
 // directory rather than the herdr the user is running — which is the whole point, since
 // the question is what some other version's schema says.
 
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as BunRuntime from "@effect/platform-bun/BunRuntime";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import {
+  Array as Arr,
+  Cause,
+  Console,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Runtime,
+  Schema,
+  Stdio,
+  Stream,
+} from "effect";
+import * as Digest from "effect/crypto/Digest";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { Pin, Release } from "./herdr-release";
 import { MANIFEST_URLS, pinDisagreement, releaseFrom } from "./herdr-release";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const PIN = join(ROOT, "herdr-pin.json");
-const SNAPSHOT = join(ROOT, "herdr-api-schema.json");
+const PIN = `${ROOT}herdr-pin.json`;
+const SNAPSHOT = `${ROOT}herdr-api-schema.json`;
 const REGENERATE = "bun run contract:regen";
+
+const ChecksumMap = Schema.Record(Schema.String, Schema.String);
+const PinSchema = Schema.Struct({
+  version: Schema.String,
+  protocol: Schema.Finite,
+  sha256: ChecksumMap,
+});
+const StableSchema = Schema.Struct({ ...PinSchema.fields, assets: ChecksumMap });
+const PreviewSchema = Schema.Struct({
+  build_id: Schema.String,
+  protocol: Schema.Finite,
+  assets: Schema.Record(
+    Schema.String,
+    Schema.Struct({ url: Schema.String, sha256: Schema.String }),
+  ),
+});
+const JsonText = Schema.fromJsonString(Schema.Json, { space: 2 });
 
 /** herdr names its assets by kernel and machine, not by Bun's target strings. */
 function assetTarget(): string {
@@ -34,11 +67,19 @@ function assetTarget(): string {
   return `${os}-${arch}`;
 }
 
-async function manifest(url: string): Promise<any> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${url} answered ${response.status}`);
-  return response.json();
-}
+const get = Effect.fn("HerdrSchema.get")(function* (url: string) {
+  const response = yield* HttpClient.get(url);
+  if (response.status < 200 || response.status >= 300)
+    return yield* new Cause.UnknownError(response.status, `${url} answered ${response.status}`);
+  return response;
+});
+
+const manifest = Effect.fn("HerdrSchema.manifest")(function* <S extends Schema.Constraint>(
+  url: string,
+  schema: S,
+) {
+  return yield* HttpClientResponse.schemaBodyJson(schema)(yield* get(url));
+});
 
 /**
  * Cross-checks the pin against the published stable manifest, where the pinned version
@@ -46,82 +87,136 @@ async function manifest(url: string): Promise<any> {
  * unreachable manifest is not, because the pin's committed checksum is what actually
  * gates the download and regenerating the snapshot has to work offline.
  */
-async function failOnPinDrift(pin: Pin, target: string): Promise<void> {
-  const stable = await manifest(MANIFEST_URLS.stable).catch((cause: unknown) => {
-    console.error(`could not reach the stable manifest to cross-check the pin: ${cause}`);
-    return undefined;
-  });
-  if (!stable) return;
+const failOnPinDrift = Effect.fn("HerdrSchema.failOnPinDrift")(function* (
+  pin: Pin,
+  target: string,
+) {
+  const stable = yield* manifest(MANIFEST_URLS.stable, StableSchema).pipe(
+    Effect.catch((cause) =>
+      Console.error(
+        `could not reach the stable manifest to cross-check the pin: ${String(cause)}`,
+      ).pipe(Effect.as(undefined)),
+    ),
+  );
+  if (stable === undefined) return;
   const disagreement = pinDisagreement(pin, stable, target);
-  if (disagreement) throw new Error(disagreement);
-}
+  if (disagreement !== undefined) return yield* new Cause.UnknownError(disagreement, disagreement);
+});
 
 /** Reads the channel's release facts; `releaseFrom` decides what they mean. */
-async function release(channel: string, target: string): Promise<Release> {
+const release = Effect.fn("HerdrSchema.release")(function* (channel: string, target: string) {
   if (channel === "pinned") {
-    const pin = JSON.parse(readFileSync(PIN, "utf8"));
-    await failOnPinDrift(pin, target);
+    const fs = yield* FileSystem.FileSystem;
+    const pin = yield* Schema.decodeEffect(Schema.fromJsonString(PinSchema))(
+      yield* fs.readFileString(PIN),
+    );
+    yield* failOnPinDrift(pin, target);
     return releaseFrom({ pinned: pin }, target);
   }
   if (channel === "stable") {
-    return releaseFrom({ stable: await manifest(MANIFEST_URLS.stable) }, target);
+    return releaseFrom({ stable: yield* manifest(MANIFEST_URLS.stable, StableSchema) }, target);
   }
   if (channel === "preview") {
-    return releaseFrom({ preview: await manifest(MANIFEST_URLS.preview) }, target);
+    return releaseFrom({ preview: yield* manifest(MANIFEST_URLS.preview, PreviewSchema) }, target);
   }
-  throw new Error(`unknown channel ${channel}; expected pinned, stable or preview`);
-}
+  return yield* new Cause.IllegalArgumentError(
+    `unknown channel ${channel}; expected pinned, stable or preview`,
+  );
+});
 
 /** Downloads, verifies and runs the release, and returns the schema it prints. */
-async function schemaOf(spec: Release): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), "herdr-schema-"));
-  const binary = join(dir, "herdr");
-  try {
-    const response = await fetch(spec.url);
-    if (!response.ok) throw new Error(`${spec.url} answered ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-    if (digest !== spec.sha256) {
-      throw new Error(`${spec.url} hashed ${digest}, expected ${spec.sha256}`);
-    }
-    writeFileSync(binary, bytes);
-    chmodSync(binary, 0o755);
-    const printed = Bun.spawnSync([binary, "api", "schema", "--json"]);
-    if (printed.exitCode !== 0) {
-      throw new Error(`herdr api schema exited ${printed.exitCode}: ${printed.stderr.toString()}`);
-    }
-    // Reprinted rather than passed through, so the committed snapshot is diffable and
-    // a whitespace change in herdr's printer is not a contract change.
-    return `${JSON.stringify(JSON.parse(printed.stdout.toString()), null, 2)}\n`;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-const [channel = "pinned", ...flags] = process.argv.slice(2);
-const outIndex = flags.indexOf("--out");
-const target = assetTarget();
-const spec = await release(channel, target);
-const schema = await schemaOf(spec);
-
-console.error(`herdr ${spec.label} (${target}), protocol ${spec.protocol}`);
-
-if (flags.includes("--check")) {
-  if (schema !== readFileSync(SNAPSHOT, "utf8")) {
-    console.error(
-      `herdr-api-schema.json is not what herdr ${spec.label} prints. Run \`${REGENERATE}\` and commit the result.`,
+const schemaOf = Effect.fn("HerdrSchema.schemaOf")(function* (spec: Release) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const digest = yield* Digest.Digest;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const binary = paths.join(
+    yield* fs.makeTempDirectoryScoped({ prefix: "herdr-schema-" }),
+    "herdr",
+  );
+  const response = yield* get(spec.url);
+  const bytes = new Uint8Array(yield* response.arrayBuffer);
+  const hashed = yield* digest.digestHex(Digest.sha256, bytes);
+  if (hashed !== spec.sha256)
+    return yield* new Cause.UnknownError(
+      hashed,
+      `${spec.url} hashed ${hashed}, expected ${spec.sha256}`,
     );
-    process.exit(1);
+  yield* fs.writeFile(binary, bytes);
+  yield* fs.chmod(binary, 0o755);
+  const child = yield* spawner.spawn(
+    ChildProcess.make(binary, ["api", "schema", "--json"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    }),
+  );
+  const [stdout, stderr, exitCode] = yield* Effect.all(
+    [
+      child.stdout.pipe(Stream.decodeText(), Stream.mkString),
+      child.stderr.pipe(Stream.decodeText(), Stream.mkString),
+      child.exitCode,
+    ],
+    { concurrency: "unbounded" },
+  );
+  if (exitCode !== 0)
+    return yield* new Cause.UnknownError(
+      exitCode,
+      `herdr api schema exited ${exitCode}: ${stderr}`,
+    );
+  // Canonical printing keeps a whitespace-only upstream change out of the contract snapshot.
+  const schema = yield* Schema.decodeEffect(JsonText)(stdout);
+  return `${yield* Schema.encodeEffect(JsonText)(schema)}\n`;
+});
+
+const program = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const stdio = yield* Stdio.Stdio;
+  const [channel = "pinned", ...flags] = yield* stdio.args;
+  const outIndex = Option.getOrElse(
+    Arr.findFirstIndex(flags, (flag) => flag === "--out"),
+    () => -1,
+  );
+  const target = assetTarget();
+  const spec = yield* release(channel, target);
+  const schema = yield* schemaOf(spec);
+
+  yield* Console.error(`herdr ${spec.label} (${target}), protocol ${spec.protocol}`);
+
+  if (Arr.contains(flags, "--check")) {
+    if (schema !== (yield* fs.readFileString(SNAPSHOT))) {
+      yield* Console.error(
+        `herdr-api-schema.json is not what herdr ${spec.label} prints. Run \`${REGENERATE}\` and commit the result.`,
+      );
+      return 1;
+    }
+    yield* Console.error("herdr-api-schema.json matches the pin.");
+  } else if (Arr.contains(flags, "--write")) {
+    yield* fs.writeFileString(SNAPSHOT, schema);
+    yield* Console.error(`wrote ${SNAPSHOT}`);
+  } else if (outIndex >= 0) {
+    const out = flags[outIndex + 1];
+    if (out === undefined || out === "")
+      return yield* new Cause.IllegalArgumentError("--out needs a path");
+    yield* fs.writeFileString(out, schema);
+    yield* Console.error(`wrote ${out}`);
+  } else {
+    yield* Stream.succeed(schema).pipe(Stream.run(stdio.stdout()));
   }
-  console.error("herdr-api-schema.json matches the pin.");
-} else if (flags.includes("--write")) {
-  writeFileSync(SNAPSHOT, schema);
-  console.error(`wrote ${SNAPSHOT}`);
-} else if (outIndex >= 0) {
-  const out = flags[outIndex + 1];
-  if (!out) throw new Error("--out needs a path");
-  writeFileSync(out, schema);
-  console.error(`wrote ${out}`);
-} else {
-  process.stdout.write(schema);
-}
+  return 0;
+});
+
+BunRuntime.runMain(
+  program.pipe(
+    Effect.scoped,
+    Effect.tapCause((cause) => Console.error(Cause.pretty(cause))),
+    Effect.provide(Layer.mergeAll(BunServices.layer, Digest.layerWebCrypto, FetchHttpClient.layer)),
+  ),
+  {
+    disableErrorReporting: true,
+    teardown: (exit, onExit) =>
+      Exit.isSuccess(exit)
+        ? onExit(exit.value === 1 ? 1 : 0)
+        : Runtime.defaultTeardown(exit, onExit),
+  },
+);

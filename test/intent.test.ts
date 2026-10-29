@@ -2,6 +2,9 @@
 // never do are tested first: never default a file it cannot read, never take authority
 // from text, never lose a child's own constraints when a parent propagates.
 
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Effect, FileSystem, Path } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -126,7 +129,7 @@ test("propagation replaces the parent's entries, keeps the child's own, and list
   });
   const child = propagate(parent, seedIntent("child", {})).intent;
   expect(child.parent).toEqual({ run: "parent", version: 1, applied: 1 });
-  expect(child.constraints.map((c) => c.source)).toEqual(["parent"]);
+  expect(Arr.map(child.constraints, (c) => c.source)).toEqual(["parent"]);
 
   const amended = amend(
     child,
@@ -146,37 +149,40 @@ test("propagation replaces the parent's entries, keeps the child's own, and list
   const later = amend(parent, { kind: "set-goal", goal: "moved on" }, "human:req", "t");
   const { intent, conflicts } = propagate(later, amended);
   expect(intent.parent).toEqual({ run: "parent", version: 2, applied: 2 });
-  expect(intent.constraints.map((c) => c.id).sort()).toEqual(["own", "p1"]);
+  expect(Arr.map(intent.constraints, (c) => c.id).sort()).toEqual(["own", "p1"]);
   expect(intent.goal).toBe(amended.goal);
   expect(conflicts).toEqual(['goal: parent "moved on" differs from the child\'s "parent goal"']);
 });
 
 test("plan requirements become warn constraints with provenance, and never authority", () => {
-  const spec = [
-    "# Spec: a thing",
-    "",
-    "## Objective",
-    "",
-    "Make the thing work end to end.",
-    "",
-    "Second paragraph is not the goal.",
-    "",
-    "## Requirements",
-    "",
-    "- the envelope stays stable",
-    "- every boundary decodes",
-    "",
-    "## Notes",
-    "",
-    "- not a requirement",
-    "",
-    "### Success criteria",
-    "",
-    "- the suite is green",
-  ].join("\n");
+  const spec = Arr.join(
+    [
+      "# Spec: a thing",
+      "",
+      "## Objective",
+      "",
+      "Make the thing work end to end.",
+      "",
+      "Second paragraph is not the goal.",
+      "",
+      "## Requirements",
+      "",
+      "- the envelope stays stable",
+      "- every boundary decodes",
+      "",
+      "## Notes",
+      "",
+      "- not a requirement",
+      "",
+      "### Success criteria",
+      "",
+      "- the suite is green",
+    ],
+    "\n",
+  );
   const found = extractRequirements(spec, "SPEC.md");
   expect(found.goal).toBe("Make the thing work end to end.");
-  expect(found.constraints.map((c) => c.text)).toEqual([
+  expect(Arr.map(found.constraints, (c) => c.text)).toEqual([
     "the envelope stays stable",
     "every boundary decodes",
     "the suite is green",
@@ -191,30 +197,33 @@ test("plan requirements become warn constraints with provenance, and never autho
   expect(found.constraints[0]?.provenance?.heading).toBe("Requirements");
   expect(found.constraints[2]?.provenance?.heading).toBe("Success criteria");
   // Nothing in a plan is a grant: `extractRequirements` returns constraints only.
-  expect(Object.keys(found)).toEqual(["goal", "constraints"]);
+  expect(Rec.keys(found)).toEqual(["goal", "constraints"]);
 });
 
 test("a numbered plan has a goal and constraints like any other", () => {
   // This repository's own SPEC.md numbers its headings. Reading it as a document with
   // neither goal nor requirements would seed every plan-dir Run with nothing to steer by.
-  const numbered = [
-    "# Spec: something",
-    "",
-    "## 1. Objective",
-    "",
-    "Make the thing work end to end.",
-    "",
-    "## 8. Requirements by area",
-    "",
-    "- the envelope stays stable",
-    "",
-    "### 9.2 Success criteria",
-    "",
-    "- the suite is green",
-  ].join("\n");
+  const numbered = Arr.join(
+    [
+      "# Spec: something",
+      "",
+      "## 1. Objective",
+      "",
+      "Make the thing work end to end.",
+      "",
+      "## 8. Requirements by area",
+      "",
+      "- the envelope stays stable",
+      "",
+      "### 9.2 Success criteria",
+      "",
+      "- the suite is green",
+    ],
+    "\n",
+  );
   const found = extractRequirements(numbered, "SPEC.md");
   expect(found.goal).toBe("Make the thing work end to end.");
-  expect(found.constraints.map((c) => c.text)).toEqual([
+  expect(Arr.map(found.constraints, (c) => c.text)).toEqual([
     "the envelope stays stable",
     "the suite is green",
   ]);
@@ -223,46 +232,52 @@ test("a numbered plan has a goal and constraints like any other", () => {
 
 test("a spec with no Objective takes its goal from its Solution, and an Objective still wins", () => {
   // The headings to-spec writes, which is how Collie's own planner shapes a spec.
-  const toSpec = [
-    "# Spec: a thing",
-    "",
-    "## Problem Statement",
-    "",
-    "Things break.",
-    "",
-    "## Solution",
-    "",
-    "Make the thing",
-    "work end to end.",
-    "",
-    "Second paragraph is not the goal.",
-    "",
-    "## Requirements",
-    "",
-    "- the envelope stays stable",
-  ].join("\n");
+  const toSpec = Arr.join(
+    [
+      "# Spec: a thing",
+      "",
+      "## Problem Statement",
+      "",
+      "Things break.",
+      "",
+      "## Solution",
+      "",
+      "Make the thing",
+      "work end to end.",
+      "",
+      "Second paragraph is not the goal.",
+      "",
+      "## Requirements",
+      "",
+      "- the envelope stays stable",
+    ],
+    "\n",
+  );
   const found = extractRequirements(toSpec, "SPEC.md");
   expect(found.goal).toBe("Make the thing work end to end.");
-  expect(found.constraints.map((c) => c.text)).toEqual(["the envelope stays stable"]);
+  expect(Arr.map(found.constraints, (c) => c.text)).toEqual(["the envelope stays stable"]);
 
-  const both = [toSpec, "", "## Objective", "", "What the Runs are to achieve."].join("\n");
+  const both = Arr.join([toSpec, "", "## Objective", "", "What the Runs are to achieve."], "\n");
   expect(extractRequirements(both, "SPEC.md").goal).toBe("What the Runs are to achieve.");
 });
 
 test("a plan's out-of-scope and done-when bullets are constraints, and out of scope says so", () => {
-  const spec = [
-    "# Spec: a thing",
-    "",
-    "## Out of Scope",
-    "",
-    "- Rewriting the scheduler",
-    "",
-    "## Done when",
-    "",
-    "- the suite is green",
-  ].join("\n");
+  const spec = Arr.join(
+    [
+      "# Spec: a thing",
+      "",
+      "## Out of Scope",
+      "",
+      "- Rewriting the scheduler",
+      "",
+      "## Done when",
+      "",
+      "- the suite is green",
+    ],
+    "\n",
+  );
   const found = extractRequirements(spec, "SPEC.md");
-  expect(found.constraints.map((c) => c.text)).toEqual([
+  expect(Arr.map(found.constraints, (c) => c.text)).toEqual([
     "Out of scope: Rewriting the scheduler",
     "the suite is green",
   ]);
@@ -270,7 +285,7 @@ test("a plan's out-of-scope and done-when bullets are constraints, and out of sc
     expect(constraint.kind).toBe("semantic");
     expect(constraint.severity).toBe("warn");
   }
-  expect(found.constraints.map((c) => c.provenance?.heading)).toEqual([
+  expect(Arr.map(found.constraints, (c) => c.provenance?.heading)).toEqual([
     "Out of Scope",
     "Done when",
   ]);
@@ -278,35 +293,42 @@ test("a plan's out-of-scope and done-when bullets are constraints, and out of sc
 
 test("a plan bullet is one constraint, its wrapped lines and nested bullets included", () => {
   // run-6ed7b18b's Done When and Out of Scope, as its plan wrapped and nested them.
-  const spec = [
-    "# Spec: Roll out nuxt module 9.1.1",
-    "",
-    "## Done When",
-    "",
-    "- Six MRs are open, one per consumer in the table above. Each moves its include to 9.1.1, is",
-    "  assigned to mk, is linked to FRO-487 through its title, and has a green pipeline.",
-    "- support-backoffice's MR also records:",
-    "  - the stage deploy under a Helle claim, and",
-    "  - the 9.0.0 baseline it was compared",
-    "    with.",
-    "- Re-run",
-    "  the container checks on each consumer after the bump.",
-    "- The suite is green.",
-    "1. A numbered step ends it and is no constraint.",
-    "",
-    "## Out of Scope",
-    "",
-    "- A canary gate between waves; a wave still waits only for the",
-    "  Repo runs before it.",
-    "",
-    "## Further Notes",
-    "",
-    "- not a requirement,",
-    "  nor this line.",
-  ].join("\n");
+  const spec = Arr.join(
+    [
+      "# Spec: Roll out nuxt module 9.1.1",
+      "",
+      "## Done When",
+      "",
+      "- Six MRs are open, one per consumer in the table above. Each moves its include to 9.1.1, is",
+      "  assigned to mk, is linked to FRO-487 through its title, and has a green pipeline.",
+      "- support-backoffice's MR also records:",
+      "  - the stage deploy under a Helle claim, and",
+      "  - the 9.0.0 baseline it was compared",
+      "    with.",
+      "- Re-run",
+      "  the container checks on each consumer after the bump.",
+      "- The suite is green.",
+      "1. A numbered step ends it and is no constraint.",
+      "",
+      "## Out of Scope",
+      "",
+      "- A canary gate between waves; a wave still waits only for the",
+      "  Repo runs before it.",
+      "",
+      "## Further Notes",
+      "",
+      "- not a requirement,",
+      "  nor this line.",
+    ],
+    "\n",
+  );
   const found = extractRequirements(spec, "SPEC.md");
   expect(
-    found.constraints.map(({ text, provenance }) => [text, provenance?.heading, provenance?.line]),
+    Arr.map(found.constraints, ({ text, provenance }) => [
+      text,
+      provenance?.heading,
+      provenance?.line,
+    ]),
   ).toEqual([
     [
       "Six MRs are open, one per consumer in the table above. Each moves its include to 9.1.1, is assigned to mk, is linked to FRO-487 through its title, and has a green pipeline.",
@@ -347,9 +369,15 @@ test("following the plan adds and removes only its own constraints", () => {
   };
   const intent = seedIntent("r1", { constraints: [human, planDir, fromOwnPlan("A")] });
   const next = followPlan(intent, [fromOwnPlan("B")], "2026-09-30T00:00:00Z");
-  expect(next.constraints.map((c) => c.id).toSorted()).toEqual(["B", "d", "h"]);
+  expect(
+    Arr.sortWith(
+      Arr.map(next.constraints, (c) => c.id),
+      (value) => value,
+      (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+    ),
+  ).toEqual(["B", "d", "h"]);
   expect(next.version).toBe(intent.version + 2);
-  expect(next.history.slice(-2).map((entry) => entry.by)).toEqual([PLAN_AUTHOR, PLAN_AUTHOR]);
+  expect(Arr.map(next.history.slice(-2), (entry) => entry.by)).toEqual([PLAN_AUTHOR, PLAN_AUTHOR]);
   expect(next.authority).toEqual(intent.authority);
 });
 
@@ -474,10 +502,13 @@ test(
         expect(seeded?.version).toBe(1);
         expect(seeded?.goal).toBe("greet whoever asks");
         // What was named at launch replaces the workspace's own entry with the same id.
-        expect(seeded?.constraints.map((one) => `${one.id}: ${one.text}`)).toEqual([
-          "tone: stay polite",
-          "short: keep it short",
-        ]);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(seeded), (present) =>
+              Arr.map(present.constraints, (one) => `${one.id}: ${one.text}`),
+            ),
+          ),
+        ).toEqual(["tone: stay polite", "short: keep it short"]);
         expect(seeded?.authority.auto_correct).toBe(true);
 
         const child = yield* client
@@ -493,10 +524,13 @@ test(
         const inherited = yield* readIntent(runDir(world.state, child.runId));
         expect(inherited?.goal).toBe("greet whoever asks");
         expect(inherited?.parent?.run).toBe(started.runId);
-        expect(inherited?.constraints.map((one) => `${one.source}:${one.id}`)).toEqual([
-          "parent:tone",
-          "parent:short",
-        ]);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(inherited), (present_) =>
+              Arr.map(present_.constraints, (one) => `${one.source}:${one.id}`),
+            ),
+          ),
+        ).toEqual(["parent:tone", "parent:short"]);
         yield* until(
           () => client.run({ runId: child.runId }).pipe(Effect.orDie),
           (view) => view !== null && isSettled(view),
