@@ -45,7 +45,7 @@ assert.ok(Math.abs(example.ratio - 0.5) < 1e-12);
 assert.ok(example.ci95.every((x) => Math.abs(x - 0.5) < 1e-12));
 assert.ok(Math.abs(example.reduction_percent - 50) < 1e-10);
 const spread = comparison(Array(10).fill(1), [...Array(9).fill(1), 2.718281828459045]);
-assert.ok(Math.abs(spread.ratio - 1.105170185988091) < 1e-12);
+assert.ok(Math.abs(spread.ratio - 1.1051709180756477) < 1e-12);
 assert.ok(Math.abs((spread.ci95[0] ?? 0) - 0.88142468861435) < 1e-12);
 assert.ok(Math.abs((spread.ci95[1] ?? 0) - 1.3857142577663495) < 1e-12);
 if (process.argv[2] === "--self-check") process.exit(0);
