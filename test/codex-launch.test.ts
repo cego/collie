@@ -198,13 +198,16 @@ test.each(["auto", "bypass", "harness"] as const)(
     ),
 );
 
-test("an older Codex starts without the unsupported hook-trust flag", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* launched({}, { help: () => Effect.succeed("  --approve-for-me") });
-      const args = agentStartArgs(yield* rig.calls());
-      expect(args).toContain("--remote");
-      expect(args).toContain("--approve-for-me");
-      expect(args).not.toContain("--dangerously-bypass-hook-trust");
-    }),
-  ));
+test.each(["", "  --approve-for-me", "  --dangerously-bypass-hook-trust-extra"])(
+  "an older Codex starts without the unsupported hook-trust flag (help: %s)",
+  (help) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* launched({}, { help: () => Effect.succeed(help) });
+        const args = agentStartArgs(yield* rig.calls());
+        expect(args).toContain("--remote");
+        expect(args).toContain("--approve-for-me");
+        expect(args).not.toContain("--dangerously-bypass-hook-trust");
+      }),
+    ),
+);
