@@ -1,5 +1,5 @@
-// What the human set in Desktop, as the main process tells every window, for the chat's bell
-// and Settings alike.
+// What the human set in Desktop for this computer alone, as the main process tells every
+// window.
 
 import { useAtomSet } from "@effect/atom-vue";
 import { Exit } from "effect";
@@ -9,7 +9,7 @@ import { failureOf } from "./useActions";
 
 const setSettingsAtom = FlockClient.mutation("setSettings");
 
-const UNREAD: DesktopSettings = { proactive: true };
+const UNREAD: DesktopSettings = {};
 
 export const useDesktopSettings = () => {
   const writeSettings = useAtomSet(() => setSettingsAtom, { mode: "promiseExit" });
@@ -23,7 +23,5 @@ export const useDesktopSettings = () => {
     desktopSettings: computed(() => value.value ?? UNREAD),
     loaded: computed(() => value.value !== undefined),
     change,
-    /** Lets the Flock chat speak first about News that matters, or not. */
-    setProactive: (proactive: boolean) => change({ proactive }),
   };
 };

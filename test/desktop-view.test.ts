@@ -988,7 +988,7 @@ test.each<[string, Column]>([
   ["review", "reading"],
   ["facts", "reading"],
   ["mr", "reading"],
-  ["settings", "reading"],
+  ["settings", "wide"],
   ["machines", "reading"],
   ["workflows", "full"],
   ["evidence", "wide"],

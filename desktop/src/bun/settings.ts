@@ -5,7 +5,13 @@ import { DEFAULT_MODEL, HARNESS_MODELS, resolveChoice } from "../../../src/harne
 import { isString } from "../../../src/schema";
 import { effortsOf, type Offer } from "../shared/chat-choices";
 import { ActionFailed, DesktopSettings, type DesktopSettingsChange } from "../shared/flock";
-import { CHAT_HARNESSES, DEFAULT_CHAT_HARNESS, type FlockSettings } from "../shared/flock-settings";
+import {
+  CHAT_HARNESSES,
+  DEFAULT_CHAT_HARNESS,
+  editSetting,
+  type FlockSettings,
+} from "../shared/flock-settings";
+import { readFlockSettings, writeFlockSettings } from "./flock-settings";
 
 const SettingsFile = Schema.fromJsonString(DesktopSettings);
 const FILE = "settings.json";
@@ -29,6 +35,32 @@ export const writeSettings = Effect.fn("Settings.write")(function* (
     (yield* Path.Path).join(dir, FILE),
     Schema.encodeSync(SettingsFile)(settings),
   );
+});
+
+/**
+ * Carries the Machine rule and a quiet Flock chat an earlier Desktop kept as its own into the
+ * Flock's settings, as Desktop's edits at `now`, then drops Desktop's copy so it happens once.
+ */
+export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
+  dir: string,
+  now: string,
+) {
+  const { proactive, machineRule, ...own } = yield* readSettings(dir);
+  const flock = yield* readFlockSettings(dir);
+  if (proactive === undefined && machineRule === undefined) return flock;
+  const carried = (
+    [
+      ["machine_rule", machineRule ?? ""],
+      ["flock_chat.proactive", proactive === false ? "false" : ""],
+    ] as const
+  ).reduce((held, [key, typed]) => {
+    if (typed === "" || held.settings[key] !== undefined) return held;
+    const edited = editSetting(held, key, typed, now);
+    return "refused" in edited ? held : edited;
+  }, flock);
+  yield* writeFlockSettings(dir, carried);
+  yield* writeSettings(dir, own);
+  return carried;
 });
 
 /** What each harness offers, by harness. */

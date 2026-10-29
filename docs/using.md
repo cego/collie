@@ -1599,30 +1599,63 @@ make a new one on the new host's page and save it. The GitLab host is given to e
 Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
 Machine's.
 
-**Settings** is a page in the board's column, at a readable line length, and re-reads the
-Flock's settings each time it opens. It is grouped under headings, in order: **Agents**, **Runs**, **Board**, **Chat**,
-**Notifications**, **GitLab and credentials** and **About**. It holds every setting the TUI's
-Settings offers — each default a Run reads, `proactive`, the extra `models.<harness>` and each
-`notifications.<kind>` — and the Flock chat's own settings. Each setting has a plain
-name with its config key in small print, a sentence or two on what it changes (what 0 or
-unset means where that matters, and that `scope`, `density` and `questions` change the TUI's
-board, not Desktop's), a control that fits it (a choice, a number, a switch, or text), its
-default, and the same refusals as the TUI. Durations — `quiet_ms`, `idle_close_ms`,
-`handoff_timeout_ms` and `board_quiet_ms` — are shown and typed in minutes, decimals where a value is not a whole
-number of them, and still stored in milliseconds, so `config.json` and `collie settings` are
-unchanged. **Reset to default**, shown while a setting is set, unsets it. Each says whether
-**Every Machine** shares it or it is for **This computer only**. Under **Chat**, the Flock
-chat's **Machine rule** and **Flock chat speaks first** are this computer's, like the bell in
-the chat's header. The chat's harness, model and effort have no rows here: they are chosen
-beside its message box ([The Flock chat](#the-flock-chat)).
-A change to this computer's settings reaches every Desktop window at once, wherever it was
-made: Settings, the bell and both chat windows show it as soon as it is saved, a choice made
-beside the message box or through `collie_chat_harness` included.
-The groups, names, descriptions and
-units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
-Settings reads too, so a new setting shows up in both, except those for this computer only,
-whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
-descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
+**Settings** is a page in the board's column, at a wide line length, and re-reads the
+Flock's settings each time it opens. Scope is its structure, and a legend states each
+scope's rule once:
+
+- **Every Machine** holds every row but one: the Flock's settings, where the latest edit of
+  a key wins, wherever it was made. It is laid out in the TUI's groups, **Agents**, **Runs**,
+  **Board**, **Chat** and **Notifications**. Agents is split into **Who does the work**,
+  **What agents may do**, **Context and patience**, and **Advanced**, which is collapsed and
+  holds `models.<harness>`, `agent_profile` and `claude_subagents`. Runs keeps **Release
+  approvals** apart, and the ten notification switches sit in a two-column grid. Chat holds
+  the Flock chat's **Machine rule** (`machine_rule`) and **Flock chat speaks first**
+  (`flock_chat.proactive`) beside each Machine's **Native chat speaks first**
+  (`proactive`), so every Desktop routes work the same way, and the TUI shows them too.
+- **This computer** is **Zoom** alone, under Board, marked **This computer** and saved on
+  this computer, since monitors differ between computers. The Flock chat's harness, model,
+  effort and width stay this computer's too, but have no rows here: they are chosen beside
+  its message box ([The Flock chat](#the-flock-chat)).
+- **Each Machine's own** is the rest of a Machine's `config.json`, changed in that Machine's
+  TUI.
+
+A left index lists the sections by scope, each with how many of its settings are set; a
+search runs over each setting's name, key and description, beside **Only what is set**.
+The header says how the Flock's settings sync: "In sync with all 4 Machines", "In sync with
+3 of 4 · old-mini out of reach", or "Showing the Flock's settings as last read" while they
+cannot be read.
+
+Each setting has a plain name with its config key in small print, a sentence or two on what
+it changes (what 0 or unset means where that matters, and that `scope`, `density` and
+`questions` change the TUI's board, not Desktop's), a control that fits it, its default, and
+the same refusals as the TUI. A choice of six options or fewer is a row of radio buttons, so
+every option shows; a boolean is a switch; a number carries its unit in its field; JSON and
+the Machine rule are typed over several lines. Durations — `quiet_ms`, `idle_close_ms`,
+`handoff_timeout_ms` and `board_quiet_ms` — are shown and typed in minutes, decimals where a
+value is not a whole number of them, and still stored in milliseconds, so `config.json` and
+`collie settings` are unchanged. A choice or a switch is saved when it changes; text is saved
+on **Set**, Enter, or Ctrl+Enter over several lines, and Esc puts it back. **Reset to
+default**, shown while a setting is set, unsets it. A refusal is said on the row itself,
+never in a toast, and the field is marked invalid. What a value brings about is stated
+there and never asked to be confirmed: bypassing tool permissions, compaction or the quiet
+nudge at 0, a Pi model not written provider/model, and another GitLab host, which forgets
+the token.
+
+A set row says whose edit it is: "Last edit: vm-build · 28 Oct, 09:05". After a save it says
+how far the edit reached, from each Machine's latest sync: "Given to all 4 Machines", or
+"Given to 3 of 4 · old-mini gets it when it connects". While the Flock's settings cannot be
+read, an edit to them is not sent, and the row says "Not set: the Flock's settings could not
+be read"; Zoom is still saved. Zoom says "Saved on this computer".
+
+A Desktop from before kept the Machine rule and whether the Flock chat speaks first as its
+own. The first start of this one carries each into the Flock's settings once, as an edit
+from Desktop at that moment, where the Flock has none yet, and then drops its own copy. A
+Flock chat left speaking first, the default, carries nothing.
+
+The groups, names, descriptions and units live with each key in the one list of settings
+(`src/settings.ts`) that the TUI's Settings reads too, so a new setting shows up in both,
+except Zoom, whose is in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI
+does not show the names, descriptions or minutes yet. Desktop keeps the Flock's in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
 Machine's host, never by editing a file over SSH. A Machine is synced each time it
 connects and after every edit in Settings, so one out of reach gets an edit when it is
@@ -1632,7 +1665,9 @@ with Desktop closed. Desktop also takes edits when it sees a Machine or Settings
 Each key is decided by whichever edit was made last, wherever it was made
 ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)); on the first sync a key set
 on one Machine only is taken from it, and a key set differently on several takes the latest,
-with Settings saying beside it which Machine that came from. A value a Machine holds that
+with the row saying "Taken from vm-gpu over a different value at the first sync" until the
+key is next edited. A Machine on a Collie from before a key was added refuses the Flock's
+settings until it is upgraded, and Machines says it is behind on settings. A value a Machine holds that
 its setting refuses, written into its file by hand, is not taken. What stays each Machine's own
 is everything else in its `config.json`: remembered answers such as `linear.team` and
 `gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
@@ -1666,7 +1701,7 @@ Desktop is drawn through XWayland, which renders it at one whole-number scale on
 monitor, so on Hyprland Desktop reads the scale of the monitor holding each window from
 `hyprctl -j` and corrects for it with Chromium's own page zoom, again whenever a window
 moves, resizes or takes focus: moving one to another monitor resizes it, and text stays sharp
-([ADR-0047](adr/0047-desktop-draws-at-its-monitors-own-scale.md)). **About** says how the
+([ADR-0047](adr/0047-desktop-draws-at-its-monitors-own-scale.md)). Beside Zoom, Settings says how the
 board's window is drawn — "Drawn at 1.5× on DP-1 (3840×2160, Hyprland scale 1.5). Rendered
 at 2×, so zoom 75% × your 100%." — and says so where the window's pixel ratio is not what
 that zoom should give. Where Desktop cannot read the monitor's scale, as on another
@@ -2158,20 +2193,20 @@ write is refused with "its Collie is older than Desktop's chat; upgrade Collie o
 <machine>. Nothing was done there." A read a host does not answer within ten seconds says
 so; one its host cannot take says its Collie may be older than Desktop's.
 
-The bell turns Desktop's own turns off (and on again); it is on by default, and kept in
-`settings.json` beside the session.
+The bell turns Desktop's own turns off (and on again); it is on by default, and is the
+Flock's `flock_chat.proactive` setting, so it is the same on every Desktop.
 
-**Settings** has the **Machine rule** under **Chat**, for **This computer only**: which Machine each kind
+**Settings** has the **Machine rule** under **Chat**, for **Every Machine**: which Machine each kind
 of work goes to, in your own words — "Frontend work is on the laptop, everything else is on
-the vm". It is kept in `settings.json` on this computer, and given to no Machine. The chat
+the vm". It is the Flock's `machine_rule` setting, so every Desktop routes work by it. The chat
 gets it with every message, its own turns included, beside the Machines Desktop reaches at
 that moment, named as the cards name them, with this computer marked as the one Desktop
 runs on, so "the laptop" can mean it. When it starts work it names the Machine from the
 rule, unless your message names one, which wins. When the rule's Machine is not reachable,
 it says so and starts nothing elsewhere; when the rule does not cover the work, it asks.
 An empty rule changes nothing. You can also tell the chat to change it ("from now on,
-frontend goes on the laptop") or ask what it is; it saves through the same setting, and
-Settings shows the new text the next time it opens. The rule informs the chat's choice and
+frontend goes on the laptop") or ask what it is; it saves through the same setting, as an
+edit from Desktop given to every Machine, and Settings shows the new text. The rule informs the chat's choice and
 nothing more: a start that names no Machine while several are reachable is still refused,
 and a Run the rule placed on another Machine still opens with Go to pane over that
 Machine's own connection.

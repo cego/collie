@@ -14,7 +14,8 @@ import {
   SettingValue,
   settingText,
 } from "../../../src/settings";
-import type { DesktopSettings, DesktopSettingsChange } from "./flock";
+import type { DesktopSettings, DesktopSettingsChange, MachineRow } from "./flock";
+import { whenOf } from "./flow";
 import { percent } from "./scale";
 
 /** Where an edit made in Desktop's own Settings is said to come from. */
@@ -55,10 +56,6 @@ interface DesktopSetting extends Setting {
   readonly read: (desktop: DesktopSettings) => string;
   /** What setting it to `typed` changes; `typed` is never empty. */
   readonly change: (typed: string) => DesktopSettingsChange;
-  /** What Settings says of it while it is unset, where its default says nothing. */
-  readonly unset?: (desktop: DesktopSettings) => string;
-  /** Typed as several lines of the human's own words. */
-  readonly multiline?: true;
 }
 
 /** The harnesses the Flock chat has a driver for. */
@@ -66,32 +63,6 @@ export const CHAT_HARNESSES = ["claude", "pi"];
 export const DEFAULT_CHAT_HARNESS = "claude";
 
 const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
-  {
-    key: "proactive",
-    kind: "boolean",
-    choices: [],
-    fallback: "true",
-    group: "Chat",
-    label: "Flock chat speaks first",
-    description:
-      "Whether the Flock chat starts a turn about News that matters, as the bell in its header does.",
-    read: (desktop: DesktopSettings) => String(desktop.proactive),
-    change: (typed) => ({ proactive: typed === "true" }),
-  },
-  {
-    key: "machineRule",
-    kind: "text",
-    choices: [],
-    fallback: "",
-    group: "Chat",
-    label: "Machine rule",
-    description:
-      "Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say.",
-    read: (desktop: DesktopSettings) => desktop.machineRule ?? "",
-    change: (typed) => ({ machineRule: typed.trim() }),
-    unset: () => "Unset: no rule",
-    multiline: true,
-  },
   {
     key: "zoom",
     kind: "choice",
@@ -103,9 +74,37 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
       "How large Desktop draws on this computer, against the other apps on the same monitor.",
     read: (desktop: DesktopSettings) => percent(desktop.zoom ?? 1),
     change: (typed) => ({ zoom: Number.parseInt(typed, 10) / 100 }),
-    unset: () => "Default: 100%, the size of your other apps",
   },
 ];
+
+/** What Settings says of a setting while it is unset, where its default says nothing. */
+const UNSET_SAID = new Map([
+  ["zoom", "Default: 100%, the size of your other apps"],
+  ["machine_rule", "Unset: no rule"],
+  ["release.approval_channel", "Unset: shares nothing"],
+]);
+
+/** The canvas's sub-groups within a group, by key; any other key has none. */
+const SUBS: ReadonlyArray<readonly [string, (key: string) => boolean]> = [
+  ["Who does the work", (key) => ["harness", "model", "effort", "fallbacks"].includes(key)],
+  ["What agents may do", (key) => ["permissions", "trust"].includes(key)],
+  [
+    "Context and patience",
+    (key) =>
+      ["compact_at_tokens", "claude_auto_compact_window", "quiet_ms", "idle_close_ms"].includes(
+        key,
+      ),
+  ],
+  [
+    "Advanced",
+    (key) => key.startsWith("models.") || ["agent_profile", "claude_subagents"].includes(key),
+  ],
+  ["Release approvals", (key) => key.startsWith("release.")],
+  ["Toasts", (key) => key.startsWith("notifications.")],
+];
+const subOf = (key: string) => SUBS.find(([, has]) => has(key))?.[0] ?? "";
+/** Where a sub-group falls within its group: none first, then the canvas's order. */
+const subRank = (sub: string) => SUBS.findIndex(([title]) => title === sub);
 
 /** What setting Desktop's own `key` to `typed` changes; empty sets it back to its default. */
 export const desktopChange = (key: string, typed: string): DesktopSettingsChange => {
@@ -117,6 +116,8 @@ export const desktopChange = (key: string, typed: string): DesktopSettingsChange
 export interface SettingRow {
   readonly key: string;
   readonly group: SettingGroup;
+  /** The sub-group it is shown under within its group, empty for none. */
+  readonly sub: string;
   readonly label: string;
   readonly description: string;
   readonly kind: SettingKind;
@@ -129,11 +130,13 @@ export interface SettingRow {
   /** The default as Settings says it, in the row's unit. */
   readonly defaultSaid: string;
   readonly set: boolean;
-  /** The Machine its value was taken from over a different one, where it was. */
-  readonly from: string | null;
+  /** Whose edit it is and when, or the Machine it was taken from over a different value. */
+  readonly edit: string | null;
   /** Every Machine's, or this computer's alone. */
   readonly shared: boolean;
   readonly multiline: boolean;
+  /** What its value brings about, stated rather than confirmed. */
+  readonly hint: string | null;
 }
 
 export interface SettingSection {
@@ -141,22 +144,52 @@ export interface SettingSection {
   readonly rows: ReadonlyArray<SettingRow>;
 }
 
-const flockRow = (flock: FlockSettings, setting: Setting): SettingRow => {
+const consequenceOf = (key: string, value: string): string | null => {
+  if (key === "permissions" && value === "bypass")
+    return "No one reviews an agent's tool calls: every Machine's agents run what they choose.";
+  if (key === "compact_at_tokens" && value === "0")
+    return "Compaction between pieces of work is off.";
+  if (key === "quiet_ms" && value === "0")
+    return "A quiet agent is never nudged; it waits as long as it takes.";
+  const bare =
+    key === "models.pi"
+      ? value.split(", ").find((model) => model !== "" && !model.includes("/"))
+      : undefined;
+  return bare === undefined
+    ? null
+    : `Pi runs a model written provider/model, such as openai-codex/gpt-6.1-sol, so it cannot run "${bare}".`;
+};
+
+const flockRow = (
+  flock: FlockSettings,
+  setting: Setting,
+  now: number,
+  timeZone: string | undefined,
+): SettingRow => {
   const held = flock.settings[setting.key];
   const value = held === undefined ? "" : settingText(valueOf(held.value));
+  const edit =
+    held === undefined || value === ""
+      ? null
+      : held.differed
+        ? `Taken from ${held.from} over a different value at the first sync`
+        : `Last edit: ${held.from} · ${whenOf(held.at, now, timeZone)}`;
   return {
     ...rowOf(setting),
     value: settingShown(setting.key, value),
     fallback: settingShown(setting.key, setting.fallback),
     defaultSaid: defaultSaid(setting, settingShown(setting.key, setting.fallback)),
     set: value !== "",
-    from: held?.differed === true ? held.from : null,
+    edit,
     shared: true,
-    multiline: setting.kind === "json",
+    multiline: setting.kind === "json" || setting.key === "machine_rule",
+    hint: consequenceOf(setting.key, value),
   };
 };
 
-const defaultSaid = ({ kind, unit }: Setting, fallback: string) => {
+const defaultSaid = ({ key, kind, unit }: Setting, fallback: string) => {
+  const unset = UNSET_SAID.get(key);
+  if (unset !== undefined) return unset;
   if (kind === "list" || kind === "json") return "Default: none";
   if (fallback === "") return "Unset: the harness decides";
   if (kind === "boolean") return `Default: ${fallback === "true" ? "on" : "off"}`;
@@ -166,6 +199,7 @@ const defaultSaid = ({ kind, unit }: Setting, fallback: string) => {
 const rowOf = ({ key, group, label, description, kind, choices, unit }: Setting) => ({
   key,
   group,
+  sub: subOf(key),
   label,
   description,
   kind,
@@ -175,30 +209,90 @@ const rowOf = ({ key, group, label, description, kind, choices, unit }: Setting)
 
 /**
  * Every setting of Collie's and Desktop's own, under its group in order, but the GitLab
- * host, which Settings keeps beside its tokens.
+ * host, which Settings keeps beside its tokens. An edit is said at `now`, on the clock of
+ * `timeZone`.
  */
 export const settingSections = (
   flock: FlockSettings,
   desktop: DesktopSettings,
+  now: number,
+  timeZone?: string,
 ): ReadonlyArray<SettingSection> => {
   const rows = [
-    ...SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map((setting) => flockRow(flock, setting)),
-    ...DESKTOP_SETTINGS.map(({ read, change: _, unset, multiline, ...setting }): SettingRow => {
-      const value = read(desktop);
+    ...DESKTOP_SETTINGS.map((setting): SettingRow => {
+      const value = setting.read(desktop);
+      const set = value !== setting.fallback;
       return {
         ...rowOf(setting),
         value,
         fallback: setting.fallback,
-        defaultSaid: unset?.(desktop) ?? defaultSaid(setting, setting.fallback),
-        set: value !== setting.fallback,
-        from: null,
+        defaultSaid: defaultSaid(setting, setting.fallback),
+        set,
+        edit: set ? "Saved on this computer" : null,
         shared: false,
-        multiline: multiline === true,
+        multiline: false,
+        hint: null,
       };
     }),
+    ...SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map((setting) =>
+      flockRow(flock, setting, now, timeZone),
+    ),
   ];
   return SETTING_GROUPS.flatMap((group) => {
-    const placed = rows.filter((row) => row.group === group);
+    const placed = rows
+      .filter((row) => row.group === group)
+      .sort((a, b) => subRank(a.sub) - subRank(b.sub));
     return placed.length === 0 ? [] : [{ group, rows: placed }];
   });
+};
+
+export type Reached = Pick<MachineRow, "name" | "state" | "settings">;
+
+export interface Said {
+  readonly said: string;
+  readonly tone: "ok" | "warn";
+}
+
+/** A Machine its latest sync did not reach; one not synced yet is not behind. */
+const missed = ({ state, settings }: Reached) =>
+  state !== "live" || (settings?.failed ?? null) !== null;
+
+const listed = (names: ReadonlyArray<string>) =>
+  names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+
+const reachedOf = (machines: ReadonlyArray<Reached>) => {
+  const behind = machines.filter(missed);
+  return {
+    behind,
+    all: behind.length === 0,
+    of: `${machines.length - behind.length} of ${machines.length}`,
+  };
+};
+
+/**
+ * How far an edit of the Flock's settings reached, from each Machine's latest sync, or why
+ * it is not sent: one made while the Flock's settings cannot be read would be made blind.
+ */
+export const flockReach = (
+  readable: boolean,
+  machines: ReadonlyArray<Reached>,
+): Said | { readonly refused: string } => {
+  if (!readable) return { refused: "Not set: the Flock's settings could not be read" };
+  const { behind, all, of } = reachedOf(machines);
+  if (all) return { said: `Given to all ${machines.length} Machines`, tone: "ok" };
+  const names = behind.map(({ name }) => name);
+  return {
+    said: `Given to ${of} · ${listed(names)} ${names.length === 1 ? "gets it when it connects" : "get it when they connect"}`,
+    tone: "warn",
+  };
+};
+
+export const syncPill = (readable: boolean, machines: ReadonlyArray<Reached>): Said => {
+  if (!readable) return { said: "Showing the Flock's settings as last read", tone: "warn" };
+  const { behind, all, of } = reachedOf(machines);
+  if (all) return { said: `In sync with all ${machines.length} Machines`, tone: "ok" };
+  const lagging = behind.map(
+    ({ name, state }) => `${name} ${state === "live" ? "behind" : "out of reach"}`,
+  );
+  return { said: `In sync with ${of} · ${listed(lagging)}`, tone: "warn" };
 };

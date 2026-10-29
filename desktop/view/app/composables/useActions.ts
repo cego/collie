@@ -185,8 +185,11 @@ export const useActions = () => {
     saveGitlab: (token: string) => saveGitlab({ payload: { token } }).then(kept),
     saveGitlabHost: (host: string) => saveGitlabHost({ payload: { host } }).then(kept),
     saveHelle: (token: string) => saveHelle({ payload: { token } }).then(kept),
+    /** Why the edit was refused, or null where it was kept; Settings says either on its row. */
     setFlockSetting: (key: string, value: string) =>
-      setFlockSetting({ payload: { key, value } }).then(kept),
+      setFlockSetting({ payload: { key, value } }).then((exit) =>
+        Exit.isFailure(exit) ? failureOf(exit.cause).reason : null,
+      ),
     /** Who the token belongs to, or why Helle would not say. */
     checkHelle: (token: string) =>
       checkHelle({ payload: { token } }).then((exit) =>

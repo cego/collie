@@ -79,6 +79,16 @@ describe("Collie's settings", () => {
     });
   });
 
+  test("take the Flock chat's Machine rule and whether it speaks first, as the Flock's", () => {
+    expect(parseSetting("machine_rule", " Frontend work is on the laptop ")).toEqual({
+      value: "Frontend work is on the laptop",
+    });
+    expect(parseSetting("flock_chat.proactive", "false")).toEqual({ value: false });
+    expect(parseSetting("flock_chat.proactive", "sometimes")).toEqual({
+      refused: 'flock_chat.proactive has to be true or false, not "sometimes"',
+    });
+  });
+
   test("refuse what no Run could use, saying what would do", () => {
     expect(parseSetting("max_iterations", "five")).toEqual({
       refused: 'max_iterations has to be a whole number, not "five"',
@@ -152,7 +162,7 @@ describe("Each setting explains itself", () => {
       "release.approval_channel",
     ],
     Board: ["scope", "density", "board_quiet_ms"],
-    Chat: ["proactive"],
+    Chat: ["flock_chat.proactive", "machine_rule", "proactive"],
     Notifications: ["questions", ...NOTIFICATION_KINDS.map((kind) => `notifications.${kind}`)],
     "GitLab and credentials": ["gitlab_host"],
   };

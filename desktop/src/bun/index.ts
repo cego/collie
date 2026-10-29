@@ -67,7 +67,7 @@ import { loopbackTools } from "./chat-endpoint";
 import { piDriver } from "./pi-driver";
 import { CHILD_CWD, childEnv, localShell, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
-import { heldSettings, type Offers } from "./settings";
+import { carryIntoFlock, heldSettings, type Offers } from "./settings";
 import { offerOf, offersOf, opensOn, readPiConfig, retelling } from "./chat-choices";
 import { harnessLists } from "./harness-lists";
 import { readPiModels } from "./pi-models";
@@ -77,7 +77,6 @@ import {
   definitionsSync,
   flockSync,
   readFlockDefinitions,
-  readFlockSettings,
   writeFlockDefinitions,
   writeFlockSettings,
 } from "./flock-settings";
@@ -256,6 +255,8 @@ const main = Effect.gen(function* () {
     claude: Effect.suspend(() => claudeModels(SubscriptionRef.getUnsafe(flockSettings), own)),
     pi: Effect.suspend(() => readPiModels(SubscriptionRef.getUnsafe(flockSettings), own)),
   });
+  // Before Desktop's own settings are held, so a save does not write back what was carried.
+  const saved = yield* carryIntoFlock(own, yield* nowIso());
   const desktop = yield* heldSettings(
     own,
     (): FlockSettings => SubscriptionRef.getUnsafe(flockSettings),
@@ -263,7 +264,6 @@ const main = Effect.gen(function* () {
       offersOf(now, SubscriptionRef.getUnsafe(flockSettings), readPiConfig(own), lists),
   );
   const settings = desktop.now;
-  const saved = yield* readFlockSettings(own);
   // The GitLab host an earlier Desktop kept as its own becomes the Flock's.
   const ownGitlabHost = settings().gitlabHost;
   const seeded =
@@ -395,6 +395,7 @@ const main = Effect.gen(function* () {
     Effect.forkScoped,
   );
   const doors = new DoorMap<Doors>();
+  const flockValue = (key: string) => SubscriptionRef.getUnsafe(flockSettings).settings[key]?.value;
   /** Keeps an edit made here, then gives it to every connected Machine. */
   const editFlock = (key: string, typed: string) =>
     Effect.gen(function* () {
@@ -711,10 +712,13 @@ const main = Effect.gen(function* () {
       ),
     dir: own,
     conversation: `flock@${local}`,
-    proactive: () => settings().proactive,
-    machineRule: () => settings().machineRule,
+    proactive: () => flockValue("flock_chat.proactive") !== false,
+    machineRule: () => {
+      const rule = flockValue("machine_rule");
+      return isString(rule) ? rule : undefined;
+    },
     setMachineRule: (machineRule) =>
-      saveSettings({ machineRule }).pipe(
+      editFlock("machine_rule", machineRule).pipe(
         Effect.asVoid,
         Effect.orDie,
         Effect.provide(BunServices.layer),

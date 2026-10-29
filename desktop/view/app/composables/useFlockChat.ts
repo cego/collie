@@ -11,7 +11,12 @@ import { isString } from "../../../../src/schema";
 import { type Attached, attachedIn, attachmentPart } from "../../../src/shared/attachments";
 import { About, type Answers, type HeldConversation } from "../../../src/shared/chat-view";
 import { replyEvents } from "../../../src/shared/chat-stream";
-import { conversationChangesAtom, desktopTurnsAtom, FlockClient } from "../flock";
+import {
+  conversationChangesAtom,
+  desktopTurnsAtom,
+  FlockClient,
+  flockSettingsAtom,
+} from "../flock";
 import { failureOf } from "./useActions";
 
 const answerAtom = FlockClient.mutation("answer");
@@ -78,7 +83,8 @@ export const useFlockChat = () => {
   const { value: turns, trouble: turnsTrouble } = useHeld(() => desktopTurnsAtom);
   /** Whether Desktop is telling the chat about News right now. */
   const desktopSpeaking = computed(() => turns.value === "started");
-  const { desktopSettings, setProactive } = useDesktopSettings();
+  const { value: flockSettings } = useHeld(() => flockSettingsAtom);
+  const { setFlockSetting } = useActions();
 
   const reload = () =>
     transcript({ payload: undefined }).then((exit) => {
@@ -105,8 +111,12 @@ export const useFlockChat = () => {
     ...chat,
     desktopSpeaking,
     turnsTrouble,
-    proactive: computed(() => desktopSettings.value.proactive),
-    setProactive,
+    proactive: computed(
+      () => flockSettings.value?.settings["flock_chat.proactive"]?.value !== false,
+    ),
+    /** Lets the Flock chat speak first about News that matters, or not, on every Desktop. */
+    setProactive: (proactive: boolean) =>
+      setFlockSetting("flock_chat.proactive", String(proactive)),
     /**
      * Sends a message with the card it is about: queued while a turn is under way, or `now`,
      * interrupting it.

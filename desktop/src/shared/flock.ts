@@ -2,7 +2,7 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
-import { DateTime, Effect, Schema, Stream, Struct } from "effect";
+import { DateTime, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
@@ -361,11 +361,11 @@ export const DesktopUpdates = Schema.Struct({ version: Schema.String, news: Upda
 export type DesktopUpdates = typeof DesktopUpdates.Type;
 /** What the human set in Desktop. */
 export const DesktopSettings = Schema.Struct({
-  /** Whether the Flock chat may start a turn about News nobody asked for. */
-  proactive: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
+  /** An earlier Desktop's own, kept only until carried into the Flock's settings. */
+  proactive: Schema.optionalKey(Schema.Boolean),
   /** The GitLab every Machine is onboarded and doctored against; unset is the default one. */
   gitlabHost: Schema.optionalKey(Schema.String),
-  /** Which Machine each kind of work goes to, in the human's words; empty is no rule. */
+  /** An earlier Desktop's own, kept only until carried into the Flock's settings. */
   machineRule: Schema.optionalKey(Schema.String),
   /** The human's Zoom, 1 the size of the other apps on each monitor; unset is 1. */
   zoom: Schema.optionalKey(Schema.Number),
@@ -382,9 +382,7 @@ export type DesktopSettings = typeof DesktopSettings.Type;
 
 /** The settings a change sets; the rest stay as they are. */
 export const DesktopSettingsChange = Schema.Struct({
-  proactive: Schema.optionalKey(Schema.Boolean),
   gitlabHost: Schema.optionalKey(Schema.String),
-  machineRule: Schema.optionalKey(Schema.String),
   zoom: Schema.optionalKey(Schema.Number),
   chatHarness: Schema.optionalKey(Schema.String),
   /** Empty unsets it. */

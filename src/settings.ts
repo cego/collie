@@ -378,6 +378,18 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description: "How long a running Run may write nothing before its card calls it quiet.",
     unit: "minutes",
   }),
+  of("flock_chat.proactive", "boolean", "true", {
+    group: "Chat",
+    label: "Flock chat speaks first",
+    description:
+      "Whether the Flock chat starts a turn about News that matters, as the bell in its header does.",
+  }),
+  of("machine_rule", "text", "", {
+    group: "Chat",
+    label: "Machine rule",
+    description:
+      "Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say.",
+  }),
   of("proactive", "boolean", String(D.proactive), {
     group: "Chat",
     label: "Native chat speaks first",
