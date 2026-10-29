@@ -73,6 +73,7 @@ describe("decoding each harness's own list", () => {
     ]);
     expect(entries[0]).toEqual({
       model: "gpt-6.1-sol",
+      isDefault: true,
       label: "GPT-6.1-Sol",
       description: "Latest workhorse model for coding and everyday work.",
       efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],

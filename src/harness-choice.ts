@@ -129,7 +129,7 @@ export interface MachineCatalogue {
   readonly harnesses: ReadonlyArray<{
     readonly harness: string;
     readonly table: string | null;
-    readonly entries: ReadonlyArray<Pick<CatalogueEntry, "model" | "efforts">>;
+    readonly entries: ReadonlyArray<Pick<CatalogueEntry, "model" | "efforts" | "isDefault">>;
   }>;
 }
 
@@ -190,7 +190,10 @@ export function resolveChoice(
   const reported = catalogue?.harnesses.find((one) => one.harness === harness);
   if (catalogue !== undefined && reported === undefined)
     return { ok: false, problem: `${catalogue.machine} has no ${harness} installed` };
-  const selected = model === DEFAULT_MODEL ? adapter.defaultModel : model;
+  const selected =
+    model === DEFAULT_MODEL
+      ? (adapter.defaultModel ?? reported?.entries.find((entry) => entry.isDefault)?.model)
+      : model;
   const lists = reported !== undefined && reported.table === null;
   const known = (id: string) =>
     lists
@@ -214,8 +217,10 @@ export function resolveChoice(
     };
   }
   const efforts = lists
-    ? (reported.entries.find((entry) => entry.model === selected)?.efforts ??
-      (extra.includes(selected ?? "") ? adapter.efforts : []))
+    ? selected === undefined
+      ? [...new Set(reported.entries.flatMap((entry) => entry.efforts))]
+      : (reported.entries.find((entry) => entry.model === selected)?.efforts ??
+        (extra.includes(selected ?? "") ? adapter.efforts : []))
     : adapter.efforts;
   if (effort !== undefined && catalogue !== undefined && !efforts?.includes(effort))
     return {
@@ -355,10 +360,15 @@ export function resolveWithRoom(
     const harness = entry.harness ?? "";
     const adapter = HARNESS_MODELS[harness];
     const reported = catalogue?.harnesses.find((one) => one.harness === harness);
-    const model = entry.model ?? adapter?.defaultModel;
+    const model =
+      entry.model === undefined || entry.model === DEFAULT_MODEL
+        ? (adapter?.defaultModel ?? reported?.entries.find((one) => one.isDefault)?.model)
+        : entry.model;
     const efforts =
       reported?.table === null
-        ? reported.entries.find((one) => one.model === model)?.efforts
+        ? model === undefined
+          ? reported.entries.flatMap((one) => one.efforts)
+          : reported.entries.find((one) => one.model === model)?.efforts
         : adapter?.efforts;
     const takes = efforts?.includes(folded.effort ?? "") ?? false;
     const next = resolveChoice(

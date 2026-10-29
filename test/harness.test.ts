@@ -274,6 +274,43 @@ test("switching harness keeps nothing chosen for the one below, and falls back t
   });
 });
 
+test("a native default takes an effort reported by any model until the harness identifies its default", () => {
+  const catalogue = {
+    machine: "vm-gpu",
+    harnesses: [
+      {
+        harness: "codex",
+        table: null,
+        entries: [
+          { model: "new-fast", efforts: ["low"] },
+          { model: "new-deep", efforts: ["high"] },
+        ],
+      },
+    ],
+  };
+  expect(resolveChoice([{ harness: "codex", effort: "high" }], {}, catalogue)).toMatchObject({
+    ok: true,
+    choice: { model: "default", effort: "high" },
+  });
+  expect(resolveChoice([{ harness: "codex", effort: "ultra" }], {}, catalogue).ok).toBe(false);
+  const identified = {
+    ...catalogue,
+    harnesses: [
+      {
+        ...catalogue.harnesses[0]!,
+        entries: [
+          { model: "new-fast", efforts: ["low"], isDefault: true },
+          { model: "new-deep", efforts: ["high"] },
+        ],
+      },
+    ],
+  };
+  expect(resolveChoice([{ harness: "codex", effort: "high" }], {}, identified).ok).toBe(false);
+  expect(resolveChoice([{ harness: "codex", effort: "low" }], {}, identified)).toMatchObject({
+    ok: true,
+  });
+});
+
 test("a combination no harness takes is refused with what would be taken instead", () => {
   const model = resolveChoice([configured, { model: "gpt-5" }]);
   expect(model.ok).toBe(false);

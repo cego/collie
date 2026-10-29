@@ -65,7 +65,8 @@ the fallback reason. An absent Harness is refused as not installed.
 The same check applies to each fallback candidate. The Flock chat checks this computer's
 catalogue before opening its session, including a saved choice made before the reading
 arrived. A pinned default is checked as its pinned model. A native default stays with the
-Harness; an explicit effort requires a named model whose catalogue lists that effort.
+Harness. Its reported default supplies the effort levels when identified; otherwise an
+effort is accepted if any model of that Harness on that Machine takes it.
 Codex receives an accepted effort as
 [`model_reasoning_effort`](https://learn.chatgpt.com/docs/config-file/config-reference)
 in both its App Server and TUI configuration.

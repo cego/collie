@@ -11,6 +11,7 @@ export const CatalogueEntry = Schema.Struct({
   efforts: Schema.Array(Schema.String),
   defaultEffort: Schema.NullOr(Schema.String),
   hidden: Schema.Boolean,
+  isDefault: Schema.optionalKey(Schema.Boolean),
   /** The harness's own report, Collie's table, or the `models.<harness>` setting. */
   from: Schema.Literals(["harness", "table", "added"]),
 });
@@ -71,6 +72,7 @@ export const CodexModelList = Schema.Struct({
       displayName: Schema.String,
       description: Schema.optionalKey(Schema.NullOr(Schema.String)),
       hidden: Schema.Boolean,
+      isDefault: Schema.optionalKey(Schema.Boolean),
       supportedReasoningEfforts: Schema.Array(Schema.Struct({ reasoningEffort: Schema.String })),
       defaultReasoningEffort: Schema.optionalKey(Schema.NullOr(Schema.String)),
     }),
@@ -85,6 +87,7 @@ export const codexEntries = ({ data }: CodexModelList): ReadonlyArray<CatalogueE
       efforts: model.supportedReasoningEfforts.map(({ reasoningEffort }) => reasoningEffort),
       defaultEffort: model.defaultReasoningEffort ?? null,
       hidden: model.hidden,
+      ...(model.isDefault === true && { isDefault: true }),
     }),
   );
 

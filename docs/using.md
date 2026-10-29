@@ -2792,8 +2792,9 @@ effort levels. If the Harness cannot be read, Collie uses its table and configur
 additions; a refusal says "from Collie's table" and why. An uninstalled Harness is refused.
 
 A pinned default is checked as its pinned model; other defaults stay with the Harness.
-With a native default, name a model before asking for an effort, so its levels can be
-checked. These checks also apply to fallback candidates and the Flock chat on this
+If the catalogue identifies the native default, its effort levels are checked.
+Otherwise an effort is accepted when any reported model of that Harness takes it.
+These checks also apply to fallback candidates and the Flock chat on this
 computer. See
 [Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
 [Permissions](#permissions-auto-by-default) for what `permissions` decides.
