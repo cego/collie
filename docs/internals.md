@@ -1568,8 +1568,12 @@ since the run leaves only its shard's files in it.
 
 Each shard uploads the timings it updated as the artifact `test-timings-shard-<i>`. Bun
 rewrites that file with only the files it ran, so each holds its own shard's durations. To
-refresh the seed, download the three from one green run (`gh run download <run-id> -p
-'test-timings-shard-*'`) and merge their `files` into `tools/test-timings.json`. Quiet-agent tests
+refresh the seed, download them from the latest three green runs (`gh run download <run-id>
+-p 'test-timings-shard-*' -D <dir>/<run-id>`) and run `bun tools/timings-seed.ts
+<dir>/*/*/test-timings.json`, which writes each file's mean. One run is not enough: a
+runner can be about 20 % faster than its siblings, and a seed copied from one run carries
+that into every later split. Bun cuts the path-sorted files into contiguous ranges of equal
+seed time, so no seed evens out runners that differ in speed on the day. Quiet-agent tests
 use a controlled Effect clock so machine load cannot consume their nudge windows. A test
 whose work waits out timers runs under `fastForward` (`test/support/effect.ts`): a test
 clock a fiber of its own keeps moving many times faster than the wall's, from the wall's
