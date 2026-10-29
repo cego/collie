@@ -154,6 +154,15 @@ export const settingsAgentSelects = (
       : (HARNESS_MODELS[set.harness]?.defaultModel ?? DEFAULT_MODEL);
   const picked = model(effective);
   const efforts = picked?.efforts ?? new Map<string, Set<string>>();
+  if ((!set.model || set.model === DEFAULT_MODEL) && !HARNESS_MODELS[set.harness]?.defaultModel)
+    for (const source of selected?.sources ?? []) {
+      const defaultModel = source.entries.find((entry) => entry.isDefault);
+      for (const effort of defaultModel?.efforts ?? source.entries.flatMap((entry) => entry.efforts)) {
+        const on = efforts.get(effort) ?? new Set<string>();
+        on.add(source.profile);
+        efforts.set(effort, on);
+      }
+    }
   const times = live
     .filter(({ problem }) => problem === null)
     .flatMap(({ catalogues }) => catalogues.map(({ at }) => at))
