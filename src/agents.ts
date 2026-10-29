@@ -2800,9 +2800,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     under(
       Effect.gen(function* () {
         const { to, operation, agent } = options;
+        const queued = (yield* readQueue(dirFor(options.runId)).pipe(Effect.orDie)).find(
+          (one) => one.request === options.request,
+        );
+        if (queued?.result != null) return queued.result;
         const launched = steerTarget(
           yield* candidatesOf(options.runId),
-          { to, operation, agent },
+          queued ?? { to, operation, agent },
           launchedAs,
         );
         if (launched === undefined) {
@@ -2817,10 +2821,6 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // After the step it is being given, so its work reaches it first.
         const out = stepsGoingOut.get(launched.agent);
         if (out !== undefined) yield* Deferred.await(out);
-        const queued = (yield* readQueue(dirFor(options.runId)).pipe(Effect.orDie)).find(
-          (one) => one.request === options.request,
-        );
-        if (queued?.result != null) return queued.result;
         const unsupported =
           options.mode === "now" &&
           (yield* gate(launched.harness, "now").pipe(
@@ -2886,18 +2886,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             return result;
           }
         }
-        const sent = yield* deliver(launched, options.text, {
+        const sent = yield* deliver(launched, pending.text, {
           kind: "steer",
           ref: options.request,
           mode: fallback ? "boundary" : options.mode,
           idleOnly: fallback,
-          actor: options.actor,
+          actor: pending.actor,
         });
         yield* log(
           options.runId,
           sent.sent
-            ? toldLine(launched.agent, options.text)
-            : `${launched.agent}: could not be told "${firstLine(options.text)}" (${sent.why})`,
+            ? toldLine(launched.agent, pending.text)
+            : `${launched.agent}: could not be told "${firstLine(pending.text)}" (${sent.why})`,
         );
         if (sent.sent) {
           const result = receipt(launched.agent, sent);

@@ -3438,6 +3438,89 @@ const tendIdle = Agents.pipe(
   ),
 );
 
+test.each([true, false])(
+  "a queued retry keeps its accepted words and actor (attributed: %s)",
+  (attributed) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"), { harness: "codex", model: "default" });
+        const text = "  Original accepted comment. Attached: /given/original.png  ";
+        const request = "accepted-comment";
+        const queued = yield* session(
+          Agents.pipe(
+            Effect.flatMap((agents) =>
+              agents.steer({
+                runId: "r1",
+                text,
+                request,
+                mode: "now",
+                actor: attributed ? { origin: "desktop" } : undefined,
+              }),
+            ),
+          ),
+          { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+        );
+        expect(queued).toMatchObject({ delivered: false, queued: true });
+        const retry = Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              text: "Replacement text. Attached: /given/replacement.png",
+              request,
+              mode: "now",
+              actor: { origin: "cli" },
+            }),
+          ),
+        );
+        const sent = yield* session(retry);
+        expect(sent).toMatchObject({ delivered: true, observed: true });
+        const again = yield* session(retry);
+        expect(again).toEqual(sent);
+        yield* session(tendIdle);
+        const comments = prompts(yield* rig.calls()).filter((one) => one.includes("Attached:"));
+        expect(comments).toHaveLength(1);
+        expect(comments[0]?.endsWith(text)).toBe(true);
+        expect(comments[0]).not.toContain("Replacement");
+        expect(comments[0]).not.toContain("From the human, in the CLI");
+        if (attributed) expect(comments[0]).toContain("From the human, in Desktop");
+        else expect(comments[0]).toBe(text);
+      }),
+    ),
+);
+
+test("a queued retry keeps its accepted recipient even when the retry names a missing agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { harness: "codex", model: "default" });
+      const queued = yield* session(
+        say("r1", "Keep this recipient.", "accepted-recipient", "now"),
+        {
+          herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })),
+        },
+      );
+      expect(queued).toMatchObject({ delivered: false, queued: true });
+      const retry = Agents.pipe(
+        Effect.flatMap((agents) =>
+          agents.steer({
+            runId: "r1",
+            text: "Keep this recipient.",
+            request: "accepted-recipient",
+            mode: "now",
+            agent: "not-launched",
+          }),
+        ),
+      );
+      const sent = yield* session(retry);
+      expect(sent).toMatchObject({ agent: agentFor("r1"), delivered: true, observed: true });
+      expect(yield* session(retry)).toEqual(sent);
+      expect(
+        prompts(yield* rig.calls()).filter((one) => one === "Keep this recipient."),
+      ).toHaveLength(1);
+    }),
+  ));
+
 test.each([
   ["agent", false],
   ["agent", true],
