@@ -720,10 +720,26 @@ they have set none. What a workflow must not hard-code — which team it files i
 where this installation keeps its logs — is asked for here rather than written into its
 prose, so the same workflow is usable by somebody else.
 
-`host.linear(cwd)` answers whether an agent Claude Code runs in `cwd` has a Linear MCP
-server, read as `collie doctor` reads it, with `detail` saying where it is or why not. Read
-it inside an Activity where the workflow branches on it: `tune-up` asks nothing it would
-need Linear to act on where it is `reachable: false`.
+`host.connection(id)` reads this Machine's Connection registry in the Run's checkout.
+It returns `{ state: "ok", account, detail }` or `{ state: "absent" | "broken", detail, fix }`.
+The ids are `gitlab`, `github`, `linear`, `helle`, and `slack`.
+Read it inside an Activity when branching, so replay keeps the original reading:
+
+```ts
+const linear =
+  yield *
+  Activity.make({
+    name: "linear",
+    success: ConnectionReading,
+    execute: host.connection("linear"),
+  });
+if (linear.state === "ok") yield * fileIssues;
+```
+
+Import `ConnectionReading` from `collie`; `fileIssues` above is your own Effect.
+For `uses`, write the branch that skips the service work and continues without it.
+Declarations don't rewrite your workflow body. `host.linear` is removed; migrate callers
+to this reading and replace `reachable` checks with `state === "ok"`.
 
 `host.mr({ cwd, target?, source? })` is whether a merge request can be opened from here and
 what it would carry, on the checkout's own forge (or the target's, where it names one):
@@ -1571,6 +1587,27 @@ export default defineWorkflow({
   order: a forecast the Flow draws, never a precondition.
 - **`agents`** is what the workflow's own work prefers, under anything a Run or a scope
   prefers: [which agent does the work](#which-agent-does-the-work).
+- **`connections`** declares required and optional services, including the text every front door shows:
+
+  ```ts
+  connections: {
+    needs: { helle: { with: "Holds the shared environment" } },
+    uses: { linear: { with: "Files issues", without: "Keeps the report in the Run" } },
+  },
+  ```
+
+  `needs` refuses a new start on its Machine unless the reading is `ok`, before creating
+  a Run. The refusal includes the Connection's fix. `uses` lets the workflow start;
+  [read the Connection inside an Activity](#where-your-run-is-and-what-it-was-given) to branch without it.
+  Both texts must be nonempty, and an id cannot be both needed and used.
+  The definitions view carries these declarations with their text.
+  Give an offer or action its own `connections: ["linear"]` list to hide it when that
+  Connection isn't `ok`. Every listed id must also appear in the declaring workflow's
+  `uses` or `needs`. An offer with no list stays shown, even when another offer's
+  Connection is absent. Invocation reads availability again. The target's `needs`
+  are checked when starting it and refuse with their fix; they don't hide the offer.
+  On GitHub repositories, `github`
+  stands in for a declared `gitlab` forge requirement.
 
 - **`hints`** attach inference to a field. `goal`, `work-source`, `diff-target` and
   `repository` — a GitLab or GitHub repository URL, or a local checkout — are the launch

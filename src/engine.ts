@@ -148,7 +148,15 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import { mrLabel, mrRefOf, mrWords, parseMrTarget, parseMrUrl, readMrRef } from "./board-model";
+import {
+  forgeOfRef,
+  mrLabel,
+  mrRefOf,
+  mrWords,
+  parseMrTarget,
+  parseMrUrl,
+  readMrRef,
+} from "./board-model";
 import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
@@ -217,6 +225,7 @@ import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
+import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
 import { listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
@@ -342,6 +351,12 @@ export const TOOLCHAIN = {
  * surface, so a declaration that has drifted fails a test rather than an author's build.
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
+  export type ConnectionId = "gitlab" | "github" | "linear" | "helle" | "slack";
+  export const ConnectionId: Schema.Codec<ConnectionId, unknown, never, never>;
+  export type ConnectionReading =
+    | { readonly state: "ok"; readonly account: string; readonly detail: string }
+    | { readonly state: "absent" | "broken"; readonly detail: string; readonly fix: string; readonly reusable?: { readonly from: string } };
+  export const ConnectionReading: Schema.Codec<ConnectionReading, unknown, never, never>;
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
   import type { PlatformError } from "effect/PlatformError";
   import type { ChildProcessSpawner } from "effect/process";
@@ -809,8 +824,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
     /** One value from the operator's own configuration, by dotted name, as text; empty for none. */
     readonly config: (dotted: string) => Effect.Effect<string>;
-    /** Whether an agent Claude Code runs in cwd has a Linear MCP server, and where or why not. */
-    readonly linear: (cwd: string) => Effect.Effect<{ readonly reachable: boolean; readonly detail: string }>;
+    /** This Machine's reading; take it inside an Activity when branching on it. */
+    readonly connection: (id: ConnectionId) => Effect.Effect<ConnectionReading>;
     /** Whether a merge request can be opened from here, and what it would carry. */
     readonly mr: (options: {
       readonly cwd: string;
@@ -1194,6 +1209,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What a definition declares about itself beside what it does. */
   export interface Declarations {
+    readonly connections?: WorkflowConnections;
     /** The Steps it expects to take, in order: a forecast, never a precondition. */
     readonly path?: ReadonlyArray<Step>;
     readonly hints?: Readonly<Record<string, string>>;
@@ -1203,6 +1219,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly closes?: "reported";
     readonly followUps?: ReadonlyArray<FollowUp>;
     readonly actions?: ReadonlyArray<ActionProvider>;
+  }
+
+  export interface WorkflowConnections {
+    readonly needs?: Partial<Record<ConnectionId, { readonly with: string }>>;
+    readonly uses?: Partial<Record<ConnectionId, { readonly with: string; readonly without: string }>>;
   }
 
   /** A workflow: its identity, what it takes and gives, what it declares, and what it does. */
@@ -1572,6 +1593,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | "started-with";
 
   export interface FollowUp {
+    readonly connections?: ReadonlyArray<ConnectionId>;
     readonly id: string;
     readonly title: string;
     /** A public workflow id, or "self" for the one declaring it. */
@@ -1602,6 +1624,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   }
 
   export interface ActionProvider {
+    readonly connections?: ReadonlyArray<ConnectionId>;
     readonly id: string;
     readonly title: string;
     /** A public workflow id, or "self" for the one declaring it. */
@@ -2182,6 +2205,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
     kind: "action" as const,
     inputs: action.inputs ?? {},
+    connections: action.connections,
     eligible: action.eligible,
   }));
   const followUps = (metadata?.followUps ?? []).map((offer) => ({
@@ -2191,6 +2215,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     arguments: null,
     kind: "follow-up" as const,
     inputs: offer.inputs ?? {},
+    connections: offer.connections,
     eligible: (facts: ActionFacts) =>
       (offer.when === "always" || (offer.when === "succeeded") === facts.succeeded) &&
       (offer.eligible?.(facts) ?? true),
@@ -2278,7 +2303,7 @@ const isWritten = (exported: unknown): exported is WrittenDefinition =>
 
 /** A definition as the entry the rest of the host reads. */
 const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
-  const { outcome, checkout, closes, followUps, actions } = definition;
+  const { outcome, checkout, closes, followUps, actions, connections } = definition;
   const path = definition.path?.map((one) => one.meta);
   const hints =
     definition.hints === undefined
@@ -2287,9 +2312,16 @@ const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
           Object.entries(definition.hints).map(([name, hint]) => [name, strategyNamed(hint)]),
         );
   const declared = Object.fromEntries(
-    Object.entries({ hints, outcome, checkout, closes, followUps, actions, path }).filter(
-      ([, value]) => value !== undefined,
-    ),
+    Object.entries({
+      hints,
+      outcome,
+      checkout,
+      closes,
+      followUps,
+      actions,
+      path,
+      connections,
+    }).filter(([, value]) => value !== undefined),
   );
   // SAFETY: checkEntry refuses an input field that is not a schema before anything settles one.
   return {
@@ -3557,6 +3589,11 @@ export const hostLayer = (options: {
         );
         const here = yield* forgeHere(cwd, runShell, defaults.gitlabHost);
         if (!here.ok) return yield* new WorkflowError({ reason: here.reason });
+        const reading = yield* connectionOnMachine({ ...env, cwd }, here.forge.name);
+        if (reading.state !== "ok")
+          return yield* new WorkflowError({
+            reason: `${reading.detail}. Fix: ${reading.fix}`,
+          });
         return { ...here, cwd, env };
       });
       const issuePrivacyBudget = Duration.fromInputUnsafe(options.issuePrivacyBudget ?? "1 minute");
@@ -4057,14 +4094,34 @@ export const hostLayer = (options: {
               Effect.orElseSucceed(() => ""),
             ),
           ),
-        linear: (cwd) =>
-          placing.pipe(
-            Effect.flatMap(({ env }) => under(connectionOnMachine({ ...env, cwd }, "linear"))),
-            Effect.map((probe) => ({ reachable: probe.state === "ok", detail: probe.detail })),
-          ),
+        connection: (id) =>
+          Effect.gen(function* () {
+            const { env } = yield* placing;
+            const run = yield* Effect.serviceOption(Run);
+            const cwd = Option.isSome(run) ? (yield* host.place(run.value.id)).cwd : env.cwd;
+            return yield* under(connectionOnMachine({ ...env, cwd }, id));
+          }),
         mr: (asked) =>
           under(
             Effect.gen(function* () {
+              const { env } = yield* placing;
+              const gitlabHost = (yield* loadDefaults(options.userDir ?? dir)).gitlabHost;
+              const ref = asked.target === undefined ? null : parseMrTarget(asked.target);
+              const here = yield* forgeHere(asked.cwd, runShell, gitlabHost);
+              const provider =
+                ref?.project != null ? forgeOfRef(ref) : here.ok ? here.forge.name : null;
+              if (provider !== null) {
+                const reading = yield* connectionOnMachine({ ...env, cwd: asked.cwd }, provider);
+                if (reading.state !== "ok")
+                  return {
+                    ok: false,
+                    provider,
+                    reason: `${reading.detail}. Fix: ${reading.fix}`,
+                    assignee: "",
+                    template: "",
+                    issues: [],
+                  };
+              }
               return yield* prepareMergeRequest(
                 {
                   ...asked,
@@ -4078,7 +4135,7 @@ export const hostLayer = (options: {
                       "github.assignee",
                     ),
                   },
-                  gitlabHost: (yield* loadDefaults(options.userDir ?? dir)).gitlabHost,
+                  gitlabHost,
                 },
                 runShell,
               );
@@ -5517,6 +5574,7 @@ export interface Generation {
   /** The file and the revision this was built from: what makes a later start the same code. */
   readonly source: string;
   readonly metadata: Schema.Json;
+  readonly connections?: import("./sdk").WorkflowConnections;
   /** What a finished Run of this module offers next, with the author's own eligibility. */
   readonly offers: ReadonlyArray<Declared>;
   /** What the workflow prefers for its own agents. */
@@ -5996,6 +6054,7 @@ const makeRegistry: (
       checkout: entry.metadata?.checkout ?? "none",
       source: yield* sourceOf(route.entry),
       metadata: describeMetadata(entry.metadata),
+      connections: entry.metadata?.connections,
       offers: declaredByModule(entry.metadata),
       agents: entry.agents,
       registration,
@@ -7364,6 +7423,27 @@ const makeRegistry: (
       diffTarget: pointedAt(generation, input),
       claim: yield* claimOf(runId),
     };
+    const available: Declared[] = [];
+    const readings = new Map<ConnectionId, ConnectionReading>();
+    for (const offer of generation.offers) {
+      const ids = yield* connectionIds(
+        offer.connections ?? [],
+        generation,
+        placedOf(row, options).cwd,
+        input,
+      );
+      let usable = true;
+      for (const id of ids) {
+        const reading =
+          readings.get(id) ??
+          (yield* connectionOnMachine({ ...placing.env, cwd: placedOf(row, options).cwd }, id).pipe(
+            Effect.provideContext(bun),
+          ));
+        readings.set(id, reading);
+        if (reading.state !== "ok") usable = false;
+      }
+      if (usable) available.push(offer);
+    }
     // A plan spanning repositories is a fan-out, which an offer does not start.
     const refused = new Map<string, string>();
     for (const offer of generation.offers) {
@@ -7420,7 +7500,40 @@ const makeRegistry: (
       }).pipe(Effect.provideContext(bun));
       if (still !== null) for (const offer of again) refused.set(offer.id, still);
     }
-    return { row, generation, facts, where, refused, input };
+    return { row, generation: { ...generation, offers: available }, facts, where, refused, input };
+  });
+
+  const connectionIds = Effect.fn("Engine.Registry.connectionIds")(function* (
+    ids: ReadonlyArray<string>,
+    generation: Generation,
+    cwd: string,
+    input: Readonly<Record<string, Schema.Json>>,
+  ) {
+    const field = fieldWith(generation.hints, "diff-target");
+    const target = field === undefined ? undefined : input[field];
+    const ref = isText(target) ? parseMrTarget(target) : null;
+    let here: import("./mr").ForgeHere | null = null;
+    if (ids.some((id) => id === "gitlab" || id === "github") && ref === null) {
+      const defaults = yield* loadDefaults(userDir).pipe(
+        Effect.provideContext(bun),
+        Effect.mapError(
+          (cause) =>
+            new HostRefused({
+              reason: `Connection configuration could not be read: ${String(cause)}`,
+            }),
+        ),
+      );
+      here = yield* forgeHere(cwd, runShell, defaults.gitlabHost).pipe(Effect.provideContext(bun));
+    }
+    const forge = ref !== null ? forgeOfRef(ref) : here?.ok ? here.forge.name : null;
+    return [
+      ...new Set(
+        ids
+          .filter(Schema.is(ConnectionId))
+          .map((id) => (id === "gitlab" && forge === "github" ? "github" : id))
+          .filter((id) => id !== "github" || forge !== "gitlab" || !ids.includes("gitlab")),
+      ),
+    ];
   });
 
   /** What a start is checked against before anything exists to clean up. */
@@ -7461,6 +7574,24 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
     );
+    if ((yield* store.requested(options.request)) === null) {
+      const cwd = request.kind === "existing" ? request.path : options.project;
+      const needed = yield* connectionIds(
+        Object.keys(generation.connections?.needs ?? {}),
+        generation,
+        cwd,
+        settled.input,
+      );
+      for (const id of needed) {
+        const reading = yield* connectionOnMachine({ ...placing.env, cwd }, id).pipe(
+          Effect.provideContext(bun),
+        );
+        if (reading.state !== "ok")
+          return yield* new HostRefused({
+            reason: `${generation.id} needs ${id}: ${reading.detail}. Fix: ${reading.fix}`,
+          });
+      }
+    }
     const provenance = {
       ...settled.provenance,
       // A host option a front door worked out, such as the checkout it placed the Run in.

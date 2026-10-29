@@ -123,6 +123,18 @@ const improvementsStep = step({
 
 export default defineWorkflow({
   id: "self-improve",
+  connections: {
+    uses: {
+      gitlab: {
+        with: "Files findings and plans improvements from issues",
+        without: "Records the retrospective in the Run only",
+      },
+      github: {
+        with: "Files findings and plans improvements from issues",
+        without: "Records the retrospective in the Run only",
+      },
+    },
+  },
   title: "self-improve — file and fix what a day of Runs shows is wrong with a project",
   description:
     "Reads the last 24 hours of Runs, this project's or the whole Machine's, with the installed retro skill, files or comments on this project's issues, and starts up to `improvements` plans that build themselves.",
@@ -249,16 +261,23 @@ export default defineWorkflow({
       );
       if (!quiet) yield* retro;
 
-      const open = yield* Activity.make({
+      const issues = yield* Activity.make({
         name: "issues",
-        success: Opened,
+        success: Schema.Union([Opened, Schema.Struct({ refused: Schema.String })]),
         error: WorkflowError,
-        execute: host
-          .issues(run.id)
-          .pipe(
-            Effect.map((issues) => issues.map((issue) => ({ ...issue, keys: keysIn(issue.body) }))),
-          ),
+        execute: host.issues(run.id).pipe(
+          Effect.map((issues) => issues.map((issue) => ({ ...issue, keys: keysIn(issue.body) }))),
+          Effect.catch((failure) => Effect.succeed({ refused: failure.reason })),
+        ),
       });
+      if ("refused" in issues) {
+        yield* host.record(
+          run.id,
+          `Retrospective kept in the Run; no issues filed: ${issues.refused}`,
+        );
+        return `Retrospective kept in ${place.dir}; no issues filed: ${issues.refused}`;
+      }
+      const open = issues;
 
       const triaging = triageStep(
         agentWork({

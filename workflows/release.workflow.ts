@@ -35,6 +35,7 @@ import {
 } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
+import { connection } from "./connections.ts";
 import * as Workflow from "effect/workflow/Workflow";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import { IMPLEMENTER } from "./reviewing.ts";
@@ -367,6 +368,18 @@ const notReady = (standing: ReviewStanding) => {
 
 export default defineWorkflow({
   id: "release",
+  connections: {
+    needs: {
+      helle: { with: "Holds the release while it ships" },
+      gitlab: { with: "Merges, tags and watches the pipeline" },
+    },
+    uses: {
+      slack: {
+        with: "Posts the merge request in the approval channel",
+        without: "Asks you to share it yourself",
+      },
+    },
+  },
   title: "release — merge and tag a merge request on a human's go",
   description:
     "Takes one merge request the rest of the way: it waits, at no model cost, until the merge request is approved, answered, green and mergeable at a head the Run's checks proved, asks the human for the go, then claims the repository, merges at that head, tags the release and reads the tag back on origin. An application is staged, from its merge request before the merge or from its tag after it, and goes to production on the human's go.",
@@ -731,6 +744,7 @@ export default defineWorkflow({
             `${SHARE_SETTINGS.on} is on but ${SHARE_SETTINGS.channel} names no channel, so nothing is shared for approval`,
           );
         let shared = !sharing.on || channel === "";
+        const slack = sharing.on && channel !== "" ? yield* connection("slack") : null;
         let shares = 0;
         /** After a wait, the question comes again only at a new head. */
         let askedAt: string | null = null;
@@ -750,8 +764,14 @@ export default defineWorkflow({
             const answer = yield* shareAsk(
               ask({
                 name: nth("share-for-approval", shares),
-                prompt: `${mr} at ${short(proved)} waits for a teammate's approval. Check it first. ${SHARE.post} posts it in ${channel} as its title, linked, and nothing else; ${SHARE.wait} posts nothing and asks again once its head moves.`,
-                options: [SHARE.post, SHARE.wait],
+                prompt:
+                  slack !== null && slack.state !== "ok"
+                    ? `${mr} at ${short(proved)} waits for a teammate's approval. Share it in ${channel} yourself: ${slack.detail}. Fix: ${slack.fix}. Confirm when shared, or wait for changes.`
+                    : `${mr} at ${short(proved)} waits for a teammate's approval. Check it first. ${SHARE.post} posts it in ${channel} as its title, linked, and nothing else; ${SHARE.wait} posts nothing and asks again once its head moves.`,
+                options: [
+                  slack !== null && slack.state !== "ok" ? "I shared it" : SHARE.post,
+                  SHARE.wait,
+                ],
               }),
               { round: shares },
             );
@@ -760,6 +780,10 @@ export default defineWorkflow({
                 runId,
                 `not shared at ${short(proved)}: waiting for ${mr} to change`,
               );
+            if (answer === "I shared it") {
+              shared = true;
+              return yield* host.record(runId, `shared by the operator: ${mr} in ${channel}`);
+            }
             // The answer can come long after the question, once nobody need approve it any more.
             if (!waitsOnApproval(yield* standingAt(`${nth("share", shares)}.standing`)))
               return yield* host.record(

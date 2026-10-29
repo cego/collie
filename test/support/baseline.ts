@@ -1773,6 +1773,38 @@ scenario(
   120_000,
 );
 
+scenario(
+  "review without its forge reviews the worktree and offers no Post",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        const forge = yield* forgeOnPath(bin, "github", {
+          installed: true,
+          loggedIn: [],
+          login: null,
+          mrs: [],
+        });
+        yield* repository();
+        yield* rig.queueOutputs([SYNTHESIS]);
+        const rows = yield* parked({
+          entry: shipped("review"),
+          runId: "r-review-without-forge",
+          input: { target: "mr:github.com/owner/repo#30" },
+          decision: "post-1",
+        });
+        expect(yield* asked("r-review-without-forge", "review-1")).toContain(
+          "Review target: worktree",
+        );
+        expect(optionsOf(rows, "post-1")).toEqual(["Don't post"]);
+        expect(forge.requests()).toEqual([]);
+        expect((yield* forge.calls()).filter((line) => line.startsWith("pr "))).toEqual([]);
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
+
 scenario("an Input the review was not given is said to be not given", () =>
   runEffect(
     Effect.gen(function* () {
@@ -9257,6 +9289,7 @@ const releaseHost = (
   whileClaiming: Effect.Effect<void, unknown, FileSystem.FileSystem> = Effect.void,
   stallAfterReplies = Infinity,
   helle?: () => HelleSays,
+  slack = true,
 ) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
@@ -9265,6 +9298,10 @@ const releaseHost = (
       let replies = 0;
       return Host.of({
         ...host,
+        connection: (id) =>
+          id === "slack" && slack
+            ? Effect.succeed({ state: "ok", account: "Collie", detail: "fixture workspace" })
+            : host.connection(id),
         // A host that stops after posting a reply, before its Activity is journaled.
         reply: (asked) =>
           host
@@ -11046,6 +11083,41 @@ for (const name of ["gitlab", "github"] as const) {
 {
   const { mr, target } = RELEASING.gitlab;
   const options = (runId: string) => ({ entry: shipped("release"), runId, input: { mr: target } });
+
+  scenario(
+    "release without Slack asks the operator to share, then continues without a posting agent",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
+          const runId = "r-share-manually";
+          yield* sharingIn("#frontend");
+          yield* rig.queueOutputs([PACKAGED]);
+          const status = yield* driven(
+            { ...options(runId), host: releaseHost({}, Effect.void, Infinity, undefined, false) },
+            (run) =>
+              Effect.gen(function* () {
+                const share = yield* goAsked(run.asked, "share-for-approval");
+                expect(share.prompt).toContain("Share it in #frontend yourself");
+                expect(optionsOf([share], "share-for-approval")).toEqual([
+                  "I shared it",
+                  "Wait for changes",
+                ]);
+                yield* run.answer("share-for-approval", "I shared it");
+                yield* changed(approvedBy("gitlab", "dave"));
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(yield* runLog(runId)).toContain(`shared by the operator: ${mr} in #frontend`);
+          expect((yield* rig.calls()).filter((call) => call.cmd === "agent start")).toHaveLength(1);
+        }),
+      ),
+    120_000,
+  );
 
   once(
     "release on gitlab: Wait for changes shares nothing, is asked again only at a new head, and a teammate's approval goes on to go 1",

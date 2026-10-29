@@ -1,7 +1,7 @@
 # A Connection is declared and read
 
-**Status: accepted, being built.** The registry and its readings are built here.
-Workflow declarations and credential reuse build on this boundary in later slices.
+**Status: accepted, being built.** The registry, workflow declarations, and readings are built here.
+Credential reuse builds on this boundary in a later slice.
 Builds on [ADR-0038](0038-the-host-builds-and-serves-the-board.md).
 
 ## What was true before
@@ -29,7 +29,7 @@ The additive `connections` board RPC leaves `PROTOCOL` at 4.
 `collie connections`, the `collie_connections` Toolkit read and Desktop use it.
 Doctor reads the registry locally, because it must also work before a host is running.
 Its existing forge prerequisites remain separate; optional Connection lines never fail it.
-The workflow's Linear read uses this registry too, without changing what an absent MCP means.
+Workflows read the same registry through `host.connection(id)`.
 
 **D3. Probes use the Machine's existing logins.**
 GitLab uses the configured host, otherwise glab's global host, and asks for the token's user.
@@ -50,9 +50,31 @@ Without one, a broken reading takes precedence over an absent one.
 A Machine lacking a working login gets `reusable.from` naming a Machine whose login works.
 This is discovery only: the later credential hand-over performs and verifies reuse.
 
+**D5. Workflows declare required and optional Connections with their consequences.**
+`connections.needs` maps ids to `{ with }`; `connections.uses` maps ids to `{ with, without }`.
+The host checks ids and nonempty text when loading the workflow.
+The existing definitions view carries these declarations for every front door.
+A new start is refused before admission when a required reading isn't `ok`, with its fix.
+An admitted request retried after a login changes keeps its original admission.
+For GitHub repositories and pull requests, `github` stands in for the declared `gitlab` forge requirement.
+
+Each offer or action may list its own `connections`, drawn from its workflow's declarations.
+It is hidden only when an id on that list isn't `ok`; an offer without a list stays shown.
+The target workflow's required Connections are checked at start, without hiding the offer.
+Availability is read again at invocation; a previously drawn offer isn't authority.
+Workflow bodies branch on `host.connection(id)` inside an Activity, preserving that reading on replay.
+`host.linear` is removed; shipped callers use the Connection reading.
+
+The shipped declarations follow their bodies where the canvas described different work:
+plan offers to hand the saved plan to Linear; renovate requires its forge before assessment;
+tune-up and self-improve use GitHub as well as GitLab.
+Review falls back to the local diff, and release asks the operator to share when Slack is absent.
+An implementation given only a Linear id cannot read its work without Linear; it names the fix
+and asks for the issue text as an alternative work source.
+
 ## Consequences
 
 - A broken service no longer hides healthy services from Settings or chat.
 - Older hosts without the RPC produce an unreadable-Connections message, not an empty list.
 - Multiple accounts remain visible in the per-Machine readings; the Flock summary names the first working account.
-- Workflow `needs` and `uses` declarations are a separate change; this slice preserves existing start behavior.
+- A missing required login is found before a Run or agent exists; optional service work follows its declared fallback.

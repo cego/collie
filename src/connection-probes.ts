@@ -22,7 +22,7 @@ export const probeHelle = Effect.fn("Connections.probeHelle")(function* (env: Pl
   if (!(yield* fs.exists(file)))
     return {
       state: "absent",
-      detail: `no credentials at ${file}; only workflows that wait on Helle (renovate) need them`,
+      detail: `no credentials at ${file}`,
       fix: `write HELLE_API_TOKEN=<token> to ${file}`,
     } satisfies Probe;
   const creds = yield* credentials({
