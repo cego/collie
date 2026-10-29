@@ -1799,6 +1799,39 @@ once; the budget was never exceeded; and the suite fits its 12 cores. The probe'
 four queued suites is over twice its idle p95. Ten suites had two Flakes, over the one
 aimed for.
 
+### Test-suite measurements, 29 October 2026
+
+Run `run-af99447d` revalidated #246 (`4cc438f7`) and #253 (`68d583e1`) on master before
+measuring `c56e9486455b33a6d3a74f131019e4a18020f980`, on vm-mk with Bun 1.4.4.
+The targets remain 360 s including builds and a probe p95 at most twice its idle value.
+
+The driver and raw samples are in that Run's `handoffs/measure/`. `drive.ts` runs
+`git rev-parse HEAD` once a second, recording wall time, child CPU time, involuntary
+context switches, CPU/I/O/memory pressure, load, and the budget's held and waiting suites.
+It also runs `sar -u -q -w -d 1`. A measured suite has its own systemd scope, whose
+`cpu.stat` separates its CPU use from the rest of the Machine. Both the idle window and
+the suite hold the host's Measurement lock, to take turns with run-2a1e10fe's measurements.
+No competing load is started for the measurement; other Runs continue.
+
+| Window (UTC)                  | Samples | Probe p50 | Probe p95 | Median load | Mean CPU pressure |
+| ----------------------------- | ------: | --------: | --------: | ----------: | ----------------: |
+| Idle, 10:44:46–10:49:46       |     300 |   5.07 ms |   7.79 ms |       15.74 |           10.35 % |
+| Base suite, 10:49:47–10:59:38 |     591 |   5.90 ms |   9.95 ms |       32.55 |           36.00 % |
+
+The base took 590.58 s including builds (10.45 s build, 580.13 s run): 5,069 passed,
+11 skipped, and one timed out, across 324 files. The timeout was
+`run-paths.test.ts`'s changed-claim test, which passed in a targeted verification afterward.
+The suite used 6,252.81 CPU-s in its cgroup, averaging 10.60 cores; the Machine averaged
+17.53 busy cores. I/O pressure averaged 0.55 %, and memory pressure was zero.
+The probe's own CPU time stayed near 4.4 ms; its mean wall time rose from 5.46 to 6.36 ms,
+with more involuntary context switches. This supports CPU scheduling delay as the
+observed slowdown, with both suite and other Machine work contributing.
+
+The probe p95 was 1.28 times idle, but only one suite waited behind the running suite.
+This does not prove #216's four-suite target. The suite also misses #215's 360 s target.
+Neither issue is resolved by these baseline numbers, and no budget or scheduling change
+is justified by a window that does not reproduce the responsiveness failure.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
