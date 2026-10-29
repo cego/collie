@@ -1840,6 +1840,27 @@ starts. Dirty trees and failed status reads retain the diff and untracked-conten
 Status explicitly includes untracked files even when the user's Git config hides them,
 and the fingerprint of an ordinary unchanged tree retains its previous value.
 
+The candidate, `621e7c3a1e753e3da511127b994138c44e00ec37`, ran at
+11:09:20–11:23:33 UTC with the same budget, dependencies, and measurement driver.
+It passed all 5,074 enabled tests, with the same 11 skips, across 325 files: four tests
+were added. It took 850.52 s including builds (10.46 s build, 840.06 s run).
+The probe's 851 samples gave p50 8.71 ms and p95 19.73 ms, 2.53 times the earlier idle p95.
+No suite waited behind this one. The additional ten-minute passive observation also
+caught no four-suite window; at most one suite waited in any recorded window.
+
+Background CPU load was substantially different. The candidate's scope averaged
+7.84 cores while the Machine averaged 21.93 busy cores, against 10.60 and 17.53 for the
+base. Mean CPU pressure was 53.81 %, I/O pressure 0.10 %, and memory pressure zero.
+The sampled cgroup ancestors had no CPU quota throttling. The final cgroup disappeared
+before its closing `cpu.stat` read; its interval samples and `/usr/bin/time -v` remain
+in `candidate-1/`. No other Run or workload was stopped to obtain these numbers.
+
+These measurements show no elapsed-time gain and meet neither original target.
+The differing background load also prevents attributing the elapsed-time difference to
+the patch. The compiler-load and Git-start reductions have targeted regression proofs;
+their whole-suite performance benefit remains unproved. #215 and #216 stay open, and
+the full correctness gate remains CI's `test` job.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
