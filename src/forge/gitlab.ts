@@ -49,6 +49,7 @@ import { isHostName } from "../gitlab-token";
 import { isString } from "../schema";
 
 export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
+export const GLAB_RELOGIN = "glab auth login";
 
 export const glabLoginOn = Effect.fn("GitLab.loginOn")(function* <R>(
   env: PluginEnv,
@@ -723,7 +724,7 @@ export function glabLoginTo(host: string, stored = false): ForgeLogin {
     display: "GitLab",
     cli: "glab",
     notReady: `glab is not logged in to ${host}`,
-    relogin: `glab auth login --hostname ${host}`,
+    relogin: `${GLAB_RELOGIN} --hostname ${host}`,
     // Empty for a personal access token, which does not expire.
     expiry: (run, cwd) =>
       Effect.map(value("oauth2_expiry_date", run, cwd), (said) =>

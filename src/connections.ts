@@ -14,7 +14,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { redact } from "./redact";
 import { probeSlack, SLACK_FIX } from "./slack-credentials";
 import { slackApi } from "./slack";
-import { glabLoginTo } from "./forge/gitlab";
+import { GLAB_RELOGIN } from "./forge/gitlab";
 import { ghLogin } from "./forge/github";
 
 export const CONNECTION_TIMEOUT_MS = 6_000;
@@ -54,7 +54,7 @@ export const connectionProbes = (
   slack = slackApi,
 ) =>
   [
-    { id: "gitlab", read: probeGitlab(env, run), fix: glabLoginTo("gitlab.com").relogin },
+    { id: "gitlab", read: probeGitlab(env, run), fix: GLAB_RELOGIN },
     { id: "github", read: probeGithub(env, run), fix: `${ghLogin.relogin} --web` },
     { id: "helle", read: probeHelle(env), fix: `check HELLE_API_TOKEN in ${helleEnvPath(env)}` },
     { id: "linear", read: probeLinearMcp(env), fix: LINEAR_MCP_FIX },
