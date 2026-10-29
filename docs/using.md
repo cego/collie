@@ -3323,6 +3323,16 @@ on as a recurrence.
 It waits for its Improvements, then writes `summary.md` in its Run directory: each issue
 filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
+Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
+
+An Improvement that failed to start, because its issues could not be read back, is started
+again by the next `self-improve` Run of the same project, the next day, from an earlier
+Run's `improvements.json` of the last seven days. That happens only while every issue it
+fixes is still open, and while no Run of the project started since names one of them in a
+`Closes #n`, so work a person or another Run already began is not duplicated. Restarts take
+`improvements` slots before the day's new Improvements, and are listed in the summary like
+them. One that started and then failed is not restarted: it is its own card, waiting on a
+person.
 
 Run it daily with a Schedule. For a project:
 

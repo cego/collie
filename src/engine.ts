@@ -1041,6 +1041,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly project: string;
       readonly created: string;
       readonly status: "pending" | "suspended" | "complete" | "failed";
+      /** The issues its input says \`Closes #n\` for. */
+      readonly closes: ReadonlyArray<number>;
     }>;
     readonly workflows: ReadonlyArray<WorkflowTally>;
     readonly failed: ReadonlyArray<{ runId: string; workflow: string; reason: string }>;

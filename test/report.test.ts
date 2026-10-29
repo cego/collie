@@ -65,6 +65,23 @@ test("each workflow is tallied by how its Runs ended, and only a recorded MR cou
   expect(report.failed).toEqual([{ runId: "b", workflow: "implement", reason: "boom" }]);
 });
 
+test("a Run lists each issue its input says Closes #n for, once", () => {
+  const report = reportOf(
+    [
+      view({
+        runId: "a",
+        input: {
+          goal: "Fix it. The merge request must say `Closes #12`, `closes #13`, Closes #12.",
+        },
+      }),
+      view({ runId: "b", input: { goal: "Fix #14.", rounds: 3 } }),
+    ],
+    new Map(),
+    null,
+  );
+  expect(report.runs.map(({ closes }) => closes)).toEqual([[12, 13], []]);
+});
+
 test("a Run carrying a stop control is counted and listed as stopped", () => {
   const report = reportOf(
     [

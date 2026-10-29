@@ -44,6 +44,8 @@ export interface Report {
     readonly project: string;
     readonly created: string;
     readonly status: RunView["status"]["status"];
+    /** The issues its input says `Closes #n` for. */
+    readonly closes: ReadonlyArray<number>;
   }>;
   readonly workflows: ReadonlyArray<WorkflowTally>;
   readonly failed: ReadonlyArray<{ runId: string; workflow: string; reason: string }>;
@@ -62,6 +64,13 @@ export interface Recorded {
   readonly records: OutcomeRecords | null;
   readonly metrics: ReadonlyArray<Metric>;
 }
+
+const CLOSES = /Closes #(\d+)/gi;
+
+const closesIn = (input: RunView["input"]) =>
+  Object.values(input)
+    .filter(isText)
+    .flatMap((text) => [...text.matchAll(CLOSES)].map((match) => Number(match[1])));
 
 type Mutable<T> = { -readonly [K in keyof T]: Mutable<T[K]> };
 
@@ -128,13 +137,14 @@ export function reportOf(
   const workflows = [...tallies.values()].toSorted(
     (a, b) => b.total - a.total || a.workflow.localeCompare(b.workflow),
   );
-  const runs = kept.map(({ runId, workflow, parent, project, created, status }) => ({
+  const runs = kept.map(({ runId, workflow, parent, project, created, status, input }) => ({
     runId,
     workflow,
     parent,
     project,
     created,
     status: status.status,
+    closes: [...new Set(closesIn(input))],
   }));
   const measures = measuresOf(
     kept.map(({ runId }) => ({
