@@ -11,8 +11,10 @@
 
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
+import { mrLabel, type MrState } from "../src/board-model";
+import { writeMrStates } from "../src/merges";
 import { runEffect } from "./support/effect";
-import { HostReply, events, fixtures, openHost, until, workspace } from "./support/host";
+import { HostReply, events, fixtures, openHost, runDirOf, until, workspace } from "./support/host";
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
 const complete = (reply: typeof HostReply.Type) => reply.status === "complete";
@@ -385,6 +387,72 @@ test(
           "note:orphan=back",
         );
         yield* third.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+const MR = "https://gitlab.example.com/group/project/-/merge_requests/7";
+const CLAIM = `[{"slug":"project","claim":"mine"}]`;
+
+/** A Run about `MR`, stopped while it waits, with a Helle claim and the forge's word on `MR`. */
+const stoppedOn = Effect.fn("test.stoppedOn")(function* (prefix: string, mr: MrState) {
+  const fs = yield* FileSystem.FileSystem;
+  const { state } = yield* workspace(prefix);
+  const host = yield* openHost(state);
+  yield* host.ask({ op: "start", id: "stops-on-mr", runId: "r1", input: { mr: MR } });
+  yield* host.until({ op: "waiting", runId: "r1" }, asking("decision"));
+  yield* host.ask({ op: "stop", id: "stops-on-mr", runId: "r1" });
+  yield* until(
+    () => events(state, "r1"),
+    (log) => log.includes("stopped"),
+  );
+  const claim = `${yield* runDirOf(state, "r1")}/helle.json`;
+  yield* fs.writeFileString(claim, CLAIM);
+  yield* writeMrStates(state, new Map([[mrLabel(MR), mr]]));
+  return { host, state, claim };
+});
+
+test(
+  "a stopped Run whose merge request merged refuses a resume and is left as it was stopped",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { host, state, claim } = yield* stoppedOn("collie-control-landed-", "merged");
+        const before = yield* host.ask({ op: "waiting", runId: "r1" });
+        const resumed = yield* host.ask({ op: "resume", id: "stops-on-mr", runId: "r1" });
+        expect(resumed.ok).toBe(false);
+        expect(resumed.detail).toContain("was stopped after its merge request merged");
+        expect(yield* host.ask({ op: "waiting", runId: "r1" })).toEqual(before);
+        expect((yield* events(state, "r1")).filter((line) => line === "wait")).toHaveLength(2);
+        expect(yield* fs.readFileString(claim)).toBe(CLAIM);
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
+  "a stopped Run whose merge request is still open is resumed and takes up its work",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { host } = yield* stoppedOn("collie-control-open-", "open");
+        const resumed = yield* host.ask({ op: "resume", id: "stops-on-mr", runId: "r1" });
+        expect(resumed).toMatchObject({ ok: true, detail: "" });
+        yield* host.until({ op: "waiting", runId: "r1" }, asking("decision"));
+        yield* host.ask({
+          op: "answer",
+          id: "stops-on-mr",
+          runId: "r1",
+          decision: "decision",
+          value: "release",
+        });
+        expect(
+          (yield* host.until({ op: "poll", id: "stops-on-mr", runId: "r1" }, complete)).value,
+        ).toBe("release");
+        yield* host.stop;
       }).pipe(Effect.scoped),
     ),
   180_000,

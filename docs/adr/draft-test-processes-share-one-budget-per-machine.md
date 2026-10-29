@@ -35,8 +35,9 @@ fraction of the suite. Every scenario still runs as shipped and under an unrelat
 **D2. One budget per user per Machine, counted in test processes.** The budget is two
 thirds of the cores, at least 2: 16 on vm-mk. A worker counts as one core: on vm-mk a
 whole suite's worker, with the hosts and fakes it starts, used 0.92 cores (2026-10-26). A
-quarter of it, at least 2, is reserved for small runs: a targeted run, a bare `bun test`,
-or one of Collie's single-test reruns. Whole suites share the rest. A whole suite asks for all of that rest, so whole suites run
+quarter of it, at least 2, is reserved for small runs: a targeted run of no more files than
+that and no directory, a bare `bun test`, or one of Collie's single-test reruns. Whole
+suites share the rest, with a targeted run the size of a suite (#252). A whole suite asks for all of that rest, so whole suites run
 one at a time, as they did under the lock. A small run never waits behind a whole suite.
 A caller's `--parallel=N` asks for N workers. A run gets no more than its class's share,
 and its log says when it got fewer than it asked for; otherwise a request larger than the
@@ -48,8 +49,11 @@ or 3, there are no classes: every run takes from all of the budget, in arrival o
 both kinds, and a whole suite asks for all of it. A small run waits behind a whole suite only
 on a Machine that small, and the bound still holds.
 
-**D3. Admission is in arrival order, and a dead holder holds nothing.** A waiter takes a
-ticket. Within its class, tickets are admitted oldest first. A hold names every process
+**D3. A request that fits is admitted, and a dead holder holds nothing.** A waiter takes a
+ticket. It is admitted as soon as its class's share has its workers free, after the earlier
+tickets that fit then: an earlier ticket waiting for more than is free does not hold back
+a later one that fits (#252). Between tickets that do not fit, the oldest goes first. A
+large request can so wait behind a stream of small ones, which is accepted. A hold names every process
 that runs on it, the runner and the `bun test` it starts, so a runner killed with
 `kill -9` does not free the slots its still-running tests use. A ticket or hold whose
 processes are all gone is removed by the next process that looks. A process is identified

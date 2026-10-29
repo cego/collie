@@ -1665,6 +1665,15 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   /**
+   * A person claimed `slug` in Helle under the identity every Run here shares, so no Run
+   * may give it back: it leaves every Run's claim record. Answers the Runs it left.
+   */
+  Rpc.make("claimedInHelle", {
+    payload: { slug: Schema.String, request: Schema.String },
+    success: Schema.Array(Schema.String),
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  /**
    * A read-only Collie tool answered for the asking channel as this Machine's Native chat
    * answers it, with no board selection standing in for a Run. Records nothing.
    */

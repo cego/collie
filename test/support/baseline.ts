@@ -9155,6 +9155,16 @@ const readyMr = (name: MrForge, head: string, merged: string, over: Partial<Fake
     ...over,
   }) satisfies FakeMr;
 
+/** The merge request's pipeline still running at its head, as GitLab says "ci still running". */
+const STILL_RUNNING = {
+  checks: [{ name: "build", state: "running" }],
+  mergeable: "running",
+} satisfies Partial<FakeMr>;
+const PIPELINE_PASSED = {
+  checks: [{ name: "build", state: "passed" }],
+  mergeable: "yes",
+} satisfies Partial<FakeMr>;
+
 const revParse = (ref: string, cwd = rig.projectDir) =>
   exec(["git", "rev-parse", ref], { cwd }).pipe(Effect.map((ran) => ran.stdout.trim()));
 
@@ -9590,7 +9600,7 @@ scenario(
 
 for (const [state, jobs] of [
   ["failing", [{ name: "test", state: "failed", retried: "failed" }]],
-  ["not reported", []],
+  ["not reported", [{ name: "static", state: "passed" }]],
 ] as const)
   scenario(
     `a Release whose check is left to CI's test job is not asked its go while the job is ${state}`,
@@ -9598,7 +9608,7 @@ for (const [state, jobs] of [
       runEffect(
         Effect.gen(function* () {
           const { bin, head } = yield* releasable("github", { jobs });
-          const runId = `r-release-own-check-${jobs.length}`;
+          const runId = `r-release-own-check-${state.replace(" ", "-")}`;
           yield* ownCheck(runId);
           yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
           const why = yield* driven(
@@ -10791,6 +10801,129 @@ for (const name of ["gitlab", "github"] as const) {
           expect(repliesOf(model)).toHaveLength(1);
           expect(yield* runLog(runId)).toContain(
             `go 1 no longer holds for ${head.slice(0, 8)}: 1 unanswered comment(s)`,
+          );
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a go answered while the head's pipeline still runs waits it out and merges on that go`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged, changed } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-go-ci-${name}`;
+          yield* rig.queueOutputs([PACKAGED, TAGGED]);
+          const status = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* changed(STILL_RUNNING);
+                yield* run.answer("go-1", "Release");
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on.startsWith("CI"),
+                );
+                expect(yield* runLog(runId)).not.toContain("no longer holds");
+                yield* changed(PIPELINE_PASSED);
+                const end = yield* ended(run.status);
+                expect(
+                  (yield* run.asked).filter((row) => row.decision.startsWith("go-")),
+                ).toHaveLength(1);
+                return end;
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
+          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a go whose pipeline fails while it still runs no longer holds, and is asked again once it is green`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, changed } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-go-ci-failed-${name}`;
+          yield* rig.queueOutputs([PACKAGED]);
+          const status = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* changed(STILL_RUNNING);
+                yield* run.answer("go-1", "Release");
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on.startsWith("CI"),
+                );
+                yield* changed({ checks: [{ name: "build", state: "failed" }], mergeable: "yes" });
+                yield* until(
+                  () => runLog(runId),
+                  (log) => log.includes("no longer holds"),
+                );
+                yield* changed(PIPELINE_PASSED);
+                yield* goAsked(run.asked, "go-2");
+                yield* run.answer("go-2", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(model.merges ?? []).toEqual([]);
+          const at = head.slice(0, 8);
+          expect(yield* runLog(runId)).toMatch(
+            new RegExp(`go 1 no longer holds for ${at}: the pipeline at ${at}, whose \\S+ failed`),
+          );
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a go whose head moves while its pipeline still runs no longer holds, naming the moved head`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, changed } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-go-ci-moved-${name}`;
+          yield* rig.queueOutputs([PACKAGED]);
+          let moved = "";
+          const status = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* changed(STILL_RUNNING);
+                yield* run.answer("go-1", "Release");
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on.startsWith("CI"),
+                );
+                moved = yield* pushedBySomebody(head);
+                yield* changed({ ...PIPELINE_PASSED, head: moved });
+                yield* goAsked(run.asked, "go-2");
+                yield* run.answer("go-2", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(model.merges ?? []).toEqual([]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+          expect(yield* runLog(runId)).toContain(
+            `go 1 no longer holds for ${head.slice(0, 8)}: its head moved to ${moved.slice(0, 8)}`,
           );
         }),
       ),
@@ -12177,6 +12310,55 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* runLog(runId)).toContain(
             `the production go no longer holds for ${head.slice(0, 8)}: 1 unanswered comment(s)`,
           );
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a production go given while the head's pipeline still runs waits it out, then merges and sends to production`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged, now, staging } = yield* testable();
+          claimed.length = 0;
+          const runId = `r-tested-ci-${name}`;
+          yield* rig.queueOutputs([
+            MR_STAGED,
+            staging,
+            testedTag(name),
+            { verdict: "clean", played: ["deploy-production"] },
+          ]);
+          const pipeline = (over: Partial<FakeMr>) =>
+            Effect.flatMap(forge.model(), (current) =>
+              forge.set({ ...current, mrs: current.mrs.map((one) => ({ ...one, ...over })) }),
+            );
+          const status = yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* tested(run);
+              yield* pipeline(STILL_RUNNING);
+              yield* run.answer("production", "Send to production");
+              const [, unstaged] = yield* until(
+                () => Effect.all([awaitingOn(runId), wasAsked(runId, "unstage")]),
+                ([on, unstaged]) => on.startsWith("CI") || unstaged,
+              );
+              expect(unstaged).toBe(false);
+              yield* pipeline(PIPELINE_PASSED);
+              yield* until(
+                () => awaitingOn(runId),
+                (on) => on !== "" && !on.startsWith("CI"),
+              );
+              yield* forge.set(yield* now({ environments: deploys(head, merged) }));
+              return yield* ended(run.status);
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `${mr} merged at ${merged}, released as v1.2.0, in production`,
+          );
+          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
         }),
       ),
     120_000,
@@ -13728,7 +13910,14 @@ scenario("a general Run declares no checkout, no gate, no outcome and offers not
 );
 
 /** The window a `self-improve` Run reads, and what its forge was asked, as a scenario sets them. */
-let windowRuns: Array<{ runId: string; parent: string | null; project?: string }> = [];
+let windowRuns: Array<{
+  runId: string;
+  parent: string | null;
+  project?: string;
+  workflow?: string;
+  created?: string;
+  closes?: ReadonlyArray<number>;
+}> = [];
 let openIssues: Issue[] = [];
 let filed: Array<{ title: string; body: string }> = [];
 let commented: Array<{ number: number; body: string }> = [];
@@ -13742,19 +13931,21 @@ const improving: HostOverride = Layer.effect(Host)(
     const host = yield* Host;
     return Host.of({
       ...host,
+      build: "0.103.0",
       report: (since) =>
         Effect.gen(function* () {
           const own = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id ?? "";
-          const runs = [{ runId: own, parent: null }, ...windowRuns].map(
-            ({ runId, parent, ...rest }) => ({
+          const runs = [{ runId: own, parent: null, workflow: idOf("self-improve") }, ...windowRuns]
+            .map(({ runId, parent, ...rest }) => ({
               runId,
-              workflow: "implement",
+              workflow: "workflow" in rest && rest.workflow ? rest.workflow : "implement",
               parent,
               project: "project" in rest && rest.project ? rest.project : rig.projectDir,
-              created: since,
+              created: "created" in rest && rest.created ? rest.created : since,
               status: "failed" as const,
-            }),
-          );
+              closes: "closes" in rest && rest.closes ? rest.closes : [],
+            }))
+            .filter(({ created }) => epochOf(created) >= epochOf(since));
           return {
             since,
             total: runs.length,
@@ -14020,6 +14211,197 @@ scenario(
         expect(prompt).toContain("r-other");
         expect(prompt).toContain("`defect` is one more");
         expect(filed.map(({ title }) => title)).toEqual(["Project host-crash"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a self-improve triage counts a Collie fix as already fixed only where the release its Machine runs carries it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        yield* rig.queueOutputs([triaged([])]);
+        yield* improved("r-release", { runs: "machine", improvements: 0 });
+        const prompt = yield* readText(`${dir}/agents/r-release/triage.prompt.md`);
+        expect(prompt).toContain("git merge-base --is-ancestor <commit> 0.103.0");
+        expect(prompt).toContain("git fetch origin tag 0.103.0");
+      }),
+    ),
+  120_000,
+);
+
+const earlier = (
+  runId: string,
+  created: string,
+  kept: ReadonlyArray<{
+    name: string;
+    issues: ReadonlyArray<number>;
+    runId: string | null;
+    ended: string;
+  }>,
+) =>
+  Effect.gen(function* () {
+    windowRuns.push({ runId, parent: null, workflow: idOf("self-improve"), created });
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+    yield* fs.writeFileString(`${runDir(dir, runId)}/improvements.json`, asJson(kept));
+  });
+
+const epochOf = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
+const hoursAgo = (hours: number) =>
+  DateTime.formatIso(DateTime.subtract(DateTime.nowUnsafe(), { hours }));
+
+const unstarted = (name: string, issues: ReadonlyArray<number>) => ({
+  name,
+  issues,
+  runId: null,
+  ended: "failed to start: an issue it fixes could not be read back from the forge",
+});
+
+const issueNumbered = (number: number) => ({
+  number,
+  title: `Issue ${number}`,
+  body: `Body ${number}.\n\n${markerOf(`key-${number}`)}`,
+  url: `https://forge.example/project/issues/${number}`,
+});
+
+scenario(
+  "the next self-improve Run starts an Improvement an earlier one failed to start, while its issue is open",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        openIssues = [issueNumbered(7)];
+        yield* earlier("r-yesterday", hoursAgo(26), [unstarted("docs", [7])]);
+        yield* rig.queueOutputs([triaged([])]);
+        yield* improved("r-again", { runs: "checkout", improvements: 1 });
+        expect(
+          started.map(({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
+        ).toEqual([["improvement-docs", "plan", true]]);
+        expect(started[0]?.input.then).toBe("implement");
+        expect(started[0]?.input.goal).toContain("`Closes #7`");
+        expect(started[0]?.input.goal).toContain("Body 7.");
+        expect(yield* readText(`${runDir(dir, "r-again")}/summary.md`)).toContain(
+          "- docs: r-again-improvement-docs, succeeded",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a self-improve Run with no Runs in its window still starts an Improvement an earlier one failed to start",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        windowRuns = [];
+        openIssues = [issueNumbered(7)];
+        yield* earlier("r-yesterday", hoursAgo(25), [unstarted("docs", [7])]);
+        yield* improved("r-quiet", { runs: "checkout", improvements: 1 });
+        expect(started.map(({ invocation }) => invocation)).toEqual(["improvement-docs"]);
+        expect(yield* readText(`${runDir(dir, "r-quiet")}/summary.md`)).toContain(
+          "- docs: r-quiet-improvement-docs, succeeded",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an earlier failed start is not restarted once its issue is closed, or once a Run since closes it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        openIssues = [issueNumbered(8)];
+        yield* earlier("r-yesterday", hoursAgo(26), [
+          unstarted("closed", [7]),
+          unstarted("taken", [8]),
+        ]);
+        windowRuns.push({
+          runId: "r-person",
+          parent: null,
+          workflow: "implement",
+          created: hoursAgo(20),
+          closes: [8],
+        });
+        yield* rig.queueOutputs([triaged([])]);
+        const result = yield* improved("r-again", { runs: "checkout", improvements: 3 });
+        expect(started).toEqual([]);
+        expect(saidBy(result)).toContain("0 Improvements");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a failed start two earlier Runs record is not restarted again once the first restart's child exists",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        openIssues = [issueNumbered(7)];
+        yield* earlier("r-first", hoursAgo(74), [unstarted("docs", [7])]);
+        windowRuns.push({
+          runId: "r-second-improvement-docs",
+          parent: "r-second",
+          workflow: "plan",
+          created: hoursAgo(50),
+          closes: [7],
+        });
+        yield* earlier("r-third", hoursAgo(26), [unstarted("docs", [7])]);
+        yield* rig.queueOutputs([triaged([])]);
+        yield* improved("r-again", { runs: "checkout", improvements: 3 });
+        expect(started).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a failed start sharing its name with an earlier one for a closed issue is still restarted, one per name",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        openIssues = [issueNumbered(7), issueNumbered(8)];
+        yield* earlier("r-first", hoursAgo(74), [unstarted("docs", [6])]);
+        yield* earlier("r-second", hoursAgo(50), [unstarted("docs", [7])]);
+        yield* earlier("r-third", hoursAgo(26), [unstarted("docs", [8])]);
+        yield* rig.queueOutputs([triaged([])]);
+        yield* improved("r-again", { runs: "checkout", improvements: 3 });
+        expect(started.map(({ invocation }) => invocation)).toEqual(["improvement-docs"]);
+        expect(started[0]?.input.goal).toContain("`Closes #7`");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "restarted and new self-improve Improvements together stay within its bound, restarts first",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        openIssues = [issueNumbered(7), issueNumbered(8)];
+        yield* earlier("r-yesterday", hoursAgo(26), [
+          unstarted("seven", [7]),
+          unstarted("eight", [8]),
+        ]);
+        yield* rig.queueOutputs([
+          triaged(
+            [finding({ key: "lost-docs" })],
+            [{ name: "fresh", keys: ["lost-docs"], why: "one gap" }],
+          ),
+        ]);
+        yield* improved("r-again", { runs: "checkout", improvements: 2 });
+        expect(new Set(started.map(({ invocation }) => invocation))).toEqual(
+          new Set(["improvement-seven", "improvement-eight"]),
+        );
+        expect(filed).toHaveLength(1);
       }),
     ),
   120_000,

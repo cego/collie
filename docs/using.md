@@ -1978,6 +1978,14 @@ every project with its holder and queue, yours marked, and it claims or releases
 when you ask. Without a Helle token in Desktop it says how to make one. This works on every
 harness.
 
+You and every Run use one Helle identity, so Helle cannot tell your claim from a Run's, and
+a Run gives back every claim in its record. So when you claim a project with `collie_helle`,
+each Machine Desktop reaches drops it from every Run's claim record, recorded as the chat
+that asked, and the answer names the Runs that will no longer give it back. A Machine that
+cannot be reached is named, and its Runs keep the project in their records. A claim taken
+outside Collie, such as Slack's `/helle` or an agent's own Helle MCP server, reaches no
+Run's record: a Run that recorded that project still gives it back when it ends.
+
 On Pi, write the model as `provider/model`, for example `openai-codex/gpt-6.1-sol`.
 Desktop reads the models and each model's thinking levels from your own Pi install and
 login, once per Desktop start. The reader runs offline, keeps no session, loads none of
@@ -2613,7 +2621,11 @@ An application has two ways to stage, each offered where its pipelines deploy to
   and the Run fails with the merge standing: the fix is a new merge request. Choose it
   where the review was enough and stage only has to check the release.
 
-Either way the Run holds the claim until the forge shows production carries the merge. An
+Either way the Run holds the claim until the forge shows production carries the merge. The
+claim is Helle's: a repository Helle has a project of its own for, by its name in whatever
+group Helle files it, claims that project alone; one without, such as a monorepo, claims each
+project of its group that an application it deploys or a deploy job's name names; and a
+`.collie/helle.json` names them instead, whatever the repository is. An
 application whose pipelines deploy nothing to stage is refused at the start. If a Run fails after
 it merged, **Release again** tags what it merged rather than merging anything again, and
 asks the second go afresh ([`release`](workflows.md#release)).
@@ -3282,7 +3294,7 @@ collie run start self-improve --input runs=checkout --input improvements=2
 checkout it runs in; `machine` reads every Run its Machine admitted, and alone files
 `defect`s, Collie misbehaving. It reads the 24 hours before it started, leaving out its
 own children; an earlier `self-improve` Run and its Improvements are read like any other.
-A day with none ends at once, starting no agent. Otherwise one `retrospective` agent reads
+A day with none starts no agent and only restarts an earlier failed start (below). Otherwise one `retrospective` agent reads
 those Runs' records with the installed `retro` skill and reports what they show is wrong,
 at most ten findings, most severe first. A finding seen in only one Run is left out unless
 it is a `defect` or matches an open issue; with `runs=checkout`, one about Collie itself is
@@ -3303,10 +3315,24 @@ holds one of its roaming checkouts, such as a `renovate`, refuses the start; one
 Run kept work in is [passed over](#a-run-that-roams-across-branches). The [cleanup](#cleanup) sweep removes
 the worktree once the Run has ended, however it ended, and nothing works in it any longer.
 An `origin` that will not fetch refuses the start, so it never triages stale code.
+Collie's own code, though, is judged against the release the Machine's host runs, which the
+triage is told: a Collie fix counts as already fixed only where its commit is in that
+release's tag, so a fix merged but not yet installed leaves the finding filed or commented
+on as a recurrence.
 
 It waits for its Improvements, then writes `summary.md` in its Run directory: each issue
 filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
+Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
+
+An Improvement that failed to start, because its issues could not be read back, is started
+again by the next `self-improve` Run of the same project, the next day, from an earlier
+Run's `improvements.json` of the last seven days. That happens only while every issue it
+fixes is still open, and while no Run of the project started since names one of them in a
+`Closes #n`, so work a person or another Run already began is not duplicated. Restarts take
+`improvements` slots before the day's new Improvements, and are listed in the summary like
+them; a day with no Runs to read still starts them. One that started and then failed is not restarted: it is its own card, waiting on a
+person.
 
 Run it daily with a Schedule. For a project:
 

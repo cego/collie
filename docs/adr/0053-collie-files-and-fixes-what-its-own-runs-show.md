@@ -51,7 +51,8 @@ Machine it runs on, so each Machine whose Runs should be read has its own Schedu
 - **Also:** the host log and the News of the same day.
 - **Not read:** a harness transcript is read only where a record points to it. The Flock
   chat's transcripts belong to Desktop and are not read.
-- **No Runs:** where that day admitted no Run, it ends at once and starts no agent.
+- **No Runs:** where that day admitted no Run, it ends at once and starts no agent, unless
+  an earlier Improvement is started again (see the amendment of 2026-10-29).
 
 **D3. It files only what the records show, and never the same problem twice.**
 
@@ -145,7 +146,8 @@ A person can ask for this too: "plan this and build it, don't ask me."
 - An Improvement that fails or parks is its own card, waiting on a person. Its
   `self-improve` Run waits on it, and so does the next day's occurrence.
 - Not decided here: reading the Flock chat's transcripts, reading other Machines' Runs from
-  one place, and retrying a failed Improvement by itself.
+  one place, and retrying by itself an Improvement that started and failed. One that failed
+  to start is started again (amended 2026-10-29, below).
 
 ## Amended 2026-10-12: the triage follows the `retro` skill
 
@@ -202,3 +204,27 @@ its remote, so a Run working there could collide with other work or triage stale
   and nothing is working in it: an Improvement still running there keeps it, and a failed
   Run, which the next roaming start would take over from anyway, does not
   ([ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
+
+## Amended 2026-10-29: an Improvement that failed to start is started the next day
+
+An Improvement whose issues could not be read back never started, so its issues stayed open
+and nothing built them. The next day's Run matched its findings to those issues and only
+commented, because only Improvements of newly filed findings start.
+
+- **What is kept:** each Run writes `improvements.json` beside `summary.md`: each
+  Improvement's name, the issues it fixes and how it ended. It is the host's record of
+  the Run's work, not an agent's judgement.
+- **What starts again:** the next Run reads the `improvements.json` of the earlier Runs of
+  its Workflow and project over the last seven days, through the host. It starts again
+  each one that failed to start, once by its name and issues, while every issue it fixes is still open
+  and no Run of the project started since the first Run that recorded it names one of them
+  in a `Closes #n`. That skips work a person or another Run already began, a restart's own
+  child included, since its goal says `Closes #n`. A Run with no `improvements.json`, still
+  going or from before this amendment, is passed over.
+- **How it starts:** as any Improvement does, a `plan` of its own Task with
+  `then=implement` under `improvement-<name>`, its goal the issues read back by number.
+  Restarts take `improvements` slots first, then the day's new Improvements. Of restarts
+  sharing a name, only the earliest starts that day. A day with no Runs in its window still
+  starts its restarts, without triage.
+- **Not restarted:** an Improvement that started and then failed. It is its own card,
+  waiting on a person, as before.
