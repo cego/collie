@@ -2861,6 +2861,29 @@ runbook find tools printing tokens — a second guard against the commands that 
   would switch Collie's hooks off, and any other key are refused with the reason. Codex, Pi
   and OpenCode take `env` only.
 
+For Claude Code 2.1.129 or later, a Run's agent lists unnamed user and project skills by
+name only, saving their descriptions from each context. Skills named by a
+`{{skill:name}}` reference in the persona or first prompt, or by a Step's `skill`, keep
+their full descriptions. Every skill remains available to invoke or read when needed.
+Skill bodies load on use; Collie doesn't preload them to shorten the catalogue.
+This includes legacy Markdown commands in your Claude config directory's `commands/`
+and project `.claude/commands/` directories, including nested commands such as `frontend:component`.
+
+Your `skillOverrides` choices in user, project, local and `agent_profile` settings take
+precedence. Collie also preserves skills' invocation restrictions. Claude discovers
+project skills above the launch directory and can share settings with a worktree's main
+checkout; Collie accounts for both when selecting overrides.
+Use `"on"` in your settings to keep a particular description, or set it in a role's
+`agent_profile` overlay for managed agents only.
+
+This selection runs at each launch, relaunch and recovery. Claude's own compaction
+continues with the same session settings. Plugin and bundled skills, other harnesses and
+Home chat keep their existing behavior. Older or unknown Claude versions keep the full
+catalogue, with the reason in the Run's agents log. Selection also stays inherited when
+the profile holds `CLAUDE_CONFIG_DIR` in a file, whose value only the launch shell reads.
+No installed skill or live settings file is changed. See
+[Claude's visibility settings](https://code.claude.com/docs/en/skills#override-skill-visibility-from-settings).
+
 The shipped `implementer`, `generalist` and `investigator` personas tell their agent that
 a stack it brings up to test — containers, compose projects, workloads in a local cluster
 — outlives it: to bring up only what the test needs, take it down once that testing is

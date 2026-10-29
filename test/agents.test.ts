@@ -90,6 +90,7 @@ import { forgeHttpOnPath, forgeOnPath } from "./support/forge";
 let rig: Rig;
 let dir: string;
 interface Clearing {
+  readonly instructions?: string;
   readonly clears?: ReadonlyArray<string>;
   readonly skill?: string;
   readonly claudeSubagents?: ClaudeSubagents;
@@ -5253,6 +5254,153 @@ test("subagent policy fields follow workflow, role, scope and call preferences w
     }),
   ));
 
+const SkillOverridesSettings = Schema.fromJsonString(
+  Schema.Struct({
+    skillOverrides: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  }),
+);
+
+const skillsInstalled = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  for (const name of ["tdd", "deploy", "kibana-dashboards", "elastic-audit"]) {
+    yield* fs.makeDirectory(`${rig.root}/.claude/skills/${name}`, { recursive: true });
+    yield* fs.writeFileString(
+      `${rig.root}/.claude/skills/${name}/SKILL.md`,
+      `---\nname: ${name}\ndescription: What ${name} is for.\n---\n`,
+    );
+  }
+  yield* writePersona(rig.userDir, "reviewer", "You review, with {{skill:tdd}}.");
+  clearing = { skill: "deploy" };
+  yield* withProfile({ "*": { claude: { skillOverrides: { "elastic-audit": "off" } } } });
+  yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+});
+
+test("a Claude skill named in the workflow prompt stays fully described", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* skillsInstalled;
+      clearing = {
+        ...clearing,
+        instructions: "Review {{target}} with {{skill:kibana-dashboards}}.",
+      };
+      yield* session(started("r1"));
+      const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(settings.skillOverrides).toEqual({ "elastic-audit": "off" });
+    }),
+  ));
+
+test("Claude skill selection uses the config directory from the agent profile", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* skillsInstalled;
+      yield* withProfile({ "*": { env: { CLAUDE_CONFIG_DIR: `${rig.root}/alternate` } } });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${rig.root}/alternate/skills/other`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.root}/alternate/skills/other/SKILL.md`,
+        "---\nname: other\ndescription: Another skill\n---\n",
+      );
+      yield* session(started("r1"));
+      const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(settings.skillOverrides).toEqual({ other: "name-only" });
+    }),
+  ));
+
+test("Claude skills stay inherited when the config directory is held in an environment file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* skillsInstalled;
+      const fs = yield* FileSystem.FileSystem;
+      const file = `${rig.root}/config-dir`;
+      yield* fs.writeFileString(file, `${rig.root}/alternate\n`);
+      yield* fs.chmod(file, 0o600);
+      yield* withProfile({ "*": { env: { CLAUDE_CONFIG_DIR: { file } } } });
+      yield* session(started("r1"));
+      const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(settings.skillOverrides).toBeUndefined();
+    }),
+  ));
+
+test.each([0, 1000])(
+  "a Claude agent keeps named skills and operator choices with compaction at %s",
+  (compactAtTokens) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* skillsInstalled;
+        yield* session(started("r1"), { compactAtTokens, ports: claudeSettingsControls() });
+        const text = yield* settingsAt(yield* rig.calls());
+        const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(text);
+        expect(settings.skillOverrides).toEqual({
+          "kibana-dashboards": "name-only",
+          "elastic-audit": "off",
+        });
+        if (compactAtTokens > 0) expect(text).toContain('"hooks"');
+      }),
+    ),
+);
+
+test("Claude skill selection is refreshed on recovery and preserves new local choices", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* skillsInstalled;
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
+      yield* interrupted("r1", prompted("Your task for this step"));
+      const initial = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(initial.skillOverrides).toEqual({
+        "kibana-dashboards": "name-only",
+        "elastic-audit": "off",
+      });
+      yield* session(halted("r1"), { collectMs: 30_000 });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${rig.projectDir}/.claude`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.projectDir}/.claude/settings.local.json`,
+        '{"skillOverrides":{"kibana-dashboards":"on"}}',
+      );
+      yield* fs.makeDirectory(`${rig.root}/.claude/skills/new-noise`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.root}/.claude/skills/new-noise/SKILL.md`,
+        "---\nname: new-noise\ndescription: Added since the first launch\n---\n",
+      );
+      const result = yield* session(started("r1"));
+      expect(result._tag).toBe("Success");
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+      const recovered = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(recovered.skillOverrides).toEqual({
+        "new-noise": "name-only",
+        "elastic-audit": "off",
+      });
+    }),
+  ));
+
+test.each([["2.1.128 (Claude Code)"], [null]])(
+  "a Claude that cannot take skillOverrides (%s) lists every skill as before",
+  (installed) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* skillsInstalled;
+        yield* session(started("r1"), { version: () => Effect.succeed(installed) });
+        const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+          yield* settingsAt(yield* rig.calls()),
+        );
+        expect(settings.skillOverrides).toEqual({ "elastic-audit": "off" });
+        expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+          "every skill described: skillOverrides needs Claude Code 2.1.129",
+        );
+      }),
+    ),
+);
+
 test.each([
   { enabled: "false" },
   { cacheTtl: "2h" },
@@ -5644,17 +5792,20 @@ test("a Run that created its branch, which the forge leaves unprotected, may rew
     }),
   ));
 
-test("a Codex launch writes no autoMode", () =>
+test("a Codex launch writes no autoMode or Claude skill overrides", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* skillsInstalled;
       yield* session(started("r1"), { harness: "codex", model: "default" });
 
       const calls = yield* rig.calls();
       expect(launchArgs(calls).join(" ")).not.toContain("autoMode");
-      for (const path of yield* fs.readDirectory(`${dir}/agents/r1`))
-        expect(yield* read(`${dir}/agents/r1/${path}`)).not.toContain("autoMode");
+      for (const path of yield* fs.readDirectory(`${dir}/agents/r1`)) {
+        const contents = yield* read(`${dir}/agents/r1/${path}`);
+        expect(contents).not.toContain("autoMode");
+        expect(contents).not.toContain("skillOverrides");
+      }
     }),
   ));
 
