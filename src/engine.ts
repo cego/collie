@@ -2230,10 +2230,17 @@ export const loadEntry: (
 ) => Effect.Effect<WorkflowEntry, EntryError, FileSystem.FileSystem> = Effect.fn(
   "Engine.loadEntry",
 )(function* (file: string, revision?: string) {
-  installSdk();
   // Bun's module registry has no invalidation, so an entry or a helper read twice at one
   // path is the first read both times. Each read is of a copy of what is there now.
   const staged = yield* stagedEntry(file, revision);
+  return yield* readStagedEntry(file, staged);
+});
+
+const readStagedEntry = Effect.fn("Engine.readStagedEntry")(function* (
+  file: string,
+  staged: { readonly file: string; readonly root: string },
+) {
+  installSdk();
   const loaded = yield* Effect.tryPromise({
     try: () => import(staged.file),
     catch: (cause) => new EntryError({ file, message: String(cause).replaceAll(staged.root, "") }),
@@ -5933,8 +5940,15 @@ const makeRegistry: (
     },
     recovered?: Set<string>,
   ) {
-    const entry = yield* stageGeneration({ dir, name: route.name, entry: route.entry }).pipe(
-      Effect.flatMap(loadEntry),
+    const name = `${route.name}-${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`;
+    const entry = yield* stageGeneration({ dir, name, entry: route.entry }).pipe(
+      // This generation already has a unique path, so its imports need no second copy.
+      Effect.flatMap((file) =>
+        readStagedEntry(file, {
+          file,
+          root: `${dir}/generations/${name}`,
+        }),
+      ),
     );
     const registration = entry.make(route.name);
     const pending: Array<{ row: RunRow; parked: Option.Option<string> }> = [];

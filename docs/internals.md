@@ -1809,6 +1809,18 @@ Run `run-af99447d` revalidated #246 (`4cc438f7`) and #253 (`68d583e1`) on master
 measuring `c56e9486455b33a6d3a74f131019e4a18020f980`, on vm-mk with Bun 1.4.4.
 The targets remain 360 s including builds and a probe p95 at most twice its idle value.
 
+The windows below were later invalidated as performance baselines. During the first
+fix round, the shared Bun cache was found to contain filesystem and SQL counters left
+by another Run. The filesystem counter normalized and counted every read, directory
+listing and stat, and periodically sorted and wrote its results. Hard-linked installs
+carried that instrumentation into both measured checkouts and their compiled binaries.
+The owner confirmed the contamination and restored the shared files. The old numbers
+remain here as historical observations, not evidence about pristine Collie performance.
+This Run reinstalled dependencies in both its checkouts using a private cache and
+`--backend=copyfile`. Its FS and SQL files match the published 4.0.1 tarballs, verified
+against the lockfile's SHA-512 values, and have private inodes. Raw integrity records
+and the invalidated profiles are kept in `handoffs/profile/dependency-integrity/`.
+
 The driver and raw samples are in that Run's `handoffs/measure/`. `drive.ts` runs
 `git rev-parse HEAD` once a second, recording wall time, child CPU time, involuntary
 context switches, CPU/I/O/memory pressure, load, and the budget's held and waiting suites.
@@ -1865,10 +1877,10 @@ the patch. The compiler-load and Git-start reductions have targeted regression p
 their whole-suite performance benefit remains unproved. #215 and #216 stay open, and
 the full correctness gate remains CI's `test` job.
 
-The first fix round adds the scheduling mechanism ticket 02 permits for CPU contention.
-The failed candidate window supplies the scheduling-delay evidence missing from the
-base window: probe wall time and involuntary context switches increased while its CPU
-work stayed near 5 ms, with negligible I/O and memory stalls. A whole-suite child now
+The first fix round adds a candidate scheduling mechanism for ticket 02. The old windows
+showed scheduling delay, but the contaminated dependencies prevent treating them as an
+attribution of pristine Collie's cost. The policy still needs fresh measurements.
+A whole-suite child now
 starts at nice level 10, or keeps an already lower priority, before the runner opens
 its execution gate. Workers and the hosts and commands they start inherit that priority;
 small runs retain their caller's priority. Admission, worker counts, and the reserve do
@@ -1880,6 +1892,20 @@ The JSX regression was also run with JSX registration temporarily removed from t
 lazy preload. `jsx-transform-disabled-red` failed because Bun's default JSX output
 lacked Solid's `_$createElement`; restoring registration made both preload cases pass
 in `jsx-transform-restored-green`. The temporary mutation is not part of the patch.
+
+A fresh, uninstrumented profile of three placement scenarios still identified module
+scanning and filesystem work as costs: `scanImports` accounted for 4.4% of self samples.
+Registration was copying its generation again through the general entry loader.
+It now imports the already unique generation through the same contract validation,
+preserving separate module state and fresh imports when a host recovers work. The
+directory is unique on every registration, including recovery in the same process;
+`registration-recovery-red` and `registration-recovery-green` cover an edited external
+helper across two Registries using the same state directory. The
+`registration-copy-red` proof observed three directory copies for the first registration;
+`registration-copy-green` observes two, then one for another generation: the shared
+catalogue copy is reused and each registration keeps its own single copy. No persistent
+source-content cache or weaker edit detection is introduced. Full-suite timings must
+be repeated with pristine dependencies before claiming a gain or closing either issue.
 
 ### Test-suite measurements, 12 October 2026
 

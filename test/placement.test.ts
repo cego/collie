@@ -199,6 +199,53 @@ const finished = (runId: string) =>
 
 const isOver = (status: string) => status === "complete" || status === "failed";
 
+test("registration copies a module into the shared cache and once per generation", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const at = `${rig.root}/module`;
+      const file = `${at}/cost.workflow.ts`;
+      yield* fs.makeDirectory(at);
+      yield* fs.writeFileString(`${rig.root}/helper.ts`, 'export const title = "Before";');
+      yield* fs.writeFileString(
+        file,
+        `
+import { defineWorkflow } from "collie";
+import { Effect } from "effect";
+import { title } from "../helper";
+export default defineWorkflow({ id: "cost", title, run: () => Effect.void });
+`,
+      );
+      const copies: string[] = [];
+      const counted: FileSystem.FileSystem = {
+        ...fs,
+        copy: (from, to, options) =>
+          Effect.sync(() => copies.push(from)).pipe(Effect.andThen(fs.copy(from, to, options))),
+      };
+      yield* Effect.gen(function* () {
+        const registry = yield* Registry;
+        const first = yield* registry
+          .load(file)
+          .pipe(Effect.provideService(FileSystem.FileSystem, counted));
+        expect(first.name).toBe("cost@1");
+        expect(copies).toHaveLength(2);
+        copies.length = 0;
+        const second = yield* registry
+          .load(file)
+          .pipe(Effect.provideService(FileSystem.FileSystem, counted));
+        expect(second.name).toBe("cost@2");
+        expect(copies).toHaveLength(1);
+      }).pipe(hosted);
+      yield* fs.writeFileString(`${rig.root}/helper.ts`, 'export const title = "After";');
+      const recovered = yield* Registry.pipe(
+        Effect.flatMap((registry) => registry.newest("cost")),
+        hosted,
+      );
+      expect(recovered.name).toBe("cost@2");
+      expect(recovered.title).toBe("After");
+    }),
+  ));
+
 const start = (
   generation: Generation,
   ask: {
