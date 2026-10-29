@@ -2328,6 +2328,17 @@ const noteStep = (dir: string, note: StepNote) =>
 /** Why a Run's work is about to be entered again, where it goes on with work left part-done. */
 const entryCauses = new Map<string, "restarted" | "resumed">();
 
+/** In-flight Runs a resume made live with another Run's module: held at entry until their own resume. */
+const heldAtEntry = new Map<string, Deferred.Deferred<void>>();
+
+/** Lets a held Run enter; false where it was not held. */
+const releaseEntry = (runId: string) =>
+  Effect.suspend(() => {
+    const hold = heldAtEntry.get(runId);
+    heldAtEntry.delete(runId);
+    return hold === undefined ? Effect.succeed(false) : Deferred.succeed(hold, undefined);
+  });
+
 /** Observed Run entries; upstream resume returns no wake acknowledgment. */
 const entriesOf = new WeakMap<HostWorkflow, Map<string, number>>();
 
@@ -2360,7 +2371,7 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
   const entries = new Map<string, number>();
   entriesOf.set(workflow, entries);
   const path = definition.path?.map((one) => one.meta) ?? [];
-  const body = workflow.toLayer((envelope) => {
+  const enter = (envelope: Schema.Schema.Type<HostPayload>) => {
     // SAFETY: the envelope decoded against the definition's own input struct.
     const input = envelope.input as never;
     const run = Run.of({ id: readEnvelope(envelope).runId, workflow: definition.id });
@@ -2388,6 +2399,12 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
           : ended(run.id, exitStatus(exit, definition.id, workflow.successSchema, error)),
       ),
     );
+  };
+  const body = workflow.toLayer((envelope) => {
+    const hold = heldAtEntry.get(readEnvelope(envelope).runId);
+    return hold === undefined
+      ? enter(envelope)
+      : Deferred.await(hold).pipe(Effect.andThen(Effect.suspend(() => enter(envelope))));
   });
   const layer = definition.layer === undefined ? body : body.pipe(Layer.provide(definition.layer));
   return { workflow, layer };
@@ -5915,12 +5932,14 @@ const makeRegistry: (
       readonly entry: string;
     },
     recovered?: Set<string>,
+    reached: (run: string) => boolean = () => true,
   ) {
     const entry = yield* stageGeneration({ dir, name: route.name, entry: route.entry }).pipe(
       Effect.flatMap(loadEntry),
     );
     const registration = entry.make(route.name);
     const pending: Array<{ row: RunRow; parked: Option.Option<string> }> = [];
+    const held: string[] = [];
     if (recovered !== undefined) {
       for (const row of yield* store.runs) {
         if (row.generation !== route.name || unplaced(row)) continue;
@@ -5929,7 +5948,10 @@ const makeRegistry: (
           yield* engine.poll(registration.workflow, row.execution),
           route.entry,
         ).status;
-        if (status === "pending") {
+        if (status === "pending" && !reached(row.run)) {
+          // Registering delivers the engine's waiting work for every Run of the generation.
+          held.push(row.run);
+        } else if (status === "pending") {
           pending.push({
             row,
             parked: yield* fs.readFileString(controlPath(dir, PARKED, row.run)).pipe(Effect.option),
@@ -5938,6 +5960,7 @@ const makeRegistry: (
         }
       }
     }
+    for (const run of held) heldAtEntry.set(run, yield* Deferred.make<void>());
     // The composition root, and the only place a host binds anything into a module's
     // own Layer: explicitly provided to this generation, never a table something looks
     // itself up in. Everything else the module needs it provides for itself.
@@ -5960,10 +5983,14 @@ const makeRegistry: (
       hostScope,
     ).pipe(
       Effect.onError(() =>
-        Effect.forEach(pending, ({ row, parked }) =>
-          (entriesOf.get(registration.workflow)?.get(row.run) ?? 0) > 0
-            ? Effect.void
-            : restoreParked(row.run, parked),
+        Effect.forEach(held, releaseEntry).pipe(
+          Effect.andThen(
+            Effect.forEach(pending, ({ row, parked }) =>
+              (entriesOf.get(registration.workflow)?.get(row.run) ?? 0) > 0
+                ? Effect.void
+                : restoreParked(row.run, parked),
+            ),
+          ),
         ),
       ),
     );
@@ -6727,6 +6754,7 @@ const makeRegistry: (
     const before = entriesOf.get(generation.registration.workflow)?.get(row.run) ?? 0;
     const old = yield* fs.readFileString(controlPath(dir, PARKED, row.run)).pipe(Effect.option);
     if (clear) yield* clearParked(row.run);
+    yield* releaseEntry(row.run);
     // Upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
     yield* engine
       .execute(generation.registration.workflow, {
@@ -6795,36 +6823,38 @@ const makeRegistry: (
     );
 
   /** Every recorded answer handed again to a run still waiting; the engine keeps one completion. */
-  const reconcileAnswers = Effect.gen(function* () {
-    const woken: string[] = [];
-    for (const row of yield* store.runs) {
-      const generation = live.get(row.generation);
-      if (generation === undefined) continue;
-      const answered = (yield* store.asked(row.run)).filter(
-        (one) => one.answer !== null && one.asker === null,
-      );
-      if (answered.length === 0) continue;
-      const state = pollStatus(
-        yield* engine.poll(generation.registration.workflow, row.execution),
-        generation.entry,
-      );
-      if (state.status !== "suspended") continue;
-      const before = entriesOf.get(generation.registration.workflow)?.get(row.run) ?? 0;
-      const old = yield* fs.readFileString(controlPath(dir, PARKED, row.run)).pipe(Effect.option);
-      yield* clearParked(row.run);
-      for (const one of answered) {
-        yield* answerDecision(generation.registration, {
-          name: one.decision,
-          executionId: row.execution,
-          value: one.answer ?? "",
-        });
+  const reconcileAnswers = (reached: (run: string) => boolean = () => true) =>
+    Effect.gen(function* () {
+      const woken: string[] = [];
+      for (const row of yield* store.runs) {
+        if (!reached(row.run)) continue;
+        const generation = live.get(row.generation);
+        if (generation === undefined) continue;
+        const answered = (yield* store.asked(row.run)).filter(
+          (one) => one.answer !== null && one.asker === null,
+        );
+        if (answered.length === 0) continue;
+        const state = pollStatus(
+          yield* engine.poll(generation.registration.workflow, row.execution),
+          generation.entry,
+        );
+        if (state.status !== "suspended") continue;
+        const before = entriesOf.get(generation.registration.workflow)?.get(row.run) ?? 0;
+        const old = yield* fs.readFileString(controlPath(dir, PARKED, row.run)).pipe(Effect.option);
+        yield* clearParked(row.run);
+        for (const one of answered) {
+          yield* answerDecision(generation.registration, {
+            name: one.decision,
+            executionId: row.execution,
+            value: one.answer ?? "",
+          });
+        }
+        if (yield* waitForEntry(generation.registration.workflow, row.run, before))
+          woken.push(row.run);
+        else yield* restoreParked(row.run, old);
       }
-      if (yield* waitForEntry(generation.registration.workflow, row.run, before))
-        woken.push(row.run);
-      else yield* restoreParked(row.run, old);
-    }
-    return woken;
-  }).pipe(waking.withPermits(1));
+      return woken;
+    }).pipe(waking.withPermits(1));
 
   /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
@@ -7537,26 +7567,41 @@ const makeRegistry: (
     };
   });
 
-  const recover = () =>
+  /** Registers, admits and answers again what is outstanding: the herd's, or only the reached Runs'. */
+  const recover = (reach?: ReadonlySet<string>) =>
     Effect.gen(function* () {
       const recovered = new Set<string>();
+      const reached = (run: string) => reach === undefined || reach.has(run);
+      const rows = yield* store.runs;
+      const used =
+        reach === undefined
+          ? undefined
+          : new Set(rows.filter((row) => reach.has(row.run)).map((row) => row.generation));
       yield* registering.withPermits(1)(
-        Effect.forEach(known, (route) =>
-          live.has(route.name)
-            ? Effect.void
-            : register(route, recovered).pipe(
-                Effect.catchTag("EntryError", (failure) =>
-                  Effect.sync(() =>
-                    unavailable.set(route.name, `${failure.file}: ${failure.message}`),
+        Effect.gen(function* () {
+          yield* Effect.forEach(known, (route) =>
+            live.has(route.name) || used?.has(route.name) === false
+              ? Effect.void
+              : register(route, recovered, reached).pipe(
+                  Effect.catchTag("EntryError", (failure) =>
+                    Effect.sync(() =>
+                      unavailable.set(route.name, `${failure.file}: ${failure.message}`),
+                    ),
                   ),
                 ),
-              ),
-        ),
+          );
+          // After registering, which may have held the Runs it did not reach.
+          for (const { run } of rows) {
+            if (!reached(run) || !(yield* releaseEntry(run))) continue;
+            yield* clearParked(run);
+            recovered.add(run);
+          }
+        }),
       );
       for (const row of yield* store.pending) {
-        if (yield* recoverAdmission(row)) recovered.add(row.run);
+        if (reached(row.run) && (yield* recoverAdmission(row))) recovered.add(row.run);
       }
-      for (const one of yield* reconcileAnswers) recovered.add(one);
+      for (const one of yield* reconcileAnswers(reached)) recovered.add(one);
       return { registrations: yield* held, takenUp: recovered };
     });
 
@@ -7578,7 +7623,7 @@ const makeRegistry: (
   yield* Effect.forkScoped(
     Effect.gen(function* () {
       for (const row of yield* store.pending) yield* recoverAdmission(row);
-      yield* reconcileAnswers;
+      yield* reconcileAnswers();
     }),
   );
 
@@ -7636,7 +7681,9 @@ const makeRegistry: (
     recover: recover().pipe(Effect.map((result) => result.registrations)),
 
     resume: Effect.fn("Engine.Registry.resume")(function* (runId: string) {
-      const recovered = yield* recover();
+      const recovered = yield* recover(
+        new Set([runId, ...descendantsOf(yield* store.runs, runId)]),
+      );
       entryCauses.set(runId, "resumed");
       const controlled = yield* applyControl(runId, STOP, false, recovered.takenUp).pipe(
         Effect.result,

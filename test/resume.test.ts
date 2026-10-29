@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, type Scope } from "effect";
+import { Duration, Effect, FileSystem, type Scope } from "effect";
 import { connect, ownerOf } from "../src/host";
 import { deliveriesOf } from "../src/steering";
 import { until, stopHost } from "./support/host";
@@ -396,3 +396,82 @@ for (const next of ["complete", "park"]) {
     120_000,
   );
 }
+
+test(
+  "a resume does not hand other Runs' recorded answers again",
+  () =>
+    proves(
+      "collie-resume-alone-",
+      (world) =>
+        Effect.gen(function* () {
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const client = yield* connect(world.state).pipe(Effect.orDie);
+              // Each costs a herd-wide resume a 2 s wake window: its answer to q1 is handed
+              // again and it does not enter, being suspended on q2.
+              const others = yield* Effect.forEach(["a", "b", "c", "d", "e", "f"], (name) =>
+                Effect.gen(function* () {
+                  const { runId } = yield* client
+                    .start({
+                      project: world.project,
+                      id: "asks",
+                      request: name,
+                      input: { goal: name },
+                    })
+                    .pipe(Effect.orDie);
+                  yield* until(
+                    () => client.run({ runId }).pipe(Effect.orDie),
+                    (one) => one?.waiting.some((asked) => asked.name === "q1") === true,
+                  );
+                  yield* client
+                    .answer({ runId, decision: "q1", value: "yes", request: `${name}-q1` })
+                    .pipe(Effect.orDie);
+                  const view = yield* until(
+                    () => client.run({ runId }).pipe(Effect.orDie),
+                    (one) =>
+                      one?.status.status === "suspended" &&
+                      one.waiting.some((asked) => asked.name === "q2"),
+                  );
+                  return { runId, parked: view?.parked ?? null };
+                }),
+              );
+              const { runId } = yield* client
+                .start({
+                  project: world.project,
+                  id: "held-wake",
+                  request: "target",
+                  input: { gate: `${world.project}/gate` },
+                })
+                .pipe(Effect.orDie);
+              yield* until(
+                () => client.run({ runId }).pipe(Effect.orDie),
+                (one) =>
+                  one?.status.status === "suspended" &&
+                  one.waiting.some((asked) => asked.name === "decision"),
+              );
+              yield* client
+                .control({ runId, control: "stop", set: true, request: "stop" })
+                .pipe(Effect.orDie);
+              const log = `${world.state}/runs/${runId}/log.txt`;
+              const fs = yield* FileSystem.FileSystem;
+              yield* until(
+                () => fs.readFileString(log).pipe(Effect.orDie),
+                (text) => text.trimEnd().endsWith("stopped"),
+              );
+              const [took, resumed] = yield* Effect.timed(
+                client.resume({ runId, request: "resume" }).pipe(Effect.orDie),
+              );
+              expect(resumed.applied).toBe(true);
+              expect(Duration.toMillis(took)).toBeLessThan(4_000);
+              for (const other of others)
+                expect((yield* client.run({ runId: other.runId }).pipe(Effect.orDie))?.parked).toBe(
+                  other.parked,
+                );
+            }),
+          );
+          yield* stopCompletely(world.state);
+        }),
+      ["asks.workflow.ts", "held-wake.workflow.ts"],
+    ),
+  120_000,
+);

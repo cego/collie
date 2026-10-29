@@ -12,7 +12,7 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
-import { events, fixtures, openHost, until, workspace, type Host } from "./support/host";
+import { events, fixtures, openHost, runDirOf, until, workspace, type Host } from "./support/host";
 
 const suspended = (reply: { readonly status?: string }) => reply.status === "suspended";
 const complete = (reply: { readonly status?: string }) => reply.status === "complete";
@@ -278,7 +278,16 @@ for (const { target, stopped } of [
             .resume({ runId: target ? pending.runId : done.runId, request: "restored" })
             .pipe(Effect.orDie);
           expect(resumed.applied).toBe(target);
-          if (!target) expect(resumed.detail).toContain("finished");
+          if (!target) {
+            expect(resumed.detail).toContain("finished");
+            const untouched = yield* client.run({ runId: pending.runId }).pipe(Effect.orDie);
+            expect(untouched?.waiting.some((one) => one.name === "decision")).toBe(false);
+            expect(launches(yield* events(state, pending.runId))).toBe(0);
+            const taken = yield* client
+              .resume({ runId: pending.runId, request: "taken" })
+              .pipe(Effect.orDie);
+            expect(taken.applied).toBe(true);
+          }
           yield* until(
             () => client.run({ runId: pending.runId }).pipe(Effect.orDie),
             (one) => one?.status.status === "suspended",
@@ -295,3 +304,114 @@ for (const { target, stopped } of [
     180_000,
   );
 }
+
+/**
+ * Runs left mid-work on held-wake by a host that died, and a host that started without the
+ * module, which is then put back. Each of `unaccepted` reached the engine and not the row.
+ */
+const stranded = (
+  prefix: string,
+  accepted: ReadonlyArray<string>,
+  unaccepted: ReadonlyArray<string>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { dir, wf, state } = yield* workspace(prefix);
+    const module = `${wf}/held-wake.workflow.ts`;
+    yield* fs.copyFile(`${fixtures}/held-wake.workflow.ts`, module).pipe(Effect.orDie);
+    const gate = `${dir}/gate`;
+    yield* fs.writeFileString(gate, "").pipe(Effect.orDie);
+    const first = yield* openHost(state);
+    for (const runId of accepted) {
+      yield* first.ask({ op: "start", id: "held-wake", runId, input: { gate } });
+      yield* until(
+        () => events(state, runId),
+        (log) => log.includes("held"),
+      );
+    }
+    yield* first.child.kill({ killSignal: "SIGKILL" }).pipe(Effect.ignore);
+    yield* first.child.exitCode.pipe(Effect.ignore);
+    for (const runId of unaccepted) {
+      const dying = yield* openHost(state, { crashAt: "executed" });
+      yield* dying.tell({ op: "start", id: "held-wake", runId, input: { gate } });
+      yield* dying.child.exitCode.pipe(Effect.ignore);
+    }
+    yield* fs.remove(module).pipe(Effect.orDie);
+    yield* fs.remove(gate).pipe(Effect.orDie);
+    const host = yield* openHost(state);
+    yield* fs.copyFile(`${fixtures}/held-wake.workflow.ts`, module).pipe(Effect.orDie);
+    // Names the Runs their dying host never answered for.
+    for (const runId of unaccepted) yield* host.ask({ op: "poll", id: "held-wake", runId });
+    const client = yield* connect(state).pipe(Effect.orDie);
+    const idOf = (name: string) =>
+      runDirOf(state, name).pipe(Effect.map((trail) => trail.slice(trail.lastIndexOf("/") + 1)));
+    const waiting = (name: string) =>
+      until(
+        () => events(state, name),
+        (log) => log.at(-1) === "wait",
+      );
+    return { state, host, client, idOf, waiting };
+  });
+
+test(
+  "a resume that registers a restored module leaves another Run on it alone until it is recovered",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const others = ["other", "unaccepted"];
+        const { state, host, client, idOf, waiting } = yield* stranded(
+          "collie-admission-shared-",
+          ["target", "other"],
+          ["unaccepted"],
+        );
+        const seen = (name: string) =>
+          Effect.gen(function* () {
+            const view = yield* client.run({ runId: yield* idOf(name) }).pipe(Effect.orDie);
+            return { log: yield* events(state, name), parked: view?.parked ?? null };
+          });
+        const before = yield* Effect.forEach(others, seen);
+        const resumed = yield* client
+          .resume({ runId: yield* idOf("target"), request: "resume-target" })
+          .pipe(Effect.orDie);
+        expect(resumed.applied).toBe(true);
+        yield* waiting("target");
+        expect(yield* Effect.forEach(others, seen)).toEqual(before);
+        const taken = yield* client
+          .resume({ runId: yield* idOf("unaccepted"), request: "resume-unaccepted" })
+          .pipe(Effect.orDie);
+        expect(taken.applied).toBe(true);
+        yield* waiting("unaccepted");
+        yield* client.recover().pipe(Effect.orDie);
+        yield* waiting("other");
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
+  "resumes of two Runs on one restored module at once each take their Run up",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { host, client, idOf, waiting } = yield* stranded(
+          "collie-admission-together-",
+          ["one", "two"],
+          [],
+        );
+        const replies = yield* Effect.forEach(
+          ["one", "two"],
+          (name) =>
+            Effect.flatMap(idOf(name), (runId) =>
+              client.resume({ runId, request: `resume-${name}` }).pipe(Effect.orDie),
+            ),
+          { concurrency: "unbounded" },
+        );
+        expect(replies.map((reply) => reply.applied)).toEqual([true, true]);
+        yield* waiting("one");
+        yield* waiting("two");
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);

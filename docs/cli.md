@@ -880,8 +880,11 @@ that cannot say whether its agent started or was given its work — herdr refuse
 the start, could not list its agents, or the step's prompt did not go out — parks the same
 way, naming the prompt file, since a resume lists herdr's agents again and takes up the
 agent or starts it. The host
-registers the modules as they are now, then clears the stop before waking work. A
-restored module is picked up without restarting the host.
+registers the modules as they are now and recovers unfinished admissions and recorded
+answers, only for the resumed Run and the Runs it started, then clears the stop before
+waking work. Other Runs are left as they are: one on the same module that a host left
+mid-work waits at its start, untouched, until its own resume or a `recover`. A restored module is picked up
+without restarting the host.
 
 Resume succeeds only when the host wakes suspended work or recovers this Run's unfinished
 admission or unavailable module into the engine. It clears the old park note before work
