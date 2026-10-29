@@ -52,9 +52,10 @@ const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const KeptJson = Schema.fromJsonString(Schema.Array(Ended));
 const decodeKept = Schema.decodeUnknownOption(KeptJson);
 const encodeKept = Schema.encodeSync(KeptJson);
-const StartingSchema = Schema.Array(
-  Schema.Struct({ name: Schema.String, issues: Schema.Array(Schema.Int) }),
-);
+const KeptRuns = Schema.Struct({
+  earlier: Schema.Array(Schema.Struct({ created: Schema.String, ended: Schema.Array(Ended) })),
+  since: Schema.Array(Schema.Struct({ created: Schema.String, closes: Schema.Array(Schema.Int) })),
+});
 
 const Count = Schema.Union([Schema.Int, Schema.NumberFromString.check(Schema.isInt())]).check(
   Schema.isGreaterThanOrEqualTo(0),
@@ -189,6 +190,46 @@ export default defineWorkflow({
       const quiet = window.runs.length === 0;
       if (quiet && bound === 0) return `No Runs since ${window.since}`;
 
+      const kept =
+        bound === 0
+          ? { earlier: [], since: [] }
+          : yield* Activity.make({
+              name: "kept",
+              success: KeptRuns,
+              error: WorkflowError,
+              execute: Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem;
+                const since = DateTime.formatIso(
+                  DateTime.subtractDuration(yield* DateTime.now, LOOKBACK),
+                );
+                const report = yield* host.report(since);
+                const own = report.runs.find(({ runId }) => runId === run.id);
+                const project = report.runs.filter(({ project }) => project === own?.project);
+                const earlier = yield* Effect.forEach(
+                  project.filter(
+                    ({ runId, workflow }) => runId !== run.id && workflow === own?.workflow,
+                  ),
+                  ({ runId, created }) =>
+                    host.place(runId).pipe(
+                      Effect.flatMap(({ dir }) => fs.readFileString(`${dir}/improvements.json`)),
+                      Effect.map((text) =>
+                        decodeKept(text).pipe(Option.map((ended) => ({ created, ended }))),
+                      ),
+                      // A Run still going, or one from before Improvements were kept, has none.
+                      Effect.orElseSucceed(() => Option.none()),
+                    ),
+                );
+                return {
+                  earlier: earlier.flatMap(Option.toArray),
+                  since: project.map(({ created, closes }) => ({ created, closes })),
+                };
+              }),
+            });
+      const failedToStart = kept.earlier.some(({ ended }) =>
+        ended.some((one) => one.ended.startsWith(FAILED_TO_START)),
+      );
+      if (quiet && !failedToStart) return `No Runs since ${window.since}`;
+
       const retro = retroStep(
         Activity.make({
           name: "retro",
@@ -300,38 +341,7 @@ export default defineWorkflow({
         }),
       );
 
-      const restarts =
-        bound === 0
-          ? []
-          : yield* Activity.make({
-              name: "restarts",
-              success: StartingSchema,
-              error: WorkflowError,
-              execute: Effect.gen(function* () {
-                const fs = yield* FileSystem.FileSystem;
-                const since = DateTime.formatIso(
-                  DateTime.subtractDuration(yield* DateTime.now, LOOKBACK),
-                );
-                const report = yield* host.report(since);
-                const own = report.runs.find(({ runId }) => runId === run.id);
-                const project = report.runs.filter(({ project }) => project === own?.project);
-                const earlier = yield* Effect.forEach(
-                  project.filter(
-                    ({ runId, workflow }) => runId !== run.id && workflow === own?.workflow,
-                  ),
-                  ({ runId, created }) =>
-                    host.place(runId).pipe(
-                      Effect.flatMap(({ dir }) => fs.readFileString(`${dir}/improvements.json`)),
-                      Effect.map((text) =>
-                        decodeKept(text).pipe(Option.map((ended) => ({ created, ended }))),
-                      ),
-                      // A Run still going, or one from before Improvements were kept, has none.
-                      Effect.orElseSucceed(() => Option.none()),
-                    ),
-                );
-                return restartsOf(earlier.flatMap(Option.toArray), project, open);
-              }),
-            });
+      const restarts = restartsOf(kept.earlier, kept.since, open);
       if (quiet && restarts.length === 0) return `No Runs since ${window.since}`;
       const outcomes = new Map(acted.map(({ finding, outcome }) => [finding.key, outcome]));
       const filedNumber = (key: string) => {
