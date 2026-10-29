@@ -24,6 +24,14 @@ const settings = (file: string, overrides: Record<string, string>) =>
     );
   });
 
+const command = (dir: string, name: string, markdown = "A long command description.") =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const file = `${dir}/${name}.md`;
+    yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+    yield* fs.writeFileString(file, markdown);
+  });
+
 const machine = Effect.gen(function* () {
   const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
   return { claudeDir: `${root}/home/.claude`, cwd: `${root}/project` };
@@ -41,6 +49,52 @@ test("a user or project skill nobody named is listed by name only, and a named o
       expect(yield* quietSkills(where, ["tdd", "code-review"])).toEqual({
         "kibana-dashboards": "name-only",
         deploy: "name-only",
+      });
+    }).pipe(Effect.scoped),
+  ));
+
+test("legacy command skills use file-based names and preserve required skills, operator choices and restrictions", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const where = yield* machine;
+      const user = `${where.claudeDir}/commands`;
+      const project = `${where.cwd}/.claude/commands`;
+      yield* fs.makeDirectory(`${where.cwd}/.git`, { recursive: true });
+      yield* fs.makeDirectory(`${where.cwd}/packages/ui`, { recursive: true });
+      yield* command(user, "release-check");
+      yield* command(project, "frontend/component", "---\nname: ignored\n---\nBuild a component.");
+      yield* command(`${where.cwd}/packages/ui/.claude/commands`, "ui-check");
+      yield* fs.writeFileString(`${user}/notes.txt`, "Not a command.");
+      for (const name of [
+        "required",
+        "frontend/required",
+        "user-choice",
+        "project-choice",
+        "local-choice",
+      ])
+        yield* command(project, name);
+      yield* settings(`${where.claudeDir}/settings.json`, { "user-choice": "off" });
+      yield* settings(`${where.cwd}/.claude/settings.json`, { "project-choice": "on" });
+      yield* settings(`${where.cwd}/.claude/settings.local.json`, {
+        "local-choice": "user-invocable-only",
+      });
+      yield* command(user, "manual", "---\ndisable-model-invocation: true\n---\nManual only.");
+      yield* command(project, "model-only", "---\nuser-invocable: false\n---\nModel only.");
+      yield* command(project, "broken", "---\nname: [unclosed\n---\nBroken.");
+      yield* skill(`${where.claudeDir}/skills`, "manual");
+      yield* command(project, "shared");
+      yield* skill(`${where.claudeDir}/skills`, "shared", "disable-model-invocation: true");
+
+      expect(
+        yield* quietSkills({ ...where, cwd: `${where.cwd}/packages/ui` }, [
+          "required",
+          "frontend:required",
+        ]),
+      ).toEqual({
+        "release-check": "name-only",
+        "frontend:component": "name-only",
+        "ui-check": "name-only",
       });
     }).pipe(Effect.scoped),
   ));

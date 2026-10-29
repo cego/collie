@@ -65,18 +65,26 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
       for (const name of Object.keys(settings.value.skillOverrides ?? {})) decided.add(name);
   }
   const candidates: string[] = [];
-  for (const dir of [`${claudeDir}/skills`, ...projects.map((dir) => `${dir}/skills`)]) {
-    const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-    for (const entry of entries.toSorted((a, b) => a.localeCompare(b))) {
-      const text = yield* read(`${dir}/${entry}/SKILL.md`);
-      if (Option.isNone(text)) continue;
-      const skill = describedNames(entry, text.value);
-      if (
-        !skill.described ||
-        skill.names.some((name) => kept.includes(name) || decided.has(name))
-      ) {
-        for (const name of skill.names) decided.add(name);
-      } else candidates.push(...skill.names);
+  for (const base of [claudeDir, ...projects]) {
+    for (const kind of ["skills", "commands"]) {
+      const isCommand = kind === "commands";
+      const dir = `${base}/${kind}`;
+      const entries = yield* fs
+        .readDirectory(dir, { recursive: isCommand })
+        .pipe(Effect.orElseSucceed(() => []));
+      for (const entry of entries.toSorted((a, b) => a.localeCompare(b))) {
+        if (isCommand && !entry.endsWith(".md")) continue;
+        const text = yield* read(isCommand ? `${dir}/${entry}` : `${dir}/${entry}/SKILL.md`);
+        if (Option.isNone(text)) continue;
+        const name = isCommand ? entry.slice(0, -3).replaceAll(path.sep, ":") : entry;
+        const skill = describedNames(name, text.value, !isCommand);
+        if (
+          !skill.described ||
+          skill.names.some((name) => kept.includes(name) || decided.has(name))
+        ) {
+          for (const name of skill.names) decided.add(name);
+        } else candidates.push(...skill.names);
+      }
     }
   }
   const quiet: Record<string, "name-only"> = {};
@@ -84,14 +92,14 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
   return quiet;
 });
 
-function describedNames(folder: string, markdown: string) {
+function describedNames(folder: string, markdown: string, useFrontmatterName = true) {
   let data;
   try {
     data = parseDocument(markdown).data;
   } catch {
     return { names: [folder], described: false };
   }
-  const own = isString(data.name) ? data.name : folder;
+  const own = useFrontmatterName && isString(data.name) ? data.name : folder;
   return {
     names: own === folder ? [folder] : [folder, own],
     described: data["disable-model-invocation"] !== true && data["user-invocable"] !== false,

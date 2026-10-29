@@ -2866,6 +2866,8 @@ name only, saving their descriptions from each context. Skills named by a
 `{{skill:name}}` reference in the persona or first prompt, or by a Step's `skill`, keep
 their full descriptions. Every skill remains available to invoke or read when needed.
 Skill bodies load on use; Collie doesn't preload them to shorten the catalogue.
+This includes legacy Markdown commands in your Claude config directory's `commands/`
+and project `.claude/commands/` directories, including nested commands such as `frontend:component`.
 
 Your `skillOverrides` choices in user, project, local and `agent_profile` settings take
 precedence. Collie also preserves skills' invocation restrictions. Claude discovers
