@@ -28,6 +28,7 @@ import { budgetOf, startOnHold, STORE as store } from "./budget";
 import {
   binDirectory,
   isTargeted,
+  prepareTimings,
   pressureAt,
   report,
   requestOf,
@@ -93,8 +94,7 @@ const suite = (targeted: boolean, since: number) => {
         }
         // A fresh checkout must start its longest files first too. These are durations, never
         // results: Bun still discovers every test, and replaces the estimates after this run.
-        if (!targeted && !(yield* fs.exists(timings)))
-          yield* Effect.promise(() => Bun.write(timings, Bun.file(seed)));
+        yield* prepareTimings(targeted, timings, seed);
         yield* fs.writeFileString(starts, "");
         const running = performance.now();
         const child = yield* startOnHold(

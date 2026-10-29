@@ -4,7 +4,7 @@
 // whole suite.
 
 import { loadavg } from "node:os";
-import { type Duration, Effect, FileSystem, Path } from "effect";
+import { type Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { admitted, type Budget, type Kind, shareOf } from "./budget";
 import { inTurn } from "./suite-lock";
 
@@ -97,6 +97,36 @@ export const timingFlags = (targeted: boolean, timings: string, seed: string) =>
   targeted
     ? Effect.map(exists(timings), (there) => [`--timings=${there ? timings : seed}`])
     : Effect.succeed([`--timings=${timings}`, "--update-timings"]);
+
+const TimingsJson = Schema.fromJsonString(
+  Schema.Struct({ version: Schema.Number, files: Schema.Record(Schema.String, Schema.Number) }),
+  { space: 2 },
+);
+const decodeTimings = Schema.decodeUnknownOption(TimingsJson);
+const encodeTimings = Schema.encodeSync(TimingsJson);
+
+/**
+ * Seeds a whole suite's timings and drops files that no longer exist, which Bun's own merge
+ * keeps forever. A targeted run reads the timings without updating them, so it leaves them be.
+ * Timings that do not decode are left for Bun.
+ */
+export const prepareTimings = Effect.fn("prepareTimings")(function* (
+  targeted: boolean,
+  timings: string,
+  seed: string,
+) {
+  if (targeted) return;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const text = yield* fs.readFileString((yield* exists(timings)) ? timings : seed);
+  const recorded = decodeTimings(text);
+  if (Option.isNone(recorded)) return;
+  const files: Record<string, number> = {};
+  for (const [file, duration] of Object.entries(recorded.value.files))
+    if (yield* exists(file)) files[file] = duration;
+  yield* fs.makeDirectory(path.dirname(timings), { recursive: true });
+  yield* fs.writeFileString(timings, `${encodeTimings({ ...recorded.value, files })}\n`);
+});
 
 const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
   const counts = new Map<string, number>();
