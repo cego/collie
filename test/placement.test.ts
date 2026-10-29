@@ -38,6 +38,7 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import { writeMrStates } from "../src/merges";
 import { mrLabel, type MrState } from "../src/board-model";
+import { HELLE_URL } from "../src/helle-url";
 import type { Call } from "./support/recorder";
 
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -52,7 +53,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
-      helleUrl = undefined;
+      helleUrl = HELLE_URL;
       sessions = [rig.socketPath];
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
@@ -91,12 +92,12 @@ const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
 
 /** The sockets `session list` names, or null for a herdr that will not list them. */
 let sessions: ReadonlyArray<string> | null;
-let helleUrl: string | undefined;
+let helleUrl = HELLE_URL;
 const env = () =>
   rig.pluginEnv({
     HERDR_PLUGIN_ROOT: ROOT,
     GITLAB_USER_LOGIN: LOGIN,
-    ...(helleUrl === undefined ? {} : { COLLIE_HELLE_URL: helleUrl }),
+    COLLIE_HELLE_URL: helleUrl,
     FAKE_HERDR_SESSIONS:
       sessions === null
         ? ""
