@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Fiber, FileSystem, Stream, SubscriptionRef } from "effect";
+import { Effect, Fiber, FileSystem, Result, Stream, SubscriptionRef } from "effect";
 import { HostRefused, type SharedSetting, type SharedSettings } from "../src/board-model";
 import {
   desktopChange,
@@ -21,6 +21,7 @@ import {
   type FlockDefinitions,
   flockSync,
   readFlockSettings,
+  writeFlockSettings,
 } from "../desktop/src/bun/flock-settings";
 import type { SharedDefinition } from "../src/definitions-model";
 import { latestEdits } from "../src/flock-settings";
@@ -42,6 +43,24 @@ const set = (key: string, value: SharedSetting["value"], hour: number): SharedSe
   value,
   at: at(hour),
 });
+
+test("unreadable Flock settings refuse reads, carry-over and writes without replacing the saved bytes", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
+      expect(yield* readFlockSettings(dir)).toEqual(NO_FLOCK_SETTINGS);
+      for (const text of ["{broken", '{"settings":42}']) {
+        yield* fs.writeFileString(`${dir}/flock-settings.json`, text);
+        yield* writeSettings(dir, { machineRule: "Keep this rule", proactive: false });
+        expect(Result.isFailure(yield* Effect.result(readFlockSettings(dir)))).toBe(true);
+        expect(Result.isFailure(yield* Effect.result(carryIntoFlock(dir, at(12))))).toBe(true);
+        expect(Result.isFailure(yield* Effect.result(writeFlockSettings(dir, NO_FLOCK_SETTINGS)))).toBe(true);
+        expect(yield* fs.readFileString(`${dir}/flock-settings.json`)).toBe(text);
+        expect(yield* readSettings(dir)).toEqual({ machineRule: "Keep this rule", proactive: false });
+      }
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  ));
 
 test("the latest edit of each key wins, a removal is an edit, and a tie keeps what is held", () => {
   const held = [

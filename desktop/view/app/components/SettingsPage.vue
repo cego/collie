@@ -61,7 +61,7 @@ const { value: held, trouble } = useHeld(() => flockSettingsAtom);
 const registry = injectRegistry();
 onMounted(() => registry.refresh(flockSettingsAtom));
 /** Whether the Flock's settings can be read now; an edit made otherwise would be blind. */
-const readable = computed(() => trouble.value === null);
+const readable = computed(() => held.value !== undefined && trouble.value === null);
 const sections = computed(() =>
   settingSections(
     held.value ?? NO_FLOCK_SETTINGS,

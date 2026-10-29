@@ -86,6 +86,7 @@ import {
   DEFAULT_CHAT_HARNESS,
   editSetting,
   editSettings,
+  NO_FLOCK_SETTINGS,
   type FlockSettings,
 } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
@@ -307,7 +308,10 @@ const main = Effect.gen(function* () {
     ),
   });
   // Before Desktop's own settings are held, so a save does not write back what was carried.
-  const saved = yield* carryIntoFlock(own, yield* nowIso());
+  const loadedFlock = yield* carryIntoFlock(own, yield* nowIso()).pipe(Effect.result);
+  const flockReadable = Result.isSuccess(loadedFlock);
+  const unreadableFlock = new ActionFailed({ reason: "Not set: the Flock's settings could not be read" });
+  const saved = Result.isSuccess(loadedFlock) ? loadedFlock.success : NO_FLOCK_SETTINGS;
   const desktop = yield* heldSettings(
     own,
     (): FlockSettings => SubscriptionRef.getUnsafe(flockSettings),
@@ -452,10 +456,11 @@ const main = Effect.gen(function* () {
   ) =>
     SubscriptionRef.modifyEffect(flockSettings, (current) =>
       Effect.gen(function* () {
+        if (!flockReadable) return yield* unreadableFlock;
         const edited = editSettings(current, changes, yield* nowIso());
         if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
         yield* writeFlockSettings(own, edited).pipe(
-          Effect.mapError((error) => new ActionFailed({ reason: error.message })),
+          Effect.mapError(() => unreadableFlock),
         );
         return [edited, edited] as const;
       }),
@@ -525,13 +530,16 @@ const main = Effect.gen(function* () {
         synced.set(`${part}:${machine.profile}`, item);
         return PubSub.publish(news, item);
       }).pipe(Effect.asVoid);
-  const { syncOn, syncEvery } = yield* flockSync({
+  const settingsSync = yield* flockSync({
     flock: flockSettings,
     machines: () => [...doors.values()].map(settingsOf),
     save: (flock) => writeFlockSettings(own, flock).pipe(Effect.provide(BunServices.layer)),
     request: uuid,
     told: toldSynced("settings"),
   });
+  const syncOn = (machine: ReturnType<typeof settingsOf>) =>
+    flockReadable ? settingsSync.syncOn(machine) : Effect.succeed(unreadableFlock.reason);
+  const syncEvery = () => flockReadable ? settingsSync.syncEvery() : Effect.void;
   const definitions = yield* definitionsSync({
     flock: flockDefinitions,
     machines: () => [...doors.values()].map(settingsOf),
@@ -979,7 +987,7 @@ const main = Effect.gen(function* () {
       }),
     credentials: () => SubscriptionRef.changes(credentials),
     flockSettings: () =>
-      Stream.unwrap(
+      !flockReadable ? Stream.fail(unreadableFlock) : Stream.unwrap(
         syncEvery().pipe(
           Effect.andThen(
             Effect.forEach(doors.values(), readOwn, { concurrency: "unbounded", discard: true }),

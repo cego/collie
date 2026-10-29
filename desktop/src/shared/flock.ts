@@ -495,7 +495,7 @@ export const DesktopRpcs = RpcGroup.make(
    * The Flock's settings, now and whenever they change. Asking syncs every connected
    * Machine, so an edit made on one since it connected is picked up.
    */
-  Rpc.make("flockSettings", { success: FlockSettings, stream: true }),
+  Rpc.make("flockSettings", { success: FlockSettings, error: ActionFailed, stream: true }),
   /** One of Collie's settings, as typed, for every Machine; what came of it in a line. */
   Rpc.make("setFlockSetting", {
     payload: { key: Schema.String, value: Schema.String },

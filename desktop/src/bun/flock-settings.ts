@@ -19,12 +19,18 @@ import { FlockSettings, NO_FLOCK_SETTINGS, takeFrom } from "../shared/flock-sett
 const FlockSettingsFile = Schema.fromJsonString(FlockSettings);
 const FILE = "flock-settings.json";
 
-/** The Flock's settings, or none where nothing is saved or it cannot be read. */
+/** The Flock's settings, empty only where no file exists. */
 export const readFlockSettings = Effect.fn("FlockSettings.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString((yield* Path.Path).join(dir, FILE)).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(FlockSettingsFile)),
-    Effect.orElseSucceed(() => NO_FLOCK_SETTINGS),
+    Effect.catchTag("PlatformError", (error) =>
+      error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
+    ),
+    Effect.flatMap((text) =>
+      text === null
+        ? Effect.succeed(NO_FLOCK_SETTINGS)
+        : Schema.decodeUnknownEffect(FlockSettingsFile)(text),
+    ),
   );
 });
 
@@ -33,6 +39,7 @@ export const writeFlockSettings = Effect.fn("FlockSettings.write")(function* (
   flock: FlockSettings,
 ) {
   const fs = yield* FileSystem.FileSystem;
+  yield* readFlockSettings(dir);
   yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(
     (yield* Path.Path).join(dir, FILE),
