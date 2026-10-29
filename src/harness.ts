@@ -2,6 +2,7 @@
 // Personas are injected, never installed as harness-native config (CONTEXT.md, Persona).
 
 import { Effect, FileSystem, Option, Schema } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
 import { isJsonObject, isString, type JsonObject } from "./schema";
 import { type AutoCompactWindow, autoCompactWindowOf, PERMISSION_MODES } from "./settings";
@@ -267,13 +268,10 @@ const helps = new Map<string, string>();
 export const installedHelp = Effect.fn("Harness.installedHelp")(function* (kind: string) {
   const known = helps.get(kind);
   if (known !== undefined) return known;
-  const help = yield* Effect.promise(() =>
-    Bun.$`${kind} --help`
-      .quiet()
-      .nothrow()
-      .text()
-      .catch(() => ""),
-  );
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const help = yield* spawner
+    .string(ChildProcess.make(kind, ["--help"], { extendEnv: true }))
+    .pipe(Effect.orElseSucceed(() => ""));
   if (help !== "") helps.set(kind, help);
   return help;
 });
@@ -285,7 +283,7 @@ export const installedHelp = Effect.fn("Harness.installedHelp")(function* (kind:
 export const autoCompactWindowFor = Effect.fn("Harness.autoCompactWindowFor")(function* (
   harness: HarnessAdapter,
   written: number | string,
-  help: (kind: string) => Effect.Effect<string>,
+  help: typeof installedHelp,
 ) {
   const flag = harness.autoCompactFlag;
   if (flag === undefined) return { passed: null, leftOff: null };

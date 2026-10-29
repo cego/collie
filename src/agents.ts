@@ -1316,7 +1316,7 @@ export interface AgentHost {
   /** Each harness's compaction controls; the shipped ones where none are given. */
   readonly ports?: CompactionPorts;
   /** A harness's `--help`, by its kind; the installed one's where left out. */
-  readonly help?: (kind: string) => Effect.Effect<string>;
+  readonly help?: typeof installedHelp;
 }
 
 type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp;

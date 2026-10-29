@@ -7,7 +7,18 @@
 // interface appends to, and a channel that asks it to compact — because the shared
 // policy owns the threshold, the budget and what counts as an outcome.
 
-import { Clock, Data, Effect, FileSystem, Option, Path, Schema } from "effect";
+import {
+  Cache,
+  Clock,
+  Data,
+  Duration,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  Path,
+  Schema,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   agentThreads,
@@ -354,12 +365,30 @@ export function atLeast(installed: string, wanted: string): boolean {
   return true;
 }
 
+const FAILED_PROBE_TTL = Duration.minutes(1);
+
 /**
- * One version check per harness per process. A gate runs before every launch, and a
- * subprocess per step to ask a CLI its own version is a cost with no new information
- * in it — the installed binary does not change under a running Driver.
+ * A harness's version, asked once per process: a gate runs before every launch, and the
+ * installed binary does not change under a running Driver. A failed probe is asked again
+ * after a while, so one hiccup does not refuse every launch until a restart.
  */
-const gated = new Map<string, string | null>();
+const versions = Effect.runSync(
+  Cache.makeWith(
+    (harness: string) =>
+      shell(harness, ["--version"], process.cwd()).pipe(
+        Effect.flatMap(({ code, stdout }) =>
+          code === 0
+            ? Effect.succeed(stdout.trim().split("\n").at(-1)?.trim() ?? "")
+            : Effect.fail(new Error(`cannot ask ${harness} its version (exit ${code})`)),
+        ),
+      ),
+    {
+      capacity: VERIFIED_VERSIONS.size,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : FAILED_PROBE_TTL),
+      requireServicesAt: "lookup",
+    },
+  ),
+);
 
 /**
  * What this machine has installed, as the harness itself reports it, or null where it
@@ -379,19 +408,13 @@ export const installedVersion = Effect.fn("Compactors.installedVersion")(functio
 const gateVersion = Effect.fn("Compactors.gateVersion")(function* (harness: string) {
   const wanted = VERIFIED_VERSIONS.get(harness);
   if (!wanted) return;
-  const cached = gated.get(harness);
-  if (cached === null) return;
-  if (cached !== undefined) return yield* Effect.fail(new Error(cached));
-  const { code, stdout } = yield* shell(harness, ["--version"], process.cwd());
-  const installed = stdout.trim().split("\n").at(-1)?.trim() ?? "";
-  const problem =
-    code !== 0
-      ? `cannot ask ${harness} its version (exit ${code})`
-      : !atLeast(installed, wanted)
-        ? `${harness} ${installed || "(no version)"} is older than the ${wanted} its compaction controls support`
-        : null;
-  gated.set(harness, problem);
-  if (problem) return yield* Effect.fail(new Error(problem));
+  const installed = yield* Cache.get(versions, harness);
+  if (!atLeast(installed, wanted))
+    return yield* Effect.fail(
+      new Error(
+        `${harness} ${installed || "(no version)"} is older than the ${wanted} its compaction controls support`,
+      ),
+    );
 });
 
 /**

@@ -620,7 +620,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
    */
   self: ReadonlyArray<string> = selfCommand(),
   /** A harness's `--help`, by its kind; the installed one's where left out. */
-  help: (kind: string) => Effect.Effect<string> = installedHelp,
+  help: typeof installedHelp = installedHelp,
 ) {
   const file = yield* chatPath(env.stateDir, key);
   yield* ensureLockDir(file);

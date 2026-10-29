@@ -200,7 +200,11 @@ export function structuredFrom<A, I>(
 
 export interface EvaluatorDeps {
   /** `claude --help`, however the caller gets it; checked for every required flag. */
-  readonly help: Effect.Effect<string, EvaluatorUnavailable>;
+  readonly help: Effect.Effect<
+    string,
+    EvaluatorUnavailable,
+    ChildProcessSpawner.ChildProcessSpawner
+  >;
   /** Where the frozen system prompt lives. Repo content, never anything an agent wrote. */
   readonly systemPromptFile: string;
   readonly limits: CallLimits;
@@ -221,17 +225,29 @@ const HELP_TAIL = 500;
 
 /** `<command> --help`, or why it could not be read: a failing CLI has not dropped its flags. */
 export const helpOf = (command: ReadonlyArray<string>) =>
-  Effect.tryPromise({
-    try: () => Bun.$`${command} --help`.nothrow().quiet(),
-    catch: (cause) =>
-      new EvaluatorUnavailable({
-        reason: `${command.join(" ")} --help did not start: ${String(cause)}`,
-      }),
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const [cmd = "", ...args] = command;
+    const handle = yield* spawner.spawn(
+      ChildProcess.make(cmd, [...args, "--help"], { extendEnv: true }),
+    );
+    const text = (stream: typeof handle.stdout) => Stream.mkString(Stream.decodeText(stream));
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [text(handle.stdout), text(handle.stderr), handle.exitCode],
+      { concurrency: "unbounded" },
+    );
+    return { stdout, stderr, exitCode: Number(exitCode) };
   }).pipe(
+    Effect.scoped,
+    Effect.mapError(
+      (cause) =>
+        new EvaluatorUnavailable({
+          reason: `${command.join(" ")} --help did not start: ${String(cause)}`,
+        }),
+    ),
     Effect.flatMap((ran) => {
-      const help = ran.stdout.toString();
-      if (ran.exitCode === 0 && help.trim() !== "") return Effect.succeed(help);
-      const said = ran.stderr.toString().trim().slice(-HELP_TAIL);
+      if (ran.exitCode === 0 && ran.stdout.trim() !== "") return Effect.succeed(ran.stdout);
+      const said = ran.stderr.trim().slice(-HELP_TAIL);
       return Effect.fail(
         new EvaluatorUnavailable({
           reason: `${command.join(" ")} --help exited ${ran.exitCode}${said === "" ? " and printed nothing" : `: ${said}`}`,
