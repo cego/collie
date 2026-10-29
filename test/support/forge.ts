@@ -1452,7 +1452,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     });
   }
   const checkRuns =
-    /^repos\/(.+)\/commits\/([^/]+)\/check-runs\?(?:check_name=([^&]+)(?:&.*)?|per_page=1)$/.exec(
+    /^repos\/(.+)\/commits\/([^/]+)\/check-runs\?(?:check_name=([^&]+)(?:&.*)?|per_page=\d+)$/.exec(
       route,
     );
   if (checkRuns) {

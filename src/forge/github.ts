@@ -480,13 +480,23 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
     const pull = yield* rest(PullRefs, cwd, `repos/${repo}/pulls/${ref.iid}`);
     if (!pull.ok) return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
     const head = pull.value.head.sha;
+    const unread = (why: string) =>
+      ({ ok: false, reason: `could not list the check runs on ${head}: ${why}` }) as const;
     const found = yield* checkRun(repo, head, name, cwd);
-    if (!found.ok)
-      return { ok: false, reason: `could not list the check runs on ${head}: ${found.reason}` };
+    if (!found.ok) return unread(found.reason);
+    let absent: JobState = "missing";
+    if (found.value === undefined) {
+      // GitHub creates a job behind `needs` only once its needs finish.
+      // ponytail: one page of 100; a head with more check runs reads only its first.
+      const all = yield* checkRuns(repo, head, "per_page=100", cwd);
+      if (!all.ok) return unread(all.reason);
+      if (all.value.length === 0 || all.value.some((one) => one.status !== "completed"))
+        absent = "pending";
+    }
     return {
       ok: true,
       head,
-      state: found.value === undefined ? "missing" : stateOf(found.value),
+      state: found.value === undefined ? absent : stateOf(found.value),
       url: found.value?.html_url ?? null,
       id: actionsJob(found.value?.html_url),
       merge: null,

@@ -1424,7 +1424,10 @@ must be `cwd`'s `HEAD`. On GitLab that is the job in the merge request's head pi
 a merged-results pipeline counts for the head only where GitLab shows the merge commit was
 built from it; on GitHub it is the check run of that name on the head commit. The adapter
 answers `passed`, `pending`, `running`, `failed`, `skipped`, `cancelled` or `missing`, with
-the job's URL, or why the forge could not say. A pass is recorded once per tree as the
+the job's URL, or why the forge could not say. GitHub creates a job behind `needs` only
+once its needs finish, so a GitHub job with no check run yet is `pending` while the head
+has no check runs or any of them is still queued or in progress, and `missing` only once
+every check run on the head has completed; GitLab creates every job up front. A pass is recorded once per tree as the
 check's `ci` pass, with `job` (`{ name, url, merge? }`, `merge` being the merged-results
 commit) beside its command, start and end tree. That Verification answers `{ proved }`; anything
 else answers `{ unproved, state, url }`, the sentence naming the check, the job and the
