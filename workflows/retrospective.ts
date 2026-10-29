@@ -151,7 +151,7 @@ export interface Starting {
 
 /**
  * The Improvements earlier Runs failed to start, each once, whose issues are all still open
- * and which no Run started since the first of those Runs closes.
+ * and which no Run started since the first of those Runs closes; one per name, the earliest.
  */
 export const restartsOf = (
   earlier: ReadonlyArray<{ readonly created: string; readonly ended: ReadonlyArray<Ended> }>,
@@ -163,13 +163,18 @@ export const restartsOf = (
   const restarts: Starting[] = [];
   for (const { created, ended } of earlier.toSorted((a, b) => at(a.created) - at(b.created)))
     for (const { name, issues, ended: how } of ended) {
-      if (!how.startsWith(FAILED_TO_START) || seen.has(name)) continue;
-      seen.add(name);
+      const same = `${name} ${issues.toSorted((a, b) => a - b).join(",")}`;
+      if (!how.startsWith(FAILED_TO_START) || seen.has(same)) continue;
+      seen.add(same);
       const taken = since.some(
         (run) =>
           at(run.created) > at(created) && run.closes.some((number) => issues.includes(number)),
       );
-      if (!taken && issues.every((number) => open.some((one) => one.number === number)))
+      if (
+        !taken &&
+        issues.every((number) => open.some((one) => one.number === number)) &&
+        !restarts.some((one) => one.name === name)
+      )
         restarts.push({ name, issues });
     }
   return restarts;

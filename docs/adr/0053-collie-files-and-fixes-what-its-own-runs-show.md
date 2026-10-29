@@ -216,14 +216,15 @@ commented, because only Improvements of newly filed findings start.
   the Run's work, not an agent's judgement.
 - **What starts again:** the next Run reads the `improvements.json` of the earlier Runs of
   its Workflow and project over the last seven days, through the host. It starts again
-  each one that failed to start, once by name, while every issue it fixes is still open
+  each one that failed to start, once by its name and issues, while every issue it fixes is still open
   and no Run of the project started since the first Run that recorded it names one of them
   in a `Closes #n`. That skips work a person or another Run already began, a restart's own
   child included, since its goal says `Closes #n`. A Run with no `improvements.json`, still
   going or from before this amendment, is passed over.
 - **How it starts:** as any Improvement does, a `plan` of its own Task with
   `then=implement` under `improvement-<name>`, its goal the issues read back by number.
-  Restarts take `improvements` slots first, then the day's new Improvements. A day with no Runs in its
-  window still starts its restarts, without triage.
+  Restarts take `improvements` slots first, then the day's new Improvements. Of restarts
+  sharing a name, only the earliest starts that day. A day with no Runs in its window still
+  starts its restarts, without triage.
 - **Not restarted:** an Improvement that started and then failed. It is its own card,
   waiting on a person, as before.

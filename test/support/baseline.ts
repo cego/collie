@@ -14362,6 +14362,25 @@ scenario(
 );
 
 scenario(
+  "a failed start sharing its name with an earlier one for a closed issue is still restarted, one per name",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        openIssues = [issueNumbered(7), issueNumbered(8)];
+        yield* earlier("r-first", hoursAgo(74), [unstarted("docs", [6])]);
+        yield* earlier("r-second", hoursAgo(50), [unstarted("docs", [7])]);
+        yield* earlier("r-third", hoursAgo(26), [unstarted("docs", [8])]);
+        yield* rig.queueOutputs([triaged([])]);
+        yield* improved("r-again", { runs: "checkout", improvements: 3 });
+        expect(started.map(({ invocation }) => invocation)).toEqual(["improvement-docs"]);
+        expect(started[0]?.input.goal).toContain("`Closes #7`");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "restarted and new self-improve Improvements together stay within its bound, restarts first",
   () =>
     runEffect(
