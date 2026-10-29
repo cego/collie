@@ -1018,6 +1018,7 @@ const main = Effect.gen(function* () {
         if (!isHostName(named))
           return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
         if (named === gitlabHost()) return `GitLab is ${named} already`;
+        if (!flockReadable) return yield* Effect.fail(unreadableFlock.reason);
         // A token is made for one GitLab, so the old host's goes before the host changes.
         // Without a keyring there is none to go.
         const token = yield* keyring.lookup("gitlab-token").pipe(Effect.orElseSucceed(() => null));
@@ -1263,6 +1264,7 @@ const main = Effect.gen(function* () {
               if (!isHostName(login.host))
                 return yield* Effect.fail("The source returned an invalid GitLab host");
               if (login.host !== gitlabHost()) {
+                if (!flockReadable) return yield* Effect.fail(unreadableFlock.reason);
                 yield* keyring.clear("gitlab-token");
                 yield* editFlock("gitlab_host", login.host).pipe(
                   Effect.mapError((failed) => failed.reason),
