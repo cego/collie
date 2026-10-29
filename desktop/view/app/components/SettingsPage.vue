@@ -33,6 +33,24 @@ const {
 const connectionsNeedYou = computed(
   () => connectionCards.value.filter((card) => card.needsYou).length,
 );
+const {
+  choices: slackChoices,
+  trouble: slackTrouble,
+  loading: slackLoading,
+  refresh: refreshSlack,
+} = useSlack();
+const slackDestinations = computed(() =>
+  connectionCards.value.some((card) => card.id === "slack" && card.account !== null)
+    ? slackChoices.value
+    : null,
+);
+watch(connectionCards, () => {
+  void refreshSlack();
+});
+const refreshSlackConnection = () => {
+  void refreshConnections();
+  void refreshSlack();
+};
 const { desktopSettings, change } = useDesktopSettings();
 const { rows: machines, own, now } = useFlock();
 const { machines: catalogues, problem: catalogueProblem } = useCatalogues();
@@ -643,8 +661,20 @@ const drawnLine = computed(() =>
                           @update:model-value="(on) => set(row, String(on))"
                         />
                       </div>
-                      <fieldset
+                      <SlackDestination
                         v-if="
+                          ['release.approval_channel', 'slack.notification_channel'].includes(
+                            row.key,
+                          )
+                        "
+                        :id="idOf(row)"
+                        :setting="row.key"
+                        :value="row.value"
+                        :choices="slackDestinations"
+                        @choose="(value) => set(row, value)"
+                      />
+                      <fieldset
+                        v-else-if="
                           sub.sub !== 'Who does the work' &&
                           row.kind === 'choice' &&
                           row.choices.length <= 6
@@ -793,13 +823,47 @@ const drawnLine = computed(() =>
                 </div>
               </section>
               <SettingsConnections
+                :slack="slackChoices"
+                :slack-trouble="slackTrouble"
+                :slack-loading="slackLoading"
+                @refresh-slack="refreshSlackConnection"
                 v-if="showConnections"
                 :cards="connectionCards"
                 :workflows="connectionWorkflows"
                 :reading="readingConnections"
                 :trouble="connectionTrouble"
                 @refresh="refreshConnections"
-              />
+              >
+                <template #slack-destination>
+                  <div
+                    v-for="row in sections
+                      .flatMap((section) => section.rows)
+                      .filter((row) => row.key === 'slack.notification_channel')"
+                    :key="row.key"
+                    class="flex flex-col gap-2"
+                  >
+                    <label for="slack-notify-in-card" class="text-sm font-medium"
+                      >Post notifications to</label
+                    >
+                    <p class="text-sm text-muted">
+                      The toasts you keep on, under Notifications, also go here.
+                    </p>
+                    <SlackDestination
+                      id="slack-notify-in-card"
+                      :setting="row.key"
+                      :value="row.value"
+                      :choices="slackDestinations"
+                      @choose="(value) => set(row, value)"
+                    />
+                    <p v-if="refusals[idOf(row)]" class="text-sm text-error" role="alert">
+                      {{ refusals[idOf(row)] }}
+                    </p>
+                    <p class="text-xs" :class="metaOf(row).tone" role="status">
+                      {{ metaOf(row).said }}
+                    </p>
+                  </div>
+                </template>
+              </SettingsConnections>
             </section>
 
             <section

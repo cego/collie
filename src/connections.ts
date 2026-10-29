@@ -12,6 +12,7 @@ import {
 import { shell, type Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/process";
 import { redact } from "./redact";
+import { probeSlack, SLACK_FIX } from "./slack-credentials";
 
 export const CONNECTION_TIMEOUT_MS = 6_000;
 
@@ -53,6 +54,7 @@ export const connectionProbes = (
     { id: "github", read: probeGithub(env, run), fix: "gh auth login --hostname github.com --web" },
     { id: "helle", read: probeHelle(env), fix: `check HELLE_API_TOKEN in ${helleEnvPath(env)}` },
     { id: "linear", read: probeLinearMcp(env), fix: LINEAR_MCP_FIX },
+    { id: "slack", read: probeSlack(env), fix: SLACK_FIX },
   ] satisfies ReadonlyArray<
     ConnectionProbe<
       FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner,

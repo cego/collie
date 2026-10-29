@@ -13,7 +13,12 @@ export const connectionsOn = (
     const connections = yield* door.connections();
     const workflows = yield* door
       .definitions()
-      .pipe(Effect.map((read) => workflowConnections(read.workflows)));
+      .pipe(
+        Effect.map((read) => [
+          ...workflowConnections(read.workflows),
+          ...(read.connectionUses ?? []),
+        ]),
+      );
     return { ...machine, connections, workflows, problem: null };
   }).pipe(
     Effect.timeoutOrElse({

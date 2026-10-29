@@ -125,6 +125,8 @@ import {
   syncNow,
 } from "./machine";
 import { givenCredentials } from "./given";
+import { saveSlackConnection, disconnectSlackConnection } from "./slack";
+import { slackApi } from "../../../src/slack";
 import { connectionsOn, githubLogin, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, openTerminal, shellLine } from "./terminal";
@@ -143,6 +145,7 @@ import {
   giveHelle,
   giveToken,
   giveGithub,
+  giveSlack,
   gitlabToken,
   helleOwner,
   oneLine,
@@ -544,6 +547,7 @@ const main = Effect.gen(function* () {
     give: {
       gitlab: (route, text) => Effect.map(giveToken([route], gitlabHost(), text), firstFailure),
       helle: (route, text) => Effect.map(giveHelle([route], helle, text), firstFailure),
+      slack: (route, text) => Effect.map(giveSlack([route], text), firstFailure),
     },
     tell: (item) => PubSub.publish(news, item).pipe(Effect.asVoid),
     skipped: (profile) =>
@@ -733,7 +737,7 @@ const main = Effect.gen(function* () {
   const routedAt = new Map<string, number>();
   const holds = Effect.map(given.held, (texts) => ({
     version: manifest.version,
-    credentials: CREDENTIALS.filter((one) => texts[one] !== undefined),
+    credentials: CREDENTIALS.filter((one) => texts[one] !== undefined && texts[one] !== ""),
   }));
   /** Sync now: what connecting would do for the Machine on `profile`. */
   const syncMachine = (profile: string) =>
@@ -1035,6 +1039,53 @@ const main = Effect.gen(function* () {
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
         return gave("Helle's token", yield* given.giveEvery(everyRoute(), "helle", said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    saveSlack: ({ token }) =>
+      saveSlackConnection(token, keyring, (text) =>
+        given.giveEvery(everyRoute(), "slack", text),
+      ).pipe(
+        Effect.map(
+          ({ identity, given }) =>
+            `Posts as ${identity.user} in ${identity.team}. ${gave("Slack's token", given)}`,
+        ),
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+      ),
+    disconnectSlack: () =>
+      disconnectSlackConnection(keyring, (text) =>
+        given.giveEvery(everyRoute(), "slack", text),
+      ).pipe(
+        Effect.map((all) => gave("Slack disconnect", all)),
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+      ),
+    slackChoices: () =>
+      Effect.gen(function* () {
+        const token = yield* keyring.lookup("slack-token");
+        if (token) {
+          const api = slackApi(token);
+          return {
+            identity: yield* api.auth(),
+            channels: yield* api.channels(),
+            people: yield* api.people(),
+          };
+        }
+        for (const source of doors.values()) {
+          const reading = (yield* source.desktop.connections()).find((one) => one.id === "slack");
+          if (reading?.reading.state === "ok") return yield* source.desktop.slackChoices();
+        }
+        return yield* Effect.fail(
+          "Connect Slack, under Connections below, to pick from the channels your Collie is in.",
+        );
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new ActionFailed({
+              reason: isString(error)
+                ? error
+                : "reason" in error && isString(error.reason)
+                  ? error.reason
+                  : "The Machine's Slack choices could not be read",
+            }),
+        ),
+      ),
     claudeLogin: ({ profile }) =>
       Effect.gen(function* () {
         const route = routes.get(profile)?.route;

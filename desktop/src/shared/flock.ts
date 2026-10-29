@@ -23,6 +23,7 @@ import { MachineSchedules } from "./schedules";
 import { MachineUsage } from "./usage";
 import { MachineCatalogue } from "./settings-agents";
 import { MachineConnections } from "./connections";
+import { SlackChoices } from "../../../src/slack";
 import { keepOwn, OwnReading } from "./machine-own";
 import {
   BoardMessage,
@@ -199,7 +200,7 @@ export const MachineLinked = Schema.TaggedStruct("Linked", {
 export type MachineLinked = typeof MachineLinked.Type;
 
 /** A credential Desktop gives every Machine. */
-export const Credential = Schema.Literals(["gitlab", "helle"]);
+export const Credential = Schema.Literals(["gitlab", "helle", "slack"]);
 export type Credential = typeof Credential.Type;
 export const CREDENTIALS = Credential.literals;
 
@@ -535,6 +536,13 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
+  Rpc.make("saveSlack", {
+    payload: { token: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("slackChoices", { success: SlackChoices, error: ActionFailed }),
+  Rpc.make("disconnectSlack", { success: Schema.String, error: ActionFailed }),
   /** Logs Claude Code in on the Machine a route reaches, then onboards it again. */
   Rpc.make("claudeLogin", {
     payload: { profile: Schema.String },

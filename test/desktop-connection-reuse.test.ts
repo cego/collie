@@ -52,6 +52,7 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
               Effect.map((result) => result[0]!.failed),
             ),
           helle: () => Effect.succeed(null),
+          slack: () => Effect.succeed(null),
         },
       });
       const hosts: string[] = [];

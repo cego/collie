@@ -14,6 +14,7 @@ import { onPath } from "./doctor-check";
 import { glabHosts, pushCheck } from "./forge/gitlab-checks";
 import { gitlabHostOf } from "./config";
 import { tokenPage } from "./gitlab-token";
+import { writeSlackToken } from "./slack-credentials";
 import type { PluginEnv } from "./env";
 import { err, prepareSteps, upgrade, type OpResult } from "./operations";
 import { whatItSaid } from "./mr";
@@ -54,7 +55,7 @@ export interface OnboardOptions {
   /** The release this runner carries; the compiled runner's own unless a test says. */
   readonly carried?: Carried | null;
   readonly skip?: ReadonlyArray<Skippable>;
-  /** `GITLAB_TOKEN` and `HELLE_API_TOKEN`, from stdin: never an argument. */
+  /** Credentials from stdin, never an argument. */
   readonly secrets?: Readonly<Record<string, string>>;
   /** stdin is a terminal the human can paste into. */
   readonly terminal?: boolean;
@@ -505,6 +506,15 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       return current === text ? inPlace(`credentials at ${file}`) : done(`wrote ${file}`);
     }),
   );
+
+  if (secrets.SLACK_BOT_TOKEN !== undefined)
+    yield* step(
+      "slack",
+      "Slack's credentials",
+      writeSlackToken(here, secrets.SLACK_BOT_TOKEN || null).pipe(
+        Effect.as(done("Slack credential saved")),
+      ),
+    );
 
   /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */
   const linearLogin = (claude: string) =>

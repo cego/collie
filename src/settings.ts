@@ -358,7 +358,13 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     group: "Runs",
     label: "Slack channel for approval requests",
     description:
-      "The Slack channel a release Run posts its merge request in for approval, e.g. #frontend. Empty shares nothing.",
+      "The Slack channel a release Run posts its merge request in for approval. Empty shares nothing. Earlier #names work until picked again.",
+  }),
+  of("slack.notification_channel", "text", "", {
+    group: "Notifications",
+    label: "Post notifications to",
+    description:
+      "The toasts you keep on also go to this Slack channel or person. Empty keeps toasts only.",
   }),
   choice("scope", SCOPES, D.scope, {
     group: "Board",

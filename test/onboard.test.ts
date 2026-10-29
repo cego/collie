@@ -489,6 +489,25 @@ test("a Machine that can already push gets no key", () =>
     }),
   ));
 
+test("Slack handed on stdin is written owner-only without appearing in onboarding events", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { events } = yield* onboarded(
+        {},
+        { secrets: { SLACK_BOT_TOKEN: "xoxb-fixture-secret" } },
+      );
+      expect(statusOf(events, "slack")).toBe("done");
+      expect(yield* read(`${home}/.config/collie/slack.env`)).toBe(
+        "SLACK_BOT_TOKEN=xoxb-fixture-secret\n",
+      );
+      expect((yield* fs.stat(`${home}/.config/collie/slack.env`)).mode & 0o777).toBe(0o600);
+      expect(
+        events.some((event) => "detail" in event && event.detail.includes("xoxb-fixture-secret")),
+      ).toBe(false);
+    }),
+  ));
+
 test("Helle's credentials file is written owner-only", () =>
   runEffect(
     Effect.gen(function* () {

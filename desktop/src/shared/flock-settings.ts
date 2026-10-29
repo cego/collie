@@ -96,6 +96,7 @@ const UNSET_SAID = new Map([
   ["zoom", "Default: 100%, the size of your other apps"],
   ["machine_rule", "Unset: no rule"],
   ["release.approval_channel", "Unset: shares nothing"],
+  ["slack.notification_channel", "Unset: toasts only"],
 ]);
 
 /** The canvas's sub-groups within a group, by key; any other key has none. */

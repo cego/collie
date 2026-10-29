@@ -72,7 +72,11 @@ describe("Collie's settings", () => {
       fallback: "false",
     });
     expect(settingOf("release.approval_channel")).toMatchObject({ kind: "text", fallback: "" });
-    expect(settingOf("release.approval_channel")!.description).toContain("#frontend");
+    expect(settingOf("slack.notification_channel")).toMatchObject({
+      kind: "text",
+      fallback: "",
+      group: "Notifications",
+    });
     expect(parseSetting("release.share_for_approval", "true")).toEqual({ value: true });
     expect(parseSetting("release.approval_channel", " #frontend ")).toEqual({
       value: "#frontend",
@@ -163,7 +167,11 @@ describe("Each setting explains itself", () => {
     ],
     Board: ["scope", "density", "board_quiet_ms"],
     Chat: ["flock_chat.proactive", "machine_rule", "proactive"],
-    Notifications: ["questions", ...NOTIFICATION_KINDS.map((kind) => `notifications.${kind}`)],
+    Notifications: [
+      "questions",
+      "slack.notification_channel",
+      ...NOTIFICATION_KINDS.map((kind) => `notifications.${kind}`),
+    ],
     "GitLab and credentials": ["gitlab_host"],
   };
 

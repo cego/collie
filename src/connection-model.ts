@@ -20,6 +20,24 @@ export type Connection = typeof Connection.Type;
 export const ConnectionLogin = Schema.Struct({ host: Schema.String, token: Schema.String });
 export type ConnectionLogin = typeof ConnectionLogin.Type;
 
+export const ConnectionUse = Schema.Struct({
+  id: Schema.String,
+  connections: Schema.Struct({
+    needs: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({ with: Schema.String }))),
+    uses: Schema.optionalKey(
+      Schema.Record(Schema.String, Schema.Struct({ with: Schema.String, without: Schema.String })),
+    ),
+  }),
+});
+export const HOST_CONNECTION_USES: ReadonlyArray<typeof ConnectionUse.Type> = [
+  {
+    id: "Notifications",
+    connections: {
+      uses: { slack: { with: "Posts the toasts you keep on", without: "Toasts only" } },
+    },
+  },
+];
+
 export const connectionsLines = (connections: ReadonlyArray<Connection>): string =>
   connections
     .map(

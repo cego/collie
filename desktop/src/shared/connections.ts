@@ -3,17 +3,10 @@ import { Option, Schema } from "effect";
 import {
   Connection as ConnectionSchema,
   ConnectionId as ConnectionIds,
+  ConnectionUse,
 } from "../../../src/connection-model";
 
-export const ConnectionWorkflow = Schema.Struct({
-  id: Schema.String,
-  connections: Schema.Struct({
-    needs: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({ with: Schema.String }))),
-    uses: Schema.optionalKey(
-      Schema.Record(Schema.String, Schema.Struct({ with: Schema.String, without: Schema.String })),
-    ),
-  }),
-});
+export const ConnectionWorkflow = ConnectionUse;
 export type ConnectionWorkflow = typeof ConnectionWorkflow.Type;
 export const workflowConnections = (
   workflows: ReadonlyArray<{ readonly id: string; readonly metadata: Schema.Json }>,
@@ -105,7 +98,12 @@ export const connectionCards = (machines: ReadonlyArray<MachineConnections>) =>
             : ready.length > 0
               ? `On ${ready.length} of ${machines.length} Machines`
               : "Not set up",
-      account: source?.reading?.state === "ok" ? source.reading.account : null,
+      account:
+        source?.reading?.state === "ok"
+          ? id === "slack"
+            ? source.reading.detail
+            : source.reading.account
+          : null,
       where:
         ready.length === machines.length
           ? `On all ${machines.length} Machines`

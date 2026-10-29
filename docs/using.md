@@ -1594,9 +1594,9 @@ never pasted on a command line. Desktop keeps the Flock's credentials in a file 
 unless that is set), readable by you alone and replaced whole on every save — the way glab,
 gh and Helle already keep the same tokens on every Machine, so nothing has to be installed
 for it. A Desktop that kept them in the Secret Service through `secret-tool` before has them
-copied into that file the first time, where `secret-tool` is there. What it keeps is one
-GitLab token, made on GitLab's own page — **Make one on GitLab** opens it with the `api` and
-`write_repository` scopes filled in — and Helle's token; Helle's URL is always
+copied into that file the first time, where `secret-tool` is there. It keeps the GitLab token,
+Helle's token, and Slack's bot token. **Make one on GitLab** opens GitLab's token page with the
+`api` and `write_repository` scopes filled in. Helle's URL is always
 `https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab
 accepts it with those scopes, and gives it at once to glab on every Machine it reaches
 (`glab auth login --hostname <host> --stdin`); Helle's goes to each Machine's
@@ -1621,6 +1621,41 @@ again. It also forgets the GitLab token Desktop kept, since a token is made for 
 make a new one on the new host's page and save it. The GitLab host is given to every
 Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
 Machine's.
+
+#### Slack
+
+Open **Connections → Slack → Connect**. One shared **Collie** app serves your Slack workspace.
+Choose **Add Collie to your Slack** and install the prefilled app.
+Skip this step if a teammate already installed it.
+Under the app's **OAuth & Permissions**, copy the **Bot User OAuth Token** (`xoxb-…`).
+Paste it into **Bot token** and choose **Connect**.
+
+Collie checks the token with Slack before keeping it. A refusal appears beside the field with Slack's reason.
+The card reads, for example, **Posts as collie in Example Co**, from Slack's answer.
+Slack does not identify the installer, so Collie does not name one.
+The app has only five bot scopes: `chat:write`, `im:write`, `channels:read`, `groups:read`, and `users:read`.
+It has no event subscriptions, Socket Mode, hosted relay, or sign-in callback.
+Talking to Collie in Slack is not built.
+
+Desktop keeps the token with its other credentials and gives it to every Machine on stdin.
+Each Machine keeps it in `$XDG_CONFIG_HOME/collie/slack.env` (`~/.config/collie/slack.env` by default), readable by its owner alone.
+An unreachable Machine gets it when it connects.
+**Disconnect** removes the token Desktop gave each Machine, including when it next reconnects.
+It does not uninstall the shared app or revoke a teammate's token.
+For a Machine configured without Desktop, give `SLACK_BOT_TOKEN=…` through `collie onboard --secrets-stdin`.
+An explicit `SLACK_BOT_TOKEN` in the host's environment takes precedence over the file.
+
+Invite Collie into each channel with `/invite @Collie`, then choose **Refresh Slack**.
+Only channels it belongs to appear, including private channels it joined.
+**Runs → Slack channel for approval requests** stores the chosen channel's id in `release.approval_channel`.
+An earlier `#name` remains **#name (not checked)** and stays unchanged until you pick again.
+While Slack is disconnected, the channel controls are disabled and point back to Connections.
+
+**Notifications → Post notifications to** stores its destination in `slack.notification_channel`.
+Choose a channel, **Nowhere: toasts only**, or **A direct message to you**.
+The direct-message choice asks **Which of these is you?**; search the workspace's people and pick yourself once.
+Collie stores your user id and then shows **A direct message to** followed by your name.
+The Slack table's **Notifications** row comes from the host's own declaration beside the workflows.
 
 ### Settings
 
@@ -2792,9 +2827,10 @@ be debugged. Leave any of them out and the workflow asks, or works from what the
 itself can tell it.
 
 `release.share_for_approval` ("Ask before sharing a merge request for approval", off until
-set) and `release.approval_channel` ("Slack channel for approval requests", such as
-`#frontend`) are under Settings' Runs, and nest in config.json as
-`"release": {"share_for_approval": true, "approval_channel": "#frontend"}`. Turned on with a
+set) and `release.approval_channel` ("Slack channel for approval requests") are under Settings' Runs.
+Connect [Slack](#slack), then pick the channel by name; Collie stores its id.
+They nest in config.json as `"release": {"share_for_approval": true, "approval_channel": "C0123456789"}`.
+Earlier `#name` values are retained and used as written until picked again. Turned on with a
 channel, a release Run waiting on a teammate's approval asks you whether to post its merge
 request there ([Releasing a merge request](#releasing-a-merge-request)); turned on with no
 channel, it says so on its log and shares nothing.

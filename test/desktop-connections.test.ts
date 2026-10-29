@@ -36,6 +36,14 @@ test(
           without: "Reviews the local diff only",
         });
         expect(gitlab.some((row) => row.id === "plan")).toBe(false);
+        expect(definitions.connectionUses).toEqual([
+          {
+            id: "Notifications",
+            connections: {
+              uses: { slack: { with: "Posts the toasts you keep on", without: "Toasts only" } },
+            },
+          },
+        ]);
         expect(
           connectionUses("helle", workflows).find((row) => row.id === "release"),
         ).toMatchObject({ declares: "needs", without: "Does not start" });
