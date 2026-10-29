@@ -683,7 +683,6 @@ export default defineWorkflow({
             }
             return at.head;
           });
-        /** The review waited on at `proved`, the Run suspended where a Hold or Stop ends it. */
         const reviewAt = (proved: string, untilBlocked = false) =>
           Effect.gen(function* () {
             const standing = yield* host.awaitReview({
