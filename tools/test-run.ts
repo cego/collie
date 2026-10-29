@@ -157,6 +157,38 @@ export const prepareTimings = Effect.fn("prepareTimings")(function* (
   yield* fs.writeFileString(timings, `${encodeTimings({ ...recorded.value, files })}\n`);
 });
 
+/** Each file's mean duration over the timings records that name it, longest first. */
+export const averageTimings = (records: ReadonlyArray<Readonly<Record<string, number>>>) => {
+  const seen = new Map<string, number[]>();
+  for (const files of records)
+    for (const [file, duration] of Object.entries(files))
+      seen.set(file, [...(seen.get(file) ?? []), duration]);
+  return Object.fromEntries(
+    [...seen]
+      .map(
+        ([file, durations]) =>
+          [
+            file,
+            Math.round(durations.reduce((sum, one) => sum + one, 0) / durations.length),
+          ] as const,
+      )
+      .toSorted(([, a], [, b]) => b - a),
+  );
+};
+
+/** Writes `seed` from the timings files `records`, each test file at its mean over them. */
+export const seedFrom = Effect.fn("seedFrom")(function* (
+  records: ReadonlyArray<string>,
+  seed: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const read = yield* Effect.forEach(records, (record) =>
+    fs.readFileString(record).pipe(Effect.flatMap(Schema.decodeUnknownEffect(TimingsJson))),
+  );
+  const files = averageTimings(read.map((one) => one.files));
+  yield* fs.writeFileString(seed, `${encodeTimings({ version: 1, files })}\n`);
+});
+
 const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
   const counts = new Map<string, number>();
   for (const line of lines) counts.set(line, (counts.get(line) ?? 0) + 1);
