@@ -54,6 +54,7 @@ import * as RpcSchema from "effect/rpc/RpcSchema";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
+import { readModelLayer, ReadModel, type ReadModelApi } from "./read-model";
 import {
   EntryError,
   REFUSED_INPUT,
@@ -972,6 +973,7 @@ interface BoardSource<E, F> {
 
 const hostBoard = (dir: string) =>
   Effect.gen(function* () {
+    const model = yield* ReadModel;
     const registry = yield* Registry;
     const checks = yield* CheckProcesses;
     const bun = yield* Effect.context<BunServices>();
@@ -1004,7 +1006,10 @@ const hostBoard = (dir: string) =>
               Effect.orElseSucceed(() => []),
             ),
         });
-      }).pipe(Effect.provideContext(bun));
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, model.reading),
+        Effect.provideContext(bun),
+      );
     /** The board, with the Runs it was built from. */
     const listingOf = (agents: typeof agentsNow) =>
       Effect.gen(function* () {
@@ -1168,17 +1173,20 @@ const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
   );
 };
 
-const watched = (dir: string) =>
+const watched = (dir: string, failed: Effect.Effect<void> = Effect.void) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      return fs.watch(dir, { recursive: true }).pipe(Stream.catch(() => Stream.empty));
+      return fs
+        .watch(dir, { recursive: true })
+        .pipe(Stream.catch(() => Stream.fromEffect(failed).pipe(Stream.drain)));
     }),
   );
 
 /** Each write under the state directory that may move the board, by its path inside it. */
-export const boardWrites = (dir: string) =>
-  watched(dir).pipe(
+export const boardWrites = (dir: string, model?: ReadModelApi) =>
+  watched(dir, model?.disable).pipe(
+    Stream.tap((event) => model?.invalidate(`${dir}/${event.path}`) ?? Effect.void),
     Stream.filter((event) => !isBookkeeping(event)),
     Stream.map((event) => event.path),
   );
@@ -1198,16 +1206,16 @@ const sharedBoardLayer = (dir: string) =>
   Layer.effect(SharedBoard)(
     Effect.gen(function* () {
       const store = yield* Store;
+      const model = yield* ReadModel;
       const { listing, herdrMoved, ...board } = yield* hostBoard(dir);
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
       // Shared, so every subscriber rides one recursive watch: setting one up walks the tree.
-      const changed = yield* Stream.mergeAll(
+      const writes = yield* Stream.mergeAll(
         [
-          boardWrites(dir).pipe(
+          boardWrites(dir, model).pipe(
             Stream.debounce("200 millis"),
             Stream.map(() => undefined),
           ),
-          Stream.tick(BOARD_TICK).pipe(Stream.tap(() => herdrMoved)),
           herdChanges(board.herdr, board.env).pipe(
             Stream.provideContext(board.bun),
             Stream.catch(() => Stream.empty),
@@ -1217,7 +1225,16 @@ const sharedBoardLayer = (dir: string) =>
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
-      const { boards, latest } = yield* shareBoard({ build: listing, changed });
+      const refresh = yield* Stream.tick(BOARD_TICK).pipe(
+        Stream.tap(() => herdrMoved),
+        Stream.share({ capacity: 1, strategy: "sliding" }),
+      );
+      const changed = Stream.merge(writes, refresh);
+      const { boards, latest } = yield* shareBoard({
+        build: listing,
+        changed: writes,
+        refresh,
+      });
       const listed = board.sweepersOver({
         runs: Effect.map(latest, (built) => built.runs),
         views: () => Effect.map(latest, (built) => built.views),
@@ -3050,7 +3067,10 @@ export const serve = (named: string): Effect.Effect<void, never, BunServices | S
         yield* Effect.forkScoped(
           rotateInPlace(outputOf(dir)).pipe(Effect.repeat(Schedule.spaced("1 minute"))),
         );
-        yield* Effect.race(own(dir, checks, sweep), orphaned(dir).pipe(Effect.flatMap(stop)));
+        yield* Effect.race(
+          own(dir, checks, sweep).pipe(Effect.provide(readModelLayer(dir))),
+          orphaned(dir).pipe(Effect.flatMap(stop)),
+        );
       }).pipe(Effect.provide(Logger.layer([hostLogger(logOf(dir))], { mergeWithExisting: true }))),
       0,
     );

@@ -10,6 +10,7 @@
 // pieces below is upstream's rather than Collie's.
 
 import type { Asker } from "./proposals";
+import { ReadModel } from "./read-model";
 import { actorOf, readAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
@@ -5836,6 +5837,8 @@ const makeRegistry: (
   const userDir = options?.userDir ?? dir;
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const fs = yield* FileSystem.FileSystem;
+  const readModel = yield* Effect.serviceOption(ReadModel);
+  const viewFs = Option.isSome(readModel) ? readModel.value.reading : fs;
   const store = yield* Store;
   const crypto = yield* Crypto.Crypto;
   const hostScope = yield* Effect.scope;
@@ -6881,6 +6884,7 @@ const makeRegistry: (
   });
 
   const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow) {
+    const fs = viewFs;
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
     const report = Option.getOrUndefined(
