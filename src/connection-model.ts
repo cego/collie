@@ -17,6 +17,9 @@ export type ConnectionReading = typeof ConnectionReading.Type;
 export const Connection = Schema.Struct({ id: ConnectionId, reading: ConnectionReading });
 export type Connection = typeof Connection.Type;
 
+export const ConnectionLogin = Schema.Struct({ host: Schema.String, token: Schema.String });
+export type ConnectionLogin = typeof ConnectionLogin.Type;
+
 export const connectionsLines = (connections: ReadonlyArray<Connection>): string =>
   connections
     .map(

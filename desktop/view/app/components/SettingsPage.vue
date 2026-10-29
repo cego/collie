@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { injectRegistry } from "@effect/atom-vue";
 import { Clock, Effect } from "effect";
-import { settingOf, settingStored } from "../../../../src/settings";
+import { settingStored } from "../../../../src/settings";
 import {
   desktopChange,
   flockReach,
@@ -22,8 +22,17 @@ import {
 import { drawnAtom, flockSettingsAtom } from "../flock";
 
 const emit = defineEmits<{ back: [] }>();
-const { openLink, saveGitlabHost, setFlockSetting, setFlockSettings } = useActions();
-const { credentials, trouble: credentialsTrouble } = useCredentials();
+const { setFlockSetting, setFlockSettings } = useActions();
+const {
+  cards: connectionCards,
+  workflows: connectionWorkflows,
+  trouble: connectionTrouble,
+  reading: readingConnections,
+  refresh: refreshConnections,
+} = useConnections();
+const connectionsNeedYou = computed(
+  () => connectionCards.value.filter((card) => card.needsYou).length,
+);
 const { desktopSettings, change } = useDesktopSettings();
 const { rows: machines, own, now } = useFlock();
 const { machines: catalogues, problem: catalogueProblem } = useCatalogues();
@@ -147,10 +156,12 @@ const total = computed(() => sections.value.reduce((sum, { rows }) => sum + rows
 const shownCount = computed(() =>
   shown.value.reduce((sum, { subs }) => sum + subs.reduce((n, { rows }) => n + rows.length, 0), 0),
 );
-const showCredentials = computed(
+const showConnections = computed(
   () =>
     !onlySet.value &&
-    "gitlab host token helle credentials gitlab_host".includes(query.value.trim().toLowerCase()),
+    "connections gitlab github gh linear host token helle slack credentials glab gitlab_host".includes(
+      query.value.trim().toLowerCase(),
+    ),
 );
 const showAbout = computed(
   () =>
@@ -243,12 +254,6 @@ const areaKey = (row: SettingRow, event: KeyboardEvent) => {
   }
 };
 
-const host = ref("");
-const saveHost = async () => {
-  if (await saveGitlabHost(host.value.trim())) host.value = "";
-};
-const gitlabHostSaid = settingOf("gitlab_host")?.description;
-
 const { value: drawn } = useHeld(() => drawnAtom);
 /** The view's own pixel ratio, read again as a zoom resizes its viewport. */
 const ratio = ref(window.devicePixelRatio);
@@ -321,13 +326,19 @@ const drawnLine = computed(() =>
                 </template>
               </UButton>
               <UButton
-                v-if="showCredentials"
+                v-if="showConnections"
                 color="neutral"
                 variant="ghost"
                 size="sm"
-                label="GitLab and credentials"
-                @click="goTo('credentials')"
-              />
+                label="Connections"
+                @click="goTo('connections')"
+              >
+                <template #trailing
+                  ><span v-if="connectionsNeedYou > 0" class="ml-auto text-xs text-warning"
+                    >{{ connectionsNeedYou }} need you</span
+                  ></template
+                >
+              </UButton>
             </div>
             <div v-if="showOwn || showAbout" class="flex flex-col gap-0.5">
               <span class="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-dimmed">
@@ -392,7 +403,7 @@ const drawnLine = computed(() =>
             </div>
 
             <div
-              v-if="shownCount === 0 && !showCredentials && !showAbout && !showOwn"
+              v-if="shownCount === 0 && !showConnections && !showAbout && !showOwn"
               class="flex flex-col items-start gap-2"
             >
               <p class="font-semibold">No setting matches “{{ query }}”.</p>
@@ -405,7 +416,7 @@ const drawnLine = computed(() =>
             </div>
 
             <section
-              v-if="shown.length > 0"
+              v-if="shown.length > 0 || showConnections"
               class="flex flex-col gap-6 rounded-xl border border-default p-4"
               aria-labelledby="band-flock"
               data-testid="band-flock"
@@ -781,104 +792,16 @@ const drawnLine = computed(() =>
                   </div>
                 </div>
               </section>
+              <SettingsConnections
+                v-if="showConnections"
+                :cards="connectionCards"
+                :workflows="connectionWorkflows"
+                :reading="readingConnections"
+                :trouble="connectionTrouble"
+                @refresh="refreshConnections"
+              />
             </section>
 
-            <section
-              v-if="showCredentials"
-              id="credentials"
-              class="flex flex-col gap-4"
-              data-testid="credentials"
-            >
-              <h3 class="text-sm font-semibold">GitLab and credentials</h3>
-              <RetryNotice
-                v-if="credentialsTrouble !== null"
-                title="Desktop could not read its credentials; showing what it last had"
-                :trouble="credentialsTrouble"
-              />
-              <template v-if="credentials">
-                <div class="flex flex-col gap-1">
-                  <div class="flex items-baseline gap-2">
-                    <span class="font-medium">GitLab host</span>
-                    <code class="text-xs text-muted">gitlab_host</code>
-                    <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
-                  </div>
-                  <p class="text-sm text-muted">{{ gitlabHostSaid }}</p>
-                  <form
-                    class="flex gap-2"
-                    data-testid="gitlab-host-form"
-                    @submit.prevent="saveHost"
-                  >
-                    <UInput
-                      v-model="host"
-                      class="flex-1"
-                      :placeholder="`GitLab host: ${credentials.host}`"
-                      data-testid="gitlab-host"
-                    />
-                    <UButton
-                      type="submit"
-                      size="sm"
-                      label="Use this GitLab"
-                      data-testid="save-gitlab-host"
-                      :disabled="host.trim() === ''"
-                    />
-                  </form>
-                  <p
-                    v-if="host.trim() !== '' && host.trim() !== credentials.host"
-                    class="rounded-md bg-warning/10 px-3 py-2 text-sm text-warning"
-                  >
-                    Another GitLab forgets the GitLab token, which was made for
-                    {{ credentials.host }}; make one on the new host after.
-                  </p>
-                </div>
-                <div class="flex flex-col gap-1">
-                  <div class="flex items-center gap-2">
-                    <span class="font-medium">GitLab token</span>
-                    <span class="text-sm text-muted" data-testid="gitlab-state">
-                      {{
-                        credentials.gitlab === null
-                          ? "none yet"
-                          : credentials.gitlab.expires === null
-                            ? "kept"
-                            : `expires ${credentials.gitlab.expires}`
-                      }}
-                    </span>
-                    <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
-                  </div>
-                  <p class="text-sm text-muted">
-                    Logs glab in on every Machine, so Runs can push branches and open merge
-                    requests. Desktop gives it to each Machine and keeps it on this computer alone.
-                  </p>
-                  <div>
-                    <UButton
-                      size="xs"
-                      variant="outline"
-                      icon="i-lucide-external-link"
-                      label="Make one on GitLab"
-                      data-testid="token-page"
-                      @click="openLink(credentials.tokenPage)"
-                    />
-                  </div>
-                  <CredentialFields
-                    which="gitlab"
-                    :label="credentials.gitlab === null ? 'Save' : 'Renew'"
-                  />
-                </div>
-                <div class="flex flex-col gap-1">
-                  <div class="flex items-center gap-2">
-                    <span class="font-medium">Helle</span>
-                    <span class="text-sm text-muted" data-testid="helle-state">
-                      {{ credentials.helle ? "kept" : "none yet" }}
-                    </span>
-                    <UBadge class="ml-auto" size="sm" variant="subtle" label="Every Machine" />
-                  </div>
-                  <p class="text-sm text-muted">
-                    Lets agents on every Machine reach Helle. Desktop gives it to each Machine's
-                    credentials file and keeps it on this computer alone.
-                  </p>
-                  <CredentialFields which="helle" label="Save" />
-                </div>
-              </template>
-            </section>
             <section
               v-if="showOwn"
               id="machine-own"

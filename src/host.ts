@@ -125,6 +125,7 @@ import { sideJobs } from "./side-jobs";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
 import { connectionsOnMachine } from "./connections";
+import { readConnectionLogin } from "./connection-login";
 import { Schedules, schedulesLayer } from "./schedules";
 import { dataHomeOf, desktopRootOf } from "./desktop";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
@@ -1925,6 +1926,16 @@ const frontDoorHandlers = (
           ),
         models: () => harnesses.catalogues,
         connections: () => connectionsOnMachine(env),
+        connectionLogin: ({ id }) =>
+          readConnectionLogin(env, id).pipe(
+            Effect.mapError(
+              () =>
+                new HostRefused({
+                  reason: `Could not read ${id}'s login; sign in on this Machine`,
+                }),
+            ),
+            Effect.provideContext(bun),
+          ),
         cleanup: () => plainly(judge(listed)),
         schedules: () => schedules.list,
         changeSchedule: ({ change, request }, { client }) =>

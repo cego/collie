@@ -150,6 +150,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `catalogue.ts`         | This Machine's Harness catalogue: each harness read on an interval, with its timeout and back-off                           |
 | `connection-model.ts`  | Connection reading Schemas and the text the CLI and chat print (pure)                                                       |
 | `connection-probes.ts` | GitLab, GitHub, Linear MCP and Helle probes on one Machine                                                                  |
+| `connection-login.ts`  | Reads a reusable forge login for the host-to-Desktop hand-over, without recording the token                                 |
 | `connections.ts`       | The Connection registry: each probe isolated and bounded, shared by the host, doctor and workflow reads                     |
 | `schedule-model.ts`    | A Schedule as every door reads it, and when an occurrence starts and which comes next (pure)                                |
 | `schedules.ts`         | This Machine's Schedules: their records, the one write, and the `Schedule` workflow that fires them                         |

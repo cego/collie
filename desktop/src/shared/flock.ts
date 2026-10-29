@@ -22,6 +22,7 @@ import { CleanupListing } from "./machine-cleanup";
 import { MachineSchedules } from "./schedules";
 import { MachineUsage } from "./usage";
 import { MachineCatalogue } from "./settings-agents";
+import { MachineConnections } from "./connections";
 import { keepOwn, OwnReading } from "./machine-own";
 import {
   BoardMessage,
@@ -557,6 +558,27 @@ export const DesktopRpcs = RpcGroup.make(
   /** What each connected Machine's host read of its Usage. */
   Rpc.make("usage", { success: Schema.Array(MachineUsage) }),
   Rpc.make("catalogues", { success: Schema.Array(MachineCatalogue) }),
+  Rpc.make("connectionReadings", { success: Schema.Array(MachineConnections) }),
+  Rpc.make("reuseConnection", {
+    payload: {
+      id: Schema.Literals(["gitlab", "github"]),
+      from: Schema.String,
+      to: Schema.Array(Schema.String),
+    },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("githubLogin", {
+    payload: { profile: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("linearSetup", {
+    payload: { profile: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("pasteGitlab", { success: Schema.String, error: ActionFailed }),
   /** What each connected Machine's host listed of its Schedules. */
   Rpc.make("schedules", { success: Schema.Array(MachineSchedules) }),
   /** What a sweep would remove now on the Machine with this profile, waited on while it is connected. */

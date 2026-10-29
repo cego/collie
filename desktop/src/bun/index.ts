@@ -125,14 +125,24 @@ import {
   syncNow,
 } from "./machine";
 import { givenCredentials } from "./given";
+import { connectionsOn, githubLogin, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, openTerminal, shellLine } from "./terminal";
-import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
+import {
+  addToHerdr,
+  doctorOn,
+  NOT_STARTED,
+  onboardThrough,
+  onboardingSkips,
+  RELEASES,
+  tracked,
+} from "./onboarding";
 import {
   claudeLoginThrough,
   GITLAB,
   giveHelle,
   giveToken,
+  giveGithub,
   gitlabToken,
   helleOwner,
   oneLine,
@@ -581,6 +591,7 @@ const main = Effect.gen(function* () {
     route: ShellRoute,
     start: OnboardRun = NOT_STARTED,
     skipping: ReadonlyArray<Skippable> = [],
+    restoring?: Skippable,
   ) => {
     const { machine } = route;
     onboarding.set(machine.profile, { job });
@@ -591,11 +602,7 @@ const main = Effect.gen(function* () {
       const before = (yield* savedOnboardings(onboardings)).find(
         (saved) => saved.machine.profile === machine.profile,
       );
-      const skip = Skippable.literals.filter(
-        (step) =>
-          skipping.includes(step) ||
-          before?.run.steps.some((one) => one.step === step && one.status === "skipped"),
-      );
+      const skip = onboardingSkips(before?.run.steps ?? [], skipping, restoring);
       const run = yield* onboardThrough(
         route,
         {
@@ -842,6 +849,15 @@ const main = Effect.gen(function* () {
     | { readonly window: BrowserWindow; readonly closed: Deferred.Deferred<void> }
     | undefined;
 
+  const keepGitlabToken = (token: string) =>
+    Effect.gen(function* () {
+      const said = token.trim();
+      if (!oneLine(said)) return yield* Effect.fail("a token is one line");
+      const { expires } = yield* gitlabToken(gitlab(), said);
+      yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost()}`, said);
+      yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
+      return gave("GitLab token", yield* given.giveEvery(everyRoute(), "gitlab", said));
+    }).pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
   const handlers = DesktopRpcs.toLayer({
     // Every board change may have left News, so each one nudges the chat to look.
     flock: () =>
@@ -983,15 +999,8 @@ const main = Effect.gen(function* () {
       editFlockSettings(changes).pipe(
         Effect.as("Agent choice saved; connected Machines are given it together"),
       ),
-    saveGitlab: ({ token }) =>
-      Effect.gen(function* () {
-        const said = token.trim();
-        if (!oneLine(said)) return yield* Effect.fail("a token is one line");
-        const { expires } = yield* gitlabToken(gitlab(), said);
-        yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost()}`, said);
-        yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
-        return gave("GitLab token", yield* given.giveEvery(everyRoute(), "gitlab", said));
-      }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    saveGitlab: ({ token }) => keepGitlabToken(token),
+    pasteGitlab: () => keepGitlabToken(Utils.clipboardReadText() ?? ""),
     saveGitlabHost: ({ host }) =>
       Effect.gen(function* () {
         const named = host.trim();
@@ -1164,6 +1173,82 @@ const main = Effect.gen(function* () {
     catalogues: () =>
       Effect.forEach(doors.values(), (door) => cataloguesOn(door.machine, door.desktop), {
         concurrency: "unbounded",
+      }),
+    connectionReadings: () =>
+      Effect.forEach(doors.values(), (door) => connectionsOn(door.machine, door.desktop), {
+        concurrency: "unbounded",
+      }),
+    reuseConnection: ({ id, from, to }) =>
+      Effect.gen(function* () {
+        const source = [...doors.values()].find((door) => door.machine.profile === from);
+        if (source === undefined)
+          return yield* Effect.fail("The Machine with the login is not connected");
+        const ready = (yield* source.desktop.connections()).find((read) => read.id === id)?.reading;
+        if (ready?.state !== "ok")
+          return yield* Effect.fail(
+            `The source no longer has a working ${id} login; refresh Connections`,
+          );
+        const targets = everyRoute().filter(
+          (route) => to.includes(route.machine.profile) && route.machine.profile !== from,
+        );
+        if (targets.length !== new Set(to.filter((profile) => profile !== from)).size)
+          return yield* Effect.fail("A target Machine was removed; refresh Connections");
+        const read = source.desktop.connectionLogin({ id });
+        if (id === "github") {
+          const login = yield* read;
+          return gave("GitHub login", yield* giveGithub(targets, login.token));
+        }
+        const each = yield* reuseGitlab(
+          read,
+          (login) =>
+            Effect.gen(function* () {
+              if (!isHostName(login.host))
+                return yield* Effect.fail("The source returned an invalid GitLab host");
+              if (login.host !== gitlabHost()) {
+                yield* keyring.clear("gitlab-token");
+                yield* editFlock("gitlab_host", login.host).pipe(
+                  Effect.mapError((failed) => failed.reason),
+                );
+              }
+            }),
+          keyring,
+          (token) => given.giveEvery(targets, "gitlab", token),
+        );
+        yield* SubscriptionRef.update(credentials, (now) => ({
+          ...now,
+          ...gitlabPages(),
+          gitlab: { expires: null },
+        }));
+        return `Using glab's login from ${source.machine.name}; ${gave("GitLab login", each)}`;
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new ActionFailed({
+              reason: isString(error)
+                ? error
+                : "The login's Machine could not be read; refresh Connections and try again",
+            }),
+        ),
+      ),
+    githubLogin: ({ profile }) =>
+      Effect.gen(function* () {
+        const route = routes.get(profile)?.route;
+        if (route === undefined) return yield* Effect.fail("That Machine is not in the Flock");
+        return yield* githubLogin(route, (command) => {
+          const terminal = inTerminal(command, process.platform, which);
+          return terminal === null ? Effect.succeed(false) : launched(terminal);
+        });
+      }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    linearSetup: ({ profile }) =>
+      Effect.gen(function* () {
+        const route = routes.get(profile)?.route;
+        if (route === undefined)
+          return yield* new ActionFailed({ reason: "That Machine is not in the Flock" });
+        const busy = onboarding.get(profile);
+        if (busy !== undefined) return busy.job;
+        const job = yield* uuid;
+        yield* onboardAs(job, route, NOT_STARTED, [], "linear");
+        return job;
       }),
     cleanup: ({ profile }) => cleanupOn(doors, profile),
     sweep: ({ installation, machine, request }) =>

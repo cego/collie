@@ -13,7 +13,7 @@ export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
 import { UsageReading } from "./usage-model";
 import { HarnessCatalogue } from "./catalogue-model";
-import { Connection } from "./connection-model";
+import { Connection, ConnectionLogin } from "./connection-model";
 import { HostDefinitions, SharedDefinition } from "./definitions-model";
 import { VerifySpecSchema } from "./verify-spec";
 
@@ -1662,6 +1662,11 @@ export const FrontDoorRpcs = RpcGroup.make(
   /** This Machine's Harness catalogue, one per installed harness. */
   Rpc.make("models", { success: Schema.Array(HarnessCatalogue), error: HostRefused }),
   Rpc.make("connections", { success: Schema.Array(Connection), error: HostRefused }),
+  Rpc.make("connectionLogin", {
+    payload: { id: Schema.Literals(["gitlab", "github"]) },
+    success: ConnectionLogin,
+    error: HostRefused,
+  }),
   /** What a sweep would remove now, and what Collie keeps and why (ADR-0045). */
   Rpc.make("cleanup", { success: CleanupReport, error: HostRefused }),
   /** This Machine's Schedules (ADR-0052). */

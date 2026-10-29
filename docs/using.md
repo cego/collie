@@ -1565,7 +1565,30 @@ absent or not working, and a Linear login onboarding left unfinished. **Skip on 
 Machine** on either step onboards it again with `--skip`, and every later onboarding of
 that Machine skips it too.
 
-What only you can give is asked once, in **Settings** under **GitLab and credentials**, and
+### Connections
+
+**Settings → Every Machine → Connections** shows GitLab, GitHub, Linear, Helle, and Slack.
+Each card names its account and the Machines that can reach it. The index counts cards that need you.
+**Details** lists each Machine's reading and fix, plus the workflows that declare the Connection.
+The **With it** and **Without it** text comes from those declarations; a **needs** row says **Does not start**.
+**Refresh** reads the Machines again after a login finishes.
+
+When a Machine already has a GitLab login, **Use glab's login** reads its host and token through that host's channel.
+Desktop keeps the token and gives it to the missing Machines on stdin.
+If no login is found, **Connect** opens the configured GitLab's token page with **Collie** and both scopes filled in.
+Then choose **Paste from clipboard**. **Use another GitLab…** reveals the host setting.
+
+GitHub's **Give to <machines>** reads the logged-in Machine's token and gives it to gh on each missing Machine's stdin.
+Tokens never appear in command arguments, action events, or recorded shell output.
+Without a reusable login, **Sign in on <machine>** opens `gh auth login --hostname github.com --web` in a terminal.
+Install gh on a Machine that lacks it, then try again. Finish the login and refresh Connections.
+
+Linear's **Set up on <machine>** onboards that Machine, adds its missing MCP, and opens the browser login.
+It restores a previously skipped Linear step while preserving the Machine's other skipped steps.
+The card shows each Machine's remembered team read-only. Renovate asks through Linear when that answer is unset.
+Helle's **Connect** opens the existing paste flow.
+
+What only you can give is asked once, in **Connections**, and
 never pasted on a command line. Desktop keeps the Flock's credentials in a file of Desktop's own,
 `$XDG_CONFIG_HOME/collie-desktop/credentials` (`~/.config/collie-desktop/credentials`
 unless that is set), readable by you alone and replaced whole on every save — the way glab,
@@ -1590,7 +1613,7 @@ is saved, and warns above the board from 14 days before, where **Renew** opens S
 **Renew** there with a new one replaces it on every Machine.
 
 That GitLab is one host for the whole Flock, `gitlab.cego.dk` unless you name another in
-**Settings** (**Use this GitLab**), which is the Flock's `gitlab_host` setting below. It is the token
+**Connections → GitLab → Use another GitLab…**, which is the Flock's `gitlab_host` setting below. It is the token
 page Desktop opens, the GitLab a token is checked against and logged in to, and the
 `--gitlab-host` every Machine is onboarded and doctored with, so each Machine's readiness
 is that host's. A change applies at once, without a restart, and every Machine is doctored
@@ -1598,6 +1621,8 @@ again. It also forgets the GitLab token Desktop kept, since a token is made for 
 make a new one on the new host's page and save it. The GitLab host is given to every
 Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
 Machine's.
+
+### Settings
 
 **Settings** is a page in the board's column, at a wide line length, and re-reads the
 Flock's settings each time it opens. Scope is its structure, and a legend states each
