@@ -158,7 +158,6 @@ const sample = Effect.gen(function* () {
   );
   yield* copy(`${kept}/world`, live);
   yield* writeFakeHerdrShim(`${live}/herdr`);
-  // A host that has just started: its first board and its first answer.
   const cold_read_ms = yield* timed(
     connect(world.state).pipe(
       Effect.flatMap((client) => client.read({ tool: "collie_run", input: { run: runId } })),
