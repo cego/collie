@@ -41,6 +41,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `intent.ts`            | What a Run is for, what bounds it, and what Collie may do about it without asking                                           |
 | `intent-model.ts`      | The Intent's Schemas alone, so a browser bundle of the board can carry a start                                              |
 | `steering.ts`          | The delivery ledger per live agent, and the Herd's model-call budget                                                        |
+| `delivery-queue.ts`    | Durable messages awaiting a supported idle submission, and their receipts                                                   |
 | `dispatcher.ts`        | The only sender: one transaction per agent, reserved before the send, ordered                                               |
 | `steering-caps.ts`     | What each harness has been shown to do about a delivery, and the gate that fails closed                                     |
 | `evaluator.ts`         | The one place a model is asked anything, tool-less and capped, and the closed schemas                                       |
@@ -137,6 +138,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `config.ts`            | User defaults and remembered values in `config.json`                                                                        |
 | `profile.ts`           | The operator's `agent_profile`: per role, an agent's env and the Claude settings merged into Collie's                       |
 | `subagents.ts`         | Claude subagent policy: validation, cache retention, delegation limits, and the native settings it needs                    |
+| `skill-overrides.ts`   | Which unnamed Claude skills are listed by name only, preserving operator choices and invocation restrictions                |
 | `compaction.ts`        | One threshold, one work-boundary policy, each agent's controls for its lifetime, and its one stop                           |
 | `compactors.ts`        | Each harness's official compaction interface, generated per agent and bundled in Collie                                     |
 | `codex.ts`             | Codex's App Server as a client: thread identity, its context, its compactions and its turns                                 |

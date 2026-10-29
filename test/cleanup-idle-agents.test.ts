@@ -15,6 +15,7 @@ import {
 } from "../src/cleanup";
 import { appendCard } from "../src/cards";
 import { Launched } from "../src/launches";
+import { keepQueued } from "../src/delivery-queue";
 import { Herdr, type AgentInfo } from "../src/herdr";
 import { agentsIn } from "../src/herds";
 import type { CompactionPorts, Stopped } from "../src/compaction";
@@ -118,6 +119,27 @@ const closes = Effect.map(
   Effect.suspend(() => rig.cmds()),
   (cmds) => cmds.filter((cmd) => cmd === "pane close").length,
 );
+
+test("idle cleanup keeps an agent with a durable delivery waiting for it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* arranged();
+      yield* keepQueued(`${rig.stateDir}/agents/r1`, {
+        runId: "r1",
+        request: "comment-1",
+        text: "Revise the plan",
+        operation: "build",
+        result: null,
+      });
+      const result = yield* sweep(
+        [sweeper([yield* finished(2 * HOUR_MS)], yield* idleFor(2 * HOUR_MS))],
+        rig.stateDir,
+        "host",
+      );
+      expect(result.keep).toEqual(kept("a Delivery to it is queued"));
+      expect(yield* closes).toBe(0);
+    }),
+  ));
 
 const runLog = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;

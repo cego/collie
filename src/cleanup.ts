@@ -39,6 +39,7 @@ import { readForge, readMrStates } from "./merges";
 import { latest, readDispositions } from "./disposition";
 import { repositoryOf } from "./strategies";
 import { LEDGER_FILE, ledgerPath, newestById, readLedger } from "./steering";
+import { readQueue } from "./delivery-queue";
 import { desktopVerdicts, trimUsage, type DesktopOwn } from "./desktop";
 import {
   CONTROL_DIR,
@@ -1222,6 +1223,10 @@ export const idleAgentsSweeper = (opts: {
         Effect.orElseSucceed(() => []),
       );
       if ([...newestById(ledger).values()].some((delivery) => QUEUED.has(delivery.state)))
+        return { keep: "a Delivery to it is queued" };
+      const queued = yield* readQueue(launchDir(opts.stateDir, one.run.id)).pipe(Effect.option);
+      if (Option.isNone(queued)) return { keep: "its delivery queue could not be read" };
+      if (queued.value.some((delivery) => delivery.result === null))
         return { keep: "a Delivery to it is queued" };
       const stems = (yield* readLaunches(opts.stateDir, one.run.id))
         .filter((launched) => launched.agent === one.launched.agent)
