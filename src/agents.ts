@@ -152,6 +152,7 @@ import {
   parseProfile,
   roleProfile,
   type ClaudeOverlay,
+  type RoleProfile,
 } from "./profile";
 import { isString } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
@@ -159,7 +160,12 @@ import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
 import { readTask, withTaskLock, writeTask } from "./task";
-import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
+import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
+import {
+  quietSkills,
+  SKILL_OVERRIDES_VERSION,
+  MAIN_CHECKOUT_SKILLS_VERSION,
+} from "./skill-overrides";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
 export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
@@ -1763,6 +1769,46 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     if (message !== null) yield* log(runId, `trust ${adapter.id}: ${message}`);
   });
 
+  const quietFor = Effect.fn("Agents.quietFor")(function* (
+    ask: AgentAsk,
+    agent: string,
+    persona: string,
+    profile: RoleProfile,
+  ) {
+    const installed = yield* (host.version ?? installedVersion)("claude");
+    if (installed === null || !atLeast(installed, SKILL_OVERRIDES_VERSION)) {
+      yield* log(
+        ask.runId,
+        `${agent}: every skill described: skillOverrides needs Claude Code ${SKILL_OVERRIDES_VERSION}; installed: ${installed ?? "unknown"}`,
+      );
+      return {};
+    }
+    const claudeDir =
+      profile.env?.CLAUDE_CONFIG_DIR ??
+      host.env.raw.CLAUDE_CONFIG_DIR ??
+      `${host.env.home}/.claude`;
+    if (!isString(claudeDir)) {
+      yield* log(
+        ask.runId,
+        `${agent}: every skill described: CLAUDE_CONFIG_DIR is held in an environment file`,
+      );
+      return {};
+    }
+    const kept = [
+      ...mentionedSkills(`${persona}\n${ask.prompt}`),
+      ...Object.keys(profile.claude?.skillOverrides ?? {}),
+    ];
+    if (ask.skill !== null) kept.push(ask.skill);
+    return yield* quietSkills(
+      {
+        claudeDir,
+        cwd: ask.cwd,
+        mainCheckoutSkills: atLeast(installed, MAIN_CHECKOUT_SKILLS_VERSION),
+      },
+      kept,
+    );
+  });
+
   /** A pane, an agent in it, and the registry entry that makes it addressable. */
   const start = Effect.fn("Agents.start")(function* (
     ask: AgentAsk,
@@ -1831,7 +1877,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       });
     yield* ensureTrusted(ask.runId, adapter, ask.cwd);
     const persona = `${dirFor(ask.runId)}/${stemOf(ask)}.persona.md`;
-    yield* write(persona, `${yield* personaOf(ask.persona ?? ask.role)}\n`);
+    const personaBody = yield* personaOf(ask.persona ?? ask.role);
+    yield* write(persona, `${personaBody}\n`);
     const { mcpConfig, piExtension } = yield* Effect.promise(() => import("./chat"));
     const { TOOLS } = yield* Effect.promise(() => import("./tools"));
     const command = selfCommand();
@@ -1923,6 +1970,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                   ),
                 ),
                 `${dirFor(ask.runId)}/${stemOf(ask)}`,
+                yield* quietFor(ask, agent, personaBody, profile),
                 ask.claudeSubagents,
               )
             : controls;
@@ -3217,6 +3265,7 @@ const claudeSettings = (
   overlay: ClaudeOverlay,
   autoMode: AutoModeBlock,
   stem: string,
+  quiet: Readonly<Record<string, string>>,
   policy?: ClaudeSubagents,
 ) =>
   Effect.gen(function* () {
@@ -3231,10 +3280,12 @@ const claudeSettings = (
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject))),
             Effect.orDie,
           );
+    const skillOverrides = { ...quiet, ...overlay.skillOverrides };
     const merged = {
       ...mergeClaudeSettings(collie, overlay),
       autoMode: { ...autoMode },
     };
+    if (Object.keys(skillOverrides).length > 0) Object.assign(merged, { skillOverrides });
     if (policy !== undefined) Object.assign(merged, subagentSettings(policy));
     yield* write(path, `${encodeSettings(merged)}\n`);
     return passed === undefined ? [...controls, "--settings", path] : controls;

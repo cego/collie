@@ -136,6 +136,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `config.ts`            | User defaults and remembered values in `config.json`                                                                        |
 | `profile.ts`           | The operator's `agent_profile`: per role, an agent's env and the Claude settings merged into Collie's                       |
 | `subagents.ts`         | Claude subagent policy: validation, cache retention, delegation limits, and the native settings it needs                    |
+| `skill-overrides.ts`   | Which unnamed Claude skills are listed by name only, preserving operator choices and invocation restrictions                |
 | `compaction.ts`        | One threshold, one work-boundary policy, each agent's controls for its lifetime, and its one stop                           |
 | `compactors.ts`        | Each harness's official compaction interface, generated per agent and bundled in Collie                                     |
 | `codex.ts`             | Codex's App Server as a client: thread identity, its context, its compactions and its turns                                 |
