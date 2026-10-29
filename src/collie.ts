@@ -15,6 +15,7 @@ import { doctor } from "./commands/doctor";
 import { upgrade } from "./commands/upgrade";
 import { onboard } from "./commands/onboard";
 import { verify } from "./commands/verify";
+import { measure } from "./commands/measure";
 import { confirm, decline, proposal, steer } from "./commands/steer";
 import { chat, mcp, tools } from "./commands/chat";
 import { board } from "./commands/board";
@@ -39,6 +40,7 @@ export const app = root.pipe(
     decline,
     proposal,
     verify,
+    measure,
     board,
     home,
     chat,

@@ -28,7 +28,7 @@ import {
   SchemaRepresentation,
 } from "effect";
 import type { CheckEvidence } from "./output";
-import type { FailedTest, Verification } from "./verify";
+import type { FailedTest, Snapshot, Verification } from "./verify";
 import type { Issue, IssueRef } from "./forge/issues";
 export type { Issue, IssueRef } from "./forge/issues";
 import type { Report } from "./report";
@@ -50,6 +50,7 @@ import {
   KINDS,
   REQUESTABLE,
   checkGaps,
+  endsWithoutPatch,
   evidenceGaps,
   reviewGaps,
   isOutcome,
@@ -69,6 +70,7 @@ import {
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
 import type { Integration } from "./integrate";
+import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
 import type { FastForward, ProductionRead, RollbackRead, StageRead, TagRead } from "./releasing";
@@ -91,6 +93,12 @@ export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 export { forgeOfRef, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
+/** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */
+export {
+  MeasurementJson as MeasurementSchema,
+  type BenchmarkPlan,
+  type Measurement,
+} from "./measurement-model";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";
 /** Where a merge request's review stands for a Release Run (`HostApi.awaitReview`). */
 export {
@@ -219,6 +227,9 @@ export {
 
 /** A Check's proof on this tree, and which of a Run's Checks it runs itself. */
 export { checkProof, owedLocally, type CheckProof, type Unmatched } from "./check-proof";
+
+/** Text with every credential-shaped value replaced, before it is published. */
+export { redact } from "./redact";
 
 /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
 export { TOO_LARGE } from "./verify";
@@ -384,6 +395,14 @@ export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
   return reviewGaps(options.kind, collectedOf(options));
 }
 
+/**
+ * Whether the Run is done with no patch to deliver, which is an outcome and not a failure:
+ * an investigation that says so, or a performance Run whose tree is its latest base tree again.
+ */
+export function endsWithoutPatchOf(options: EvidenceAsk): boolean {
+  return endsWithoutPatch(options.kind, collectedOf(options));
+}
+
 export interface EvidenceAsk {
   readonly kind: Outcome;
   readonly evidence: CheckEvidence;
@@ -392,6 +411,8 @@ export interface EvidenceAsk {
   readonly outputs: Readonly<Record<string, Schema.Json>>;
   /** Which of those are a reviewer's judgement rather than the implementer's claim. */
   readonly reviewed: ReadonlyArray<string>;
+  /** The tree each of those reviewed. A `performance` verdict counts only from a review of the tree in front of it. */
+  readonly reviewedOn?: Readonly<Record<string, Snapshot>>;
   /** The directories this Run owns, which a reference it gives has to point inside. */
   readonly roots: ReadonlyArray<string>;
   readonly tickets: ReadonlyArray<{
@@ -407,6 +428,10 @@ const collectedOf = (options: EvidenceAsk) => ({
   commands: options.evidence.commands,
   outputs: new Map(Object.entries(options.outputs)),
   reviewed: new Set(options.reviewed),
+  reviewedOn: new Map(Object.entries(options.reviewedOn ?? {})),
+  measurements: options.evidence.measurements,
+  mergeBase: options.evidence.mergeBase,
+  content: options.evidence.content,
   insideRun: (ref: string) => refInside(options.roots, ref),
   tickets: options.tickets,
 });
@@ -800,6 +825,14 @@ export interface HostApi {
    */
   readonly config: (dotted: string) => Effect.Effect<string>;
   /**
+   * Whether an agent Claude Code runs in `cwd` has a Linear MCP server, read as `collie
+   * doctor` reads it, with where it is or why not. Read it inside an Activity of the
+   * workflow's own where it branches on it.
+   */
+  readonly linear: (
+    cwd: string,
+  ) => Effect.Effect<{ readonly reachable: boolean; readonly detail: string }>;
+  /**
    * Whether a merge request can be opened from this checkout, and what it would carry —
    * the configured assignee, the repository's own template, the issues this branch
    * answers. One question rather than two: a step that cannot reach its forge has nothing to
@@ -901,6 +934,25 @@ export interface HostApi {
    * `integrated <branch>@<sha>`. Take it inside an Activity, so a replay does not merge again.
    */
   readonly integrate: (runId: string, cwd: string) => Effect.Effect<Integration>;
+  /**
+   * A Measurement of `cwd`, the Run's own checkout, against a base tree Collie makes at `base`
+   * with the plan's harness commits applied: the plan's commands sampled A B B A … after its
+   * warmup, while this Machine runs no other Measurement and is not Short of memory, and judged
+   * per metric. Where these trees were measured under this plan, that record answers and `ran`
+   * is false. A harness commit touching a path outside the plan's harness paths is refused,
+   * naming each. Take it inside an Activity, so a replay does not measure again.
+   */
+  readonly measure: (options: {
+    readonly runId: string;
+    readonly base: string;
+    readonly cwd: string;
+    /** A key left out takes its default: warmup 1, samples 10, limit 600 s, threshold 5, tolerance 2. */
+    readonly plan: typeof BenchmarkPlan.Encoded;
+    /** `calibration`, `cycle N` or `final`. */
+    readonly pass: string;
+    /** Why the plan changed: refused without one where the Run was measured under another plan. */
+    readonly reason?: string;
+  }) => Effect.Effect<{ readonly measurement: Measurement; readonly ran: boolean }, WorkflowError>;
   /**
    * The commit origin's default branch is at now: everything merged there so far. Take it
    * inside an Activity, so a replay reads the same commit. Fails where origin cannot be read.
@@ -1729,6 +1781,7 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema
     selectable: [...(metadata?.outcome?.selectable ?? [])],
     checkout: metadata?.checkout ?? null,
     closes: metadata?.closes ?? null,
+    path: (metadata?.path ?? []).map((one) => ({ id: one.id, title: one.title })),
     followUps: (metadata?.followUps ?? []).map((offer) => ({
       id: offer.id,
       title: offer.title,

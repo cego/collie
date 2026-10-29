@@ -282,6 +282,8 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["decline", { route: "write", tool: "collie_do" }],
   ["proposal reconcile", { route: "shell" }],
   ["verify", { route: "shell" }],
+  // Chat runs `collie measure` as the human types it, through the same host operation.
+  ["measure", { route: "shell" }],
   // The same Herd, shaped as the board's Tasks rather than as its Runs.
   ["board", { route: "read", tool: "collie_herd" }],
   ["home show", { route: "read", tool: "collie_installation" }],

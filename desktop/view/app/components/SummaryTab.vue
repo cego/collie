@@ -23,6 +23,10 @@ const sections = computed(() => summaryOf(props.detail));
         <h3 class="flex items-center gap-2 font-semibold">
           Outcome <UBadge v-if="shown.kind" variant="outline" color="neutral" :label="shown.kind" />
         </h3>
+        <template v-if="shown.measurement">
+          <p class="text-muted">Measured</p>
+          <p data-testid="summary-measurement">{{ shown.measurement }}</p>
+        </template>
         <template v-if="shown.gaps.length > 0">
           <p class="text-muted">Still to prove</p>
           <ul class="list-disc pl-5">

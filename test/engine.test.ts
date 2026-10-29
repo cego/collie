@@ -347,6 +347,7 @@ test(
           "share",
           "offered",
           "planned",
+          "measured",
           // A fork of a shipped workflow, which is code an author writes the same way.
           "landing",
           // The shipped seven, held to the same declarations: a workflow Collie ships is

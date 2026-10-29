@@ -301,6 +301,13 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 before and after. A result whose snapshots differ is `unstable`, never `pass`. An agent's
 statement about tests is a **claim**, and is shown as one.
 
+**Measurement** — The host's comparison of a base tree and a candidate tree on one Machine.
+It is a Run's declared benchmark commands, sampled alternately on each tree for a fixed
+budget, with every raw sample, command, tree, environment and Machine load kept. It ends in
+a verdict per metric: `gain`, `no-change`, `regression` or `inconclusive`. An agent's
+timings are a **claim**; only a Measurement proves a `performance` outcome
+(ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement).
+
 **Card** — Collie's record of one slice of work: what was asked for, what changed,
 what backs it, and what nobody checked. Its **readiness** — `claimed`, `inspect-ready`,
 `verified` — says how far the evidence goes and no further.
@@ -559,6 +566,19 @@ startup and writes to that issue for the rest of its life, however long it waits
 and whatever cycle it rolls into. Updates are read-modify-write and never rewrite a line
 the Run did not add, because several Runs append to one description.
 
+**Tune-up Run** — One execution of the `tune-up` Workflow: one repository made measurably
+faster than a pinned base, over at most `cycles` **Cycles**, without giving up behaviour.
+It opens one merge request only where its accumulated change, measured against the merge
+base that merge request targets, shows a gain; otherwise it finishes with its findings and
+no merge request. It is bounded by its Cycles and an optional wall-time limit; what it
+spends is recorded as usage and never caps it.
+
+**Cycle** — One hypothesis tried in a **Tune-up Run**: prioritised, made as one bounded
+change, verified for correctness and measured, then kept or reverted (only the Run's own
+changes), with its findings updated. A reverted or no-op Cycle still counts, and a restart
+or resume never gives one back. Not an agent's turn, a plan's dependency cycle or a
+Linear cycle.
+
 **Renovated with exceptions** — How a Renovate Run ends when every merge request is
 accounted for and the release succeeded, but one or more updates were deferred with the
 operator's approval. The exceptions are named in the checklist entry. An unresolved
@@ -631,7 +651,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Requester** — The agent Actor that started a Run, recorded as `requestedBy`: its Run, agent and Machine. Once the started Run settles, its host reports its status, summary or failure and where its full Output is to that address. The report records delivery or why it could not be delivered, without queuing later delivery. A Workflow declaring `closes: "reported"` then closes its own agents and its Task workspace when nothing else needs it.
 
-**Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back. A Run nobody classified is `unspecified` and proves only its **Checks** — never a feature by default.
+**Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back, a performance change shows a gain in the host's **Measurement**. A Run nobody classified is `unspecified` and proves only its **Checks** — never a feature by default.
 
 **Checks** — The commands Collie runs itself to prove one Run. Each is an executable and its arguments, bound argument for argument and run in a tree the Run owns, and nobody approves them. They are the ones given with the start (`run start --verify`, or chat's `start` with `verify`), else the project's `.collie/verify.json` as the Run's base has it, the ref a checkout for it is cut from, whatever the checkout it was started in holds (ADR-draft-a-runs-checks-are-read-where-its-checkout-starts), else the checks remembered for the checkout's remote (`~/.collie/user/verify/<host>/<path>.json`, written by `run intent remember` or chat's `remember_verification`), else `~/.collie/user/verify.json`. The first found is taken whole and kept with the Run: in its Intent's `run_verification`, or in the host's record for a workflow module's Run. Where none of those has any, the Run's own agent names them from what the repository says proves its work, before it builds, and Collie records and runs them without asking. Anyone (a human, chat, or the Run's agent) adds or withdraws a check on a live Run with `run intent verification` (chat's `set_verification`). The gate reads them at every pass. Nobody is asked to approve one, and no start is refused for want of one. A Run whose agent still names none after its gate fixes is held unproved, as a failing check is (ADR-0055). An agent may `collie verify` anything but the Run's own Checks, which only the gate runs: given one, `collie verify` answers with its latest record on the tree, or refuses and names the gate, for a human as for an agent (ADR-draft-a-runs-checks-are-run-by-its-gate). A check may be **left to CI**: its entry names, as `ci`, the merge request pipeline job that proves it. Nobody runs it locally, the gate skips it, and once the merge request is open the Run waits for that job on the merge request's head commit; a failed job is a fix round like a failed check (ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job). Formerly the "approved set"; code still calls them `approved`.
 

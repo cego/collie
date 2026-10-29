@@ -16,6 +16,7 @@ import {
   definitionOf,
   describeMetadata,
   jsonSchemaFor,
+  step,
   template,
   type Registration,
   type WorkflowEntry,
@@ -280,6 +281,21 @@ test("a flagless pattern that matches differently under the u flag is not drawn"
   }
 });
 
+test("what a workflow is described with names its path, step by step", () => {
+  const described = describeMetadata({
+    path: [
+      step({ id: "discover", title: "Discover", description: "Reads.", kind: "agent" }),
+      step({ id: "calibrate", title: "Calibrate", description: "Measures.", kind: "check" }),
+    ],
+  });
+  expect(described).toMatchObject({
+    path: [
+      { id: "discover", title: "Discover" },
+      { id: "calibrate", title: "Calibrate" },
+    ],
+  });
+});
+
 test("what a card is given is ids, titles and projections — never the closures", () => {
   const described = describeMetadata({
     hints: { text: "work-source" },
@@ -293,6 +309,7 @@ test("what a card is given is ids, titles and projections — never the closures
     selectable: ["feature"],
     checkout: null,
     closes: null,
+    path: [],
     followUps: [{ id: "again", title: "Run again", workflow: "echo", when: "succeeded" }],
     actions: [
       {

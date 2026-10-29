@@ -92,6 +92,8 @@ import { encodeSubagents, readSubagents } from "./subagents";
 import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
+import { measure, readMeasurements } from "./measurement";
+import { finalMeasurementLine, type Measurement } from "./measurement-model";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { gitDirOf, publicationCheckouts, throughAliases, remoteOf } from "./issue-privacy";
 import {
@@ -186,7 +188,7 @@ import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
-import { isOutcome } from "./outcome";
+import { isOutcome, REQUESTABLE } from "./outcome";
 import { Store, storeLayer, type Admission, type RunRow, type StoreApi } from "./store";
 import {
   Answered,
@@ -212,6 +214,7 @@ import {
 import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
+import { probeLinearMcp } from "./optional";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
 import { listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
@@ -254,6 +257,7 @@ import {
   encodeVerifying,
   fingerprint,
   insideRun,
+  contentOf,
   ranCommand,
   readVerifications,
   recordFor,
@@ -397,6 +401,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly ci?: string;
     }>;
+    /** The Run's Measurements, oldest first. */
+    readonly measurements?: ReadonlyArray<Measurement>;
+    /** Where this checkout leaves the default branch a merge request targets; null where it has none. */
+    readonly mergeBase?: string | null;
+    /** The Git tree HEAD names, to compare with a Measurement's base tree. */
+    readonly content?: string;
   }
 
   /** A Run as the host admitted it: where it works, where its work belongs, what it was given. */
@@ -436,6 +446,82 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly reason: string;
   }
   export const IntegrationSchema: Schema.Codec<Integration, unknown, never, never>;
+
+  /** One command a benchmark plan runs, with no shell between. */
+  export interface BenchmarkCommand {
+    readonly name: string;
+    readonly executable: string;
+    readonly argv: ReadonlyArray<string>;
+  }
+  /** A metric a plan judges: \`<command>.wall_ms\`, \`.cpu_ms\`, \`.peak_kb\`, or a key of its last stdout line's JSON. */
+  export interface BenchmarkMetric {
+    readonly name: string;
+    readonly direction: "lower" | "higher";
+    readonly role: "primary" | "guardrail";
+  }
+  /** A Run's frozen benchmark plan; a key left out takes its default. */
+  export interface BenchmarkPlan {
+    readonly harness: { readonly commits: ReadonlyArray<string>; readonly paths: ReadonlyArray<string> };
+    readonly prepare?: { readonly executable: string; readonly argv: ReadonlyArray<string> } | null;
+    readonly commands: readonly [BenchmarkCommand, ...Array<BenchmarkCommand>];
+    readonly metrics: readonly [BenchmarkMetric, ...Array<BenchmarkMetric>];
+    readonly warmup?: number;
+    readonly samples?: number;
+    /** Seconds one command of a sample, or prepare, may take. */
+    readonly limit?: number;
+    readonly threshold?: number;
+    readonly tolerance?: number;
+  }
+  /** One tree a Measurement sampled. */
+  export interface MeasuredTree {
+    readonly cwd: string;
+    readonly head_sha: string;
+    readonly fingerprint: string;
+    /** The Git tree HEAD names: equal on two checkouts of the same files at different commits. */
+    readonly content: string;
+    readonly lockfiles: Readonly<Record<string, string>>;
+  }
+  /** A Measurement as the host recorded it: every sample, and a verdict per metric where it was judged. */
+  export interface Measurement {
+    readonly id: string;
+    readonly run: string;
+    readonly pass: string;
+    readonly machine: string;
+    readonly plan: Required<BenchmarkPlan>;
+    readonly plan_digest: string;
+    readonly plan_reason: string | null;
+    readonly base: MeasuredTree & { readonly commit: string };
+    readonly candidate: MeasuredTree;
+    readonly environment: Readonly<Record<string, string | null>>;
+    readonly waited: { readonly memory: boolean; readonly machine: ReadonlyArray<string> };
+    readonly prepare: ReadonlyArray<{ readonly tree: "base" | "candidate"; readonly exit: number; readonly seconds: number; readonly output: string }>;
+    readonly samples: ReadonlyArray<{
+      readonly tree: "base" | "candidate";
+      readonly warmup: boolean;
+      readonly readings: Readonly<Record<string, number>>;
+      readonly load: ReadonlyArray<number>;
+      readonly memory: { readonly available: number; readonly total: number; readonly pressure: number | null } | null;
+      readonly at: string;
+    }>;
+    readonly result:
+      | {
+          readonly _tag: "Judged";
+          readonly verdicts: ReadonlyArray<{
+            readonly metric: string;
+            readonly ratio: number;
+            readonly interval: readonly [number, number];
+            readonly verdict: "gain" | "no-change" | "regression" | "inconclusive";
+            readonly held: boolean;
+          }>;
+        }
+      | { readonly _tag: "TimedOut"; readonly tree: "base" | "candidate"; readonly stage: "prepare" | "sample"; readonly command: string }
+      | { readonly _tag: "Failed"; readonly tree: "base" | "candidate"; readonly stage: "prepare" | "sample"; readonly command: string; readonly exit: number; readonly output: string }
+      | { readonly _tag: "Unjudged"; readonly reason: string };
+    readonly started: string;
+    readonly at: string;
+  }
+  /** Keeps an infinite ratio, which plain JSON writes as null: journal a Measurement with it. */
+  export const MeasurementSchema: Schema.Codec<Measurement, unknown, never, never>;
 
   /** What a merge at a head came to: \`MergedOutside\` is a merge this Run did not make. */
   export type MergeOutcome =
@@ -719,6 +805,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
     /** One value from the operator's own configuration, by dotted name, as text; empty for none. */
     readonly config: (dotted: string) => Effect.Effect<string>;
+    /** Whether an agent Claude Code runs in cwd has a Linear MCP server, and where or why not. */
+    readonly linear: (cwd: string) => Effect.Effect<{ readonly reachable: boolean; readonly detail: string }>;
     /** Whether a merge request can be opened from here, and what it would carry. */
     readonly mr: (options: {
       readonly cwd: string;
@@ -789,6 +877,22 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * \`integrated <branch>@<sha>\`. Take it inside an Activity, so a replay does not merge again.
      */
     readonly integrate: (runId: string, cwd: string) => Effect.Effect<Integration>;
+    /**
+     * A Measurement of cwd, the Run's checkout, against a base tree Collie makes at base with the
+     * plan's harness commits applied, sampled A B B A … while no other Measurement runs on this
+     * Machine and it is not Short of memory. Where these trees were measured under this plan, that
+     * record answers and ran is false. Take it inside an Activity, so a replay does not measure again.
+     */
+    readonly measure: (options: {
+      readonly runId: string;
+      readonly base: string;
+      readonly cwd: string;
+      readonly plan: BenchmarkPlan;
+      /** \`calibration\`, \`cycle N\` or \`final\`. */
+      readonly pass: string;
+      /** Why the plan changed: refused without one where the Run was measured under another plan. */
+      readonly reason?: string;
+    }) => Effect.Effect<{ readonly measurement: Measurement; readonly ran: boolean }, WorkflowError>;
     /** The commit origin's default branch is at now. Take it inside an Activity. */
     readonly defaultHead: (cwd: string) => Effect.Effect<string, WorkflowError>;
     /**
@@ -1443,7 +1547,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   export type Outcome =
     | "unspecified" | "feature" | "bug" | "refactor" | "investigation"
-    | "docs" | "migration" | "review" | "plan";
+    | "docs" | "migration" | "review" | "plan" | "performance";
 
   export type OutcomeContract =
     | { readonly fixed: Outcome; readonly selectable?: undefined }
@@ -1528,6 +1632,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     supported?: boolean;
     accurate?: boolean;
     compatible?: boolean;
+    /** Beside \`behavior_preserved\`, for a performance change: the benchmark measures what it claims. */
+    measurement_valid?: boolean;
   }
 
   export interface ReviewOutput extends Judgement {
@@ -1903,10 +2009,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** This Run's checks as a human would type them, for a prompt to name them. */
   export function renderApproved(approved: ReadonlyArray<VerifySpec>): string;
 
+  /** Text with every credential-shaped value replaced, before it is published. */
+  export function redact(text: string): string;
+
   /** What was actually collected, and by whom, for a merge request to say what it proved. */
-  export function renderEvidence(
-    got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
-  ): string;
+  export function renderEvidence(got: {
+    readonly verifications: ReadonlyArray<Verification>;
+    readonly final: Snapshot;
+    /** The latest \`final\` of these is named with its verdicts. */
+    readonly measurements?: ReadonlyArray<Measurement>;
+  }): string;
 
   /** Where a reference a Run's Outputs give may point: its own directory, its checkout, and a planning Run's. */
   export function evidenceRoots(own: string, cwd: string, workSource: string): string[];
@@ -1940,6 +2052,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly outputs: Readonly<Record<string, unknown>>;
     /** Which of those are a reviewer's judgement rather than the implementer's claim. */
     readonly reviewed: ReadonlyArray<string>;
+    /** The tree each of those reviewed. A \`performance\` verdict counts only from a review of the tree in front of it. */
+    readonly reviewedOn?: Readonly<Record<string, Snapshot>>;
     /** The directories this Run owns, which a reference it gives has to point inside. */
     readonly roots: ReadonlyArray<string>;
     readonly tickets: ReadonlyArray<{
@@ -1958,6 +2072,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function reviewGapsOf(
     options: Parameters<typeof evidenceGapsOf>[0],
   ): ReadonlyArray<string>;
+  /**
+   * Whether the Run is done with no patch to deliver, which is an outcome and not a failure:
+   * an investigation that says so, or a performance Run whose tree is its latest base tree again.
+   */
+  export function endsWithoutPatchOf(options: Parameters<typeof evidenceGapsOf>[0]): boolean;
 
   /**
    * A Check's proof on this tree: passed, failed, unstable, passed only on an earlier tree, or
@@ -3895,6 +4014,13 @@ export const hostLayer = (options: {
                 commands: Effect.forEach(yield* approvedOf(dir, runId), (spec) =>
                   commandOf({ ...own, cwd }, spec),
                 ),
+                measurements: readMeasurements(evidenceDir(dir, runId)).pipe(
+                  Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
+                ),
+                mergeBase: Effect.map(defaultMergeBase(cwd), (found) =>
+                  found.found ? found.base : null,
+                ),
+                content: contentOf(cwd),
               });
             }),
           ).pipe(Effect.orDie),
@@ -3922,6 +4048,14 @@ export const hostLayer = (options: {
                   : "";
               }),
               Effect.orElseSucceed(() => ""),
+            ),
+          ),
+        linear: (cwd) =>
+          placing.pipe(
+            Effect.flatMap(({ env }) => under(probeLinearMcp({ ...env, cwd }))),
+            Effect.map((probe) => ({ reachable: probe.state === "ok", detail: probe.detail })),
+            Effect.catch((cause) =>
+              Effect.succeed({ reachable: false, detail: `unreadable: ${cause.message}` }),
             ),
           ),
         mr: (asked) =>
@@ -4134,6 +4268,34 @@ export const hostLayer = (options: {
                 Effect.provideContext(services),
               ),
             ),
+          ),
+        measure: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const own = yield* treeOf(yield* store.run(asked.runId), asked.runId, dir);
+              if (!(yield* insideRun(asked.cwd, own)))
+                return yield* new WorkflowError({
+                  reason: `"${asked.cwd}" is not inside run ${asked.runId}`,
+                });
+              const env = yield* currentEnv.pipe(Effect.option);
+              const answered = yield* measure({
+                stateDir: dir,
+                env: Option.isSome(env)
+                  ? { ...env.value, userDir: options.userDir ?? env.value.userDir }
+                  : null,
+                ask: asked,
+                evidence: evidenceDir(dir, asked.runId),
+                awaiting: controlPath(dir, AWAITING, asked.runId),
+                stopped: set(STOP, asked.runId),
+              }).pipe(Effect.mapError((cause) => new WorkflowError({ reason: cause.why })));
+              if (answered !== "stopped") return answered;
+              // A stop ends the Measurement and records nothing; the Run parks, and a resume measures again.
+              const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+              if (Option.isSome(instance)) return yield* Workflow.suspend(instance.value);
+              return yield* new WorkflowError({
+                reason: "the Measurement did not finish: the Run was stopped while it ran",
+              });
+            }),
           ),
         integrate: (runId, cwd) =>
           under(
@@ -4893,6 +5055,11 @@ const refuseOptions = (
       `"${generation.id}" always proves ${fixed}, so it cannot be asked for ${asked}`,
     );
   }
+  if (fixed === null && asked !== UNSPECIFIED && !REQUESTABLE.includes(asked)) {
+    return refusedInput(
+      `"${asked}" is not an outcome a Run can be asked for; one of ${REQUESTABLE.join(", ")}`,
+    );
+  }
   return Effect.void;
 };
 
@@ -5299,6 +5466,8 @@ export const RunView = Schema.Struct({
   wakes: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** The Subscription its work waits on to reset, or null; absent from an older host. */
   usage: Schema.optionalKey(Schema.NullOr(UsageWaitSchema)),
+  /** A performance Run's latest \`final\` Measurement, or null; absent from an older host. */
+  measurement: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type RunView = typeof RunView.Type;
 
@@ -5675,11 +5844,38 @@ const makeRegistry: (
    * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
    * that shape; any other is refused here, before anything exists.
    */
+  /**
+   * A branch Run works in the checkout it is started in, which only Home places by a
+   * repository's URL or path; a repository naming any other is refused, never ignored.
+   */
+  const refuseElsewhere = Effect.fn("Engine.refuseElsewhere")(function* (
+    generation: Generation,
+    settled: Settled,
+    cwd: string,
+  ) {
+    const field = fieldWith(generation.hints, "repository");
+    const value = field === undefined ? undefined : settled.input[field];
+    if (generation.checkout !== "branch" || !isText(value) || value.trim() === "") return;
+    const named = value.trim();
+    const top = (at: string) =>
+      runShell("git", ["rev-parse", "--show-toplevel"], at).pipe(
+        Effect.map((said) => (said.code === 0 ? said.stdout.trim() : null)),
+        Effect.orElseSucceed(() => null),
+        Effect.provideContext(bun),
+      );
+    const there = named.startsWith("/") ? yield* top(named) : null;
+    if (there !== null && there === (yield* top(cwd))) return;
+    return yield* refusedInput(
+      `"${field}" names ${named}, and a ${generation.id} Run works in the checkout it is started in, ${cwd}, and never clones: start it in that checkout, or from Home, which places it there`,
+    );
+  });
+
   const settleTargets = Effect.fn("Engine.settleTargets")(function* (
     generation: Generation,
     settled: Settled,
     cwd: string,
   ) {
+    yield* refuseElsewhere(generation, settled, cwd);
     const field = fieldWith(generation.hints, "diff-target");
     const value = field === undefined ? undefined : settled.input[field];
     if (field === undefined || !isText(value) || value.trim() === "") return settled;
@@ -6743,6 +6939,15 @@ const makeRegistry: (
       landing: yield* readLanding(runDir(dir, row.run)).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
       ),
+      measurement:
+        outcome === "performance"
+          ? finalMeasurementLine(
+              yield* readMeasurements(evidenceDir(dir, row.run)).pipe(
+                Effect.provideService(FileSystem.FileSystem, fs),
+                Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
+              ),
+            )
+          : null,
     };
     // Not registered here is not a verdict on the work: the rows are all still there,
     // and what is missing is the module, named so somebody can put it back.

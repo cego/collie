@@ -117,6 +117,9 @@ change (empty outcome) or a `bug` needs none — its proof is a verification, no
   commands they show were run and passed as verifications.
 - **migration** — `"compatible": true` when it goes both ways and the code on either side
   of it still reads the data.
+- **performance** — both `"behavior_preserved": true`, as for a refactor, and
+  `"measurement_valid": true` when the benchmark measures what the change claims to speed
+  up, on cases a user meets, and nothing in the change only games it.
 
 `true` is a judgement you can defend from the diff. Where you cannot, write `false` and
 say why in a finding: the run will not open its merge request until it is settled, and
@@ -165,7 +168,8 @@ The human is watching a rally, not a new list every time.
   without anyone deciding it.
 - Do not edit files, commit, push, or comment anywhere. This Output is the whole job.
 - The outcome field: where the outcome above names one (`scope_met`, `behavior_preserved`,
-  `supported`, `accurate` or `compatible`, as the review step's own section lists them),
+  `supported`, `accurate`, `compatible`, or `measurement_valid` beside `behavior_preserved`,
+  as the review step's own section lists them),
   carry it as `true` only when every reviewer that wrote it wrote `true` and you can defend
   it from the diff yourself. Otherwise `false`, with the finding that says why.
 
