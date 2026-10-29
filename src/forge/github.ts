@@ -487,11 +487,15 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
     let absent: JobState = "missing";
     if (found.value === undefined) {
       // GitHub creates a job behind `needs` only once its needs finish.
-      // ponytail: one page of 100; a head with more check runs reads only its first.
-      const all = yield* checkRuns(repo, head, "per_page=100", cwd);
-      if (!all.ok) return unread(all.reason);
-      if (all.value.length === 0 || all.value.some((one) => one.status !== "completed"))
-        absent = "pending";
+      let listed = 0;
+      for (let page = 1; absent === "missing"; page++) {
+        const some = yield* checkRuns(repo, head, `per_page=100&page=${page}`, cwd);
+        if (!some.ok) return unread(some.reason);
+        listed += some.value.length;
+        if (some.value.some((one) => one.status !== "completed")) absent = "pending";
+        else if (some.value.length < 100) break;
+      }
+      if (listed === 0) absent = "pending";
     }
     return {
       ok: true,

@@ -77,7 +77,6 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
   return { asked, at, root, forge };
 });
 
-/** A fake forge whose merge request is on `head`. */
 const forgeOn = (name: MrForge, head: string, over: Partial<FakeMr>) =>
   fakeForge(name, {
     installed: true,
@@ -392,6 +391,27 @@ test("a GitHub head with no check runs yet reads as pending", () =>
         state: "pending",
         url: null,
         log: null,
+      });
+    }),
+  ));
+
+test("a GitHub job absent from a head whose first hundred check runs completed waits on a later one still running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const completed = Array.from({ length: 100 }, (_, n) => ({
+        name: `shard-${n}`,
+        state: "passed" as const,
+      }));
+      const { asked, at, forge } = yield* waiting(
+        "passed",
+        PULL,
+        undefined,
+        { jobs: [...completed, { name: "static", state: "running" }] },
+        "github",
+      );
+      expect(yield* read({ ...asked, spec: GATE, wait: false }, forge)).toMatchObject({
+        unproved: `nuxi is left to CI and unproved: job test on ${at.slice(0, 12)} is pending`,
+        state: "pending",
       });
     }),
   ));
