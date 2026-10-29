@@ -293,6 +293,8 @@ test("a glob finds dot paths only where its pattern names them, newest first", (
         "src/a.ts",
         "src/deep/b.ts",
         "node_modules/m/i.js",
+        ".github/.cache/x",
+        ".github/.github/y",
       ];
       for (const [n, file] of files.entries()) {
         const path = `${dir}/${file}`;
@@ -308,7 +310,8 @@ test("a glob finds dot paths only where its pattern names them, newest first", (
         ["*", []],
         ["**/*.ts", ["src/deep/b.ts", "src/a.ts"]],
         [".env", [".env"]],
-        ["**/.github/**", [".github/workflows/ci.yml"]],
+        ["**/.github/**", [".github/.github/y", ".github/workflows/ci.yml"]],
+        [".*/**", [".github/.github/y", ".github/.cache/x", ".github/workflows/ci.yml"]],
         ["src/**", ["src/deep/b.ts", "src/a.ts"]],
         ["**/.hidden/*", ["src/.hidden/x.ts"]],
         ["*.{ts,js}", []],

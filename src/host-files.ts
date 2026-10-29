@@ -2,7 +2,7 @@
 // Grep, Write and Edit on a Machine it does not run on (ADR-0011, the Flock chat reaches
 // files). Paths are absolute on this Machine; nothing is written inside the host's state.
 
-import { Effect, FileSystem, Glob, Option, Path, Schema, Stream } from "effect";
+import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { mediaTypeOf } from "./attachments";
@@ -70,6 +70,17 @@ const dotNames = (pattern: string) =>
     .flatMap(expanded)
     .filter((name) => name.startsWith("."));
 
+// Named dot segments remain allowed at any depth, unlike Effect Glob's `**`.
+const reaches = (pattern: string) => {
+  const glob = new Bun.Glob(pattern);
+  const dotted = dotNames(pattern).map((segment) => new Bun.Glob(segment));
+  return (relative: string) =>
+    glob.match(relative) &&
+    relative
+      .split("/")
+      .every((segment) => !segment.startsWith(".") || dotted.some((one) => one.match(segment)));
+};
+
 /** Files under `dir` matching `pattern`, newest first, and how many beyond the bound. */
 export const globFiles = Effect.fn("HostFiles.glob")(function* (
   pattern: string,
@@ -79,8 +90,8 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
   const fs = yield* FileSystem.FileSystem;
   const root = yield* absolute(dir);
   const paths = yield* Path.Path;
-  const glob = Glob.make(pattern);
-  const keep = (line: string) => Glob.match(glob, paths.relative(root, line));
+  const matches = reaches(pattern);
+  const keep = (line: string) => matches(paths.relative(root, line));
   const dotted = dotNames(pattern);
   // The root must list; an unreadable directory below it is passed by.
   yield* fs
