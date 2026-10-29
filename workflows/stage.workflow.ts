@@ -29,6 +29,7 @@ import {
   RolledBack,
   StagedMergeRequest,
   claiming,
+  fitting,
   nth,
   plays,
   quoted,
@@ -65,16 +66,9 @@ const stepsOf = (markdown: string) => {
 /** The shipped content per forge: the procedure differs, not only the commands (ADR-0050 D1). */
 export const STAGE_ON = { gitlab: stepsOf(onGitlab), github: stepsOf(onGithub) };
 
-const CLEARANCE_CHARS = 400;
-
 const naming =
-  (clears: (url: string, jobs: string) => string[]) =>
-  (url: string, jobs: ReadonlyArray<string>) => {
-    const named = clears(url, quoted(jobs));
-    return named.join("; ").length <= CLEARANCE_CHARS
-      ? named
-      : clears(url, `the ${jobs.length} stage jobs its task names`);
-  };
+  (clears: (url: string, jobs: string) => string[]) => (url: string, jobs: ReadonlyArray<string>) =>
+    fitting(clears(url, quoted(jobs)), clears(url, `the ${jobs.length} stage jobs its task names`));
 
 export const STAGE_CLEARS = {
   stage: naming((url, jobs) => [

@@ -43,6 +43,7 @@ import {
   RolledBack,
   StagedMergeRequest,
   claiming,
+  fitting,
   nth,
   plays,
   quoted,
@@ -111,41 +112,51 @@ const pushing = (url: string) =>
 const rollingBack = (url: string) =>
   `rolling ${url}'s stage back to the newest release production carries`;
 
+const releaseCommit = (url: string) =>
+  `a release commit to ${url}'s default branch, where it makes one`;
+
+const watching = "watching the tag's pipeline there, never playing a production job";
+
 export const RELEASE_CLEARS = {
   answer: (url: string) => [
     pushing(url),
-    `never posting on ${url} or resolving a thread there: Collie replies`,
+    "never posting or resolving a thread there: Collie replies",
   ],
   fix: (url: string) => [pushing(url)],
   stageMergeRequest: (url: string) => [
     `playing, retrying and watching ${url}'s stage deploy job and stage check jobs (e2e-stage, smoke or the like) of the merge request's pipeline`,
-    rollingBack(url),
+    "rolling stage back to the newest release production carries",
     "never a production job",
   ],
   tag: (url: string) => [
-    `a release commit to ${url}'s default branch, where the repository makes one`,
-    `pushing an annotated version tag of ${url} to origin`,
-    `creating its release on ${url}, where the package publishes from its tags`,
-    `watching the tag's pipeline on ${url}, never playing a production job`,
+    releaseCommit(url),
+    "pushing an annotated version tag to origin",
+    "creating its release there, where the package publishes from its tags",
+    watching,
   ],
   /** An application's tag step, which stages the tag too. */
   stage: (url: string) => [
-    `a release commit to ${url}'s default branch, where it makes one`,
+    releaseCommit(url),
     "pushing an annotated version tag to origin, with no forge release",
-    "playing, retrying and watching the tag pipeline's stage deploy and check jobs until only production jobs waiting to be started are left",
+    "playing, retrying and watching the tag's stage deploy and check jobs",
     "rolling stage back to the newest release production carries",
     "never a production job",
   ],
   /** An application's tag step after its merge request was tested on stage. */
   tagTested: (url: string) => [
-    `a release commit to ${url}'s default branch, where it makes one`,
+    releaseCommit(url),
     "pushing an annotated version tag to origin, with no forge release",
-    `watching the tag's pipeline on ${url}, never playing a production job`,
+    watching,
   ],
   rollback: (url: string) => [`${rollingBack(url)}, never a production job`],
-  production: (url: string, jobs: ReadonlyArray<JobLink>) => [
-    `playing ${plays(jobs)} on ${url}, and no other job`,
-  ],
+  production: (url: string, jobs: ReadonlyArray<JobLink>) => {
+    const playing = (named: string) => [`playing ${named} on ${url}, and no other job`];
+    return fitting(
+      playing(plays(jobs)),
+      playing(quoted(jobs.map((job) => job.name))),
+      playing(`the ${jobs.length} production jobs its task names`),
+    );
+  },
 };
 
 /** Not one of RELEASE_CLEARS: it is cleared for a Slack channel, not the repository. */

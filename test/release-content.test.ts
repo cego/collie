@@ -146,3 +146,45 @@ test("sharing's Clearance names the channel and the merge request, well under th
   expect(joined).toContain(mr);
   expect(joined.length).toBeLessThanOrEqual(200);
 });
+
+const gated = (clears: ReadonlyArray<string>) => Array.from(clears.join("; ")).length;
+const times = (said: string, url: string) => said.split(url).length - 1;
+
+test("every Clearance fits a 120-character repository URL, and names it exactly once", () => {
+  const url = `https://gitlab.example.com/spilnu/frontend/platform/web-applications/${"a".repeat(51)}`;
+  expect(url.length).toBe(120);
+  const jobs = [
+    "deploy-production",
+    "deploy-production:spilnu",
+    "deploy-production:happytiger",
+  ].map((name, n) => ({ name, url: `${url}/-/jobs/${987654321 + n}` }));
+  const measured = Object.entries(RELEASE_CLEARS).map(([step, clears]) => {
+    const lines = clears(url, jobs);
+    return [step, gated(lines) <= 400, times(lines.join("; "), url)];
+  });
+  expect(measured).toEqual(Object.keys(RELEASE_CLEARS).map((step) => [step, true, 1]));
+});
+
+test("production names its jobs with their URLs, then by name, then by count, whichever first fits", () => {
+  const url = "https://gitlab.example.com/group/app";
+  const job = (name: string, n: number) => ({ name, url: `${url}/-/jobs/${1000000 + n}` });
+
+  const one = RELEASE_CLEARS.production(url, [job("deploy-production", 4)]).join("; ");
+  expect(one).toContain(`\`deploy-production\` at ${url}/-/jobs/1000004`);
+
+  const apps = ["bingo", "casino", "happytiger", "lobby", "playground", "poker", "spilnu"];
+  const several = apps.map((app, n) => job(`deploy-production:${app}`, n));
+  expect(several.map((one) => one.name + one.url).join("").length).toBeGreaterThan(400);
+  const byName = RELEASE_CLEARS.production(url, several).join("; ");
+  for (const app of apps) expect(byName).toContain(`\`deploy-production:${app}\``);
+  expect(byName).not.toContain("/-/jobs/");
+
+  const many = Array.from({ length: 30 }, (_, n) => job(`deploy-production:application-${n}`, n));
+  const counted = RELEASE_CLEARS.production(url, many);
+  expect(counted.join("; ")).toContain("the 30 production jobs its task names");
+  expect(gated(counted)).toBeLessThanOrEqual(400);
+
+  for (const said of [one, byName, counted.join("; ")]) {
+    expect(said).toContain(` on ${url}, and no other job`);
+  }
+});
