@@ -14,7 +14,7 @@
 //     subscribes this client and immediately replays the current token usage — and that
 //     is the only way Collie can read a Codex agent's current context.
 
-import { Clock, Data, Effect, Schema } from "effect";
+import { Data, Effect, Option, Queue, Schema } from "effect";
 
 /** What the client sends as itself, which the server echoes into its user agent. */
 const CLIENT_INFO = { name: "collie", version: "0", title: "Collie" };
@@ -60,8 +60,8 @@ export interface CodexParams {
 export interface CodexClient {
   /** One request/response. Fails on a JSON-RPC error or a silent server. */
   call(method: string, params: CodexParams): Effect.Effect<unknown, CodexError>;
-  /** Notifications received so far, in arrival order. */
-  notifications(): ReadonlyArray<{ method: string; params: unknown }>;
+  /** Notifications as they arrive, each taken once. */
+  readonly notifications: Queue.Dequeue<{ method: string; params: unknown }>;
 }
 
 interface Live {
@@ -85,63 +85,64 @@ const encodeRequest = Schema.encodeSync(Request);
  * is request/response over a stream, and Effect has none for it.
  */
 const open = (url: string) =>
-  Effect.callback<Live, CodexError>((resume) => {
-    const socket = new WebSocket(url);
-    const notifications: { method: string; params: unknown }[] = [];
-    const pending = new Map<number, (reply: Reply) => void>();
-    let nextId = 0;
+  Effect.flatMap(Queue.unbounded<{ method: string; params: unknown }>(), (notifications) =>
+    Effect.callback<Live, CodexError>((resume) => {
+      const socket = new WebSocket(url);
+      const pending = new Map<number, (reply: Reply) => void>();
+      let nextId = 0;
 
-    // Every frame goes through the reply schema, which is where the protocol becomes
-    // domain values: a binary frame, a half-written one and a method Collie does not
-    // know all fall out here rather than reaching the policy.
-    socket.onmessage = (event) => {
-      const decodedReply = decodeReply(event.data);
-      if (decodedReply._tag === "None") return;
-      const reply = decodedReply.value;
-      const waiting = reply.id === undefined ? undefined : pending.get(reply.id);
-      if (waiting !== undefined && reply.id !== undefined) {
-        pending.delete(reply.id);
-        waiting(reply);
-      } else if (reply.method !== undefined) {
-        notifications.push({ method: reply.method, params: reply.params });
-      }
-    };
-    // A close answers everyone still waiting, so a server that goes away fails the
-    // exchange rather than leaving the boundary holding its budget open.
-    socket.onclose = () => {
-      for (const waiting of pending.values()) {
-        waiting({ error: { message: "the connection closed" } });
-      }
-      pending.clear();
-    };
-    socket.onerror = () => resume(Effect.fail(failed(`${url} refused the connection`)));
-    socket.onopen = () => {
-      const call: CodexClient["call"] = (method, params) =>
-        Effect.callback<unknown, CodexError>((answer) => {
-          const id = ++nextId;
-          pending.set(id, (reply) =>
-            answer(
-              reply.error
-                ? Effect.fail(failed(`${method}: ${reply.error.message}`, reply.error.code))
-                : Effect.succeed(reply.result),
+      // Every frame goes through the reply schema, which is where the protocol becomes
+      // domain values: a binary frame, a half-written one and a method Collie does not
+      // know all fall out here rather than reaching the policy.
+      socket.onmessage = (event) => {
+        const decodedReply = decodeReply(event.data);
+        if (decodedReply._tag === "None") return;
+        const reply = decodedReply.value;
+        const waiting = reply.id === undefined ? undefined : pending.get(reply.id);
+        if (waiting !== undefined && reply.id !== undefined) {
+          pending.delete(reply.id);
+          waiting(reply);
+        } else if (reply.method !== undefined) {
+          Queue.offerUnsafe(notifications, { method: reply.method, params: reply.params });
+        }
+      };
+      // A close answers everyone still waiting, so a server that goes away fails the
+      // exchange rather than leaving the boundary holding its budget open.
+      socket.onclose = () => {
+        for (const waiting of pending.values()) {
+          waiting({ error: { message: "the connection closed" } });
+        }
+        pending.clear();
+      };
+      socket.onerror = () => resume(Effect.fail(failed(`${url} refused the connection`)));
+      socket.onopen = () => {
+        const call: CodexClient["call"] = (method, params) =>
+          Effect.callback<unknown, CodexError>((answer) => {
+            const id = ++nextId;
+            pending.set(id, (reply) =>
+              answer(
+                reply.error
+                  ? Effect.fail(failed(`${method}: ${reply.error.message}`, reply.error.code))
+                  : Effect.succeed(reply.result),
+              ),
+            );
+            socket.send(encodeRequest({ jsonrpc: "2.0", id, method, params }));
+            return Effect.sync(() => pending.delete(id));
+          }).pipe(
+            Effect.timeout(CALL_MS),
+            Effect.catchTag("TimeoutError", () =>
+              Effect.fail(failed(`${method} was not answered within ${CALL_MS}ms`)),
             ),
           );
-          socket.send(encodeRequest({ jsonrpc: "2.0", id, method, params }));
-          return Effect.sync(() => pending.delete(id));
-        }).pipe(
-          Effect.timeout(CALL_MS),
-          Effect.catchTag("TimeoutError", () =>
-            Effect.fail(failed(`${method} was not answered within ${CALL_MS}ms`)),
-          ),
+        resume(
+          Effect.succeed({
+            client: { call, notifications },
+            close: () => socket.close(),
+          }),
         );
-      resume(
-        Effect.succeed({
-          client: { call, notifications: () => notifications },
-          close: () => socket.close(),
-        }),
-      );
-    };
-  }).pipe(
+      };
+    }),
+  ).pipe(
     Effect.timeout(CALL_MS),
     Effect.catchTag("TimeoutError", () =>
       Effect.fail(failed(`${url} did not accept a connection within ${CALL_MS}ms`)),
@@ -305,16 +306,15 @@ export const currentContext = Effect.fn("Codex.currentContext")(function* (
   threadId: string,
 ) {
   yield* client.call("thread/resume", { threadId });
-  const deadline = (yield* Clock.currentTimeMillis) + REPLAY_MS;
-  for (;;) {
-    for (const note of client.notifications()) {
+  const replayed = Effect.gen(function* () {
+    for (;;) {
+      const note = yield* Queue.take(client.notifications);
       if (note.method !== "thread/tokenUsage/updated") continue;
       const usage = yield* decoded("thread/tokenUsage/updated", TokenUsage, note.params);
       if (usage.threadId === threadId) return usage.tokenUsage.last.totalTokens;
     }
-    if ((yield* Clock.currentTimeMillis) >= deadline) return null;
-    yield* Effect.sleep(100);
-  }
+  });
+  return Option.getOrNull(yield* replayed.pipe(Effect.timeoutOption(REPLAY_MS)));
 });
 
 export interface CompactionItem {

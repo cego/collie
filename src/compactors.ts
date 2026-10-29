@@ -17,6 +17,7 @@ import {
   FileSystem,
   Option,
   Path,
+  Schedule,
   Schema,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -1080,16 +1081,17 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
   );
 
   const deadline = (yield* Clock.currentTimeMillis) + opts.startMs;
-  for (;;) {
-    const said = opts.listening.exec(yield* fs.readFileString(opts.log));
-    if (said) return { pid, found: said[1] ?? "" };
-    if ((yield* Clock.currentTimeMillis) >= deadline) {
-      return yield* Effect.fail(
-        new Error(`${opts.what} did not come up within ${opts.startMs}ms — see ${opts.log}`),
-      );
-    }
-    yield* Effect.sleep(200);
-  }
+  const said = yield* fs.readFileString(opts.log).pipe(
+    Effect.map((log) => opts.listening.exec(log)),
+    Effect.repeat({
+      until: (said) => said !== null,
+      schedule: Schedule.spaced(200).pipe(Schedule.while(({ now }) => now < deadline)),
+    }),
+  );
+  if (said) return { pid, found: said[1] ?? "" };
+  return yield* Effect.fail(
+    new Error(`${opts.what} did not come up within ${opts.startMs}ms — see ${opts.log}`),
+  );
 });
 
 /** Stops a server this agent no longer needs. Best effort: it may already be gone. */
@@ -1305,33 +1307,33 @@ const survivors = (
     const remaining = sessions ? sessionOf(root) : Effect.filter(noted, (one) => stillRunning(one));
     for (const one of yield* remaining) if (proven(one)) yield* once(one);
     const until = Math.max(deadline, (yield* Clock.currentTimeMillis) + SURVIVOR_GRACE_MS);
-    for (;;) {
-      const left = yield* remaining;
-      if (left.length === 0)
-        return {
-          state: "quiet",
-          turns,
-          reason: null,
-          signalled,
-          left: [],
-          noted,
-        } satisfies Stopped;
-      if ((yield* Clock.currentTimeMillis) >= until) {
-        const named = left.map(
-          (one) =>
-            `pid ${one.pid}${proven(one) || signalled.some((seen) => seen.pid === one.pid && seen.started === one.started) ? "" : " (not signalled: not proven its)"}`,
-        );
-        return {
-          state: short,
-          turns,
-          reason: `its server exited, but ${named.join(", ")} of its session is still running`,
-          signalled,
-          left: left.map((one) => ({ pid: one.pid, started: one.started })),
-          noted,
-        } satisfies Stopped;
-      }
-      yield* Effect.sleep(50);
-    }
+    const left = yield* remaining.pipe(
+      Effect.repeat({
+        until: (left) => left.length === 0,
+        schedule: Schedule.spaced(50).pipe(Schedule.while(({ now }) => now < until)),
+      }),
+    );
+    if (left.length === 0)
+      return {
+        state: "quiet",
+        turns,
+        reason: null,
+        signalled,
+        left: [],
+        noted,
+      } satisfies Stopped;
+    const named = left.map(
+      (one) =>
+        `pid ${one.pid}${proven(one) || signalled.some((seen) => seen.pid === one.pid && seen.started === one.started) ? "" : " (not signalled: not proven its)"}`,
+    );
+    return {
+      state: short,
+      turns,
+      reason: `its server exited, but ${named.join(", ")} of its session is still running`,
+      signalled,
+      left: left.map((one) => ({ pid: one.pid, started: one.started })),
+      noted,
+    } satisfies Stopped;
   });
 
 /** Codex's port, over the App Server `server` starts: `codex app-server`, or a test's stand-in. */

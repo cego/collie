@@ -14,6 +14,7 @@ import {
   FileSystem,
   Option,
   Random,
+  Schedule,
   Schema,
   Stream,
 } from "effect";
@@ -264,11 +265,13 @@ const goneWithin = (
 ) =>
   Effect.gen(function* () {
     const until = (yield* Clock.currentTimeMillis) + within;
-    for (;;) {
-      if (isGone(yield* provedOf(record, installation))) return true;
-      if ((yield* Clock.currentTimeMillis) >= until) return false;
-      yield* Effect.sleep("100 millis");
-    }
+    return yield* provedOf(record, installation).pipe(
+      Effect.map(isGone),
+      Effect.repeat({
+        until: (gone) => gone,
+        schedule: Schedule.spaced("100 millis").pipe(Schedule.while(({ now }) => now < until)),
+      }),
+    );
   });
 
 /**

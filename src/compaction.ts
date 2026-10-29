@@ -5,7 +5,18 @@
 // next step, a fix round, a hand-off from another Run — and a threshold repeated per
 // harness is a threshold that disagrees with itself.
 
-import { Clock, Data, Effect, FileSystem, Path, PlatformError, Result, Schema } from "effect";
+import {
+  Clock,
+  Data,
+  Duration,
+  Effect,
+  FileSystem,
+  Path,
+  PlatformError,
+  Result,
+  Schedule,
+  Schema,
+} from "effect";
 import type { PlatformServices } from "./platform";
 import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
@@ -708,19 +719,19 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
   }
   const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
   let why = "";
-  for (;;) {
-    const up = yield* ready(record).pipe(
-      Effect.tap(() => Effect.sync(() => (why = ""))),
-      Effect.catch((cause) => {
-        why = reason(cause);
-        return Effect.succeed(false);
-      }),
-    );
-    if (up) return null;
-    if ((yield* Clock.currentTimeMillis) >= deadline)
-      return `${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s${why === "" ? "" : ` (${why})`}`;
-    yield* Effect.sleep(deps.pollMs);
-  }
+  const up = yield* ready(record).pipe(
+    Effect.tap(() => Effect.sync(() => (why = ""))),
+    Effect.catch((cause) => {
+      why = reason(cause);
+      return Effect.succeed(false);
+    }),
+    Effect.repeat({
+      until: (up) => up,
+      schedule: Schedule.spaced(deps.pollMs).pipe(Schedule.while(({ now }) => now < deadline)),
+    }),
+  );
+  if (up) return null;
+  return `${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s${why === "" ? "" : ` (${why})`}`;
 });
 
 /**
@@ -1010,25 +1021,30 @@ const settle = Effect.fn("Compaction.settle")(function* (
   attempt: Schema.Schema.Type<typeof AttemptSchema>,
   step: string,
 ) {
-  for (;;) {
-    const done = yield* resolved(deps, ctx, record, attempt);
-    if (done !== null) return done;
-    const now = yield* Clock.currentTimeMillis;
-    if (now >= attempt.deadline) {
-      // The attempt is kept, not cleared: it is unresolved, not over. A timeout is not
-      // proof that the agent stopped compacting, so nothing here retries, kills the
-      // agent or replays the work.
-      if (deps.waitMs === 0)
-        return {
-          dispatch: false,
-          reason: `${ctx.agent}: compaction ${attempt.id} is still in the air — no work sent; try again once it has finished`,
-        } satisfies Boundary;
-      return {
-        dispatch: false,
-        waiting: true,
-        reason: `${ctx.agent}: compaction ${attempt.id} has not finished after ${Math.round(deps.waitMs / 60_000)} minutes; Collie keeps waiting and sends ${step} once it does. Check its pane.`,
-      } satisfies Boundary;
-    }
-    yield* Effect.sleep(Math.min(deps.pollMs, attempt.deadline - now));
-  }
+  const done = yield* resolved(deps, ctx, record, attempt).pipe(
+    Effect.repeat({
+      until: (done) => done !== null,
+      schedule: Schedule.spaced(deps.pollMs).pipe(
+        Schedule.while(({ now }) => now < attempt.deadline),
+        // The last poll lands on the deadline rather than past it.
+        Schedule.modifyDelay(({ duration, now }) =>
+          Effect.succeed(Duration.min(duration, Duration.millis(attempt.deadline - now))),
+        ),
+      ),
+    }),
+  );
+  if (done !== null) return done;
+  // The attempt is kept, not cleared: it is unresolved, not over. A timeout is not
+  // proof that the agent stopped compacting, so nothing here retries, kills the
+  // agent or replays the work.
+  if (deps.waitMs === 0)
+    return {
+      dispatch: false,
+      reason: `${ctx.agent}: compaction ${attempt.id} is still in the air — no work sent; try again once it has finished`,
+    } satisfies Boundary;
+  return {
+    dispatch: false,
+    waiting: true,
+    reason: `${ctx.agent}: compaction ${attempt.id} has not finished after ${Math.round(deps.waitMs / 60_000)} minutes; Collie keeps waiting and sends ${step} once it does. Check its pane.`,
+  } satisfies Boundary;
 });

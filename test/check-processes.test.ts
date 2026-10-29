@@ -948,6 +948,68 @@ test(
   10_000,
 );
 
+/** `endCheck` on a TestClock its sleeps advance: each look at `/proc` and signal, by when. */
+const endedOnClock = (look: (at: number, alive: { now: boolean }) => Effect.Effect<void>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const clock = yield* TestClock.make();
+    const fast: Clock.Clock = { ...clock, sleep: (duration) => clock.adjust(duration) };
+    const start = clock.currentTimeMillisUnsafe();
+    const pid = 987_654;
+    const alive = { now: true };
+    const said: string[] = [];
+    const at = () => clock.currentTimeMillisUnsafe() - start;
+    const proc = fakeProc(fs, pid, {
+      stat: () => statLine(pid, "start"),
+      environ: () => (alive.now ? markers("run-1@1-check") : ""),
+      list: Effect.suspend(() => {
+        said.push(`look@${at()}`);
+        return look(at(), alive);
+      }),
+    });
+    const gone = yield* endCheck(
+      { id: "run-1@1-check", leader: { pid, started: "", group: pid } },
+      installation,
+      (_target, name) => said.push(`${name}@${at()}`),
+    ).pipe(
+      Effect.provideService(FileSystem.FileSystem, proc),
+      Effect.provideService(Clock.Clock, fast),
+    );
+    return { gone, said, ended: at() };
+  });
+
+test("ending a check looks every 100 ms, two seconds after its SIGTERM and one after its SIGKILL", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { gone, said } = yield* endedOnClock(() => Effect.void);
+      const looks = (from: number, to: number) =>
+        Array.from({ length: (to - from) / 100 + 1 }, (_, at) => `look@${from + at * 100}`);
+      expect(gone).toBe(false);
+      expect(said).toEqual([
+        "look@0",
+        "SIGTERM@0",
+        ...looks(0, 2000),
+        "look@2000",
+        "SIGKILL@2000",
+        ...looks(2000, 3000),
+      ]);
+    }),
+  ));
+
+test("a look at a check still running when its SIGTERM's two seconds are up is waited for, and used", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { gone, said, ended } = yield* endedOnClock((at, alive) =>
+        at === 1900
+          ? Effect.sleep("300 millis").pipe(Effect.andThen(Effect.sync(() => (alive.now = false))))
+          : Effect.void,
+      );
+      expect(gone).toBe(true);
+      expect(said.filter((one) => one.startsWith("SIG"))).toEqual(["SIGTERM@0"]);
+      expect(ended).toBe(2200);
+    }),
+  ));
+
 test(
   "a check whose end is refused keeps its record, so it is still found as left",
   () =>

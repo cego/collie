@@ -55,6 +55,7 @@ import * as ProcessModules from "effect/process";
 import * as CryptoModules from "effect/crypto";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
+import { HOLD, STOP, controlPath, controlSet } from "./controls";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
 import {
@@ -2767,8 +2768,7 @@ export const forgetExecution = (name: string, execution: string) =>
 /** How long a start waits for the engine to take its Run before it is refused. */
 const HAND_OVER_TIMEOUT = "30 seconds";
 
-export const HOLD = "hold";
-export const STOP = "stop";
+export { HOLD, STOP, controlPath };
 /** Why work parked; the host clears it when taking that work up. */
 export const PARKED = "parked";
 /** A wait that ends by itself; the host clears it when the wait ends. */
@@ -2786,20 +2786,6 @@ const UsageWaitJson = Schema.fromJsonString(UsageWaitSchema);
 
 /** What a Run nobody classified proves: the approved set, and no ticket's evidence. */
 const UNSPECIFIED = "unspecified";
-
-/**
- * What a workflow reads about its own run: the controls an operator has set over it, and
- * the question it is waiting on.
- *
- * A control is one file in the host's own directory, and the host is its only writer —
- * no client writes one and nothing consumes it as a command. It stays a file rather than
- * a row because a workflow reads it at its boundaries, from the engine's own fiber:
- * answering that read out of this process's memory or its database settles the boundary
- * fast enough to race a resume, and the run parks again before the resume has landed.
- * `docs/adr/0021-one-host-answers-for-a-run.md` has the measurement.
- */
-export const controlPath = (dir: string, control: string, runId: string): string =>
-  `${dir}/${control}.${runId}`;
 
 /**
  * Where one Run's evidence lives: the verification journal `verify.ts` writes and
@@ -3121,14 +3107,18 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
     if (tree.left.length > 0) return yield* refused(tree.left);
     const deadline = (yield* Clock.currentTimeMillis) + patience.forMs;
     for (const one of tree.runs) {
-      while (!(yield* options.stopped(one))) {
-        if ((yield* Clock.currentTimeMillis) >= deadline) {
-          return yield* new HelleError({
-            message: `the claim on ${options.slug} is ${runId}'s, and ${one} is still running a step its stop has not reached; resume ${options.to} once ${one} has stopped`,
-          });
-        }
-        yield* Effect.sleep(Duration.millis(patience.everyMs));
-      }
+      const stopped = yield* options.stopped(one).pipe(
+        Effect.repeat({
+          until: (stopped) => stopped,
+          schedule: Schedule.spaced(patience.everyMs).pipe(
+            Schedule.while(({ now }) => now < deadline),
+          ),
+        }),
+      );
+      if (!stopped)
+        return yield* new HelleError({
+          message: `the claim on ${options.slug} is ${runId}'s, and ${one} is still running a step its stop has not reached; resume ${options.to} once ${one} has stopped`,
+        });
     }
     const late: string[] = [];
     for (const one of tree.runs) late.push(...(yield* options.halt(one)).left);
@@ -3248,12 +3238,14 @@ export const hostLayer = (options: {
       const bun = yield* Effect.context<PlatformServices>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
-      const set = (control: string, runId: string) =>
-        fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
-      const untilStopped = (runId: string) =>
-        set(STOP, runId).pipe(
-          Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+      const anySet = (runId: string, ...controls: ReadonlyArray<string>) =>
+        controlSet(dir, runId, ...controls).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+      const set = (control: string, runId: string) => anySet(runId, control);
+      const untilSet = (runId: string, ...controls: ReadonlyArray<string>) =>
+        anySet(runId, ...controls).pipe(
+          Effect.repeat({ until: (on) => on, schedule: Schedule.spaced("1 second") }),
         );
+      const untilStopped = (runId: string) => untilSet(runId, STOP);
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
       yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
@@ -4368,11 +4360,9 @@ export const hostLayer = (options: {
         review: (asked) => reviewRead(asked).pipe(Effect.map(({ standing }) => standing)),
         awaitReview: (asked) =>
           Effect.gen(function* () {
-            const controlled = Effect.gen(function* () {
-              while (!((yield* set(HOLD, asked.runId)) || (yield* set(STOP, asked.runId))))
-                yield* Effect.sleep("1 second");
-              return { _tag: "Held" } satisfies ReviewStanding;
-            });
+            const controlled = untilSet(asked.runId, HOLD, STOP).pipe(
+              Effect.as({ _tag: "Held" } satisfies ReviewStanding),
+            );
             const polled = Effect.gen(function* () {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
@@ -4525,11 +4515,7 @@ export const hostLayer = (options: {
             const { gitlabHost } = yield* loadDefaults(options.userDir ?? dir).pipe(
               Effect.orElseSucceed(() => ({ gitlabHost: undefined })),
             );
-            const controlled = Effect.gen(function* () {
-              while (!((yield* set(HOLD, asked.runId)) || (yield* set(STOP, asked.runId))))
-                yield* Effect.sleep("1 second");
-              return false;
-            });
+            const controlled = untilSet(asked.runId, HOLD, STOP).pipe(Effect.as(false));
             const carried = Effect.gen(function* () {
               while (!(yield* productionCarries(asked.cwd, asked.sha, runShell, gitlabHost))) {
                 if (awaited !== null) yield* awaited;

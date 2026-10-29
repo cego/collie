@@ -80,6 +80,7 @@ import type { ForgeHttp } from "./forge/http";
 import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
 import type { Asker } from "./proposals";
+import { STOP, controlSet } from "./controls";
 import * as dispatch from "./dispatcher";
 import type * as Types from "effect/Types";
 import { bodySections, layers, personaHoles, skillDirs, skillFile } from "./definitions";
@@ -1650,12 +1651,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
    * transaction so a steer still reaches it. A status herdr cannot give ends the wait.
    * `false` where the Run was stopped while it waited.
    */
-  const stoppedRun = (runId: string) =>
-    FileSystem.FileSystem.pipe(
-      // engine.ts's `controlPath(dir, STOP, runId)`, which this module cannot import.
-      Effect.flatMap((fs) => fs.exists(`${host.dir}/stop.${runId}`)),
-      Effect.orElseSucceed(() => false),
-    );
+  const stoppedRun = (runId: string) => controlSet(host.dir, runId, STOP);
 
   const turnEnded = (launched: Launched) =>
     Effect.gen(function* () {
