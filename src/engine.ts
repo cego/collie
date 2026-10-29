@@ -56,6 +56,7 @@ import * as CryptoModules from "effect/crypto";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
 import { HOLD, STOP, controlPath, controlSet } from "./controls";
+import manifest from "../herdr-plugin.toml";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
 import {
@@ -746,6 +747,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string }) => Effect.Effect<IssueRef, WorkflowError>;
     readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string }) => Effect.Effect<void, WorkflowError>;
     readonly dir: string;
+    /** The Collie release this host runs, as its tag names it. */
+    readonly build: string;
     /**
      * This Machine's Usage readings, one per Subscription. Read it inside an Activity of
      * the workflow's own where it branches on it, so a replay takes the same branch.
@@ -938,6 +941,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly proved: string;
       readonly seen: ReadonlyArray<string>;
+      /** Also return a \`Waiting\` review that needs a repair, rather than wait for it. */
+      readonly untilBlocked?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
@@ -1047,6 +1052,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly project: string;
       readonly created: string;
       readonly status: "pending" | "suspended" | "complete" | "failed";
+      /** The issues its input says \`Closes #n\` for. */
+      readonly closes: ReadonlyArray<number>;
     }>;
     readonly workflows: ReadonlyArray<WorkflowTally>;
     readonly failed: ReadonlyArray<{ runId: string; workflow: string; reason: string }>;
@@ -3757,6 +3764,7 @@ export const hostLayer = (options: {
         });
       const host = Host.of({
         dir,
+        build: manifest.version,
         report: () =>
           Effect.fail(
             new WorkflowError({ reason: "Run reporting requires the host's workflow registry" }),
@@ -4368,6 +4376,7 @@ export const hostLayer = (options: {
                 const { mr, read, standing } = yield* reviewRead(asked);
                 if (standing._tag !== "Waiting" && standing._tag !== "Unreadable") return standing;
                 const wait = reviewWaitOf(mr, read);
+                if (wait._tag === "Blocked" && asked.untilBlocked === true) return standing;
                 yield* waitOn(
                   asked.runId,
                   wait._tag === "Awaiting" ? wait : { repair: blockedLine(mr, wait.why) },
@@ -5631,6 +5640,8 @@ export interface RegistryApi {
   readonly waiting: (runId: string) => Effect.Effect<ReadonlyArray<OpenDecision>>;
   /** One run as a front door shows it, or null where nothing was admitted under that id. */
   readonly view: (runId: string) => Effect.Effect<RunView | null>;
+  /** Drops `slug` from every Run's claim record, answering the Runs it was in. */
+  readonly forgetClaim: (slug: string) => Effect.Effect<ReadonlyArray<string>>;
   /** Every run this host has rows for, newest last, narrowed to one Task where named. */
   readonly views: (task: string | null) => Effect.Effect<ReadonlyArray<RunView>>;
   /** Records `url` as the merge request `runId` opened, as the MR step does, without its notice. */
@@ -7608,6 +7619,17 @@ const makeRegistry: (
           forgetExecution(row.generation, row.execution).pipe(Effect.provideContext(storage)),
         ),
       ),
+    forgetClaim: (slug: string) =>
+      Effect.gen(function* () {
+        const dropped: string[] = [];
+        for (const { run } of yield* store.runs) {
+          const file = claimPath(dir, run);
+          if (!(yield* recordedClaims(file)).some((one) => one.slug === slug)) continue;
+          yield* updateClaims(file, (now) => now.filter((one) => one.slug !== slug));
+          dropped.push(run);
+        }
+        return dropped;
+      }).pipe(Effect.orDie, Effect.provideContext(bun)),
     views: (task: string | null) =>
       store.runs.pipe(
         Effect.flatMap((rows) =>

@@ -1,7 +1,9 @@
 // One budget of test processes per user per Machine
 // (ADR-draft-test-processes-share-one-budget-per-machine). A whole suite and a small run each
-// take workers from it, in the order they arrived, so the Machine is never oversubscribed and
-// a small run never waits behind a whole suite.
+// take workers from their kind's share of it, so the Machine is never oversubscribed and a
+// small run never waits behind a whole suite. A request is admitted as soon as its share has
+// the workers free, whatever waits before it; arrival order decides only between those that
+// do not fit, so a large one can wait behind a stream of smaller ones.
 
 // FileSystem cannot write to or close a pipe it did not open.
 // oxlint-disable-next-line effecttsgo/node-builtin-import
@@ -54,13 +56,20 @@ export const admission = (
   const classOf = entries.filter(
     (one) => one.id !== request.id && (pooled(budget) || one.kind === request.kind),
   );
-  const earlier = classOf.filter((one) => one.state === "waiting" && one.seq < request.seq);
-  if (earlier.length > 0)
-    return { _tag: "wait", behind: earlier.toSorted((a, b) => a.seq - b.seq) };
   const holds = classOf.filter((one) => one.state === "held");
+  let free = share - holds.reduce((sum, one) => sum + one.workers, 0);
+  // An earlier waiter that fits now is admitted on its own look, so its workers are not free.
+  const ahead: Entry[] = [];
+  for (const one of classOf
+    .filter((it) => it.state === "waiting" && it.seq < request.seq)
+    .toSorted((a, b) => a.seq - b.seq)) {
+    const wants = Math.min(one.asked, share);
+    if (wants > free) continue;
+    free -= wants;
+    ahead.push(one);
+  }
   const workers = Math.min(request.asked, share);
-  if (holds.reduce((sum, one) => sum + one.workers, 0) + workers > share)
-    return { _tag: "wait", behind: holds };
+  if (workers > free) return { _tag: "wait", behind: [...ahead, ...holds] };
   const of = pooled(budget)
     ? `runs share all ${share}`
     : request.kind === "whole"

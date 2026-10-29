@@ -1,6 +1,6 @@
 // What `self-improve` decides, as pure functions its module and its tests share.
 
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 
 export const CATEGORIES = [
   "navigation",
@@ -133,11 +133,52 @@ export const goalOf = (
     "Quote nothing from anywhere else: no Run's goal, no person's words, no transcript and no other repository.",
   ].join("\n\n");
 
-export interface Ended {
+export const Ended = Schema.Struct({
+  name: Schema.String,
+  issues: Schema.Array(Schema.Int),
+  runId: Schema.NullOr(Schema.String),
+  ended: Schema.String,
+});
+export type Ended = typeof Ended.Type;
+
+export const FAILED_TO_START = "failed to start";
+
+/** An Improvement to start, by the issues it fixes. */
+export interface Starting {
   readonly name: string;
-  readonly runId: string | null;
-  readonly ended: string;
+  readonly issues: ReadonlyArray<number>;
 }
+
+/**
+ * The Improvements earlier Runs failed to start, each once, whose issues are all still open
+ * and which no Run started since the first of those Runs closes; one per name, the earliest.
+ */
+export const restartsOf = (
+  earlier: ReadonlyArray<{ readonly created: string; readonly ended: ReadonlyArray<Ended> }>,
+  since: ReadonlyArray<{ readonly created: string; readonly closes: ReadonlyArray<number> }>,
+  open: ReadonlyArray<{ readonly number: number }>,
+): ReadonlyArray<Starting> => {
+  const at = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
+  const seen = new Set<string>();
+  const restarts: Starting[] = [];
+  for (const { created, ended } of earlier.toSorted((a, b) => at(a.created) - at(b.created)))
+    for (const { name, issues, ended: how } of ended) {
+      const same = `${name} ${issues.toSorted((a, b) => a - b).join(",")}`;
+      if (!how.startsWith(FAILED_TO_START) || seen.has(same)) continue;
+      seen.add(same);
+      const taken = since.some(
+        (run) =>
+          at(run.created) > at(created) && run.closes.some((number) => issues.includes(number)),
+      );
+      if (
+        !taken &&
+        issues.every((number) => open.some((one) => one.number === number)) &&
+        !restarts.some((one) => one.name === name)
+      )
+        restarts.push({ name, issues });
+    }
+  return restarts;
+};
 
 export const summaryOf = (options: {
   readonly runId: string;

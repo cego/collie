@@ -10,7 +10,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { hostname } from "node:os";
 import { readEnv, type PluginEnv } from "../src/env";
 import { amend, readIntent, writeIntentHeld } from "../src/intent";
-import { withLock } from "../src/lock";
+import { ensureLockDir, withLock } from "../src/lock";
 import { nowIso } from "../src/time";
 import { changeSchedule, runView, scheduleListing } from "../src/lifecycle";
 import { listRuns } from "../src/runs";
@@ -419,6 +419,41 @@ test(
         );
         expect(yield* Fiber.join(pending)).toContain("the Intent is v2, not v1");
         expect((yield* readIntent(run.dir))?.goal).toBe("a wider picker");
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "an outcome change that waits out a long-held Proposals journal lock is applied, not refused as busy",
+  () =>
+    inWorld(
+      Effect.gen(function* () {
+        const run = yield* aRun("add a picker");
+        const journal = yield* proposalsPath(stateDir, KEY);
+        yield* ensureLockDir(journal);
+        const pending = yield* withLock(
+          `${journal}.lock`,
+          Effect.die("the Proposals journal's lock was already taken"),
+          Effect.gen(function* () {
+            const change = yield* call("collie_propose", {
+              interpretation: "change the kind",
+              actions: [
+                {
+                  kind: "update_intent",
+                  run: run.id,
+                  change: "set-outcome",
+                  patch: "bug",
+                  base_version: 1,
+                },
+              ],
+            }).pipe(Effect.forkScoped);
+            yield* Effect.sleep("3 seconds");
+            return change;
+          }),
+        );
+        expect(yield* Fiber.join(pending)).toContain("applied");
+        expect((yield* readIntent(run.dir))?.version).toBe(2);
       }),
     ),
   60_000,

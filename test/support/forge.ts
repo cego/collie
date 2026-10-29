@@ -118,7 +118,9 @@ export const FakeMr = Schema.Struct({
   mergedAt: Schema.optionalKey(Schema.String),
   closedAt: Schema.optionalKey(Schema.String),
   /** Whether the forge would merge it now; mergeable where unsaid. */
-  mergeable: Schema.optionalKey(Schema.Literals(["yes", "conflict", "unapproved", "checking"])),
+  mergeable: Schema.optionalKey(
+    Schema.Literals(["yes", "conflict", "unapproved", "checking", "running"]),
+  ),
   mergedBy: Schema.optionalKey(Schema.String),
   comments: Schema.optionalKey(Schema.Array(FakeComment)),
   /** Threads resolved, by their id. */
@@ -149,6 +151,7 @@ const GITLAB_MERGE_STATUS = {
   conflict: "conflict",
   unapproved: "not_approved",
   checking: "checking",
+  running: "ci_still_running",
 } as const;
 
 const GITHUB_MERGE_STATE = {
@@ -156,6 +159,7 @@ const GITHUB_MERGE_STATE = {
   conflict: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
   unapproved: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
   checking: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+  running: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
 } as const;
 
 export const ForgeModel = Schema.Struct({
@@ -1452,7 +1456,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     });
   }
   const checkRuns =
-    /^repos\/(.+)\/commits\/([^/]+)\/check-runs\?(?:check_name=([^&]+)(?:&.*)?|per_page=1)$/.exec(
+    /^repos\/(.+)\/commits\/([^/]+)\/check-runs\?(?:check_name=([^&]+)(?:&.*)?|per_page=\d+(?:&page=\d+)?)$/.exec(
       route,
     );
   if (checkRuns) {

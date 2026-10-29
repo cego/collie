@@ -683,16 +683,24 @@ export default defineWorkflow({
             }
             return at.head;
           });
+        const reviewAt = (proved: string, untilBlocked = false) =>
+          Effect.gen(function* () {
+            const standing = yield* host.awaitReview({
+              runId,
+              cwd,
+              proved,
+              seen: [],
+              untilBlocked,
+            });
+            if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
+            return standing;
+          });
         const awaited = (at: number, proved: string) =>
           Activity.make({
             name: `review.${at}`,
             success: ReviewStandingSchema,
             error: WorkflowError,
-            execute: Effect.gen(function* () {
-              const standing = yield* host.awaitReview({ runId, cwd, proved, seen: [] });
-              if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
-              return standing;
-            }),
+            execute: reviewAt(proved),
           });
 
         let proved = yield* proveHead(
@@ -900,7 +908,7 @@ export default defineWorkflow({
             name: `go-${gos}.check`,
             success: ReviewStandingSchema,
             error: WorkflowError,
-            execute: host.review({ runId, cwd, proved: head, seen: [] }),
+            execute: reviewAt(head, true),
           });
           if (still._tag !== "Ready") {
             yield* giveBack;
@@ -1010,7 +1018,7 @@ export default defineWorkflow({
                   success: Schema.NullOr(Schema.String),
                   error: WorkflowError,
                   execute: Effect.gen(function* () {
-                    const standing = yield* host.review({ runId, cwd, proved: head, seen: [] });
+                    const standing = yield* reviewAt(head, true);
                     if (standing._tag !== "Ready") return notReady(standing);
                     const now = yield* tested.readStage;
                     if (now._tag === "Moved") return `its head moved to ${short(now.head)}`;

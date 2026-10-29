@@ -1,10 +1,12 @@
 // What a `bun run test` invocation is, and what it holds from the Machine's budget. One that
 // names files or `--changed` is targeted: it builds into a directory of its own, shares nothing
-// with a whole suite, and takes its workers from the budget's reserve. Anything else is the
-// whole suite.
+// with a whole suite, and takes its workers from the budget's reserve. One naming a directory,
+// or more files than the reserve has workers, is the size of a suite: it still builds and times
+// as a targeted run, but takes its workers and the suite lock as a whole suite does. Anything
+// else is the whole suite.
 
 import { loadavg } from "node:os";
-import { type Duration, Effect, FileSystem, Path } from "effect";
+import { type Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { admitted, type Budget, type Kind, shareOf } from "./budget";
 import { inTurn } from "./suite-lock";
 
@@ -34,22 +36,49 @@ const TAKES_VALUE = new Set([
   "--preload",
 ]);
 
-export const isTargeted = (args: ReadonlyArray<string>) => {
+const isChanged = (arg: string) => arg === "--changed" || arg.startsWith("--changed=");
+
+/** The existing files and directories a run names, and whether it passes `--changed`. */
+const namedBy = (args: ReadonlyArray<string>) => {
   const operands = args.indexOf("--");
+  const option = (arg: string, at: number) =>
+    (operands === -1 || at < operands) &&
+    (arg.startsWith("-") || TAKES_VALUE.has(args[at - 1] ?? ""));
   return Effect.forEach(args, (arg, at) =>
-    operands !== -1 && at > operands
-      ? exists(arg)
-      : arg === "--changed" || arg.startsWith("--changed=")
-        ? Effect.succeed(true)
-        : arg.startsWith("-") || TAKES_VALUE.has(args[at - 1] ?? "")
-          ? Effect.succeed(false)
-          : exists(arg),
-  ).pipe(Effect.map((each) => each.includes(true)));
+    option(arg, at) ? Effect.succeed(false) : exists(arg),
+  ).pipe(
+    Effect.map((named) => ({
+      paths: args.filter((_, at) => named[at]),
+      changed: args.some((arg, at) => option(arg, at) && isChanged(arg)),
+    })),
+  );
 };
 
+export const isTargeted = (args: ReadonlyArray<string>) =>
+  Effect.map(namedBy(args), ({ paths, changed }) => changed || paths.length > 0);
+
+/** A targeted run the size of a suite, naming a directory or more files than small runs share, is whole. */
+export const kindOf = (args: ReadonlyArray<string>, budget: Budget) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { paths, changed } = yield* namedBy(args);
+    if (paths.length === 0) return changed ? "small" : "whole";
+    const directories = yield* Effect.filter(paths, (path) =>
+      fs.stat(path).pipe(
+        Effect.map((info) => info.type === "Directory"),
+        Effect.orElseSucceed(() => false),
+      ),
+    );
+    return directories.length > 0 || paths.length > shareOf(budget, "small") ? "whole" : "small";
+  });
+
 /** What a run asks of the budget, and its arguments less the `--parallel` it is given instead. */
-export const requestOf = (args: ReadonlyArray<string>, budget: Budget, targeted: boolean) => {
-  const kind: Kind = targeted ? "small" : "whole";
+export const requestOf = (
+  args: ReadonlyArray<string>,
+  budget: Budget,
+  targeted: boolean,
+  kind: Kind = targeted ? "small" : "whole",
+) => {
   const operands = args.indexOf("--");
   const isWorkers = (arg: string, at: number) =>
     (operands === -1 || at < operands) &&
@@ -97,6 +126,36 @@ export const timingFlags = (targeted: boolean, timings: string, seed: string) =>
   targeted
     ? Effect.map(exists(timings), (there) => [`--timings=${there ? timings : seed}`])
     : Effect.succeed([`--timings=${timings}`, "--update-timings"]);
+
+const TimingsJson = Schema.fromJsonString(
+  Schema.Struct({ version: Schema.Number, files: Schema.Record(Schema.String, Schema.Number) }),
+  { space: 2 },
+);
+const decodeTimings = Schema.decodeUnknownOption(TimingsJson);
+const encodeTimings = Schema.encodeSync(TimingsJson);
+
+/**
+ * Seeds a whole suite's timings and drops files that no longer exist, which Bun's own merge
+ * keeps forever. A targeted run reads the timings without updating them, so it leaves them be.
+ * Timings that do not decode are left for Bun.
+ */
+export const prepareTimings = Effect.fn("prepareTimings")(function* (
+  targeted: boolean,
+  timings: string,
+  seed: string,
+) {
+  if (targeted) return;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const text = yield* fs.readFileString((yield* exists(timings)) ? timings : seed);
+  const recorded = decodeTimings(text);
+  if (Option.isNone(recorded)) return;
+  const files: Record<string, number> = {};
+  for (const [file, duration] of Object.entries(recorded.value.files))
+    if (yield* exists(file)) files[file] = duration;
+  yield* fs.makeDirectory(path.dirname(timings), { recursive: true });
+  yield* fs.writeFileString(timings, `${encodeTimings({ ...recorded.value, files })}\n`);
+});
 
 const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
   const counts = new Map<string, number>();
