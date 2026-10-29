@@ -69,11 +69,11 @@ and its target, and the short answer is typed plain under the answerer's sender 
 
 Three modes:
 
-| Mode        | What it does                                        | Needs                                  |
-| ----------- | --------------------------------------------------- | -------------------------------------- |
-| `boundary`  | Composed into the front of the agent's next prompt. | Nothing.                               |
-| `now`       | Sent to an agent that is already working.           | A proven `now` for that harness.       |
-| `interrupt` | An interrupt key, then the message.                 | A proven `interrupt` for that harness. |
+| Mode        | What it does                                        | Needs                                             |
+| ----------- | --------------------------------------------------- | ------------------------------------------------- |
+| `boundary`  | Composed into the front of the agent's next prompt. | Nothing.                                          |
+| `now`       | Sent immediately where proven; otherwise at idle.   | A live agent; proven `now` to send while working. |
+| `interrupt` | An interrupt key, then the message.                 | A proven `interrupt` for that harness.            |
 
 `run steer <run> --step <step-id> "<words>"` leaves a note for a declared Step,
 including one whose agent has not launched. Its next prompt starts with the note,
@@ -95,8 +95,9 @@ every harness takes, and a busy agent's harness takes it when the turn it is in 
 human's message is about the work under way, so a `deliver` with no mode is `now`. Every
 mode goes out from the host, through the Dispatcher, under the agent's ledger lock. `now`
 and `interrupt` are gated on a **recorded live result** per harness; where that harness
-has none the delivery is refused, with `capability_unproven:<harness>:<mode>` on the
-ledger, so a steer that did not go out as asked has an answer rather than a silence.
+has none the Dispatcher refuses that mode, with `capability_unproven:<harness>:<mode>`
+on the ledger. A Run's `now` message instead uses the durable idle fallback described
+[below](#who-a-steer-reaches-and-what-it-says-came-of-it); interrupts still refuse.
 
 One delivery is at most 8 KiB, a resource limit the Dispatcher refuses past. Words that
 long are always over the paste budget, so they are kept as a file before that.
@@ -180,7 +181,7 @@ Queued acceptance does not claim observation. A submitted or uncertain delivery 
 automatically sent again, including after a harness switch. An uncertain result names the
 delivery to reconcile. Interrupts still require their own proven capability.
 
-A steer, a review comment, chat's `deliver` and a correction that name no agent reach the
+A steer, chat's `deliver` and a correction that name no agent reach the
 agent whose step is active — its newest launch has no Output yet — and with none active,
 the Run's builder (its `implementer`), else whoever was launched last — a Run with no
 implementer, such as an investigation, has no builder, and `--to builder` there says no
@@ -190,6 +191,10 @@ an operation, and `--operation` still works; where both are given, an agent's na
 then `--operation`, then `--to`. An agent is also named by the short name it was launched
 under, such as `build` for `run-…-build-r1`, which reaches it in a Run whose operations are
 its tickets, finished or not.
+
+Desktop defaults plan comments to the planner when one is live, including after a second
+opinion. An explicit recipient selection takes precedence. Other comments default to the
+agent at work. Plan comments ask for revision without answering the Run's next-choice menu.
 
 A steer or correction that herdr did not see start a turn is confirmed as a step's prompt
 is: a turn starting once the agent has settled, Claude's prompt-submit receipt, or, with
