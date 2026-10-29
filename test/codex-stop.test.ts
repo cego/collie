@@ -5,7 +5,7 @@
 // stop says, what it was sent, and whether anything started beside it.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun";
+import type { PlatformServices } from "../src/platform";
 import { Duration, Effect, FileSystem, Path, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
@@ -72,7 +72,7 @@ const body = work.toLayer((payload) =>
   }).pipe(asRun(payload)),
 );
 
-const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
 const SERVER = `${import.meta.dir}/support/codex-server.ts`;

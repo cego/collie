@@ -8,7 +8,8 @@
 // proposal; `validate` says which of a proposal's actions the target's own authority
 // already grants and which need a human. Running them is somebody else's module.
 
-import { Clock, Crypto, Data, Effect, FileSystem, Path, Schema, Option } from "effect";
+import { Clock, Data, Effect, FileSystem, Path, Schema, Option } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { budgetPath, herdOf, reserve, settle } from "./steering";
 import { isArray, isRecord, isString } from "./schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -559,7 +560,7 @@ export const askOnce = Effect.fn("Evaluator.askOnce")(function* (
 ) {
   const asked = yield* Effect.result(
     Effect.gen(function* () {
-      const callId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+      const callId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
       yield* reserve(deps.budget, { id: callId, run: null }, deps.evaluator.limits);
       const answer = yield* evaluate(deps.evaluator, kind, pack);
       yield* settle(deps.budget, callId, {

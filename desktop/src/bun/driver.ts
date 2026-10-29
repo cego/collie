@@ -1,14 +1,7 @@
 // What the Flock chat's session needs of a harness: one driver per harness it can run on.
 
-import {
-  Schema,
-  type Crypto,
-  type Effect,
-  type FileSystem,
-  type Path,
-  type Scope,
-  type Stream,
-} from "effect";
+import { Schema, type Effect, type FileSystem, type Path, type Scope, type Stream } from "effect";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type { AguiEvent } from "../shared/agui";
 import type { Answers, ChatMessage, Earlier } from "../shared/chat-view";
 import type { ShownImage } from "../shared/attachments";
@@ -41,7 +34,7 @@ export interface DriverContext {
   readonly dir: string;
   readonly flock: FlockChat;
   readonly run: <A>(
-    effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>,
+    effect: Effect.Effect<A, never, SecureRandom.SecureRandom | FileSystem.FileSystem>,
   ) => Promise<A>;
   readonly ask: (toolUseID: string, signal: AbortSignal) => Promise<Answers | null>;
   readonly noticed: () => string | undefined;

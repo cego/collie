@@ -6,7 +6,7 @@
 // installation's are, and the link between them is the real listener on 127.0.0.1.
 
 import solidPlugin from "@opentui/solid/bun-plugin";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../../src/platform";
 import { Effect, FileSystem, Schema, type Scope } from "effect";
 import { exec } from "./command";
 import { suiteEnv } from "./effect";
@@ -65,7 +65,7 @@ const machineOf = (side: Side) => ({
  */
 export const twoMachines = <A, E>(
   prefix: string,
-  body: (first: Side, second: Side) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (first: Side, second: Side) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string>,
   options: {
     /** Each Machine's `COLLIE_PEER_PORT`, by name; 0, where its listener binds what is free. */
@@ -73,7 +73,7 @@ export const twoMachines = <A, E>(
     /** Runs before any host starts, with the `COLLIE_PEER_PORT` each Machine was given. */
     readonly before?: (
       ports: Readonly<Record<string, string>>,
-    ) => Effect.Effect<void, never, BunServices | Scope.Scope>;
+    ) => Effect.Effect<void, never, PlatformServices | Scope.Scope>;
   } = {},
 ) =>
   Effect.gen(function* () {

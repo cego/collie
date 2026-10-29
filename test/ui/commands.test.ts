@@ -1,7 +1,7 @@
 // The Settings commands: what a value the human typed does to config.json, which is what
 // every later Run reads its defaults from.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, PlatformError } from "effect";
 import { Rig, type RigError } from "../support/recorder";
@@ -25,7 +25,11 @@ let runs: RunFacts[] = [];
 
 function effectTest(
   name: string,
-  body: () => Effect.gen.Return<void, RigError | PlatformError.PlatformError | Error, BunServices>,
+  body: () => Effect.gen.Return<
+    void,
+    RigError | PlatformError.PlatformError | Error,
+    PlatformServices
+  >,
 ) {
   test(name, () => runEffect(Effect.gen(body)));
 }

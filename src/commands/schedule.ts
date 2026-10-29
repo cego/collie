@@ -10,7 +10,7 @@ import { Herdr } from "../herdr";
 import { changeSchedule, flockSchedules, moduleFor, scheduleDoorOn } from "../lifecycle";
 import { machineName } from "../peers";
 import { moveSchedule } from "../schedule-move";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../platform";
 import { err, type Failure, type OpResult } from "../operations";
 import {
   SCHEDULE_PROJECTS_ROOT,
@@ -35,7 +35,7 @@ const checkoutOf = Effect.fn("schedule.checkoutOf")(function* (
 ): Effect.fn.Return<
   { readonly path: string | null } | { readonly error: OpResult },
   never,
-  BunServices
+  PlatformServices
 > {
   const named = given.trim();
   if (named === SCHEDULE_PROJECTS_ROOT || named.startsWith("/")) return { path: named };
@@ -69,7 +69,7 @@ const changing = (
   requestId: Option.Option<string>,
   change: (
     env: PluginEnv,
-  ) => Effect.Effect<ScheduleChange | { readonly refused: OpResult }, never, BunServices>,
+  ) => Effect.Effect<ScheduleChange | { readonly refused: OpResult }, never, PlatformServices>,
 ) =>
   answering((env) =>
     mutation(env, operation, requestId, (request) =>

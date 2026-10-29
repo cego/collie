@@ -10,7 +10,7 @@
 
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Option, Schema, Scope, Stream } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { writeConfigValue } from "../src/config";
 import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
@@ -46,7 +46,7 @@ const payloadOf = (envelope: { readonly data?: unknown }) =>
 
 const proves = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) => provesWith(prefix, body, [...MODULE, ...OTHER]);
 
 test(

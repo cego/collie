@@ -2,7 +2,7 @@
 // of the human; Desktop's own version of the runner goes there only once its signature
 // verifies; and `collie onboard` runs with it, each step told as it comes.
 
-import { Clock, Crypto, Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Clock, Effect, FileSystem, Option, Schema, Stream } from "effect";
 import { inTerminal } from "../../../src/in-terminal";
 import { verifiedRunner as sharedVerifiedRunner } from "../../../src/releases";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";

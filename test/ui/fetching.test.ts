@@ -2,7 +2,7 @@
 // nothing at all, and the host's merge watch reads one merge request once per poll, again
 // only when asked to.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Layer, PlatformError } from "effect";
 import { Rig, type RigError } from "../support/recorder";
@@ -28,7 +28,11 @@ let runs: RunFacts[] = [];
 
 function effectTest(
   name: string,
-  body: () => Effect.gen.Return<void, RigError | PlatformError.PlatformError | Error, BunServices>,
+  body: () => Effect.gen.Return<
+    void,
+    RigError | PlatformError.PlatformError | Error,
+    PlatformServices
+  >,
 ) {
   test(name, () => runEffect(Effect.gen(body)));
 }

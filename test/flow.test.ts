@@ -3,7 +3,7 @@
 // (ADR-draft-a-step-is-declared-where-its-work-is-written).
 
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { Clock, DateTime, Effect, FileSystem, Option, Schema, type Scope, Stream } from "effect";
 import type { Flow, FlowLane, FlowNode } from "../src/board-model";
 import { STEPS_FILE } from "../src/steps";
@@ -29,7 +29,7 @@ const cli = (world: World, args: ReadonlyArray<string>) =>
 /** A world whose fake agents answer each prompt in turn with these Outputs. */
 const flowing = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   answers: number,
   modules: ReadonlyArray<string> = ["stepped.workflow.ts"],
 ) =>

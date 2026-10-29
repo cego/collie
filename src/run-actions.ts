@@ -15,7 +15,7 @@ import { Effect, Option, Schema } from "effect";
 import { hostname } from "node:os";
 import type { PlatformError } from "effect/PlatformError";
 import { reason } from "./naming";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } from "./executors";
 import type { PluginEnv } from "./env";
 import {
@@ -127,7 +127,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   const failed = (note: string): ExecutionResult => ({ state: "failed", note });
   const settled = (result: OpResult | Failure): ExecutionResult =>
     result.ok ? { state: "applied", note: result.human } : failed(result.error.message);
-  const carry = (what: Effect.Effect<OpResult | Failure, PlatformError, BunServices>) =>
+  const carry = (what: Effect.Effect<OpResult | Failure, PlatformError, PlatformServices>) =>
     what.pipe(
       Effect.map(settled),
       Effect.catch((cause) => Effect.succeed(failed(reason(cause)))),

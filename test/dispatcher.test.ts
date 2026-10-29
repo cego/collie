@@ -3,7 +3,7 @@
 // refuses versus one that never answers, and an agent that is no longer the one the
 // message was addressed to.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { Clock, DateTime, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -200,7 +200,7 @@ function fake(
     /** What herdr saw of the submission; `observed` unless a test says otherwise. */
     saw?: "observed" | "unobserved";
     /** Run inside `agentPrompt`, to observe what the ledger says at that instant. */
-    onPrompt?: Effect.Effect<void, never, BunServices>;
+    onPrompt?: Effect.Effect<void, never, PlatformServices>;
   } = {},
 ) {
   const calls: string[] = [];

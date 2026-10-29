@@ -4,7 +4,7 @@
 
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer, type PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Queue, type Scope } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -28,8 +28,8 @@ import { type Credential, type MachineGiven, type OnboardRun } from "../desktop/
 import { renewalDue } from "../src/gitlab-token";
 import { HELLE_URL } from "../src/helle-url";
 
-const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>) =>
-  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
+const run = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
+  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(platformLayer)));
 
 const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "collie-credentials-" }),

@@ -10,7 +10,7 @@
 // second engine on the same file rather than a second map.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun";
+import type { PlatformServices } from "../src/platform";
 import {
   Clock,
   ConfigProvider,
@@ -210,7 +210,7 @@ test(
 );
 
 /** Every wait in here is on a clock that moves many times faster than the wall's. */
-const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
@@ -218,7 +218,7 @@ const session = <A, E>(
   run: Effect.Effect<
     A,
     E,
-    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | BunServices.BunServices
+    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | PlatformServices
   >,
   over?: Partial<AgentHost>,
 ) =>

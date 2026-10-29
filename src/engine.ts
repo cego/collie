@@ -15,14 +15,12 @@ import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
 import { hostname } from "node:os";
-import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
   Cache,
   Cause,
   Clock,
   Context,
-  Crypto,
   Data,
   Deferred,
   DateTime,
@@ -42,6 +40,8 @@ import {
   Semaphore,
   Stream,
 } from "effect";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { ConfigError } from "effect/Config";
 import type { PlatformError } from "effect/PlatformError";
@@ -52,6 +52,7 @@ import * as Activity from "effect/workflow/Activity";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as WorkflowModules from "effect/workflow";
 import * as ProcessModules from "effect/process";
+import * as CryptoModules from "effect/crypto";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
 import { Agents } from "./agents";
@@ -240,7 +241,7 @@ import {
   type StepNote,
 } from "./steps";
 import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import {
   approvedFile,
   approvedFrom,
@@ -310,8 +311,17 @@ const NAMESPACES = [
   ["effect", EffectRoot],
   ["effect/workflow", WorkflowModules],
   ["effect/process", ProcessModules],
+  ["effect/crypto", CryptoModules],
   // rc.117's path, so a module saved before 4.0.0 moved it still loads. Goes in Collie 0.42.0.
   ["effect/unstable/workflow", WorkflowModules],
+] as const;
+
+/** What Effect removed that a module saved before may still import, and what replaces it. */
+const REMOVED = [
+  [
+    "effect/Crypto",
+    "Effect 4.1 removed effect/Crypto: ids come from effect/crypto's SecureRandom and hashes from its Digest",
+  ],
 ] as const;
 
 export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
@@ -330,7 +340,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
 /** Kept in step with package.json, which `engine.test.ts` checks: the host and an
  *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
-  effect: "4.0.1",
+  effect: "4.1.0",
   typescript: "^7.0.2",
 } as const;
 
@@ -2201,6 +2211,10 @@ export function installSdk(): void {
         // the values in it stay the very functions and keys the binary is running on.
         build.module(specifier, () => ({ exports: { ...namespace }, loader: "object" }));
       }
+      for (const [specifier, reason] of REMOVED)
+        build.module(specifier, () => {
+          throw new Error(reason);
+        });
     },
   });
 }
@@ -2714,7 +2728,7 @@ export function engineLayer(options: {
     ).pipe(
       Effect.map(([SingleRunner, ClusterWorkflowEngine]) => {
         const cluster = SingleRunner.layer({ shardingConfig: polled }).pipe(
-          Layer.provide([sql, BunCrypto.layer]),
+          Layer.provide([sql, Digest.layerWebCrypto]),
         );
         // The message storage too: forgetting a Run clears what the engine kept of it.
         return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
@@ -3214,7 +3228,11 @@ export const hostLayer = (options: {
   readonly issuePrivacyBudget?: Duration.Input;
   /** How often a wait for review reads the merge request again. */
   readonly reviewPoll?: Duration.Input;
-}): Layer.Layer<Host | Notifier | Oversight | Reliance, never, Store | BunServices | ForgeHttp> =>
+}): Layer.Layer<
+  Host | Notifier | Oversight | Reliance,
+  never,
+  Store | PlatformServices | ForgeHttp
+> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const dir = options.dir;
@@ -3227,7 +3245,7 @@ export const hostLayer = (options: {
         | ChildProcessSpawner.ChildProcessSpawner
         | ForgeHttp;
       const services = yield* Effect.context<Collecting>();
-      const bun = yield* Effect.context<BunServices>();
+      const bun = yield* Effect.context<PlatformServices>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
       const set = (control: string, runId: string) =>
@@ -4645,10 +4663,7 @@ export const hostLayer = (options: {
             evaluator: built.evaluator,
             budgetFile: yield* budgetPath(dir, built.herdKey),
             limits: built.limits,
-            newId: Crypto.Crypto.pipe(
-              Effect.flatMap((one) => one.randomUUIDv4),
-              Effect.orDie,
-            ),
+            newId: SecureRandom.SecureRandom.pipe(Effect.flatMap((one) => one.uuidV4())),
             log: (line: string) => said(at, line).pipe(Effect.provideContext(services)),
           } satisfies JudgementDeps;
         }).pipe(Effect.orElseSucceed(() => null));
@@ -4773,7 +4788,7 @@ export interface Herd {
   readonly socketPath: string | null;
   readonly pluginRoot: string;
   /** Where herdr's server listens, asked while `socketPath` is null. */
-  readonly locate?: Effect.Effect<string | null, never, BunServices>;
+  readonly locate?: Effect.Effect<string | null, never, PlatformServices>;
 }
 
 /** Which toasts a Run has raised, so a replay or a second host does not raise them again. */
@@ -5273,7 +5288,7 @@ const checksOfStart = Effect.fn("Engine.checksOfStart")(function* (o: {
   readonly verify: ReadonlyArray<VerifySpec> | undefined;
   readonly userDir: string;
   /** Where a checkout for the Run starts, by placement's rule. */
-  readonly start: Effect.Effect<string | null, never, BunServices>;
+  readonly start: Effect.Effect<string | null, never, PlatformServices>;
 }) {
   const readApproved = (cwd: string, ref: string | null) =>
     approvedAt(cwd, o.userDir, ref).pipe(Effect.catch((cause) => refusedInput(cause.message)));
@@ -5764,7 +5779,11 @@ export const registryLayer = (
 ): Layer.Layer<
   Registry,
   never,
-  HostServices | Store | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner | BunServices
+  | HostServices
+  | Store
+  | SecureRandom.SecureRandom
+  | ChildProcessSpawner.ChildProcessSpawner
+  | PlatformServices
 > => Layer.effect(Registry)(makeRegistry(dir, options));
 
 /**
@@ -5800,7 +5819,7 @@ export const foundationLayer = (options: {
   | Reactivity.Reactivity
   | ForgeHttp,
   ConfigError,
-  BunServices
+  PlatformServices
 > =>
   hostLayer(options).pipe(
     Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
@@ -5815,10 +5834,10 @@ const makeRegistry: (
   never,
   | HostServices
   | Store
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | Scope.Scope
   | ChildProcessSpawner.ChildProcessSpawner
-  | BunServices
+  | PlatformServices
 > = Effect.fn("Engine.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
   const crashAt = options?.crashAt;
   const locate = options?.locate;
@@ -5826,7 +5845,7 @@ const makeRegistry: (
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const fs = yield* FileSystem.FileSystem;
   const store = yield* Store;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const hostScope = yield* Effect.scope;
   const placing =
     options?.placing ??
@@ -5835,7 +5854,7 @@ const makeRegistry: (
       Effect.orDie,
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
-  const bun = yield* Effect.context<BunServices | Crypto.Crypto>();
+  const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom>();
 
   /**
    * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
@@ -7485,8 +7504,7 @@ const makeRegistry: (
 
   const startWork = Effect.fn("Engine.Registry.start")(function* (options: StartOptions) {
     const generation = options.generation;
-    const runId =
-      options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
+    const runId = options.runId ?? `run-${(yield* random.uuidV4()).slice(0, 8)}`;
     const asked = options.options ?? {};
     const { request, launch, settled, provenance, payload, approved } = yield* settleStart(
       options,

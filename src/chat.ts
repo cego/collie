@@ -14,7 +14,8 @@
 // happened to write last in this directory, which is how a Home reopens into somebody
 // else's conversation.
 
-import { Crypto, Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { everyAgentText } from "./agents";
 import { autoCompactWindowAsWritten, readConfig } from "./config";
 import { redact } from "./redact";
@@ -711,14 +712,14 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
         mcpConfig: mcpConfig(self, serverEnv),
       });
 
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const paneId = home.chatPaneId ?? "";
       const kind = adapter?.kind ?? decision.harness;
       const start = Effect.fn("Chat.start")(function* (sessionId: string) {
         // A fresh name every attempt, never derived from the session: herdr keeps a name
         // until the process holding it has gone, so a relaunch under the same name was
         // refused `agent_name_taken` and left the Home with a pane and nothing in it.
-        const agent = `${CHAT_AGENT_PREFIX}-${(yield* crypto.randomUUIDv4).slice(0, 8)}`;
+        const agent = `${CHAT_AGENT_PREFIX}-${(yield* random.uuidV4()).slice(0, 8)}`;
         const failed = yield* herdr
           .agentStart({
             name: agent,
@@ -733,7 +734,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
         return { agent, sessionId, failed };
       });
 
-      const attempt = yield* start(yield* crypto.randomUUIDv4);
+      const attempt = yield* start(yield* random.uuidV4());
       if (attempt.failed !== null) {
         // herdr's own words: "would not start it" is not something a human can act on.
         const why = `herdr would not start ${decision.harness} in the Home's chat pane: ${attempt.failed}`;

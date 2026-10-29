@@ -4,7 +4,7 @@
 // could: a record written *before* herdr is called, and one answer to "is something
 // already in the air about this work".
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import {
   Clock,
   Data,
@@ -210,7 +210,7 @@ export interface Channel {
   submit(
     text: string,
     draft: DeliveryDraft,
-  ): Effect.Effect<SubmitOutcome, never, FileSystem.FileSystem | Path.Path | BunServices>;
+  ): Effect.Effect<SubmitOutcome, never, FileSystem.FileSystem | Path.Path | PlatformServices>;
 }
 
 export interface DispatcherDeps {
@@ -219,7 +219,7 @@ export interface DispatcherDeps {
   /** The Run's audit trail, so a refusal is explained where the Run is read. */
   readonly log: (
     line: string,
-  ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path | BunServices>;
+  ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path | PlatformServices>;
 }
 
 /** Nothing was sent, and the caller is told which of its own rules stopped it. */
@@ -587,7 +587,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
   /** Re-read under the lock, so a settlement never lands on a delivery another writer moved. */
   const settle = (
     id: string,
-    act: Effect.Effect<void, never, BunServices>,
+    act: Effect.Effect<void, never, PlatformServices>,
     note: string,
     state?: "acknowledged",
   ) =>
@@ -757,7 +757,7 @@ const recordUngated = Effect.fn("Dispatcher.recordUngated")(function* (
  */
 export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   deps: DispatcherDeps & {
-    readonly status: (agent: string) => Effect.Effect<string, never, BunServices>;
+    readonly status: (agent: string) => Effect.Effect<string, never, PlatformServices>;
   },
   channel: Channel,
   entry: AgentEntry,

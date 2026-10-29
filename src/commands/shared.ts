@@ -1,4 +1,4 @@
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../platform";
 import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Argument, Command, Flag } from "effect/cli";
@@ -175,7 +175,7 @@ export const locateRun = Effect.fn("collie.locateRun")(function* (
 ): Effect.fn.Return<
   Located,
   never,
-  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | BunServices
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | PlatformServices
 > {
   const missing: Located = {
     _tag: "RunFailure",
@@ -313,7 +313,7 @@ export function answering<E, R>(
 export function mutating(
   operation: string,
   requestId: Option.Option<string>,
-  apply: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, BunServices>,
+  apply: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, PlatformServices>,
 ) {
   return answering((env) => mutation(env, operation, requestId, (id) => apply(env, id)));
 }

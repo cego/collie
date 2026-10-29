@@ -2,7 +2,7 @@
 // Machine's host over its `chat` channel, with everything named `<machine>:<id>`.
 
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer } from "../src/platform";
 import { Effect, Fiber, FileSystem, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ATTACHMENT_BYTES } from "../src/attachments";
@@ -294,7 +294,7 @@ const flockOf = (asked: Asked[]) => ({
 });
 
 const call = (asked: Asked[], name: string, input: JsonObject) =>
-  callFlockTool(flockOf(asked), name, input).pipe(Effect.provide(BunServices.layer));
+  callFlockTool(flockOf(asked), name, input).pipe(Effect.provide(platformLayer));
 
 test("collie_herd is every Machine's board, each Run named by its Machine", () =>
   Effect.runPromise(
@@ -510,7 +510,7 @@ test("a Machine whose Schedules cannot be read is named, with no empty list clai
         ],
       };
       const said = yield* callFlockTool(flock, "collie_schedules", {}).pipe(
-        Effect.provide(BunServices.layer),
+        Effect.provide(platformLayer),
       );
       expect(said).toContain("mk-pc:nightly");
       expect(said).toContain("upgrade Collie on vm-mk");
@@ -586,7 +586,7 @@ test("a Machine whose host is older than the Flock chat is written to by nothing
       expect(asked).toEqual([]);
       expect(hold).toContain("upgrade Collie on old-pc");
       expect(news).toContain("upgrade Collie on old-pc");
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("a Machine that stops answering costs a look for News its time, and the others still speak", () =>
@@ -619,7 +619,7 @@ test("a Machine that stops answering costs a look for News its time, and the oth
       const said = yield* Fiber.join(looking);
       expect(said).toContain("[consequential] mk-pc:r-1");
       expect(said).toContain("vm-mk's News could not be read");
-    }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
+    }).pipe(Effect.provide([platformLayer, TestClock.layer()])),
   ));
 
 const withUnread = (asked: Asked[], board: ChatBoard) => ({
@@ -681,7 +681,7 @@ for (const [board, why] of UNREAD)
           asked.filter(({ op }) => op !== "news" && op !== "declare" && op !== "read"),
         ).toEqual([]);
         expect(asked.filter(({ machine }) => machine === "vm-mk")).toEqual([]);
-      }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
+      }).pipe(Effect.provide([platformLayer, TestClock.layer()])),
     ));
 
 test("a live Machine whose chat channel is not open yet is still a Machine, and says so", () =>
@@ -697,7 +697,7 @@ test("a live Machine whose chat channel is not open yet is still a Machine, and 
       expect(said).toBe(
         "hold: failed — vm-mk's chat channel is not open yet. Nothing was done on vm-mk.",
       );
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("a live Machine's board is read before its chat channel opens", () =>
@@ -715,7 +715,7 @@ test("a live Machine's board is read before its chat channel opens", () =>
         {},
       );
       expect(herd).toContain("run vm-mk:r-2: Fix board bugs");
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("a Repo run is reached on its Machine by its bare id", () =>
@@ -736,7 +736,7 @@ test("a Repo run is reached on its Machine by its bare id", () =>
       const bare = yield* callFlockTool(flock, "collie_hold", { run: "r-api" });
       expect(bare).toBe("Held r-api");
       expect(asked.at(-1)).toMatchObject({ machine: "vm-mk", op: "control" });
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("a live Machine is read from the board Desktop follows, with no board of its host's", () =>
@@ -764,7 +764,7 @@ const callFile = (asked: Asked[], name: string, input: JsonObject, files = true)
     },
     name,
     input,
-  ).pipe(Effect.provide(BunServices.layer));
+  ).pipe(Effect.provide(platformLayer));
 
 test("collie_read reaches the named Machine's host with the bare path, and answers numbered lines", () =>
   Effect.runPromise(
@@ -948,7 +948,7 @@ test("a Machine whose host cannot answer a read is told to upgrade, one that is 
       expect(said).toContain("## vm-slow\n\nvm-slow did not answer within 10 s.");
       expect(said).not.toContain("upgrade Collie on vm-slow");
       expect(said).toContain("collie_workspaces answered by mk-pc");
-    }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
+    }).pipe(Effect.provide([platformLayer, TestClock.layer()])),
   ));
 
 test("the chat reads whether each Machine is in sync, and syncs the one it names", () =>
@@ -999,7 +999,7 @@ test("the chat's model listing explains reads in progress and the table fallback
           },
           "collie_chat_harness",
           {},
-        ).pipe(Effect.provide(BunServices.layer));
+        ).pipe(Effect.provide(platformLayer));
       expect(yield* read({ from: "reading" })).toContain("claude's models are still being read.");
       const failed = yield* read({
         from: "table",
@@ -1138,7 +1138,7 @@ test("the chat's read names where the conversation is held, that no session is w
           { ...flockOf([]), chatChoices: Effect.succeed(account) },
           "collie_chat_harness",
           {},
-        ).pipe(Effect.provide(BunServices.layer)),
+        ).pipe(Effect.provide(platformLayer)),
       ).toBe(
         [
           "The Flock chat is set to pi, with no model set, so it runs as openai-codex/gpt-6.1-sol, with no effort set, so it runs at high.",
@@ -1198,7 +1198,7 @@ const withShot = <A>(body: (dir: string) => Effect.Effect<A, unknown, FileSystem
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "flock-carry-" });
       yield* fs.writeFileString(`${dir}/shot.png`, "PNG!");
       return yield* body(dir);
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   );
 
 const start = (extra: JsonObject = {}) => ({
@@ -1215,7 +1215,7 @@ test("a start carries the turn's files, uploaded to its Machine once and handed 
       const asked: Asked[] = [];
       const flock = carrying(asked, dir);
       const said = yield* callFlockTool(flock, "collie_do", start()).pipe(
-        Effect.provide(BunServices.layer),
+        Effect.provide(platformLayer),
       );
       expect(said).toBe("start: applied");
       const uploads = asked.filter(({ op }) => op === "upload");
@@ -1234,13 +1234,13 @@ test("a start carries the turn's files, uploaded to its Machine once and handed 
         attachments: ["shot.png"],
       });
 
-      yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(BunServices.layer));
+      yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(platformLayer));
       expect(asked.filter(({ op }) => op === "upload")).toHaveLength(1);
 
       // A day on, the host may have pruned it, so it is uploaded again.
       const held = flock.uploaded.get("vm-mk")!.get(shotSha)!;
       flock.uploaded.get("vm-mk")!.set(shotSha, { ...held, at: held.at - 2 * 24 * 60 * 60 * 1000 });
-      yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(BunServices.layer));
+      yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(platformLayer));
       expect(asked.filter(({ op }) => op === "upload")).toHaveLength(2);
     }),
   ));
@@ -1251,7 +1251,7 @@ test("an offer taken on a Run named with its Machine goes to that Machine's host
       const asked: Asked[] = [];
       yield* callFlockTool(carrying(asked, dir), "collie_do", {
         actions: [{ kind: "take_offer", run: "vm-mk:r-2", offer: "release" }],
-      }).pipe(Effect.provide(BunServices.layer));
+      }).pipe(Effect.provide(platformLayer));
       expect(asked.find(({ op }) => op === "act")).toEqual({
         machine: "vm-mk",
         op: "act",
@@ -1282,7 +1282,7 @@ test("a file over 100 MB, here or on another Machine, is refused before it is re
         flock,
         "collie_do",
         start({ attachments: [`${dir}/huge.bin`] }),
-      ).pipe(Effect.provide(BunServices.layer));
+      ).pipe(Effect.provide(platformLayer));
       expect(here).toContain(`${dir}/huge.bin is larger than 100 MB`);
 
       const [pc, vm] = flock.machines();
@@ -1303,7 +1303,7 @@ test("a file over 100 MB, here or on another Machine, is refused before it is re
         { ...flock, machines: () => [big, vm!] },
         "collie_do",
         start({ attachments: ["mk-pc:/big.log"] }),
-      ).pipe(Effect.provide(BunServices.layer));
+      ).pipe(Effect.provide(platformLayer));
       expect(there).toContain("mk-pc:/big.log is larger than 100 MB");
       expect(asked.filter(({ op }) => op === "upload" || op === "act")).toEqual([]);
     }),
@@ -1315,13 +1315,13 @@ test("[] carries no files, and a file already on the start's Machine goes as its
       const asked: Asked[] = [];
       const flock = carrying(asked, dir);
       yield* callFlockTool(flock, "collie_do", start({ attachments: [] })).pipe(
-        Effect.provide(BunServices.layer),
+        Effect.provide(platformLayer),
       );
       yield* callFlockTool(
         flock,
         "collie_do",
         start({ attachments: ["vm-mk:/var/log/app.log"] }),
-      ).pipe(Effect.provide(BunServices.layer));
+      ).pipe(Effect.provide(platformLayer));
       expect(asked.filter(({ op }) => op === "upload")).toEqual([]);
       expect(asked.filter(({ op }) => op === "act").map(({ payload }) => payload)).toMatchObject([
         { actions: [{ attachments: [] }] },
@@ -1339,7 +1339,7 @@ test("a turn of Desktop's own carries no files", () =>
         said: () => undefined,
         attachments: () => undefined,
       };
-      yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(BunServices.layer));
+      yield* callFlockTool(flock, "collie_do", start()).pipe(Effect.provide(platformLayer));
       expect(asked.filter(({ op }) => op === "upload")).toEqual([]);
       expect(asked.find(({ op }) => op === "act")?.payload).not.toMatchObject({
         actions: [{ attachments: expect.anything() }],
@@ -1355,7 +1355,7 @@ test("a start carrying files to a Machine whose Collie predates them is refused,
         carrying(asked, dir, { vm: false }),
         "collie_do",
         start(),
-      ).pipe(Effect.provide(BunServices.layer));
+      ).pipe(Effect.provide(platformLayer));
       expect(said).toContain("upgrade Collie on vm-mk");
       expect(asked.filter(({ op }) => op === "act" || op === "upload")).toEqual([]);
     }),
@@ -1389,7 +1389,7 @@ test("a Machine whose Collie has no such operation is told to upgrade, and the r
       const said = yield* callFlockTool(flock, "collie_workspaces", {});
       expect(said).toContain("upgrade Collie on vm-mk");
       expect(said).toContain("collie_workspaces answered by mk-pc");
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("the Flock chat moves a Schedule between two Machines through the shared sequence", () =>
@@ -1435,7 +1435,7 @@ test("a Flock chat move to a Machine it cannot reach is refused, and nothing is 
         },
         "collie_move_schedule",
         { schedule: "vm-mk:daily", to: "mk-pc" },
-      ).pipe(Effect.provide(BunServices.layer));
+      ).pipe(Effect.provide(platformLayer));
       expect(said).toContain("machine_unreachable");
       expect(asked.filter(({ op }) => op === "changeSchedule")).toEqual([]);
     }),
@@ -1464,7 +1464,7 @@ test("a deliver to a Machine whose board speaks an older protocol is refused bef
         "vm-mk declare",
         "vm-mk act",
       ]);
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 /** A Machine whose host has `runs` though its board lists none of them, or whose `progress` is `answer`. */
@@ -1509,7 +1509,7 @@ test("a bare id no board lists yet is read on the one Machine whose host has it"
         'No Run "r-new" on any Machine. Nothing was done; collie_herd lists them as <machine>:<id>.',
       );
       expect(nowhere).toEqual([]);
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 for (const [why, answer, said] of [
@@ -1535,7 +1535,7 @@ for (const [why, answer, said] of [
         expect(refused).toContain(said);
         expect(refused).toContain("name it as vm-mk:r-new");
         expect(asked).toEqual([]);
-      }).pipe(Effect.provide([BunServices.layer, TestClock.layer()])),
+      }).pipe(Effect.provide([platformLayer, TestClock.layer()])),
     ));
 
 test("a hold and a run-scoped action on a bare id no board lists go to the Machine whose host has it", () =>
@@ -1557,7 +1557,7 @@ test("a hold and a run-scoped action on a bare id no board lists go to the Machi
         "vm-mk act",
       ]);
       expect(asked[3]!.payload).toMatchObject({ actions: [{ kind: "stop", run: "r-new" }] });
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("an answer its Machine never confirms is said as not confirmed, and nothing after it is sent", () =>
@@ -1592,7 +1592,7 @@ test("an answer its Machine never confirms is said as not confirmed, and nothing
       const acts = asked.filter(({ op }) => op === "act");
       expect(acts).toHaveLength(3);
       expect(new Set(acts.map(({ payload }) => JSON.stringify(payload))).size).toBe(1);
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 const keeping = () => {
@@ -1625,7 +1625,7 @@ test("a host that never takes the chat's declaration ends the write as not confi
         "hold timed-out",
         "hold timed-out",
       ]);
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("a chat write refused before it is sent is logged as not sent, with Desktop's reason", () =>
@@ -1662,7 +1662,7 @@ test("a chat write refused before it is sent is logged as not sent, with Desktop
       ]);
       expect(lines[0]!.reason).toContain("its Collie is older than Desktop's chat");
       expect(lines[0]!.request).toBeString();
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("a refusal that quotes what the chat sent is logged without it", () =>
@@ -1698,7 +1698,7 @@ test("a refusal that quotes what the chat sent is logged without it", () =>
       expect(lines[0]!.ended).toBe("refused");
       expect(lines[0]!.reason).toContain("is not one of A, B");
       expect(lines[0]!.reason).not.toContain("PRIVATE_ANSWER_123");
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 test("a confirmation whose proposed action fails is logged with its kinds and states only", () =>
@@ -1752,7 +1752,7 @@ test("a confirmation whose proposed action fails is logged with its kinds and st
         ended: "refused",
         reason: "answer failed",
       });
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(platformLayer)),
   ));
 
 const standInHelle = (projects: ReadonlyArray<HelleProject>, calls: string[]) =>
@@ -1801,7 +1801,7 @@ const askHelle = (token: string | null, input: JsonObject) =>
     };
     const said = yield* callFlockTool(flock, "collie_helle", input);
     return { said, calls };
-  }).pipe(Effect.scoped, Effect.provide(BunServices.layer));
+  }).pipe(Effect.scoped, Effect.provide(platformLayer));
 
 test("collie_helle lists every Helle project with its holder and queue, the human's own marked", () =>
   Effect.runPromise(

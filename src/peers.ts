@@ -4,7 +4,7 @@
 // above that path knows there is a WebSocket behind it.
 
 import { createServer, isIP, type Server, type Socket } from "node:net";
-// Effect Crypto has no X.509 certificate inspection.
+// effect/crypto has no X.509 certificate inspection.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { X509Certificate } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
@@ -12,7 +12,6 @@ import type { ServerWebSocket } from "bun";
 import {
   Clock,
   Config,
-  Crypto,
   DateTime,
   Deferred,
   Effect,
@@ -27,6 +26,7 @@ import {
   type Scope,
   Stream,
 } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   FrontDoor,
@@ -342,14 +342,14 @@ export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: P
   yield* Effect.logInfo(`bringing ${peer.name} from ${who.build} to ${link.build}`);
   const result = yield* door.shell({
     script: `collie --json upgrade --to ${quoted(link.build)}`,
-    request: `level:${link.installation}:${yield* (yield* Crypto.Crypto).randomUUIDv4}`,
+    request: `level:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
   });
   if (result.code !== 0)
     return yield* new HostRefused({
       reason: `upgrade to ${link.build} failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`}`,
     });
   yield* door.refresh({
-    request: `refresh:${link.installation}:${yield* (yield* Crypto.Crypto).randomUUIDv4}`,
+    request: `refresh:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
   });
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -498,7 +498,10 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const scope = yield* Effect.scope;
   const clock = yield* Clock.Clock;
   const services = yield* Effect.context<
-    FileSystem.FileSystem | Path.Path | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+    | FileSystem.FileSystem
+    | Path.Path
+    | SecureRandom.SecureRandom
+    | ChildProcessSpawner.ChildProcessSpawner
   >();
   // Port 0 takes what is free once; every later opening, by any host of the directory,
   // binds that same port.
@@ -559,7 +562,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
             if (merged.give.length > 0)
               yield* door.setSettings({
                 settings: merged.give,
-                request: `sync:${link.installation}:${yield* (yield* Crypto.Crypto).randomUUIDv4}`,
+                request: `sync:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
               });
           }),
         ),
@@ -591,7 +594,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
             if (give.length > 0)
               yield* door.setSharedDefinitions({
                 definitions: give,
-                request: `sync:${link.installation}:${yield* (yield* Crypto.Crypto).randomUUIDv4}`,
+                request: `sync:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
               });
             const known = holds.get(peer.installation) ?? new Map<string, string>();
             for (const one of landed([...mine, ...take], held)) known.set(one.path, one.at);

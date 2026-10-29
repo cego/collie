@@ -2,7 +2,7 @@
 // sweep is every judge, then each removal judged again and written to `cleanup.jsonl`.
 
 import { Clock, Duration, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import {
   FrontDoor,
   mrLabel,
@@ -76,12 +76,12 @@ export interface Sweeper {
       retry?: ReadonlyArray<CleanupItem>;
     },
     never,
-    BunServices
+    PlatformServices
   >;
   /** Removes `item` if it still should go, answering with the bytes freed or why it stays. */
   readonly remove: (
     item: CleanupItem,
-  ) => Effect.Effect<{ freed: number } | { kept: string }, never, BunServices>;
+  ) => Effect.Effect<{ freed: number } | { kept: string }, never, PlatformServices>;
 }
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -417,7 +417,7 @@ export const worktreesSweeper = (opts: {
   registered: ReadonlyArray<AgentEntry>;
   cwd: string;
   /** Read when it judges, so a workspace closed earlier in the same sweep counts as closed. */
-  settling?: Effect.Effect<Settling, never, BunServices>;
+  settling?: Effect.Effect<Settling, never, PlatformServices>;
 }): Sweeper => {
   const kind = "worktree";
   return {
@@ -515,7 +515,7 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
   /** What becomes of one entry, or null where it is not this sweeper's to judge. */
   const verdict = (
     target: string,
-  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, BunServices> =>
+  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const rel = target.slice(stateDir.length + 1).split("/");
@@ -627,7 +627,7 @@ const LedgerRuns = Schema.fromJsonString(Schema.Struct({ run: Schema.String }));
 /** Removes `target` where `verdict`, asked now, still says it goes. */
 const removeIf = (
   target: string,
-  verdict: Effect.Effect<{ remove: string } | { keep: string } | null, never, BunServices>,
+  verdict: Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices>,
 ) =>
   Effect.gen(function* () {
     const now = yield* verdict;
@@ -880,7 +880,7 @@ export const taskWorkspacesSweeper = (opts: {
       }
     | null,
     never,
-    BunServices
+    PlatformServices
   > =>
     Effect.gen(function* () {
       const session = sessionOf(task);
@@ -1208,7 +1208,7 @@ export const idleAgentsSweeper = (opts: {
   /** Why `one` stays, or how long it has been idle since its Run finished. */
   const verdict = (
     one: Candidate,
-  ): Effect.Effect<{ keep: string } | { idleFor: number }, never, BunServices> =>
+  ): Effect.Effect<{ keep: string } | { idleFor: number }, never, PlatformServices> =>
     Effect.gen(function* () {
       if (!IDLE.has(one.at.status)) return { keep: one.at.status ?? "unknown" };
       const now = yield* Clock.currentTimeMillis;
@@ -1324,7 +1324,7 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
   );
   const verdict = (
     target: string,
-  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, BunServices> =>
+  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       if (!(yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))) return null;
@@ -1376,7 +1376,7 @@ export const measurementTreesSweeper = (
   const live = new Set(runs.filter((run) => !settled(run)).map((run) => run.id));
   const verdict = (
     target: string,
-  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, BunServices> =>
+  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, PlatformServices> =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       if (!(yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))) return null;
@@ -1441,8 +1441,10 @@ export const retentionSweeper = (opts: {
   stateDir: string;
   sessions: ReadonlyArray<Herdr>;
   /** Read for every judgement, so a Run started since the last one is seen. */
-  facts: Effect.Effect<RetentionFacts, never, BunServices>;
-  retire: (runs: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<string>, never, BunServices>;
+  facts: Effect.Effect<RetentionFacts, never, PlatformServices>;
+  retire: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<string>, never, PlatformServices>;
 }): Sweeper => {
   const kind = "task";
   const filesOf = (ids: ReadonlyArray<string>) =>
@@ -1491,7 +1493,7 @@ export const retentionSweeper = (opts: {
   ): Effect.Effect<
     { keep: string } | { remove: string; ids: ReadonlyArray<string> } | null,
     never,
-    BunServices
+    PlatformServices
   > =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

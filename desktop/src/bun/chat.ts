@@ -1,7 +1,6 @@
 // The Flock chat resumes one warm session on the harness named in Desktop's Settings.
 
 import {
-  Crypto,
   Deferred,
   Duration,
   Effect,
@@ -17,6 +16,7 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Base64 from "effect/encoding/Base64";
 import { type AguiEvent, ends } from "../shared/agui";
 import { saidOf } from "../shared/said";
@@ -230,7 +230,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     | Effect.Effect<
         Readonly<Record<string, ChatDriver>>,
         never,
-        Scope.Scope | Crypto.Crypto | FileSystem.FileSystem
+        Scope.Scope | SecureRandom.SecureRandom | FileSystem.FileSystem
       >;
   readonly dir: string;
   readonly conversation: string;
@@ -265,7 +265,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
 }) {
   const fs = yield* FileSystem.FileSystem;
   const scope = yield* Effect.scope;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   yield* fs.makeDirectory(opts.dir, { recursive: true });
   const file = (yield* Path.Path).join(opts.dir, "flock-chat.json");
   const saved = yield* fs
@@ -277,9 +277,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   const asking = new Map<string, Deferred.Deferred<Answers>>();
   const questions = new Set<string>();
   const clicked = new Map<string, Answers>();
-  const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
-  const run = <A>(effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>) =>
-    Effect.runPromise(effect.pipe(Effect.provideContext(services)));
+  const services = yield* Effect.context<
+    SecureRandom.SecureRandom | FileSystem.FileSystem | Path.Path
+  >();
+  const run = <A>(
+    effect: Effect.Effect<A, never, SecureRandom.SecureRandom | FileSystem.FileSystem>,
+  ) => Effect.runPromise(effect.pipe(Effect.provideContext(services)));
   /** The session warm now, if one is. */
   let live:
     | { readonly running: Live; readonly scope: Scope.Closeable; readonly choice: Resolved }
@@ -372,7 +375,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   });
 
   type Live = Effect.Success<ReturnType<typeof start>>;
-  let id = Option.isSome(saved) ? saved.value.session : yield* crypto.randomUUIDv4;
+  let id = Option.isSome(saved) ? saved.value.session : yield* random.uuidV4();
   let heldOn = Option.isSome(saved) ? saved.value.harness : opts.chatHarness().harness;
   const changed = yield* SubscriptionRef.make(id);
   const held = yield* SubscriptionRef.make<Held>({ heldOn, runsOn: null, turning: false });
@@ -430,7 +433,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     Effect.gen(function* () {
       if (harness === heldOn) return;
       yield* end;
-      id = yield* crypto.randomUUIDv4;
+      id = yield* random.uuidV4();
       heldOn = harness;
       yield* remember;
     }).pipe(Effect.orDie);
@@ -647,7 +650,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
               if (refused !== null) return refused;
             }
             yield* end;
-            id = conversation?.session ?? (yield* crypto.randomUUIDv4);
+            id = conversation?.session ?? (yield* random.uuidV4());
             heldOn = conversation?.harness ?? set;
             yield* remember;
             return null;

@@ -4,7 +4,8 @@
 // candidates where several do. The human's words go with each write as the channel's
 // declaration, attached here and never by the model.
 
-import { Cause, Clock, Crypto, Effect, Exit, FileSystem, Option, Result, Schema } from "effect";
+import { Cause, Clock, Effect, Exit, FileSystem, Option, Result, Schema } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 import {
@@ -436,7 +437,7 @@ export const writable = (machine: ChatMachine) =>
 export const speaking = (flock: FlockChat, machine: ChatMachine) =>
   writable(machine).pipe(Effect.tap((reached) => declareVoice(flock, reached)));
 
-export const newRequest = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4);
+export const newRequest = Effect.flatMap(SecureRandom.SecureRandom, (random) => random.uuidV4());
 
 export { reasonOf };
 
@@ -1187,8 +1188,10 @@ const helle = (flock: FlockChat, asked: { claim?: string; release?: string }) =>
 /** The handlers for one call, which take the input as it was sent once the Toolkit has decoded it. */
 const handlersFor = (flock: FlockChat, sent: JsonObject) =>
   Effect.gen(function* () {
-    const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem>();
-    const answer = <E>(effect: Effect.Effect<string, E, Crypto.Crypto | FileSystem.FileSystem>) =>
+    const services = yield* Effect.context<SecureRandom.SecureRandom | FileSystem.FileSystem>();
+    const answer = <E>(
+      effect: Effect.Effect<string, E, SecureRandom.SecureRandom | FileSystem.FileSystem>,
+    ) =>
       effect.pipe(
         Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
         Effect.provideContext(services),

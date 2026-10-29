@@ -17,13 +17,12 @@
 import { createConnection, type Socket as NetSocket } from "node:net";
 import { withdrawStepNote } from "./step-steering";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import {
   Clock,
   Config,
   Context,
-  Crypto,
   Data,
   Deferred,
   Duration,
@@ -43,6 +42,7 @@ import {
   Stream,
   Struct,
 } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as Socket from "effect/socket/Socket";
 import * as Rpc from "effect/rpc/Rpc";
@@ -590,7 +590,7 @@ const handlers = (
   HostRpcs.toLayer(
     Effect.gen(function* () {
       const registry = yield* Registry;
-      const bun = yield* Effect.context<BunServices>();
+      const bun = yield* Effect.context<PlatformServices>();
       const pid = yield* currentPid;
       const { aliveNow } = yield* SharedBoard;
       const recordingLinks = yield* Semaphore.make(1);
@@ -974,7 +974,7 @@ const hostBoard = (dir: string) =>
   Effect.gen(function* () {
     const registry = yield* Registry;
     const checks = yield* CheckProcesses;
-    const bun = yield* Effect.context<BunServices>();
+    const bun = yield* Effect.context<PlatformServices>();
     const hosted = yield* Effect.context<HostServices>();
     const env = yield* servingEnv(dir);
     const herdr = new Herdr(env);
@@ -1445,7 +1445,7 @@ const frontDoorHandlers = (
             ),
           ).pipe(Effect.provideContext(hosted));
       /** A file operation's failure as the host's refusal, in its own words. */
-      const refusedPlainly = <A, E, R extends BunServices>(effect: Effect.Effect<A, E, R>) =>
+      const refusedPlainly = <A, E, R extends PlatformServices>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
           Effect.mapError((cause) =>
             Schema.is(RequestConflict)(cause) || Schema.is(HostRefused)(cause)
@@ -1827,7 +1827,7 @@ const frontDoorHandlers = (
             const trail = (yield* Path.Path).join(env.stateDir, "definitions");
             yield* recordAudit(trail, {
               operation: "definitions",
-              request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+              request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
               ...whoOf(client),
               result: Schema.Number,
               value: held.length,
@@ -1877,7 +1877,7 @@ const frontDoorHandlers = (
             Effect.gen(function* () {
               const readings = yield* usage.readings;
               const trail = (yield* Path.Path).join(env.stateDir, "usage");
-              const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+              const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
               const value = usagePhrase(readings, yield* Clock.currentTimeMillis).text;
               yield* recordingUsage.withPermits(1)(
                 recordAudit(trail, {
@@ -2916,7 +2916,7 @@ const installationOf = Effect.fn("Host.installationOf")(function* (dir: string) 
   const file = `${dir}/installation`;
   const known = (yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))).trim();
   if (known !== "") return known;
-  const made = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const made = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   // Renamed into place, so a host that dies mid-write leaves no half an id.
   yield* fs.writeFileString(`${file}.new`, `${made}\n`);
   yield* fs.rename(`${file}.new`, file);
@@ -2950,7 +2950,7 @@ const onLeftoversRun = (dir: string) => (leftover: Leftover, outcome: LeftoverEn
  * Losing the lock is not a failure. It means a host is already here, which is what the
  * caller wanted; the client that started this one connects to that host instead.
  */
-export const serve = (named: string): Effect.Effect<void, never, BunServices | Scope.Scope> =>
+export const serve = (named: string): Effect.Effect<void, never, PlatformServices | Scope.Scope> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(named, { recursive: true });
@@ -3130,7 +3130,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     const env = yield* currentEnv.pipe(Effect.orDie);
     const crashAt = yield* crashPoint;
     const seconds = yield* scheduleSeconds;
-    const bun = yield* Effect.context<BunServices>();
+    const bun = yield* Effect.context<PlatformServices>();
     const herdr = new Herdr(env);
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
@@ -3154,7 +3154,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     const usage = yield* Usage;
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
-    const stamp = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+    const stamp = yield* (yield* SecureRandom.SecureRandom).uuidV4();
     const peers = yield* startPeers({
       dir,
       userDir: env.userDir,

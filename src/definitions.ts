@@ -3,7 +3,8 @@
 
 import { expressionsIn, malformedIn } from "./template";
 import { parseDocument, YamlError, type YamlValue } from "./yaml";
-import { Crypto, Effect, FileSystem, Path, Result, type PlatformError } from "effect";
+import { Effect, FileSystem, Path, Result, type PlatformError } from "effect";
+import * as Digest from "effect/crypto/Digest";
 import { isString } from "./schema";
 import type { PersonaView } from "./definitions-model";
 
@@ -80,11 +81,8 @@ export function isStale(def: Provenance): boolean {
 }
 
 export const contentHash = Effect.fn("Definitions.contentHash")(function* (text: string) {
-  const crypto = yield* Crypto.Crypto;
-  const bytes = yield* crypto.digest("SHA-1", new TextEncoder().encode(text));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 12);
+  const digest = yield* Digest.Digest;
+  return (yield* digest.digestHex(Digest.sha1, new TextEncoder().encode(text))).slice(0, 12);
 });
 
 /** What the layers hold. Workflows are modules now, and are found by `discovery`. */
@@ -221,7 +219,7 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
   ): Effect.Effect<
     void,
     PlatformError.PlatformError,
-    FileSystem.FileSystem | Path.Path | Crypto.Crypto
+    FileSystem.FileSystem | Path.Path | Digest.Digest
   > =>
     Effect.gen(function* () {
       if (settled.has(name)) return;

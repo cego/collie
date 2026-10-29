@@ -1,6 +1,6 @@
 import { Cause, Duration, Effect, Exit, Option, Path, Ref, Schema, Stdio, Stream } from "effect";
 import { redactedField, withNotice } from "../redact";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../platform";
 import { Argument, Command, Flag } from "effect/cli";
 import { err, type Failure } from "../operations";
 import { GIVEN, INFERRED } from "../engine";
@@ -1006,7 +1006,7 @@ function runMutationCommand(
   operation: string,
   runId: string,
   requestId: Option.Option<string>,
-  hosted: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, BunServices>,
+  hosted: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, PlatformServices>,
 ) {
   return Effect.gen(function* () {
     const global = yield* root;

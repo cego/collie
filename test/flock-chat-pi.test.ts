@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
-import { Crypto, Effect, FileSystem, Path, Schema, Scope, Stream } from "effect";
+import { platformLayer } from "../src/platform";
+import { Effect, FileSystem, Path, Schema, Scope, Stream } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { piDriver } from "../desktop/src/bun/pi-driver";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
 import type { DriverContext } from "../desktop/src/bun/driver";
@@ -25,7 +26,11 @@ const withPi = <A, E>(
   body: (
     driver: ReturnType<typeof piDriver>,
     context: DriverContext,
-  ) => Effect.Effect<A, E, Scope.Scope | Crypto.Crypto | FileSystem.FileSystem | Path.Path>,
+  ) => Effect.Effect<
+    A,
+    E,
+    Scope.Scope | SecureRandom.SecureRandom | FileSystem.FileSystem | Path.Path
+  >,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -42,7 +47,7 @@ const withPi = <A, E>(
       env.PI_CODING_AGENT_DIR = `${dir}/agent`;
       yield* fs.makeDirectory(env.PI_CODING_AGENT_DIR);
       expect(childEnv().PI_CODING_AGENT_DIR).toBe(`${dir}/agent`);
-      const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem>();
+      const services = yield* Effect.context<SecureRandom.SecureRandom | FileSystem.FileSystem>();
       const context: DriverContext = {
         dir,
         run: (effect) => Effect.runPromise(effect.pipe(Effect.provideContext(services))),
@@ -66,7 +71,7 @@ const withPi = <A, E>(
       const endpoint = yield* loopbackTools(context);
       const driver = piDriver(context, endpoint, ["bun", `${import.meta.dir}/fixtures/pi-chat.ts`]);
       return yield* body(driver, context);
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   );
 
 test("Pi streams text including Unicode separators, thinking and one row per tool, ending at agent_settled", () =>
@@ -651,5 +656,5 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
       expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
         content: expect.stringContaining("Here"),
       });
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));

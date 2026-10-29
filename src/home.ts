@@ -12,7 +12,7 @@
 // expired: creating one where one already exists is how a Herd ends up with two boards
 // disagreeing about the same Runs.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { Clock, Data, Effect, FileSystem, Path, Schema } from "effect";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir, herdKey } from "./steering";
@@ -493,7 +493,7 @@ export interface HomeDeps {
  * than an error path of its own. Bun's services because the real boundary shells out; a
  * test's fake needs none and satisfies this all the same.
  */
-type HomeAnswer<A> = Effect.Effect<A, never, BunServices>;
+type HomeAnswer<A> = Effect.Effect<A, never, PlatformServices>;
 
 function ready(record: HomeRecord): Ensured {
   return { kind: "ready", record };

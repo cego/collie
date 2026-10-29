@@ -5,7 +5,7 @@
 // its own. Building that is the same work for every one of them, so it is here.
 
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope, Stream } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../../src/platform";
 import { exec } from "./command";
 import { runEffect, suiteEnv } from "./effect";
 import { writeFakeHerdrShim } from "./fake-herdr-core";
@@ -164,7 +164,7 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
  */
 export const proves = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string>,
 ) =>
   runEffect(

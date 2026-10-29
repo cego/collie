@@ -14,7 +14,7 @@ import { runEffect } from "./support/effect";
 import { until } from "./support/host";
 import { releaseBinary, twoMachines } from "./support/peers";
 import { collieCommand } from "./support/world";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { TestClock } from "effect/testing";
 
 test(
@@ -112,7 +112,7 @@ test(
               "sonnet",
             );
             const desktop = `${first.world.home}/desktop`;
-            const services = yield* Effect.context<BunServices>();
+            const services = yield* Effect.context<PlatformServices>();
             const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
             const machines = [first, second].map((side) => ({
               name: side.name,

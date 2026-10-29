@@ -3,6 +3,7 @@
 // from text, never lose a child's own constraints when a parent propagates.
 
 import { Effect, FileSystem, Path } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   DEFAULT_AUTHORITY,
@@ -19,7 +20,6 @@ import {
   writeIntent,
 } from "../src/intent";
 import { runEffect } from "./support/effect";
-import { Crypto } from "effect";
 import { connect } from "../src/host";
 import { runDir } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
@@ -437,7 +437,7 @@ test(
     hosted("hw-intent-seed-", ({ world }) =>
       Effect.gen(function* () {
         const client = yield* connect(world.state).pipe(Effect.orDie);
-        const uuid = (yield* Crypto.Crypto).randomUUIDv4;
+        const uuid = (yield* SecureRandom.SecureRandom).uuidV4();
         const human = { kind: "semantic", severity: "warn", source: "human" } as const;
         const started = yield* client
           .start({

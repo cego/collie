@@ -4,7 +4,7 @@
 // fact about herdr is behind this one interface, which is what makes the fake herdr in
 // `test/support/` enough to test everything above it.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import {
   Data,
   Duration,
@@ -50,7 +50,7 @@ export function herdrFailureReason(cause: unknown): string {
   return cause.detail === "" ? cause.message : `${cause.message}: ${cause.detail}`;
 }
 
-type HerdrEffect<A> = Effect.Effect<A, HerdrError, BunServices>;
+type HerdrEffect<A> = Effect.Effect<A, HerdrError, PlatformServices>;
 /** What running the CLI needs, and the fakes that answer for it. */
 type CliServices = ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path;
 type ExecResult = { code: number; stdout: string; stderr: string };
@@ -1079,7 +1079,7 @@ export class Herdr {
    */
   waitForEvent<R>(
     subscriptions: Effect.Effect<ReadonlyArray<HerdrParams>, HerdrError, R>,
-  ): Effect.Effect<void, HerdrError, BunServices | R> {
+  ): Effect.Effect<void, HerdrError, PlatformServices | R> {
     const path = this.env.socketPath;
     if (!path) return herdrFail("cannot subscribe to herdr events", "no socket path");
     const id = `hw-${++this.seq}`;
@@ -1158,7 +1158,7 @@ export class Herdr {
    * calls `idle` or `done` counts as gone here, as it does everywhere else: it is
    * holding a pane, not the work.
    */
-  agentsAlive(names: ReadonlyArray<string>): Effect.Effect<AgentsAlive, never, BunServices> {
+  agentsAlive(names: ReadonlyArray<string>): Effect.Effect<AgentsAlive, never, PlatformServices> {
     // An arrow rather than the generator's `this`: the loop below only needs the one
     // question asked, and closing over it keeps the class's scope out of it.
     const ask = (name: string) => this.agentStatus(name);
@@ -1225,7 +1225,7 @@ export class Herdr {
    * XDG_CONFIG_HOME is not consulted: the fallback is herdr's own default, and a
    * machine that keeps its config elsewhere says so with `HERDR_CONFIG_PATH`.
    */
-  worktreesDirectory(): Effect.Effect<string, never, BunServices> {
+  worktreesDirectory(): Effect.Effect<string, never, PlatformServices> {
     const { home, herdrConfigPath } = this.env;
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

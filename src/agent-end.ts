@@ -13,7 +13,7 @@
 // after step 5, or after the caller's own close; ticket 08's Closure is written with step 6.
 
 import { Data, Effect, FileSystem, Result } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { STOP_WAIT_MS, notStopped, stopAgent, type CompactionDeps } from "./compaction";
 import type { AgentInfo, Herdr, HerdrError, PaneInfo } from "./herdr";
 import { launchDir, sameSession, type Launched } from "./launches";
@@ -130,7 +130,7 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
 const restoredPane = (
   deps: EndDeps,
   launched: Pick<Launched, "agentSession">,
-): Effect.Effect<PaneInfo | undefined, never, BunServices> =>
+): Effect.Effect<PaneInfo | undefined, never, PlatformServices> =>
   launched.agentSession === undefined
     ? Effect.succeed(undefined)
     : deps.herdr.paneList().pipe(

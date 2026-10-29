@@ -6,7 +6,6 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   Clock,
   Config,
-  Crypto,
   Deferred,
   Effect,
   Exit,
@@ -24,6 +23,8 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as RpcServer from "effect/rpc/RpcServer";
 import Electrobun, { BrowserView, BrowserWindow, type RPCSchema, Utils } from "electrobun/bun";
 import {
@@ -134,6 +135,7 @@ import {
 } from "./credentials";
 import { isHostName, tokenPage } from "../../../src/gitlab-token";
 import { HELLE_URL } from "../../../src/helle-url";
+import { platformLayer } from "../../../src/platform";
 import { electrobunUpdater } from "./electrobun-updater";
 import {
   dropBoardsOf,
@@ -440,7 +442,7 @@ const main = Effect.gen(function* () {
       );
     });
   yield* zoomed(board.window, "Collie", (now) => SubscriptionRef.set(drawn, now));
-  const uuid = (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
+  const uuid = (yield* SecureRandom.SecureRandom).uuidV4();
   /** Each route's latest settings and definitions sync, told again to a view that subscribes. */
   const synced = new Map<string, MachineSynced>();
   const settingsOf = (door: Doors) => ({
@@ -1180,7 +1182,11 @@ const main = Effect.gen(function* () {
         ),
       ),
     // Annotated because it serves its own window through `servedOn`, which needs these handlers.
-    popOut: (): Effect.Effect<void, never, Crypto.Crypto | FileSystem.FileSystem | Path.Path> =>
+    popOut: (): Effect.Effect<
+      void,
+      never,
+      SecureRandom.SecureRandom | Digest.Digest | FileSystem.FileSystem | Path.Path
+    > =>
       Effect.gen(function* () {
         if (popped === undefined) {
           const opened = windowOn(`${VIEW}#chat`, "Flock chat", {
@@ -1218,7 +1224,7 @@ const main = Effect.gen(function* () {
       Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(channel))),
     );
   return yield* Layer.launch(servedOn(board.channel));
-}).pipe(Effect.scoped, Effect.provide(BunServices.layer));
+}).pipe(Effect.scoped, Effect.provide(platformLayer));
 
 // A Mac sends Cmd+C, Cmd+V, Cmd+Q and the rest through its menu bar, which is empty until set.
 if (process.platform === "darwin")

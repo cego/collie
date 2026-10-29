@@ -2,7 +2,7 @@
 // once, and everything a finished Run may still be given is read on every view.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun";
+import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Layer, type Schema, type Scope } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
@@ -47,7 +47,7 @@ afterEach(() => runEffect(rig.close()));
 const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT });
 const dir = () => env().stateDir;
 
-const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
 /** How many times the engine was polled for each execution. */
@@ -65,7 +65,7 @@ const counted = Layer.effect(WorkflowEngine.WorkflowEngine)(
 );
 
 const hosted = <A, E>(
-  run: Effect.Effect<A, E, Registry | Store | HostServices | BunServices.BunServices | Scope.Scope>,
+  run: Effect.Effect<A, E, Registry | Store | HostServices | PlatformServices | Scope.Scope>,
 ) =>
   Effect.suspend(() => {
     polls = new Map();

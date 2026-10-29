@@ -168,12 +168,16 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
       yield* exec(["mkfifo", source]);
       yield* mkdirp(join(targetDir, "personas"));
       const forkModule = new URL("../src/fork.ts", import.meta.url).pathname.replaceAll("'", "\\'");
+      const platformModule = new URL("../src/platform.ts", import.meta.url).pathname.replaceAll(
+        "'",
+        "\\'",
+      );
       const marker = join(root, "child-ready");
       const child = Bun.spawn(
         [
           "bun",
           "-e",
-          `import { BunServices } from "@effect/platform-bun"; import { ManagedRuntime } from "effect"; import { forkDefinition } from '${forkModule}'; const runtime = ManagedRuntime.make(BunServices.layer); await Bun.write(process.argv[3], ""); console.log((await runtime.runPromise(forkDefinition(process.argv[1], "personas", process.argv[2], { full: true }))).ok ? "ok=true" : "ok=false")`,
+          `import { platformLayer } from '${platformModule}'; import { ManagedRuntime } from "effect"; import { forkDefinition } from '${forkModule}'; const runtime = ManagedRuntime.make(platformLayer); await Bun.write(process.argv[3], ""); console.log((await runtime.runPromise(forkDefinition(process.argv[1], "personas", process.argv[2], { full: true }))).ok ? "ok=true" : "ok=false")`,
           source,
           targetDir,
           marker,

@@ -6,7 +6,6 @@
 import {
   Cause,
   Clock,
-  Crypto,
   Deferred,
   Duration,
   Effect,
@@ -22,6 +21,7 @@ import {
   Scope,
   Stream,
 } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { BunCrypto } from "@effect/platform-bun";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -588,9 +588,7 @@ export const linkRoute = (
           ));
         const asked = {
           script,
-          request: yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(
-            Effect.mapError((cause) => cause.message),
-          ),
+          request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
         };
         const payload =
           stdin === undefined ? asked : { ...asked, stdin: new TextDecoder().decode(stdin) };
@@ -598,7 +596,7 @@ export const linkRoute = (
           .shell(payload)
           .pipe(Effect.mapError((cause) => refusal()(cause).reason));
         return { code, out: stdout, err: stderr };
-      }).pipe(Effect.provide(BunCrypto.layer)),
+      }).pipe(Effect.provide(BunCrypto.layerSecureRandom)),
     );
   return {
     machine,
@@ -647,10 +645,10 @@ export const linkRoute = (
                       bridgeCommand([...collie, "--machine", peer.name], client),
                       env,
                     ));
-                  const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+                  const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
                   yield* door.refresh({ request: `refresh:${request}` });
                 }).pipe(
-                  Effect.provide(BunCrypto.layer),
+                  Effect.provide(BunCrypto.layerSecureRandom),
                   Effect.mapError((cause) =>
                     "reason" in cause ? String(cause.reason) : String(cause),
                   ),

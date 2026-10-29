@@ -71,6 +71,10 @@
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
     "anti-slop-effect/no-service-constructor-imports": "error",
+    // New in @effect/tsgo 0.63's preset: a rewrite of every native array, string and record call.
+    "effecttsgo/prefer-effect-array": "off",
+    "effecttsgo/prefer-effect-string": "off",
+    "effecttsgo/prefer-effect-record": "off",
     "effecttsgo/global-console": "error",
     "effecttsgo/global-date": "error",
     "effecttsgo/abort-controller-in-effect": "error",

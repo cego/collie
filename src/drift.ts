@@ -10,7 +10,7 @@
 // was made from, and the journal is append-only, so a resolution is a new line rather
 // than an edit — the account of what Collie thought and when survives being wrong.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
 import type { Constraint, Intent, RuleSpec } from "./intent";
 import { appendJournal, readJournal } from "./journal";
@@ -490,8 +490,8 @@ export interface JudgementDeps {
   readonly evaluator: EvaluatorDeps;
   readonly budgetFile: string;
   readonly limits: CallLimits;
-  readonly newId: Effect.Effect<string, never, BunServices>;
-  readonly log: (line: string) => Effect.Effect<void, never, BunServices>;
+  readonly newId: Effect.Effect<string, never, PlatformServices>;
+  readonly log: (line: string) => Effect.Effect<void, never, PlatformServices>;
 }
 
 /** Which files a judgement is about: what the semantic constraints name, else everything. */

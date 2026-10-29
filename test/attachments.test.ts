@@ -4,7 +4,7 @@
 // installation runs, with herdr faked.
 
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Schema, type Scope } from "effect";
 import { readAudit } from "../src/audit";
 import { runDir, type RunView } from "../src/engine";
@@ -30,7 +30,7 @@ const attending = <A, E>(
   body: (
     world: World,
     cli: (args: ReadonlyArray<string>) => ReturnType<typeof collie>,
-  ) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  ) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
   proves(
     prefix,

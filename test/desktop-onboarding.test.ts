@@ -4,7 +4,7 @@
 
 import { expect, test } from "bun:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer, type PlatformServices } from "../src/platform";
 import { Clock, Deferred, Effect, FileSystem, Option, Schedule, type Scope, Stream } from "effect";
 import type { BoardMessage, BoardSnapshot } from "../src/board-model";
 import { signRelease } from "../src/signing";
@@ -33,8 +33,8 @@ const pair = () => {
   };
 };
 
-const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>) =>
-  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
+const run = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
+  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(platformLayer)));
 
 const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "collie-onboarding-" }),

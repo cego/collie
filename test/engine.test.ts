@@ -10,7 +10,7 @@ import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
-import { engineLayer, TOOLCHAIN } from "../src/engine";
+import { engineLayer, loadEntry, TOOLCHAIN } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { HostReply, events, fixtures, openHost, root, until, workspace } from "./support/host";
 
@@ -409,6 +409,18 @@ test("the Effect an author's declarations come from is the one the host runs", (
         yield* fs.readFileString(`${root}package.json`),
       );
       expect(manifest.dependencies.effect).toBe(TOOLCHAIN.effect);
+    }),
+  ));
+
+test("a Run's execution id is the one Effect 4.0.1 derived, so a recorded Run is found again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const entry = yield* loadEntry(`${fixtures}/echo.workflow.ts`).pipe(Effect.orDie);
+      const execution = yield* entry
+        .make("echo@1")
+        .workflow.executionId({ runId: "run-0c0ffee0", input: { text: "hi", times: 2 } });
+      // Captured under Effect 4.0.1.
+      expect(execution).toBe("5c3dc3215494e321b93f992d11ccc29e");
     }),
   ));
 

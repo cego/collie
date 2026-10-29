@@ -9,7 +9,7 @@
 // repository is a real git one, so the worktree is one git actually made.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun";
+import type { PlatformServices } from "../src/platform";
 import { Clock, ConfigProvider, Effect, FileSystem, Layer, Result, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
@@ -115,7 +115,7 @@ const hostOf = (): AgentHost => ({
 });
 
 /** Every wait in here is on a clock that moves many times faster than the wall's. */
-const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
 const hosted = <A, E>(

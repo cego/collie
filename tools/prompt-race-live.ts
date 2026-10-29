@@ -17,7 +17,7 @@
 // awaited, the prompt sent and confirmed — so what it proves is the shipped path. It costs
 // one short Haiku turn per agent.
 
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer } from "../src/platform";
 import { Clock, Effect, FileSystem, ManagedRuntime } from "effect";
 import { Agents, agentsLayer, type AgentAsk } from "../src/agents";
 import { controlDir } from "../src/compaction";
@@ -29,7 +29,7 @@ import { deliveriesOf } from "../src/steering";
 // this script is not Collie's CLI.
 Bun.argv[1] = new URL("../src/main.ts", import.meta.url).pathname;
 
-const runtime = ManagedRuntime.make(BunServices.layer);
+const runtime = ManagedRuntime.make(platformLayer);
 
 const flag = (name: string) => process.argv.indexOf(name);
 /** More than this at once took the machine down: every probe carries its own MCP servers. */

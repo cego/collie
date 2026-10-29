@@ -2,7 +2,7 @@
 
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -92,7 +92,7 @@ const inDir = <A, E>(
   body: (
     env: ReturnType<typeof readEnv>,
     dir: string,
-  ) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  ) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
   runEffect(
     Effect.gen(function* () {

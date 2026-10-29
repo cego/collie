@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import type { HerdrError, SocketMethod } from "../src/herdr";
 import { Herdr, replySchemas, SOCKET_METHODS } from "../src/herdr";
 import { PANE_EVENTS } from "../src/herds";
@@ -83,7 +83,10 @@ const calls = {
     herdr.waitForEvent(
       Effect.succeed([...PANE_EVENTS, { type: "pane.agent_status_changed", pane_id: "1-2" }]),
     ),
-} satisfies Record<SocketMethod, (herdr: Herdr) => Effect.Effect<void, HerdrError, BunServices>>;
+} satisfies Record<
+  SocketMethod,
+  (herdr: Herdr) => Effect.Effect<void, HerdrError, PlatformServices>
+>;
 
 /** What each call sent down a herdr socket. */
 const sentBy = (method: SocketMethod) =>

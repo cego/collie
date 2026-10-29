@@ -28,7 +28,7 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import * as Activity from "effect/workflow/Activity";
 import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
 import { Launched, LAUNCH_ORDER, LAUNCH_SUFFIX, launchDir, readLaunches, stemOf } from "./launches";
@@ -1319,7 +1319,7 @@ export interface AgentHost {
   readonly help?: (kind: string) => Effect.Effect<string>;
 }
 
-type AgentServices = FileSystem.FileSystem | Path.Path | BunServices | ForgeHttp;
+type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp;
 
 const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;

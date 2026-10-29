@@ -8,13 +8,13 @@
 // release older than the pin runs this code too, and the only honest answer then is to
 // refuse rather than fall back to owning a workspace by its label.
 
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer } from "../src/platform";
 import { Effect, ManagedRuntime } from "effect";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { REQUIRED_FIELDS, REQUIRED_RUNTIME, missingRuntime } from "../src/home";
 
-const runtime = ManagedRuntime.make(BunServices.layer);
+const runtime = ManagedRuntime.make(platformLayer);
 
 const check = Effect.fn("runtimeCheck")(function* () {
   const herdr = new Herdr(yield* currentEnv);

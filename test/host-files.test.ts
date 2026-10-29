@@ -2,7 +2,7 @@
 // parts, found, written and edited, and never written inside the host's own state.
 
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer, type PlatformServices } from "../src/platform";
 import { Clock, Effect, FileSystem, Result, Schema, type Scope, Stream } from "effect";
 import { HostRefused } from "../src/board-model";
 import { readAudit } from "../src/audit";
@@ -220,8 +220,8 @@ const inTemp = (prefix: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeTempDirectoryScoped({ prefix }));
 
 const local = <A, E>(
-  effect: Effect.Effect<A, E, FileSystem.FileSystem | Scope.Scope | BunServices.BunServices>,
-) => Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
+  effect: Effect.Effect<A, E, FileSystem.FileSystem | Scope.Scope | PlatformServices>,
+) => Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(platformLayer)));
 
 test("a glob stops listing, and a grep stops its search, at the bound, and a glob reaches dot paths it names", () =>
   local(

@@ -1,4 +1,4 @@
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { Config, Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
@@ -26,7 +26,7 @@ const ResultJson = Schema.fromJsonString(
 
 export type Result = OpResult;
 export type CollieError = Config.ConfigError | Error | HerdrError | PlatformError;
-type CollieServices = BunServices;
+type CollieServices = PlatformServices;
 
 /**
  * The codes that mean the command line was wrong rather than the operation failed:

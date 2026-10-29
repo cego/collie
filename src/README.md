@@ -6,6 +6,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | File                   | What it owns                                                                                                                |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `main.ts`              | Entry: the `collie` CLI, or the actions and pane entrypoints under `herdr`                                                  |
+| `platform.ts`          | The platform services every program runs on: Bun's, plus the ids and hashes Effect 4.1 took out of them                     |
 | `collie.ts`            | CLI assembly, help behavior, and process exit handling                                                                      |
 | `commands/`            | Workflow, Persona, and Run command handlers plus their shared resolution context                                            |
 | `envelope.ts`          | CLI envelopes, stdout, exit statuses, request receipts, and mutation locks                                                  |

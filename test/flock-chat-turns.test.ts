@@ -2,9 +2,8 @@
 // of Desktop's own only about News that matters, and every turn ending however it ends.
 
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer } from "../src/platform";
 import {
-  Crypto,
   Deferred,
   Effect,
   Fiber,
@@ -16,6 +15,7 @@ import {
   Stream,
   Queue,
 } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { TestClock } from "effect/testing";
 import { type Declaration, NewsBatch, PROTOCOL, type Significance } from "../src/board-model";
 import { stageAttachment } from "../desktop/src/bun/attachments";
@@ -304,7 +304,11 @@ const withChat = <A, E>(
     readonly seen: Seen;
     readonly read: string[];
     readonly dir: string;
-  }) => Effect.Effect<A, E, Crypto.Crypto | FileSystem.FileSystem | Path.Path | Scope.Scope>,
+  }) => Effect.Effect<
+    A,
+    E,
+    SecureRandom.SecureRandom | FileSystem.FileSystem | Path.Path | Scope.Scope
+  >,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -371,7 +375,7 @@ const withChat = <A, E>(
           }),
       });
       return yield* body({ conversation, seen, read, dir });
-    }).pipe(Effect.scoped, Effect.provide([BunServices.layer, TestClock.layer()])),
+    }).pipe(Effect.scoped, Effect.provide([platformLayer, TestClock.layer()])),
   );
 
 test("Desktop speaks first only about what matters, and the rest goes with the human's next message", () =>

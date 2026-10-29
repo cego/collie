@@ -7,7 +7,7 @@
 // orchestration service: the server lives as long as the chat that started it, and every
 // answer it gives is a read through the shared operations.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import {
   Cause,
   Context,
@@ -38,7 +38,7 @@ import { callTool, TOOLS } from "./tools";
 export const serveMcp = Effect.fn("Mcp.serve")(
   function* () {
     const env = yield* currentEnv;
-    const services = yield* Effect.context<BunServices>();
+    const services = yield* Effect.context<PlatformServices>();
     const server = yield* McpServer.McpServer;
     const answer = yield* answering({
       binary: process.execPath,

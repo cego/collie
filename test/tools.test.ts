@@ -3,18 +3,9 @@
 // of it. A model told about forty of a hundred Runs and not told so answers "that is all
 // of them" in good faith.
 
-import {
-  Clock,
-  Crypto,
-  Deferred,
-  Effect,
-  Fiber,
-  FileSystem,
-  Option,
-  Schema,
-  type Scope,
-} from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import { Clock, Deferred, Effect, Fiber, FileSystem, Option, Schema, type Scope } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { hostname } from "node:os";
 import { readEnv, type PluginEnv } from "../src/env";
@@ -91,7 +82,7 @@ const call = (name: string, input: JsonObject = {}) =>
   });
 
 /** One test, in a Herd of its own with a host in it. */
-const inWorld = <A, E>(body: Effect.Effect<A, E, BunServices | Scope.Scope>) =>
+const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
   hosted("hw-tools-", (herd) =>
     Effect.gen(function* () {
       world = herd.world;
@@ -1523,7 +1514,7 @@ const startedRun = Effect.fn("test.startedRun")(function* (
     .start({
       project,
       id: module,
-      request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+      request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
       input,
       parent,
       task,
@@ -1549,7 +1540,7 @@ const answerAs = (as: typeof Declaration.Type, runId: string, decision: string, 
         runId,
         decision,
         value,
-        request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+        request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
       });
     }),
   ).pipe(Effect.orDie);

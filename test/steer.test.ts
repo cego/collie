@@ -3,7 +3,7 @@
 // nothing at all reached an agent — whatever authority the Run has granted.
 
 import { Effect, FileSystem, Path, Schema, type Scope } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { steer } from "../src/operations";
 import { DEFAULT_AUTHORITY, readIntent, type Authority } from "../src/intent";
@@ -81,7 +81,7 @@ let setReply: (text: string) => Effect.Effect<void, PlatformError, FileSystem.Fi
 let originalPath: string;
 
 /** One test, in a Herd of its own with a host in it, and a `claude` that says what it is told. */
-const inWorld = <A, E>(body: Effect.Effect<A, E, BunServices | Scope.Scope>) =>
+const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
   hosted("hw-steer-", (herd) =>
     Effect.gen(function* () {
       world = herd.world;

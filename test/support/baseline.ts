@@ -45,7 +45,7 @@ import {
   type FakeMr,
   type ForgeModel,
 } from "./forge";
-import * as BunServices from "@effect/platform-bun/BunServices";
+import { platformLayer, type PlatformServices } from "../../src/platform";
 import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
 import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
@@ -230,7 +230,7 @@ const children = Layer.succeed(Children)(
 );
 
 /** A host layer a test may wrap, for the one capability it has no service to answer with. */
-type HostOverride = Layer.Layer<Host, never, Host | BunServices.BunServices | ForgeHttp>;
+type HostOverride = Layer.Layer<Host, never, Host | PlatformServices | ForgeHttp>;
 
 /** The host's own layers, placing checkouts through the rig's herdr. */
 const foundation = () => ({
@@ -9251,7 +9251,7 @@ const releaseHost = (
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
-      const services = yield* Effect.context<BunServices.BunServices | ForgeHttp>();
+      const services = yield* Effect.context<PlatformServices | ForgeHttp>();
       let replies = 0;
       return Host.of({
         ...host,
@@ -14318,7 +14318,7 @@ const refusedAtStart = (id: Shipped, text: Readonly<Record<string, string>>) =>
     }).pipe(
       Effect.provide(registryLayer(dir, { placing: foundation().placing, userDir: rig.userDir })),
       Effect.provide(forgeHttpLayer),
-      Effect.provide(BunServices.layer),
+      Effect.provide(platformLayer),
     ),
   );
 

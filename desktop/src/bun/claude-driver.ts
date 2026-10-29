@@ -2,17 +2,8 @@
 // session id; the Machine rule and News go in its UserPromptSubmit hook, not the message.
 
 import { homedir } from "node:os";
-import {
-  Config,
-  type Crypto,
-  Effect,
-  type FileSystem,
-  Option,
-  Path,
-  Queue,
-  Schema,
-  Stream,
-} from "effect";
+import { Config, Effect, type FileSystem, Option, Path, Queue, Schema, Stream } from "effect";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { type SdkMessage, startState, step } from "./agui";
 import { type ChatDriver, type ContentBlock, type DriverContext, TurnCost } from "./driver";
 import { which } from "./login-env";
@@ -60,7 +51,9 @@ export interface ClaudeCode<Server> {
   /** Collie's tools as an MCP server in this process. */
   readonly server: (
     flock: FlockChat,
-    run: <A>(effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>) => Promise<A>,
+    run: <A>(
+      effect: Effect.Effect<A, never, SecureRandom.SecureRandom | FileSystem.FileSystem>,
+    ) => Promise<A>,
   ) => Server;
   /** The MCP servers the human added to Claude Code at user scope. */
   readonly userServers: () => Promise<UserMcpServers>;

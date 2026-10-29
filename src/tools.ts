@@ -20,8 +20,9 @@
 // — a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Crypto, Effect, Result, Schema } from "effect";
+import type { PlatformServices } from "./platform";
+import { Clock, Effect, Result, Schema } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
 import {
@@ -108,7 +109,7 @@ import {
 type ToolAnswer = Effect.Effect<
   string,
   never,
-  BunServices | ChildProcessSpawner.ChildProcessSpawner
+  PlatformServices | ChildProcessSpawner.ChildProcessSpawner
 >;
 
 const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
@@ -130,9 +131,11 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
   /** Whether the board's selection may stand in for a Run nobody named. */
   selected: boolean,
 ) {
-  const services = yield* Effect.context<BunServices | ChildProcessSpawner.ChildProcessSpawner>();
+  const services = yield* Effect.context<
+    PlatformServices | ChildProcessSpawner.ChildProcessSpawner
+  >();
   const answer = <E>(
-    effect: Effect.Effect<string, E, BunServices | ChildProcessSpawner.ChildProcessSpawner>,
+    effect: Effect.Effect<string, E, PlatformServices | ChildProcessSpawner.ChildProcessSpawner>,
   ) => said(effect).pipe(Effect.provideContext(services));
   return CollieTools.of({
     collie_herd: (input) =>
@@ -263,7 +266,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   const wrong = actions.filter((action) => !asked.includes(action.kind));
   if (wrong.length > 0)
     return `collie_do does not carry out ${[...new Set(wrong.map((a) => a.kind))].join(", ")}: that is collie_propose's, which carries it out in the same call.`;
-  const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const door: Door = yield* toolDoor(env);
   const said: string[] =
     selected.on === null
@@ -483,7 +486,7 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
   if (run === undefined && workspace === undefined)
     return "collie_hold needs a run or a workspace to hold, and the board has nothing open. Ask which one they meant.";
   const why = reason ?? "asked in chat";
-  const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
 
   // One channel for every control, so what chat can do to a Run is exactly what the
   // board and the CLI can do to it — including which Runs there are to do it to.

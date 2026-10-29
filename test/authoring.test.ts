@@ -589,6 +589,31 @@ test(
   300_000,
 );
 
+test(
+  "checking a module that imports effect/Crypto names the import, and its replacement loads",
+  () =>
+    provesWith(
+      "collie-authoring-crypto-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.copyFile(`${fixtures}crypto.workflow.ts`, `${world.user}/crypto.workflow.ts`);
+          const checked = yield* collie(world, ["workflow", "check", "crypto"]);
+          expect(checked.exit).not.toBe(0);
+          expect(checked.envelope.error?.message ?? "").toContain("crypto\tuser\t1 problem(s)");
+          expect(checked.envelope.error?.message ?? "").toContain("effect/Crypto");
+
+          // What replaces it is served from the executable, as `effect` is.
+          yield* fs.copyFile(`${fixtures}random.workflow.ts`, `${world.user}/random.workflow.ts`);
+          const replaced = yield* collie(world, ["workflow", "check", "random"]);
+          expect(replaced.exit).toBe(0);
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  120_000,
+);
+
 test("reported is the one workflow declaration that closes after its report", () =>
   runEffect(
     Effect.gen(function* () {

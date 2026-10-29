@@ -1,7 +1,7 @@
 // The four Views are projections of state Effect produces. These are the producers'
 // own tests; the components are tested against fixtures in app.test.tsx.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { DateTime, Effect, FileSystem, Path, PlatformError, Schema } from "effect";
 import { Rig, type RigError } from "../support/recorder";
@@ -31,7 +31,11 @@ let runs: RunFacts[] = [];
 
 function effectTest(
   name: string,
-  body: () => Effect.gen.Return<void, RigError | PlatformError.PlatformError | Error, BunServices>,
+  body: () => Effect.gen.Return<
+    void,
+    RigError | PlatformError.PlatformError | Error,
+    PlatformServices
+  >,
 ) {
   test(name, () => runEffect(Effect.gen(body)));
 }

@@ -1,15 +1,6 @@
 import { hostname } from "node:os";
-import {
-  type Cause,
-  Clock,
-  Crypto,
-  Effect,
-  FileSystem,
-  Option,
-  Queue,
-  Schema,
-  Stream,
-} from "effect";
+import { type Cause, Clock, Effect, FileSystem, Option, Queue, Schema, Stream } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { AguiEvent } from "../shared/agui";
 import { ends } from "../shared/agui";
 import type { ChatDriver, DriverContext, DriverSession, TurnCost } from "./driver";
@@ -36,9 +27,7 @@ export const piDriver = (
       const { url, token } = yield* endpoint.start;
       // A short private name avoids user overrides and Pi hashing provider tool names.
       const server = `cf-${(yield* Effect.promise(() =>
-        context.run(
-          Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4).pipe(Effect.orDie),
-        ),
+        context.run(Effect.flatMap(SecureRandom.SecureRandom, (random) => random.uuidV4())),
       )).replaceAll("-", "")}`;
       const extension = `${context.dir}/pi-collie.ts`;
       const source = `export default function(pi) { pi.registerMcpServer("${server}", { url: ${Schema.encodeSync(Schema.fromJsonString(Schema.String))(url)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } }); }\n`;

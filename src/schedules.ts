@@ -22,7 +22,7 @@ import * as Activity from "effect/workflow/Activity";
 import * as DurableClock from "effect/workflow/DurableClock";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { agentStartRefusal, hostOptions } from "./agent-start";
 import { once, readAudit, recordAudit, type ScheduledBy } from "./audit";
 import { HostRefused, RequestConflict, Started, type FrontDoor, type Where } from "./board-model";
@@ -137,7 +137,7 @@ export const schedulesLayer = (options: {
       const { dir, env } = options;
       const fs = yield* FileSystem.FileSystem;
       const registry = yield* Registry;
-      const hosted = yield* Effect.context<HostServices | BunServices>();
+      const hosted = yield* Effect.context<HostServices | PlatformServices>();
       const scope = yield* Effect.scope;
       const machine: ScheduleMachine = { installation: options.installation, hostname: hostname() };
       // One writer of the records at a time: a change and an occurrence both read and write one.

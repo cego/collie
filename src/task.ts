@@ -6,7 +6,8 @@
 // label: two Tasks may share a project prefix, a workspace may be renamed by hand, and
 // neither says anything about whose work a Run is.
 
-import { Crypto, Data, Effect, FileSystem, Path, Schema } from "effect";
+import { Data, Effect, FileSystem, Path, Schema } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ensureLockDir, withLock } from "./lock";
 import { nowIso } from "./time";
 import { unsafePathComponent } from "./naming";
@@ -147,7 +148,7 @@ export const newTask = Effect.fn("task.newTask")(function* (opts: {
   readonly herd: string | null;
 }) {
   return {
-    id: `task-${(yield* (yield* Crypto.Crypto).randomUUIDv4).slice(0, 8)}`,
+    id: `task-${(yield* (yield* SecureRandom.SecureRandom).uuidV4()).slice(0, 8)}`,
     workspace: opts.workspace,
     label: opts.label,
     cwd: opts.cwd,

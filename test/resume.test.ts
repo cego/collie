@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, type Scope } from "effect";
 import { connect, ownerOf } from "../src/host";
 import { deliveriesOf } from "../src/steering";
@@ -21,7 +21,7 @@ const stopCompletely = (state: string) =>
 
 const withLostPrompt = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   extra: Readonly<Record<string, string>> = {},
 ) =>
   withHerdr(prefix, body, {
@@ -33,7 +33,7 @@ const withLostPrompt = <A, E>(
 
 const withHerdr = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   fake: Readonly<Record<string, string>>,
 ) =>
   proves(

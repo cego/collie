@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
 import type { FetchLike } from "forges";
 import { forgeHttpTest, type ForgeHttp } from "../src/forge/http";
@@ -66,8 +66,9 @@ const forgeHttp = forgeHttpTest(
 );
 
 /** `runEffect`, with ForgeHttp asking the fake of each forge made last. */
-const runWithForge = <A, E>(effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | BunServices>) =>
-  runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttp))));
+const runWithForge = <A, E>(
+  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices>,
+) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttp))));
 
 const mr65 = (over: Partial<FakeMr>): FakeMr => ({
   project: GITLAB,
@@ -568,7 +569,7 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
       yield* rig.addPane("p0", "t0", "/project", null, "w1");
       yield* rig.addPane("p1", "t1", "/project", "claude", "w1");
       yield* rig.addAgent("impl", "p1");
-      const services = yield* Effect.context<BunServices>();
+      const services = yield* Effect.context<PlatformServices>();
       const halting = (stateDir: string, run: string, reason: string) =>
         Agents.pipe(
           Effect.flatMap((agents) => agents.halt(run, reason)),

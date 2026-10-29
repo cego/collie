@@ -3,9 +3,10 @@
 // command cannot drift apart. What stays with each of them is presentation: picking,
 // prompting, rendering, and turning a result into text or JSON.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { repositoryCheckout } from "./projects";
-import { Crypto, Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
@@ -133,7 +134,7 @@ const ok = <A extends object>(data: A, human: string): OpResult => ({
 
 /** A fresh id for a mutation whose caller supplied none. Reusing one replays it. */
 export const newRequestId = Effect.fn("operations.newRequestId")(function* () {
-  return yield* (yield* Crypto.Crypto).randomUUIDv4;
+  return yield* (yield* SecureRandom.SecureRandom).uuidV4();
 });
 
 /** The live workspace for this environment, shared by both adapters. */
@@ -165,7 +166,7 @@ export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(functio
 export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
   env: PluginEnv,
   named: string | undefined,
-): Effect.fn.Return<WorkspaceNamed, never, BunServices> {
+): Effect.fn.Return<WorkspaceNamed, never, PlatformServices> {
   if (named === undefined || named.trim() === "") return null;
   const herdr = new Herdr(env);
   const all = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
@@ -267,7 +268,7 @@ const workspaceForDirectory = Effect.fn("operations.workspaceForDirectory")(func
   named: string,
   all: ReadonlyArray<WorkspaceInfo>,
   panes: ReadonlyArray<Pick<PaneInfo, "workspaceId" | "cwd">>,
-): Effect.fn.Return<WorkspaceNamed, never, BunServices> {
+): Effect.fn.Return<WorkspaceNamed, never, PlatformServices> {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const expanded = named.startsWith("~/") ? path.join(env.home, named.slice(2)) : named;
@@ -325,7 +326,7 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
     /** The key a downloaded runner must verify against; Collie's own unless a test says. */
     readonly key?: string;
     /** Where live Runs work, or null where that cannot be asked; the host's answer by default. */
-    readonly liveCheckouts?: Effect.Effect<ReadonlyArray<string> | null, never, BunServices>;
+    readonly liveCheckouts?: Effect.Effect<ReadonlyArray<string> | null, never, PlatformServices>;
   } = {},
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) {
@@ -398,7 +399,7 @@ const migrate = Effect.fn("operations.migrate")(function* (
   env: PluginEnv,
   to: string | undefined,
   key: string | undefined,
-  live: Effect.Effect<ReadonlyArray<string> | null, never, BunServices>,
+  live: Effect.Effect<ReadonlyArray<string> | null, never, PlatformServices>,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -461,7 +462,7 @@ const INSTALL_IGNORED = ["bin/", "node_modules/", "user/", "release/", "kept/"];
 /** What in a clone is the human's, one line per kind; empty where nothing is. */
 const humansIn = Effect.fn("operations.humansIn")(function* (
   root: string,
-  live: Effect.Effect<ReadonlyArray<string> | null, never, BunServices>,
+  live: Effect.Effect<ReadonlyArray<string> | null, never, PlatformServices>,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const git = (...args: string[]) => run("git", args, root);

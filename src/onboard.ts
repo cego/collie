@@ -3,7 +3,7 @@
 // running it again is how a half-onboarded Machine is repaired. Nothing here runs sudo:
 // a step that needs root stops with the command to run.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { Effect, FileSystem, Option, Schedule, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -129,8 +129,10 @@ const decodeChecks = Schema.decodeUnknownOption(
 export const onboard = Effect.fn("Onboard.onboard")(function* (
   env: PluginEnv,
   options: OnboardOptions,
-  emit: (event: OnboardEvent) => Effect.Effect<void, never, BunServices>,
-  check: (env: PluginEnv) => Effect.Effect<OpResult, Error | PlatformError, BunServices> = doctor,
+  emit: (event: OnboardEvent) => Effect.Effect<void, never, PlatformServices>,
+  check: (
+    env: PluginEnv,
+  ) => Effect.Effect<OpResult, Error | PlatformError, PlatformServices> = doctor,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

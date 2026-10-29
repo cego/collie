@@ -3,7 +3,7 @@
 // is already recorded — the tree, the journal, the Intent and its drift — so nothing a
 // card or a report says is a claim nobody can check.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
 import { appendLogLine } from "./run-log";
 import type { ChildProcessSpawner } from "effect/process";
@@ -552,7 +552,7 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   judging: "none" | "boundary" | "finish",
   deps: JudgementDeps | null,
   to: Correcting | null,
-): Effect.fn.Return<Corrected, never, BunServices> {
+): Effect.fn.Return<Corrected, never, PlatformServices> {
   yield* followRunPlan(at);
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return NOTHING_CORRECTED;
@@ -851,7 +851,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
   where: string,
   leaving: boolean,
   deps: JudgementDeps | null,
-): Effect.fn.Return<void, never, BunServices> {
+): Effect.fn.Return<void, never, PlatformServices> {
   const key = at.herd;
   if (key === null) {
     if (at.family.length > 1)

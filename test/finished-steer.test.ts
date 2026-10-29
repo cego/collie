@@ -3,8 +3,9 @@
 // status nothing rewrites.
 
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Config, Crypto, Effect, FileSystem, Option, Schema, type Scope } from "effect";
+import type { PlatformServices } from "../src/platform";
+import { Config, Effect, FileSystem, Option, Schema, type Scope } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
 import { readEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
@@ -46,7 +47,7 @@ const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
     COLLIE_CWD: world.project,
   });
   const client = yield* connect(world.state).pipe(Effect.orDie);
-  const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const started = yield* client
     .start({ project: world.project, id: workflow, request, input: { work: "the picker" } })
     .pipe(Effect.orDie);
@@ -78,7 +79,7 @@ const chat = () => ({ origin: "chat" as const, requestId: `req-chat-${++asked}` 
 /** A world whose fake agent answers its one prompt with an Output, and is then left alive. */
 const steerable = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   /** What the fake agent answers its prompts with; none leaves it working for good. */
   answers: ReadonlyArray<{ readonly verdict: string }> = [{ verdict: "built" }],
   modules: ReadonlyArray<string> = ["told.workflow.ts"],
@@ -512,7 +513,7 @@ test(
             COLLIE_CWD: world.project,
           });
           const client = yield* connect(world.state).pipe(Effect.orDie);
-          const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+          const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
           const { runId } = yield* client
             .start({ project: world.project, id: "told", request, input: { work: "the picker" } })
             .pipe(Effect.orDie);

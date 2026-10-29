@@ -11,7 +11,7 @@
 // `CAPABILITIES.md`. Attribution asks for a line typed into that pane, by a person or an
 // agent, and waits.
 
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer } from "../src/platform";
 import { Clock, Effect, FileSystem, ManagedRuntime, Path } from "effect";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
@@ -20,7 +20,7 @@ import { controlDir } from "../src/compaction";
 import { ackPath, entryFromLive, transaction, INTERRUPT_WAIT_MS } from "../src/dispatcher";
 import { nowIso } from "../src/time";
 
-const runtime = ManagedRuntime.make(BunServices.layer);
+const runtime = ManagedRuntime.make(platformLayer);
 
 type Result = "pass" | "fail" | "not-run";
 interface Row {

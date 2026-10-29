@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
-import { Crypto, Deferred, Effect, Fiber, FileSystem } from "effect";
+import { platformLayer } from "../src/platform";
+import { Deferred, Effect, Fiber, FileSystem } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
@@ -33,7 +34,7 @@ test("the loopback tools require their token, list the chat's tools and match a 
         chatChoices: Effect.die("not asked"),
         setChatHarness: () => Effect.succeed(null),
       };
-      const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem>();
+      const services = yield* Effect.context<SecureRandom.SecureRandom | FileSystem.FileSystem>();
       const clicked = yield* Deferred.make<{ readonly Where: string }>();
       const asked = yield* Deferred.make<string>();
       const endpoint = yield* loopbackTools({
@@ -91,5 +92,5 @@ test("the loopback tools require their token, list the chat's tools and match a 
         ),
       ).toMatchObject({ content: [{ type: "text", text: NO_HUMAN }] });
       expect(yield* endpoint.start).toEqual({ url, token });
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));

@@ -4,7 +4,7 @@
 // nobody can say whether it already happened.
 
 import { Effect, FileSystem, Path, type Scope } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   EXPIRES_AFTER_MS,
@@ -395,7 +395,7 @@ const inHerd = <A, E>(
     world: World;
     env: PluginEnv;
     herdFile: string;
-  }) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  }) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
   hosted("hw-proposals-", ({ world, env }) =>
     Effect.gen(function* () {

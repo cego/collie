@@ -6,7 +6,7 @@
 // harness is a threshold that disagrees with itself.
 
 import { Clock, Data, Effect, FileSystem, Path, PlatformError, Result, Schema } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
@@ -104,7 +104,7 @@ export interface AgentContext extends LaunchContext {
  * Everything an adapter may need: the filesystem for the telemetry its controls write,
  * and the platform services herdr's own channel and a version probe run on.
  */
-type PortServices = FileSystem.FileSystem | Path.Path | BunServices;
+type PortServices = FileSystem.FileSystem | Path.Path | PlatformServices;
 /** What reading a file or talking to a harness fails with, in one name. */
 type PortError = Error | PlatformError.PlatformError;
 

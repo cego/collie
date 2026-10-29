@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Schema, Scope } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { writeConfigValue } from "../src/config";
 import { currentEnv, type PluginEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
@@ -49,7 +49,7 @@ const answering = (script: ReadonlyArray<string>) => {
 
 const launching = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) => proves(prefix, (world) => body(world).pipe(Effect.ensuring(stopHost(world.state))), MODULES);
 
 /** `glab` answering with this branch's open merge request, for the flow's own inference. */
