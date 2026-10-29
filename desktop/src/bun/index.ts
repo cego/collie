@@ -47,6 +47,7 @@ import {
   machineRows,
   type MachineLinked,
   type MachineSynced,
+  type MachineOwnRead,
   type OnboardRun,
   type OnboardStep,
   Skippable,
@@ -86,6 +87,7 @@ import { nowIso } from "../../../src/time";
 import { changedLine } from "../../../src/schedule-model";
 import { SettingValue, settingText } from "../../../src/settings";
 import { isString } from "../../../src/schema";
+import { keepOwn } from "../shared/machine-own";
 import {
   actOn,
   DoorMap,
@@ -95,6 +97,7 @@ import {
   offersOn,
   runDetailOn,
   usageOn,
+  machineOwnOn,
   schedulesOn,
   cleanupOn,
   sweepOn,
@@ -138,9 +141,12 @@ import { electrobunUpdater } from "./electrobun-updater";
 import {
   dropBoardsOf,
   dropOnboarding,
+  dropOwn,
   saveOnboarding,
   savedBoards,
   savedOnboardings,
+  saveOwn,
+  savedOwn,
   saving,
 } from "./saved";
 import { applyAtLaunch, restartToUpdate, updatesOf } from "./updates";
@@ -442,6 +448,24 @@ const main = Effect.gen(function* () {
       return edited;
     });
   const boards = `${Utils.paths.userData}/machines`;
+  const ownDirectory = `${Utils.paths.userData}/machine-own`;
+  const ownReadings = new Map(
+    (yield* savedOwn(ownDirectory)).map((read) => [read.machine.profile, read]),
+  );
+  const readOwn = (door: Doors) =>
+    machineOwnOn(door.machine, door.desktop).pipe(
+      Effect.flatMap((read) =>
+        Effect.gen(function* () {
+          const kept: MachineOwnRead = {
+            ...read,
+            reading: keepOwn(read.reading, ownReadings.get(read.machine.profile)?.reading),
+          };
+          ownReadings.set(read.machine.profile, kept);
+          yield* saveOwn(ownDirectory, kept).pipe(Effect.provide(BunServices.layer));
+          yield* PubSub.publish(news, kept);
+        }),
+      ),
+    );
   const onboardings = `${Utils.paths.userData}/onboarding`;
   const runners = `${Utils.paths.userData}/runners`;
   const scope = yield* Effect.scope;
@@ -848,6 +872,7 @@ const main = Effect.gen(function* () {
             return Effect.all(
               [
                 door === undefined ? Effect.void : syncOn(settingsOf(door)),
+                door === undefined ? Effect.void : readOwn(door),
                 door === undefined ? Effect.void : definitions.syncOn(settingsOf(door)),
                 route === undefined ? Effect.void : given.giveLacking(route),
                 route?.pair === undefined
@@ -869,6 +894,7 @@ const main = Effect.gen(function* () {
             { _tag: "Routes", profiles: [...routes.keys()] },
             ...reachable.map(({ machine }): FlockItem => ({ _tag: "Routed", machine })),
             ...(yield* savedBoards(boards)).filter(listed),
+            ...[...ownReadings.values()].filter(listed),
             ...(yield* savedOnboardings(onboardings)).filter(listed),
             ...(yield* given.states(reachable.map(({ machine }) => machine))),
             ...[...synced.values()].filter(listed),
@@ -933,7 +959,13 @@ const main = Effect.gen(function* () {
     credentials: () => SubscriptionRef.changes(credentials),
     flockSettings: () =>
       Stream.unwrap(
-        syncEvery().pipe(Effect.forkIn(scope), Effect.as(SubscriptionRef.changes(flockSettings))),
+        syncEvery().pipe(
+          Effect.andThen(
+            Effect.forEach(doors.values(), readOwn, { concurrency: "unbounded", discard: true }),
+          ),
+          Effect.forkIn(scope),
+          Effect.as(SubscriptionRef.changes(flockSettings)),
+        ),
       ),
     setFlockSetting: ({ key, value }) =>
       editFlock(key, value).pipe(
@@ -1033,11 +1065,13 @@ const main = Effect.gen(function* () {
         // Without a board open there is no stream to end.
         yield* Deferred.await(done).pipe(Effect.timeoutOption("5 seconds"));
         routes.delete(profile);
+        ownReadings.delete(profile);
         const running = onboarding.get(profile)?.fiber;
         if (running !== undefined) yield* Fiber.interrupt(running);
         yield* Scope.close(known.scope, Exit.void);
         yield* Effect.all([
           dropOnboarding(onboardings, profile),
+          dropOwn(ownDirectory, profile),
           dropBoardsOf(boards, profile),
           given.drop(profile),
         ]).pipe(Effect.provide(BunServices.layer));

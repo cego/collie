@@ -19,7 +19,8 @@ const emit = defineEmits<{ back: [] }>();
 const { openLink, saveGitlabHost, setFlockSetting } = useActions();
 const { credentials, trouble: credentialsTrouble } = useCredentials();
 const { desktopSettings, change } = useDesktopSettings();
-const { rows: machines } = useFlock();
+const { rows: machines, own } = useFlock();
+const { open: openPage } = usePage();
 const { value: held, trouble } = useHeld(() => flockSettingsAtom);
 // Asked again on opening, which syncs every connected Machine and so shows their edits.
 const registry = injectRegistry();
@@ -88,6 +89,13 @@ const showAbout = computed(
   () =>
     !filtering.value ||
     "about version update collie desktop".includes(query.value.trim().toLowerCase()),
+);
+const showOwn = computed(
+  () =>
+    !onlySet.value &&
+    "each machine's own projects.root chat_harness harnesses found remembered linear.team gitlab.assignee".includes(
+      query.value.trim().toLowerCase(),
+    ),
 );
 const clearFilters = () => {
   query.value = "";
@@ -254,11 +262,20 @@ const drawnLine = computed(() =>
                 @click="goTo('credentials')"
               />
             </div>
-            <div v-if="showAbout" class="flex flex-col gap-0.5">
+            <div v-if="showOwn || showAbout" class="flex flex-col gap-0.5">
               <span class="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-dimmed">
                 Elsewhere
               </span>
               <UButton
+                v-if="showOwn"
+                color="neutral"
+                variant="ghost"
+                size="sm"
+                label="Each Machine's own"
+                @click="goTo('machine-own')"
+              />
+              <UButton
+                v-if="showAbout"
                 color="neutral"
                 variant="ghost"
                 size="sm"
@@ -308,7 +325,7 @@ const drawnLine = computed(() =>
             </div>
 
             <div
-              v-if="shownCount === 0 && !showCredentials && !showAbout"
+              v-if="shownCount === 0 && !showCredentials && !showAbout && !showOwn"
               class="flex flex-col items-start gap-2"
             >
               <p class="font-semibold">No setting matches “{{ query }}”.</p>
@@ -667,6 +684,30 @@ const drawnLine = computed(() =>
                   <CredentialFields which="helle" label="Save" />
                 </div>
               </template>
+            </section>
+            <section
+              v-if="showOwn"
+              id="machine-own"
+              aria-labelledby="machine-own-title"
+              class="flex flex-col gap-4"
+              data-testid="machine-own"
+            >
+              <div class="flex flex-col gap-2">
+                <h2 id="machine-own-title" class="text-lg font-semibold">Each Machine's own</h2>
+                <p class="text-sm text-muted">
+                  Where its projects live, its Native chat's harness, and the answers it remembered
+                  stay in that Machine's config.json. Change them in that Machine's TUI Settings.
+                </p>
+              </div>
+              <MachineOwnTable :rows="own" />
+              <div>
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  label="Open Machines"
+                  @click="openPage('machines')"
+                />
+              </div>
             </section>
             <section v-if="showAbout" id="about" class="flex flex-col gap-3" data-testid="about">
               <h3 class="text-sm font-semibold">About</h3>

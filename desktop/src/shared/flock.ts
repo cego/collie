@@ -21,6 +21,7 @@ import { FlockSettings } from "./flock-settings";
 import { CleanupListing } from "./machine-cleanup";
 import { MachineSchedules } from "./schedules";
 import { MachineUsage } from "./usage";
+import { keepOwn, OwnReading } from "./machine-own";
 import {
   BoardMessage,
   CleanupReport,
@@ -182,6 +183,12 @@ export const MachineSynced = Schema.TaggedStruct("Synced", {
 });
 export type MachineSynced = typeof MachineSynced.Type;
 
+export const MachineOwnRead = Schema.TaggedStruct("OwnRead", {
+  machine: KnownMachine,
+  reading: OwnReading,
+});
+export type MachineOwnRead = typeof MachineOwnRead.Type;
+
 /** A Machine's paired link, as Local's `collie machine list` says it now. */
 export const MachineLinked = Schema.TaggedStruct("Linked", {
   machine: KnownMachine,
@@ -234,6 +241,7 @@ export const FlockItem = Schema.Union([
   MachineOnboarding,
   MachineDoctored,
   MachineSynced,
+  MachineOwnRead,
   MachineGiven,
   MachineLinked,
 ]);
@@ -717,6 +725,7 @@ export interface Flock {
   readonly doctored: ReadonlyMap<string, OnboardRun>;
   /** How each route's latest settings sync ended, by herdr profile. */
   readonly synced: ReadonlyMap<string, string | null>;
+  readonly own: ReadonlyMap<string, OwnReading>;
   /** How each route's latest definitions sync ended, by herdr profile. */
   readonly definitions: ReadonlyMap<string, string | null>;
   /** Each route's credentials, by herdr profile. */
@@ -738,6 +747,7 @@ export const EMPTY_FLOCK: Flock = {
   onboarded: new Map(),
   doctored: new Map(),
   synced: new Map(),
+  own: new Map(),
   definitions: new Map(),
   given: new Map(),
   links: new Map(),
@@ -761,6 +771,7 @@ const removed = (flock: Flock, profile: string): Flock => {
     onboarded: without(flock.onboarded),
     doctored: without(flock.doctored),
     synced: without(flock.synced),
+    own: without(flock.own),
     definitions: without(flock.definitions),
     given: without(flock.given),
     links: without(flock.links),
@@ -790,6 +801,14 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
         };
   if ("_tag" in item && item._tag === "Linked")
     return { ...flock, links: new Map(flock.links).set(item.machine.profile, item.link) };
+  if ("_tag" in item && item._tag === "OwnRead")
+    return {
+      ...flock,
+      own: new Map(flock.own).set(
+        item.machine.profile,
+        keepOwn(item.reading, flock.own.get(item.machine.profile)),
+      ),
+    };
   if ("_tag" in item && item._tag === "Given") {
     const { machine, credential, given, failed } = item;
     const { profile } = machine;

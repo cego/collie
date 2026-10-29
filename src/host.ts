@@ -164,7 +164,7 @@ import { readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
-import { buildRunDetail, type PlanCache } from "./views";
+import { buildMachineOwn, buildRunDetail, type PlanCache } from "./views";
 import {
   Answered,
   ASKED_KINDS,
@@ -1806,6 +1806,11 @@ const frontDoorHandlers = (
           ),
         settings: () =>
           sharedSettings(env.userDir).pipe(
+            Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+            Effect.provideContext(bun),
+          ),
+        machineOwn: () =>
+          buildMachineOwn(env).pipe(
             Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
             Effect.provideContext(bun),
           ),

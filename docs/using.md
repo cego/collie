@@ -1616,8 +1616,12 @@ scope's rule once:
   this computer, since monitors differ between computers. The Flock chat's harness, model,
   effort and width stay this computer's too, but have no rows here: they are chosen beside
   its message box ([The Flock chat](#the-flock-chat)).
-- **Each Machine's own** is the rest of a Machine's `config.json`, changed in that Machine's
-  TUI.
+- **Each Machine's own** is a read-only table: the Machine and where it is, its settings
+  sync state, `projects.root`, `chat_harness`, harnesses found, and remembered answers such
+  as `linear.team` and `gitlab.assignee`. Change these in that Machine's TUI Settings.
+  A value never configured says **Not set**. A Machine out of reach keeps its last values
+  and says when they were read, including after Desktop reopens. A host without this read
+  says **Not known** and names its Collie version; its paired link and board keep working.
 
 A left index lists the sections by scope, each with how many of its settings are set; a
 search runs over each setting's name, key and description, beside **Only what is set**.

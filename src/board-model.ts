@@ -1293,6 +1293,14 @@ export const SharedSettings = Schema.Struct({
 });
 export type SharedSettings = typeof SharedSettings.Type;
 
+export const MachineOwn = Schema.Struct({
+  projectsRoot: Schema.optionalKey(Schema.String),
+  chatHarness: Schema.optionalKey(Schema.String),
+  harnesses: Schema.Array(Schema.String),
+  remembered: Schema.Array(Schema.Struct({ key: Schema.String, value: Schema.String })),
+});
+export type MachineOwn = typeof MachineOwn.Type;
+
 /** Files given with a request, as paths on the host's own Machine, copied into the Run. */
 export const Attachments = Schema.Array(Schema.String);
 
@@ -1628,6 +1636,7 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** This Machine's settings that a Flock shares: those ever set, each with when. */
   Rpc.make("settings", { success: SharedSettings, error: HostRefused }),
+  Rpc.make("machineOwn", { success: MachineOwn, error: HostRefused }),
   /**
    * The Flock's settings, each written with its own edit's time, where it is newer than
    * this Machine's last edit of that key.
