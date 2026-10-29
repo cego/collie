@@ -1907,6 +1907,40 @@ catalogue copy is reused and each registration keeps its own single copy. No per
 source-content cache or weaker edit detection is introduced. Full-suite timings must
 be repeated with pristine dependencies before claiming a gain or closing either issue.
 
+Pristine qualification ran at 13:08–13:34 UTC, after run-bd4539a0's final completion
+notice, using private FS and SQL dependencies checked against their published tarballs.
+The original performance targets remain unmet or unproved:
+
+| Window    | Revision                                   | Whole-suite time with builds | Tests                       | Probe p95 |
+| --------- | ------------------------------------------ | ---------------------------: | --------------------------- | --------: |
+| Idle      | —                                          |                            — | 300 probes                  |  9.219 ms |
+| Control   | `c54a40b88eb57e1bd22faaaab6b6d5b8f10de387` |                     622.40 s | 5,076 pass, 11 skip         | 11.731 ms |
+| Candidate | `0716a73754b1339e2de6138c1c9c879dad0771e0` |                     663.71 s | 5,078 pass, 11 skip, 1 fail | 12.974 ms |
+
+Neither suite had another whole suite waiting. The candidate's probe p95 is 1.41 times
+idle for the observed window, but that does not establish the required four-suite
+condition or a benefit from the priority change. The control and candidate used
+6,128.28 and 6,323.28 CPU-s respectively in their complete cgroups. Mean Machine use
+was 18.60 and 19.08 cores, versus suite use of 9.86 and 9.53 cores. Mean CPU pressure
+was 40.49% and 43.63%, with I/O pressure below 0.10% and negligible memory pressure.
+There is no demonstrated whole-suite gain. The candidate's board-stream test failed
+when a removed fake agent was still listed; it passed in the isolated diagnostic run.
+That failure is retained, not counted as a green measurement. Raw evidence and the
+qualification result are in `handoffs/measure/fix1-qualification.json` and the three
+`fix1-*-pristine/` directories. The lock was released at 13:34:49.902 UTC.
+
+Further module-load work removes the initial import that only learned an entry's id
+before staging and importing it for registration. Registration now stages once and
+uses that validated definition directly. `registration-single-import-red` and
+`registration-single-import-count-red` exposed the extra copy and top-level import;
+the green proof still checks separate registrations and external-helper recovery.
+Revision calculation also reuses source bytes between import scanning and hashing
+within one calculation. `revision-read-once-red` observed duplicate reads; its green
+proof checks one read per source and an edited helper on the next calculation. This
+cache ends with each calculation; dependency resolution and edit detection remain
+fresh. These cuts need a new measured qualification, coordinated after the other
+Run's next announced final-tree study; no further window was taken ahead of it.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.

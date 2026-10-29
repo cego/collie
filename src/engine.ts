@@ -2525,6 +2525,19 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
   Effect.fn("Engine.revisionOf")(function* (dir: string) {
     const fs = yield* FileSystem.FileSystem;
+    const contents = new Map<string, string>();
+    const contentOf = (file: string) => {
+      const cached = contents.get(file);
+      return cached !== undefined
+        ? Effect.succeed(cached)
+        : fs.readFileString(file).pipe(
+            Effect.orElseSucceed(() => ""),
+            Effect.map((content) => {
+              contents.set(file, content);
+              return content;
+            }),
+          );
+    };
     // An installed dependency counts by its names alone: the toolchain a module is
     // typechecked against lives here too, and reading all of it would cost more than
     // every start it is on the way of.
@@ -2538,13 +2551,11 @@ export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSyste
     for (const name of (yield* sourcesIn(dir)).sort()) {
       // A directory reads as nothing, and what is inside it is in the list under a name
       // of its own.
-      const content = yield* fs
-        .readFileString(`${dir}/${name}`)
-        .pipe(Effect.orElseSucceed(() => ""));
+      const content = yield* contentOf(`${dir}/${name}`);
       read += `${name}:${Bun.hash(content).toString(16)}\n`;
     }
-    for (const file of yield* outsideOf(dir)) {
-      const content = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+    for (const file of yield* outsideOf(dir, contentOf)) {
+      const content = yield* contentOf(file);
       read += `${file}:${Bun.hash(content).toString(16)}\n`;
     }
     return Bun.hash(read).toString(16);
@@ -2554,7 +2565,10 @@ export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSyste
  * The files outside `dir` its code imports by a relative path or a package import, what
  * those import in turn, and the `package.json` files above them that such imports resolve by.
  */
-const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
+const outsideOf = Effect.fn("Engine.outsideOf")(function* (
+  dir: string,
+  contentOf?: (file: string) => Effect.Effect<string>,
+) {
   const fs = yield* FileSystem.FileSystem;
   const pending = (yield* sourcesIn(dir)).map((name) => `${dir}/${name}`);
   const outside = new Set<string>();
@@ -2570,7 +2584,9 @@ const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
     }
     const loader = loaderOf(file);
     if (loader === null) continue;
-    const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+    const text = yield* (
+      contentOf?.(file) ?? fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))
+    );
     for (const target of importedBy(file, text, loader)) {
       if (target.startsWith(`${dir}/`) || outside.has(target)) continue;
       outside.add(target);
@@ -5932,6 +5948,12 @@ const makeRegistry: (
       }
     });
 
+  const stageEntry = Effect.fn("Engine.stageEntry")(function* (file: string) {
+    const name = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+    const staged = yield* stageGeneration({ dir, name, entry: file });
+    return yield* readStagedEntry(file, { file: staged, root: `${dir}/generations/${name}` });
+  });
+
   const register = Effect.fn("Engine.register")(function* (
     route: {
       readonly workflow: string;
@@ -5939,17 +5961,9 @@ const makeRegistry: (
       readonly entry: string;
     },
     recovered?: Set<string>,
+    prepared?: WorkflowEntry,
   ) {
-    const name = `${route.name}-${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`;
-    const entry = yield* stageGeneration({ dir, name, entry: route.entry }).pipe(
-      // This generation already has a unique path, so its imports need no second copy.
-      Effect.flatMap((file) =>
-        readStagedEntry(file, {
-          file,
-          root: `${dir}/generations/${name}`,
-        }),
-      ),
-    );
+    const entry = prepared ?? (yield* stageEntry(route.entry));
     const registration = entry.make(route.name);
     const pending: Array<{ row: RunRow; parked: Option.Option<string> }> = [];
     if (recovered !== undefined) {
@@ -7278,13 +7292,13 @@ const makeRegistry: (
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
     // Read as it is now to learn the id this file claims, then register the next
     // generation of that id.
-    const described = yield* loadEntry(file);
+    const described = yield* stageEntry(file);
     const route = {
       workflow: described.id,
       name: nextRegistrationName(known, described.id),
       entry: file,
     };
-    const generation = yield* register(route);
+    const generation = yield* register(route, undefined, described);
     known = [...known, route];
     yield* store.remember(route);
     return generation;

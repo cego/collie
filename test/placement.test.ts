@@ -199,12 +199,13 @@ const finished = (runId: string) =>
 
 const isOver = (status: string) => status === "complete" || status === "failed";
 
-test("registration copies a module into the shared cache and once per generation", () =>
+test("registration copies and imports a module once per generation", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const at = `${rig.root}/module`;
       const file = `${at}/cost.workflow.ts`;
+      const imports = `${rig.root}/imports.log`;
       yield* fs.makeDirectory(at);
       yield* fs.writeFileString(`${rig.root}/helper.ts`, 'export const title = "Before";');
       yield* fs.writeFileString(
@@ -213,6 +214,8 @@ test("registration copies a module into the shared cache and once per generation
 import { defineWorkflow } from "collie";
 import { Effect } from "effect";
 import { title } from "../helper";
+import { appendFileSync } from "node:fs";
+appendFileSync(${asJson(imports)}, "loaded\\n");
 export default defineWorkflow({ id: "cost", title, run: () => Effect.void });
 `,
       );
@@ -228,12 +231,14 @@ export default defineWorkflow({ id: "cost", title, run: () => Effect.void });
           .load(file)
           .pipe(Effect.provideService(FileSystem.FileSystem, counted));
         expect(first.name).toBe("cost@1");
-        expect(copies).toHaveLength(2);
+        expect(yield* fs.readFileString(imports)).toBe("loaded\n");
+        expect(copies).toHaveLength(1);
         copies.length = 0;
         const second = yield* registry
           .load(file)
           .pipe(Effect.provideService(FileSystem.FileSystem, counted));
         expect(second.name).toBe("cost@2");
+        expect(yield* fs.readFileString(imports)).toBe("loaded\nloaded\n");
         expect(copies).toHaveLength(1);
       }).pipe(hosted);
       yield* fs.writeFileString(`${rig.root}/helper.ts`, 'export const title = "After";');
