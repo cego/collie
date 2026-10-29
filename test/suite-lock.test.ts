@@ -6,6 +6,7 @@ import { inTurn } from "../tools/suite-lock";
 import {
   binDirectory,
   isTargeted,
+  kindOf,
   prepareTimings,
   pressureAt,
   report,
@@ -104,6 +105,28 @@ test("a run naming an existing path or --changed is targeted, anything else is t
       expect(yield* targeted("--bail", "test/suite-lock.test.ts")).toBe(true);
       expect(yield* targeted("--", "test/suite-lock.test.ts")).toBe(true);
       expect(yield* targeted("--parallel", "test/suite-lock.test.ts")).toBe(true);
+    }),
+  ));
+
+test("a targeted run of a few files is small, and one naming a directory or more files than small runs share is whole", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const budget = budgetOf(24);
+      const kind = (...args: string[]) => kindOf(args, budget);
+      const five = [
+        "test/budget.test.ts",
+        "test/suite-lock.test.ts",
+        "test/tools.test.ts",
+        "test/helle.test.ts",
+        "test/control.test.ts",
+      ];
+      expect(yield* kind("test/budget.test.ts")).toBe("small");
+      expect(yield* kind(...five.slice(0, 4))).toBe("small");
+      expect(yield* kind(...five)).toBe("whole");
+      expect(yield* kind("test/support")).toBe("whole");
+      expect(yield* kind("test/budget.test.ts", "test/support")).toBe("whole");
+      expect(yield* kind("--changed")).toBe("small");
+      expect(yield* kind("-t", "foo")).toBe("whole");
     }),
   ));
 

@@ -1514,7 +1514,9 @@ seconds, how long it has waited (`tools/suite-lock.ts`). Which forms take the lo
   `--changed[=<ref>]`, does not (`tools/test-run.ts`). The lock guards the cores and the
   executables in `.scratch/test-bin/`; a run of a few files needs few cores, builds into a
   temporary directory of its own that it removes when it ends, and reads
-  `.scratch/test-timings.json` without updating it.
+  `.scratch/test-timings.json` without updating it. One that names a directory, or more
+  files than the budget keeps for small runs, needs a suite's cores: it builds and reads
+  the timings as a targeted run, but takes the lock and its workers as a whole suite.
 - `bun test <file>`, `bun test -t <name>` and `bun run test:live` do not: they run the
   sources directly, and join the budget as a small run (see [Keeping the suite and a start
   fast](#keeping-the-suite-and-a-start-fast)).
@@ -1594,15 +1596,21 @@ its time.
   of test processes per user per Machine
   ([ADR-draft-test-processes-share-one-budget-per-machine](adr/draft-test-processes-share-one-budget-per-machine.md);
   `tools/budget.ts`). The budget is two thirds of the cores, at least 2, and
-  `COLLIE_TEST_BUDGET` sets it. A quarter of it, at least 2, is kept for targeted runs. A
-  whole suite asks for all the rest, so whole suites run one at a time. A targeted run asks
+  `COLLIE_TEST_BUDGET` sets it. A quarter of it, at least 2, is kept for small runs: a
+  targeted run of no more files than that, with no directory among them, or `--changed`. A
+  targeted run naming a directory or more files is the size of a suite and takes from the
+  rest, as a whole suite does, so a small run never waits behind it. A whole suite asks for
+  all the rest, so whole suites run one at a time. A targeted run asks
   for 2, and a `--parallel=N` before any `--` asks for N. A run gets no more than its kind's
   share, and says so when it gets fewer than it asked for. On vm-mk that is 12 workers for a
   whole suite out of 16. Each of CI's suite shards sets a budget of 6 on its 4-core runner,
   giving it 4 workers. Two thirds of 4 cores is a budget of 2, and a budget of 4 would still keep
   2 for targeted runs, which never run on a dedicated runner. At 4 workers the suite ran in
   692 s, against 1,003 s at 2. More workers than cores there is unmeasured. Where the rest would be under 2, as on two or three cores, every
-  run takes from the whole budget in turn. Waiters are admitted in the order they arrived.
+  run takes from the whole budget in turn. A run is admitted as soon as its share has the
+  workers it asks for free, whatever waits before it; arrival order decides only between
+  runs that do not fit, and an earlier one that fits once workers free up is never
+  overtaken. A run asking for many workers can so wait behind a stream of smaller ones.
   A wait names who it is behind once, then says every 30 s how long it has waited. The store
   is `collie-test-budget-<uid>` under the temporary directory, changed under
   `src/lock.ts`'s lock. A hold names its runner and the `bun test` it started, and it is

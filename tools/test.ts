@@ -12,9 +12,9 @@
 // those whose pid is dead are removed before this one starts.
 //
 // Every run takes its workers from one budget of test processes per user per Machine
-// (`tools/budget.ts`): two thirds of the cores, a quarter of it kept for targeted runs, and
-// waiters admitted in the order they arrived. A whole suite asks for all the rest, so whole
-// suites run one at a time and a targeted run never waits behind one. A whole suite also
+// (`tools/budget.ts`): two thirds of the cores, a quarter of it kept for targeted runs of a few
+// files, and a run admitted as soon as its share has the workers free. A whole suite asks for
+// all the rest, so whole suites run one at a time and a targeted run never waits behind one. A whole suite also
 // takes the old suite lock, so a checkout from before the budget still takes turns with it.
 // A caller's `--parallel=N` asks for N, and gets no more than its kind's share.
 // `COLLIE_TEST_BUDGET` sets the budget's size. The run ends with a report of where its time
@@ -24,10 +24,11 @@ import { availableParallelism, tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem } from "effect";
-import { budgetOf, startOnHold, STORE as store } from "./budget";
+import { budgetOf, type Kind, startOnHold, STORE as store } from "./budget";
 import {
   binDirectory,
   isTargeted,
+  kindOf,
   prepareTimings,
   pressureAt,
   report,
@@ -69,8 +70,8 @@ const build = (out: string) =>
 const timings = ".scratch/test-timings.json";
 const seed = resolve(import.meta.dir, "test-timings.json");
 
-const suite = (targeted: boolean, since: number) => {
-  const request = requestOf(args, budget, targeted);
+const suite = (targeted: boolean, kind: Kind, since: number) => {
+  const request = requestOf(args, budget, targeted, kind);
   return turnFor(
     request,
     store,
@@ -151,7 +152,9 @@ const lock = `${tmpdir()}/collie-test-suite-${process.getuid?.() ?? "user"}.lock
 BunRuntime.runMain(
   Effect.sync(() => performance.now()).pipe(
     Effect.flatMap((since) =>
-      isTargeted(args).pipe(Effect.flatMap((targeted) => suite(targeted, since))),
+      Effect.all([isTargeted(args), kindOf(args, budget)]).pipe(
+        Effect.flatMap(([targeted, kind]) => suite(targeted, kind, since)),
+      ),
     ),
     Effect.flatMap((code) => Effect.sync(() => process.exit(code))),
     Effect.provide(BunServices.layer),
