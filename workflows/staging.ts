@@ -28,7 +28,6 @@ export const plays = (jobs: ReadonlyArray<JobLink>) =>
 /** The step gate's limit on a joined Clearance, counted as it counts. */
 const CLEARANCE_CHARS = 400;
 
-/** The first form of a Clearance within its limit, else the last. */
 export const fitting = (...forms: ReadonlyArray<ReadonlyArray<string>>) =>
   forms.find((form) => Array.from(form.join("; ")).length <= CLEARANCE_CHARS) ?? forms.at(-1)!;
 
