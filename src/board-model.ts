@@ -8,6 +8,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
 import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
+import { MeasureEvent } from "./measurement-model";
 export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
 import { UsageReading } from "./usage-model";
@@ -855,6 +856,8 @@ export const RunDetail = Schema.Struct({
     obstacle: Schema.NullOr(Schema.String),
     next: Schema.NullOr(Schema.String),
     delivered: Schema.NullOr(Schema.String),
+    /** A performance Run's latest `final` Measurement, or null. Absent from an older host. */
+    measurement: Schema.optional(Schema.NullOr(Schema.String)),
     metrics: Metrics,
   }),
   /** When this Run finished, so the merge-request panel can say what moved since. */
@@ -1481,6 +1484,20 @@ export const FrontDoorRpcs = RpcGroup.make(
       expect: Schema.Literals(["pass", "fail"]),
     },
     success: VerifyEvent,
+    error: HostRefused,
+    stream: true,
+  }),
+  /** A Measurement of the Run's checkout against a base, or the one already recorded for them. */
+  Rpc.make("measure", {
+    payload: {
+      runId: Schema.String,
+      base: Schema.String,
+      cwd: Schema.optionalKey(Schema.String),
+      plan: Schema.Json,
+      pass: Schema.String,
+      reason: Schema.optionalKey(Schema.String),
+    },
+    success: MeasureEvent,
     error: HostRefused,
     stream: true,
   }),

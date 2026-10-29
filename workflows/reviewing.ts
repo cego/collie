@@ -11,27 +11,38 @@
 
 import {
   Agents,
+  FixOutputSchema,
   Host,
   ReviewOutputSchema,
   Run,
   SynthesisSchema,
+  WorkflowError,
   agentWork,
   contentOf,
+  findingKey,
   panelOf,
   formatFindings,
+  isBlocking,
+  leaveOutstanding,
   leaveReview,
   mrForgeFacts,
   parseMrTarget,
   renderRecordedChecks,
   repoArgs,
   riskLine,
+  settleFinalFix,
+  settleRound,
+  splitDisputed,
   step,
   targetKind,
   type Finding,
+  type Integration,
   type SynthesisReport,
 } from "collie";
-import { Effect, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
+import { type WorkflowEngine, type WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./review.md" with { type: "text" };
+import type { Reviewed } from "./delivering.ts";
 
 const content = contentOf(markdown);
 const text = Schema.String;
@@ -238,4 +249,172 @@ export const reviewPass = (ask: ReviewAsk) =>
     // The prose a human reads and the findings a card counts, where both are looked for.
     yield* leaveReview(dir, reconciled);
     return reconciled;
+  });
+
+/** At most four rounds per rally; it leaves at the first review with nothing blocking. */
+export const ROUNDS = 4;
+
+type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem;
+
+/** Each blocking dispute left standing, as the merge request lists it for the human. */
+const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
+  findings
+    .filter(isBlocking)
+    .map(
+      (one) =>
+        `disputed blocking finding: [${one.severity}] ${one.title}${one.file ? ` (${one.file})` : ""}${one.reason ? `: ${one.reason}` : ""}`,
+    );
+
+/** Where a rally stood when it stopped: what halted it, and what the last fix left. */
+export interface Rallied extends Reviewed {
+  /** Why the loop stopped short, or null where it converged. */
+  readonly halted: string | null;
+}
+
+/**
+ * Review, fix, review again. The loop leaves at the first review with nothing blocking;
+ * a dispute is carried rather than re-argued, and the last round has no review after it,
+ * so that fix's own account is judged against the journal rather than taken on its word.
+ */
+export const rally = (ask: {
+  /** Review rounds the Run has had, so each round of every rally is a run of its own. */
+  readonly rounds: { n: number };
+  readonly cwd: string;
+  readonly plan: string;
+  /** The outcome kind each round is held to, read as the round starts. */
+  readonly proves: Effect.Effect<string, never, WorkflowEngine | WorkflowInstance>;
+  readonly risks: string;
+  /** What the change is held to beside the spec, for the reviewer. */
+  readonly criteria: string;
+  /** Before every operation's name, telling this rally's rounds from another's. */
+  readonly prefix: string;
+  /** What every round's reviewers are told beside the change; empty for nothing. */
+  readonly obstacle: string;
+  /** Integrates the default branch, answering with what a review is diffed against. */
+  readonly integrate: (
+    operation: string,
+  ) => Effect.Effect<Integration & { readonly base: string }, WorkflowError, Needs>;
+  /** What blocked a round, fixed under `operation` by whoever fixes this change. */
+  readonly fix: (round: {
+    readonly operation: string;
+    readonly at: number;
+    readonly proves: string;
+    readonly findings: string;
+  }) => Effect.Effect<typeof FixOutputSchema.Type, WorkflowError, Needs>;
+}): Effect.Effect<Rallied, WorkflowError, Needs> =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const agents = yield* Agents;
+    const runId = (yield* Run).id;
+    const { prefix } = ask;
+    let disputed: Finding[] = [];
+    let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
+
+    for (let at = 1; at <= ROUNDS; at++) {
+      ask.rounds.n += 1;
+      const ended = yield* reviewRound(
+        Effect.gen(function* () {
+          const merged = yield* ask.integrate(`${prefix}merge-${at}`);
+          const proves = yield* ask.proves;
+          const synthesis = yield* reviewPass({
+            // The change is the work in this checkout: a Run that built it reviews what it
+            // built, rather than a merge request somebody else has to be pointed at.
+            target: "",
+            plan: ask.plan,
+            proves,
+            previous: "",
+            // The last round's fix, which a follow-up review checks each of its findings against.
+            answered: at === 1 ? "" : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
+            prefix,
+            obstacle: ask.obstacle,
+            risks: ask.risks,
+            criteria: ask.criteria,
+            base: merged.base,
+            at,
+            of: ROUNDS,
+            disputed,
+          });
+          const split = splitDisputed(synthesis.findings, disputed);
+          const round = settleRound({ live: split.live, disputed, at, seen });
+          if (round.go === "halt" && round.halt === "dispute_unresolved") {
+            return {
+              halted: null,
+              unreviewed: "",
+              unsettled: disputesOf(round.outstanding),
+              disputes: round.outstanding.filter(isBlocking),
+              reviewed: synthesis,
+            };
+          }
+          if (round.go === "halt") {
+            return {
+              halted: `${round.halt}: ${round.reason}`,
+              unreviewed: "",
+              unsettled: [],
+              disputes: [],
+              reviewed: synthesis,
+            };
+          }
+          if (round.go === "clean") {
+            // Nothing blocking is not nothing found: what is left is carried to the merge
+            // request unfixed, and the record says so rather than the loop going quiet.
+            if (synthesis.findings.length > 0) {
+              yield* host.record(
+                runId,
+                `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${synthesis.findings.map((one) => one.title).join("; ")}`,
+              );
+            }
+            return {
+              halted: null,
+              unreviewed: "",
+              unsettled: [],
+              disputes: [],
+              reviewed: synthesis,
+            };
+          }
+          seen = { at, keys: round.keys };
+
+          const fixed = yield* ask.fix({
+            operation: `${prefix}fix-${at}`,
+            at,
+            proves,
+            findings: formatFindings(round.live),
+          });
+          // A dispute is carried, not re-argued: the next review either answers it with a
+          // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new
+          // reason, and one fixed since is gone.
+          const settledNow = new Set([...fixed.fixed, ...fixed.disputed].map(findingKey));
+          disputed = [
+            ...disputed.filter((one) => !settledNow.has(findingKey(one))),
+            ...fixed.disputed,
+          ];
+
+          if (at === ROUNDS) {
+            const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
+            // Every round's disputes, not only this fix's: earlier ones were split out of what
+            // this fix was shown, and are still the human's to settle.
+            if (settled.ok || settled.halt === "dispute_unresolved") {
+              yield* leaveOutstanding((yield* host.place(runId)).dir, settled.outstanding);
+              return {
+                halted: null,
+                unreviewed: settled.attestation,
+                unsettled: disputesOf(disputed),
+                disputes: disputed.filter(isBlocking),
+                reviewed: synthesis,
+              };
+            }
+            return {
+              halted: `${settled.halt}: ${settled.reasons.join("; ")}`,
+              unreviewed: "",
+              unsettled: [],
+              disputes: [],
+              reviewed: synthesis,
+            };
+          }
+          return null;
+        }),
+        { round: ask.rounds.n },
+      );
+      if (ended !== null) return ended;
+    }
+    return yield* new WorkflowError({ reason: "the rally ran no rounds at all" });
   });

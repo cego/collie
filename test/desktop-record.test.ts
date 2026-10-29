@@ -157,6 +157,7 @@ describe("what the Summary shows", () => {
         obstacle: "A question is open.",
         next: "Answer it with `collie run answer`.",
         delivered: "Nothing yet.",
+        measurement: null,
       },
       {
         section: "inputs",
@@ -185,7 +186,16 @@ describe("what the Summary shows", () => {
       obstacle: "A question is open.",
       next: "Answer it with `collie run answer`.",
       delivered: "Nothing yet.",
+      measurement: null,
     });
+  });
+
+  test("name a performance Run's final Measurement, which alone is something to say", () => {
+    const measurement = "final Measurement m2: bench.wall_ms gain (ratio 0.700)";
+    expect(summaryOf({ ...bare, outcome: { ...bare.outcome, measurement } })).toEqual([
+      { section: "status", status: "running" },
+      { ...bare.outcome, section: "outcome", measurement },
+    ]);
   });
 
   test("list the replies the Run posted to reviewers last", () => {

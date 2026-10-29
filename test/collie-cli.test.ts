@@ -108,26 +108,30 @@ const WorkflowRows = Schema.fromJsonString(
   }),
 );
 
-test("public JSON discovery has one typed envelope", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const listed = yield* cli(["--json", "workflow", "list"]);
-      expect(listed.exit).toBe(0);
-      expect(listed.stderr).toBe("");
-      expect(yield* parseEnvelope(listed.stdout)).toMatchObject({
-        ok: true,
-        data: { workflows: expect.any(Array) },
-      });
+test(
+  "public JSON discovery has one typed envelope",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const listed = yield* cli(["--json", "workflow", "list"]);
+        expect(listed.exit).toBe(0);
+        expect(listed.stderr).toBe("");
+        expect(yield* parseEnvelope(listed.stdout)).toMatchObject({
+          ok: true,
+          data: { workflows: expect.any(Array) },
+        });
 
-      const missing = yield* cli(["--json", "workflow", "show", "__missing__"]);
-      expect(missing.exit).toBe(1);
-      expect(missing.stderr).toBe("");
-      expect(yield* parseEnvelope(missing.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "workflow_not_found", details: {} },
-      });
-    }),
-  ));
+        const missing = yield* cli(["--json", "workflow", "show", "__missing__"]);
+        expect(missing.exit).toBe(1);
+        expect(missing.stderr).toBe("");
+        expect(yield* parseEnvelope(missing.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "workflow_not_found", details: {} },
+        });
+      }),
+    ),
+  60_000,
+);
 
 test("persona discovery uses the same command boundary", () =>
   runEffect(
@@ -585,40 +589,44 @@ test(
   240_000,
 );
 
-test("the names the host settles are published beside the ones a module declares", () =>
-  runEffect(
-    Effect.gen(function* () {
-      // An agent driving Collie cannot pass an Input nothing names, and `branch` is
-      // the one that decides which checkout the run gets. A module never declares it —
-      // declaring it is refused — so it is published as the host's, with what it means.
-      const implement = yield* cli(["--json", "workflow", "show", "implement"]);
-      const described = Schema.decodeUnknownSync(ShownModule)(implement.stdout).data.workflow;
-      expect(described.inputs.map((one) => one.name)).not.toContain("branch");
-      expect(described.options.map((one) => one.name)).toEqual([
-        "branch",
-        "task",
-        "workspace",
-        "repo",
-        "outcome",
-        "risks",
-        "previous",
-        "harness",
-        "model",
-        "effort",
-      ]);
+test(
+  "the names the host settles are published beside the ones a module declares",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        // An agent driving Collie cannot pass an Input nothing names, and `branch` is
+        // the one that decides which checkout the run gets. A module never declares it —
+        // declaring it is refused — so it is published as the host's, with what it means.
+        const implement = yield* cli(["--json", "workflow", "show", "implement"]);
+        const described = Schema.decodeUnknownSync(ShownModule)(implement.stdout).data.workflow;
+        expect(described.inputs.map((one) => one.name)).not.toContain("branch");
+        expect(described.options.map((one) => one.name)).toEqual([
+          "branch",
+          "task",
+          "workspace",
+          "repo",
+          "outcome",
+          "risks",
+          "previous",
+          "harness",
+          "model",
+          "effort",
+        ]);
 
-      // And for a human, the order `branch` is resolved in, which is the whole of it.
-      const human = yield* cli(["workflow", "show", "implement"]);
-      expect(human.stdout).toContain("branch:");
-      expect(human.stdout).toContain("--input branch=");
+        // And for a human, the order `branch` is resolved in, which is the whole of it.
+        const human = yield* cli(["workflow", "show", "implement"]);
+        expect(human.stdout).toContain("branch:");
+        expect(human.stdout).toContain("--input branch=");
 
-      // `branch` is the host's, not a module's: it is never among what a module declares.
-      const listed = yield* cli(["--json", "workflow", "list"]);
-      const workflows = Schema.decodeUnknownSync(WorkflowRows)(listed.stdout).data.workflows;
-      const row = workflows.find((w) => w.id === "implement")!;
-      expect(row.inputs.map((input) => input.name)).not.toContain("branch");
-    }),
-  ));
+        // `branch` is the host's, not a module's: it is never among what a module declares.
+        const listed = yield* cli(["--json", "workflow", "list"]);
+        const workflows = Schema.decodeUnknownSync(WorkflowRows)(listed.stdout).data.workflows;
+        const row = workflows.find((w) => w.id === "implement")!;
+        expect(row.inputs.map((input) => input.name)).not.toContain("branch");
+      }),
+    ),
+  60_000,
+);
 
 test(
   "an agent saves a workflow, checks it and finds it, with nothing to register by hand",

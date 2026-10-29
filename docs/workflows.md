@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships ten workflows. This page is the "which one do I want" level: what each is
+Collie ships eleven workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -11,7 +11,9 @@ For what a Workflow, an operation, a Choice or a Run _is_, see [`CONTEXT.md`](..
 ## Choosing one
 
 A task that is not planning, building a change to a merge request, reviewing, releasing
-or staging one, renovating or an architecture survey is `general`'s, never `implement` or `plan` stretched to fit.
+or staging one, renovating, making a repository faster or an architecture survey is
+`general`'s, never `implement` or `plan` stretched to fit. Making a repository faster is
+`tune-up`'s, never `implement` asked to: only `tune-up` proves the `performance` outcome.
 
 ## How inputs reach a run
 
@@ -904,6 +906,11 @@ Every other shipped step clears nothing.
   build gets is the review you would run standalone. It is an import, not a lookup:
   overriding `review` in your layer leaves `implement`'s review as it was, and a fork of
   `implement` imports the pass it wants.
+- `implement` imports its delivery the same way (`workflows/delivering.ts`): the gate and
+  its fixes, the merge request, and CI's proof of the checks left to it, with CI's fixes.
+  It takes the outcome kind, the prompts and the merge request's Output from the workflow
+  that calls it, and a step to run after a gate or CI fix moves the tree; `implement`
+  passes none.
 - `plan` → `architecture`, for a plan whose tickets need architectural decisions, started
   with the plan's own goal. It is a Choice a human takes, not a pass every build makes.
 - `review` → `implement`, from **Fix findings in a full implement run**. See
@@ -973,3 +980,138 @@ named improvement, each starting a plan in its own Task.
 
 Module: [`workflows/self-improve.workflow.ts`](../workflows/self-improve.workflow.ts),
 with its prompt in [`workflows/self-improve.md`](../workflows/self-improve.md).
+
+## `tune-up`
+
+**For:** making a repository measurably faster without giving up behaviour, proved by the
+host's Measurements and never by an agent's own timings
+([ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md)).
+It proves the fixed `performance` outcome, which no other workflow can be asked for.
+
+**Inputs**, each optional:
+
+| Input        | Default                       | What it is                                                                               |
+| ------------ | ----------------------------- | ---------------------------------------------------------------------------------------- |
+| `repository` | the checkout it is started in | The checkout to tune. See below.                                                         |
+| `focus`      | empty, the whole              | A journey, endpoint or page to spend the Cycles on.                                      |
+| `cycles`     | `5`                           | How many Cycles at most, a whole number from 1 to 20. A reverted Cycle counts.           |
+| `threshold`  | `5`                           | The smallest gain, in percent, that counts.                                              |
+| `tolerance`  | `2`                           | How far, in percent, a guardrail may worsen and still hold.                              |
+| `samples`    | `10`                          | Samples per side of each Measurement, at least 2.                                        |
+| `wall_time`  | none                          | A duration, such as `2 hours`, after which no new Cycle starts.                          |
+| `external`   | `ask`                         | `ask` puts each external finding to you, `report` only writes them, `off` collects none. |
+
+A `cycles` of 0, 21 or 2.5, or a `wall_time` that is not a duration, is refused at the
+start, before any Run exists. The Run works on
+a branch of its own, in a worktree of the checkout it is started in, and never clones. From
+Home, a repository URL or path places it in the local checkout it names. From the CLI or
+another Run's agent, start it in the checkout you want tuned: a `repository` naming any
+other checkout, or a URL, is refused at the start.
+
+**What happens:**
+
+1. **Discover.** A `tuner` agent reads the stack, loads the installed skills that fit it,
+   and writes down the journeys that matter with their objectives. It records each
+   telemetry source it tried as used, with release, window, sample and a sanitised link, or
+   unavailable, with why. It records the documentation and prior work it read, each with
+   the opportunity it raised, lowered or ruled out, or what it searched where it found
+   nothing. It ranks the opportunities, each marked measured, telemetry or hypothesis and
+   citing what it rests on. An Output with no research, or an opportunity citing nothing,
+   is refused and repaired. Each telemetry source and research link is written to the
+   Run's log.
+2. **Harness.** The tuner commits a benchmark harness on commits of its own, touching only
+   the harness paths it declares, and writes the benchmark plan: journeys, cases, commands,
+   prepare, metrics with direction and role, warmup, and for a metric this Machine may be
+   too noisy to prove, a low-variance counter of the same work. The Run's `samples`,
+   `threshold` and `tolerance` complete it. The plan is recorded before anything is
+   measured by it, and a later change is a new plan with its reason.
+3. **Calibrate.** The host measures the base, the merge base with the harness commits on
+   it, against the Run's own checkout, which holds nothing else yet. A primary metric that
+   comes back `inconclusive` there, or a guardrail that is not held, cannot be proved on
+   this Machine. Where the plan declared a counter for it, the Run switches to the counter,
+   records the switch as a new plan and calibrates again; otherwise it ends.
+4. **Cycles**, at most `cycles` of them. In each, the tuner is given the ranked
+   opportunities and every earlier Cycle's result, and commits one change on the Run's
+   branch. Collie runs the Run's checks, all but those left to CI, and measures the
+   checkout against the tree the Cycle started on. The Cycle is kept only where those checks pass,
+   the primary metric shows a `gain` and every guardrail holds. Otherwise the tuner takes
+   back only that Cycle's commits, with `git reset --keep` to its starting commit, and does
+   nothing where a commit landed after the Cycle or uncommitted work would be lost. Collie
+   then checks that the head and files are that tree again before anything else; a revert
+   that leaves another tree fails the Run, naming both, rather than lose anyone's work. The findings are rewritten after each Cycle. A reverted Cycle, or one that
+   changed nothing, still counts, and a restarted host resumes in the Cycle it was in.
+
+   The Cycles stop early, with the reason in the Run's log and its findings, when the tuner
+   says no measured opportunity is left or names an unsafe tradeoff, when two Cycles in a
+   row are not kept, or when `wall_time` is spent. `wall_time` counts from the Run's start
+   and is read before each Cycle: it never interrupts one, and never cuts short Discover,
+   Harness or Calibrate, or anything after the Cycles. Spent by the end of Calibrate, it
+   means no Cycle runs.
+
+5. **Integrate.** With a Cycle kept, Collie merges the default branch where it has moved,
+   and the tuner settles a conflict. The host makes the base tree again at the merge base
+   the merge request will target, and takes a `final` Measurement of the branch against it.
+   Where the default branch moved, the branch is also measured against the base the Run
+   started from, for the merge request.
+6. **Review.** The shared review, with a Tune-up prompt, judges `behavior_preserved`
+   (behaviour, APIs, accessibility, reliability, security, data integrity, no weakened test
+   or disabled validation) and `measurement_valid` (realistic fixtures, no hidden caching
+   tradeoff, the harness apart from the product, no secret or personal data in what is
+   published). The tuner fixes what blocks in the same bounded rally as `implement`'s, and
+   each review round starts with a new `final` Measurement of the tree it reads.
+7. **Checks** and **Merge request**, through the delivery `implement` uses: Collie runs the
+   Run's checks on the tree, the tuner fixes what they lack, opens the merge request and
+   fixes what a check left to CI fails on its head. A gate or CI fix that moves the tree is
+   measured and reviewed again before the outcome is read. The merge request's description
+   is `handoffs/tune-up-merge-request.md`, which Collie writes from the Measurements, with
+   credential-shaped values taken out: the base and candidate table with each metric's
+   ratio and interval, the commands and harness commits, the guardrails and Cycles not
+   kept, the checks and the review, the opportunities left, what to monitor after
+   deploying, and, collapsed, every sample of the `final` Measurement, the frozen plan,
+   every plan and `final` Measurement, the commands to reproduce it and the Run id.
+8. **External report**, at whichever end the Run reaches, after the merge request or with
+   its findings alone. Discover and each Cycle hand on what only another repository could
+   change, and Collie writes each to `handoffs/tune-up-external.md`: the owning repository
+   and team where known, evidence links, the journey, the change it needs, its estimated
+   impact apart from anything measured, acceptance criteria and how it relates to the local
+   change. Each is keyed by a digest of its repository and change, the same in any Run.
+   With `external` at `ask`, each finding is put to you one at a time, with `Ignore` and
+   `Post` only, its question showing the finding. A finding with no known team asks for the
+   team in your own words first. Post has the tuner search Linear, read-only, for the issue
+   carrying the key's marker and for open issues asking for the same change, and file one
+   issue carrying the marker only where it found none. A finding that already matched an
+   issue when it was found is recorded as `existing` and not asked. Your answer and the
+   issue's URL go in the Run's log. A host restarted while an issue was being filed never
+   files blind: it searches again, records the issue it finds, and otherwise asks again,
+   saying an earlier Post may have filed it. With no Linear MCP server in Claude Code, the
+   report is written, nothing is asked, and the log says why. `report` writes the report
+   and asks nothing, and `off` writes none. None of it counts toward a Measurement, the
+   outcome or the merge request's readiness.
+
+**Ends:** with `handoffs/tune-up-findings.md` in its Run directory, and with a merge request
+only where `performance` is proved: a `final` Measurement of the delivered head against the
+merge base showing a `gain` with every guardrail held, the checks passing, and a review of
+that same tree reporting both `behavior_preserved` and `measurement_valid`. Where
+calibration rules out proof, no Cycle was kept, or the `final` Measurement shows no gain or
+a guardrail not held, there is no merge request and the Run is not failed. Its result names
+that file and why it ended: `proof unavailable`, naming each metric, why the Cycles stopped,
+or the `final` Measurement's verdict. The Run is then back on its base tree: with no kept
+Cycle the branch already is, and a change that lost its gain is dropped back to the base
+tree at the latest merge base, in a commit that changes only the files it needs, keeps
+uncommitted work, and takes back nothing once a commit not the Run's own is on the branch,
+which Collie checks from the trees, failing the Run naming both where the drop did not land. A fix after the merge
+request is open that loses the gain or a reviewer's verdict fails the Run, saying the merge
+request is not ready and why, on the merge request too. A forge that refuses the merge
+request fails the Run with the forge's reason. A harness commit touching a path outside its
+harness paths, a base that cannot be built, or a calibration that ends without a verdict
+fails the Run, naming the paths or the tree.
+
+**Never:** load against production, which it only reads, bounded; auto-merge; a deploy; a
+change to another repository; or an issue filed without your Post.
+
+Its Flow forecasts Discover, Harness, Calibrate, Cycles, Integrate, Review, Checks, Merge
+request and External report.
+
+Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its
+prompts in [`workflows/tune-up.md`](../workflows/tune-up.md) and its agent's Persona in
+[`personas/tuner.md`](../personas/tuner.md).

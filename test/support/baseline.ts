@@ -48,7 +48,7 @@ import {
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
-import type { ForgeHttp } from "../../src/forge/http";
+import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
 import { mrLabel, mrTarget, type FlowLane, type MrForge } from "../../src/board-model";
 import { laneFor } from "../../src/flow-read";
@@ -87,6 +87,7 @@ import {
   HOLD,
   PARKED,
   RunStatus,
+  Registry,
   answerDecision,
   checkoutRefusedFile,
   controlPath,
@@ -95,8 +96,12 @@ import {
   foundationLayer,
   loadEntry,
   pollStatus,
+  registryLayer,
   runDir,
 } from "../../src/engine";
+import { declaredBy } from "../../src/discovery";
+import { readMeasurements } from "../../src/measurement";
+import type { Measurement } from "../../src/measurement-model";
 import { nothingToLandFile } from "../../src/standing";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
@@ -122,6 +127,7 @@ const UNRELATED = {
   general: "odd-job",
   "self-improve": "look-back",
   stage: "try-it-out",
+  "tune-up": "make-haste",
 } as const;
 type Shipped = keyof typeof UNRELATED;
 
@@ -426,6 +432,7 @@ const undeclaredWork = () =>
           "general",
           "investigate",
           "self-improve",
+          "tune-up",
         ] as const
       ).map(shipped),
     );
@@ -13871,6 +13878,11 @@ scenario(
   120_000,
 );
 
+const DefaultOf = Schema.Struct({ default: Schema.Json });
+/** The default a drawn input schema declares, or null for none. */
+const schemaDefault = (drawn: Schema.Json | null) =>
+  Option.getOrNull(Schema.decodeUnknownOption(DefaultOf)(drawn))?.default ?? null;
+
 const agentPrompts = () =>
   rig.calls().pipe(Effect.map((calls) => calls.filter((call) => call.cmd === "agent prompt")));
 
@@ -14201,6 +14213,1498 @@ scenario(
       }),
     ),
   120_000,
+);
+
+/** One harness commit of `files` over what origin has, as Harness leaves the branch; its sha. */
+const harnessCommit = (files: Readonly<Record<string, string>>) =>
+  Effect.gen(function* () {
+    yield* levelRepository();
+    const fs = yield* FileSystem.FileSystem;
+    for (const [name, text] of Object.entries(files)) {
+      const at = `${rig.projectDir}/${name}`;
+      yield* fs.makeDirectory(at.slice(0, at.lastIndexOf("/")), { recursive: true });
+      yield* fs.writeFileString(at, text);
+    }
+    yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
+    yield* exec(["git", "commit", "-qm", "harness"], { cwd: rig.projectDir });
+    return yield* headOf();
+  }).pipe(Effect.orDie);
+
+/** A steady `count` of 7, and a `value` of 5 or 15 by how often it has run. */
+const NOISY_BENCH = [
+  'echo x >> "$1"',
+  'if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then v=5; else v=15; fi',
+  'printf \'{"value": %s, "count": 7}\\n\' "$v"',
+  "",
+].join("\n");
+
+const TUNE_DISCOVERED = {
+  stack: ["bun", "sqlite"],
+  skills: ["performance-optimization"],
+  journeys: [
+    { name: "search", objectives: [{ metric: "p95 latency", why: "people wait on every search" }] },
+  ],
+  telemetry: [
+    { source: "APM", status: "unavailable", reason: "no APM access from this Machine" },
+    { source: "Kibana logs", status: "unavailable", reason: "no Kibana credentials here" },
+  ],
+  research: [
+    {
+      kind: "documentation",
+      title: "bun:sqlite",
+      link: "https://bun.sh/docs/api/sqlite",
+      opportunity: "prepared statements",
+      effect: "raised",
+    },
+    {
+      kind: "prior-work",
+      title: "Slow search",
+      link: "https://gitlab.example.com/group/project/-/issues/7",
+      opportunity: "an index on name",
+      effect: "ruled out",
+    },
+  ],
+  opportunities: [
+    {
+      title: "prepared statements",
+      evidence: "hypothesis",
+      cites: ["https://bun.sh/docs/api/sqlite"],
+    },
+  ],
+  external: [],
+};
+
+const tunePlan = (
+  commit: string,
+  metrics: ReadonlyArray<Schema.Json>,
+  prepare: Schema.Json = null,
+  argv: ReadonlyArray<string> = [],
+) => ({
+  journeys: ["search"],
+  cases: ["warm"],
+  commands: [
+    {
+      name: "bench",
+      executable: "sh",
+      argv: ["bench/bench.sh", `${rig.root}/bench-runs`, ...argv],
+    },
+  ],
+  prepare,
+  metrics,
+  warmup: 1,
+  harness: { commits: [commit], paths: ["bench"] },
+});
+
+const NOISY_PRIMARY = { name: "bench.value", direction: "lower", role: "primary" } as const;
+const STEADY_PRIMARY = { name: "bench.count", direction: "lower", role: "primary" } as const;
+
+const tunedUp = (runId: string, input: Readonly<Record<string, Schema.Json>> = {}) =>
+  ran({ entry: shipped("tune-up"), runId, input });
+
+const calibrations = (runId: string) =>
+  Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
+    all.filter((one) => one.pass === "calibration"),
+  );
+
+/** How a start of `id` with these words is refused, checked as a front door checks one. */
+const refusedAtStart = (id: Shipped, text: Readonly<Record<string, string>>) =>
+  session(
+    Effect.gen(function* () {
+      const registry = yield* Registry;
+      const generation = yield* registry.load(shipped(id));
+      return yield* registry
+        .check({ generation, request: `r-${id}-checked`, project: rig.projectDir, input: {}, text })
+        .pipe(Effect.match({ onFailure: (refused) => refused.reason, onSuccess: () => "started" }));
+    }).pipe(
+      Effect.provide(registryLayer(dir, { placing: foundation().placing, userDir: rig.userDir })),
+      Effect.provide(forgeHttpLayer),
+      Effect.provide(BunServices.layer),
+    ),
+  );
+
+scenario(
+  "tune-up refuses cycles of 0, 21 and 2.5 at the front door, before any Run starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        for (const cycles of ["0", "21", "2.5"]) {
+          const reason = yield* refusedAtStart("tune-up", { cycles });
+          expect([cycles, reason.startsWith("invalid_input:"), reason]).toEqual([
+            cycles,
+            true,
+            expect.stringContaining("cycles"),
+          ]);
+        }
+        expect(yield* refusedAtStart("tune-up", { cycles: "20" })).toBe("started");
+        expect(yield* session(Effect.flatMap(Store, (store) => store.runs))).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "tune-up refuses a repository other than the checkout it is started in, and never clones one",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        const elsewhere = `${rig.root}/elsewhere`;
+        yield* exec(["git", "init", "-q", elsewhere], { cwd: rig.root });
+        for (const named of [elsewhere, "https://gitlab.example.com/group/other.git"]) {
+          const reason = yield* refusedAtStart("tune-up", { repository: named });
+          expect(reason).toStartWith("invalid_input:");
+          expect(reason).toContain(named);
+          expect(reason).toContain("from Home");
+        }
+        expect(yield* refusedAtStart("tune-up", { repository: rig.projectDir })).toBe("started");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose base is too noisy against itself, with no counter, completes with its findings and no merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-noisy";
+        yield* rig.queueOutputs([TUNE_DISCOVERED, tunePlan(commit, [NOISY_PRIMARY])]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("proof unavailable: bench.value is inconclusive");
+        expect(yield* persona(runId, "discover")).toContain("tuner");
+        const log = yield* runLog(runId);
+        expect(log).toContain("cycles 5");
+        expect(log).toContain("proof unavailable: bench.value is inconclusive");
+        // Every telemetry source Discover could not use, with why.
+        expect(log).toContain("telemetry APM: unavailable: no APM access from this Machine");
+        expect(log).toContain("telemetry Kibana logs: unavailable: no Kibana credentials here");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        const [calibration, ...more] = yield* calibrations(runId);
+        expect(more).toEqual([]);
+        // Base against base: the base tree is the merge base with the harness on it.
+        expect(calibration!.candidate.content).toBe(calibration!.base.content);
+        expect(calibration!.base.commit).toBe(yield* revParse(`${commit}~1`));
+        expect(calibration!.plan.samples).toBe(10);
+        const report = yield* readText(said(result).split(": ")[0]!);
+        expect(report).toContain("no APM access from this Machine");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose primary is too noisy but declared a counter for it calibrates again on the counter, and records the switch",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-counter";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [
+            { ...NOISY_PRIMARY, counter: { name: "bench.count", direction: "lower" } },
+          ]),
+          EXHAUSTED,
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4 });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).not.toContain("proof unavailable");
+        expect(yield* runLog(runId)).toContain("calibrated on bench.count");
+        expect(yield* runLog(runId)).toContain(
+          "switched bench.value to its counter bench.count: bench.value is inconclusive",
+        );
+        const [first, second] = yield* calibrations(runId);
+        expect(first!.plan.metrics.map((one) => one.name)).toEqual(["bench.value"]);
+        expect(second!.plan.metrics).toEqual([STEADY_PRIMARY]);
+        expect(second!.plan.samples).toBe(4);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose guardrail is not held against itself, with no counter for it, ends naming that guardrail",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-guardrail";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [STEADY_PRIMARY, { ...NOISY_PRIMARY, role: "guardrail" }]),
+        ]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain(
+          "proof unavailable: guardrail bench.value is not held against itself",
+        );
+        expect(said(result)).not.toContain("bench.count");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+for (const [what, unusable] of [
+  ["no research", { ...TUNE_DISCOVERED, research: [] }],
+  [
+    "an opportunity citing nothing",
+    {
+      ...TUNE_DISCOVERED,
+      opportunities: [{ ...TUNE_DISCOVERED.opportunities[0]!, cites: [] }],
+    },
+  ],
+] as const)
+  scenario(
+    `a tune-up Discover Output with ${what} is refused and repaired, and its research is recorded under the opportunity it changed`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+          const runId = "r-tune-research";
+          yield* rig.queueOutputs([unusable, TUNE_DISCOVERED, tunePlan(commit, [NOISY_PRIMARY])]);
+          const result = yield* tunedUp(runId);
+          expect(result._tag).toBe("Success");
+          expect(yield* agentPrompts()).toHaveLength(3);
+          const log = yield* runLog(runId);
+          expect(log).toContain(
+            "research https://bun.sh/docs/api/sqlite raised prepared statements",
+          );
+          expect(log).toContain(
+            "research https://gitlab.example.com/group/project/-/issues/7 ruled out an index on name",
+          );
+          const report = yield* readText(said(result).split(": ")[0]!);
+          // Each source on the line under the opportunity it changed.
+          const lines = report.split("\n");
+          const under = (opportunity: string) =>
+            lines[lines.findIndex((line) => line.includes(opportunity)) + 1];
+          expect(under("prepared statements")).toContain("raised by");
+          expect(under("prepared statements")).toContain("https://bun.sh/docs/api/sqlite");
+          expect(under("an index on name")).toContain("ruled out by");
+          expect(under("an index on name")).toContain(
+            "https://gitlab.example.com/group/project/-/issues/7",
+          );
+        }),
+      ),
+    120_000,
+  );
+
+scenario(
+  "a tune-up harness commit touching a path outside the harness fails the Run, naming it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH, README: "faster\n" });
+        yield* rig.queueOutputs([TUNE_DISCOVERED, tunePlan(commit, [STEADY_PRIMARY])]);
+        const result = yield* tunedUp("r-tune-stray");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("README");
+        expect(reasonOf(result)).not.toContain("bench/bench.sh");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose base cannot be built fails the Run, naming the tree",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [STEADY_PRIMARY], { executable: "sh", argv: ["-c", "exit 3"] }),
+        ]);
+        const result = yield* tunedUp("r-tune-unbuildable");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain(
+          `the base tree at ${yield* revParse(`${commit}~1`)} could not be built`,
+        );
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * `count` and `size` read from files a Cycle may commit; `count` is 3 wherever the default
+ * branch brought `fixed`, and `size` swings while `jitter` is there.
+ */
+const CYCLE_BENCH = [
+  "count=7; [ -f count ] && count=$(cat count)",
+  "[ -f fixed ] && count=3",
+  "size=100; [ -f size ] && size=$(cat size)",
+  'if [ -e jitter ]; then echo x >> "$1"; if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then size=60; else size=140; fi; fi',
+  'printf \'{"count": %s, "size": %s}\\n\' "$count" "$size"',
+  "",
+].join("\n");
+
+const SIZE_GUARDRAIL = { name: "bench.size", direction: "lower", role: "guardrail" } as const;
+
+/** `script` run in the Run's checkout, as the tuner runs it. */
+const inCheckout = (script: string) => `cd '${rig.projectDir}' && ${script}`;
+
+const tried = (script: string) => ({
+  writes: [],
+  sh: inCheckout(`${script} && git commit -qm cycle`),
+  output: {
+    result: "changed",
+    opportunity: "prepared statements",
+    change: "search prepares its statement once",
+    commits: ["HEAD"],
+  },
+});
+const NO_CHANGE = () => tried("echo note > notes && git add notes");
+const FASTER = () => tried("echo 3 > count && git add count");
+const FASTER_BUT_LARGER = () => tried("echo 3 > count && echo 200 > size && git add count size");
+const FASTER_BUT_JITTERY = () => tried("echo 3 > count && touch jitter && git add count jitter");
+const FASTER_BUT_BROKEN = () => tried("echo 3 > count && touch broken && git add count broken");
+const RESET = () => asTold("true", "reset");
+const EXHAUSTED = { result: "exhausted", why: "every ranked opportunity has been tried" };
+
+/** A tune-up that calibrates, then answers each Cycle's prompt with the next of `turns`. */
+const cycling = (
+  runId: string,
+  turns: ReadonlyArray<Schema.Json>,
+  argv: ReadonlyArray<string> = [],
+  discovered: Schema.Json = TUNE_DISCOVERED,
+) =>
+  Effect.gen(function* () {
+    const commit = yield* harnessCommit({ "bench/bench.sh": CYCLE_BENCH });
+    yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
+    // The project the fake forge knows, for a Run that gets as far as its merge request.
+    yield* exec(["git", "remote", "set-url", "upstream", DELIVERY.gitlab.origin], {
+      cwd: rig.projectDir,
+    }).pipe(Effect.orDie);
+    yield* rig.queueOutputs([
+      discovered,
+      tunePlan(commit, [STEADY_PRIMARY, SIZE_GUARDRAIL], null, argv),
+      ...turns,
+    ]);
+    return commit;
+  });
+
+/** Each Cycle's tree where the log says it started, and where it says it was reverted to. */
+const cycleTrees = (runId: string) =>
+  Effect.map(runLog(runId), (log) => {
+    const trees = (said: string) =>
+      Object.fromEntries(
+        [...log.matchAll(new RegExp(`cycle (\\d+) ${said} (\\S+) (\\S+?):?(?:\\s|$)`, "g"))].map(
+          (one) => [one[1]!, { head: one[2]!, fingerprint: one[3]! }],
+        ),
+      );
+    return { started: trees("started on"), reverted: trees("reverted to") };
+  });
+
+const cyclesMeasured = (runId: string) =>
+  Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
+    all.filter((one) => one.pass.startsWith("cycle ")),
+  );
+
+/** The tree the Run's checkout holds now, read by the test rather than the Run. */
+const checkoutNow = (runId: string) =>
+  Effect.gen(function* () {
+    const [first] = yield* cyclesMeasured(runId);
+    const now = yield* fingerprint(first!.candidate.cwd);
+    return { head: now.head_sha, fingerprint: now.fingerprint };
+  });
+
+const cyclePrompts = (runId: string) =>
+  Effect.map(prompts(), (all) =>
+    all.flatMap((one) => {
+      const named = new RegExp(`/${runId}/(cycle-\\d+(?:-revert)?)\\.prompt\\.md`).exec(one);
+      return named === null ? [] : [named[1]!];
+    }),
+  );
+
+scenario(
+  "a tune-up Cycle with no change and one whose guardrail regresses are each reverted to the tree it started on, and two in a row stop the Run with its findings",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-reverted";
+        const commit = yield* cycling(runId, [NO_CHANGE(), RESET(), FASTER_BUT_LARGER(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4 });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("two consecutive Cycles were not kept");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* cyclePrompts(runId)).toEqual([
+          "cycle-1",
+          "cycle-1-revert",
+          "cycle-2",
+          "cycle-2-revert",
+        ]);
+        const verdicts = (yield* cyclesMeasured(runId)).map((one) =>
+          one.result._tag === "Judged"
+            ? one.result.verdicts.map((judged) => `${judged.metric} ${judged.verdict}`)
+            : [],
+        );
+        expect(verdicts).toEqual([
+          ["bench.count no-change", "bench.size no-change"],
+          ["bench.count gain", "bench.size regression"],
+        ]);
+        const { started, reverted } = yield* cycleTrees(runId);
+        expect(started["1"]?.head).toBe(commit);
+        expect(reverted).toEqual(started);
+        expect(yield* checkoutNow(runId)).toEqual(started["1"]!);
+        const log = yield* runLog(runId);
+        expect(log).toContain("cycle 1 reverted to");
+        expect(log).toContain("bench.count no-change");
+        expect(log).toContain("guardrail bench.size regression");
+        const report = yield* readText(said(result).split(": ")[0]!);
+        expect(report).toContain("## Cycles");
+        expect(report).toContain("two consecutive Cycles were not kept");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up Cycle whose primary gains but whose guardrail is inconclusive is reverted",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-jittery";
+        yield* cycling(runId, [FASTER_BUT_JITTERY(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.result._tag === "Judged" && measured.result.verdicts).toEqual([
+          expect.objectContaining({ metric: "bench.count", verdict: "gain" }),
+          expect.objectContaining({ metric: "bench.size", verdict: "inconclusive" }),
+        ]);
+        const { started, reverted } = yield* cycleTrees(runId);
+        expect(reverted["1"]).toEqual(started["1"]);
+        expect(yield* runLog(runId)).toContain("guardrail bench.size inconclusive");
+        expect(said(result)).toContain("cycles spent: 1 of 1");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up Cycle whose checks fail is reverted though it measures a gain, and the Run completes with its findings",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-broken";
+        yield* cycling(runId, [FASTER_BUT_BROKEN(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.result._tag === "Judged" && measured.result.verdicts[0]?.verdict).toBe(
+          "gain",
+        );
+        const { started, reverted } = yield* cycleTrees(runId);
+        expect(reverted["1"]).toEqual(started["1"]);
+        expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
+        expect(yield* runLog(runId)).toContain("checks failed: unit");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* readText(said(result).split(": ")[0]!)).toContain("checks failed: unit");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up revert that leaves another tree fails the Run, naming both trees",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-unreverted";
+        yield* cycling(runId, [NO_CHANGE(), { ...RESET(), sh: inCheckout("true") }]);
+        const result = yield* tunedUp(runId, { samples: 4 });
+        expect(result._tag).toBe("Failure");
+        const { started } = yield* cycleTrees(runId);
+        const now = yield* checkoutNow(runId);
+        expect(now.head).not.toBe(started["1"]?.head);
+        expect(reasonOf(result)).toContain(started["1"]!.head);
+        expect(reasonOf(result)).toContain(now.head);
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+      }),
+    ),
+  120_000,
+);
+
+/** After `before`, what the fenced `sh` block of the agent's own prompt says, run in the checkout; it answers whatever that did. */
+const asTold = (before: string, output: Schema.Json) => ({
+  writes: [],
+  sh: inCheckout(
+    `${before} && sed -n '/^\`\`\`sh$/,/^\`\`\`$/p' "$PROMPT_PATH" | sed '1d;$d' | sh; true`,
+  ),
+  output,
+});
+
+scenario(
+  "a tune-up revert keeps uncommitted work it did not make, and fails the Run naming both trees rather than lose it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-dirty-revert";
+        yield* cycling(runId, [NO_CHANGE(), asTold("echo '# mine' >> bench/bench.sh", "reset")]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(yield* readText(`${rig.projectDir}/bench/bench.sh`)).toEndWith("# mine\n");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain((yield* cycleTrees(runId)).started["1"]!.head);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up revert takes back nothing once another commit lands after its Cycle, and fails the Run naming both trees",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-foreign-revert";
+        yield* cycling(runId, [
+          NO_CHANGE(),
+          asTold("echo theirs > theirs && git add theirs && git commit -qm theirs", "reset"),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(yield* readText(`${rig.projectDir}/theirs`)).toBe("theirs\n");
+        expect(yield* readText(`${rig.projectDir}/notes`)).toBe("note\n");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain((yield* cycleTrees(runId)).started["1"]!.head);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up drop keeps uncommitted work it did not make",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-dirty-drop";
+        yield* cycling(runId, [
+          fasterWhileUpstreamPushes(3, "fixed"),
+          asTold("echo '# mine' >> bench/bench.sh", "dropped"),
+        ]);
+        yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(yield* wasAsked(runId, "drop")).toBe(true);
+        expect(yield* readText(`${rig.projectDir}/bench/bench.sh`)).toEndWith("# mine\n");
+        const [final] = yield* finals(runId);
+        expect(yield* checkoutTree()).toBe(final!.base.content);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up drop takes back nothing once another commit lands, and fails the Run naming both trees",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-foreign-drop";
+        yield* cycling(runId, [
+          fasterWhileUpstreamPushes(3, "fixed"),
+          asTold("echo theirs > theirs && git add theirs && git commit -qm theirs", "dropped"),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(yield* wasAsked(runId, "drop")).toBe(true);
+        expect(yield* readText(`${rig.projectDir}/theirs`)).toBe("theirs\n");
+        expect(result._tag).toBe("Failure");
+        const [final] = yield* finals(runId);
+        expect(reasonOf(result)).toContain(final!.base.head_sha);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up tuner that has no opportunity left stops the Run with that reason, before its cycles are spent",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-exhausted";
+        yield* cycling(runId, [EXHAUSTED]);
+        const result = yield* tunedUp(runId, { samples: 4 });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain(
+          "no measured opportunity is left: every ranked opportunity has been tried",
+        );
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1"]);
+        expect(yield* cyclesMeasured(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up host restarted in the middle of Cycle 2 resumes in Cycle 2 and runs no more than its cycles",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-restart";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [
+          NO_CHANGE(),
+          RESET(),
+          FASTER(),
+          NO_CHANGE(),
+          RESET(),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 3 } };
+        yield* running(options, () =>
+          until(
+            () => wasAsked(runId, "cycle-2"),
+            (asked) => asked,
+          ),
+        );
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert", "cycle-2"]);
+        const result = yield* resumed(options);
+        expect(yield* cyclePrompts(runId)).toEqual([
+          "cycle-1",
+          "cycle-1-revert",
+          "cycle-2",
+          "cycle-3",
+          "cycle-3-revert",
+        ]);
+        expect((yield* cyclesMeasured(runId)).map((one) => one.pass)).toEqual([
+          "cycle 1",
+          "cycle 2",
+          "cycle 3",
+        ]);
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+      }),
+    ),
+  120_000,
+);
+
+/** A clock two hours ahead once `marker` holds anything, as a Cycle that ran long would leave it. */
+const lateOnce = (marker: string) =>
+  Effect.map(Clock.Clock, (clock): Clock.Clock => {
+    const ahead = () => (Bun.file(marker).size > 0 ? 2 * 60 * 60 * 1000 : 0);
+    const millis = () => clock.currentTimeMillisUnsafe() + ahead();
+    const nanos = () => clock.currentTimeNanosUnsafe() + BigInt(ahead()) * 1_000_000n;
+    return {
+      currentTimeMillisUnsafe: millis,
+      currentTimeMillis: Effect.sync(millis),
+      currentTimeNanosUnsafe: nanos,
+      currentTimeNanos: Effect.sync(nanos),
+      monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: clock.monotonicTimeNanos,
+      sleep: (duration) => clock.sleep(duration),
+    };
+  });
+
+scenario(
+  "a tune-up whose wall time runs out during a Cycle finishes that Cycle and starts no other",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-late";
+        const marker = `${rig.root}/late`;
+        yield* cycling(runId, [
+          { ...NO_CHANGE(), sh: `echo late > '${marker}' && ${NO_CHANGE().sh}` },
+          RESET(),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, wall_time: "1 hour" }).pipe(
+          Effect.provideServiceEffect(Clock.Clock, lateOnce(marker)),
+        );
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("wall time 1 hour spent");
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+        expect((yield* cyclesMeasured(runId)).map((one) => one.pass)).toEqual(["cycle 1"]);
+        const { started, reverted } = yield* cycleTrees(runId);
+        expect(reverted["1"]).toEqual(started["1"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose wall time is spent by the end of Calibrate runs no Cycle and ends with its findings",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-no-time";
+        yield* cycling(runId, []);
+        const result = yield* tunedUp(runId, { samples: 4, wall_time: "1 millis" });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("wall time 1 millis spent before Cycle 1");
+        expect(yield* cyclePrompts(runId)).toEqual([]);
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* readText(said(result).split(": ")[0]!)).toContain(
+          "wall time 1 millis spent before Cycle 1",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario("tune-up refuses a wall time that is not a duration at the front door", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      const reason = yield* refusedAtStart("tune-up", { wall_time: "soon" });
+      expect(reason).toStartWith("invalid_input:");
+      expect(reason).toContain("wall_time");
+      expect(yield* refusedAtStart("tune-up", { wall_time: "2 hours" })).toBe("started");
+    }),
+  ),
+);
+
+const fasterTo = (count: number) => tried(`echo ${count} > count && git add count`);
+
+/** The default branch moved by somebody else while a Cycle runs: `file` pushed to origin. */
+const upstreamPushes = (file: string) =>
+  `(git clone -q '${rig.root}/project-origin.git' '${rig.root}/upstream' && cd '${rig.root}/upstream' && echo theirs > ${file} && git add ${file} && git -c user.email=u@example.com -c user.name=u commit -qm upstream && git push -q origin HEAD)`;
+const fasterWhileUpstreamPushes = (count: number, file: string) => {
+  const turn = fasterTo(count);
+  return { ...turn, sh: `${upstreamPushes(file)} && ${turn.sh}` };
+};
+
+const TUNE_REVIEWED = {
+  verdict: "clean",
+  summary: "Search prepares its statement once; the bench runs search as people do.",
+  findings: [],
+  dropped: [],
+  fixed: [],
+  behavior_preserved: true,
+  measurement_valid: true,
+};
+
+/** The fake glab and gh on PATH, with no merge request yet. */
+const tuneForge = Effect.gen(function* () {
+  const bin = yield* FakeBin.make(`${rig.root}/bin`);
+  const forge = yield* forgeOnPath(bin, "gitlab", {
+    installed: true,
+    loggedIn: [FORGE_HOST.gitlab],
+    login: "tester",
+    mrs: [],
+  });
+  yield* forgeOnPath(bin, "github", { installed: true, loggedIn: [], login: null, mrs: [] });
+  return { bin, forge };
+});
+
+const finals = (runId: string) =>
+  Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
+    all.filter((one) => one.pass === "final"),
+  );
+
+const verdictsOf = (measured: { readonly result: Measurement["result"] }) =>
+  measured.result._tag === "Judged"
+    ? measured.result.verdicts.map(
+        (one) => `${one.metric} ${one.verdict}${one.held ? "" : ", not held"}`,
+      )
+    : [measured.result._tag];
+
+const originHead = () =>
+  Effect.map(
+    exec(["git", "--git-dir", `${rig.root}/project-origin.git`, "rev-parse", "HEAD"], {
+      cwd: rig.root,
+    }),
+    (ran) => ran.stdout.trim(),
+  );
+
+const checkoutTree = () =>
+  Effect.map(exec(["git", "rev-parse", "HEAD^{tree}"], { cwd: rig.projectDir }), (ran) =>
+    ran.stdout.trim(),
+  );
+
+const SECRET = "sk-live0123456789abcdefXYZ";
+
+scenario(
+  "a tune-up with two kept Cycles proves their tree against the merge base, has it reviewed and opens one merge request written from the Measurements",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-delivered";
+        const { bin, forge } = yield* tuneForge;
+        const commit = yield* cycling(
+          runId,
+          [fasterTo(5), fasterTo(3), TUNE_REVIEWED, OPENED],
+          [`API_TOKEN=${SECRET}`],
+        );
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 2 });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect((yield* cyclesMeasured(runId)).map(verdictsOf)).toEqual([
+          ["bench.count gain", "bench.size no-change"],
+          ["bench.count gain", "bench.size no-change"],
+        ]);
+        const [final, ...more] = yield* finals(runId);
+        expect(more).toEqual([]);
+        const head = yield* headOf();
+        expect(final!.base.commit).toBe(yield* originHead());
+        expect(final!.candidate.head_sha).toBe(head);
+        expect(verdictsOf(final!)).toEqual(["bench.count gain", "bench.size no-change"]);
+        const review = yield* asked(runId, "review-1");
+        expect(review).toContain("measurement_valid");
+        expect(review).toContain("the harness kept apart from the product");
+        expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
+        expect((yield* forge.model()).merges ?? []).toEqual([]);
+
+        const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
+        expect(yield* asked(runId, "mr")).toContain(
+          `${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`,
+        );
+        expect(body).toContain("| bench.count | primary | 7 | 3 |");
+        const [table, evidence] = body.split("<details>");
+        expect(table).toContain(final!.id);
+        for (const metric of ["bench.count", "bench.size"])
+          for (const side of ["base", "candidate"] as const) {
+            const line = evidence!
+              .split("\n")
+              .find((one) => one.startsWith(`- ${metric}, ${side}:`));
+            const listed = line!
+              .split(":")[1]!
+              .split(",")
+              .map((one) => Number(one.trim()));
+            expect(listed).toEqual(
+              final!.samples
+                .filter((one) => one.tree === side && !one.warmup)
+                .map((one) => one.readings[metric]!),
+            );
+          }
+        for (const text of [
+          "bench/bench.sh",
+          commit,
+          final!.base.commit,
+          final!.base.head_sha,
+          final!.candidate.head_sha,
+          runId,
+        ])
+          expect(evidence).toContain(text);
+        expect(body).not.toContain(SECRET);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose default branch moved during its Cycles merges it, and takes its final Measurement against the new merge base",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-moved";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(5),
+          fasterWhileUpstreamPushes(3, "upstream.txt"),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const original = yield* originHead();
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 2 });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        const moved = yield* originHead();
+        expect(moved).not.toBe(original);
+        expect(yield* runLog(runId)).toMatch(new RegExp(`integrated \\S+@${moved}`));
+        const measured = yield* finals(runId);
+        expect(measured.map((one) => one.base.commit)).toEqual([moved, original]);
+        expect(verdictsOf(measured[0]!)).toEqual(["bench.count gain", "bench.size no-change"]);
+        expect(measured.map((one) => one.candidate.head_sha)).toEqual([
+          yield* headOf(),
+          yield* headOf(),
+        ]);
+        expect(yield* readText(`${rig.projectDir}/upstream.txt`)).toBe("theirs\n");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose final Measurement is no-change once integrated drops back to its base tree, and completes with its findings and no merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-lost";
+        yield* cycling(runId, [
+          fasterWhileUpstreamPushes(3, "fixed"),
+          {
+            writes: [],
+            sh: inCheckout("git rm -q count && git commit -qm drop"),
+            output: "dropped",
+          },
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* wasAsked(runId, "drop")).toBe(true);
+        const [final, ...more] = yield* finals(runId);
+        expect(more).toEqual([]);
+        expect(final!.base.commit).toBe(yield* originHead());
+        expect(verdictsOf(final!)).toEqual(["bench.count no-change", "bench.size no-change"]);
+        expect(yield* checkoutTree()).toBe(final!.base.content);
+        expect(said(result)).toContain("bench.count no-change, not a gain");
+        expect(yield* readText(said(result).split(": ")[0]!)).toContain(final!.id);
+      }),
+    ),
+  120_000,
+);
+
+/** The merge request opened on the checkout's head, its CI job failing there and green at the base. */
+const openedFailing = (forge: {
+  readonly holding: (next: ForgeModel) => { path: string; text: string };
+}) => {
+  const write = forge.holding(ciOn("OPENED_AT", ciFailing, "passed"));
+  return {
+    writes: [write],
+    sh: `sed -i "s/OPENED_AT/$(git -C '${rig.projectDir}' rev-parse HEAD)/" '${write.path}'`,
+    output: OPENED_CI,
+  };
+};
+
+/** A CI fix that commits `count` and whose new head's job passes. */
+const ciFixedTo = (
+  forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
+  count: number,
+) => {
+  const write = forge.holding(ciOn("FIXED_AT", { name: "nuxi-job", state: "passed" }, "passed"));
+  return {
+    writes: [write],
+    sh: `${inCheckout(`echo ${count} > count && git add count && git commit -qm ci-fix`)} && sed -i "s/FIXED_AT/$(git -C '${rig.projectDir}' rev-parse HEAD)/" '${write.path}'`,
+    output: { ...GATE_FIX, fixed: [{ title: "nuxi: its CI job nuxi-job failed" }] },
+  };
+};
+
+scenario(
+  "a tune-up CI fix that changes product code is measured and reviewed again on the delivered head, and performance closes there",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-ci-fixed";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          TUNE_REVIEWED,
+          openedFailing(forge),
+          ciFixedTo(forge, 2),
+          TUNE_REVIEWED,
+        ]);
+        yield* leftToCi(runId, ["nuxi"]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const head = yield* headOf();
+        const measured = yield* finals(runId);
+        expect(measured).toHaveLength(2);
+        expect(measured[1]!.candidate.head_sha).toBe(head);
+        expect(measured[0]!.candidate.head_sha).not.toBe(head);
+        expect(verdictsOf(measured[1]!)).toEqual(["bench.count gain", "bench.size no-change"]);
+        expect(yield* wasAsked(runId, "ci-fix-1.review-1")).toBe(true);
+        expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
+        // The merge request is told the whole replacement evidence, not only its table.
+        const noted = (yield* ciNotes(forge)).join("\n");
+        expect(noted).toContain(`Samples of \`final\` Measurement ${measured[1]!.id}`);
+        expect(noted).toContain(head);
+        expect(noted).toContain("#### Reproduce");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up CI fix that loses the gain leaves its merge request not ready, and the Run fails saying so",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-ci-lost";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          TUNE_REVIEWED,
+          openedFailing(forge),
+          ciFixedTo(forge, 7),
+          TUNE_REVIEWED,
+        ]);
+        yield* leftToCi(runId, ["nuxi"]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Failure");
+        const measured = yield* finals(runId);
+        expect(verdictsOf(measured.at(-1)!)).toEqual([
+          "bench.count no-change",
+          "bench.size no-change",
+        ]);
+        expect(reasonOf(result)).toContain(`${CI_MR} is not ready`);
+        expect(reasonOf(result)).toContain("bench.count no-change, not a gain");
+        expect((yield* ciNotes(forge)).join("\n")).toContain("not ready");
+        expect((yield* forge.model()).merges ?? []).toEqual([]);
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up reviewer's blocker is fixed in the rally, and the fix gets a final Measurement of its own",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-blocked";
+        const blocker = "search drops results past the hundredth";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          {
+            ...TUNE_REVIEWED,
+            verdict: "findings",
+            findings: [{ severity: "blocker", title: blocker, file: "count" }],
+            behavior_preserved: false,
+          },
+          {
+            writes: [],
+            sh: inCheckout("echo 2 > count && git add count && git commit -qm fix"),
+            output: { ...GATE_FIX, fixed: [{ title: blocker, file: "count" }] },
+          },
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "fix-1")).toContain(blocker);
+        expect(yield* wasAsked(runId, "review-2-1")).toBe(true);
+        const measured = yield* finals(runId);
+        expect(measured).toHaveLength(2);
+        expect(measured[1]!.candidate.head_sha).toBe(yield* headOf());
+        expect(measured[0]!.candidate.head_sha).not.toBe(measured[1]!.candidate.head_sha);
+      }),
+    ),
+  120_000,
+);
+
+const blockedThenFixed = (round: number): ReadonlyArray<Schema.Json> => {
+  const title = `round ${round}: search drops a result`;
+  return [
+    {
+      ...TUNE_REVIEWED,
+      verdict: "findings",
+      findings: [{ severity: "blocker", title, file: "count" }],
+    },
+    {
+      writes: [],
+      sh: inCheckout(`echo ${round} > note && git add note && git commit -qm fix-${round}`),
+      output: { ...GATE_FIX, fixed: [{ title, file: "count" }], checks: [{ name: "nuxi" }] },
+    },
+  ];
+};
+
+scenario(
+  "a tune-up whose last rally fix lands after the last review proves its outcome on the fresh review delivery took",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-fresh";
+        const { bin, forge } = yield* tuneForge;
+        const write = forge.holding(
+          ciOn("OPENED_AT", { name: "nuxi-job", state: "passed" }, "passed"),
+        );
+        yield* cycling(runId, [
+          fasterTo(3),
+          ...[1, 2, 3, 4].flatMap(blockedThenFixed),
+          TUNE_REVIEWED,
+          {
+            writes: [write],
+            sh: `sed -i "s/OPENED_AT/$(git -C '${rig.projectDir}' rev-parse HEAD)/" '${write.path}'`,
+            output: OPENED_CI,
+          },
+        ]);
+        yield* leftToCi(runId, ["nuxi"]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(yield* wasAsked(runId, "proof.review-1")).toBe(true);
+        expect(said(result)).toBe(CI_MR);
+        expect(yield* runLog(runId)).toContain(`performance proved on ${yield* headOf()}`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose forge refuses the merge request fails with the forge's reason, and merges nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-refused";
+        const refusal = "403 Forbidden: you cannot create merge requests in group/app";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          TUNE_REVIEWED,
+          {
+            verdict: "findings",
+            findings: [{ severity: "blocker", title: `glab mr create refused: ${refusal}` }],
+            mr_url: null,
+            pushed: true,
+          },
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain(refusal);
+        expect((yield* forge.model()).merges ?? []).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+const POOLING = {
+  title: "Pool the search client's connections",
+  repository: "group/search-client",
+  team: "Search",
+  links: ["https://gitlab.example.com/group/search-client/-/issues/3"],
+  journey: "search",
+  change: "reuse one connection per process instead of one per query",
+  estimated_impact: "about 20 ms off p95 search latency",
+  criteria: ["the bench opens one connection per process"],
+  relation: "the local change prepares statements; this cuts the connect time left",
+};
+const FTS = {
+  title: "Ship sqlite with FTS5",
+  repository: "group/sqlite-build",
+  links: [],
+  journey: "search",
+  change: "build sqlite with the FTS5 extension",
+  estimated_impact: "full-text search without a table scan",
+  criteria: ["FTS5 is loadable from the built library"],
+  relation: "the local change cannot avoid the scan without it",
+};
+const KNOWN = {
+  title: "Cache the tokenizer's tables",
+  repository: "group/tokenizer",
+  team: "Search",
+  links: [],
+  journey: "search",
+  change: "load the tables once per process",
+  estimated_impact: "a few ms per query",
+  criteria: ["one load per process"],
+  relation: "independent of the local change",
+  existing: "https://linear.app/acme/issue/PERF-9",
+};
+
+/** A Claude Code with a Linear MCP server, as the rig's home tells it, while `body` runs. */
+const withLinear = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    FileSystem.FileSystem.pipe(
+      Effect.flatMap((fs) =>
+        fs.writeFileString(
+          `${rig.root}/.claude.json`,
+          '{"mcpServers": {"linear-server": {"url": "https://mcp.linear.app/mcp"}}}',
+        ),
+      ),
+      Effect.orDie,
+    ),
+    () => body,
+    () =>
+      FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.remove(`${rig.root}/.claude.json`, { force: true })),
+        Effect.orDie,
+      ),
+  );
+
+/** The fake Linear: one line per issue, its URL then the marker it carries. */
+const tracker = () => `${rig.root}/tracker`;
+const emptyTracker = () =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.writeFileString(tracker(), "")),
+    Effect.orDie,
+  );
+const trackerLines = () =>
+  Effect.map(readText(tracker()).pipe(Effect.orDie), (text) =>
+    text.split("\n").filter((line) => line !== ""),
+  );
+const MARKED =
+  'marker=$(grep -o \'collie:external-[0-9a-f]*\' "$PROMPT_PATH" | head -n 1); [ -n "$marker" ]';
+/** A search of the fake tracker for the marker its prompt carries. */
+const SEARCHED = () => ({
+  writes: [],
+  sh: `${MARKED} && url=$(grep -F "$marker" '${tracker()}' | cut -d ' ' -f 1) && if [ -n "$url" ]; then printf '{"marked": "%s", "matching": []}' "$url"; else printf '{"marked": null, "matching": []}'; fi > "$OUTPUT_PATH"`,
+  output: null,
+});
+const ISSUE = "https://linear.app/acme/issue/PERF-1";
+/** One issue filed in the fake tracker, carrying the marker its prompt gave. */
+const FILED = () => ({
+  writes: [],
+  sh: `${MARKED} && echo "${ISSUE} $marker" >> '${tracker()}'`,
+  output: { url: ISSUE },
+});
+
+const withExternal = (
+  turn: ReturnType<typeof tried>,
+  external: ReadonlyArray<Schema.Json>,
+): Schema.Json => ({ ...turn, output: { ...turn.output, external } });
+
+/** Each search, create and recheck an external finding's Post asked for, in order. */
+const externalPrompts = (runId: string) =>
+  Effect.map(prompts(), (all) =>
+    all.flatMap((one) => {
+      const named = new RegExp(
+        `/${runId}/(external-[0-9a-f]+-(?:search|create|recheck)(?:-\\d+)?)\\.prompt\\.md`,
+      ).exec(one);
+      return named === null ? [] : [named[1]!];
+    }),
+  );
+
+type Asked = { decision: string; prompt: string; options: string; answer: string | null };
+/** The first open question that is none of `seen`. */
+const nextAsked = (asked: Effect.Effect<ReadonlyArray<Asked>>, seen: ReadonlyArray<string>) =>
+  until(
+    () => asked,
+    (rows) => rows.some((row) => row.answer === null && !seen.includes(row.decision)),
+  ).pipe(
+    Effect.map((rows) => rows.find((row) => row.answer === null && !seen.includes(row.decision))!),
+  );
+const openOf = (rows: ReadonlyArray<Asked>) => rows.filter((row) => row.answer === null);
+
+scenario(
+  "a tune-up puts each external finding to the human one at a time as Ignore or Post, files a Post once with its marker, and proves the same outcome whatever is answered",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          const runId = "r-tune-external";
+          const { bin } = yield* tuneForge;
+          yield* emptyTracker();
+          yield* cycling(
+            runId,
+            [withExternal(fasterTo(3), [KNOWN]), TUNE_REVIEWED, OPENED, SEARCHED(), FILED()],
+            [],
+            { ...TUNE_DISCOVERED, external: [POOLING, FTS] },
+          );
+          const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } };
+          const driving = yield* driven(options, (run) =>
+            Effect.gen(function* () {
+              const pooling = yield* nextAsked(run.asked, []);
+              expect(openOf(yield* run.asked).map((row) => row.decision)).toEqual([
+                pooling.decision,
+              ]);
+              expect(pooling.prompt).toContain(POOLING.title);
+              expect(optionsOf([pooling], pooling.decision)).toEqual(["Ignore", "Post"]);
+              yield* run.answer(pooling.decision, "Post");
+              const team = yield* nextAsked(run.asked, [pooling.decision]);
+              expect(team.prompt).toContain(FTS.title);
+              expect(optionsOf([team], team.decision)).toEqual([]);
+              yield* run.answer(team.decision, "Platform");
+              const fts = yield* nextAsked(run.asked, [pooling.decision, team.decision]);
+              expect(fts.prompt).toContain(FTS.title);
+              expect(optionsOf([fts], fts.decision)).toEqual(["Ignore", "Post"]);
+              yield* run.answer(fts.decision, "Ignore");
+              return {
+                status: yield* ended(run.status),
+                pooling: pooling.decision,
+                fts: fts.decision,
+                asked: yield* run.asked,
+              };
+            }),
+          );
+          yield* bin.restore();
+          const { pooling, fts } = driving;
+          expect(outcomeText(driving.status)).toBe(OPENED.mr_url);
+          expect(driving.asked.some((row) => row.prompt.includes(KNOWN.title))).toBe(false);
+          expect(yield* externalPrompts(runId)).toEqual([`${pooling}-search`, `${pooling}-create`]);
+          expect(yield* asked(runId, `${pooling}-create`)).toContain(`collie:${pooling}`);
+          expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${pooling}`]);
+          const log = yield* runLog(runId);
+          const proved = log.indexOf("performance proved on");
+          expect(proved).toBeGreaterThan(-1);
+          for (const decided of [
+            `external ${pooling}: posted ${ISSUE}`,
+            `external ${fts}: ignored`,
+            `: existing ${KNOWN.existing}`,
+          ])
+            expect(log.indexOf(decided)).toBeGreaterThan(proved);
+          const report = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-external.md`);
+          for (const one of [POOLING, FTS, KNOWN]) {
+            expect(report).toContain(one.title);
+            expect(report).toContain(one.estimated_impact);
+          }
+          expect(report).toContain(KNOWN.existing);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+/** A tune-up that ends on its noisy calibration, with Discover's `external` findings. */
+const noisyWith = (external: ReadonlyArray<Schema.Json>, turns: ReadonlyArray<Schema.Json> = []) =>
+  Effect.gen(function* () {
+    const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+    yield* emptyTracker();
+    yield* rig.queueOutputs([
+      { ...TUNE_DISCOVERED, external },
+      tunePlan(commit, [NOISY_PRIMARY]),
+      ...turns,
+    ]);
+  });
+
+scenario(
+  "a tune-up host restarted after an external finding's Post filed its issue but before the Output was collected searches again and files no second issue",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          const runId = "r-tune-filed";
+          yield* noisyWith([POOLING], [SEARCHED(), { ...FILED(), output: null }, SEARCHED()]);
+          const options = { entry: shipped("tune-up"), runId, input: {} };
+          const key = yield* driven(options, (run) =>
+            Effect.gen(function* () {
+              const pooling = yield* nextAsked(run.asked, []);
+              yield* run.answer(pooling.decision, "Post");
+              yield* until(trackerLines, (lines) => lines.length === 1);
+              return pooling.decision;
+            }),
+          );
+          const status = yield* driven({ ...options, restarted: true }, (run) => ended(run.status));
+          expect(status.status).toBe("complete");
+          expect(yield* externalPrompts(runId)).toEqual([
+            `${key}-search`,
+            `${key}-create`,
+            `${key}-recheck`,
+          ]);
+          expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${key}`]);
+          expect(yield* runLog(runId)).toContain(`external ${key}: posted ${ISSUE}`);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up host restarted after an external finding's Post launched its create but before it filed asks the finding again, and creates nothing without a second Post",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          const runId = "r-tune-unfiled";
+          yield* noisyWith([POOLING], [SEARCHED(), { writes: [], output: null }, SEARCHED()]);
+          const options = { entry: shipped("tune-up"), runId, input: {} };
+          const key = yield* driven(options, (run) =>
+            Effect.gen(function* () {
+              const pooling = yield* nextAsked(run.asked, []);
+              yield* run.answer(pooling.decision, "Post");
+              yield* until(
+                () => wasAsked(runId, `${pooling.decision}-create`),
+                (launched) => launched,
+              );
+              return pooling.decision;
+            }),
+          );
+          const status = yield* driven({ ...options, restarted: true }, (run) =>
+            Effect.gen(function* () {
+              const again = yield* nextAsked(run.asked, [key]);
+              expect(again.prompt).toContain("may have filed");
+              expect(again.prompt).toContain(POOLING.title);
+              expect(optionsOf([again], again.decision)).toEqual(["Ignore", "Post"]);
+              expect(yield* externalPrompts(runId)).toEqual([
+                `${key}-search`,
+                `${key}-create`,
+                `${key}-recheck`,
+              ]);
+              yield* run.answer(again.decision, "Ignore");
+              return yield* ended(run.status);
+            }),
+          );
+          expect(status.status).toBe("complete");
+          expect(yield* externalPrompts(runId)).toEqual([
+            `${key}-search`,
+            `${key}-create`,
+            `${key}-recheck`,
+          ]);
+          expect(yield* trackerLines()).toEqual([]);
+          expect(yield* runLog(runId)).toContain(`external ${key}: ignored`);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up with no Linear MCP keeps its external report and asks nothing, saying why",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-no-linear";
+        yield* noisyWith([POOLING]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Success");
+        expect(yield* questions(runId)).toEqual([]);
+        const file = `${runDir(dir, runId)}/handoffs/tune-up-external.md`;
+        expect(yield* readText(file)).toContain(POOLING.title);
+        expect(yield* runLog(runId)).toContain(`${file} not asked: no Linear MCP server`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up with external report writes its external report and asks nothing",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          yield* noisyWith([POOLING]);
+          expect((yield* tunedUp("r-tune-report", { external: "report" }))._tag).toBe("Success");
+          expect(yield* questions("r-tune-report")).toEqual([]);
+          expect(
+            yield* readText(`${runDir(dir, "r-tune-report")}/handoffs/tune-up-external.md`),
+          ).toContain(POOLING.title);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up with external off writes no external report",
+  () =>
+    runEffect(
+      withLinear(
+        Effect.gen(function* () {
+          yield* noisyWith([POOLING]);
+          expect((yield* tunedUp("r-tune-off", { external: "off" }))._tag).toBe("Success");
+          expect(yield* questions("r-tune-off")).toEqual([]);
+          const fs = yield* FileSystem.FileSystem;
+          expect(
+            yield* fs.exists(`${runDir(dir, "r-tune-off")}/handoffs/tune-up-external.md`),
+          ).toBe(false);
+        }),
+      ),
+    ),
+  120_000,
+);
+
+once("tune-up declares every input with its default, and its path", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const entry = yield* loadEntry(shipped("tune-up"));
+      const defaults = Object.fromEntries(
+        declaredBy(entry).map((one) => [one.name, schemaDefault(one.schema)]),
+      );
+      expect(defaults).toEqual({
+        repository: "",
+        focus: "",
+        cycles: 5,
+        threshold: 5,
+        tolerance: 2,
+        samples: 10,
+        wall_time: "",
+        external: "ask",
+      });
+      expect(entry.metadata?.path?.map((one) => one.title)).toEqual([
+        "Discover",
+        "Harness",
+        "Calibrate",
+        "Cycles",
+        "Integrate",
+        "Review",
+        "Checks",
+        "Merge request",
+        "External report",
+      ]);
+      expect(entry.metadata?.checkout).toBe("branch");
+      expect(entry.metadata?.outcome).toEqual({ fixed: "performance" });
+    }),
+  ),
 );
 
 /**

@@ -148,6 +148,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `schedules.ts`         | This Machine's Schedules: their records, the one write, and the `Schedule` workflow that fires them                         |
 | `run-record.ts`        | Run records served by their owning host, including Outputs confined to the Run directory                                    |
 | `verify-model.ts`      | Verification and stream Schemas shared with front doors without loading the collector                                       |
+| `measurement.ts`       | A Measurement taken: the base tree, the Machine's one-at-a-time lock, A B B A samples and the record, for both doors        |
+| `measurement-model.ts` | A Measurement's plan, record and stream Schemas, shared with front doors without loading the sampler                        |
 
 The Machine link is `peers.ts`: pairing, TLS channels, relay sockets, dial-back and
 keeping paired Machines level. `peer-transport.ts` is the way to a peer this Machine

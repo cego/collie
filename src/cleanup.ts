@@ -25,7 +25,7 @@ import { removeTask, withTaskLock, type TaskRecord } from "./task";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
 import type { AgentEntry } from "./registry";
-import type { RunFacts } from "./runs";
+import { settled, type RunFacts } from "./runs";
 import { epochMs, nowIso, took } from "./time";
 import {
   isDestinationLock,
@@ -485,6 +485,7 @@ const KEPT_KINDS = new Set([
   "compaction-locks",
   "generations",
   "renovate-repositories",
+  "measurements",
   "uploads",
   "files",
   "claude.json.bak",
@@ -1359,6 +1360,66 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
       return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
     remove: (item) => removeIf(item.target, verdict(item.target)),
+  };
+};
+
+/**
+ * The base trees a Run's Measurements were taken on, each removed with git's record of it
+ * once its Run has ended or has no row.
+ */
+export const measurementTreesSweeper = (
+  stateDir: string,
+  runs: ReadonlyArray<RunFacts>,
+): Sweeper => {
+  const kind = "measurement-tree";
+  const root = `${stateDir}/measurements/trees`;
+  const live = new Set(runs.filter((run) => !settled(run)).map((run) => run.id));
+  const verdict = (
+    target: string,
+  ): Effect.Effect<{ remove: string } | { keep: string } | null, never, BunServices> =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      if (!(yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))) return null;
+      const run = target.slice(root.length + 1).split("/")[0] ?? "";
+      return live.has(run)
+        ? { keep: `${run} may measure on it again` }
+        : { remove: `${run} has ended, so nothing measures on it` };
+    });
+  return {
+    kind,
+    judge: Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const remove: CleanupItem[] = [];
+      const keep: CleanupKept[] = [];
+      for (const run of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => [])))
+        for (const tree of yield* fs
+          .readDirectory(`${root}/${run}`)
+          .pipe(Effect.orElseSucceed(() => []))) {
+          const target = `${root}/${run}/${tree}`;
+          const judged = yield* verdict(target);
+          if (judged === null) continue;
+          if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
+          else remove.push({ kind, target, bytes: 0, reason: judged.remove });
+        }
+      const sizes = yield* sizesOf(remove.map((item) => item.target));
+      return { remove: remove.map((item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+    }),
+    remove: (item) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const common = yield* shell(
+          "git",
+          ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+          item.target,
+        );
+        const freed = yield* removeIf(item.target, verdict(item.target));
+        if (common.code === 0)
+          yield* shell("git", ["--git-dir", common.stdout.trim(), "worktree", "prune"], "/");
+        const parent = item.target.slice(0, item.target.lastIndexOf("/"));
+        if ((yield* fs.readDirectory(parent).pipe(Effect.orElseSucceed(() => ["?"]))).length === 0)
+          yield* fs.remove(parent, { recursive: true }).pipe(Effect.ignore);
+        return freed;
+      }),
   };
 };
 

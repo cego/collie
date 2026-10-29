@@ -68,11 +68,13 @@ import {
   runDir,
   evidenceDir,
   STOP,
+  AWAITING,
   controlPath,
   type HostServices,
   type Locate,
 } from "./engine";
 import { RequestedBy } from "./board-model";
+import type { MeasureEvent } from "./measurement-model";
 import {
   RunMetrics,
   RunCards,
@@ -130,6 +132,7 @@ import {
   compactionSweeper,
   desktopSweeper,
   renovateClonesSweeper,
+  measurementTreesSweeper,
   retentionSweeper,
   runnersSweeper,
   settlingOf,
@@ -1070,6 +1073,7 @@ const hostBoard = (dir: string) =>
           runnersSweeper(`${collieCache()}/runners`, BUILD),
           checksSweeper(checks),
           renovateClonesSweeper(env.stateDir, all),
+          measurementTreesSweeper(env.stateDir, all),
           desktopSweeper(
             desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"])),
             `${env.raw["XDG_STATE_HOME"] || `${env.home}/.local/state`}/collie-desktop`,
@@ -2270,6 +2274,76 @@ const frontDoorHandlers = (
                       ran: true,
                     });
                     yield* toldVerifyEnded(client, collected.success);
+                    yield* Queue.end(queue);
+                  }).pipe(Effect.provideContext(hosted)),
+                { bufferSize: 16 },
+              );
+            }),
+          ),
+        measure: ({ runId, base, cwd, plan, pass, reason }, { client }) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const view = yield* known(runId);
+              const { insideRun } = yield* Effect.promise(() => import("./verify"));
+              const { measure } = yield* Effect.promise(() => import("./measurement"));
+              const where = cwd ?? view.cwd;
+              if (!(yield* insideRun(where, { cwd: view.cwd, worktree: null })))
+                return yield* new HostRefused({
+                  reason: `${REFUSED_INPUT}: "${where}" is not inside run ${runId}; a Measurement's candidate is the Run's own tree.`,
+                });
+              return Stream.callback<typeof MeasureEvent.Type, HostRefused>(
+                (queue) =>
+                  Effect.gen(function* () {
+                    const fs = yield* FileSystem.FileSystem;
+                    const answered = yield* measure({
+                      stateDir: env.stateDir,
+                      env,
+                      ask: {
+                        runId,
+                        base,
+                        cwd: where,
+                        plan,
+                        pass,
+                        ...(reason !== undefined && { reason }),
+                      },
+                      evidence: evidenceDir(env.stateDir, runId),
+                      awaiting: controlPath(env.stateDir, AWAITING, runId),
+                      stopped: fs
+                        .exists(controlPath(env.stateDir, STOP, runId))
+                        .pipe(Effect.orElseSucceed(() => false)),
+                      say: (text) => Queue.offer(queue, { _tag: "Said", text }).pipe(Effect.asVoid),
+                    }).pipe(
+                      Effect.mapError(
+                        (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.why}` }),
+                      ),
+                      Effect.result,
+                    );
+                    if (answered._tag === "Failure")
+                      return yield* Queue.fail(queue, answered.failure);
+                    if (answered.success === "stopped")
+                      return yield* Queue.fail(
+                        queue,
+                        new HostRefused({
+                          reason: `invalid_state: run ${runId} was stopped before its Measurement finished, so none was recorded.`,
+                        }),
+                      );
+                    const { measurement, ran } = answered.success;
+                    if (ran)
+                      yield* recordAudit(trail(runId), {
+                        operation: "measure",
+                        request: measurement.id,
+                        ...whoOf(client),
+                        asked: {
+                          base,
+                          cwd: where,
+                          plan,
+                          pass,
+                          ...(reason !== undefined && { reason }),
+                        },
+                        result: Schema.Json,
+                        value: { measurement: measurement.id, result: measurement.result._tag },
+                      }).pipe(Effect.orDie);
+                    yield* Queue.offer(queue, { _tag: "Result", measurement, ran });
                     yield* Queue.end(queue);
                   }).pipe(Effect.provideContext(hosted)),
                 { bufferSize: 16 },

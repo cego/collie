@@ -1209,7 +1209,7 @@ const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(
 export const describeRun = (view: RunView): ReadonlyArray<string> => [
   `${view.runId}\t${statusOf(view)}\t${view.workflow}`,
   view.entry,
-  `proves ${view.outcome}`,
+  `proves ${view.outcome}${view.measurement ? `; ${view.measurement}` : ""}`,
   ...(view.parent === null ? [] : [`part of ${view.parent}`]),
   ...(view.controls.length === 0 ? [] : [`under ${view.controls.join(", ")}`]),
   ...describeWaiting(view),
@@ -1844,6 +1844,25 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
   if (!found.ok) return found;
   const client = yield* reach(env, found.machine, door);
   return { ok: true as const, events: client.verify(request) };
+});
+
+/** A Measurement of the Run's checkout, asked of the host on the Run's own Machine. */
+export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
+  env: PluginEnv,
+  request: {
+    runId: string;
+    base: string;
+    cwd?: string;
+    plan: Schema.Json;
+    pass: string;
+    reason?: string;
+  },
+  door: Door,
+) {
+  const found = yield* asksRun(env, request.runId, () => Effect.void, door);
+  if (!found.ok) return found;
+  const client = yield* reach(env, found.machine, door);
+  return { ok: true as const, events: client.measure(request) };
 });
 
 /**
