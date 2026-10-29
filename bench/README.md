@@ -46,3 +46,41 @@ The first study of 2026-10-29 was invalidated in full after discovering filesyst
 SQL profiling instrumentation left in shared dependencies by the original tune-up.
 Its samples are retained in the Run record and excluded from conclusions. Only the
 replacement study with verified pristine dependencies can support a verdict.
+
+## Evaluated candidate
+
+The [complete observations and provenance](results/read-2026-10-29.json) compare
+implementation `7b67f8a6` against merge base `6b3e277f`. **Verdict: not proved
+improved; leave unmerged.** Correctness checks passed, and every candidate warm p95
+was at most five seconds. Peak RSS exceeded its 10% allowance; shown and listing
+latency guardrails were inconclusive.
+
+| Metric                        | Baseline mean | Candidate mean | Paired ratio, 95% CI | Verdict      |
+| ----------------------------- | ------------: | -------------: | -------------------- | ------------ |
+| Warm read, ms                 |       1,988.2 |        1,102.5 | 0.551 [0.456, 0.665] | Improved     |
+| Warm read p95, ms             |       4,313.9 |        2,167.1 | 0.529 [0.359, 0.779] | Held         |
+| Cold read, ms                 |      10,396.9 |        7,536.0 | 0.728 [0.684, 0.774] | Held         |
+| Shown, ms                     |         899.8 |          889.0 | 0.977 [0.804, 1.185] | Inconclusive |
+| Listing, ms                   |         865.6 |          829.7 | 0.945 [0.769, 1.161] | Inconclusive |
+| Idle host CPU, ms/s           |         781.9 |          498.0 | 0.641 [0.589, 0.697] | Improved     |
+| Peak RSS, KiB                 |     325,406.8 |      515,069.6 | 1.584 [1.533, 1.637] | Failed       |
+| Concurrent control + read, ms |       6,022.6 |        3,603.8 | 0.600 [0.565, 0.637] | Held         |
+| Read during mutation load, ms |       6,407.9 |        2,744.6 | 0.429 [0.389, 0.473] | Held         |
+
+Means above are arithmetic process means; ratios and intervals use paired log ratios.
+Each process's empirical p95 is the maximum of its twelve observations. The primary
+latency reduction is 44.9% (95% CI: 33.5–54.4%), and idle host CPU falls 35.9%
+(30.3–41.1%). Peak RSS rises 58.4% (53.3–63.7%). These fixture results do not establish
+live Desktop latency or whole-process-tree CPU cost.
+
+The Machine remained shared: surrounding one-minute load ranged from 7.00 to 27.31
+on 24 logical CPUs. Load/process snapshots are retained for each process. Two production
+host upgrades terminated the first process of pair seven
+before it yielded an observation. The six completed pairs were retained, the unchanged
+fixture hash and dependency provenance were rechecked, and only incomplete attempts
+were repeated. All twenty completed observations enter the fixed ten-pair analysis;
+no completed pair spans a host upgrade. The interruption records are included in the
+data. Bulk fixtures were relocated out of the Run's recursive handoff listing.
+
+Check the harness with `bunx tsc --noEmit -p bench/tsconfig.json` and
+`bun bench/paired.ts --self-check`, each through `collie verify` when working in a Run.
