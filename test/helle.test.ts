@@ -4,8 +4,13 @@
 // exactly the ones a real Helle will not produce on demand.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Path, Result, Schedule, Schema } from "effect";
+import { ConfigProvider, Effect, Fiber, FileSystem, Path, Result, Schedule, Schema } from "effect";
 import { runEffect } from "./support/effect";
+import { events, openHost, runDirOf, until, workspace } from "./support/host";
+import { readAudit } from "../src/audit";
+import { frontDoor, socketOf } from "../src/host";
+import { Host } from "../src/sdk";
+import { callFlockTool, chatDoor } from "../desktop/src/bun/flock-tools";
 import {
   credentials,
   helleHolders,
@@ -18,7 +23,7 @@ import {
   type HelleProject,
 } from "../src/helle";
 import { HELLE_URL } from "../src/helle-url";
-import { handOverClaim } from "../src/engine";
+import { foundationLayer, handOverClaim } from "../src/engine";
 import { ClaimedSchema } from "../src/sdk";
 
 const ME = "6b9ba520-user";
@@ -244,13 +249,36 @@ test("a project of a group the repository's group merely ends with is not the re
   expect(resolved._tag).toBe("Unresolved");
 });
 
-test("a repository's own project is still needed, with its applications'", () => {
+/** The shape of Helle's own list on 2026-10-29: no `monorepo`, and the backoffice filed apart from the brands. */
+const HELLE = [
+  project("support-backoffice", "spilnu/backoffices", ["sbo"]),
+  project("happytiger", "spilnu/frontend"),
+  project("spilnu", "spilnu/frontend"),
+  project("crushit-uk", "spilnu/frontend"),
+  project("spinking-dk", "spilnu/frontend"),
+];
+
+test("a repository that is its own Helle project needs that project alone", () => {
   expect(
     resolveProjects(
-      [...FRONTEND, project("monorepo", "spilnu/frontend")],
-      release({ jobs: ["stage:spilnu"] }),
+      HELLE,
+      release({
+        repositoryPath: "gitlab.cego.dk/spilnu/frontend/support-backoffice",
+        repoName: "support-backoffice",
+        applications: ["spilnu"],
+        jobs: ["stage:happytiger"],
+      }),
     ),
-  ).toEqual({ _tag: "Projects", slugs: ["monorepo", "spilnu"] });
+  ).toEqual({ _tag: "Projects", slugs: ["support-backoffice"] });
+});
+
+test("a repository with no Helle project of its own needs each brand its applications and stage jobs name", () => {
+  expect(
+    resolveProjects(
+      HELLE,
+      release({ applications: ["spilnu"], jobs: ["stage:happytiger", "stage:crushit-uk"] }),
+    ),
+  ).toEqual({ _tag: "Projects", slugs: ["crushit-uk", "happytiger", "spilnu"] });
 });
 
 test("an application Helle has no project for leaves the release unresolved", () => {
@@ -695,7 +723,7 @@ test("who holds: each needed project's holder is read, and no queue is joined", 
     }),
   ));
 
-test("who holds: every application needs the repository's own project, and every declared one", () =>
+test("who holds: every application of a repository that is its own project needs that project alone, and every declared one", () =>
   runEffect(
     Effect.gen(function* () {
       fake.projects = [
@@ -711,8 +739,8 @@ test("who holds: every application needs the repository's own project, and every
       };
       const own = yield* helleHolders({ ...where, declared: null });
       expect(own._tag === "Read" && own.applications).toEqual([
-        { name: "spilnu", needs: ["monorepo", "spilnu"] },
-        { name: "happytiger", needs: ["happytiger", "monorepo"] },
+        { name: "spilnu", needs: ["monorepo"] },
+        { name: "happytiger", needs: ["monorepo"] },
       ]);
       const declared = yield* helleHolders({ ...where, declared: ["happytiger", "playground"] });
       expect(declared._tag === "Read" && declared.applications).toEqual([
@@ -1329,3 +1357,159 @@ test("two Runs taking over different claims of one Run both remove theirs from i
       expect(yield* fs.exists(`${dir}/runs/r-old/helle.json`)).toBe(false);
     }).pipe(Effect.scoped),
   ));
+
+const RECORDED = `[{"slug":"happytiger","claim":"mine"},{"slug":"spilnu","claim":"mine"}]`;
+const SAID = "claim happytiger for the monorepo release";
+
+/**
+ * A stopped Run that recorded `happytiger` and `spilnu`, and `slug` claimed for the human
+ * through Desktop's Helle tool, its one Machine being this host.
+ */
+const claimedThroughDesktop = Effect.fn("test.claimedThroughDesktop")(function* (
+  prefix: string,
+  slug: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  fake.projects = [
+    { slug: "happytiger", group: "spilnu/frontend", queue: [] },
+    { slug: "spilnu", group: "spilnu/frontend", queue: [] },
+    { slug: "docs", queue: [] },
+  ];
+  const { state } = yield* workspace(prefix);
+  const host = yield* openHost(state);
+  yield* host.ask({
+    op: "start",
+    id: "stops-on-mr",
+    runId: "r1",
+    input: { mr: "https://gitlab.example.com/group/project/-/merge_requests/7" },
+  });
+  yield* host.until({ op: "waiting", runId: "r1" }, (reply) =>
+    (reply.diagnostics ?? []).includes("decision"),
+  );
+  yield* host.ask({ op: "stop", id: "stops-on-mr", runId: "r1" });
+  yield* until(
+    () => events(state, "r1"),
+    (log) => log.includes("stopped"),
+  );
+  const dir = yield* runDirOf(state, "r1");
+  yield* fs.writeFileString(`${dir}/helle.json`, RECORDED);
+  const door = chatDoor(yield* frontDoor(socketOf(state)));
+  const said = yield* callFlockTool(
+    {
+      machines: () => [
+        {
+          name: "vm-mk",
+          board: { _tag: "Live", herds: [], tasks: [], protocol: 4, files: true },
+          door,
+        },
+      ],
+      conversation: "flock@mk-pc",
+      said: () => SAID,
+      attachments: () => undefined,
+      uploaded: new Map(),
+      machineRule: () => undefined,
+      setMachineRule: () => Effect.void,
+      inSync: () => Effect.succeed(""),
+      helle: Effect.succeed({ url: server.base, token: "token-abc" }),
+      chatHarness: () => ({ harness: "claude", model: undefined, effort: undefined }),
+      chatChoices: Effect.die("not asked"),
+      setChatHarness: () => Effect.succeed(null),
+    },
+    "collie_helle",
+    { claim: slug },
+  );
+  yield* host.stop;
+  return { state, dir, runId: dir.split("/").pop()!, said };
+});
+
+/** The Run's give-back, as its workflow asks it, against the stand-in Helle. */
+const giveBack = (state: string, runId: string) =>
+  Effect.gen(function* () {
+    const env = yield* envFile();
+    return yield* Effect.gen(function* () {
+      return yield* (yield* Host).release(runId);
+    }).pipe(
+      Effect.provide(foundationLayer({ dir: state })),
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({
+          HOME: state,
+          HELLE_ENV_FILE: env,
+          COLLIE_HELLE_URL: server.base,
+        }),
+      ),
+    );
+  });
+
+test(
+  "a claim through Desktop's Helle tool leaves a stopped Run's record, so its give-back releases none of it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { state, dir, runId, said } = yield* claimedThroughDesktop(
+          "collie-helle-claimed-",
+          "happytiger",
+        );
+        expect(yield* fs.readFileString(`${dir}/helle.json`)).toBe(
+          `[{"slug":"spilnu","claim":"mine"}]`,
+        );
+        fake.calls = [];
+        expect(yield* giveBack(state, runId)).toEqual([]);
+        expect(fake.calls).toEqual(["POST /api/v1/projects/spilnu/release"]);
+        expect(said).toBe(
+          `Claimed happytiger in Helle: you hold it.\nvm-mk:${runId} will no longer give happytiger back.`,
+        );
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
+  "a claim of a project no Run recorded changes no Run's record",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { state, dir, said } = yield* claimedThroughDesktop(
+          "collie-helle-unrecorded-",
+          "docs",
+        );
+        expect(said).toBe("Claimed docs in Helle: you hold it.");
+        expect(yield* fs.readFileString(`${dir}/helle.json`)).toBe(RECORDED);
+        const asked = yield* readAudit(`${state}/helle`);
+        expect(asked.map((line) => [line.operation, line.asked, line.result])).toEqual([
+          ["helle_claimed", { slug: "docs" }, []],
+        ]);
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
+  "dropping a claim from Runs' records is recorded as the chat that asked, on the host and the Run",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { state, dir, runId } = yield* claimedThroughDesktop(
+          "collie-helle-actor-",
+          "happytiger",
+        );
+        const [onHost] = yield* readAudit(`${state}/helle`);
+        expect(onHost).toMatchObject({
+          operation: "helle_claimed",
+          actor: { origin: "chat", conversation: "flock@mk-pc", said: SAID },
+          result: [runId],
+        });
+        const onRun = (yield* readAudit(dir)).filter((line) => line.operation === "helle_claimed");
+        expect(onRun).toEqual([
+          {
+            ...onHost!,
+            at: onRun[0]!.at,
+            result: "happytiger",
+          },
+        ]);
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);

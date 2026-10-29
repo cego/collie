@@ -884,7 +884,11 @@ Resume succeeds only when the host wakes suspended work or recovers this Run's u
 admission or unavailable module into the engine. It clears the old park note before work
 starts; if work parks again, the new reason is shown. Take-up does not promise completion.
 A Run already running, finished, failed, or still missing its module returns
-`operation_failed` and a nonzero exit. A missing module's file is named.
+`operation_failed` and a nonzero exit. A missing module's file is named. So does a stopped
+Run whose merge request has merged, as its card reads the landing: the work is done, and
+waking it could only redo answered Steps or give back a claim. It stays stopped, and
+the refusal says so in every front door. A stopped Run whose merge request is open, closed
+unmerged or absent resumes as before.
 Repeating the same request returns its recorded result; a fresh request judges the Run again.
 Delivery reconciliation remains explicit: `not-sent` permits one resend, while `sent` waits
 for Output. An unresolved delivery stays uncertain.
@@ -2563,7 +2567,9 @@ against the workflow's own schema. `usage` reads this Machine's [Usage readings]
 paused or not, or pauses, resumes or removes one, under a request id and the asker's Actor.
 `cleanup` reads what a sweep would remove and keep, and
 `sweep` sweeps now, recorded with its Actor in the state directory's `cleanup/operations.jsonl`
-as well as in `cleanup.jsonl`. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
+as well as in `cleanup.jsonl`. `claimedInHelle`, which Desktop's `collie_helle` sends after
+a claim, drops that project from every Run's Helle claim record, recorded in
+`helle/operations.jsonl` and in each Run's own trail. `grant` and `steer` stay on `HostRpcs`. Each takes a request id, and the same id twice is one operation. A
 channel first sends `declare` with its front door, and the host stamps every operation on
 it with that, as a line in the Run's `operations.jsonl`: the operation, the request, the
 Actor and what came of it ([ADR-0039](adr/0039-every-operation-records-who-asked.md)). A

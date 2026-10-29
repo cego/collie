@@ -195,6 +195,11 @@ const machine = (
           schedule: null,
         };
       }),
+    claimedInHelle: (payload) =>
+      Effect.sync(() => {
+        note("claimedInHelle", payload);
+        return [];
+      }),
   };
   return {
     name,

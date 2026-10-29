@@ -205,9 +205,10 @@ const twice = (name: string, found: readonly HelleProject[]) =>
   `${name} names ${found.length} Helle projects: ${found.map((p) => p.slug).join(", ")}`;
 
 /**
- * Every Helle project a release needs: the repository's own, and each project of the
- * repository's group that an application or a deploy job's name (`stage:spilnu`) names, by
- * slug or shorthand. Anything it cannot settle is `Unresolved`, never an empty set.
+ * Every Helle project a release needs: the repository's own alone where it has one, else each
+ * project of the repository's group that an application or a deploy job's name
+ * (`stage:spilnu`) names, by slug or shorthand. Anything it cannot settle is `Unresolved`,
+ * never an empty set.
  */
 export function resolveProjects(projects: readonly HelleProject[], release: Deploys): Needed {
   if (release.declared !== null) {
@@ -233,9 +234,10 @@ export function resolveProjects(projects: readonly HelleProject[], release: Depl
       _tag: "Unresolved",
       why: `helle has ${own.slugs.length} projects matching ${release.repoName}: ${own.slugs.join(", ")}`,
     };
+  if (own._tag === "Project") return { _tag: "Projects", slugs: [own.slug] };
   const group = groupOf(release.repositoryPath);
   const inGroup = inGroupOf(projects, release.repositoryPath);
-  const slugs = new Set(own._tag === "Project" ? [own.slug] : []);
+  const slugs = new Set<string>();
   for (const application of release.applications) {
     const found = inGroup(application);
     if (found.length > 1)

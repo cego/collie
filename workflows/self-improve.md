@@ -5,6 +5,7 @@ edit nothing; what you find becomes issues on this project's tracker and Improve
 
 The project's checkout: {{checkout}}
 Collie's state directory on this Machine: {{state}}
+The Collie release this Machine runs: {{release}}
 The window: the Runs admitted since {{since}}.
 
 ## triage
@@ -58,6 +59,12 @@ What may reach this project's tracker, in a title, a body and an Improvement:
 - never a Run's goal, a person's words, an agent's transcript, or another repository's
   name, paths or content. The host redacts credential-shaped values and refuses another
   checkout's paths; write so it has nothing to do.
+
+A Collie fix counts as already fixed only where this Machine's release carries it:
+`git merge-base --is-ancestor <commit> {{release}}` succeeds in the checkout, after
+`git fetch origin tag {{release}}` where the tag is not there. A fix on the default branch
+that the release lacks leaves the finding a live recurrence, filed or commented on as any
+other.
 
 Match each finding against every open issue below, whoever filed it, and set `issue` to
 the one it is about. An issue whose body carries `<!-- collie-finding: <key> -->` is

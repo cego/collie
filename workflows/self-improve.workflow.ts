@@ -12,20 +12,22 @@ import {
   step,
 } from "collie";
 import { hostname } from "node:os";
-import { DateTime, Duration, Effect, FileSystem, Result, Schema } from "effect";
+import { DateTime, Duration, Effect, FileSystem, Option, Result, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./self-improve.md" with { type: "text" };
 import {
-  type Ended,
   type Finding,
-  type Improvement,
   type Outcome,
+  type Starting,
+  Ended,
+  FAILED_TO_START,
   MAX_FINDINGS,
   Triage,
   chosen,
   goalOf,
   keysIn,
   markerOf,
+  restartsOf,
   sortOut,
   summaryOf,
   targetOf,
@@ -35,6 +37,7 @@ const content = contentOf(markdown);
 const triage = content.template("triage", {
   checkout: Schema.String,
   state: Schema.String,
+  release: Schema.String,
   since: Schema.String,
   runs: Schema.String,
   report: Schema.String,
@@ -44,7 +47,15 @@ const triage = content.template("triage", {
 });
 
 const DAY = Duration.hours(24);
+const LOOKBACK = Duration.days(7);
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const KeptJson = Schema.fromJsonString(Schema.Array(Ended));
+const decodeKept = Schema.decodeUnknownOption(KeptJson);
+const encodeKept = Schema.encodeSync(KeptJson);
+const KeptRuns = Schema.Struct({
+  earlier: Schema.Array(Schema.Struct({ created: Schema.String, ended: Schema.Array(Ended) })),
+  since: Schema.Array(Schema.Struct({ created: Schema.String, closes: Schema.Array(Schema.Int) })),
+});
 
 const Count = Schema.Union([Schema.Int, Schema.NumberFromString.check(Schema.isInt())]).check(
   Schema.isGreaterThanOrEqualTo(0),
@@ -176,9 +187,50 @@ export default defineWorkflow({
           }),
         }),
       );
-      if (window.runs.length === 0) return `No Runs since ${window.since}`;
+      const quiet = window.runs.length === 0;
+      if (quiet && bound === 0) return `No Runs since ${window.since}`;
 
-      yield* retroStep(
+      const kept =
+        bound === 0
+          ? { earlier: [], since: [] }
+          : yield* Activity.make({
+              name: "kept",
+              success: KeptRuns,
+              error: WorkflowError,
+              execute: Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem;
+                const since = DateTime.formatIso(
+                  DateTime.subtractDuration(yield* DateTime.now, LOOKBACK),
+                );
+                const report = yield* host.report(since);
+                const own = report.runs.find(({ runId }) => runId === run.id);
+                const project = report.runs.filter(({ project }) => project === own?.project);
+                const earlier = yield* Effect.forEach(
+                  project.filter(
+                    ({ runId, workflow }) => runId !== run.id && workflow === own?.workflow,
+                  ),
+                  ({ runId, created }) =>
+                    host.place(runId).pipe(
+                      Effect.flatMap(({ dir }) => fs.readFileString(`${dir}/improvements.json`)),
+                      Effect.map((text) =>
+                        decodeKept(text).pipe(Option.map((ended) => ({ created, ended }))),
+                      ),
+                      // A Run still going, or one from before Improvements were kept, has none.
+                      Effect.orElseSucceed(() => Option.none()),
+                    ),
+                );
+                return {
+                  earlier: earlier.flatMap(Option.toArray),
+                  since: project.map(({ created, closes }) => ({ created, closes })),
+                };
+              }),
+            });
+      const failedToStart = kept.earlier.some(({ ended }) =>
+        ended.some((one) => one.ended.startsWith(FAILED_TO_START)),
+      );
+      if (quiet && !failedToStart) return `No Runs since ${window.since}`;
+
+      const retro = retroStep(
         Activity.make({
           name: "retro",
           success: Schema.Void,
@@ -195,6 +247,7 @@ export default defineWorkflow({
           ),
         }),
       );
+      if (!quiet) yield* retro;
 
       const open = yield* Activity.make({
         name: "issues",
@@ -207,7 +260,7 @@ export default defineWorkflow({
           ),
       });
 
-      const triaged = yield* triageStep(
+      const triaging = triageStep(
         agentWork({
           operation: "triage",
           role: "retrospective",
@@ -215,6 +268,7 @@ export default defineWorkflow({
           input: {
             checkout: place.cwd,
             state: host.dir,
+            release: host.build,
             since: window.since,
             runs: window.runs.join("\n"),
             report: asJson(window.report),
@@ -233,6 +287,9 @@ export default defineWorkflow({
           output: Triage,
         }),
       );
+      const triaged: Triage = quiet
+        ? { findings: [], improvements: [], left_out: [] }
+        : yield* triaging;
 
       const sorted = sortOut(
         triaged.findings,
@@ -284,12 +341,20 @@ export default defineWorkflow({
         }),
       );
 
+      const restarts = restartsOf(kept.earlier, kept.since, open);
+      if (quiet && restarts.length === 0) return `No Runs since ${window.since}`;
       const outcomes = new Map(acted.map(({ finding, outcome }) => [finding.key, outcome]));
-      const starting = chosen(triaged.improvements, outcomes, bound);
       const filedNumber = (key: string) => {
         const outcome = outcomes.get(key);
         return outcome?.kind === "filed" ? [outcome.number] : [];
       };
+      const fresh = chosen(triaged.improvements, outcomes, bound).map(
+        ({ name, keys }): Starting => ({ name, issues: keys.flatMap(filedNumber) }),
+      );
+      const starting = [
+        ...restarts.filter(({ name }) => !fresh.some((one) => one.name === name)),
+        ...fresh,
+      ].slice(0, bound);
       // The issues as the forge holds them, so a goal carries only what the host let out. Read
       // by number: the forge's open listing can lag the issues this Run just filed.
       const published =
@@ -301,23 +366,19 @@ export default defineWorkflow({
                 success: Opened,
                 error: WorkflowError,
                 execute: host
-                  .issues(run.id, [
-                    ...new Set(starting.flatMap(({ keys }) => keys.flatMap(filedNumber))),
-                  ])
+                  .issues(run.id, [...new Set(starting.flatMap(({ issues }) => issues))])
                   .pipe(Effect.map((issues) => issues.map((issue) => ({ ...issue, keys: [] })))),
               }),
             );
-      const issuesOf = (improvement: Improvement, listed: typeof Opened.Type) =>
-        improvement.keys.flatMap((key) =>
-          filedNumber(key).flatMap((number) => listed.filter((one) => one.number === number)),
-        );
       const improvements: ReadonlyArray<Ended> = yield* Effect.all(
         starting.map((improvement) =>
           improvementsStep(
             Effect.gen(function* () {
               if (Result.isFailure(published)) return yield* published.failure;
-              const issues = issuesOf(improvement, published.success);
-              if (issues.length < improvement.keys.length)
+              const issues = improvement.issues.flatMap((number) =>
+                published.success.filter((one) => one.number === number),
+              );
+              if (issues.length < improvement.issues.length)
                 return yield* new WorkflowError({
                   reason: "an issue it fixes could not be read back from the forge",
                 });
@@ -334,12 +395,14 @@ export default defineWorkflow({
               return yield* children.result(child).pipe(
                 Effect.as<Ended>({
                   name: improvement.name,
+                  issues: improvement.issues,
                   runId: child.runId,
                   ended: "succeeded",
                 }),
                 Effect.catch((failure) =>
                   Effect.succeed<Ended>({
                     name: improvement.name,
+                    issues: improvement.issues,
                     runId: child.runId,
                     ended: `failed: ${failure.reason}`,
                   }),
@@ -349,8 +412,9 @@ export default defineWorkflow({
               Effect.catch((failure) =>
                 Effect.succeed<Ended>({
                   name: improvement.name,
+                  issues: improvement.issues,
                   runId: null,
-                  ended: `failed to start: ${failure.reason}`,
+                  ended: `${FAILED_TO_START}: ${failure.reason}`,
                 }),
               ),
             ),
@@ -367,15 +431,18 @@ export default defineWorkflow({
         error: WorkflowError,
         execute: FileSystem.FileSystem.pipe(
           Effect.flatMap((fs) =>
-            fs.writeFileString(
-              file,
-              summaryOf({
-                runId: run.id,
-                since: window.since,
-                acted,
-                improvements,
-                leftOut: [...triaged.left_out, ...sorted.leftOut],
-              }),
+            Effect.andThen(
+              fs.writeFileString(`${place.dir}/improvements.json`, encodeKept(improvements)),
+              fs.writeFileString(
+                file,
+                summaryOf({
+                  runId: run.id,
+                  since: window.since,
+                  acted,
+                  improvements,
+                  leftOut: [...triaged.left_out, ...sorted.leftOut],
+                }),
+              ),
             ),
           ),
           Effect.mapError((cause) => new WorkflowError({ reason: cause.message })),

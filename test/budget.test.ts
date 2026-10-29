@@ -64,13 +64,33 @@ test("two waiting whole suites are admitted in the order they arrived", () => {
   expect(admission(VM_MK, [second, first], first)).toMatchObject({ _tag: "admit", workers: 12 });
 });
 
-test("a later small run that would fit does not overtake an earlier one of its class", () => {
-  const running = entry("small", "held", 2);
+test("a small run that fits is admitted at once, though an earlier one waits for more than is free", () => {
+  const running = entry("small", "held", 1);
   const earlier = entry("small", "waiting", 4);
-  const later = entry("small", "waiting", 2);
+  const later = entry("small", "waiting", 1);
   const all = [running, later, earlier];
-  expect(admission(VM_MK, all, later)).toEqual({ _tag: "wait", behind: [earlier] });
+  expect(admission(VM_MK, all, later)).toEqual({ _tag: "admit", workers: 1, fewer: null });
   expect(admission(VM_MK, all, earlier)).toEqual({ _tag: "wait", behind: [running] });
+});
+
+test("of two runs that do not fit, the earlier is admitted first once workers free up", () => {
+  const running = entry("small", "held", 4);
+  const earlier = entry("small", "waiting", 3);
+  const later = entry("small", "waiting", 3);
+  expect(admission(VM_MK, [running, later, earlier], later)).toEqual({
+    _tag: "wait",
+    behind: [running],
+  });
+  expect(admission(VM_MK, [running, later, earlier], earlier)).toEqual({
+    _tag: "wait",
+    behind: [running],
+  });
+  expect(admission(VM_MK, [later, earlier], later)).toEqual({ _tag: "wait", behind: [earlier] });
+  expect(admission(VM_MK, [later, earlier], earlier)).toEqual({
+    _tag: "admit",
+    workers: 3,
+    fewer: null,
+  });
 });
 
 test("a --parallel larger than its class's share gets the share, and says so", () => {

@@ -766,12 +766,15 @@ The shipped `renovate` workflow still requires GitLab for its merge and release 
 `host.report(since)` reads this Machine's Runs admitted at or after an ISO moment. It
 returns the same report as `collie --json run report --since`: workflow tallies, metrics,
 failed and completed results, stopped Runs, and a `runs` list. Each list entry has
-`runId`, `workflow`, `parent`, `project`, `created`, and `status`. An invalid date fails with
+`runId`, `workflow`, `parent`, `project`, `created`, `status`, and `closes`: the issue
+numbers its input names in a `Closes #n`. An invalid date fails with
 `WorkflowError`. Read it inside an Activity when its answer decides subsequent work.
 
 `host.skill(name)` answers the installed `SKILL.md` that `{{skill:name}}` would name to an
 agent, or `null` where this Machine has none. Check it in an Activity to fail before any
 agent starts on a skill the work cannot do without.
+
+`host.build` is the Collie release this host runs, as its tag names it, such as `0.105.0`.
 
 `host.issues(runId)` lists the open issues of that Run's checkout, each with `number`,
 `title`, `body`, and `url`. The checkout's remote decides its forge.
@@ -852,7 +855,9 @@ until the standing is anything but `Waiting` or `Unreadable`, or a Hold or Stop 
 threads resolved, the forge — is recorded as the Run awaiting it, under Working with no
 notification ("Waiting for CI and a teammate's approval on `<mr>`."), until it has waited 2
 hours (2 days for a person) and parks; a red pipeline, changes requested or a merge the
-forge refuses parks it as Needs you while it keeps reading. Both are cleared when it returns. Take either inside an Activity, and suspend on `Held`
+forge refuses parks it as Needs you while it keeps reading. Both are cleared when it returns.
+With `untilBlocked: true` it returns that `Waiting` standing instead of waiting for the
+repair, as the release's re-reading of a go does. Take either inside an Activity, and suspend on `Held`
 there, so a resume waits again.
 
 `host.reply({ runId, cwd, comment, body })` replies to the comment with id `comment` on
@@ -1445,7 +1450,10 @@ must be `cwd`'s `HEAD`. On GitLab that is the job in the merge request's head pi
 a merged-results pipeline counts for the head only where GitLab shows the merge commit was
 built from it; on GitHub it is the check run of that name on the head commit. The adapter
 answers `passed`, `pending`, `running`, `failed`, `skipped`, `cancelled` or `missing`, with
-the job's URL, or why the forge could not say. A pass is recorded once per tree as the
+the job's URL, or why the forge could not say. GitHub creates a job behind `needs` only
+once its needs finish, so a GitHub job with no check run yet is `pending` while the head
+has no check runs or any of them is still queued or in progress, and `missing` only once
+every check run on the head has completed; GitLab creates every job up front. A pass is recorded once per tree as the
 check's `ci` pass, with `job` (`{ name, url, merge? }`, `merge` being the merged-results
 commit) beside its command, start and end tree. That Verification answers `{ proved }`; anything
 else answers `{ unproved, state, url }`, the sentence naming the check, the job and the

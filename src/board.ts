@@ -115,7 +115,7 @@ export interface PendingChoice {
   items: readonly PickItem[];
 }
 
-const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
+export const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
 const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as const;
 
 /** When a Run ended: its own record, else the final card its finish wrote. Null for neither. */

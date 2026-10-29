@@ -4,6 +4,7 @@
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schedule } from "effect";
 import { ciJob } from "../src/ci-job";
+import type { MrForge } from "../src/board-model";
 import type { Runner } from "../src/mr";
 import type { FetchLike } from "forges";
 import { readVerifications, verifyingIn, type CheckCommand } from "../src/verify";
@@ -35,6 +36,7 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
   mr: string | null = MR,
   head?: string,
   over: Partial<FakeMr> = {},
+  name: MrForge = "gitlab",
 ) {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ci-job-" });
@@ -55,22 +57,7 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
   ])
     yield* exec(["git", ...args], { cwd });
   const at = (yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout.trim();
-  const forge = fakeForge("gitlab", {
-    installed: true,
-    loggedIn: [FORGE_HOST.gitlab],
-    login: "me",
-    mrs: [
-      {
-        project: PROJECT.gitlab,
-        iid: "31",
-        state: "open",
-        head: head ?? at,
-        targetBranch: "main",
-        jobs: [{ name: "nuxi-typecheck", state }],
-        ...over,
-      },
-    ],
-  });
+  const forge = forgeOn(name, head ?? at, { jobs: [{ name: "nuxi-typecheck", state }], ...over });
   const run: Runner = (cmd, args, where) =>
     cmd === "git" && args.join(" ") === "rev-parse HEAD"
       ? Effect.succeed({ code: 0, stdout: `${at}\n` })
@@ -89,6 +76,23 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
   };
   return { asked, at, root, forge };
 });
+
+const forgeOn = (name: MrForge, head: string, over: Partial<FakeMr>) =>
+  fakeForge(name, {
+    installed: true,
+    loggedIn: [FORGE_HOST[name]],
+    login: "me",
+    mrs: [
+      {
+        project: PROJECT[name],
+        iid: "31",
+        state: "open",
+        head,
+        targetBranch: "main",
+        ...over,
+      },
+    ],
+  });
 
 /** `ciJob` asking the fake forge, its credential reads through the Run's runner. */
 const read = (
@@ -312,5 +316,102 @@ test("a failed job that fails its retry, or with no base to compare, is the Run'
       expect(yield* read(asked, forge)).toMatchObject({ state: "failed", log: LOG });
       expect(forge.requests.some((one) => one.url.includes("pipelines?sha="))).toBe(false);
       expect(retries(forge.requests)).toEqual([]);
+    }),
+  ));
+
+const PULL = `https://${PROJECT.github}/pull/31`;
+const GATE: VerifySpec = { ...NUXI, ci: "test" };
+
+/** `now`'s forge for the first read of the job, `later`'s from the next. */
+const thenLater = (now: { readonly fetch: FetchLike }, later: { readonly fetch: FetchLike }) => {
+  let reads = 0;
+  const fetch: FetchLike = (input, init) => {
+    if (input.endsWith("/pulls/31")) reads++;
+    return (reads > 1 ? later : now).fetch(input, init);
+  };
+  return { fetch };
+};
+
+test("a GitHub job not yet created while its pipeline still runs is waited on, and its pass proves the check", () =>
+  runEffect(
+    fastForward(
+      Effect.gen(function* () {
+        const { asked, at, forge } = yield* waiting(
+          "running",
+          PULL,
+          undefined,
+          { jobs: [{ name: "static", state: "running" }] },
+          "github",
+        );
+        const later = forgeOn("github", at, {
+          jobs: [
+            { name: "static", state: "passed" },
+            { name: "test", state: "passed" },
+          ],
+        });
+        expect(yield* read({ ...asked, spec: GATE }, thenLater(forge, later))).toMatchObject({
+          proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
+        });
+      }),
+      1_000,
+    ),
+  ));
+
+test("a GitHub job absent from a head whose check runs have all completed is not in its pipeline, and is not waited on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, forge } = yield* waiting(
+        "passed",
+        PULL,
+        undefined,
+        { jobs: [{ name: "static", state: "passed" }] },
+        "github",
+      );
+      expect(yield* read({ ...asked, spec: GATE }, forge)).toEqual({
+        unproved: `nuxi is left to CI and unproved: job test on ${at.slice(0, 12)} is not in its pipeline`,
+        state: "missing",
+        url: null,
+        log: null,
+      });
+    }),
+  ));
+
+test("a GitHub head with no check runs yet reads as pending", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, forge } = yield* waiting(
+        "passed",
+        PULL,
+        undefined,
+        { jobs: [] },
+        "github",
+      );
+      expect(yield* read({ ...asked, spec: GATE, wait: false }, forge)).toEqual({
+        unproved: `nuxi is left to CI and unproved: job test on ${at.slice(0, 12)} is pending`,
+        state: "pending",
+        url: null,
+        log: null,
+      });
+    }),
+  ));
+
+test("a GitHub job absent from a head whose first hundred check runs completed waits on a later one still running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const completed = Array.from({ length: 100 }, (_, n) => ({
+        name: `shard-${n}`,
+        state: "passed" as const,
+      }));
+      const { asked, at, forge } = yield* waiting(
+        "passed",
+        PULL,
+        undefined,
+        { jobs: [...completed, { name: "static", state: "running" }] },
+        "github",
+      );
+      expect(yield* read({ ...asked, spec: GATE, wait: false }, forge)).toMatchObject({
+        unproved: `nuxi is left to CI and unproved: job test on ${at.slice(0, 12)} is pending`,
+        state: "pending",
+      });
     }),
   ));
