@@ -318,7 +318,10 @@ test.skipIf(process.getuid?.() === 0)(
                 times: 80,
               }),
             );
-            expect(after?.tail?._tag).toBe("Text");
+            expect(after?.tail).toMatchObject({
+              _tag: "Text",
+              text: expect.stringContaining("after the defect"),
+            });
           }).pipe(Effect.provide(Logger.layer([kept])));
           yield* stopHost(world.state);
           expect(defects[0]).toStartWith("Error ");
