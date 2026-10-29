@@ -173,6 +173,23 @@ const machine = (
           ...(name === "vm-mk" ? [{ harness: "pi", at, table: null, entries: [qwen] }] : []),
         ];
       }),
+    connections: () =>
+      Effect.sync(() => {
+        note("connections", {});
+        return [
+          {
+            id: "gitlab" as const,
+            reading:
+              name === "mk-pc"
+                ? { state: "ok" as const, account: "mk", detail: "gitlab.example as mk" }
+                : {
+                    state: "absent" as const,
+                    detail: "no token",
+                    fix: "glab auth login --hostname gitlab.example",
+                  },
+          },
+        ];
+      }),
     schedules: () =>
       Effect.sync(() => {
         note("schedules", {});
@@ -514,6 +531,27 @@ test("a cleanup goes to the Machine it names, and naming none of several changes
         expect(yield* proposing({ kind, machine: "unknown" })).toContain('No Machine "unknown"');
         expect(asked).toEqual([]);
       }
+    }),
+  ));
+
+test("Connections are read per Machine through the Flock chat, and an explicit Machine limits the read", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const every = yield* call(asked, "collie_connections", {});
+      expect(every).toContain("## mk-pc");
+      expect(every).toContain("gitlab    ok · mk");
+      expect(every).toContain("## vm-mk");
+      expect(every).toContain("Fix: glab auth login --hostname gitlab.example");
+      asked.length = 0;
+      const one = yield* call(asked, "collie_connections", { machine: "vm-mk" });
+      expect(one).not.toContain("## mk-pc");
+      expect(asked.filter(({ op }) => op === "connections").map(({ machine }) => machine)).toEqual([
+        "vm-mk",
+      ]);
+      expect(yield* call([], "collie_connections", { machine: "missing" })).toContain(
+        'No Machine "missing"',
+      );
     }),
   ));
 

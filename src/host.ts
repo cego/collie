@@ -124,6 +124,7 @@ import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-
 import { sideJobs } from "./side-jobs";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
+import { connectionsOnMachine } from "./connections";
 import { Schedules, schedulesLayer } from "./schedules";
 import { dataHomeOf, desktopRootOf } from "./desktop";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
@@ -1918,6 +1919,7 @@ const frontDoorHandlers = (
             }),
           ),
         models: () => harnesses.catalogues,
+        connections: () => connectionsOnMachine(env),
         cleanup: () => plainly(judge(listed)),
         schedules: () => schedules.list,
         changeSchedule: ({ change, request }, { client }) =>

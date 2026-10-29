@@ -1450,6 +1450,9 @@ export const setSharedSetting = (
 export const catalogueReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.models(), door);
 
+export const connectionReadings = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.connections(), door);
+
 /** This Machine's Usage readings, as its host last read them. */
 export const usageReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.usage(), door);

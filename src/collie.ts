@@ -10,6 +10,7 @@ import { settings } from "./commands/settings";
 import { cleanup } from "./commands/cleanup";
 import { usage } from "./commands/usage";
 import { models } from "./commands/models";
+import { connections } from "./commands/connections";
 import { schedule } from "./commands/schedule";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
@@ -53,6 +54,7 @@ export const app = root.pipe(
     cleanup,
     usage,
     models,
+    connections,
     schedule,
     host,
     bridge,

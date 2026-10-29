@@ -18,7 +18,8 @@ import type { PluginEnv } from "./env";
 import { err, prepareSteps, upgrade, type OpResult } from "./operations";
 import { whatItSaid } from "./mr";
 import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
-import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
+import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX } from "./connection-probes";
+import { connectionOnMachine } from "./connections";
 import { installation, manifestField, RELEASE_TAG, type Carried } from "./release";
 import manifest from "../herdr-plugin.toml";
 
@@ -570,7 +571,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         return failed("Claude Code is not installed, so it has no MCP servers", CLAUDE_INSTALL);
       }
       let changed = false;
-      if ((yield* probeLinearMcp(here)).state !== "ok") {
+      if ((yield* connectionOnMachine(here, "linear")).state !== "ok") {
         const added = yield* exec("claude", LINEAR_MCP_ADD, env.home);
         if (added.code !== 0) {
           return failed(

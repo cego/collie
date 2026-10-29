@@ -215,7 +215,7 @@ import {
 import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
-import { probeLinearMcp } from "./optional";
+import { connectionOnMachine } from "./connections";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
 import { listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
@@ -4058,11 +4058,8 @@ export const hostLayer = (options: {
           ),
         linear: (cwd) =>
           placing.pipe(
-            Effect.flatMap(({ env }) => under(probeLinearMcp({ ...env, cwd }))),
+            Effect.flatMap(({ env }) => under(connectionOnMachine({ ...env, cwd }, "linear"))),
             Effect.map((probe) => ({ reachable: probe.state === "ok", detail: probe.detail })),
-            Effect.catch((cause) =>
-              Effect.succeed({ reachable: false, detail: `unreadable: ${cause.message}` }),
-            ),
           ),
         mr: (asked) =>
           under(

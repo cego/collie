@@ -133,6 +133,36 @@ afterEach(() =>
   ),
 );
 
+test("GitLab and GitHub Connections keep an absent login optional and identify the working account", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* bin.add(
+        "glab",
+        `case "$*" in
+      "config get token --host gitlab.example") echo fixture-token ;;
+      "api --hostname gitlab.example user") echo '{"username":"mk"}' ;;
+      "auth status"*) echo 'gitlab.example' ;;
+      *personal_access_tokens/self*) echo '{"name":"collie","expires_at":null}' ;;
+      *) exit 0 ;;
+    esac`,
+      );
+      const result = yield* report();
+      expect(result.ok).toBe(true);
+      expect(check(result, "gitlab connection")).toEqual({
+        name: "gitlab connection",
+        ok: true,
+        detail: "gitlab.example as mk",
+        fix: "",
+      });
+      expect(check(result, "github connection")).toMatchObject({
+        ok: true,
+        fix: "gh auth login --hostname github.com --web",
+      });
+      expect(check(result, "github connection").warn).toBeUndefined();
+    }),
+  ));
+
 test("a healthy machine passes every check and says so", () =>
   runEffect(
     Effect.gen(function* () {
@@ -165,6 +195,8 @@ test("a healthy machine passes every check and says so", () =>
         "glab",
         "gitlab token",
         "git push",
+        "gitlab connection",
+        "github connection",
         "helle",
         "linear mcp",
       ]);

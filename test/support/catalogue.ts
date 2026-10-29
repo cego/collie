@@ -13,6 +13,7 @@ import {
 } from "../../src/catalogue";
 import { ClaudeModels, CodexModelList } from "../../src/catalogue-model";
 import { BUILD, HostRpcs, socketOf } from "../../src/host";
+import type { Connection } from "../../src/connection-model";
 import claudeModels from "../fixtures/catalogue/claude-supported-models.json";
 import codexModelList from "../fixtures/catalogue/codex-model-list.json";
 
@@ -32,17 +33,19 @@ export const fakeSources = (replaced: Partial<CatalogueSources> = {}): Catalogue
   ...replaced,
 });
 
-/**
- * A host for `state` that answers only who it is, a declaration and its Harness catalogue,
- * for as long as the scope lasts; anything else it is asked dies.
- */
-export const serveCatalogue = (state: string, catalogues: HarnessCatalogues["Service"]) =>
+// Unexpected RPCs die so a CLI test cannot pass by asking the wrong operation.
+export const serveCatalogue = (
+  state: string,
+  catalogues: HarnessCatalogues["Service"],
+  connections: ReadonlyArray<Connection> = [],
+) =>
   Effect.gen(function* () {
     const group = HostRpcs.merge(FrontDoorRpcs);
     const handlers = new Map([
       ["identity", () => Effect.succeed({ build: BUILD, pid: process.pid, dir: state })],
       ["declare", () => Effect.void],
       ["models", () => catalogues.catalogues],
+      ["connections", () => Effect.succeed(connections)],
     ]);
     const served = new Proxy(
       {},

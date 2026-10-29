@@ -321,6 +321,15 @@ export const CollieTools = Toolkit.make(
       harness: Schema.optionalKey(Schema.String),
     }),
   }),
+  collieTool("collie_connections", {
+    readOnly: true,
+    title: "Which services each Machine is logged in to",
+    description:
+      "Each Machine's Connections: GitLab, GitHub, Linear and Helle, with the account, " +
+      "whether its login is absent or broken, and the fix. `machine` keeps one Machine; " +
+      "without it the Flock chat reads every Machine it can reach. Credentials are never returned.",
+    parameters: Schema.Struct({ machine: Schema.optionalKey(Schema.String) }),
+  }),
   collieTool("collie_hold", {
     readOnly: false,
     title: "Hold a Run, or a whole workspace",
@@ -389,6 +398,7 @@ export const TAKES: Record<ToolName, string> = {
   collie_definitions: 'It takes {"workflow": "<name>"} or {"persona": "<name>"}.',
   collie_installation: "It takes nothing.",
   collie_models: 'It takes nothing, or {"machine": "<name>"} and {"harness": "<harness>"}.',
+  collie_connections: 'It takes nothing, or {"machine": "<name>"}.',
   collie_hold: 'It takes {"run": "..."} or {"workspace": "..."}, and optionally "reason".',
   collie_do:
     'It takes {"actions": [...]}, and every action has to be one of the kinds in the schema. An action with no "run" acts on the board\'s selection, and the board has nothing open.',
