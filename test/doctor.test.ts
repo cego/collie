@@ -199,6 +199,7 @@ test("a healthy machine passes every check and says so", () =>
         "github connection",
         "helle",
         "linear mcp",
+        "slack connection",
       ]);
       expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
     }),
