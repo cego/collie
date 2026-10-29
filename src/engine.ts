@@ -54,6 +54,7 @@ import * as WorkflowModules from "effect/workflow";
 import * as ProcessModules from "effect/process";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
+import manifest from "../herdr-plugin.toml";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
 import {
@@ -735,6 +736,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string }) => Effect.Effect<IssueRef, WorkflowError>;
     readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string }) => Effect.Effect<void, WorkflowError>;
     readonly dir: string;
+    /** The Collie release this host runs, as its tag names it. */
+    readonly build: string;
     /**
      * This Machine's Usage readings, one per Subscription. Read it inside an Activity of
      * the workflow's own where it branches on it, so a replay takes the same branch.
@@ -3749,6 +3752,7 @@ export const hostLayer = (options: {
         });
       const host = Host.of({
         dir,
+        build: manifest.version,
         report: () =>
           Effect.fail(
             new WorkflowError({ reason: "Run reporting requires the host's workflow registry" }),

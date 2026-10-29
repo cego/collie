@@ -773,6 +773,8 @@ failed and completed results, stopped Runs, and a `runs` list. Each list entry h
 agent, or `null` where this Machine has none. Check it in an Activity to fail before any
 agent starts on a skill the work cannot do without.
 
+`host.build` is the Collie release this host runs, as its tag names it, such as `0.105.0`.
+
 `host.issues(runId)` lists the open issues of that Run's checkout, each with `number`,
 `title`, `body`, and `url`. The checkout's remote decides its forge.
 `host.issues(runId, numbers)` reads those issues one by one instead. Use it for issues the

@@ -35,6 +35,7 @@ const content = contentOf(markdown);
 const triage = content.template("triage", {
   checkout: Schema.String,
   state: Schema.String,
+  release: Schema.String,
   since: Schema.String,
   runs: Schema.String,
   report: Schema.String,
@@ -215,6 +216,7 @@ export default defineWorkflow({
           input: {
             checkout: place.cwd,
             state: host.dir,
+            release: host.build,
             since: window.since,
             runs: window.runs.join("\n"),
             report: asJson(window.report),

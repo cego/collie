@@ -13924,6 +13924,7 @@ const improving: HostOverride = Layer.effect(Host)(
     const host = yield* Host;
     return Host.of({
       ...host,
+      build: "0.103.0",
       report: (since) =>
         Effect.gen(function* () {
           const own = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id ?? "";
@@ -14202,6 +14203,22 @@ scenario(
         expect(prompt).toContain("r-other");
         expect(prompt).toContain("`defect` is one more");
         expect(filed.map(({ title }) => title)).toEqual(["Project host-crash"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a self-improve triage counts a Collie fix as already fixed only where the release its Machine runs carries it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        yield* rig.queueOutputs([triaged([])]);
+        yield* improved("r-release", { runs: "machine", improvements: 0 });
+        const prompt = yield* readText(`${dir}/agents/r-release/triage.prompt.md`);
+        expect(prompt).toContain("git merge-base --is-ancestor <commit> 0.103.0");
+        expect(prompt).toContain("git fetch origin tag 0.103.0");
       }),
     ),
   120_000,

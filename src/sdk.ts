@@ -682,6 +682,8 @@ export const ClaimedSchema = Schema.Union([Holding, SingleClaim]);
 
 export interface HostApi {
   readonly dir: string;
+  /** The Collie release this host runs, as its tag names it. */
+  readonly build: string;
   /** This Machine's Run report, for admissions at or after the ISO moment. */
   readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
   /** Open issues on the forge of this Run's checkout, or with `numbers` those issues read one by one. */

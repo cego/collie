@@ -3315,6 +3315,10 @@ holds one of its roaming checkouts, such as a `renovate`, refuses the start; one
 Run kept work in is [passed over](#a-run-that-roams-across-branches). The [cleanup](#cleanup) sweep removes
 the worktree once the Run has ended, however it ended, and nothing works in it any longer.
 An `origin` that will not fetch refuses the start, so it never triages stale code.
+Collie's own code, though, is judged against the release the Machine's host runs, which the
+triage is told: a Collie fix counts as already fixed only where its commit is in that
+release's tag, so a fix merged but not yet installed leaves the finding filed or commented
+on as a recurrence.
 
 It waits for its Improvements, then writes `summary.md` in its Run directory: each issue
 filed or commented, by category; each Improvement's Run and how it ended; and each finding
