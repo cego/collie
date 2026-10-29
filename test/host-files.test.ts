@@ -281,6 +281,45 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
     }),
   ));
 
+test("a glob finds dot paths only where its pattern names them, newest first", () =>
+  local(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* inTemp("collie-glob-pins-");
+      const files = [
+        ".env",
+        ".github/workflows/ci.yml",
+        "src/.hidden/x.ts",
+        "src/a.ts",
+        "src/deep/b.ts",
+        "node_modules/m/i.js",
+      ];
+      for (const [n, file] of files.entries()) {
+        const path = `${dir}/${file}`;
+        yield* fs.makeDirectory(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+        yield* fs.writeFileString(path, "x\n");
+        yield* fs.utimes(path, n * 1000, n * 1000);
+      }
+      const found = (pattern: string) =>
+        globFiles(pattern, dir).pipe(
+          Effect.map(({ paths }) => paths.map((path) => path.slice(dir.length + 1))),
+        );
+      for (const [pattern, expected] of [
+        ["*", []],
+        ["**/*.ts", ["src/deep/b.ts", "src/a.ts"]],
+        [".env", [".env"]],
+        ["**/.github/**", [".github/workflows/ci.yml"]],
+        ["src/**", ["src/deep/b.ts", "src/a.ts"]],
+        ["**/.hidden/*", ["src/.hidden/x.ts"]],
+        ["*.{ts,js}", []],
+      ] as const)
+        expect({ pattern, found: yield* found(pattern) }).toEqual({
+          pattern,
+          found: [...expected],
+        });
+    }),
+  ));
+
 test("a grep answers its matches past a file it cannot read, and cuts a long line", () =>
   local(
     Effect.gen(function* () {
