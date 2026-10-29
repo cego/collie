@@ -2621,7 +2621,11 @@ An application has two ways to stage, each offered where its pipelines deploy to
   and the Run fails with the merge standing: the fix is a new merge request. Choose it
   where the review was enough and stage only has to check the release.
 
-Either way the Run holds the claim until the forge shows production carries the merge. An
+Either way the Run holds the claim until the forge shows production carries the merge. The
+claim is Helle's: a repository Helle has a project of its own for, by its name in whatever
+group Helle files it, claims that project alone; one without, such as a monorepo, claims each
+project of its group that an application it deploys or a deploy job's name names; and a
+`.collie/helle.json` names them instead, whatever the repository is. An
 application whose pipelines deploy nothing to stage is refused at the start. If a Run fails after
 it merged, **Release again** tags what it merged rather than merging anything again, and
 asks the second go afresh ([`release`](workflows.md#release)).

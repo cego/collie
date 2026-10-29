@@ -249,13 +249,36 @@ test("a project of a group the repository's group merely ends with is not the re
   expect(resolved._tag).toBe("Unresolved");
 });
 
-test("a repository's own project is still needed, with its applications'", () => {
+/** The shape of Helle's own list on 2026-10-29: no `monorepo`, and the backoffice filed apart from the brands. */
+const HELLE = [
+  project("support-backoffice", "spilnu/backoffices", ["sbo"]),
+  project("happytiger", "spilnu/frontend"),
+  project("spilnu", "spilnu/frontend"),
+  project("crushit-uk", "spilnu/frontend"),
+  project("spinking-dk", "spilnu/frontend"),
+];
+
+test("a repository that is its own Helle project needs that project alone", () => {
   expect(
     resolveProjects(
-      [...FRONTEND, project("monorepo", "spilnu/frontend")],
-      release({ jobs: ["stage:spilnu"] }),
+      HELLE,
+      release({
+        repositoryPath: "gitlab.cego.dk/spilnu/frontend/support-backoffice",
+        repoName: "support-backoffice",
+        applications: ["spilnu"],
+        jobs: ["stage:happytiger"],
+      }),
     ),
-  ).toEqual({ _tag: "Projects", slugs: ["monorepo", "spilnu"] });
+  ).toEqual({ _tag: "Projects", slugs: ["support-backoffice"] });
+});
+
+test("a repository with no Helle project of its own needs each brand its applications and stage jobs name", () => {
+  expect(
+    resolveProjects(
+      HELLE,
+      release({ applications: ["spilnu"], jobs: ["stage:happytiger", "stage:crushit-uk"] }),
+    ),
+  ).toEqual({ _tag: "Projects", slugs: ["crushit-uk", "happytiger", "spilnu"] });
 });
 
 test("an application Helle has no project for leaves the release unresolved", () => {
@@ -700,7 +723,7 @@ test("who holds: each needed project's holder is read, and no queue is joined", 
     }),
   ));
 
-test("who holds: every application needs the repository's own project, and every declared one", () =>
+test("who holds: every application of a repository that is its own project needs that project alone, and every declared one", () =>
   runEffect(
     Effect.gen(function* () {
       fake.projects = [
@@ -716,8 +739,8 @@ test("who holds: every application needs the repository's own project, and every
       };
       const own = yield* helleHolders({ ...where, declared: null });
       expect(own._tag === "Read" && own.applications).toEqual([
-        { name: "spilnu", needs: ["monorepo", "spilnu"] },
-        { name: "happytiger", needs: ["happytiger", "monorepo"] },
+        { name: "spilnu", needs: ["monorepo"] },
+        { name: "happytiger", needs: ["monorepo"] },
       ]);
       const declared = yield* helleHolders({ ...where, declared: ["happytiger", "playground"] });
       expect(declared._tag === "Read" && declared.applications).toEqual([

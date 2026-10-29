@@ -576,10 +576,11 @@ release deploys under, one at a time in a fixed order and each waited for — be
 for one it does not hold, whether it lost it, or is resumed or tried again, it gives back
 the later ones it holds or is queued for, and takes them again in order — asking first to
 take over any that were already the operator's — so two releases never each hold what the
-other waits for: the repository's own, and each
-project of the repository's group that an application the assessment named, or a deploy
-job's name (`stage:spilnu`), names, by the project's slug or one of its Helle shorthands,
-ignoring case — a monorepo needs several. A name two projects answer to is not guessed
+other waits for: the repository's own Helle project alone, where Helle has one by its name
+in whatever group Helle files it; otherwise each project of the repository's group that an
+application the assessment named, or a deploy job's name (`stage:spilnu`), names, by the
+project's slug or one of its Helle shorthands, ignoring case — a monorepo, which is no
+project of its own, needs several. A name two projects answer to is not guessed
 between: it is unsettled, naming both. A repository's `.collie/helle.json`,
 `{"projects": [...]}`, names them instead, by slug or shorthand, and `[]` declares none.
 Where they cannot be settled — an application with no project, nothing found, Helle
@@ -721,8 +722,9 @@ rule, whether the repository is a package or an application, and names the stage
 jobs of its merge request pipelines: a package fails, and so does an application with
 none. Collie fast-forwards the checkout to the head, and reads in Helle who holds each
 project the stage deploys under, found as a Release Run finds them, by slug or Helle
-shorthand, joining no queue. Each application needs its own project and the repository's;
-with a `.collie/helle.json`, every application needs every project it declares. Where every
+shorthand, joining no queue. Each application needs the repository's own project where it
+has one, and otherwise its own; with a `.collie/helle.json`, every application needs every
+project it declares. Where every
 project is free or already the operator's, it claims them all, as a Release Run does: in
 Helle's order, asking first to take over any already the operator's. Where someone else holds
 or queues for some of them, it asks **`claims-1`**, naming each such project and who has it:
