@@ -2208,10 +2208,19 @@ scenario(
           yield* exec(["git", ...args], { cwd: rig.projectDir });
         }
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* bin.add(
-          "glab",
-          `[ "$1 $2" = "mr view" ] && echo '{"source_branch": "fix-the-guard"}'; exit 0`,
-        );
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [
+            {
+              project: "gitlab.example.com/group/project",
+              iid: "42",
+              state: "open",
+              sourceBranch: "fix-the-guard",
+            },
+          ],
+        });
         yield* rig.queueOutputs([SYNTHESIS]);
         const rows = yield* parked({
           entry: shipped("review"),
@@ -3835,7 +3844,7 @@ scenario(
         expect(yield* asked(copied, "build.criteria-1")).toContain(
           "acceptance criterion not answered: **Counted.** Every registry is counted once.",
         );
-      }).pipe(Effect.orDie),
+      }).pipe(withLinear, Effect.orDie),
     ),
   120_000,
 );
@@ -3858,7 +3867,7 @@ scenario(
         expect(reasonOf(stopped)).toContain("plan/SPEC.md cannot be read");
         expect(reasonOf(stopped)).toContain("Continue with a follow-up Run to finish delivery.");
         expect(yield* prompts()).not.toContainEqual(expect.stringContaining("review-1"));
-      }),
+      }).pipe(withLinear),
     ),
   120_000,
 );
@@ -3888,7 +3897,7 @@ for (const [kind, plan] of [
           });
           expect(said(result)).toBe(OPENED.mr_url);
           expect(yield* asked(runId, "review-1")).toContain(`Spec: ${runDir(dir, runId)}/plan\n`);
-        }).pipe(Effect.orDie),
+        }).pipe((work) => (kind === "Linear issue" ? withLinear(work) : work), Effect.orDie),
       ),
     120_000,
   );
@@ -7406,7 +7415,11 @@ scenario(
         // The HTTP login works, but the CLI needed to deliver is missing.
         yield* bin.add(
           "gh",
-          `[ "$*" = "auth token --hostname github.com" ] && { echo gho-fake; exit 0; }; exit 127`,
+          `case "$1 $2" in
+  "auth token") echo gho-fake; exit 0;;
+  "auth status") echo 'Logged in to github.com account tester'; exit 0;;
+esac
+exit 127`,
         );
         yield* repository();
         yield* exec(["git", "remote", "set-url", "upstream", "git@github.com:team/project.git"], {
@@ -7904,7 +7917,11 @@ scenario(
         // The HTTP login works, but the CLI needed to deliver is missing.
         yield* bin.add(
           "gh",
-          `[ "$*" = "auth token --hostname github.com" ] && { echo gho-fake; exit 0; }; exit 127`,
+          `case "$1 $2" in
+  "auth token") echo gho-fake; exit 0;;
+  "auth status") echo 'Logged in to github.com account tester'; exit 0;;
+esac
+exit 127`,
         );
         yield* repository();
         yield* exec(["git", "remote", "set-url", "upstream", "git@github.com:team/project.git"], {

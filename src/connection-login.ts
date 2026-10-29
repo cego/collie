@@ -1,10 +1,9 @@
 import { Effect } from "effect";
 import type { PluginEnv } from "./env";
-import { readConfig } from "./config";
-import { isHostName } from "./gitlab-token";
 import { shell, type Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/process";
-import { isString } from "./schema";
+import { glabLoginOn } from "./forge/gitlab";
+import { ghLogin } from "./forge/github";
 
 export const readConnectionLogin = <R = never>(
   env: PluginEnv,
@@ -12,34 +11,17 @@ export const readConnectionLogin = <R = never>(
   run: Runner<R | ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) =>
   Effect.gen(function* () {
-    let host = "github.com";
-    if (id === "gitlab") {
-      const config = yield* readConfig(env.userDir);
-      const configured = env.raw.GITLAB_HOST ?? config.gitlab_host;
-      const found =
-        isString(configured) && isHostName(configured)
-          ? configured
-          : (yield* run("glab", ["config", "get", "host", "--global"], env.cwd)).stdout.trim();
-      host = isHostName(found) ? found : "gitlab.com";
-    }
+    const login = id === "gitlab" ? yield* glabLoginOn(env, run) : ghLogin;
     const fromEnvironment =
       id === "gitlab"
         ? env.raw.GITLAB_TOKEN || env.raw.GITLAB_ACCESS_TOKEN || env.raw.OAUTH_TOKEN
         : undefined;
-    const stored =
-      fromEnvironment === undefined
-        ? yield* run(
-            id === "gitlab" ? "glab" : "gh",
-            id === "gitlab"
-              ? ["config", "get", "token", "--host", host]
-              : ["auth", "token", "--hostname", host],
-            env.cwd,
-          )
-        : null;
-    const token = fromEnvironment ?? (stored?.code === 0 ? stored.stdout.trim() : "");
+    const token = fromEnvironment ?? (yield* login.token(run, env.cwd)) ?? "";
     if (token === "" || /[\r\n]/.test(token))
-      return yield* Effect.fail(`No reusable ${id} login for ${host}; sign in on this Machine`);
-    return { host, token };
+      return yield* Effect.fail(
+        `No reusable ${id} login for ${login.host}; sign in on this Machine`,
+      );
+    return { host: login.host, token };
   }).pipe(
     Effect.timeoutOrElse({
       duration: "10 seconds",

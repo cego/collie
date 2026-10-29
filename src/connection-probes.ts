@@ -3,10 +3,6 @@ import type { PluginEnv } from "./env";
 import { credentials, helleMe } from "./helle";
 import { helleUrlOf } from "./helle-url";
 import type { ConnectionReading as Probe } from "./connection-model";
-import { readConfig } from "./config";
-import { isHostName } from "./gitlab-token";
-import { whatItSaid, type Runner } from "./mr";
-import { isString } from "./schema";
 
 export type { ConnectionReading as Probe } from "./connection-model";
 
@@ -188,65 +184,5 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
   );
 });
 
-const GitlabUser = Schema.fromJsonString(Schema.Struct({ username: Schema.NonEmptyString }));
-
-export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
-  env: PluginEnv,
-  run: Runner<R>,
-) {
-  const config = yield* readConfig(env.userDir);
-  const configured = env.raw.GITLAB_HOST ?? config.gitlab_host;
-  const stored =
-    isString(configured) && isHostName(configured)
-      ? configured
-      : (yield* run("glab", ["config", "get", "host", "--global"], env.cwd)).stdout.trim();
-  const host = isHostName(stored) ? stored : "gitlab.com";
-  const fix = `glab auth login --hostname ${host}`;
-  const environmentToken =
-    env.raw.GITLAB_TOKEN || env.raw.GITLAB_ACCESS_TOKEN || env.raw.OAUTH_TOKEN;
-  const storedToken = environmentToken
-    ? null
-    : yield* run("glab", ["config", "get", "token", "--host", host], env.cwd);
-  const token = environmentToken || (storedToken?.code === 0 ? storedToken.stdout.trim() : "");
-  if (token === "")
-    return { state: "absent", detail: `no GitLab login for ${host}`, fix } satisfies Probe;
-  const args = ["api", "--hostname", host, "user"];
-  const me = yield* environmentToken
-    ? run("env", [`GITLAB_HOST=${host}`, "glab", ...args], env.cwd)
-    : run("glab", args, env.cwd);
-  const user = Schema.decodeUnknownOption(GitlabUser)(me.stdout);
-  if (me.code !== 0 || Option.isNone(user))
-    return {
-      state: "broken",
-      detail: `${host} did not accept its GitLab login`,
-      fix,
-    } satisfies Probe;
-  return {
-    state: "ok",
-    account: user.value.username,
-    detail: `${host} as ${user.value.username}`,
-  } satisfies Probe;
-});
-
-export const probeGithub = Effect.fn("Connections.probeGithub")(function* <R>(
-  env: PluginEnv,
-  run: Runner<R>,
-) {
-  const fix = "gh auth login --hostname github.com --web";
-  const status = yield* run(
-    "gh",
-    ["auth", "status", "--active", "--hostname", "github.com"],
-    env.cwd,
-  );
-  const text = whatItSaid(status);
-  if (status.code === 127 || /not logged into any|not logged in to any/i.test(text))
-    return { state: "absent", detail: "no GitHub login on this Machine", fix } satisfies Probe;
-  const account = /Logged in to github\.com (?:account |as )([^\s(]+)/i.exec(text)?.[1];
-  if (status.code !== 0 || account === undefined)
-    return {
-      state: "broken",
-      detail: "gh could not verify its active GitHub login",
-      fix,
-    } satisfies Probe;
-  return { state: "ok", account, detail: `github.com as ${account}` } satisfies Probe;
-});
+export { probeGitlab } from "./forge/gitlab";
+export { probeGithub } from "./forge/github";

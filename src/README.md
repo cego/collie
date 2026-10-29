@@ -149,8 +149,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `catalogue-model.ts`   | A Harness catalogue: its Schemas, one decoder per harness's output, Collie's table (pure)                                   |
 | `catalogue.ts`         | This Machine's Harness catalogue: each harness read on an interval, with its timeout and back-off                           |
 | `connection-model.ts`  | Connection reading Schemas and the text the CLI and chat print (pure)                                                       |
-| `connection-probes.ts` | GitLab, GitHub, Linear MCP and Helle probes on one Machine                                                                  |
-| `connection-login.ts`  | Reads a reusable forge login for the host-to-Desktop hand-over, without recording the token                                 |
+| `connection-probes.ts` | Linear MCP and Helle probes; reexports the forge adapters' probes                                                           |
+| `connection-login.ts`  | Reads a reusable login through its forge adapter for host-to-Desktop hand-over, without recording the token                 |
 | `slack.ts`             | Slack Web API adapter: identity, member channels, people, direct messages, posts and permalinks                             |
 | `slack-credentials.ts` | Reads and writes each Machine's Slack token and supplies its registry reading and channel choices                           |
 | `connections.ts`       | The Connection registry: each probe isolated and bounded, shared by the host, doctor and workflow reads                     |

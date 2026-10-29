@@ -52,6 +52,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      helleUrl = undefined;
       sessions = [rig.socketPath];
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
@@ -90,10 +91,12 @@ const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
 
 /** The sockets `session list` names, or null for a herdr that will not list them. */
 let sessions: ReadonlyArray<string> | null;
+let helleUrl: string | undefined;
 const env = () =>
   rig.pluginEnv({
     HERDR_PLUGIN_ROOT: ROOT,
     GITLAB_USER_LOGIN: LOGIN,
+    ...(helleUrl === undefined ? {} : { COLLIE_HELLE_URL: helleUrl }),
     FAKE_HERDR_SESSIONS:
       sessions === null
         ? ""
@@ -3078,6 +3081,16 @@ test.each([
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        const helle = yield* Effect.acquireRelease(
+          Effect.sync(() => Bun.serve({ port: 0, fetch: () => Response.json({ user_id: LOGIN }) })),
+          (server) => Effect.promise(() => server.stop(true)),
+        );
+        helleUrl = `http://127.0.0.1:${helle.port}`;
+        yield* fs.makeDirectory(`${rig.root}/.config/helle`, { recursive: true });
+        yield* fs.writeFileString(
+          `${rig.root}/.config/helle/env`,
+          "HELLE_API_TOKEN=fixture-token\n",
+        );
         yield* git("branch", "feature");
         const first = `${rig.root}/.herdr/worktrees/project/feature`;
         for (const slot of [first, `${first}-2`, `${first}-3`])

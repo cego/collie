@@ -1281,17 +1281,17 @@ export const ask = (question: {
   Effect.gen(function* () {
     const host = yield* Host;
     const runId = (yield* Run).id;
-    yield* host.asking(runId, {
-      name: question.name,
-      prompt: question.prompt ?? question.name,
-      options: question.options ?? [],
-    });
     const at = yield* CurrentStep;
     if (at !== null)
       yield* Activity.make({
         name: `ask.${question.name}.step`,
         execute: host.step(runId, { kind: "question", key: at.key, name: question.name }),
       });
+    yield* host.asking(runId, {
+      name: question.name,
+      prompt: question.prompt ?? question.name,
+      options: question.options ?? [],
+    });
     return yield* DurableDeferred.await(
       DurableDeferred.make(question.name, { success: Schema.String }),
     );
