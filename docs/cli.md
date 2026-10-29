@@ -1632,10 +1632,11 @@ its pass as a verification of the check, with the job's URL. A failed job is fir
 where the branch leaves its target branch: failed there too, it is reported as failing
 before the run's changes, and left unproved. Otherwise it is retried once, and a pass on
 the retry is reported as a Flake. A job that fails its retry goes to the builder in a CI
-fix round, at most 4; see [`docs/workflows.md`](workflows.md). A skipped, cancelled or
-missing job, a job not finished after 2 hours, a checkout with no forge, or a job still
-failing after the last round parks the run unproved, naming the check, the job and the
-commit.
+fix round, at most 4; see [`docs/workflows.md`](workflows.md). A job missing right after
+its retry, as GitHub holds back a job behind `needs` until its needs finish, is waited on
+like a pending one, up to 2 hours. A skipped, cancelled or missing job, a job not finished
+after 2 hours, a checkout with no forge, or a job still failing after the last round parks
+the run unproved, naming the check, the job and the commit.
 
 ```json
 [
