@@ -9600,7 +9600,7 @@ scenario(
 
 for (const [state, jobs] of [
   ["failing", [{ name: "test", state: "failed", retried: "failed" }]],
-  ["not reported", []],
+  ["not reported", [{ name: "static", state: "passed" }]],
 ] as const)
   scenario(
     `a Release whose check is left to CI's test job is not asked its go while the job is ${state}`,
@@ -9608,7 +9608,7 @@ for (const [state, jobs] of [
       runEffect(
         Effect.gen(function* () {
           const { bin, head } = yield* releasable("github", { jobs });
-          const runId = `r-release-own-check-${jobs.length}`;
+          const runId = `r-release-own-check-${state.replace(" ", "-")}`;
           yield* ownCheck(runId);
           yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
           const why = yield* driven(
