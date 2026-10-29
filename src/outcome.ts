@@ -9,6 +9,7 @@
 // Nothing in here reads a file or runs a command. The caller collects the evidence and
 // this says what is missing.
 
+import { CommandLine } from "effect/process";
 import type { VerifySpec } from "./verify-spec";
 import { checkProof, owedLocally, owesNothingHere } from "./check-proof";
 import {
@@ -384,11 +385,12 @@ function earlierTree(v: Verification, final: Snapshot): boolean {
 
 /** A command whole, so two that differ never read the same. */
 const shown = (v: Verification) => {
+  const executable = CommandLine.display([v.executable]);
   const program =
     v.asked === undefined || v.asked === v.executable
-      ? v.executable
-      : `${v.asked} (${v.executable})`;
-  return `"${[program, ...v.argv].join(" ")}" in ${v.cwd}`;
+      ? executable
+      : `${CommandLine.display([v.asked])} (${executable})`;
+  return `"${[program, CommandLine.display(v.argv)].filter((part) => part !== "").join(" ")}" in ${v.cwd}`;
 };
 
 function names(value: YamlValue | undefined): string[] {

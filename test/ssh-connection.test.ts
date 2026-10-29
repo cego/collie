@@ -11,7 +11,7 @@ import {
   openConnection,
   sshConnection,
 } from "../src/ssh-connection";
-import { quoted, remoteCollie, riderArgv } from "../src/ssh-argv";
+import { remoteCollie, riderArgv } from "../src/ssh-argv";
 import { withLock } from "../src/lock";
 import { runEffect } from "./support/effect";
 import { freePort, portOf, silentMaster, writeFakeSsh, socketDir } from "./support/fake-ssh";
@@ -349,8 +349,7 @@ test("a session built from the rider argv rides an open master and never logs in
   ));
 
 test("a command for a Machine's login shell is quoted word by word", () => {
-  expect(quoted("it's")).toBe(`'it'\\''s'`);
   expect(remoteCollie(["machine", "it's"])).toBe(
-    `exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie 'machine' 'it'\\''s'`,
+    `exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie machine 'it'\\''s'`,
   );
 });

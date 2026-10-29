@@ -1,7 +1,18 @@
 // What only the human can give, asked once by Desktop: credentials kept in an owner-only file
 // on this computer and handed to each Machine on stdin, and logins approved in this computer's browser.
 
-import { Effect, FileSystem, Option, Queue, Schedule, Schema, Semaphore, Stream } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Option,
+  Queue,
+  Result,
+  Schedule,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
+import { CommandLine } from "effect/process";
 import { BunFileSystem } from "@effect/platform-bun";
 import type { PlatformError } from "effect/PlatformError";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -12,7 +23,6 @@ import { inTerminal } from "../../../src/in-terminal";
 import { scriptLine } from "../../../src/script";
 import type { OnboardRun } from "../shared/flock";
 import { type ShellRoute, spawned } from "./machine";
-import { quoted } from "../../../src/ssh-argv";
 import { CHILD_CWD, childEnv, which } from "./login-env";
 import { ranWith, shOn, tracked } from "./onboarding";
 
@@ -208,7 +218,11 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
   );
 
 export const giveToken = (routes: ReadonlyArray<ShellRoute>, host: string, token: string) =>
-  onEvery(routes, `exec glab auth login --hostname ${quoted(host)} --stdin`, `${token}\n`);
+  onEvery(
+    routes,
+    `exec ${Result.getOrThrow(CommandLine.join(["glab", "auth", "login", "--hostname", host, "--stdin"]))}`,
+    `${token}\n`,
+  );
 
 /** Writes Helle's credentials file, owner-only, on every Machine, as onboarding does. */
 export const giveHelle = (routes: ReadonlyArray<ShellRoute>, url: string, token: string) =>

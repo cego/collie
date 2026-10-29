@@ -3,7 +3,8 @@
 // resets the TLS ClientHello on a peer's port.
 
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { Effect, FileSystem, Schema, type Scope } from "effect";
+import { Effect, FileSystem, Result, Schema, type Scope } from "effect";
+import { CommandLine } from "effect/process";
 import { root } from "./host";
 import { SOCKET_BASE } from "./sweep";
 
@@ -78,7 +79,7 @@ export const writeFakeSsh = Effect.fn("FakeSsh.write")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const log = `${dir}/ssh-calls.log`;
-  const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
+  const quote = (word: string) => Result.getOrThrow(CommandLine.quote(word));
   yield* fs.writeFileString(
     bin,
     `#!/bin/sh\nFAKE_SSH_LOG=${quote(log)} FAKE_SSH_DIR=${quote(dir)} FAKE_SSH_ENV=${quote(encode(env))} exec ${quote(process.execPath)} ${quote(`${root}test/support/fake-ssh-main.ts`)} "$@"\n`,

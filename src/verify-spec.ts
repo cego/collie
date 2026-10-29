@@ -10,6 +10,7 @@
 // lands (ADR-0055).
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
+import { CommandLine } from "effect/process";
 
 /**
  * Exactly what Collie runs for a check, bound argument by argument: the wrapper is part
@@ -158,7 +159,7 @@ export function renderApproved(approved: ReadonlyArray<VerifySpec>): string {
   return approved
     .map((spec) =>
       spec.ci === undefined
-        ? `- ${spec.name}: ${[spec.executable, ...spec.argv].join(" ")} (in ${spec.cwd})`
+        ? `- ${spec.name}: ${CommandLine.display([spec.executable, ...spec.argv])} (in ${spec.cwd})`
         : `- ${spec.name}: left to CI (job ${spec.ci}), do not run it`,
     )
     .join("\n");

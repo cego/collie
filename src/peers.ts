@@ -20,15 +20,16 @@ import {
   FiberSet,
   FileSystem,
   Option,
+  Path,
+  Result,
   Schedule,
   Schema,
-  Semaphore,
-  Path,
   type Scope,
+  Semaphore,
   Stream,
 } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   FrontDoor,
   HostRefused,
@@ -48,7 +49,7 @@ import {
   sshConnection,
   type SshMachine,
 } from "./ssh-connection";
-import { quoted, remoteCollie } from "./ssh-argv";
+import { remoteCollie } from "./ssh-argv";
 import { shell } from "./mr";
 import {
   backoff,
@@ -342,7 +343,9 @@ export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: P
     return who.development ?? who.build;
   yield* Effect.logInfo(`bringing ${peer.name} from ${who.build} to ${link.build}`);
   const result = yield* door.shell({
-    script: `collie --json upgrade --to ${quoted(link.build)}`,
+    script: Result.getOrThrow(
+      CommandLine.join(["collie", "--json", "upgrade", "--to", link.build]),
+    ),
     request: `level:${link.installation}:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`,
   });
   if (result.code !== 0)

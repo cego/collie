@@ -1,4 +1,5 @@
 import { Cause, Duration, Effect, Exit, Option, Path, Ref, Schema, Stdio, Stream } from "effect";
+import { CommandLine } from "effect/process";
 import { redactedField, withNotice } from "../redact";
 import type { PlatformServices } from "../platform";
 import { Argument, Command, Flag } from "effect/cli";
@@ -1607,7 +1608,7 @@ function intentChange(
                     `${runId} may have Collie run:`,
                     ...approved.map(
                       (one) =>
-                        `  ${one.name}: ${one.executable} ${one.argv.join(" ")} (in ${one.cwd})`,
+                        `  ${one.name}: ${CommandLine.display([one.executable, ...one.argv])} (in ${one.cwd})`,
                     ),
                     ...(warning === undefined ? [] : [warning]),
                   ].join("\n"),

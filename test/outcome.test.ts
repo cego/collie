@@ -368,6 +368,17 @@ test("a bug reproduced by one command and fixed by another is a gap naming both"
   ]);
 });
 
+test("a bug reproduced and fixed by commands whose words differ names them differently", () => {
+  const [gap] = checkGaps(
+    "bug",
+    reproducedThenFixed(["/bin/echo", "a b"], ["/bin/echo", "a", "b"]),
+  );
+  const [, reproducedBy, provenBy] = /reproduced by (.*) but the fix is proven by (.*): one/.exec(
+    gap ?? "",
+  )!;
+  expect(reproducedBy).not.toBe(provenBy);
+});
+
 test("a bug whose one command failed before the fix and passes after it has no reproduction gap", () => {
   const command = ["/usr/bin/bun", "test", "test/x.test.ts"];
   expect(checkGaps("bug", reproducedThenFixed(command, command))).toEqual([]);

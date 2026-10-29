@@ -7,9 +7,9 @@
 // their editor rather than Collie's: a status line somebody else put there is reported and
 // left alone, and everything else in the file survives being written to.
 
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Result, Schema } from "effect";
+import { CommandLine } from "effect/process";
 import { selfCommand, type PluginEnv } from "./env";
-import { shellQuote } from "./naming";
 import { isString } from "./schema";
 import { promptLine, readSelection, selectionLine, selectionPath } from "./selection";
 import { herdOf } from "./steering";
@@ -34,7 +34,7 @@ export const claudeSettingsPath = Effect.fn("StatusLine.settingsPath")(function*
  * on PATH: the line has to keep working in a pane whose PATH is not the installer's.
  */
 export function statusLineCommand(self: ReadonlyArray<string> = selfCommand()): string {
-  return [self.map(shellQuote).join(" "), ...STATUS_LINE_ARGS].join(" ");
+  return Result.getOrThrow(CommandLine.join([...self, ...STATUS_LINE_ARGS]));
 }
 
 /**

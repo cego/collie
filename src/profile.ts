@@ -1,8 +1,8 @@
 // The operator's per-role overlay for the agents Collie launches (ADR-0060).
 
-import { Effect, FileSystem, Option, Schema } from "effect";
+import { Effect, FileSystem, Option, Result, Schema } from "effect";
+import { CommandLine } from "effect/process";
 import { scrub } from "./redact";
-import { shellQuote } from "./script";
 
 const ClaudeOverlay = Schema.Struct({
   enabledPlugins: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
@@ -95,8 +95,8 @@ const expand = (path: string, home: string) =>
 export const envLines = (env: Env, home: string): ReadonlyArray<string> =>
   Object.entries(env).map(([name, value]) =>
     isLiteral(value)
-      ? `export ${name}=${shellQuote(value)}`
-      : `IFS= read -r ${name} < ${shellQuote(expand(value.file, home))}; export ${name}`,
+      ? `export ${name}=${Result.getOrThrow(CommandLine.quote(value))}`
+      : `IFS= read -r ${name} < ${Result.getOrThrow(CommandLine.quote(expand(value.file, home)))}; export ${name}`,
   );
 
 /** Each file-held value that cannot be read safely, by path and problem; never its value. */

@@ -71,7 +71,7 @@ import {
 import type { UsageReading } from "./usage-model";
 import { keyboard } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
-import { COLLIE_TAB, reason, runTitle, shellQuote } from "./naming";
+import { COLLIE_TAB, reason, runTitle } from "./naming";
 import { listRuns, settled, type RunFacts } from "./runs";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { reportedWorktrees } from "./worktree";
@@ -98,7 +98,7 @@ import { shell } from "./mr";
 import { forgeOf } from "./forge/forge";
 import { forgeHttpLayer } from "./forge/http";
 import { parseMrTarget, readMrRef } from "./board-model";
-import type { ChildProcessSpawner } from "effect/process";
+import { type ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   agentForKey,
   askingRun,
@@ -1259,17 +1259,19 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
           : ((yield* listTasks(env.stateDir)).find((task) => task.id === run.task)?.workspace ??
             null));
       // The same state directory as this board's, whatever the pane's shell would default to.
-      const follow = [
-        "env",
-        `HERDR_PLUGIN_STATE_DIR=${env.stateDir}`,
-        ...selfCommand(),
-        "run",
-        "checks",
-        run.id,
-        "--follow",
-      ]
-        .map(shellQuote)
-        .join(" ");
+      const follow = yield* Effect.orDie(
+        Effect.fromResult(
+          CommandLine.join([
+            "env",
+            `HERDR_PLUGIN_STATE_DIR=${env.stateDir}`,
+            ...selfCommand(),
+            "run",
+            "checks",
+            run.id,
+            "--follow",
+          ]),
+        ),
+      );
       return yield* session.herdr
         .tabCreate({ label: "check output", cwd: run.cwd, focus: true, workspace })
         .pipe(

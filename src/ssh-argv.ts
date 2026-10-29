@@ -1,13 +1,17 @@
 // The ssh argv and bounds Desktop shares with the host, without the host's lock.
 
+import { Result } from "effect";
+import { CommandLine } from "effect/process";
+
 /** How long a master has to answer one control command, which it does at once when it is well. */
 export const MUX_BOUND = "5 seconds";
 
-export const quoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
-
 /** `collie` as a Machine's login shell runs it over SSH. */
 export const remoteCollie = (args: ReadonlyArray<string>) =>
-  [`exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie`, ...args.map(quoted)].join(" ");
+  [
+    `exec "\${SHELL:-/bin/sh}" -lc 'exec collie "$@"' collie`,
+    ...args.map((word) => Result.getOrThrow(CommandLine.quote(word))),
+  ].join(" ");
 
 /**
  * A session that rides the connection and fails where it has gone: without

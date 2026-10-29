@@ -60,8 +60,8 @@ test("a literal is exported and a file is read by the shell, so its value is nev
   expect(
     envLines({ PONYTAIL_DEFAULT_MODE: "off", TOKEN: { file: "~/.secrets/token" } }, "/home/me"),
   ).toEqual([
-    "export PONYTAIL_DEFAULT_MODE='off'",
-    "IFS= read -r TOKEN < '/home/me/.secrets/token'; export TOKEN",
+    "export PONYTAIL_DEFAULT_MODE=off",
+    "IFS= read -r TOKEN < /home/me/.secrets/token; export TOKEN",
   ]);
 });
 

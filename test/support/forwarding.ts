@@ -3,8 +3,8 @@
 
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { Cause, Effect, FileSystem, Schema, Semaphore } from "effect";
-import { shellQuote } from "../../src/script";
+import { Cause, Effect, FileSystem, Result, Schema, Semaphore } from "effect";
+import { CommandLine } from "effect/process";
 import { MARKER } from "./sweep";
 
 export interface Answer {
@@ -107,6 +107,6 @@ export const forwarding = Effect.fn("forwarding")(function* (
   const id = String(answerers.size);
   answerers.set(id, answerer);
   const at = yield* socket;
-  const command = [...forwarderCommand(compiled), ...args].map(shellQuote).join(" ");
-  return `COLLIE_FAKE_SOCKET=${shellQuote(at)} ${ANSWERER}=${id} exec ${command} "$@"`;
+  const command = Result.getOrThrow(CommandLine.join([...forwarderCommand(compiled), ...args]));
+  return `COLLIE_FAKE_SOCKET=${Result.getOrThrow(CommandLine.quote(at))} ${ANSWERER}=${id} exec ${command} "$@"`;
 });

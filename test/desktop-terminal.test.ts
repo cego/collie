@@ -3,7 +3,8 @@
 
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, FileSystem, Option, Schedule, Stream } from "effect";
+import { Effect, FileSystem, Option, Result, Schedule, Stream } from "effect";
+import { CommandLine } from "effect/process";
 import type { PaneAt } from "../src/board-model";
 import {
   type Door,
@@ -21,7 +22,6 @@ import {
   launched,
   openTerminal,
   readRecord,
-  shellLine,
 } from "../desktop/src/bun/terminal";
 import { runEffect } from "./support/effect";
 
@@ -64,7 +64,7 @@ test("a chosen agent is focused by its own Run, and no choice asks for the Run's
   ));
 
 test("the command to copy reads as typed, quoting only what a shell would split", () => {
-  expect(shellLine(["herdr", "--remote", "mk@vm-mk", "--session", "my work"])).toBe(
+  expect(Result.getOrThrow(CommandLine.join(attachCommand("mk@vm-mk", "my work")))).toBe(
     "herdr --remote mk@vm-mk --session 'my work'",
   );
 });
@@ -120,10 +120,10 @@ test("the controller takes over a pane in a named session, or in herdr's default
     "--rows",
     "40",
   ]);
-  expect(shellLine(controlCommand(null, "1-2", 80, 24))).toBe(
+  expect(Result.getOrThrow(CommandLine.join(controlCommand(null, "1-2", 80, 24)))).toBe(
     "herdr terminal session control 1-2 --takeover --cols 80 --rows 24",
   );
-  expect(shellLine(controlCommand("my work", "1-2", 80, 24))).toBe(
+  expect(Result.getOrThrow(CommandLine.join(controlCommand("my work", "1-2", 80, 24)))).toBe(
     "herdr --session 'my work' terminal session control 1-2 --takeover --cols 80 --rows 24",
   );
 });

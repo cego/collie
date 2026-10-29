@@ -23,6 +23,7 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
+import { CommandLine } from "effect/process";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as RpcServer from "effect/rpc/RpcServer";
@@ -118,7 +119,7 @@ import {
 } from "./machine";
 import { givenCredentials } from "./given";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
-import { attachCommand, inTerminal, launched, openTerminal, shellLine } from "./terminal";
+import { attachCommand, inTerminal, launched, openTerminal } from "./terminal";
 import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
 import {
   claudeLoginThrough,
@@ -1026,7 +1027,7 @@ const main = Effect.gen(function* () {
         const attach = attachCommand(door.machine.target, at.session);
         const terminal = inTerminal(attach, process.platform, which);
         const opened = terminal !== null && (yield* launched(terminal));
-        return { at, command: shellLine(attach), opened };
+        return { at, command: Result.getOrThrow(CommandLine.join(attach)), opened };
       }),
     terminal: ({ installation, runId, agent, cols, rows }) =>
       Stream.unwrap(

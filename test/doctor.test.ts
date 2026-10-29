@@ -14,7 +14,6 @@ import { withLock } from "../src/lock";
 import { claudeSettingsPath, installStatusLine } from "../src/statusline";
 import { hostname } from "node:os";
 import { shell } from "../src/mr";
-import { shellQuote } from "../src/script";
 import type { OpResult } from "../src/operations";
 import { writeConfigValue } from "../src/config";
 import { withGitlabHost } from "../src/commands/shared";
@@ -826,7 +825,7 @@ test("a Machine that cannot push to its GitLab fails, with the key to make and r
       expect(push.ok).toBe(false);
       expect(push.detail).toContain("gitlab.example");
       expect(push.fix).toContain("glab ssh-key add");
-      expect(push.fix).toContain(`--title ${shellQuote(hostname())}`);
+      expect(push.fix).toContain(`--title ${hostname()}`);
       expect(push.fix).not.toContain("$(");
     }),
   ));

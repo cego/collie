@@ -302,16 +302,16 @@ test("both adapters are told about the same Collie, in one place", () =>
         };
       };
       const command = hook.hooks.UserPromptSubmit[0]!.hooks[0]!.command;
-      expect(command).toEndWith("'/bin/collie' chat context");
+      expect(command).toEndWith("/bin/collie chat context");
       // And every prompt is handed to the tool host until the turn ends, so a chat's
       // actions carry the words of the turn they were taken in.
       const heard = hook.hooks.UserPromptSubmit[0]!.hooks[1]!.command;
-      expect(heard).toEndWith("'/bin/collie' chat heard");
+      expect(heard).toEndWith("/bin/collie chat heard");
       expect(hook.hooks.Stop[0]!.hooks[0]!.command).toBe(heard);
       for (const [key, value] of Object.entries(serverEnv))
-        expect(heard).toContain(`${key}='${value}'`);
+        expect(heard).toContain(`${key}=${value}`);
       for (const [key, value] of Object.entries(serverEnv))
-        expect(command).toContain(`${key}='${value}'`);
+        expect(command).toContain(`${key}=${value}`);
       for (const [key, value] of Object.entries(serverEnv)) {
         expect(extension).toContain(`"${key}":"${value}"`);
         expect(config).toMatchObject({ mcpServers: { collie: { env: { [key]: value } } } });

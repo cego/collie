@@ -446,7 +446,7 @@ test("install writes run-scoped settings and passes them with Claude's own flag"
       expect(written).toContain(`"PreCompact"`);
       expect(written).toContain(`"PostCompact"`);
       expect(written).toContain(`"manual|auto"`);
-      expect(written).toContain(`'herdr' 'compaction' '${dir}'`);
+      expect(written).toContain(`herdr compaction ${dir}`);
       // An agent's question goes to its Run, through the same helper.
       expect(written).toContain(`"PreToolUse"`);
       expect(written).toContain(`"AskUserQuestion"`);

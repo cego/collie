@@ -14,7 +14,8 @@
 // happened to write last in this directory, which is how a Home reopens into somebody
 // else's conversation.
 
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Result, Schema } from "effect";
+import { CommandLine } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { everyAgentText } from "./agents";
 import { autoCompactWindowAsWritten, readConfig } from "./config";
@@ -24,7 +25,7 @@ import { selfCommand, type PluginEnv } from "./env";
 import { autoCompactWindowFor, HARNESSES, installedHelp } from "./harness";
 import type { AgentInfo, Herdr, PaneInfo } from "./herdr";
 import { ensureLockDir, withLock } from "./lock";
-import { reason, shellQuote } from "./naming";
+import { reason } from "./naming";
 import { isString, type JsonObject } from "./schema";
 import type { AutoCompactWindow } from "./settings";
 import type { YamlMap } from "./yaml";
@@ -443,10 +444,10 @@ export function claudeSettings(
 ): string {
   const run = (sub: string) =>
     [
-      ...Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`),
-      ...command.map(shellQuote),
-      "chat",
-      sub,
+      ...Object.entries(env).map(
+        ([key, value]) => `${key}=${Result.getOrThrow(CommandLine.quote(value))}`,
+      ),
+      Result.getOrThrow(CommandLine.join([...command, "chat", sub])),
     ].join(" ");
   const heard = { type: "command", command: run("heard") };
   const hooks = {

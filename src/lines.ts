@@ -11,6 +11,7 @@
 // is empty, and the narrative is last and named as Collie's. A `tone` is a hint about
 // emphasis and never the only carrier — every line reads correctly with no colour at all.
 
+import { CommandLine } from "effect/process";
 import type { Card } from "./cards";
 import type { Delivery } from "./steering";
 import type { DriftReport, Ref } from "./evaluator";
@@ -164,7 +165,7 @@ const commandLine = (command: {
   readonly executable: string;
   readonly argv: ReadonlyArray<string>;
   readonly cwd: string;
-}) => `${[command.executable, ...command.argv].join(" ")} (in ${command.cwd})`;
+}) => `${CommandLine.display([command.executable, ...command.argv])} (in ${command.cwd})`;
 
 const named = (fields: Record<string, string>) =>
   Object.entries(fields).map(([name, value]) => `${name}=${value}`);

@@ -3,11 +3,11 @@
 // terminal of its own on this computer. Desktop passes on what the controller prints and
 // decides nothing from it.
 
-import { Effect, Option, Schema, Stream } from "effect";
+import { Effect, Option, Result, Schema, Stream } from "effect";
+import { CommandLine } from "effect/process";
 import type { PaneAt } from "../../../src/board-model";
 import { ActionFailed, TerminalCommand, type TerminalEvent } from "../shared/flock";
 import { type ShellRoute, spawned, stderrTail } from "./machine";
-import { quoted } from "../../../src/ssh-argv";
 import { CHILD_CWD, childEnv } from "./login-env";
 
 /** herdr's controller for one pane, taking it over from any other direct attach. */
@@ -141,7 +141,7 @@ export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
       send: (): Effect.Effect<void> => Effect.void,
     };
   const command = yield* route
-    .sh(shellLine(controlCommand(at.session, at.pane, cols, rows)))
+    .sh(Result.getOrThrow(CommandLine.join(controlCommand(at.session, at.pane, cols, rows))))
     .pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
   const opened = yield* control(command, route.machine.name);
   return {
@@ -156,9 +156,6 @@ export const attachCommand = (target: string | undefined, session: string | null
   ...(target === undefined ? [] : ["--remote", target]),
   ...(session === null ? [] : ["--session", session]),
 ];
-
-export const shellLine = (command: ReadonlyArray<string>) =>
-  command.map((word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : quoted(word))).join(" ");
 
 /** In the order this computer's default terminal is looked for, with how each is told what to run. */
 const TERMINALS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
@@ -182,7 +179,7 @@ export const inTerminal = (
     return [
       "osascript",
       "-e",
-      `tell application "Terminal" to do script ${appleString(shellLine(command))}`,
+      `tell application "Terminal" to do script ${appleString(Result.getOrThrow(CommandLine.join(command)))}`,
       "-e",
       `tell application "Terminal" to activate`,
     ];

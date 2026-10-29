@@ -1539,6 +1539,10 @@ What the command prints is shown as it runs — its stdout on stdout and its std
 stderr, or both on stderr under `--json`, where stdout is the one envelope — and the exit
 status is the command's own, so a failure says why the first time.
 
+Command displays preserve argument boundaries: `echo 'a b'` reads differently from
+`echo a b`. Control characters appear as escapes, so displayed commands containing them
+are for reading; the recorded argv retains the original values.
+
 | Flag       | What it does                                                                                                                                                         |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--run`    | The run this is a verification of, and whose tree is snapshotted. Defaults to the Run whose agent this pane is.                                                      |

@@ -3,6 +3,7 @@
 // door that reads a Flow reads one set of rules.
 
 import { DateTime } from "effect";
+import { CommandLine } from "effect/process";
 import {
   mrLabel,
   ranOn,
@@ -245,7 +246,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
     if (state !== "failed") return null;
     const last = proofsFor(one).findLast((proof) => proof.at >= one.attempts.at(-1)!.at);
     if (last?.result === "fail") {
-      const command = [last.executable, ...last.argv].join(" ").replaceAll("\n", "\\n");
+      const command = CommandLine.display([last.executable, ...last.argv]);
       const output = [last.tail.stdout.trimEnd(), last.tail.stderr.trimEnd()]
         .filter(Boolean)
         .join("\n")

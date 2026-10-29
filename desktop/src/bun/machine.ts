@@ -15,12 +15,14 @@ import {
   Predicate,
   Queue,
   Ref,
-  Semaphore,
+  Result,
   Schema,
   SchemaIssue,
   Scope,
+  Semaphore,
   Stream,
 } from "effect";
+import { CommandLine } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { BunCrypto } from "@effect/platform-bun";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -46,7 +48,7 @@ import {
   type PeerView,
   PeerView as PeerSchema,
 } from "../../../src/peers-model";
-import { MUX_BOUND, muxArgv, quoted, remoteCollie, riderArgv } from "../../../src/ssh-argv";
+import { MUX_BOUND, muxArgv, remoteCollie, riderArgv } from "../../../src/ssh-argv";
 import {
   ActionFailed,
   type Credential,
@@ -223,7 +225,7 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
     Effect.flatMap((code) =>
       Effect.fail<RouteFailure>({
         state: code === NOT_FOUND ? "no-collie" : "unreachable",
-        reason: said() || `${command.join(" ")} exited ${code}`,
+        reason: said() || `${CommandLine.display(command)} exited ${code}`,
       }),
     ),
   );
@@ -323,7 +325,7 @@ export const output = (command: ReadonlyArray<string>) =>
     Effect.flatMap(({ out, err, code }) =>
       code === 0
         ? Effect.succeed(out)
-        : Effect.fail(err.trim() || `${command.join(" ")} exited ${code}`),
+        : Effect.fail(err.trim() || `${CommandLine.display(command)} exited ${code}`),
     ),
   );
 
@@ -423,7 +425,9 @@ const machineConnect = Effect.fn("Desktop.machineConnect")(function* (
     return answer.value.ok
       ? answer.value.data.path
       : yield* Effect.fail(unreachable(answer.value.error.message));
-  return yield* Effect.fail(unreachable(said() || `${command.join(" ")} exited ${code}`));
+  return yield* Effect.fail(
+    unreachable(said() || `${CommandLine.display(command)} exited ${code}`),
+  );
 }, Effect.scoped);
 
 /**
@@ -492,7 +496,8 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
         );
       }),
     collie: (args) => used(riding(remoteCollie(args))).pipe(Effect.flatMap((argv) => ran(argv))),
-    sh: (script) => used(riding(`exec "\${SHELL:-/bin/sh}" -lc ${quoted(script)}`)),
+    sh: (script) =>
+      used(riding(`exec "\${SHELL:-/bin/sh}" -lc ${Result.getOrThrow(CommandLine.quote(script))}`)),
     forward: (port) => {
       const spec = ["-L", `${port}:127.0.0.1:${port}`];
       return used(connected).pipe(

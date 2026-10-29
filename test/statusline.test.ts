@@ -11,6 +11,7 @@ import {
   installStatusLine,
   readStatusLine,
   STATUS_LINE_ARGS,
+  statusLineCommand,
   statusLineFor,
 } from "../src/statusline";
 import { selectionPath, writeSelection } from "../src/selection";
@@ -135,5 +136,26 @@ test("settings Collie cannot read are refused rather than replaced", () =>
       expect(yield* read(file)).toBe(broken);
       expect(said).toContain("could not read");
       expect(said).toContain(file);
+    }),
+  ));
+
+test("the status line 0.104.0 wrote is Collie's, and is replaced rather than joined", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = yield* claudeSettingsPath(env);
+      // statusLineCommand(["/home/u/.collie/release/bin/collie"]) on 0.104.0.
+      const written = "'/home/u/.collie/release/bin/collie' chat status-line";
+      yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
+      yield* fs.writeFileString(
+        file,
+        `{\n  "statusLine": {\n    "type": "command",\n    "command": "${written}",\n    "padding": 0\n  }\n}\n`,
+      );
+      expect(yield* readStatusLine(env)).toEqual({ kind: "ours", command: written });
+
+      yield* installStatusLine(env);
+
+      expect(yield* readStatusLine(env)).toEqual({ kind: "ours", command: statusLineCommand() });
+      expect((yield* read(file)).match(/"statusLine"/g)).toHaveLength(1);
     }),
   ));

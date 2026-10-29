@@ -3,6 +3,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import {
   approvedFor,
@@ -252,3 +253,18 @@ test("a check is named by the script it runs, else the tool and its subcommand, 
   expect(named("npm run test -- --watch")).toBe("test");
   expect(named("npm --version")).toBe("npm");
 });
+
+test("an approved check renders as a line a shell runs with the same words", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const spec: VerifySpec = {
+        name: "echoes",
+        executable: "printf",
+        argv: ["%s\\0", "two words", "$HOME costs"],
+        cwd: "/",
+      };
+      const line = renderApproved([spec]).slice("- echoes: ".length, -" (in /)".length);
+      const ran = yield* exec(["/bin/sh", "-c", line]);
+      expect(ran.stdout.split("\0").slice(0, -1)).toEqual(spec.argv.slice(1));
+    }),
+  ));

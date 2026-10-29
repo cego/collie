@@ -124,7 +124,7 @@ test(
             const calls = (yield* read(first.sshLog)).split("\n");
             expect(calls.filter((line) => line.startsWith("master"))).toHaveLength(1);
             expect(calls.filter((line) => line.startsWith("login"))).toEqual([]);
-            expect(calls.some((line) => line.startsWith("ride") && line.includes("'invite'"))).toBe(
+            expect(calls.some((line) => line.startsWith("ride") && line.includes(" invite "))).toBe(
               true,
             );
 

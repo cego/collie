@@ -28,6 +28,7 @@ import {
   Schedule,
   Schema,
 } from "effect";
+import { CommandLine } from "effect/process";
 import type { PlatformServices } from "./platform";
 import * as Activity from "effect/workflow/Activity";
 import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
@@ -107,14 +108,7 @@ import {
   type Preferences,
 } from "./harness";
 import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError } from "./herdr";
-import {
-  agentName,
-  agentTabLabel,
-  launchedAs,
-  reason,
-  shellQuote,
-  unsafePathComponent,
-} from "./naming";
+import { agentName, agentTabLabel, launchedAs, reason, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
 import { askRouteTo } from "./handoff";
 import { nowIso } from "./time";
@@ -1935,9 +1929,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (reused !== null) yield* Effect.ignore(host.herdr.tabRename(reused.tabId, label));
         const tab = reused ?? (yield* host.herdr.tabCreate({ label, cwd: ask.cwd, workspace }));
         // herdr ignores --cwd on tab create, so the pane is told where it is explicitly.
-        yield* host.herdr.paneRun(tab.paneId, `cd ${shellQuote(ask.cwd)}`);
+        yield* host.herdr.paneRun(
+          tab.paneId,
+          yield* Effect.orDie(Effect.fromResult(CommandLine.join(["cd", ask.cwd]))),
+        );
         for (const [key, value] of Object.entries(mcp.env))
-          yield* host.herdr.paneRun(tab.paneId, `export ${key}=${shellQuote(value)}`);
+          yield* host.herdr.paneRun(
+            tab.paneId,
+            `export ${key}=${yield* Effect.orDie(Effect.fromResult(CommandLine.quote(value)))}`,
+          );
         for (const line of env) yield* host.herdr.paneRun(tab.paneId, line);
         yield* host.herdr
           .agentStart({

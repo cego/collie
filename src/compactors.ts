@@ -17,10 +17,11 @@ import {
   FileSystem,
   Option,
   Path,
+  Result,
   Schedule,
   Schema,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   agentThreads,
   boundThread,
@@ -103,7 +104,7 @@ const submitCompaction = (ctx: AgentContext, requestId: string, text: string) =>
     );
 import { selfCommand } from "./env";
 import { shell } from "./mr";
-import { reason, shellQuote } from "./naming";
+import { reason } from "./naming";
 
 /**
  * The harness releases these adapters were verified against. The gate refuses an older
@@ -885,7 +886,9 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
  * an automatic compaction is what invalidates a sample Collie is about to read.
  */
 export function claudeSettings(dir: string, stopFailure: boolean): string {
-  const helper = [...selfCommand(), "herdr", "compaction", dir].map(shellQuote).join(" ");
+  const helper = Result.getOrThrow(
+    CommandLine.join([...selfCommand(), "herdr", "compaction", dir]),
+  );
   const hook = { matcher: "manual|auto", hooks: [{ type: "command", command: helper }] };
   // `UserPromptSubmit` is the only place a submitted turn is visible to Collie, and it
   // is what attribution rests on: a prompt with no delivery token is somebody typing in
@@ -1053,16 +1056,14 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
   // makes it too, but a read that gets there first is a launch that fails on a missing
   // file instead of waiting for the line it is waiting for.
   yield* fs.writeFileString(opts.log, "");
+  const log = yield* Effect.orDie(Effect.fromResult(CommandLine.quote(opts.log)));
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const pid = yield* Effect.scoped(
     Effect.gen(function* () {
       const handle = yield* spawner.spawn(
         ChildProcess.make(
           "sh",
-          [
-            "-c",
-            [...(opts.env ?? []), `exec ${opts.command} >${shellQuote(opts.log)} 2>&1`].join("\n"),
-          ],
+          ["-c", [...(opts.env ?? []), `exec ${opts.command} >${log} 2>&1`].join("\n")],
           {
             cwd: opts.cwd,
             extendEnv: true,
@@ -1122,7 +1123,12 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
   const served = yield* servedEndpoint({
     cwd: ctx.cwd,
     log: path.join(ctx.dir, CODEX_LOG),
-    command: [`${server} --listen ws://127.0.0.1:0`, ...(ctx.mcp ?? []).map(shellQuote)].join(" "),
+    command: [
+      `${server} --listen ws://127.0.0.1:0`,
+      ...(yield* Effect.orDie(
+        Effect.forEach(ctx.mcp ?? [], (word) => Effect.fromResult(CommandLine.quote(word))),
+      )),
+    ].join(" "),
     listening: CODEX_LISTENING,
     startMs: CODEX_START_MS,
     what: "codex app-server",

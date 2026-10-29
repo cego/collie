@@ -2,12 +2,12 @@
 // of the human; Desktop's own version of the runner goes there only once its signature
 // verifies; and `collie onboard` runs with it, each step told as it comes.
 
-import { Clock, Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Clock, Effect, FileSystem, Option, Result, Schema, Stream } from "effect";
+import { CommandLine } from "effect/process";
 import { inTerminal } from "../../../src/in-terminal";
 import { verifiedRunner as sharedVerifiedRunner } from "../../../src/releases";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { type Route, type ShellRoute, spawned } from "./machine";
-import { quoted } from "../../../src/ssh-argv";
 import { CHILD_CWD, childEnv } from "./login-env";
 
 export const RELEASES = "https://github.com/cego/collie/releases/download";
@@ -216,10 +216,16 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
   const ended = yield* Effect.gen(function* () {
     const command = yield* route.sh(
       [
-        `exec ${placedAt(version)} --json onboard --to ${quoted(version)}`,
-        ...(secrets === "" ? [] : ["--secrets-stdin"]),
-        ...skip.map((step) => `--skip ${step}`),
-        ...(gitlabHost === undefined ? [] : [`--gitlab-host ${quoted(gitlabHost)}`]),
+        `exec ${placedAt(version)}`,
+        ...[
+          "--json",
+          "onboard",
+          "--to",
+          version,
+          ...(secrets === "" ? [] : ["--secrets-stdin"]),
+          ...skip.flatMap((step) => ["--skip", step]),
+          ...(gitlabHost === undefined ? [] : ["--gitlab-host", gitlabHost]),
+        ].map((word) => Result.getOrThrow(CommandLine.quote(word))),
       ].join(" "),
     );
     const child = yield* spawned(() =>

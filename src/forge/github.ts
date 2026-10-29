@@ -1,7 +1,8 @@
 // The GitHub adapter: everything Collie asks GitHub, through `gh` or over HTTP with gh's
 // token. Only github.com.
 
-import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import { CommandLine } from "effect/process";
 import {
   mrPath,
   mrWords,
@@ -12,7 +13,6 @@ import {
   type MrRef,
 } from "../board-model";
 import { keepCredentialHelper, whatItSaid, type Runner } from "../mr";
-import { shellQuote } from "../script";
 import { epochMs } from "../time";
 import type {
   DeployTier,
@@ -941,10 +941,20 @@ function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness,
   );
 }
 
-const runOf = (id: string) => id.split("/")[0];
+const runOf = (id: string) => id.split("/")[0]!;
 
 const jobLog = (ref: MrRef, id: string) =>
-  `gh run view ${runOf(id)} --log-failed --repo ${mrPath({ project: ref.project, iid: "" })}`;
+  Result.getOrThrow(
+    CommandLine.join([
+      "gh",
+      "run",
+      "view",
+      runOf(id),
+      "--log-failed",
+      "--repo",
+      mrPath({ project: ref.project, iid: "" }),
+    ]),
+  );
 
 /** Where GitHub looks for a pull request template, in the order it looks. */
 const TEMPLATES = [
@@ -1271,13 +1281,13 @@ export const github: Forge = {
   jobLog,
   template,
   commands: ({ project, branch, assignee, existing }) => {
-    const repo = shellQuote(mrPath({ project, iid: "" }));
+    const repo = mrPath({ project, iid: "" });
     return {
-      create: `gh pr create --repo ${repo} --head ${shellQuote(branch)} --assignee ${shellQuote(assignee)} --title "<title>" --body-file <file>`,
+      create: `${Result.getOrThrow(CommandLine.join(["gh", "pr", "create", "--repo", repo, "--head", branch, "--assignee", assignee]))} --title "<title>" --body-file <file>`,
       comment:
         existing === null
           ? ""
-          : `gh pr comment ${shellQuote(existing)} --repo ${repo} --body-file <file>`,
+          : `${Result.getOrThrow(CommandLine.join(["gh", "pr", "comment", existing, "--repo", repo]))} --body-file <file>`,
     };
   },
   ready,
@@ -1300,12 +1310,14 @@ export const github: Forge = {
     project === null ? Effect.succeed([]) : myMergeRequests(LOGIN, project, cwd),
   open: (ref, cwd, run) => run("gh", ["pr", "view", ref.iid, "--repo", mrPath(ref), "--web"], cwd),
   review: (ref) => {
-    const repo = `--repo ${shellQuote(mrPath(ref))}`;
-    const iid = shellQuote(ref.iid);
+    const gh = (verb: string, ...rest: ReadonlyArray<string>) =>
+      Result.getOrThrow(
+        CommandLine.join(["gh", "pr", verb, ref.iid, "--repo", mrPath(ref), ...rest]),
+      );
     return {
-      diff: `gh pr diff ${iid} ${repo}`,
-      view: `gh pr view ${iid} ${repo} --comments`,
-      checkout: `gh pr checkout ${iid} ${repo}`,
+      diff: gh("diff"),
+      view: gh("view", "--comments"),
+      checkout: gh("checkout"),
     };
   },
 };

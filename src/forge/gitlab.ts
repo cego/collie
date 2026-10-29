@@ -1,7 +1,8 @@
 // The GitLab adapter: everything Collie asks GitLab, through `glab` or over HTTP with
 // glab's token.
 
-import { DateTime, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Option, Path, Redacted, Result, Schema } from "effect";
+import { CommandLine } from "effect/process";
 import {
   mrPath,
   mrWords,
@@ -14,7 +15,6 @@ import {
 } from "../board-model";
 import { epochMs } from "../time";
 import { keepCredentialHelper, projectHere, whatItSaid, type Runner } from "../mr";
-import { shellQuote } from "../script";
 import type {
   DeployTier,
   DeployedRead,
@@ -1068,7 +1068,7 @@ function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness,
 }
 
 const jobLog = (ref: MrRef, id: string) =>
-  ["glab", "ci", "trace", id, ...repoArgs(ref.project)].join(" ");
+  Result.getOrThrow(CommandLine.join(["glab", "ci", "trace", id, ...repoArgs(ref.project)]));
 
 function template(cwd: string) {
   return Effect.gen(function* () {
@@ -1199,7 +1199,7 @@ export const gitlab: Forge = {
     return keepCredentialHelper(
       into,
       host,
-      `!f() { test "$1" = get || exit 0; echo username=oauth2; echo "password=$(glab config get token --host ${shellQuote(host)})"; }; f`,
+      `!f() { test "$1" = get || exit 0; echo username=oauth2; echo "password=$(glab config get token --host ${Result.getOrThrow(CommandLine.quote(host))})"; }; f`,
       run,
     );
   },
@@ -1220,17 +1220,26 @@ export const gitlab: Forge = {
   // `glab mr create` and `glab mr note` take text only, so a file goes through the API,
   // which reads `@<file>` itself: no command substitution (CrowdStrike flags it).
   commands: ({ project, assignee, existing }) => {
-    const api = `glab api --hostname ${shellQuote(hostOf(project) ?? "")}`;
+    const api = (method: string, path: string) =>
+      Result.getOrThrow(
+        CommandLine.join([
+          "glab",
+          "api",
+          "--hostname",
+          hostOf(project) ?? "",
+          "--method",
+          method,
+          path,
+        ]),
+      );
     const route = `projects/${encodeURIComponent(mrPath({ project, iid: "" }))}/merge_requests`;
     return {
       create: [
-        `glab mr create --assignee ${shellQuote(assignee)} --title "<title>" --description "<title>" --yes`,
-        `${api} --method PUT ${shellQuote(`${route}/<iid>`)} -F description=@<file>`,
+        `${Result.getOrThrow(CommandLine.join(["glab", "mr", "create", "--assignee", assignee]))} --title "<title>" --description "<title>" --yes`,
+        `${api("PUT", `${route}/<iid>`)} -F description=@<file>`,
       ].join("\n"),
       comment:
-        existing === null
-          ? ""
-          : `${api} --method POST ${shellQuote(`${route}/${existing}/notes`)} -F body=@<file>`,
+        existing === null ? "" : `${api("POST", `${route}/${existing}/notes`)} -F body=@<file>`,
     };
   },
   ready: gitlabForProject,
@@ -1266,12 +1275,14 @@ export const gitlab: Forge = {
   open: (ref, cwd, run) =>
     run("glab", ["mr", "view", ref.iid, ...repoArgs(ref.project), "--web"], cwd),
   review: (ref) => {
-    const repo = ref.project === null ? "" : ` --repo ${shellQuote(ref.project)}`;
-    const iid = shellQuote(ref.iid);
+    const glab = (verb: string, ...rest: ReadonlyArray<string>) =>
+      Result.getOrThrow(
+        CommandLine.join(["glab", "mr", verb, ref.iid, ...repoArgs(ref.project), ...rest]),
+      );
     return {
-      diff: `glab mr diff ${iid}${repo}`,
-      view: `glab mr view ${iid}${repo} --comments`,
-      checkout: `glab mr checkout ${iid}${repo}`,
+      diff: glab("diff"),
+      view: glab("view", "--comments"),
+      checkout: glab("checkout"),
     };
   },
 };

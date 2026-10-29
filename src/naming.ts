@@ -82,8 +82,6 @@ export function unsafePathComponent(value: string): string | null {
   return null;
 }
 
-export { shellQuote } from "./script";
-
 /** ⚙ working, ⚠ your turn, ✓ finished, ✗ stopped. */
 /**
  * What a failure says in a log line or a board row: a caught Error's own message, and

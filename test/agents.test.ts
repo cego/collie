@@ -70,7 +70,7 @@ import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } fro
 import { Herdr, HerdrError } from "../src/herdr";
 import { retitleGenericTasks } from "../src/tasknames";
 import { runFacts } from "./support/records";
-import { agentName, shellQuote } from "../src/naming";
+import { agentName } from "../src/naming";
 import {
   controlDir,
   withControlLock,
@@ -414,7 +414,7 @@ test("work asked for inside a Run needs no run id, checkout or contract, and ans
       const moved = (yield* rig.calls()).filter(
         (call) => call.argv?.[0] === "pane" && call.argv[1] === "run",
       );
-      expect(moved.map((call) => call.argv?.at(-1))).toContain(`cd ${shellQuote(dir)}`);
+      expect(moved.map((call) => call.argv?.at(-1))).toContain(`cd ${dir}`);
     }),
   ));
 
@@ -5436,9 +5436,9 @@ test("a profile's environment is set in the pane before the harness starts, and 
 
       const calls = yield* rig.calls();
       const typed = paneLines(calls);
-      expect(typed).toContain("export PONYTAIL_DEFAULT_MODE='off'");
+      expect(typed).toContain("export PONYTAIL_DEFAULT_MODE=off");
       expect(typed).toContain(
-        `IFS= read -r DEPLOY_TOKEN < '${rig.root}/secrets/token'; export DEPLOY_TOKEN`,
+        `IFS= read -r DEPLOY_TOKEN < ${rig.root}/secrets/token; export DEPLOY_TOKEN`,
       );
       const startAt = calls.findIndex((call) => call.argv?.[1] === "start");
       const lastTyped = calls.findLastIndex(
