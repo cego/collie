@@ -537,6 +537,7 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
     "delegates.workflow.ts",
     "declines.workflow.ts",
     "landing.workflow.ts",
+    "stops-on-mr.workflow.ts",
     "capability.ts",
     "house.ts",
     "helper.ts",
@@ -576,11 +577,17 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
 });
 
 /** What a run recorded, by the id the suite gave it or the one its host did. */
-export const events = Effect.fn("HostTest.events")(function* (state: string, runId: string) {
+/** The directory of the Run the suite named `runId`. */
+export const runDirOf = Effect.fn("HostTest.runDirOf")(function* (state: string, runId: string) {
   const fs = yield* FileSystem.FileSystem;
   const named = (yield* readNames(fs, layoutOf(state).names)).runs[runId] ?? runId;
+  return `${state}/runs/${named}`;
+});
+
+export const events = Effect.fn("HostTest.events")(function* (state: string, runId: string) {
+  const fs = yield* FileSystem.FileSystem;
   const text = yield* fs
-    .readFileString(`${state}/runs/${named}/log.txt`)
+    .readFileString(`${yield* runDirOf(state, runId)}/log.txt`)
     .pipe(Effect.orElseSucceed(() => ""));
   return text.split("\n").filter((line) => line.length > 0);
 });

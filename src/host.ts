@@ -157,8 +157,8 @@ import { currentEnv, leaveLauncher, withoutLauncher } from "./env";
 import { installation as installedRelease, RELEASE_TAG } from "./release";
 import { Herdr, isSettled, type AgentInfo } from "./herdr";
 import { serverSocket } from "./home";
-import { buildBoard, mrOf, taskFlowOf } from "./board";
-import { readForge, watchedMr, type MrPanels } from "./merges";
+import { buildBoard, LANDED_STATES, mrOf, taskFlowOf } from "./board";
+import { readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
@@ -1517,8 +1517,30 @@ const frontDoorHandlers = (
             });
           return yield* act(file, lines);
         }).pipe(plainly);
-      /** A Run picked up again: what current files allow is registered, then its stop cleared. */
-      const takeUp = (runId: string) => registry.resume(runId);
+      /**
+       * A Run picked up again: what current files allow is registered, then its stop cleared.
+       * One stopped after its merge request landed is left stopped, as a card reads the landing.
+       */
+      const takeUp = Effect.fn("Host.takeUp")(function* (runId: string) {
+        const view = yield* registry.view(runId);
+        const run = view === null ? null : factsOfView(env.stateDir, view);
+        const mr = run?.state === "stopped" ? mrOf(run) : null;
+        const state =
+          mr === null
+            ? undefined
+            : (yield* readMrStates(env.stateDir).pipe(Effect.orElseSucceed(() => new Map()))).get(
+                mrLabel(mr),
+              );
+        if (state === undefined || !LANDED_STATES.has(state)) return yield* registry.resume(runId);
+        return {
+          runId,
+          control: STOP,
+          set: false,
+          left: [],
+          applied: false,
+          detail: `${runId} was stopped after its merge request merged; there is nothing left to resume`,
+        };
+      });
       return FrontDoorRpcs.of({
         declare: ({ frontDoor, session, from, stamp: stamped, ...voice }, { client }) => {
           // Which Machine a channel came from is said by this host's own link, never by the channel.
