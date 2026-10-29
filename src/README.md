@@ -40,6 +40,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `intent.ts`            | What a Run is for, what bounds it, and what Collie may do about it without asking                                           |
 | `intent-model.ts`      | The Intent's Schemas alone, so a browser bundle of the board can carry a start                                              |
 | `steering.ts`          | The delivery ledger per live agent, and the Herd's model-call budget                                                        |
+| `delivery-queue.ts`    | Durable messages awaiting a supported idle submission, and their receipts                                                   |
 | `dispatcher.ts`        | The only sender: one transaction per agent, reserved before the send, ordered                                               |
 | `steering-caps.ts`     | What each harness has been shown to do about a delivery, and the gate that fails closed                                     |
 | `evaluator.ts`         | The one place a model is asked anything, tool-less and capped, and the closed schemas                                       |
