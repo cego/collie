@@ -3380,17 +3380,130 @@ test("a message nobody can say arrived is not called delivered when it is said a
     }),
   ));
 
-test("a delivery this harness has not been shown to take is refused rather than sent and hoped for", () =>
+test("an idle Codex takes a now message through the supported boundary transport", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       const codex = { harness: "codex", model: "default" };
       yield* session(started("r1"), codex);
       const told = yield* session(say("r1", "stop what you are doing", "steer-now", "now"), codex);
-      expect(told.delivered).toBe(false);
-      expect(told.detail).toContain("capability_unproven");
-      // Nothing was typed at it: the gate is in the sender, not in front of it.
-      expect(prompts(yield* rig.calls())).not.toContain("stop what you are doing");
+      expect(told).toMatchObject({ delivered: true, observed: true });
+      expect(prompts(yield* rig.calls())).toContain("stop what you are doing");
+    }),
+  ));
+
+test("an unsupported busy delivery survives restart and reaches the idle agent once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const codex = { harness: "codex", model: "default" };
+      yield* session(started("r1"), codex);
+      const busy = new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" }));
+      const text = "Revise the plan.\n  Keep my exact words.  ";
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const queued = yield* session(say("r1", text, "queued-1", "now"), {
+          ...codex,
+          herdr: busy,
+        });
+        expect(queued).toMatchObject({ delivered: false, queued: true });
+      }
+      expect(prompts(yield* rig.calls())).not.toContain(text);
+      yield* session(tendIdle);
+      yield* session(tendIdle);
+      expect(prompts(yield* rig.calls()).filter((one) => one === text)).toHaveLength(1);
+      const sent = (yield* deliveriesOf(rig.pluginEnv().stateDir, "r1")).filter(
+        (one) => one.delivery.cause.kind === "steer",
+      );
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.delivery).toMatchObject({ mode: "boundary", state: "acknowledged" });
+    }),
+  ));
+
+const tendIdle = Agents.pipe(
+  Effect.flatMap((agents) =>
+    agents.tendQuestions(() => ({
+      ask: () => Effect.void,
+      asked: Effect.succeed([]),
+      close: () => Effect.void,
+    })),
+  ),
+);
+
+test("a queued operation follows a harness switch and preserves its long comment and attachment", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }, null]);
+      yield* session(started("r1"), { harness: "pi", model: "default" });
+      const first = yield* launchOf("r1");
+      const text = `${"é".repeat(5_000)}\n  exact comment  \nAttached: /given/screenshot.png`;
+      yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "reviewer",
+              text,
+              request: "switch-comment",
+              mode: "now",
+              actor: { origin: "desktop" },
+            }),
+          ),
+        ),
+        { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+      );
+      const next = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          yield* agents.halt("r1");
+          return yield* agents.launch({
+            ...first,
+            sequence: 2,
+            harness: "codex",
+            agent: null,
+            model: null,
+            effort: null,
+            permissions: null,
+            task: null,
+            cwd: rig.projectDir,
+            prompt: "Continue the same work.",
+            skill: null,
+          });
+        }),
+      );
+      yield* session(tendIdle);
+      yield* session(tendIdle);
+      const calls = (yield* rig.calls()).filter(
+        (call) =>
+          call.cmd === "agent prompt" &&
+          call.argv?.[2] === next.agent &&
+          call.argv?.[3]?.includes("Their message is in"),
+      );
+      expect(calls).toHaveLength(1);
+      const typed = calls[0]?.argv?.[3] ?? "";
+      expect(typed).toContain("From the human, in Desktop");
+      const file = /Their message is in (\S+)\./.exec(typed)?.[1];
+      expect(file).toBeDefined();
+      expect(yield* read(file!)).toBe(text);
+      expect(next.agent).not.toBe(first.agent);
+    }),
+  ));
+
+test("an uncertain queued submission is retained and never automatically repeated", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const codex = { harness: "codex", model: "default" };
+      yield* session(started("r1"), codex);
+      yield* session(say("r1", "keep this once", "uncertain-queue", "now"), {
+        ...codex,
+        herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })),
+      });
+      yield* session(tendIdle, { herdr: new SilentPrompts(rig.pluginEnv()) });
+      yield* session(tendIdle);
+      const again = yield* session(say("r1", "keep this once", "uncertain-queue", "now"));
+      expect(again.delivered).toBe(false);
+      expect(again.detail).toContain("unknown");
+      expect(prompts(yield* rig.calls())).not.toContain("keep this once");
     }),
   ));
 

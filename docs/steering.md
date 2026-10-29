@@ -168,6 +168,18 @@ reaches the agent first.
 
 ## Who a steer reaches, and what it says came of it
 
+When `now` is unproven for an agent's harness, Collie keeps the message durably under its
+request and returns `queued: true, delivered: false`. Once the agent is idle or done,
+the host submits it through the supported boundary transport. This also works while a
+planner waits at its Run's next-choice menu; no Choice is answered. The queue survives a
+host restart, keeps attachments and authorship, and follows an operation onto its fallback
+agent. An explicitly named agent stays pinned to that agent. Idle cleanup keeps agents
+with pending messages. The agents log records the eventual submission.
+
+Queued acceptance does not claim observation. A submitted or uncertain delivery is never
+automatically sent again, including after a harness switch. An uncertain result names the
+delivery to reconcile. Interrupts still require their own proven capability.
+
 A steer, a review comment, chat's `deliver` and a correction that name no agent reach the
 agent whose step is active — its newest launch has no Output yet — and with none active,
 the Run's builder (its `implementer`), else whoever was launched last — a Run with no

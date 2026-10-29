@@ -27,6 +27,7 @@ import {
   Predicate,
   Schedule,
   Schema,
+  Struct,
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as Activity from "effect/workflow/Activity";
@@ -105,7 +106,10 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError } from "./herdr";
+import { Herdr, herdrFailureReason, isSettled, type AgentInfo, type HerdrError } from "./herdr";
+import { gate } from "./steering-caps";
+import { actorOf } from "./audit";
+import { keepQueued, readQueue, type Queued } from "./delivery-queue";
 import {
   agentName,
   agentTabLabel,
@@ -449,6 +453,7 @@ export interface Steered {
   readonly agent: string;
   readonly delivered: boolean;
   readonly detail: string;
+  readonly queued?: boolean;
   /** Not delivered because no incarnation of the agent is alive. */
   readonly gone?: boolean;
   /** Whether the agent was seen to take it; absent where nothing was sent. */
@@ -1468,6 +1473,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       readonly actor?: Asker;
       /** The session the agent is in, where it is not the host's own. */
       readonly herdr?: Herdr;
+      readonly idleOnly?: boolean;
     },
   ) {
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
@@ -1497,6 +1503,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       actor: fitted.actor,
       cause: { kind: delivery.kind, ref: delivery.ref },
       mode: delivery.mode ?? "boundary",
+      idleOnly: delivery.idleOnly,
       // Work, a repair and a steer share a causal key per thing they are about, which is
       // what makes the second copy refusable; a correction's is its constraint's.
       intentVersion: delivery.intentVersion ?? 0,
@@ -2375,6 +2382,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        const pendingRuns = yield* fs
+          .readDirectory(launchDir(host.dir, ""))
+          .pipe(Effect.orElseSucceed(() => []));
+        for (const run of pendingRuns) {
+          for (const queued of yield* readQueue(dirFor(run)).pipe(
+            Effect.catch((cause) =>
+              log(run, `Delivery queue could not be read: ${reason(cause)}`).pipe(Effect.as([])),
+            ),
+          )) {
+            if (queued.result !== null) continue;
+            yield* steer({ ...queued, mode: "now" });
+          }
+        }
         const named = yield* fs
           .readDirectory(yield* controlDir(host.env.stateDir, ""))
           .pipe(Effect.orElseSucceed(() => []));
@@ -2788,10 +2808,76 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // After the step it is being given, so its work reaches it first.
         const out = stepsGoingOut.get(launched.agent);
         if (out !== undefined) yield* Deferred.await(out);
+        const queued = (yield* readQueue(dirFor(options.runId)).pipe(Effect.orDie)).find(
+          (one) => one.request === options.request,
+        );
+        if (queued?.result != null) return queued.result;
+        const unsupported =
+          options.mode === "now" &&
+          (yield* gate(launched.harness, "now").pipe(
+            Effect.as(false),
+            Effect.catch(() => Effect.succeed(true)),
+          ));
+        const fallback = unsupported || queued !== undefined;
+        const pending: Types.Mutable<Queued> = queued ?? {
+          runId: options.runId,
+          request: options.request,
+          text: options.text,
+          ...(options.agent === undefined
+            ? { operation: launched.operation }
+            : { agent: options.agent }),
+          result: null,
+        };
+        if (options.actor !== undefined && queued === undefined) {
+          pending.actor = Struct.omit(actorOf(options.actor, options.request), ["requestId"]);
+        }
+        if (fallback) {
+          const found = yield* entryFor(launched, launched.agent, null);
+          if (found.entry === null)
+            return {
+              agent: launched.agent,
+              delivered: false,
+              detail: found.reason ?? "no such agent",
+              gone: found.gone,
+            };
+          yield* keepQueued(dirFor(options.runId), pending).pipe(Effect.orDie);
+          const status = yield* host.herdr
+            .agentStatus(launched.agent)
+            .pipe(Effect.orElseSucceed(() => "unknown" as const));
+          if (!isSettled(status))
+            return {
+              agent: launched.agent,
+              delivered: false,
+              queued: true,
+              detail:
+                "Queued durably; the host will deliver when this agent is idle, without answering its Run's choices.",
+            };
+          const previous = (yield* deliveriesOf(host.env.stateDir, options.runId)).find(
+            (one) =>
+              one.delivery.cause.kind === "steer" &&
+              one.delivery.cause.ref === options.request &&
+              !["failed", "superseded"].includes(one.delivery.state),
+          )?.delivery;
+          if (previous !== undefined) {
+            const result = SENT_STATES.has(previous.state)
+              ? receipt(previous.agent, {
+                  observed:
+                    previous.state === "acknowledged" ? "taken when it was first sent" : null,
+                })
+              : {
+                  agent: previous.agent,
+                  delivered: false,
+                  detail: `${previous.id} is ${previous.state}; reconcile before resending`,
+                };
+            yield* keepQueued(dirFor(options.runId), { ...pending, result }).pipe(Effect.orDie);
+            return result;
+          }
+        }
         const sent = yield* deliver(launched, options.text, {
           kind: "steer",
           ref: options.request,
-          mode: options.mode,
+          mode: fallback ? "boundary" : options.mode,
+          idleOnly: fallback,
           actor: options.actor,
         });
         yield* log(
@@ -2800,7 +2886,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             ? toldLine(launched.agent, options.text)
             : `${launched.agent}: could not be told "${firstLine(options.text)}" (${sent.why})`,
         );
-        if (sent.sent) return receipt(launched.agent, sent);
+        if (sent.sent) {
+          const result = receipt(launched.agent, sent);
+          if (fallback)
+            yield* keepQueued(dirFor(options.runId), { ...pending, result }).pipe(Effect.orDie);
+          return result;
+        }
+        if (fallback && !sent.why.startsWith("unknown:"))
+          return {
+            agent: launched.agent,
+            delivered: false,
+            queued: true,
+            detail: `Queued durably; waiting for a supported idle submission (${sent.why}).`,
+          };
         const alive = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
         return {
           agent: launched.agent,

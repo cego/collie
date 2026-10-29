@@ -155,6 +155,7 @@ export interface DeliveryDraft {
   readonly requestId: string;
   readonly actor?: Asker;
   readonly note?: string;
+  readonly idleOnly?: boolean;
   /**
    * How long a refusal herdr calls momentary may hold before this sender gives up, from
    * the first one. Absent, it is not waited out: the refusal fails the delivery at once.
@@ -215,7 +216,8 @@ export interface Channel {
 
 export interface DispatcherDeps {
   readonly stateDir: string;
-  readonly herdr: Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys" | "restoreAgentName">;
+  readonly herdr: Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys" | "restoreAgentName"> &
+    Partial<Pick<Herdr, "agentStatus">>;
   /** The Run's audit trail, so a refusal is explained where the Run is read. */
   readonly log: (
     line: string,
@@ -335,6 +337,15 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
               yield* recordUngated(file, entry, terminalId, text, draft, ungated.reason);
               return refuse(null, "failed", ungated.reason);
             }
+            if (
+              draft.idleOnly &&
+              !isSettled(
+                yield* (
+                  deps.herdr.agentStatus?.(entry.agent) ?? Effect.succeed("unknown" as const)
+                ).pipe(Effect.orElseSucceed(() => "unknown" as const)),
+              )
+            )
+              return refuse(null, "deferred", "agent is not idle");
             // The listing was read when the transaction opened, and a whole compaction
             // can happen inside one. Anything older than a few seconds is re-read before
             // it is trusted with a send.
