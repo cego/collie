@@ -67,9 +67,10 @@ import { loopbackTools } from "./chat-endpoint";
 import { piDriver } from "./pi-driver";
 import { CHILD_CWD, childEnv, localShell, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
-import { carryIntoFlock, heldSettings, type Offers } from "./settings";
+import { carryIntoFlock, chatChoice, heldSettings, type Offers } from "./settings";
 import { offerOf, offersOf, opensOn, readPiConfig, retelling } from "./chat-choices";
-import { harnessLists } from "./harness-lists";
+import { harnessLists, listedIn } from "./harness-lists";
+import type { ListedModel } from "./claude-models";
 import { readPiModels } from "./pi-models";
 import { followWindow, zoomWindow } from "./scale";
 import type { Drawn } from "../shared/scale";
@@ -251,9 +252,37 @@ const main = Effect.gen(function* () {
     version: manifest.version,
   }).pipe(Effect.ignore);
   const logged = yield* actionsLog(own);
+  const doors = new DoorMap<Doors>();
+  /** A harness's list from this computer's Machine; its own reader's where it has none or an older one. */
+  const fromMachine = (harness: string, own: Effect.Effect<ReadonlyArray<ListedModel>, string>) =>
+    Effect.suspend(() => {
+      const local = [...doors.values()].find((door) => door.machine.profile === "local");
+      if (local === undefined) return own;
+      const flock = SubscriptionRef.getUnsafe(flockSettings);
+      const chats = (model: string) =>
+        chatChoice({ proactive: true, chatHarness: harness, chatModel: model }, flock).ok;
+      return local.desktop.models().pipe(
+        Effect.map((catalogues) => listedIn(catalogues, harness, chats)),
+        Effect.catchCause(() => Effect.succeed(null)),
+        Effect.flatMap((read) =>
+          read === null
+            ? own
+            : Result.match(read, {
+                onSuccess: (models) => Effect.succeed(models),
+                onFailure: (why) => Effect.fail(why),
+              }),
+        ),
+      );
+    });
   const lists = yield* harnessLists({
-    claude: Effect.suspend(() => claudeModels(SubscriptionRef.getUnsafe(flockSettings), own)),
-    pi: Effect.suspend(() => readPiModels(SubscriptionRef.getUnsafe(flockSettings), own)),
+    claude: fromMachine(
+      "claude",
+      Effect.suspend(() => claudeModels(SubscriptionRef.getUnsafe(flockSettings), own)),
+    ),
+    pi: fromMachine(
+      "pi",
+      Effect.suspend(() => readPiModels(SubscriptionRef.getUnsafe(flockSettings), own)),
+    ),
   });
   // Before Desktop's own settings are held, so a save does not write back what was carried.
   const saved = yield* carryIntoFlock(own, yield* nowIso());
@@ -394,7 +423,6 @@ const main = Effect.gen(function* () {
     Effect.repeat(Schedule.spaced("15 seconds")),
     Effect.forkScoped,
   );
-  const doors = new DoorMap<Doors>();
   const flockValue = (key: string) => SubscriptionRef.getUnsafe(flockSettings).settings[key]?.value;
   /** Keeps an edit made here, then gives it to every connected Machine. */
   const editFlock = (key: string, typed: string) =>

@@ -306,6 +306,21 @@ export const CollieTools = Toolkit.make(
       "proposing an upgrade, an onboarding, a cleanup, a change to the defaults or to a Schedule.",
     parameters: Tool.EmptyParams,
   }),
+  collieTool("collie_models", {
+    readOnly: true,
+    title: "Which models a Machine can run",
+    description:
+      "Which models and efforts each harness installed on a Machine offers, as that " +
+      "Machine's host last read them from the harnesses themselves, with each model's " +
+      "default effort and whether the harness hides it. A harness that could not be read " +
+      "says why and lists Collie's own table instead. `machine` names one Machine; without " +
+      "it the answer is for every Machine there is to ask. `harness` keeps one harness. " +
+      "Read this before saying which model or effort a Machine can run.",
+    parameters: Schema.Struct({
+      machine: Schema.optionalKey(Schema.String),
+      harness: Schema.optionalKey(Schema.String),
+    }),
+  }),
   collieTool("collie_hold", {
     readOnly: false,
     title: "Hold a Run, or a whole workspace",
@@ -373,6 +388,7 @@ export const TAKES: Record<ToolName, string> = {
   collie_news: "It takes nothing.",
   collie_definitions: 'It takes {"workflow": "<name>"} or {"persona": "<name>"}.',
   collie_installation: "It takes nothing.",
+  collie_models: 'It takes nothing, or {"machine": "<name>"} and {"harness": "<harness>"}.',
   collie_hold: 'It takes {"run": "..."} or {"workspace": "..."}, and optionally "reason".',
   collie_do:
     'It takes {"actions": [...]}, and every action has to be one of the kinds in the schema. An action with no "run" acts on the board\'s selection, and the board has nothing open.',

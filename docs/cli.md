@@ -2113,6 +2113,64 @@ never its email. `source` is `claude-usage`, `claude-status-line` or `codex-app-
 endpoint refusing — with the last good windows kept where there were any.
 [Usage](using.md#usage) says where the numbers come from and how fresh they are.
 
+## Models
+
+```sh
+collie models [--harness claude|codex|opencode|pi]
+```
+
+Which models and efforts each harness installed on this Machine offers, as its host last
+read them from the harness itself: the **Harness catalogue**
+([ADR-draft-settings-read-what-harnesses-report](adr/draft-settings-read-what-harnesses-report.md)).
+`--machine <name>` reads a paired Machine's. `--harness` keeps one harness. One line per
+model, with its efforts, its default effort, and whether the harness hides it:
+
+```text
+claude    opus (Opus 5.5) · efforts low, medium, high, xhigh, max
+claude    claude-haiku-4-5-20251001 (Haiku 4.5)
+codex     gpt-6.1-sol (GPT-6.1-Sol) · efforts low, medium, high, xhigh, max, ultra · default medium
+codex     gpt-reserve (GPT-Reserve) · efforts low, medium, high, xhigh, max · default medium · hidden
+pi        from Collie's table: pi --list-models did not answer within 20s
+```
+
+Each harness answers from its own source: Claude Code the list the Agent SDK's
+`supportedModels()` reads, Codex its app server's `model/list`, Pi `pi --list-models`, and
+OpenCode `opencode models`. A harness that is not installed is left out. One that is
+installed but cannot be read, because it fails, answers in a shape Collie does not read, or
+takes longer than 20 seconds, gets a `from Collie's table: <why>` line, and its models are
+then Collie's own table. The host reads each harness at most once every 30 minutes. After a
+failure it waits a minute before the next read, and the wait doubles with each failure
+after that, up to the 30 minutes. A model in the `models.<harness>` setting that the harness
+does not list is added after the harness's own.
+
+Under `--json`, `data` is `{ "machine": null, "catalogues": [...] }`. `machine` is the
+Machine that answered, null for this one. Each catalogue is one harness:
+
+```json
+{
+  "harness": "codex",
+  "at": "2026-10-29T09:00:00.000Z",
+  "table": null,
+  "entries": [
+    {
+      "model": "gpt-6.1-sol",
+      "label": "GPT-6.1-Sol",
+      "description": "Latest workhorse model for coding and everyday work.",
+      "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "defaultEffort": "medium",
+      "hidden": false,
+      "from": "harness"
+    }
+  ]
+}
+```
+
+`at` is when the harness was last read. `table` says why it could not be read, and is null
+when it was. `efforts` is empty for a model that takes none: a Pi model that does not think,
+and every OpenCode model. `defaultEffort` is the harness's own default, where it names one.
+`from` is `harness`, `table`, or `added` for a model the `models.<harness>` setting adds.
+Chat reads the same catalogue with `collie_models`.
+
 ## Schedules
 
 ```sh
@@ -2562,7 +2620,8 @@ shipped and user Layers in full: each module as `workflow show` reads it, with i
 and the Markdown beside it named `<stem>.md` or `<stem>.<anything>.md`, the modules that
 would not load, each Persona as `persona show` gives it, and the Persona files that would
 not load. It typechecks nothing. `start` then takes what a human typed in `text`, and the host settles it
-against the workflow's own schema. `usage` reads this Machine's [Usage readings](#usage).
+against the workflow's own schema. `usage` reads this Machine's [Usage readings](#usage),
+and `models` its [Harness catalogue](#models).
 `schedules` reads this Machine's [Schedules](#schedules), and `changeSchedule` adds one,
 paused or not, or pauses, resumes or removes one, under a request id and the asker's Actor.
 `cleanup` reads what a sweep would remove and keep, and

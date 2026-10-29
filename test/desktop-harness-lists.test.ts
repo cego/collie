@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { Effect, Fiber, Stream } from "effect";
+import { Effect, Fiber, Result, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { offerOf, opensOn } from "../desktop/src/bun/chat-choices";
-import { harnessLists, type HarnessList } from "../desktop/src/bun/harness-lists";
+import { harnessLists, listedIn, type HarnessList } from "../desktop/src/bun/harness-lists";
 import { changeSettings } from "../desktop/src/bun/settings";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 
@@ -189,3 +189,44 @@ test("the first open waits for the harness list and uses its model's effort leve
       });
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   ));
+
+test("on a computer with a Machine, a harness's list is what its host read, and why not where it read none", () => {
+  const at = "2026-10-29T09:00:00.000Z";
+  const entry = {
+    description: null,
+    efforts: [],
+    defaultEffort: null,
+    hidden: false,
+    from: "harness" as const,
+  };
+  const catalogues = [
+    {
+      harness: "claude",
+      at,
+      table: null,
+      entries: [
+        {
+          ...entry,
+          model: "opus",
+          label: "Opus 5.5",
+          description: "Complex work",
+          efforts: ["low"],
+        },
+        { ...entry, model: "claude-mythos-5-1", label: "Mythos 5.1" },
+        { ...entry, model: "gpt-reserve", label: "Hidden", hidden: true },
+      ],
+    },
+    { harness: "pi", at, table: "pi --list-models said: No models available.", entries: [] },
+  ];
+  expect(listedIn(catalogues, "claude", (model) => model !== "claude-mythos-5-1")).toEqual(
+    Result.succeed([
+      { id: "opus", label: "Opus 5.5", description: "Complex work", efforts: ["low"] },
+    ]),
+  );
+  expect(listedIn(catalogues, "pi")).toEqual(
+    Result.fail("pi --list-models said: No models available."),
+  );
+  expect(listedIn(catalogues, "codex")).toEqual(
+    Result.fail("codex is not installed on this computer"),
+  );
+});

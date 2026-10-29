@@ -123,6 +123,7 @@ import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
 import { sideJobs } from "./side-jobs";
 import { Usage, usageLayer } from "./usage";
+import { HarnessCatalogues, catalogueLayer } from "./catalogue";
 import { Schedules, schedulesLayer } from "./schedules";
 import { dataHomeOf, desktopRootOf } from "./desktop";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
@@ -1306,6 +1307,7 @@ const frontDoorHandlers = (
       const forgeHttp = yield* ForgeHttp;
       const boards = shared.boards.pipe(Stream.map((built) => built.views));
       const usage = yield* Usage;
+      const harnesses = yield* HarnessCatalogues;
       const schedules = yield* Schedules;
       // Trimming rewrites the trail through one temporary file, so one read records at a time.
       const recordingUsage = yield* Semaphore.make(1);
@@ -1915,6 +1917,7 @@ const frontDoorHandlers = (
               return readings;
             }),
           ),
+        models: () => harnesses.catalogues,
         cleanup: () => plainly(judge(listed)),
         schedules: () => schedules.list,
         changeSchedule: ({ change, request }, { client }) =>
@@ -3208,6 +3211,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     const development: Development = installed.release ? {} : { development: installed.build };
     // One reader of this Machine's usage, so every door and every choice of agent paces as one.
     const usage = yield* Usage;
+    const harnesses = yield* HarnessCatalogues;
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
     const stamp = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
@@ -3268,6 +3272,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
                   ),
                 ),
                 Layer.succeed(Usage, usage),
+                Layer.succeed(HarnessCatalogues, harnesses),
               ),
             ),
           ),
@@ -3291,7 +3296,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
         Layer.tap(() => Effect.forkScoped(onceAnswering)),
       ),
     );
-  }).pipe(Effect.provide(usageLayer), Effect.orDie);
+  }).pipe(Effect.provide([usageLayer, catalogueLayer]), Effect.orDie);
 
 /**
  * A client of the host that owns `dir`, starting one if nothing is there. Every client

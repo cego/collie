@@ -1446,6 +1446,10 @@ export const setSharedSetting = (
     options.door,
   );
 
+/** A Machine's Harness catalogue, as its host last read it. */
+export const catalogueReadings = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.models(), door);
+
 /** This Machine's Usage readings, as its host last read them. */
 export const usageReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.usage(), door);

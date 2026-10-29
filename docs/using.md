@@ -1991,9 +1991,12 @@ back to the message box. Settings › Chat has no rows for them.
 A refused choice is shown in red above the message box, ending "Nothing was saved.", with
 **Dismiss**; nothing is saved.
 
-Claude Code's model list comes from your own install and login on this computer. Desktop
-reads it once per start, when the chat is first shown, with no turn started and no tokens
-spent, and keeps the successful list until it quits. Each model lists its own effort
+Claude Code's model list comes from your own install and login on this computer. Where this
+computer has a Machine, Desktop reads the list from that Machine's host, the same [Harness
+catalogue](cli.md#models) `collie models` prints. Pi's list comes from there too. Where the
+computer has no Machine, or its Collie is older, Desktop reads each harness itself. Desktop
+reads the list once per start, when the chat is first shown, with no turn started and no
+tokens spent, and keeps the successful list until it quits. Each model lists its own effort
 levels; Haiku 4.5 takes none. The menu says when the list is still being read and still lets
 you type an id. The first message waits at most 20 seconds for it. If the read fails or
 takes longer, the menu warns why and offers Collie's table, the Flock's **More Claude models**

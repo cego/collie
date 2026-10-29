@@ -144,6 +144,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `check-processes.ts`   | A check's processes from spawn to gone: marked, recorded, and ended with the host that runs them                            |
 | `usage-model.ts`       | A Subscription's Usage reading: Schemas, parsing, Exhausted; pure, so Desktop and a module share it                         |
 | `usage.ts`             | This Machine's Usage readings: Claude's endpoint, Codex's app server, status lines                                          |
+| `catalogue-model.ts`   | A Harness catalogue: its Schemas, one decoder per harness's output, Collie's table (pure)                                   |
+| `catalogue.ts`         | This Machine's Harness catalogue: each harness read on an interval, with its timeout and back-off                           |
 | `schedule-model.ts`    | A Schedule as every door reads it, and when an occurrence starts and which comes next (pure)                                |
 | `schedules.ts`         | This Machine's Schedules: their records, the one write, and the `Schedule` workflow that fires them                         |
 | `run-record.ts`        | Run records served by their owning host, including Outputs confined to the Run directory                                    |

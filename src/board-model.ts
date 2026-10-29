@@ -12,6 +12,7 @@ import { MeasureEvent } from "./measurement-model";
 export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
 import { UsageReading } from "./usage-model";
+import { HarnessCatalogue } from "./catalogue-model";
 import { HostDefinitions, SharedDefinition } from "./definitions-model";
 import { VerifySpecSchema } from "./verify-spec";
 
@@ -1648,6 +1649,8 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** This Machine's Usage readings, one per Subscription (ADR-0049). */
   Rpc.make("usage", { success: Schema.Array(UsageReading), error: HostRefused }),
+  /** This Machine's Harness catalogue, one per installed harness. */
+  Rpc.make("models", { success: Schema.Array(HarnessCatalogue), error: HostRefused }),
   /** What a sweep would remove now, and what Collie keeps and why (ADR-0045). */
   Rpc.make("cleanup", { success: CleanupReport, error: HostRefused }),
   /** This Machine's Schedules (ADR-0052). */

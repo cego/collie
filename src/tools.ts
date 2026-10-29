@@ -53,8 +53,10 @@ import {
   runShown,
   reportFor,
   showOffers,
+  catalogueReadings,
   type Door,
 } from "./lifecycle";
+import { modelsLines } from "./catalogue-model";
 import { peersOf } from "./peers";
 import { cleanupLines } from "./cleanup";
 import { taskOfWorkspace } from "./task";
@@ -150,6 +152,13 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     collie_news: () => answer(newsFacts(env)),
     collie_definitions: (input) => answer(definitionFacts(env, input)),
     collie_installation: () => answer(installationFacts(env)),
+    collie_models: (input) =>
+      answer(
+        modelsFacts(
+          input.machine === undefined ? env : { ...env, machine: input.machine },
+          input.harness,
+        ),
+      ),
     collie_hold: (input) => answer(hold(env, input)),
     collie_do: (input) => answer(carryOut(env, input)),
     collie_propose: (input) =>
@@ -415,6 +424,16 @@ const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
   const views = read.value.tasks;
   const now = yield* Clock.currentTimeMillis;
   return herdLines(views, now);
+});
+
+/** What `collie_models` answers with: a Machine's Harness catalogue, as `collie models` prints it. */
+const modelsFacts = Effect.fn("Tools.modelsFacts")(function* (
+  env: PluginEnv,
+  harness: string | undefined,
+) {
+  const read = yield* catalogueReadings(env, yield* toolDoor(env));
+  if (!read.ok) return `- (the models could not be read: ${read.error.message})`;
+  return modelsLines(read.value, harness);
 });
 
 /** The action kinds that are not about one Run, so the selection never stands in for theirs. */
