@@ -3504,6 +3504,9 @@ It waits for its Improvements, then writes `summary.md` in its Run directory: ea
 filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
 Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
+When the forge cannot be read, the retrospective still runs and `summary.md` keeps its
+findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
+comment or Improvement is started on that path.
 
 An Improvement that failed to start, because its issues could not be read back, is started
 again by the next `self-improve` Run of the same project, the next day, from an earlier

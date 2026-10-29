@@ -270,14 +270,7 @@ export default defineWorkflow({
           Effect.catch((failure) => Effect.succeed({ refused: failure.reason })),
         ),
       });
-      if ("refused" in issues) {
-        yield* host.record(
-          run.id,
-          `Retrospective kept in the Run; no issues filed: ${issues.refused}`,
-        );
-        return `Retrospective kept in ${place.dir}; no issues filed: ${issues.refused}`;
-      }
-      const open = issues;
+      const open = "refused" in issues ? [] : issues;
 
       const triaging = triageStep(
         agentWork({
@@ -292,7 +285,9 @@ export default defineWorkflow({
             runs: window.runs.join("\n"),
             report: asJson(window.report),
             issues:
-              open.length === 0
+              "refused" in issues
+                ? `Unavailable: ${issues.refused}. Keep the retrospective locally; no issues or Improvements will be started.`
+                : open.length === 0
                 ? "None."
                 : open
                     .map(
@@ -309,6 +304,22 @@ export default defineWorkflow({
       const triaged: Triage = quiet
         ? { findings: [], improvements: [], left_out: [] }
         : yield* triaging;
+      const file = `${place.dir}/summary.md`;
+      if ("refused" in issues) {
+        yield* Activity.make({
+          name: "summary",
+          success: Schema.Void,
+          error: WorkflowError,
+          execute: FileSystem.FileSystem.pipe(
+            Effect.flatMap((fs) => fs.writeFileString(file,
+              `# Retrospective ${run.id}\n\nNo issues filed: ${issues.refused}\n\n\`\`\`json\n${asJson(triaged)}\n\`\`\`\n`,
+            )),
+            Effect.mapError((cause) => new WorkflowError({ reason: cause.message })),
+          ),
+        });
+        yield* host.record(run.id, `Retrospective kept in ${file}; no issues filed: ${issues.refused}`);
+        return `Retrospective kept in ${file}; no issues filed: ${issues.refused}`;
+      }
 
       const sorted = sortOut(
         triaged.findings,
@@ -443,7 +454,6 @@ export default defineWorkflow({
         { concurrency: "unbounded" },
       );
 
-      const file = `${place.dir}/summary.md`;
       yield* Activity.make({
         name: "summary",
         success: Schema.Void,
