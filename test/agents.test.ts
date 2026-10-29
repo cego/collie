@@ -93,6 +93,7 @@ import type { HarnessCatalogue } from "../src/catalogue-model";
 let rig: Rig;
 let dir: string;
 interface Clearing {
+  readonly instructions?: string;
   readonly clears?: ReadonlyArray<string>;
   readonly skill?: string;
   readonly claudeSubagents?: ClaudeSubagents;
@@ -3493,17 +3494,270 @@ test("a message nobody can say arrived is not called delivered when it is said a
     }),
   ));
 
-test("a delivery this harness has not been shown to take is refused rather than sent and hoped for", () =>
+test("an idle Codex takes a now message through the supported boundary transport", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       const codex = { harness: "codex", model: "default" };
       yield* session(started("r1"), codex);
       const told = yield* session(say("r1", "stop what you are doing", "steer-now", "now"), codex);
-      expect(told.delivered).toBe(false);
-      expect(told.detail).toContain("capability_unproven");
-      // Nothing was typed at it: the gate is in the sender, not in front of it.
-      expect(prompts(yield* rig.calls())).not.toContain("stop what you are doing");
+      expect(told).toMatchObject({ delivered: true, observed: true });
+      expect(prompts(yield* rig.calls())).toContain("stop what you are doing");
+    }),
+  ));
+
+test("an unsupported busy delivery survives restart and reaches the idle agent once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const codex = { harness: "codex", model: "default" };
+      yield* session(started("r1"), codex);
+      const busy = new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" }));
+      const text = "Revise the plan.\n  Keep my exact words.  ";
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const queued = yield* session(say("r1", text, "queued-1", "now"), {
+          ...codex,
+          herdr: busy,
+        });
+        expect(queued).toMatchObject({ delivered: false, queued: true });
+      }
+      expect(prompts(yield* rig.calls())).not.toContain(text);
+      yield* session(tendIdle);
+      yield* session(tendIdle);
+      expect(prompts(yield* rig.calls()).filter((one) => one === text)).toHaveLength(1);
+      const sent = (yield* deliveriesOf(rig.pluginEnv().stateDir, "r1")).filter(
+        (one) => one.delivery.cause.kind === "steer",
+      );
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.delivery).toMatchObject({ mode: "boundary", state: "acknowledged" });
+    }),
+  ));
+
+const tendIdle = Agents.pipe(
+  Effect.flatMap((agents) =>
+    agents.tendQuestions(() => ({
+      ask: () => Effect.void,
+      asked: Effect.succeed([]),
+      close: () => Effect.void,
+    })),
+  ),
+);
+
+test.each([true, false])(
+  "a queued retry keeps its accepted words and actor (attributed: %s)",
+  (attributed) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"), { harness: "codex", model: "default" });
+        const text = "  Original accepted comment. Attached: /given/original.png  ";
+        const request = "accepted-comment";
+        const queued = yield* session(
+          Agents.pipe(
+            Effect.flatMap((agents) =>
+              agents.steer({
+                runId: "r1",
+                text,
+                request,
+                mode: "now",
+                actor: attributed ? { origin: "desktop" } : undefined,
+              }),
+            ),
+          ),
+          { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+        );
+        expect(queued).toMatchObject({ delivered: false, queued: true });
+        const retry = Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              text: "Replacement text. Attached: /given/replacement.png",
+              request,
+              mode: "now",
+              actor: { origin: "cli" },
+            }),
+          ),
+        );
+        const sent = yield* session(retry);
+        expect(sent).toMatchObject({ delivered: true, observed: true });
+        const again = yield* session(retry);
+        expect(again).toEqual(sent);
+        yield* session(tendIdle);
+        const comments = prompts(yield* rig.calls()).filter((one) => one.includes("Attached:"));
+        expect(comments).toHaveLength(1);
+        expect(comments[0]?.endsWith(text)).toBe(true);
+        expect(comments[0]).not.toContain("Replacement");
+        expect(comments[0]).not.toContain("From the human, in the CLI");
+        if (attributed) expect(comments[0]).toContain("From the human, in Desktop");
+        else expect(comments[0]).toBe(text);
+      }),
+    ),
+);
+
+test("a queued retry keeps its accepted recipient even when the retry names a missing agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { harness: "codex", model: "default" });
+      const queued = yield* session(
+        say("r1", "Keep this recipient.", "accepted-recipient", "now"),
+        {
+          herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })),
+        },
+      );
+      expect(queued).toMatchObject({ delivered: false, queued: true });
+      const retry = Agents.pipe(
+        Effect.flatMap((agents) =>
+          agents.steer({
+            runId: "r1",
+            text: "Keep this recipient.",
+            request: "accepted-recipient",
+            mode: "now",
+            agent: "not-launched",
+          }),
+        ),
+      );
+      const sent = yield* session(retry);
+      expect(sent).toMatchObject({ agent: agentFor("r1"), delivered: true, observed: true });
+      expect(yield* session(retry)).toEqual(sent);
+      expect(
+        prompts(yield* rig.calls()).filter((one) => one === "Keep this recipient."),
+      ).toHaveLength(1);
+    }),
+  ));
+
+test.each([
+  ["agent", false],
+  ["agent", true],
+  ["to", false],
+  ["to", true],
+  ["operation", false],
+  ["operation", true],
+] as const)("a queued %s address pins its named agent (alias: %s)", (field, alias) =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null]);
+      const ask = {
+        runId: "r1",
+        operation: "plan",
+        role: "planner",
+        workflow: "plan",
+        harness: "codex",
+        agent: "plan-seat",
+        model: null,
+        effort: null,
+        permissions: null,
+        task: null,
+        cwd: rig.projectDir,
+        prompt: "Write the plan.",
+        output: `${dir}/plan.json`,
+        skill: null,
+      };
+      const first = yield* session(Agents.pipe(Effect.flatMap((agents) => agents.launch(ask))));
+      const queued = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              [field]: alias ? "plan-seat" : first.agent,
+              text: "Only the named planner should revise this.",
+              request: "pinned-comment",
+              mode: "now",
+            }),
+          ),
+        ),
+        { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+      );
+      expect(queued).toMatchObject({ delivered: false, queued: true });
+      const next = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch({ ...ask, sequence: 2 }))),
+      );
+      expect(next.agent).not.toBe(first.agent);
+      yield* session(tendIdle);
+      yield* session(tendIdle);
+      const comments = (yield* rig.calls()).filter(
+        (call) => call.cmd === "agent prompt" && call.argv?.[3]?.includes("Only the named planner"),
+      );
+      expect(comments.map((call) => call.argv?.[2])).toEqual([first.agent]);
+    }),
+  ),
+);
+
+test("a queued operation follows a harness switch and preserves its long comment and attachment", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }, null]);
+      yield* session(started("r1"), { harness: "pi", model: "default" });
+      const first = yield* launchOf("r1");
+      const text = `${"é".repeat(5_000)}\n  exact comment  \nAttached: /given/screenshot.png`;
+      yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "reviewer",
+              text,
+              request: "switch-comment",
+              mode: "now",
+              actor: { origin: "desktop" },
+            }),
+          ),
+        ),
+        { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+      );
+      const next = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          yield* agents.halt("r1");
+          return yield* agents.launch({
+            ...first,
+            sequence: 2,
+            harness: "codex",
+            agent: null,
+            model: null,
+            effort: null,
+            permissions: null,
+            task: null,
+            cwd: rig.projectDir,
+            prompt: "Continue the same work.",
+            skill: null,
+          });
+        }),
+      );
+      yield* session(tendIdle);
+      yield* session(tendIdle);
+      const calls = (yield* rig.calls()).filter(
+        (call) =>
+          call.cmd === "agent prompt" &&
+          call.argv?.[2] === next.agent &&
+          call.argv?.[3]?.includes("Their message is in"),
+      );
+      expect(calls).toHaveLength(1);
+      const typed = calls[0]?.argv?.[3] ?? "";
+      expect(typed).toContain("From the human, in Desktop");
+      const file = /Their message is in (\S+)\./.exec(typed)?.[1];
+      expect(file).toBeDefined();
+      expect(yield* read(file!)).toBe(text);
+      expect(next.agent).not.toBe(first.agent);
+    }),
+  ));
+
+test("an uncertain queued submission is retained and never automatically repeated", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const codex = { harness: "codex", model: "default" };
+      yield* session(started("r1"), codex);
+      yield* session(say("r1", "keep this once", "uncertain-queue", "now"), {
+        ...codex,
+        herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })),
+      });
+      yield* session(tendIdle, { herdr: new SilentPrompts(rig.pluginEnv()) });
+      yield* session(tendIdle);
+      const again = yield* session(say("r1", "keep this once", "uncertain-queue", "now"));
+      expect(again.delivered).toBe(false);
+      expect(again.detail).toContain("unknown");
+      expect(prompts(yield* rig.calls())).not.toContain("keep this once");
     }),
   ));
 
@@ -5357,6 +5611,153 @@ test("subagent policy fields follow workflow, role, scope and call preferences w
     }),
   ));
 
+const SkillOverridesSettings = Schema.fromJsonString(
+  Schema.Struct({
+    skillOverrides: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  }),
+);
+
+const skillsInstalled = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  for (const name of ["tdd", "deploy", "kibana-dashboards", "elastic-audit"]) {
+    yield* fs.makeDirectory(`${rig.root}/.claude/skills/${name}`, { recursive: true });
+    yield* fs.writeFileString(
+      `${rig.root}/.claude/skills/${name}/SKILL.md`,
+      `---\nname: ${name}\ndescription: What ${name} is for.\n---\n`,
+    );
+  }
+  yield* writePersona(rig.userDir, "reviewer", "You review, with {{skill:tdd}}.");
+  clearing = { skill: "deploy" };
+  yield* withProfile({ "*": { claude: { skillOverrides: { "elastic-audit": "off" } } } });
+  yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+});
+
+test("a Claude skill named in the workflow prompt stays fully described", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* skillsInstalled;
+      clearing = {
+        ...clearing,
+        instructions: "Review {{target}} with {{skill:kibana-dashboards}}.",
+      };
+      yield* session(started("r1"));
+      const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(settings.skillOverrides).toEqual({ "elastic-audit": "off" });
+    }),
+  ));
+
+test("Claude skill selection uses the config directory from the agent profile", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* skillsInstalled;
+      yield* withProfile({ "*": { env: { CLAUDE_CONFIG_DIR: `${rig.root}/alternate` } } });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${rig.root}/alternate/skills/other`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.root}/alternate/skills/other/SKILL.md`,
+        "---\nname: other\ndescription: Another skill\n---\n",
+      );
+      yield* session(started("r1"));
+      const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(settings.skillOverrides).toEqual({ other: "name-only" });
+    }),
+  ));
+
+test("Claude skills stay inherited when the config directory is held in an environment file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* skillsInstalled;
+      const fs = yield* FileSystem.FileSystem;
+      const file = `${rig.root}/config-dir`;
+      yield* fs.writeFileString(file, `${rig.root}/alternate\n`);
+      yield* fs.chmod(file, 0o600);
+      yield* withProfile({ "*": { env: { CLAUDE_CONFIG_DIR: { file } } } });
+      yield* session(started("r1"));
+      const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(settings.skillOverrides).toBeUndefined();
+    }),
+  ));
+
+test.each([0, 1000])(
+  "a Claude agent keeps named skills and operator choices with compaction at %s",
+  (compactAtTokens) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* skillsInstalled;
+        yield* session(started("r1"), { compactAtTokens, ports: claudeSettingsControls() });
+        const text = yield* settingsAt(yield* rig.calls());
+        const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(text);
+        expect(settings.skillOverrides).toEqual({
+          "kibana-dashboards": "name-only",
+          "elastic-audit": "off",
+        });
+        if (compactAtTokens > 0) expect(text).toContain('"hooks"');
+      }),
+    ),
+);
+
+test("Claude skill selection is refreshed on recovery and preserves new local choices", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* skillsInstalled;
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
+      yield* interrupted("r1", prompted("Your task for this step"));
+      const initial = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(initial.skillOverrides).toEqual({
+        "kibana-dashboards": "name-only",
+        "elastic-audit": "off",
+      });
+      yield* session(halted("r1"), { collectMs: 30_000 });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${rig.projectDir}/.claude`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.projectDir}/.claude/settings.local.json`,
+        '{"skillOverrides":{"kibana-dashboards":"on"}}',
+      );
+      yield* fs.makeDirectory(`${rig.root}/.claude/skills/new-noise`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.root}/.claude/skills/new-noise/SKILL.md`,
+        "---\nname: new-noise\ndescription: Added since the first launch\n---\n",
+      );
+      const result = yield* session(started("r1"));
+      expect(result._tag).toBe("Success");
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+      const recovered = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(recovered.skillOverrides).toEqual({
+        "new-noise": "name-only",
+        "elastic-audit": "off",
+      });
+    }),
+  ));
+
+test.each([["2.1.128 (Claude Code)"], [null]])(
+  "a Claude that cannot take skillOverrides (%s) lists every skill as before",
+  (installed) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* skillsInstalled;
+        yield* session(started("r1"), { version: () => Effect.succeed(installed) });
+        const settings = yield* Schema.decodeUnknownEffect(SkillOverridesSettings)(
+          yield* settingsAt(yield* rig.calls()),
+        );
+        expect(settings.skillOverrides).toEqual({ "elastic-audit": "off" });
+        expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+          "every skill described: skillOverrides needs Claude Code 2.1.129",
+        );
+      }),
+    ),
+);
+
 test.each([
   { enabled: "false" },
   { cacheTtl: "2h" },
@@ -5748,17 +6149,20 @@ test("a Run that created its branch, which the forge leaves unprotected, may rew
     }),
   ));
 
-test("a Codex launch writes no autoMode", () =>
+test("a Codex launch writes no autoMode or Claude skill overrides", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* skillsInstalled;
       yield* session(started("r1"), { harness: "codex", model: "default" });
 
       const calls = yield* rig.calls();
       expect(launchArgs(calls).join(" ")).not.toContain("autoMode");
-      for (const path of yield* fs.readDirectory(`${dir}/agents/r1`))
-        expect(yield* read(`${dir}/agents/r1/${path}`)).not.toContain("autoMode");
+      for (const path of yield* fs.readDirectory(`${dir}/agents/r1`)) {
+        const contents = yield* read(`${dir}/agents/r1/${path}`);
+        expect(contents).not.toContain("autoMode");
+        expect(contents).not.toContain("skillOverrides");
+      }
     }),
   ));
 

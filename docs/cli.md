@@ -429,7 +429,10 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   operation ([steering](steering.md#who-a-steer-reaches-and-what-it-says-came-of-it)). It
   tells you whether the agent was seen to take it: `Delivered to <agent> (observed: <how>).`,
   or `Sent to <agent>, not observed.` with how to go to its pane, and `data.observed` and
-  `data.how` say the same. Anything not sent is `operation_failed`, with why. The agent sees who sent it on its
+  `data.how` say the same. An unproven `now` mode keeps the message durably until the agent
+  is idle, returning `data.queued: true, data.delivered: false` with an explicit queued
+  receipt. The host submits it automatically without answering any Run Choice.
+  Other messages not sent are `operation_failed`, with why. The agent sees who sent it on its
   first line. A message whose typed form would pass 3 lines or 700 characters is kept whole
   as a file in the Run's `attachments/`, the agent is told where to read it, and the
   receipt says to ask for an action auto mode must clear in a shorter message

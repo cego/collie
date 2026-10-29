@@ -27,6 +27,7 @@ import {
   Predicate,
   Schedule,
   Schema,
+  Struct,
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as Activity from "effect/workflow/Activity";
@@ -105,7 +106,10 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr, herdrFailureReason, type AgentInfo, type HerdrError } from "./herdr";
+import { Herdr, herdrFailureReason, isSettled, type AgentInfo, type HerdrError } from "./herdr";
+import { gate } from "./steering-caps";
+import { actorOf } from "./audit";
+import { keepQueued, readQueue, type Queued } from "./delivery-queue";
 import {
   agentName,
   agentTabLabel,
@@ -130,7 +134,7 @@ import {
   type AgentEntry,
   type Incarnation,
 } from "./registry";
-import { steerTarget } from "./steer-target";
+import { ROLES, steerTarget } from "./steer-target";
 import {
   jsonSchemaFor,
   AgentScopes,
@@ -153,6 +157,7 @@ import {
   parseProfile,
   roleProfile,
   type ClaudeOverlay,
+  type RoleProfile,
 } from "./profile";
 import { isString } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
@@ -160,7 +165,12 @@ import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
 import { readTask, withTaskLock, writeTask } from "./task";
-import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
+import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
+import {
+  quietSkills,
+  SKILL_OVERRIDES_VERSION,
+  MAIN_CHECKOUT_SKILLS_VERSION,
+} from "./skill-overrides";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
 export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
@@ -450,6 +460,7 @@ export interface Steered {
   readonly agent: string;
   readonly delivered: boolean;
   readonly detail: string;
+  readonly queued?: boolean;
   /** Not delivered because no incarnation of the agent is alive. */
   readonly gone?: boolean;
   /** Whether the agent was seen to take it; absent where nothing was sent. */
@@ -1470,6 +1481,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       readonly actor?: Asker;
       /** The session the agent is in, where it is not the host's own. */
       readonly herdr?: Herdr;
+      readonly idleOnly?: boolean;
     },
   ) {
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
@@ -1499,6 +1511,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       actor: fitted.actor,
       cause: { kind: delivery.kind, ref: delivery.ref },
       mode: delivery.mode ?? "boundary",
+      idleOnly: delivery.idleOnly,
       // Work, a repair and a steer share a causal key per thing they are about, which is
       // what makes the second copy refusable; a correction's is its constraint's.
       intentVersion: delivery.intentVersion ?? 0,
@@ -1765,6 +1778,46 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     if (message !== null) yield* log(runId, `trust ${adapter.id}: ${message}`);
   });
 
+  const quietFor = Effect.fn("Agents.quietFor")(function* (
+    ask: AgentAsk,
+    agent: string,
+    persona: string,
+    profile: RoleProfile,
+  ) {
+    const installed = yield* (host.version ?? installedVersion)("claude");
+    if (installed === null || !atLeast(installed, SKILL_OVERRIDES_VERSION)) {
+      yield* log(
+        ask.runId,
+        `${agent}: every skill described: skillOverrides needs Claude Code ${SKILL_OVERRIDES_VERSION}; installed: ${installed ?? "unknown"}`,
+      );
+      return {};
+    }
+    const claudeDir =
+      profile.env?.CLAUDE_CONFIG_DIR ??
+      host.env.raw.CLAUDE_CONFIG_DIR ??
+      `${host.env.home}/.claude`;
+    if (!isString(claudeDir)) {
+      yield* log(
+        ask.runId,
+        `${agent}: every skill described: CLAUDE_CONFIG_DIR is held in an environment file`,
+      );
+      return {};
+    }
+    const kept = [
+      ...mentionedSkills(`${persona}\n${ask.prompt}`),
+      ...Object.keys(profile.claude?.skillOverrides ?? {}),
+    ];
+    if (ask.skill !== null) kept.push(ask.skill);
+    return yield* quietSkills(
+      {
+        claudeDir,
+        cwd: ask.cwd,
+        mainCheckoutSkills: atLeast(installed, MAIN_CHECKOUT_SKILLS_VERSION),
+      },
+      kept,
+    );
+  });
+
   /** A pane, an agent in it, and the registry entry that makes it addressable. */
   const start = Effect.fn("Agents.start")(function* (
     ask: AgentAsk,
@@ -1841,7 +1894,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       });
     yield* ensureTrusted(ask.runId, adapter, ask.cwd);
     const persona = `${dirFor(ask.runId)}/${stemOf(ask)}.persona.md`;
-    yield* write(persona, `${yield* personaOf(ask.persona ?? ask.role)}\n`);
+    const personaBody = yield* personaOf(ask.persona ?? ask.role);
+    yield* write(persona, `${personaBody}\n`);
     const { mcpConfig, piExtension } = yield* Effect.promise(() => import("./chat"));
     const { TOOLS } = yield* Effect.promise(() => import("./tools"));
     const command = selfCommand();
@@ -1934,6 +1988,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                   ),
                 ),
                 `${dirFor(ask.runId)}/${stemOf(ask)}`,
+                yield* quietFor(ask, agent, personaBody, profile),
                 ask.claudeSubagents,
               )
             : controls;
@@ -2387,6 +2442,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        const pendingRuns = yield* fs
+          .readDirectory(launchDir(host.dir, ""))
+          .pipe(Effect.orElseSucceed(() => []));
+        for (const run of pendingRuns) {
+          for (const queued of yield* readQueue(dirFor(run)).pipe(
+            Effect.catch((cause) =>
+              log(run, `Delivery queue could not be read: ${reason(cause)}`).pipe(Effect.as([])),
+            ),
+          )) {
+            if (queued.result !== null) continue;
+            yield* steer({ ...queued, mode: "now" });
+          }
+        }
         const named = yield* fs
           .readDirectory(yield* controlDir(host.env.stateDir, ""))
           .pipe(Effect.orElseSucceed(() => []));
@@ -2783,9 +2851,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     under(
       Effect.gen(function* () {
         const { to, operation, agent } = options;
+        const queued = (yield* readQueue(dirFor(options.runId)).pipe(Effect.orDie)).find(
+          (one) => one.request === options.request,
+        );
+        if (queued?.result != null) return queued.result;
         const launched = steerTarget(
           yield* candidatesOf(options.runId),
-          { to, operation, agent },
+          queued ?? { to, operation, agent },
           launchedAs,
         );
         if (launched === undefined) {
@@ -2800,19 +2872,97 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // After the step it is being given, so its work reaches it first.
         const out = stepsGoingOut.get(launched.agent);
         if (out !== undefined) yield* Deferred.await(out);
-        const sent = yield* deliver(launched, options.text, {
+        const unsupported =
+          options.mode === "now" &&
+          (yield* gate(launched.harness, "now").pipe(
+            Effect.as(false),
+            Effect.catch(() => Effect.succeed(true)),
+          ));
+        const fallback = unsupported || queued !== undefined;
+        const named = agent ?? operation ?? (Object.hasOwn(ROLES, to ?? "") ? undefined : to);
+        const pinned =
+          agent !== undefined ||
+          (named !== undefined &&
+            named !== launched.operation &&
+            (named === launched.agent || launchedAs(launched, named)));
+        const pending: Types.Mutable<Queued> = queued ?? {
+          runId: options.runId,
+          request: options.request,
+          text: options.text,
+          ...(pinned ? { agent: launched.agent } : { operation: launched.operation }),
+          result: null,
+        };
+        if (options.actor !== undefined && queued === undefined) {
+          pending.actor = Struct.omit(actorOf(options.actor, options.request), ["requestId"]);
+        }
+        if (fallback) {
+          const found = yield* entryFor(launched, launched.agent, null);
+          if (found.entry === null)
+            return {
+              agent: launched.agent,
+              delivered: false,
+              detail: found.reason ?? "no such agent",
+              gone: found.gone,
+            };
+          yield* keepQueued(dirFor(options.runId), pending).pipe(Effect.orDie);
+          const status = yield* host.herdr
+            .agentStatus(launched.agent)
+            .pipe(Effect.orElseSucceed(() => "unknown" as const));
+          if (!isSettled(status))
+            return {
+              agent: launched.agent,
+              delivered: false,
+              queued: true,
+              detail:
+                "Queued durably; the host will deliver when this agent is idle, without answering its Run's choices.",
+            };
+          const previous = (yield* deliveriesOf(host.env.stateDir, options.runId)).find(
+            (one) =>
+              one.delivery.cause.kind === "steer" &&
+              one.delivery.cause.ref === options.request &&
+              !["failed", "superseded"].includes(one.delivery.state),
+          )?.delivery;
+          if (previous !== undefined) {
+            const result = SENT_STATES.has(previous.state)
+              ? receipt(previous.agent, {
+                  observed:
+                    previous.state === "acknowledged" ? "taken when it was first sent" : null,
+                })
+              : {
+                  agent: previous.agent,
+                  delivered: false,
+                  detail: `${previous.id} is ${previous.state}; reconcile before resending`,
+                };
+            yield* keepQueued(dirFor(options.runId), { ...pending, result }).pipe(Effect.orDie);
+            return result;
+          }
+        }
+        const sent = yield* deliver(launched, pending.text, {
           kind: "steer",
           ref: options.request,
-          mode: options.mode,
-          actor: options.actor,
+          mode: fallback ? "boundary" : options.mode,
+          idleOnly: fallback,
+          actor: pending.actor,
         });
         yield* log(
           options.runId,
           sent.sent
-            ? toldLine(launched.agent, options.text)
-            : `${launched.agent}: could not be told "${firstLine(options.text)}" (${sent.why})`,
+            ? toldLine(launched.agent, pending.text)
+            : `${launched.agent}: could not be told "${firstLine(pending.text)}" (${sent.why})`,
         );
-        if (sent.sent) return receipt(launched.agent, sent);
+        if (sent.sent) {
+          const result = receipt(launched.agent, sent);
+          if (fallback)
+            yield* keepQueued(dirFor(options.runId), { ...pending, result }).pipe(Effect.orDie);
+          return result;
+        }
+        if (fallback && !sent.why.startsWith("unknown:"))
+          return {
+            agent: launched.agent,
+            delivered: false,
+            queued: true,
+            detail: `Queued durably; waiting for a supported idle submission (${sent.why}).`,
+          };
         const alive = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
         return {
           agent: launched.agent,
@@ -3230,6 +3380,7 @@ const claudeSettings = (
   overlay: ClaudeOverlay,
   autoMode: AutoModeBlock,
   stem: string,
+  quiet: Readonly<Record<string, string>>,
   policy?: ClaudeSubagents,
 ) =>
   Effect.gen(function* () {
@@ -3244,10 +3395,12 @@ const claudeSettings = (
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.JsonObject))),
             Effect.orDie,
           );
+    const skillOverrides = { ...quiet, ...overlay.skillOverrides };
     const merged = {
       ...mergeClaudeSettings(collie, overlay),
       autoMode: { ...autoMode },
     };
+    if (Object.keys(skillOverrides).length > 0) Object.assign(merged, { skillOverrides });
     if (policy !== undefined) Object.assign(merged, subagentSettings(policy));
     yield* write(path, `${encodeSettings(merged)}\n`);
     return passed === undefined ? [...controls, "--settings", path] : controls;

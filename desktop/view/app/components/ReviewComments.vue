@@ -14,7 +14,14 @@ const props = defineProps<{
 const { drafts, edit, remove, clear } = useReviewDrafts(() => props);
 const { run } = useActions();
 
-const offered = computed(() => deliveryChoices(props.launches, props.live, props.protocol));
+const offered = computed(() =>
+  deliveryChoices(
+    props.launches,
+    props.live,
+    props.protocol,
+    drafts.value.some((draft) => draft.anchor._tag === "Plan") ? "planner" : undefined,
+  ),
+);
 /** The human's choice while the Run still offers it, else the first offered. */
 const picked = ref<string>();
 const choice = computed(

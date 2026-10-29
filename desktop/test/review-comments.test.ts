@@ -68,8 +68,18 @@ test("the message numbers each comment in the order written, with its place, quo
       "> stamp",
       "",
       words,
+      "",
+      "Revise the plan and tickets where these comments call for changes. Preserve the Run's scope and constraints. Leave its next-choice menu unanswered.",
     ].join("\n"),
   );
+});
+
+test("a plan revision instruction preserves exact comments and does not select an implementation choice", () => {
+  const words = "  Start with DEV only.\nDo not lose this whitespace.  ";
+  const message = compose([plan("p", "SPEC.md", "STAGE", words)]);
+  expect(message).toContain(words);
+  expect(message).toContain("Revise the plan and tickets");
+  expect(message).toContain("Leave its next-choice menu unanswered.");
 });
 
 test("one comment is said as one", () => {
