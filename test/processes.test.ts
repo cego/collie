@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Clock, Effect, FileSystem } from "effect";
+import { Clock, Effect, FileSystem, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   bindingsOf,
@@ -48,14 +48,16 @@ test("a running process's group and bindings are read, and a gone one has neithe
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const leader = yield* spawner.spawn(
-        ChildProcess.make("sleep", ["30"], {
+        ChildProcess.make("sh", ["-c", "echo ready; while :; do sleep 1; done"], {
           env: { COLLIE_PROBE: "carried" },
           extendEnv: true,
           detached: true,
-          stdout: "ignore",
+          stdout: "pipe",
           stderr: "ignore",
         }),
       );
+      // Until it has exec'd, /proc shows its parent's environment, or none.
+      yield* Stream.runDrain(Stream.take(Stream.decodeText(leader.stdout), 1));
       expect(yield* groupOf(leader.pid)).toBe(leader.pid);
       // Without a readable /proc, a binding proves nothing.
       expect(yield* bindingsOf(leader.pid, ["COLLIE_PROBE", "COLLIE_ABSENT"])).toEqual(
@@ -65,6 +67,18 @@ test("a running process's group and bindings are read, and a gone one has neithe
       const gone = 2 ** 22 + 1;
       expect(yield* groupOf(gone)).toBeNull();
       expect(yield* bindingsOf(gone, ["COLLIE_PROBE"])).toBeNull();
+    }),
+  ));
+
+test("an environ /proc shows empty, as mid-exec, proves nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const midExec = FileSystem.makeNoop({ readFileString: () => Effect.succeed("") });
+      expect(
+        yield* bindingsOf(7, ["COLLIE_PROBE"]).pipe(
+          Effect.provideService(FileSystem.FileSystem, midExec),
+        ),
+      ).toBeNull();
     }),
   ));
 
