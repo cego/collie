@@ -4,6 +4,7 @@ import { processStartTime } from "../src/lock";
 import { budgetOf, entriesOf } from "../tools/budget";
 import { inTurn } from "../tools/suite-lock";
 import {
+  averageTimings,
   binDirectory,
   isTargeted,
   kindOf,
@@ -255,6 +256,16 @@ test("a whole suite with no timings starts from the seed, without its deleted fi
       expect(yield* fs.readFileString(seed)).toBe(recorded);
     }).pipe(Effect.scoped),
   ));
+
+test("a seed takes each file's mean over the records that timed it, longest first", () => {
+  const seed = averageTimings([
+    { "test/a.test.ts": 1000, "test/b.test.ts": 3001 },
+    { "test/a.test.ts": 2001 },
+    { "test/c.test.ts": 500 },
+  ]);
+  expect(seed).toEqual({ "test/a.test.ts": 1501, "test/b.test.ts": 3001, "test/c.test.ts": 500 });
+  expect(Object.keys(seed)).toEqual(["test/b.test.ts", "test/a.test.ts", "test/c.test.ts"]);
+});
 
 test("a run asks for its kind's workers, or the --parallel its caller passed, which it hands on as its own", () => {
   const budget = budgetOf(24);
