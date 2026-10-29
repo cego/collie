@@ -1,7 +1,7 @@
 // The GitLab adapter: everything Collie asks GitLab, through `glab` or over HTTP with
 // glab's token.
 
-import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
 import {
   mrPath,
   mrWords,
@@ -1173,20 +1173,11 @@ function clone<R>(
     )).stdout.trim();
     if (token === "") return { ok: false, reason: `could not authenticate to ${host}` };
     const credentials = Buffer.from(`oauth2:${token}`).toString("base64");
-    const cloned = yield* run(
-      "env",
-      [
-        "GIT_CONFIG_COUNT=1",
-        "GIT_CONFIG_KEY_0=http.extraHeader",
-        `GIT_CONFIG_VALUE_0=Authorization: Basic ${credentials}`,
-        "git",
-        "clone",
-        "--quiet",
-        `https://${project}.git`,
-        into,
-      ],
-      cwd,
-    );
+    const cloned = yield* run("git", ["clone", "--quiet", `https://${project}.git`, into], cwd, {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.extraHeader",
+      GIT_CONFIG_VALUE_0: Redacted.make(`Authorization: Basic ${credentials}`),
+    });
     return cloned.code === 0
       ? { ok: true, reason: "" }
       : { ok: false, reason: whatItSaid(cloned) || "git clone failed" };

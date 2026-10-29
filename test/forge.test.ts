@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { Clock, ConfigProvider, Deferred, Effect, Fiber, FileSystem, Schema } from "effect";
+import {
+  Clock,
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Redacted,
+  Schema,
+} from "effect";
 import { TestClock } from "effect/testing";
+import { ChildProcessSpawner } from "effect/process";
 import type { MrForge } from "../src/board-model";
 import { FORGES } from "../src/forge/forge";
 import { forgeHttpLayer, forgeHttpTest, type ForgeHttp } from "../src/forge/http";
@@ -1844,6 +1854,47 @@ for (const name of ["gitlab", "github"] as const) {
       }),
     ));
 }
+
+test("a gitlab clone that cannot start shows glab's token in neither its command line nor its reason", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const token = "glpat-SECRET";
+      const header = `Authorization: Basic ${Buffer.from(`oauth2:${token}`).toString("base64")}`;
+      const fake = fakeForge("gitlab", model("gitlab", { token }));
+      // The fake records the clone; the real runner then fails to start it.
+      const run: Runner<ChildProcessSpawner.ChildProcessSpawner> = (cmd, args, cwd, env) =>
+        fake
+          .run(cmd, args, cwd, env)
+          .pipe(
+            Effect.andThen((ran) =>
+              args.includes("clone")
+                ? shell("collie-no-such-git", args, cwd, env)
+                : Effect.succeed(ran),
+            ),
+          );
+
+      const cwd = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "forge-clone-",
+      });
+      const cloned = yield* FORGES.gitlab.clone(PROJECT.gitlab, `${cwd}/into`, cwd, run);
+
+      expect(cloned.ok).toBe(false);
+      const at = fake.calls.findIndex((call) => call.includes(" clone "));
+      expect(at).toBeGreaterThan(-1);
+      const shown = `${fake.calls[at]}\n${cloned.reason}`;
+      expect(shown).not.toContain(token);
+      expect(shown).not.toContain(header.slice("Authorization: Basic ".length));
+      const env = Object.entries(fake.environments[at] ?? {}).map(([key, value]) => [
+        key,
+        Redacted.isRedacted(value) ? `redacted ${Redacted.value(value)}` : value,
+      ]);
+      expect(Object.fromEntries(env)).toEqual({
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "http.extraHeader",
+        GIT_CONFIG_VALUE_0: `redacted ${header}`,
+      });
+    }),
+  ));
 
 for (const name of ["gitlab", "github"] as const) {
   test(`a ${name} clone keeps a credential helper that asks ${CLI[name]} at each use, and no token`, () =>

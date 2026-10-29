@@ -22,7 +22,7 @@ import type { MrForge } from "../../src/board-model";
 import { forgeHttpTest, type ForgeHttp } from "../../src/forge/http";
 import { runEffect } from "./effect";
 import { glabExpiry, MONTHS } from "../../src/forge/gitlab";
-import { shell, type Ran, type Runner } from "../../src/mr";
+import { shell, type Ran, type Runner, type RunnerEnv } from "../../src/mr";
 import type { FakeBin } from "./bin";
 import { recordStart } from "../../src/starts";
 import { forwarding } from "./forwarding";
@@ -1679,6 +1679,14 @@ export function answer(
       environment: false,
     });
   }
+  // GitLab's clone is git's own, with glab's token as its header.
+  const cloning =
+    cmd === "git" && args[0] === "clone" ? /^https:\/\/(.+)\.git$/.exec(args.at(-2) ?? "") : null;
+  if (cloning)
+    return {
+      ran: ok().ran,
+      model: { ...model, cloned: [...(model.cloned ?? []), `${cloning[1]} ${args.at(-1)}`] },
+    };
   if (cmd === "git") {
     const said =
       args[0] === "remote" && args[1] === "get-url"
@@ -1694,16 +1702,6 @@ export function answer(
             : undefined;
     return { ran: said === undefined ? no().ran : ok(`${said}\n`).ran, model };
   }
-  // GitLab's clone is git's own, with glab's token as its header.
-  const cloning =
-    cmd === "env" && args.includes("clone")
-      ? /^https:\/\/(.+)\.git$/.exec(args.at(-2) ?? "")
-      : null;
-  if (cloning)
-    return {
-      ran: ok().ran,
-      model: { ...model, cloned: [...(model.cloned ?? []), `${cloning[1]} ${args.at(-1)}`] },
-    };
   if (cmd !== CLI[forge]) return { ran: no(127).ran, model };
   const said = forge === "gitlab" ? glab(model, args, under) : gh(model, args);
   let after = model;
@@ -1956,17 +1954,19 @@ export const runOnPath = <A, E>(
 ) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttpOnPath))));
 
 /**
- * The Runner face, which logs `cmd args…` to `calls`, and the HTTP face, which logs to
+ * The Runner face, which logs `cmd args…` to `calls` and its env to `environments`, and the HTTP face, which logs to
  * `requests`, answering from one model; `layer` is ForgeHttp reaching the forge through both.
  */
 export function fakeForge(forge: MrForge, start: ForgeModel) {
   const calls: string[] = [];
+  const environments: Array<RunnerEnv | undefined> = [];
   const requests: FakeRequest[] = [];
   const aborted: string[] = [];
   let model = start;
-  const run: Runner = (cmd, args) =>
+  const run: Runner = (cmd, args, _cwd, env) =>
     Effect.map(Clock.currentTimeMillis, (now) => {
       calls.push([cmd, ...args].join(" "));
+      environments.push(env);
       const said = answer(forge, model, cmd, args, { now, environment: true });
       model = said.model;
       return said.ran;
@@ -1986,6 +1986,7 @@ export function fakeForge(forge: MrForge, start: ForgeModel) {
   return {
     run,
     calls,
+    environments,
     requests,
     aborted,
     fetch,

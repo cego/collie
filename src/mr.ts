@@ -2,7 +2,7 @@
 // at all, who to assign, which template to fill, and which Linear tickets this
 // branch is answering. Push is this step's business and nothing else's.
 
-import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import { Effect, FileSystem, Option, Path, Redacted, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { YamlValue } from "./yaml";
@@ -20,10 +20,14 @@ import { FORGES, forgeOf, forgeOfHost, type Forge } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
 import type { MrReady, Posted } from "./sdk";
 
+/** Variables a command gets on top of this process's environment. */
+export type RunnerEnv = Record<string, string | Redacted.Redacted<string>>;
+
 export type Runner<R = never> = (
   cmd: string,
   args: string[],
   cwd: string,
+  env?: RunnerEnv,
 ) => Effect.Effect<Ran, never, R>;
 
 /** What a command said. `stderr` is optional so fakes may omit it; real runners always fill it. */
@@ -170,11 +174,13 @@ export function shell(
   cmd: string,
   args: string[],
   cwd: string,
+  env?: RunnerEnv,
 ): Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make(cmd, args, {
       cwd,
+      env,
       stdout: "pipe",
       stderr: "pipe",
       // extendEnv, so git and glab inherit this process's environment and find their
