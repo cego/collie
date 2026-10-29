@@ -1,7 +1,6 @@
 # A Connection is declared and read
 
-**Status: accepted, being built.** The registry, workflow declarations, and readings are built here.
-Credential reuse builds on this boundary in a later slice.
+**Status: accepted, built.** The registry, workflow declarations, readings and credential reuse are built here.
 Builds on [ADR-0038](0038-the-host-builds-and-serves-the-board.md).
 
 ## What was true before
@@ -14,7 +13,7 @@ Desktop could not say which Machine had a login another could reuse.
 
 **D1. One registry reads each Connection on one Machine.**
 [Connection](../../CONTEXT.md) names the domain concept.
-The registry contains GitLab, GitHub, Linear and Helle; Slack joins it in its own slice.
+The registry contains GitLab, GitHub, Linear, Helle and Slack.
 Each probe returns either `{ state: "ok", account, detail }` or
 `{ state: "absent" | "broken", detail, fix }`.
 `absent` is not set up; `broken` is set up and not working.
@@ -37,18 +36,23 @@ GitHub reads gh's active login on github.com.
 Helle keeps its existing credentials, health check, detail and fix, adding the user id as account.
 Linear reads Claude, Codex and OpenCode MCP configurations; it ignores disabled servers.
 Its account is the MCP registration name. Configuration discovery cannot establish the authenticated Linear user or OAuth health.
+Slack checks the Machine's bot token with `auth.test` and names its workspace and bot.
 
 The formats follow [glab's configuration](https://docs.gitlab.com/cli/config/),
 [gh auth status](https://cli.github.com/manual/gh_auth_status),
 [Codex MCP configuration](https://developers.openai.com/codex/mcp/) and
 [OpenCode MCP configuration](https://opencode.ai/docs/mcp-servers/).
 
-**D4. Desktop combines readings without moving credentials.**
+**D4. Desktop combines readings and offers explicit credential reuse.**
 The merged model retains each Machine's reading, account and fix.
 A working login on any Machine makes the service available in the Flock view.
 Without one, a broken reading takes precedence over an absent one.
 A Machine lacking a working login gets `reusable.from` naming a Machine whose login works.
-This is discovery only: the later credential hand-over performs and verifies reuse.
+Reading Connections never moves credentials. An explicit reuse action reads a working
+Machine's GitLab or GitHub login through its host and gives it to missing Machines on
+stdin. Source credentials remain in place. Desktop keeps the reused GitLab token;
+Helle and Slack use their shared token flows. Linear sets up each Machine's MCP and
+browser login without copying OAuth credentials.
 
 **D5. Workflows declare required and optional Connections with their consequences.**
 `connections.needs` maps ids to `{ with }`; `connections.uses` maps ids to `{ with, without }`.

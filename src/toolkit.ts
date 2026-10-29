@@ -325,7 +325,7 @@ export const CollieTools = Toolkit.make(
     readOnly: true,
     title: "Which services each Machine is logged in to",
     description:
-      "Each Machine's Connections: GitLab, GitHub, Linear and Helle, with the account, " +
+      "Each Machine's Connections: GitLab, GitHub, Linear, Helle and Slack, with the account, " +
       "whether its login is absent or broken, and the fix. `machine` keeps one Machine; " +
       "without it the Flock chat reads every Machine it can reach. Credentials are never returned.",
     parameters: Schema.Struct({ machine: Schema.optionalKey(Schema.String) }),

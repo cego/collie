@@ -2182,7 +2182,7 @@ collie connections [--json]
 collie --machine vm-mk connections --json
 ```
 
-Read the services this Machine is logged in to: GitLab, GitHub, Linear and Helle.
+Read the services this Machine is logged in to: GitLab, GitHub, Linear, Helle and Slack.
 `--machine <name>` asks that paired Machine's host. The same registry serves
 `collie_connections` in chat and the optional Connection lines in `collie doctor`.
 See [Connection](../CONTEXT.md) and
