@@ -1733,10 +1733,12 @@ nudge at 0, a Pi model not written provider/model, and another GitLab host, whic
 the token.
 
 A set row says whose edit it is: "Last edit: vm-build · 28 Oct, 09:05". After a save it says
-how far the edit reached, from each Machine's latest sync: "Given to all 4 Machines", or
+how far the edit reached, after a fresh exchange with connected Machines: "Given to all 4 Machines", or
 "Given to 3 of 4 · old-mini gets it when it connects". While the Flock's settings cannot be
 read, an edit to them is not sent, and the row says "Not set: the Flock's settings could not
-be read"; Zoom is still saved. Zoom says "Saved on this computer".
+be read"; Zoom is still saved. A malformed settings file is kept without overwriting it;
+repair it and restart Desktop to read it again. A Machine that has not exchanged settings
+yet stays behind. Zoom says "Saved on this computer".
 
 A Desktop from before kept the Machine rule and whether the Flock chat speaks first as its
 own. The first start of this one carries each into the Flock's settings once, as an edit

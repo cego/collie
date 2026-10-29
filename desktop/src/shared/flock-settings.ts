@@ -268,9 +268,9 @@ export interface Said {
   readonly tone: "ok" | "warn";
 }
 
-/** A Machine its latest sync did not reach; one not synced yet is not behind. */
+/** A Machine whose settings exchange has not succeeded. */
 const missed = ({ state, settings }: Reached) =>
-  state !== "live" || (settings?.failed ?? null) !== null;
+  state !== "live" || settings === null || settings.failed !== null;
 
 const listed = (names: ReadonlyArray<string>) =>
   names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;

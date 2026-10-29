@@ -14,7 +14,8 @@ import {
 import type { SharedSetting, SharedSettings } from "../../../src/board-model";
 import type { SharedDefinition } from "../../../src/definitions-model";
 import { latestEdits } from "../../../src/flock-settings";
-import { FlockSettings, NO_FLOCK_SETTINGS, takeFrom } from "../shared/flock-settings";
+import { editSettings, FlockSettings, NO_FLOCK_SETTINGS, takeFrom } from "../shared/flock-settings";
+import { ActionFailed } from "../shared/flock";
 
 const FlockSettingsFile = Schema.fromJsonString(FlockSettings);
 const FILE = "flock-settings.json";
@@ -223,12 +224,29 @@ const latestSync = <T, Has, M extends { readonly name: string }>(
 
 /** Syncs connected Machines with the Flock's settings. */
 export const flockSync = <E, M extends SettingsMachine<E>>(options: Synced<FlockSettings, M>) =>
-  latestSync({
+  Effect.gen(function* () {
+    const sync = yield* latestSync({
     ...options,
     what: "Settings",
     exchange: (flock, { name, door }, request) => syncSettings(flock, name, door, request),
     take: (now, name, has: ReadonlyArray<SharedSetting>) => takeFrom(now, name, has).flock,
     edits: (flock) => flock.settings,
+    });
+    return {
+      ...sync,
+      edit: (changes: ReadonlyArray<{ readonly key: string; readonly value: string }>, now: string) =>
+        SubscriptionRef.modifyEffect(options.flock, (current) => Effect.gen(function* () {
+          const edited = editSettings(current, changes, now);
+          if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
+          yield* options.save(edited).pipe(Effect.mapError(() => new ActionFailed({
+            reason: "Not set: the Flock's settings could not be read or saved",
+          })));
+          return [edited, edited] as const;
+        })).pipe(
+          Effect.tap(() => Effect.forEach(options.machines(), (machine) => options.told(machine, "Delivery pending"), { discard: true })),
+          Effect.tap(() => sync.syncEvery()),
+        ),
+    };
   });
 
 /** Syncs connected Machines with the Flock's shared definitions, giving only what one lacks. */

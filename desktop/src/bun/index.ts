@@ -85,7 +85,6 @@ import {
 import {
   DEFAULT_CHAT_HARNESS,
   editSetting,
-  editSettings,
   NO_FLOCK_SETTINGS,
   type FlockSettings,
 } from "../shared/flock-settings";
@@ -454,17 +453,10 @@ const main = Effect.gen(function* () {
   const editFlockSettings = (
     changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
   ) =>
-    SubscriptionRef.modifyEffect(flockSettings, (current) =>
-      Effect.gen(function* () {
-        if (!flockReadable) return yield* unreadableFlock;
-        const edited = editSettings(current, changes, yield* nowIso());
-        if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
-        yield* writeFlockSettings(own, edited).pipe(
-          Effect.mapError(() => unreadableFlock),
-        );
-        return [edited, edited] as const;
-      }),
-    ).pipe(Effect.tap(() => syncEvery().pipe(Effect.forkIn(scope))));
+    Effect.gen(function* () {
+      if (!flockReadable) return yield* unreadableFlock;
+      return yield* settingsSync.edit(changes, yield* nowIso());
+    });
   const editFlock = (key: string, typed: string) => editFlockSettings([{ key, value: typed }]);
   const boards = `${Utils.paths.userData}/machines`;
   const ownDirectory = `${Utils.paths.userData}/machine-own`;
