@@ -64,6 +64,19 @@ test("a fingerprint reads HEAD from the status it hashes, in three git starts", 
     }),
   ));
 
+test("a clean committed tree needs only one git start to fingerprint", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const aside = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-clean-" });
+      const starts = yield* loggedGit(`${aside}/bin`, `${aside}/git.log`);
+      const tree = yield* fingerprint(repo);
+      expect(tree.head_sha).toHaveLength(40);
+      expect(tree.fingerprint).toBe("2efa17941bdbaf7c");
+      expect((yield* starts).map((line) => line.split(" ")[0])).toEqual(["status"]);
+    }),
+  ));
+
 test("a fingerprint is the value it was before HEAD came from the status", () =>
   inRepository(
     Effect.gen(function* () {
@@ -74,6 +87,20 @@ test("a fingerprint is the value it was before HEAD came from the status", () =>
       yield* fs.writeFileString(`${repo}/scratch.txt`, "a\n");
       // Records made before still have to match the same tree.
       expect((yield* fingerprint(repo)).fingerprint).toBe("5924b814fb9f3819");
+    }),
+  ));
+
+test("untracked content still changes a fingerprint when status hides untracked files", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* git(["config", "status.showUntrackedFiles", "no"]);
+      const clean = yield* fingerprint(repo);
+      yield* fs.writeFileString(`${repo}/scratch.txt`, "one\n");
+      const untracked = yield* fingerprint(repo);
+      expect(untracked.fingerprint).not.toBe(clean.fingerprint);
+      yield* fs.writeFileString(`${repo}/scratch.txt`, "two\n");
+      expect((yield* fingerprint(repo)).fingerprint).not.toBe(untracked.fingerprint);
     }),
   ));
 

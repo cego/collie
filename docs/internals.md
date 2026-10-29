@@ -1832,6 +1832,14 @@ This does not prove #216's four-suite target. The suite also misses #215's 360 s
 Neither issue is resolved by these baseline numbers, and no budget or scheduling change
 is justified by a window that does not reproduce the responsiveness failure.
 
+Two per-test costs are removed without sharing mutable test state. The test preload
+loads the Solid compiler only when a file imports JSX or Solid's server modules; other
+files avoid loading Babel. The handlers still come from the installed Solid plugin.
+A clean committed tree's fingerprint needs only `git status`, rather than three Git
+starts. Dirty trees and failed status reads retain the diff and untracked-content reads.
+Status explicitly includes untracked files even when the user's Git config hides them,
+and the fingerprint of an ordinary unchanged tree retains its previous value.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.

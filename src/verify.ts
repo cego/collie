@@ -92,13 +92,9 @@ const statusParts = (stdout: string) => {
 export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const [status, diff, others] = yield* Effect.all(
-    [
-      git(["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "-z"], cwd),
-      git(["diff", "HEAD", "--binary"], cwd),
-      git(["ls-files", "--others", "--exclude-standard", "-z"], cwd),
-    ],
-    { concurrency: "unbounded" },
+  const status = yield* git(
+    ["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "--untracked-files=normal", "-z"],
+    cwd,
   );
   const { headers, entries } = statusParts(status.code === 0 ? status.stdout : "");
   const oid = headers.get("branch.oid");
@@ -108,6 +104,16 @@ export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
   const branch = !born || named === undefined ? null : named === "(detached)" ? "HEAD" : named;
   const dirty = entries !== "";
 
+  const [diff, others] =
+    status.code === 0 && born && !dirty
+      ? [{ stdout: "" }, { stdout: "" }]
+      : yield* Effect.all(
+          [
+            git(["diff", "HEAD", "--binary"], cwd),
+            git(["ls-files", "--others", "--exclude-standard", "-z"], cwd),
+          ],
+          { concurrency: "unbounded" },
+        );
   const parts = [entries, Bun.hash(diff.stdout).toString(16)];
   let bytes = entries.length + diff.stdout.length;
   for (const relative of others.stdout.split("\0")) {
