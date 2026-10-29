@@ -3294,7 +3294,7 @@ collie run start self-improve --input runs=checkout --input improvements=2
 checkout it runs in; `machine` reads every Run its Machine admitted, and alone files
 `defect`s, Collie misbehaving. It reads the 24 hours before it started, leaving out its
 own children; an earlier `self-improve` Run and its Improvements are read like any other.
-A day with none ends at once, starting no agent. Otherwise one `retrospective` agent reads
+A day with none starts no agent and only restarts an earlier failed start (below). Otherwise one `retrospective` agent reads
 those Runs' records with the installed `retro` skill and reports what they show is wrong,
 at most ten findings, most severe first. A finding seen in only one Run is left out unless
 it is a `defect` or matches an open issue; with `runs=checkout`, one about Collie itself is
@@ -3331,7 +3331,7 @@ Run's `improvements.json` of the last seven days. That happens only while every 
 fixes is still open, and while no Run of the project started since names one of them in a
 `Closes #n`, so work a person or another Run already began is not duplicated. Restarts take
 `improvements` slots before the day's new Improvements, and are listed in the summary like
-them. One that started and then failed is not restarted: it is its own card, waiting on a
+them; a day with no Runs to read still starts them. One that started and then failed is not restarted: it is its own card, waiting on a
 person.
 
 Run it daily with a Schedule. For a project:

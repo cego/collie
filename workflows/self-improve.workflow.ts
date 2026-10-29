@@ -47,7 +47,6 @@ const triage = content.template("triage", {
 });
 
 const DAY = Duration.hours(24);
-/** How far back an earlier Run's failed start is still restarted. */
 const LOOKBACK = Duration.days(7);
 const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const KeptJson = Schema.fromJsonString(Schema.Array(Ended));
@@ -187,9 +186,10 @@ export default defineWorkflow({
           }),
         }),
       );
-      if (window.runs.length === 0) return `No Runs since ${window.since}`;
+      const quiet = window.runs.length === 0;
+      if (quiet && bound === 0) return `No Runs since ${window.since}`;
 
-      yield* retroStep(
+      const retro = retroStep(
         Activity.make({
           name: "retro",
           success: Schema.Void,
@@ -206,6 +206,7 @@ export default defineWorkflow({
           ),
         }),
       );
+      if (!quiet) yield* retro;
 
       const open = yield* Activity.make({
         name: "issues",
@@ -218,7 +219,7 @@ export default defineWorkflow({
           ),
       });
 
-      const triaged = yield* triageStep(
+      const triaging = triageStep(
         agentWork({
           operation: "triage",
           role: "retrospective",
@@ -245,6 +246,9 @@ export default defineWorkflow({
           output: Triage,
         }),
       );
+      const triaged: Triage = quiet
+        ? { findings: [], improvements: [], left_out: [] }
+        : yield* triaging;
 
       const sorted = sortOut(
         triaged.findings,
@@ -328,6 +332,7 @@ export default defineWorkflow({
                 return restartsOf(earlier.flatMap(Option.toArray), project, open);
               }),
             });
+      if (quiet && restarts.length === 0) return `No Runs since ${window.since}`;
       const outcomes = new Map(acted.map(({ finding, outcome }) => [finding.key, outcome]));
       const filedNumber = (key: string) => {
         const outcome = outcomes.get(key);

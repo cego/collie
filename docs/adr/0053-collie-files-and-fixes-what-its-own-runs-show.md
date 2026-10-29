@@ -51,7 +51,8 @@ Machine it runs on, so each Machine whose Runs should be read has its own Schedu
 - **Also:** the host log and the News of the same day.
 - **Not read:** a harness transcript is read only where a record points to it. The Flock
   chat's transcripts belong to Desktop and are not read.
-- **No Runs:** where that day admitted no Run, it ends at once and starts no agent.
+- **No Runs:** where that day admitted no Run, it ends at once and starts no agent, unless
+  an earlier Improvement is started again (see the amendment of 2026-10-29).
 
 **D3. It files only what the records show, and never the same problem twice.**
 
@@ -222,6 +223,7 @@ commented, because only Improvements of newly filed findings start.
   going or from before this amendment, is passed over.
 - **How it starts:** as any Improvement does, a `plan` of its own Task with
   `then=implement` under `improvement-<name>`, its goal the issues read back by number.
-  Restarts take `improvements` slots first, then the day's new Improvements.
+  Restarts take `improvements` slots first, then the day's new Improvements. A day with no Runs in its
+  window still starts its restarts, without triage.
 - **Not restarted:** an Improvement that started and then failed. It is its own card,
   waiting on a person, as before.

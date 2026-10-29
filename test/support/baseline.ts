@@ -13935,18 +13935,17 @@ const improving: HostOverride = Layer.effect(Host)(
       report: (since) =>
         Effect.gen(function* () {
           const own = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id ?? "";
-          const runs = [
-            { runId: own, parent: null, workflow: idOf("self-improve") },
-            ...windowRuns,
-          ].map(({ runId, parent, ...rest }) => ({
-            runId,
-            workflow: "workflow" in rest && rest.workflow ? rest.workflow : "implement",
-            parent,
-            project: "project" in rest && rest.project ? rest.project : rig.projectDir,
-            created: "created" in rest && rest.created ? rest.created : since,
-            status: "failed" as const,
-            closes: "closes" in rest && rest.closes ? rest.closes : [],
-          }));
+          const runs = [{ runId: own, parent: null, workflow: idOf("self-improve") }, ...windowRuns]
+            .map(({ runId, parent, ...rest }) => ({
+              runId,
+              workflow: "workflow" in rest && rest.workflow ? rest.workflow : "implement",
+              parent,
+              project: "project" in rest && rest.project ? rest.project : rig.projectDir,
+              created: "created" in rest && rest.created ? rest.created : since,
+              status: "failed" as const,
+              closes: "closes" in rest && rest.closes ? rest.closes : [],
+            }))
+            .filter(({ created }) => epochOf(created) >= epochOf(since));
           return {
             since,
             total: runs.length,
@@ -14233,7 +14232,6 @@ scenario(
   120_000,
 );
 
-/** An earlier `self-improve` Run of this project, and the Improvements it kept. */
 const earlier = (
   runId: string,
   created: string,
@@ -14250,6 +14248,10 @@ const earlier = (
     yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
     yield* fs.writeFileString(`${runDir(dir, runId)}/improvements.json`, asJson(kept));
   });
+
+const epochOf = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
+const hoursAgo = (hours: number) =>
+  DateTime.formatIso(DateTime.subtract(DateTime.nowUnsafe(), { hours }));
 
 const unstarted = (name: string, issues: ReadonlyArray<number>) => ({
   name,
@@ -14272,7 +14274,7 @@ scenario(
       Effect.gen(function* () {
         freshDay();
         openIssues = [issueNumbered(7)];
-        yield* earlier("r-yesterday", "2026-10-28T02:00:00.000Z", [unstarted("docs", [7])]);
+        yield* earlier("r-yesterday", hoursAgo(26), [unstarted("docs", [7])]);
         yield* rig.queueOutputs([triaged([])]);
         yield* improved("r-again", { runs: "checkout", improvements: 1 });
         expect(
@@ -14290,13 +14292,32 @@ scenario(
 );
 
 scenario(
+  "a self-improve Run with no Runs in its window still starts an Improvement an earlier one failed to start",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        windowRuns = [];
+        openIssues = [issueNumbered(7)];
+        yield* earlier("r-yesterday", hoursAgo(25), [unstarted("docs", [7])]);
+        yield* improved("r-quiet", { runs: "checkout", improvements: 1 });
+        expect(started.map(({ invocation }) => invocation)).toEqual(["improvement-docs"]);
+        expect(yield* readText(`${runDir(dir, "r-quiet")}/summary.md`)).toContain(
+          "- docs: r-quiet-improvement-docs, succeeded",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "an earlier failed start is not restarted once its issue is closed, or once a Run since closes it",
   () =>
     runEffect(
       Effect.gen(function* () {
         freshDay();
         openIssues = [issueNumbered(8)];
-        yield* earlier("r-yesterday", "2026-10-28T02:00:00.000Z", [
+        yield* earlier("r-yesterday", hoursAgo(26), [
           unstarted("closed", [7]),
           unstarted("taken", [8]),
         ]);
@@ -14304,7 +14325,7 @@ scenario(
           runId: "r-person",
           parent: null,
           workflow: "implement",
-          created: "2026-10-28T09:00:00.000Z",
+          created: hoursAgo(20),
           closes: [8],
         });
         yield* rig.queueOutputs([triaged([])]);
@@ -14323,15 +14344,15 @@ scenario(
       Effect.gen(function* () {
         freshDay();
         openIssues = [issueNumbered(7)];
-        yield* earlier("r-first", "2026-10-26T02:00:00.000Z", [unstarted("docs", [7])]);
+        yield* earlier("r-first", hoursAgo(74), [unstarted("docs", [7])]);
         windowRuns.push({
           runId: "r-second-improvement-docs",
           parent: "r-second",
           workflow: "plan",
-          created: "2026-10-27T02:05:00.000Z",
+          created: hoursAgo(50),
           closes: [7],
         });
-        yield* earlier("r-third", "2026-10-28T02:00:00.000Z", [unstarted("docs", [7])]);
+        yield* earlier("r-third", hoursAgo(26), [unstarted("docs", [7])]);
         yield* rig.queueOutputs([triaged([])]);
         yield* improved("r-again", { runs: "checkout", improvements: 3 });
         expect(started).toEqual([]);
@@ -14347,7 +14368,7 @@ scenario(
       Effect.gen(function* () {
         freshDay();
         openIssues = [issueNumbered(7), issueNumbered(8)];
-        yield* earlier("r-yesterday", "2026-10-28T02:00:00.000Z", [
+        yield* earlier("r-yesterday", hoursAgo(26), [
           unstarted("seven", [7]),
           unstarted("eight", [8]),
         ]);
