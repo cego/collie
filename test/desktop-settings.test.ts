@@ -12,6 +12,7 @@ import {
   flockReach,
   type FlockSettings,
   NO_FLOCK_SETTINGS,
+  type Reached,
   settingSections,
   syncPill,
   takeFrom,
@@ -435,11 +436,7 @@ test("saving one setting or an agent choice waits for a fresh exchange before ac
               : Effect.void,
           ),
         );
-        const reached: {
-          name: string;
-          state: "live";
-          settings: { failed: string | null };
-        } = {
+        let reached: Reached = {
           name: "laptop",
           state: "live",
           settings: { failed: null },
@@ -451,7 +448,7 @@ test("saving one setting or an agent choice waits for a fresh exchange before ac
           request: Effect.succeed("fresh"),
           told: (_, failed) =>
             Effect.sync(() => {
-              reached.settings = { failed };
+              reached = { ...reached, settings: { failed } };
             }),
         });
         yield* sync.syncOn(vm);

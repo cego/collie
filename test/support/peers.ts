@@ -107,6 +107,8 @@ export const twoMachines = <A, E>(
           `#!/bin/sh\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
           { mode: 0o755 },
         );
+        for (const harness of ["codex", "pi", "opencode"])
+          yield* fs.writeFileString(`${bin}/${harness}`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
         yield* fs.writeFileString(
           `${bin}/collie`,
           `#!/bin/sh\nexec ${command.map((part) => `'${part}'`).join(" ")} "$@"\n`,
