@@ -3128,6 +3128,15 @@ Each Codex agent's server is detached, so it outlives the Run that launched the 
 is still there for a hand-off. The next launch puts down the endpoint of any agent herdr
 no longer has, which is also what stops the control directories accumulating.
 
+Collie's managed Codex agents run all enabled hooks without a startup review. Where the
+installed Codex lists `--dangerously-bypass-hook-trust` in its help, Collie passes it to
+the remote TUI, which forwards hook approval to its App Server session. This applies to
+initial launches, fallbacks and replacement agents after a resume; a reused agent and
+its compactions keep that session's approval. New or changed hooks need no saved trust
+hash. Disabled hooks stay disabled, tool permissions keep their configured mode, and
+Collie does not rewrite the user's Codex config. Older Codex versions receive no new flag.
+See Codex's [hook trust documentation](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
+
 OpenCode needed the opposite trick. Its servers do not isolate sessions at all — every
 one answers with every session in the project, and its "which sessions are active"
 endpoints are empty unless a session is mid-turn — so nothing in the API could tell two

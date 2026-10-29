@@ -148,6 +148,7 @@ const body = work.toLayer((payload) =>
 );
 
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
+const CODEX_HELP = "  --dangerously-bypass-hook-trust";
 
 const hostOf = (): AgentHost => ({
   dir,
@@ -159,7 +160,7 @@ const hostOf = (): AgentHost => ({
   compactAtTokens: 0,
   pollMs: 20,
   collectMs: 400,
-  help: () => Effect.succeed(CLAUDE_HELP),
+  help: (kind) => Effect.succeed(kind === "codex" ? CODEX_HELP : CLAUDE_HELP),
   version: () => Effect.succeed("2.1.309 (Claude Code)"),
 });
 
@@ -2252,6 +2253,7 @@ test("work whose Subscription is Exhausted starts on the first chain entry with 
 
       expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
       const launched = yield* launchOf("r1");
+      expect(launchArgs(yield* rig.calls())).toContain("--dangerously-bypass-hook-trust");
       expect(launched).toMatchObject({
         harness: "codex",
         model: "default",
@@ -2304,7 +2306,10 @@ test(
         // Claude has room again by the time the host comes back.
         const result = yield* session(started("r1"), chain);
         expect(result._tag === "Success" && result.success.note).toBe("back");
-        expect(harnessesStarted(yield* rig.calls())).toEqual(["codex", "codex"]);
+        const calls = yield* rig.calls();
+        expect(harnessesStarted(calls)).toEqual(["codex", "codex"]);
+        for (const call of calls.filter((call) => call.cmd === "agent start"))
+          expect(call.argv).toContain("--dangerously-bypass-hook-trust");
       }),
     ),
   120_000,
@@ -2421,6 +2426,9 @@ test("an agent that runs out mid-work is closed and replaced by one on the next 
       expect(closedPanes(calls)).toHaveLength(1);
       expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
       const successor = agentName("r1", "review", null, 2);
+      const starts = calls.filter((call) => call.cmd === "agent start");
+      expect(starts[0]?.argv).not.toContain("--dangerously-bypass-hook-trust");
+      expect(starts[1]?.argv).toContain("--dangerously-bypass-hook-trust");
       expect(calls.some((call) => (call.argv ?? []).includes(successor))).toBe(true);
       const prompt = yield* read(`${dir}/agents/r1/review.r2.prompt.md`);
       const handed = prompt.indexOf("Another agent (claude/opus) started this work");
@@ -2909,7 +2917,7 @@ test("auto in the config is passed as auto", () =>
     }),
   ));
 
-test("a Codex agent is given no auto-compact window, and no help is asked for one", () =>
+test("a Codex agent checks help for hook trust without receiving a Claude auto-compact window", () =>
   runEffect(
     Effect.gen(function* () {
       const asked: string[] = [];
@@ -2921,7 +2929,8 @@ test("a Codex agent is given no auto-compact window, and no help is asked for on
       });
 
       expect(launchArgs(yield* rig.calls())).not.toContain("--autocompact");
-      expect(asked).toEqual([]);
+      expect(launchArgs(yield* rig.calls())).not.toContain("--dangerously-bypass-hook-trust");
+      expect(asked).toEqual(["codex"]);
     }),
   ));
 

@@ -1805,6 +1805,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       });
     if (window.leftOff !== null)
       yield* log(ask.runId, `${agent}: started without an auto-compact window: ${window.leftOff}`);
+    // The remote TUI forwards hook trust to its App Server as a session override.
+    const hookTrustArgs =
+      adapter.id === "codex" &&
+      /--dangerously-bypass-hook-trust(?![\w-])/.test(
+        yield* (host.help ?? installedHelp)(adapter.kind),
+      )
+        ? ["--dangerously-bypass-hook-trust"]
+        : [];
     const parsed = parseProfile(isString(config.agent_profile) ? config.agent_profile : "");
     if ("refused" in parsed)
       return yield* new AgentParked({
@@ -1955,6 +1963,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 window.passed ?? undefined,
               ),
               ...(adapter.dirArgs?.(`${host.dir}/runs/${ask.runId}`) ?? []),
+              ...hookTrustArgs,
               ...settingsArgs,
               ...mcp.args,
             ],
