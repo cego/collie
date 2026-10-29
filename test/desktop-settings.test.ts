@@ -222,7 +222,6 @@ test("Zoom is the one row kept on this computer, and the Flock chat's rule and s
     set: false,
     defaultSaid: "Unset: no rule",
   });
-  // Under the canvas's sub-groups.
   expect(row("fallbacks")!.sub).toBe("Who does the work");
   expect(row("trust")!.sub).toBe("What agents may do");
   expect(row("idle_close_ms")!.sub).toBe("Context and patience");

@@ -146,7 +146,6 @@ const LEADS: Partial<Record<SettingSection["group"], string>> = {
   Board: "Scope and density change the TUI's board; Desktop's board is not changed.",
   Chat: "The Flock chat in Desktop, and each Machine's Native chat. The Flock chat's harness, model and effort are picked in its composer, on this computer.",
 };
-/** Each section's rows that the search keeps, under their sub-groups in order. */
 const shown = computed(() =>
   sections.value.flatMap((section) => {
     const rows = section.rows.filter(kept);
