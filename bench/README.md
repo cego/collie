@@ -47,7 +47,12 @@ SQL profiling instrumentation left in shared dependencies by the original tune-u
 Its samples are retained in the Run record and excluded from conclusions. Only the
 replacement study with verified pristine dependencies can support a verdict.
 
-## Evaluated candidate
+## Historical candidate
+
+The following study predates the merge of `origin/master` and the child-order fix.
+It does not establish performance for the current tree. The final-tree comparison
+uses the same ten-pair protocol, endpoints, intervals, and guardrails against merge
+base `cb8edab0`. No historical observation is reused in that comparison.
 
 The [complete observations and provenance](results/read-2026-10-29.json) compare
 implementation `7b67f8a6` against merge base `6b3e277f`. **Verdict: not proved
