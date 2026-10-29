@@ -170,13 +170,11 @@ test("production names its jobs with their URLs, then by name, then by count, wh
   const job = (name: string, n: number) => ({ name, url: `${url}/-/jobs/${1000000 + n}` });
 
   const one = RELEASE_CLEARS.production(url, [job("deploy-production", 4)]).join("; ");
-  expect(one).toContain(`\`deploy-production\` at ${url}/-/jobs/1000004`);
+  expect(one).toContain("`deploy-production` at /-/jobs/1000004");
 
-  const apps = ["bingo", "casino", "happytiger", "lobby", "playground", "poker", "spilnu"];
-  const several = apps.map((app, n) => job(`deploy-production:${app}`, n));
-  expect(several.map((one) => one.name + one.url).join("").length).toBeGreaterThan(400);
+  const several = Array.from({ length: 12 }, (_, n) => job(`production:app${n}`, 9876540000 + n));
   const byName = RELEASE_CLEARS.production(url, several).join("; ");
-  for (const app of apps) expect(byName).toContain(`\`deploy-production:${app}\``);
+  for (const one of several) expect(byName).toContain(`\`${one.name}\``);
   expect(byName).not.toContain("/-/jobs/");
 
   const many = Array.from({ length: 30 }, (_, n) => job(`deploy-production:application-${n}`, n));
@@ -186,5 +184,6 @@ test("production names its jobs with their URLs, then by name, then by count, wh
 
   for (const said of [one, byName, counted.join("; ")]) {
     expect(said).toContain(` on ${url}, and no other job`);
+    expect(times(said, url)).toBe(1);
   }
 });

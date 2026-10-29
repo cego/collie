@@ -151,8 +151,9 @@ export const RELEASE_CLEARS = {
   rollback: (url: string) => [`${rollingBack(url)}, never a production job`],
   production: (url: string, jobs: ReadonlyArray<JobLink>) => {
     const playing = (named: string) => [`playing ${named} on ${url}, and no other job`];
+    const under = (job: JobLink) => (job.url.startsWith(url) ? job.url.slice(url.length) : job.url);
     return fitting(
-      playing(plays(jobs)),
+      playing(jobs.map((job) => `\`${job.name}\` at ${under(job)}`).join(", ")),
       playing(quoted(jobs.map((job) => job.name))),
       playing(`the ${jobs.length} production jobs its task names`),
     );
