@@ -4,6 +4,7 @@
 
 import { tmpdir } from "node:os";
 import { Clock, Console, Crypto, Effect, FileSystem, Schema } from "effect";
+import { Flow } from "../src/board-model";
 import { connect, ownerOf } from "../src/host";
 import { runEffect } from "../test/support/effect";
 import { writeFakeHerdrShim } from "../test/support/fake-herdr-core";
@@ -17,9 +18,10 @@ const RUNS = 487;
 const ROUNDS = 12;
 const IDLE_SECONDS = 20;
 
-const kept = `${process.cwd()}/.scratch/bench-read`;
+const kept = Bun.env.COLLIE_BENCH_FIXTURE ?? `${process.cwd()}/.scratch/bench-read`;
 // The host's socket is in its state directory, so the copy a sample runs needs a short path.
-const live = `${tmpdir()}/cb-${Bun.hash(process.cwd()).toString(16).slice(0, 8)}`;
+const live =
+  Bun.env.COLLIE_BENCH_LIVE ?? `${tmpdir()}/cb-${Bun.hash(process.cwd()).toString(16).slice(0, 8)}`;
 const world = {
   install: `${live}/install`,
   user: `${live}/install/user/workflows`,
@@ -46,7 +48,14 @@ Object.assign(Bun.env, {
 });
 
 const Fixture = Schema.fromJsonString(Schema.Struct({ runId: Schema.String }));
-const Readings = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number));
+const Readings = Schema.fromJsonString(Schema.Json);
+const decodeFlow = Schema.decodeUnknownSync(Schema.fromJsonString(Flow));
+const encodeActions = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const flowOf = (answer: string) => {
+  const json = /```json\n([\s\S]*?)\n```/.exec(answer)?.[1];
+  if (json === undefined) throw new Error("the answer omitted its Flow");
+  return decodeFlow(json);
+};
 
 /** `cp -a`, which keeps the sockets a stopped host and the fake herdr leave. */
 const copy = (from: string, to: string) =>
@@ -160,8 +169,10 @@ const sample = Effect.gen(function* () {
   const client = yield* connect(world.state);
   yield* Effect.sleep("10 seconds");
   const idleFrom = yield* usageOf(owner.pid);
+  const idleBegan = yield* Clock.currentTimeMillis;
   yield* Effect.sleep(`${IDLE_SECONDS} seconds`);
   const idleTo = yield* usageOf(owner.pid);
+  const idleSeconds = ((yield* Clock.currentTimeMillis) - idleBegan) / 1000;
   const took: Record<"read" | "shown" | "runs" | "progress", Array<number>> = {
     read: [],
     shown: [],
@@ -169,20 +180,88 @@ const sample = Effect.gen(function* () {
     progress: [],
   };
   const readSyscr: Array<number> = [];
+  const answers: string[] = [];
+  let sampleAnswer = "";
   for (let round = 0; round < ROUNDS; round++) {
     const before = yield* usageOf(owner.pid);
-    took.read.push(yield* timed(client.read({ tool: "collie_run", input: { run: runId } })));
+    const began = yield* Clock.currentTimeMillis;
+    const answer = yield* client.read({ tool: "collie_run", input: { run: runId } });
+    took.read.push((yield* Clock.currentTimeMillis) - began);
+    if (!answer.includes("Status: succeeded")) throw new Error(answer);
+    flowOf(answer);
+    answers.push(new Bun.CryptoHasher("sha256").update(answer).digest("hex"));
+    sampleAnswer = answer;
     readSyscr.push((yield* usageOf(owner.pid)).syscr - before.syscr);
     took.shown.push(yield* timed(client.shown({ runId })));
     took.runs.push(yield* timed(client.runs({ task: null })));
     took.progress.push(yield* timed(client.progress({ runId })));
   }
+  const mutation = yield* client.start({
+    project: world.project,
+    id: "proof",
+    request: "bench-mutation",
+    input: { note: "mutation" },
+  });
+  const mutationRun = mutation.runId;
+  for (;;) {
+    if ((yield* client.run({ runId: mutationRun }))?.waiting.some((one) => one.answer === null))
+      break;
+    yield* Effect.yieldNow;
+  }
+  const mutationMs: number[] = [];
+  const mixedReadMs: number[] = [];
+  yield* Effect.all(
+    [
+      Effect.gen(function* () {
+        for (let round = 0; round < ROUNDS; round++)
+          mixedReadMs.push(
+            yield* timed(client.read({ tool: "collie_run", input: { run: runId } })),
+          );
+      }),
+      Effect.gen(function* () {
+        for (let round = 0; round < ROUNDS; round++) {
+          const set = round % 2 === 0;
+          let answer = "";
+          mutationMs.push(
+            yield* timed(
+              Effect.gen(function* () {
+                yield* client.control({
+                  runId: mutationRun,
+                  control: "hold",
+                  set,
+                  request: `mutation-${round}`,
+                });
+                answer = yield* client.read({ tool: "collie_run", input: { run: mutationRun } });
+              }),
+            ),
+          );
+          const shown = yield* client.shown({ runId: mutationRun });
+          if (shown === null || shown.view.controls.includes("hold") !== set)
+            throw new Error("the mutation read did not see its control write");
+          const local = flowOf(answer).lanes.find((lane) => lane.run === mutationRun);
+          const record = shown.flow?.lanes.find((lane) => lane.run === mutationRun);
+          if (encodeActions(local?.actions ?? []) !== encodeActions(record?.actions ?? []))
+            throw new Error("the answer's Flow did not see its control write");
+        }
+      }),
+    ],
+    { concurrency: "unbounded" },
+  );
+  yield* client.answer({
+    runId: mutationRun,
+    decision: "decision",
+    value: "bench-value",
+    request: "mutation-answer",
+  });
+  const answered = yield* client.read({ tool: "collie_run", input: { run: mutationRun } });
+  if (!answered.includes('"decision": bench-value'))
+    throw new Error("the answer lost its answered Choice");
   const after = yield* usageOf(owner.pid);
   return {
     cold_read_ms,
-    idle_cpu_ms_per_s: (idleTo.cpu_ms - idleFrom.cpu_ms) / IDLE_SECONDS,
-    idle_syscr_per_s: (idleTo.syscr - idleFrom.syscr) / IDLE_SECONDS,
-    idle_rchar_kb_per_s: (idleTo.rchar - idleFrom.rchar) / 1024 / IDLE_SECONDS,
+    idle_cpu_ms_per_s: (idleTo.cpu_ms - idleFrom.cpu_ms) / idleSeconds,
+    idle_syscr_per_s: (idleTo.syscr - idleFrom.syscr) / idleSeconds,
+    idle_rchar_kb_per_s: (idleTo.rchar - idleFrom.rchar) / 1024 / idleSeconds,
     read_mean_ms: mean(took.read),
     read_p50_ms: rank(took.read, 0.5),
     read_p95_ms: rank(took.read, 0.95),
@@ -194,6 +273,19 @@ const sample = Effect.gen(function* () {
     progress_max_ms: Math.max(...took.progress),
     host_peak_kb: after.peak_kb,
     host_rss_kb: after.rss_kb,
+    mutation_mean_ms: mean(mutationMs),
+    mutation_p95_ms: rank(mutationMs, 0.95),
+    mixed_read_mean_ms: mean(mixedReadMs),
+    correctness_failures: 0,
+    raw: {
+      sample_answer: sampleAnswer,
+      ...took,
+      read_syscr: readSyscr,
+      mutation: mutationMs,
+      mixed_read: mixedReadMs,
+      answers,
+      idle_seconds: idleSeconds,
+    },
   };
 }).pipe(Effect.orDie, Effect.ensuring(stopHost(world.state)));
 
