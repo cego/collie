@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import type { PluginEnv } from "./env";
 import { shell, type Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/process";
-import { glabLoginOn } from "./forge/gitlab";
+import { glabLoginOn } from "./forge/gitlab-checks";
 import { ghLogin } from "./forge/github";
 
 export const readConnectionLogin = <R = never>(

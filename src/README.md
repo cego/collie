@@ -132,7 +132,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `forge/github.ts`      | The GitHub adapter: everything Collie asks GitHub, through `gh` or over HTTP with its token                                 |
 | `forge/http.ts`        | ForgeHttp: a `forges` provider per host, its token from the CLI's login; the library loaded here                            |
 | `forge/threads.ts`     | Modelled issue, review-posting, menu and login operations shared by the forge adapters                                      |
-| `forge/*-checks.ts`    | Each forge's doctor checks: glab, its token and push; gh where a checkout uses GitHub                                       |
+| `forge/*-checks.ts`    | Each forge's doctor checks; GitLab's configured Connection probe and reusable login selection                               |
 | `template.ts`          | `{{a.b}}` prompt substitution                                                                                               |
 | `config.ts`            | User defaults and remembered values in `config.json`                                                                        |
 | `profile.ts`           | The operator's `agent_profile`: per role, an agent's env and the Claude settings merged into Collie's                       |

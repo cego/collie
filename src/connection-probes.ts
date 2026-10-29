@@ -184,5 +184,5 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
   );
 });
 
-export { probeGitlab } from "./forge/gitlab";
+export { probeGitlab } from "./forge/gitlab-checks";
 export { probeGithub } from "./forge/github";

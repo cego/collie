@@ -42,61 +42,8 @@ import {
 } from "./threads";
 import { judgeComments, type ForgeComment, type MergeAnswer, type ReviewRead } from "./review";
 
-import type { PluginEnv } from "../env";
-import type { ConnectionReading as Probe } from "../connection-model";
-import { readConfig } from "../config";
-import { isHostName } from "../gitlab-token";
-import { isString } from "../schema";
-
 export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
 export const GLAB_RELOGIN = "glab auth login";
-
-export const glabLoginOn = Effect.fn("GitLab.loginOn")(function* <R>(
-  env: PluginEnv,
-  run: Runner<R>,
-) {
-  const config = yield* readConfig(env.userDir);
-  const configured = env.raw.GITLAB_HOST ?? config.gitlab_host;
-  const stored =
-    isString(configured) && isHostName(configured)
-      ? configured
-      : (yield* run("glab", ["config", "get", "host", "--global"], env.cwd)).stdout.trim();
-  const host = isHostName(stored) ? stored : "gitlab.com";
-  return glabLoginTo(host);
-});
-
-const GitlabUser = Schema.fromJsonString(Schema.Struct({ username: Schema.NonEmptyString }));
-
-export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
-  env: PluginEnv,
-  run: Runner<R>,
-) {
-  const login = yield* glabLoginOn(env, run);
-  const host = login.host;
-  const fix = login.relogin;
-  const environmentToken =
-    env.raw.GITLAB_TOKEN || env.raw.GITLAB_ACCESS_TOKEN || env.raw.OAUTH_TOKEN;
-  const storedToken = environmentToken ? null : yield* login.token(run, env.cwd);
-  const token = environmentToken || (storedToken ?? "");
-  if (token === "")
-    return { state: "absent", detail: `no GitLab login for ${host}`, fix } satisfies Probe;
-  const args = ["api", "--hostname", host, "user"];
-  const me = yield* environmentToken
-    ? run("env", [`GITLAB_HOST=${host}`, "glab", ...args], env.cwd)
-    : run("glab", args, env.cwd);
-  const user = Schema.decodeUnknownOption(GitlabUser)(me.stdout);
-  if (me.code !== 0 || Option.isNone(user))
-    return {
-      state: "broken",
-      detail: `${host} did not accept its GitLab login`,
-      fix,
-    } satisfies Probe;
-  return {
-    state: "ok",
-    account: user.value.username,
-    detail: `${host} as ${user.value.username}`,
-  } satisfies Probe;
-});
 
 /** The glab arguments that point a command at a project rather than at the cwd. */
 export function repoArgs(project: string | null): string[] {
