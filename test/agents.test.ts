@@ -3438,6 +3438,63 @@ const tendIdle = Agents.pipe(
   ),
 );
 
+test.each([
+  ["agent", false],
+  ["agent", true],
+  ["to", false],
+  ["to", true],
+  ["operation", false],
+  ["operation", true],
+] as const)("a queued %s address pins its named agent (alias: %s)", (field, alias) =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null]);
+      const ask = {
+        runId: "r1",
+        operation: "plan",
+        role: "planner",
+        workflow: "plan",
+        harness: "codex",
+        agent: "plan-seat",
+        model: null,
+        effort: null,
+        permissions: null,
+        task: null,
+        cwd: rig.projectDir,
+        prompt: "Write the plan.",
+        output: `${dir}/plan.json`,
+        skill: null,
+      };
+      const first = yield* session(Agents.pipe(Effect.flatMap((agents) => agents.launch(ask))));
+      const queued = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              [field]: alias ? "plan-seat" : first.agent,
+              text: "Only the named planner should revise this.",
+              request: "pinned-comment",
+              mode: "now",
+            }),
+          ),
+        ),
+        { herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" })) },
+      );
+      expect(queued).toMatchObject({ delivered: false, queued: true });
+      const next = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch({ ...ask, sequence: 2 }))),
+      );
+      expect(next.agent).not.toBe(first.agent);
+      yield* session(tendIdle);
+      yield* session(tendIdle);
+      const comments = (yield* rig.calls()).filter(
+        (call) => call.cmd === "agent prompt" && call.argv?.[3]?.includes("Only the named planner"),
+      );
+      expect(comments.map((call) => call.argv?.[2])).toEqual([first.agent]);
+    }),
+  ),
+);
+
 test("a queued operation follows a harness switch and preserves its long comment and attachment", () =>
   runEffect(
     Effect.gen(function* () {

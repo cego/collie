@@ -133,7 +133,7 @@ import {
   type AgentEntry,
   type Incarnation,
 } from "./registry";
-import { steerTarget } from "./steer-target";
+import { ROLES, steerTarget } from "./steer-target";
 import {
   jsonSchemaFor,
   AgentScopes,
@@ -2828,13 +2828,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             Effect.catch(() => Effect.succeed(true)),
           ));
         const fallback = unsupported || queued !== undefined;
+        const named = agent ?? operation ?? (Object.hasOwn(ROLES, to ?? "") ? undefined : to);
+        const pinned =
+          agent !== undefined ||
+          (named !== undefined &&
+            named !== launched.operation &&
+            (named === launched.agent || launchedAs(launched, named)));
         const pending: Types.Mutable<Queued> = queued ?? {
           runId: options.runId,
           request: options.request,
           text: options.text,
-          ...(options.agent === undefined
-            ? { operation: launched.operation }
-            : { agent: options.agent }),
+          ...(pinned ? { agent: launched.agent } : { operation: launched.operation }),
           result: null,
         };
         if (options.actor !== undefined && queued === undefined) {
