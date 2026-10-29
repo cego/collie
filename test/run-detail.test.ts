@@ -3,10 +3,12 @@
 
 import { expect, test } from "bun:test";
 import {
+  Cause,
   ConfigProvider,
   Effect,
   Fiber,
   FileSystem,
+  Logger,
   Option,
   Schedule,
   Schema,
@@ -14,7 +16,7 @@ import {
 } from "effect";
 import { startedBy, type AuditLine } from "../src/audit";
 import type { RunDetail } from "../src/board-model";
-import { runDir } from "../src/engine";
+import { evidenceDir, runDir } from "../src/engine";
 import { currentEnv } from "../src/env";
 import { appState } from "../src/flows";
 import { forgeHttpLayer } from "../src/forge/http";
@@ -32,7 +34,7 @@ import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { forgeOnPath, serveForges } from "./support/forge";
 import { focus } from "./support/focus";
-import { stopHost } from "./support/host";
+import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
 const runIdOf = (envelope: { readonly data?: unknown }) =>
@@ -271,6 +273,55 @@ test(
           );
           yield* stopHost(world.state);
           expect(after.detail?.tail?._tag).toBe("Text");
+        }),
+      ["plain.workflow.ts"],
+    ),
+  120_000,
+);
+
+test.skipIf(process.getuid?.() === 0)(
+  "a defect in a drawer's stream is logged, and the stream follows the next details after it",
+  () =>
+    proves(
+      "collie-detail-dies-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const runId = yield* started(world, ["plain", "--input", "note=hi"]);
+          const dir = runDir(world.state, runId);
+          const env = yield* currentEnv.pipe(Effect.orDie);
+          const defects: Array<string> = [];
+          const kept = Logger.make(({ logLevel, cause }) => {
+            if (Cause.hasDies(cause)) defects.push(`${logLevel} ${Cause.pretty(cause)}`);
+          });
+          yield* Effect.gen(function* () {
+            const detailOf = yield* followRunDetail(env);
+            const key = { runId, tail: true, pages: 1, refreshMr: false };
+            expect((yield* detailOf(key))?.id).toBe(runId);
+            // Unreadable, the host cannot build the details, and its stream dies.
+            yield* Effect.acquireRelease(fs.chmod(dir, 0o000), () =>
+              fs.chmod(dir, 0o755).pipe(Effect.ignore),
+            );
+            yield* fs.makeDirectory(evidenceDir(world.state, runId), { recursive: true });
+            yield* fs.writeFileString(`${evidenceDir(world.state, runId)}/poke`, "");
+            yield* until(
+              () => Effect.sync(() => defects.length),
+              (count) => count > 0,
+            );
+            yield* fs.chmod(dir, 0o755);
+            yield* fs.writeFileString(`${dir}/log.txt`, "after the defect\n", { flag: "a" });
+            const after = yield* detailOf(key).pipe(
+              Effect.repeat({
+                until: (detail) =>
+                  detail?.tail?._tag === "Text" && detail.tail.text.includes("after the defect"),
+                schedule: Schedule.spaced("250 millis"),
+                times: 80,
+              }),
+            );
+            expect(after?.tail?._tag).toBe("Text");
+          }).pipe(Effect.provide(Logger.layer([kept])));
+          yield* stopHost(world.state);
+          expect(defects[0]).toStartWith("Error ");
         }),
       ["plain.workflow.ts"],
     ),

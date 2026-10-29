@@ -234,7 +234,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     },
     narrative: null,
   });
-  yield* appendCard(at.runDir, card).pipe(Effect.ignore);
+  yield* appendCard(at.runDir, card).pipe(Effect.ignore({ log: "Unhandled" }));
   return card;
 });
 
@@ -244,7 +244,7 @@ export const appendLog = (runDir: string, line: string) =>
 
 /** Best effort: oversight's notes never fail the thing they are about. */
 export const said = (at: { readonly runDir: string }, line: string) =>
-  appendLog(at.runDir, line).pipe(Effect.ignore);
+  appendLog(at.runDir, line).pipe(Effect.ignore({ log: "Warn" }));
 
 const JudgedJson = Schema.fromJsonString(
   Schema.Struct({
@@ -308,13 +308,15 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
   const facts = yield* ruleFacts(at).pipe(Effect.result);
   if (facts._tag === "Failure") {
     const skipped = `rule check skipped at ${where}: ${facts.failure.reason}`;
-    yield* recordSkipped(at.runDir, at.runId, skipped, "rule").pipe(Effect.ignore);
+    yield* recordSkipped(at.runDir, at.runId, skipped, "rule").pipe(
+      Effect.ignore({ log: "Unhandled" }),
+    );
     return yield* said(at, skipped);
   }
   const found = checkRules(intent, facts.success, yield* nowIso());
   const before = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
   for (const report of newReports(found, before)) {
-    yield* appendDrift(at.runDir, report).pipe(Effect.ignore);
+    yield* appendDrift(at.runDir, report).pipe(Effect.ignore({ log: "Unhandled" }));
     yield* said(at, driftSaid(report, where));
   }
   // A report that was open and is no longer found is one the work came back from — but
@@ -323,7 +325,7 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
   for (const report of openReports(before)) {
     if (found.some((still) => still.constraint === report.constraint)) continue;
     yield* appendDrift(at.runDir, { ...report, at: yield* nowIso(), resolution: "verified" }).pipe(
-      Effect.ignore,
+      Effect.ignore({ log: "Unhandled" }),
     );
     yield* said(at, `drift ${report.constraint} cleared at ${where}`);
   }
@@ -344,7 +346,7 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   if (!intent.constraints.some((constraint) => constraint.kind === "semantic")) return;
   if (deps === null) {
     yield* recordSkipped(at.runDir, at.runId, "there is no Herd to charge a judgement to").pipe(
-      Effect.ignore,
+      Effect.ignore({ log: "Unhandled" }),
     );
     return;
   }
@@ -359,7 +361,7 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   }).pipe(
     Effect.catch((cause) =>
       recordSkipped(at.runDir, at.runId, `the judgement failed: ${reason(cause)}`).pipe(
-        Effect.ignore,
+        Effect.ignore({ log: "Unhandled" }),
         Effect.as({ judged: NOT_JUDGED, reports: [] }),
       ),
     ),
@@ -375,10 +377,10 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
         ...(answeredAt !== undefined && { at: answeredAt }),
       }),
     )
-    .pipe(Effect.ignore);
+    .pipe(Effect.ignore({ log: "Unhandled" }));
   const before = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
   for (const report of newReports(outcome.reports, before)) {
-    yield* appendDrift(at.runDir, report).pipe(Effect.ignore);
+    yield* appendDrift(at.runDir, report).pipe(Effect.ignore({ log: "Unhandled" }));
     yield* said(
       at,
       `drift at ${where}: ${report.constraint} (${report.severity}) — judged against ${report.evidence.length} piece(s) of evidence`,
@@ -429,13 +431,13 @@ const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   const before = Number(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "0")));
   if (seen <= before || to.terminalId === undefined) return;
   yield* fs.makeDirectory(`${at.runDir}/steering`, { recursive: true }).pipe(Effect.ignore);
-  yield* fs.writeFileString(file, String(seen)).pipe(Effect.ignore);
+  yield* fs.writeFileString(file, String(seen)).pipe(Effect.ignore({ log: "Unhandled" }));
   yield* appendLine(ledger, {
     kind: "manual_override",
     at: yield* nowIso(),
     incarnation: to.terminalId,
     by: "hook:UserPromptSubmit",
-  }).pipe(Effect.ignore);
+  }).pipe(Effect.ignore({ log: "Unhandled" }));
   yield* said(at, `${to.agent}: manual_override — someone typed into its pane`);
 });
 
@@ -490,7 +492,7 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
       at: yield* nowIso(),
       resolution: "correction_submitted",
       correction: requestId,
-    }).pipe(Effect.ignore);
+    }).pipe(Effect.ignore({ log: "Unhandled" }));
     yield* said(at, `correction sent for ${report.constraint} (${mode})`);
     sent.push(report.constraint);
   }
@@ -502,7 +504,7 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
       continue;
     if (decided.some((one) => one.report.constraint === report.constraint)) continue;
     yield* appendDrift(at.runDir, { ...report, at: yield* nowIso(), resolution: "escalated" }).pipe(
-      Effect.ignore,
+      Effect.ignore({ log: "Unhandled" }),
     );
     yield* said(at, `drift ${report.constraint} escalated: the correction bound is spent`);
     escalated.push(report.constraint);
@@ -814,7 +816,9 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
       cited,
     );
     if (target.finished) {
-      yield* appendPendingReport(at.stateDir, key, target.id, report).pipe(Effect.ignore);
+      yield* appendPendingReport(at.stateDir, key, target.id, report).pipe(
+        Effect.ignore({ log: "Unhandled" }),
+      );
     } else {
       if (!(yield* fileReport(target.dir, report))) continue;
     }
@@ -835,7 +839,7 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
     at: snapshotAt,
     by: at.runId,
     runs: targets.map((target) => target.id),
-  }).pipe(Effect.ignore);
+  }).pipe(Effect.ignore({ log: "Unhandled" }));
   return null;
 });
 
@@ -864,7 +868,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
   const now = yield* nowIso();
   if (!alreadyStood(standing, at.runId))
     yield* appendElection(file, { kind: "candidate", at: now, by: where, run: at.runId }).pipe(
-      Effect.ignore,
+      Effect.ignore({ log: "Unhandled" }),
     );
   const owed = pendingEvaluation(standing)?.runs ?? [];
   const owe = (why: string) =>
@@ -874,13 +878,15 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
       )
         return;
       yield* appendElection(file, { kind: "pending", since: now, runs: [...at.family] }).pipe(
-        Effect.ignore,
+        Effect.ignore({ log: "Unhandled" }),
       );
       yield* said(at, `cross-run evaluation pending for ${at.family.join(", ")}: ${why}`);
     });
   yield* withLock(
     `${file}.evaluator.lock`,
-    appendElection(file, { kind: "dirty", at: now, by: where, run: at.runId }).pipe(Effect.ignore),
+    appendElection(file, { kind: "dirty", at: now, by: where, run: at.runId }).pipe(
+      Effect.ignore({ log: "Unhandled" }),
+    ),
     Effect.gen(function* () {
       let snapshotAt = now;
       for (let passes = 0; ; passes += 1) {
@@ -918,7 +924,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
         snapshotAt = yield* nowIso();
       }
     }),
-  ).pipe(Effect.ignore);
+  ).pipe(Effect.ignore({ log: "Unhandled" }));
 });
 
 /**
@@ -1012,7 +1018,7 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
       fs
         .writeFileString(cardedPath(at.runDir), `${key}\n`, { flag: "a" })
         .pipe(
-          Effect.ignore,
+          Effect.ignore({ log: "Unhandled" }),
           Effect.andThen(writeCard(at, { kind: "slice", step, claims: checkpoint.claims })),
         ),
     );

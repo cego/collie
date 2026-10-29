@@ -1727,7 +1727,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           return now;
         }
       }
-    }).pipe(Effect.catch(() => Effect.succeed({ dispatch: true as const })));
+    }).pipe(
+      Effect.catch((failed) =>
+        Effect.fail(failed).pipe(
+          Effect.ignore({ log: "Unhandled" }),
+          Effect.as({ dispatch: true as const }),
+        ),
+      ),
+    );
 
   const checkedTrust = new Set<string>();
 

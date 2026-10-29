@@ -2677,8 +2677,8 @@ const sourceOf = (entry: string): Effect.Effect<string, never, FileSystem.FileSy
 /** Every generation a host staged, gone: a new host stages from the sources again. */
 export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.remove(`${dir}/generations`, { recursive: true })),
-    Effect.ignore,
+    Effect.flatMap((fs) => fs.remove(`${dir}/generations`, { recursive: true, force: true })),
+    Effect.ignore({ log: "Warn" }),
   );
 
 /**
@@ -4704,19 +4704,19 @@ export const hostLayer = (options: {
               key: `escalated:${constraint}`,
               subject: constraint,
             });
-        }).pipe(Effect.ignore);
+        }).pipe(Effect.ignore({ log: "Unhandled" }));
       const oversight = Oversight.of({
         card: (runId, what) =>
           watched(runId).pipe(
             Effect.flatMap((at) => under(writeCard(at, what))),
             Effect.flatMap((card) => told(runId, [card])),
-            Effect.ignore,
+            Effect.ignore({ log: "Unhandled" }),
           ),
         checkpoints: (runId, step) =>
           watched(runId).pipe(
             Effect.flatMap((at) => under(cardCheckpoints(at, step))),
             Effect.flatMap((cards) => told(runId, cards)),
-            Effect.ignore,
+            Effect.ignore({ log: "Unhandled" }),
           ),
         drift,
         finish: (runId) =>
@@ -4751,7 +4751,7 @@ export const hostLayer = (options: {
             // owed cross-run check, which is what makes it something a human has to know.
             if (card.cross_run === "pending")
               yield* notify(runId, "drift-unresolved", "cross_run_pending", { key: "cross_run" });
-          }).pipe(Effect.ignore),
+          }).pipe(Effect.ignore({ log: "Unhandled" })),
       });
       const relied: Reliance["Service"]["relied"] = (runId, command) =>
         under(
@@ -6639,10 +6639,10 @@ const makeRegistry: (
       project: request.kind === "existing" ? request.path : parent.project,
       userDir,
       approved: parentChecks.length > 0 ? parentChecks : undefined,
-    }).pipe(Effect.provideContext(bun), Effect.ignore);
+    }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
     yield* seedIntentOf({ dir, row: claimed.row, generation, seed: undefined, parent }).pipe(
       Effect.provideContext(bun),
-      Effect.ignore,
+      Effect.ignore({ log: "Unhandled" }),
     );
     if (claimed.row.accepted === null) yield* attachInto(claimed.row);
     // The parent hands its own children over, so the receipt is written here: a host
@@ -7540,14 +7540,14 @@ const makeRegistry: (
       project: options.project,
       userDir,
       approved,
-    }).pipe(Effect.provideContext(bun), Effect.ignore);
+    }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
     yield* seedIntentOf({
       dir,
       row: claimed.row,
       generation,
       seed: options.intent,
       parent: options.parent ? yield* store.run(options.parent) : null,
-    }).pipe(Effect.provideContext(bun), Effect.ignore);
+    }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
     // A retry of work the engine already has is nothing more to do; one that crashed
     // before it heard is handed over now, under the identity it was admitted with.
     // A caller that executes the Run itself has the receipt first, as a parent does.

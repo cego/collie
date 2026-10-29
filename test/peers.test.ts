@@ -649,6 +649,45 @@ test(
 );
 
 test(
+  "a dial-back refused because its ticket expired is in the dialling host's log",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-dialfail-",
+        (first, second) =>
+          Effect.gen(function* () {
+            yield* first.lists([second]);
+            expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+            const [laptop] = yield* peersOf(second.world.state);
+            const relay = relayOf(second.world.state, laptop!.name);
+            // A dial-back that works first, so the link was heard just before it is frozen.
+            yield* until(
+              () => relayAnswer(relay, '{"as":"cli","client":"probe"}'),
+              (said) => said.includes('"ok":true'),
+            );
+            const owner = yield* ownerOf(first.world.state);
+            process.kill(owner!.pid, "SIGSTOP");
+            const resumed = Effect.sync(() => process.kill(owner!.pid, "SIGCONT"));
+            yield* Effect.gen(function* () {
+              yield* relayAnswer(relay, '{"as":"cli","client":"late"}');
+              // Past the ticket's life, so the dial-back the frozen host makes is refused.
+              yield* Effect.sleep("6 seconds");
+            }).pipe(Effect.ensuring(resumed));
+            const logged = yield* until(
+              () => read(`${first.world.state}/host.log`),
+              (log) => log.includes("dial-back to second failed"),
+            );
+            expect(
+              logged.split("\n").find((line) => line.includes("dial-back to second failed")),
+            ).toContain("level=WARN");
+          }),
+        [],
+      ),
+    ),
+  120_000,
+);
+
+test(
   "a listener lets in only its paired installation over its own certificate, a relay only a front door, and a far host of another build is refused, left running",
   () =>
     runEffect(

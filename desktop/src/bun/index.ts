@@ -252,7 +252,7 @@ const main = Effect.gen(function* () {
     state: own,
     hash: yield* updater.hash,
     version: manifest.version,
-  }).pipe(Effect.ignore);
+  }).pipe(Effect.ignore({ log: "Warn" }));
   const logged = yield* actionsLog(own);
   const lists = yield* harnessLists({
     claude: Effect.suspend(() => claudeModels(SubscriptionRef.getUnsafe(flockSettings), own)),
@@ -313,7 +313,7 @@ const main = Effect.gen(function* () {
     Effect.flatMap((read) =>
       SubscriptionRef.update(credentials, (now) => (now === blank ? read : now)),
     ),
-    Effect.ignore,
+    Effect.ignore({ log: "Warn" }),
     Effect.forkScoped,
   );
   // An older Desktop that was killed left its own masters behind.

@@ -1246,7 +1246,7 @@ const sideJobsLayer = (panels: MrPanels) =>
         board.pipe(
           Effect.flatMap(({ runs }) => retitleGenericTasks(env, herdr, runs)),
           Effect.provideContext(bun),
-          Effect.ignore,
+          Effect.ignore({ log: "Warn" }),
         ),
       );
     }),
@@ -2227,7 +2227,7 @@ const frontDoorHandlers = (
                           said: (line) =>
                             echo("stderr")(`${line}\n`).pipe(
                               Effect.andThen(appendLog(runDir(env.stateDir, runId), line)),
-                              Effect.ignore,
+                              Effect.ignore({ log: "Warn" }),
                               Effect.provideService(FileSystem.FileSystem, fs),
                             ),
                         },
@@ -3030,7 +3030,12 @@ const boundedStop = (lock: string, checks: CheckProcessesApi) =>
       Effect.andThen(Effect.sleep(LOG_FLUSH)),
       // Let go of here rather than left for the next host to judge stale.
       Effect.andThen(releaseOwnLock(lock)),
-      Effect.ignore,
+      Effect.catch((failed) =>
+        Effect.fail(failed).pipe(
+          Effect.ignore({ log: "Unhandled" }),
+          Effect.andThen(Effect.sleep(LOG_FLUSH)),
+        ),
+      ),
       Effect.andThen(Effect.sync(() => process.exit(1))),
       Effect.forkScoped,
     );
@@ -3145,7 +3150,9 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     yield* record(herdSocket).pipe(Effect.orDie);
     if (herdSocket === null) yield* Effect.logWarning(HERDLESS);
     const locate = serverSocket(herdr).pipe(
-      Effect.tap((found) => (found === null ? Effect.void : record(found).pipe(Effect.ignore))),
+      Effect.tap((found) =>
+        found === null ? Effect.void : record(found).pipe(Effect.ignore({ log: "Unhandled" })),
+      ),
     );
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
     const installed = yield* installedRelease(env.pluginRoot, env.collieDir, BUILD);

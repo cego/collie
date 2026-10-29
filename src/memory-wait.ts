@@ -107,7 +107,7 @@ export const waitForMemory = (opts: {
         .makeDirectory(runLog, { recursive: true })
         .pipe(
           Effect.andThen(fs.writeFileString(`${runLog}/agents.log`, `${line}\n`, { flag: "a" })),
-          Effect.ignore,
+          Effect.ignore({ log: "Warn" }),
         );
     const period = yield* every;
     const mark = (memory: Memory & { known: true }) =>
@@ -123,7 +123,7 @@ export const waitForMemory = (opts: {
             asker: opts.asker ?? null,
           }),
         );
-      }).pipe(Effect.ignore);
+      }).pipe(Effect.ignore({ log: "Warn" }));
     const freed = Effect.gen(function* () {
       for (;;) {
         yield* Effect.sleep(period);

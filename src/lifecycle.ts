@@ -801,7 +801,10 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
               ),
           ),
         ).pipe(
-          Effect.catchCause(() => Effect.void),
+          // A host going away ends the stream interrupted, which the retry answers.
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.logError(cause),
+          ),
           Effect.repeat(Schedule.spaced("1 second")),
         );
         const fiber = yield* Effect.forkIn(follow, scope);

@@ -17,6 +17,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  FiberSet,
   FileSystem,
   Option,
   Schedule,
@@ -496,6 +497,8 @@ const NO_WAY = { transport: null, direct: null, ssh: null, waits: null } as cons
 export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const fs = yield* FileSystem.FileSystem;
   const scope = yield* Effect.scope;
+  // Forked with the host's own services, so what they log reaches the host log.
+  const runInHost = yield* FiberSet.makeRuntime();
   const clock = yield* Clock.Clock;
   const services = yield* Effect.context<
     | FileSystem.FileSystem
@@ -656,7 +659,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const forget = (installation: string) =>
     Effect.suspend(() => keep(peers.filter((peer) => peer.installation !== installation))).pipe(
       pairing.withPermits(1),
-      Effect.ignore,
+      Effect.ignore({ log: "Unhandled" }),
     );
   const reconcileMachines = Effect.gen(function* () {
     const listed = yield* link.machines;
@@ -820,7 +823,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       Effect.flatMap((far) =>
         intoHost(peer, as, client, far, sender).pipe(Effect.catch(() => Effect.sync(far.close))),
       ),
-      Effect.ignore,
+      Effect.ignore({ log: "Warn", message: `dial-back to ${peer.name} failed` }),
       Effect.scoped,
     );
 
@@ -863,16 +866,13 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
           heard = clock.currentTimeMillisUnsafe();
           const said = decodeControl(new TextDecoder().decode(data));
           if (Option.isSome(said) && "dial" in said.value)
-            void Effect.runFork(
-              Effect.forkIn(
-                dialledBack(
-                  peer,
-                  said.value.dial,
-                  said.value.as,
-                  said.value.client,
-                  said.value.sender,
-                ),
-                scope,
+            void runInHost(
+              dialledBack(
+                peer,
+                said.value.dial,
+                said.value.as,
+                said.value.client,
+                said.value.sender,
               ),
             );
         },
@@ -904,10 +904,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     });
 
   const relayTo = (peer: Peer) => (conn: Socket) =>
-    firstLine(
-      conn,
-      (line, rest) => void Effect.runFork(Effect.forkIn(relayed(peer, conn, line, rest), scope)),
-    );
+    firstLine(conn, (line, rest) => void runInHost(relayed(peer, conn, line, rest)));
 
   const openRelay = (peer: Peer) =>
     Effect.gen(function* () {
@@ -963,21 +960,18 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     return {
       peer,
       opened: (ws) =>
-        void Effect.runFork(
-          Effect.forkIn(
-            intoHost(
-              peer,
-              as,
-              client,
-              {
-                send: (chunk) => void ws.sendBinary(chunk),
-                close: () => ws.close(),
-                listen: inbox.listen,
-              },
-              sender,
-            ).pipe(Effect.catch((refused) => Effect.sync(() => ws.close(1011, refused.reason)))),
-            scope,
-          ),
+        void runInHost(
+          intoHost(
+            peer,
+            as,
+            client,
+            {
+              send: (chunk) => void ws.sendBinary(chunk),
+              close: () => ws.close(),
+              listen: inbox.listen,
+            },
+            sender,
+          ).pipe(Effect.catch((refused) => Effect.sync(() => ws.close(1011, refused.reason)))),
         ),
       arrived: inbox.arrived,
       hungUp: inbox.hungUp,
