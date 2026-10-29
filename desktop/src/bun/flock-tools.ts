@@ -70,6 +70,7 @@ export const chatDoor = (door: Door) => ({
   progress: (asked: Parameters<Door["progress"]>[0]) => door.progress(asked),
   schedules: () => door.schedules(),
   changeSchedule: (asked: Parameters<Door["changeSchedule"]>[0]) => door.changeSchedule(asked),
+  claimedInHelle: (asked: Parameters<Door["claimedInHelle"]>[0]) => door.claimedInHelle(asked),
 });
 
 export type ChatDoor = ReturnType<typeof chatDoor>;
@@ -1152,6 +1153,36 @@ const projectLine = (project: HelleProject, me: string) => {
   }`;
 };
 
+/** Runs share the human's Helle identity, so one that recorded `slug` would give the human's claim back. */
+const forgottenByRuns = Effect.fn("FlockTools.forgottenByRuns")(function* (
+  flock: FlockChat,
+  slug: string,
+) {
+  const request = yield* newRequest;
+  return yield* Effect.forEach(
+    flock.machines(),
+    (machine) =>
+      Effect.gen(function* () {
+        const reached = yield* reach(machine);
+        yield* declareVoice(flock, reached);
+        const runs = yield* reached.door.claimedInHelle({ slug, request });
+        return runs.length === 0
+          ? []
+          : [
+              `${runs.map((run) => `${machine.name}:${run}`).join(", ")} will no longer give ${slug} back.`,
+            ];
+      }).pipe(
+        Effect.timeout(ANSWER_WITHIN),
+        Effect.catch((cause) =>
+          Effect.succeed([
+            `${machine.name}'s Runs may still give ${slug} back: ${reasonOf(cause)}.`,
+          ]),
+        ),
+      ),
+    { concurrency: "unbounded" },
+  ).pipe(Effect.map((lines) => lines.flat()));
+});
+
 const helle = (flock: FlockChat, asked: { claim?: string; release?: string }) =>
   Effect.gen(function* () {
     const creds = flock.helle === undefined ? null : yield* flock.helle;
@@ -1164,17 +1195,17 @@ const helle = (flock: FlockChat, asked: { claim?: string; release?: string }) =>
     }
     if (asked.claim !== undefined) {
       const claim = asked.claim;
-      done.push(
-        yield* claimProject(creds, claim).pipe(
-          Effect.map(
-            ({ position }) =>
-              `Claimed ${claim} in Helle: ${
-                position === 0 ? "you hold it" : `queued at position ${position}`
-              }.`,
-          ),
-          Effect.catchTag("HelleError", ({ message }) => Effect.succeed(message)),
-        ),
-      );
+      const claimed = yield* claimProject(creds, claim).pipe(Effect.result);
+      if (Result.isFailure(claimed)) done.push(claimed.failure.message);
+      else {
+        const { position } = claimed.success;
+        done.push(
+          `Claimed ${claim} in Helle: ${
+            position === 0 ? "you hold it" : `queued at position ${position}`
+          }.`,
+          ...(yield* forgottenByRuns(flock, claim)),
+        );
+      }
     }
     if (done.length > 0) return done.join("\n");
     const me = yield* helleMe(creds);

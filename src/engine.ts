@@ -5633,6 +5633,8 @@ export interface RegistryApi {
   readonly waiting: (runId: string) => Effect.Effect<ReadonlyArray<OpenDecision>>;
   /** One run as a front door shows it, or null where nothing was admitted under that id. */
   readonly view: (runId: string) => Effect.Effect<RunView | null>;
+  /** Drops `slug` from every Run's claim record, answering the Runs it was in. */
+  readonly forgetClaim: (slug: string) => Effect.Effect<ReadonlyArray<string>>;
   /** Every run this host has rows for, newest last, narrowed to one Task where named. */
   readonly views: (task: string | null) => Effect.Effect<ReadonlyArray<RunView>>;
   /** Records `url` as the merge request `runId` opened, as the MR step does, without its notice. */
@@ -7607,6 +7609,17 @@ const makeRegistry: (
           forgetExecution(row.generation, row.execution).pipe(Effect.provideContext(storage)),
         ),
       ),
+    forgetClaim: (slug: string) =>
+      Effect.gen(function* () {
+        const dropped: string[] = [];
+        for (const { run } of yield* store.runs) {
+          const file = claimPath(dir, run);
+          if (!(yield* recordedClaims(file)).some((one) => one.slug === slug)) continue;
+          yield* updateClaims(file, (now) => now.filter((one) => one.slug !== slug));
+          dropped.push(run);
+        }
+        return dropped;
+      }).pipe(Effect.orDie, Effect.provideContext(bun)),
     views: (task: string | null) =>
       store.runs.pipe(
         Effect.flatMap((rows) =>

@@ -1271,6 +1271,8 @@ const CLEANUP_TRAIL = 50;
 
 /** How many of the settings operations a host keeps a record of. */
 const SETTINGS_TRAIL = 50;
+/** How many claims through Desktop's Helle tool a host keeps a record of. */
+const HELLE_TRAIL = 200;
 const DEFINITIONS_TRAIL = 50;
 /** How many usage reads the host keeps a record of: Desktop asks every minute. */
 const USAGE_TRAIL = 200;
@@ -1934,6 +1936,38 @@ const frontDoorHandlers = (
               );
               yield* trimAudit(trail, CLEANUP_TRAIL).pipe(Effect.orDie);
               return swept;
+            }),
+          ),
+        claimedInHelle: ({ slug, request }, { client }) =>
+          plainly(
+            Effect.gen(function* () {
+              const who = whoOf(client);
+              const helleTrail = (yield* Path.Path).join(env.stateDir, "helle");
+              const dropped = yield* once(
+                helleTrail,
+                {
+                  operation: "helle_claimed",
+                  request,
+                  ...who,
+                  asked: { slug },
+                  result: Schema.Array(Schema.String),
+                },
+                Effect.gen(function* () {
+                  const runs = yield* registry.forgetClaim(slug);
+                  for (const runId of runs)
+                    yield* recordAudit(trail(runId), {
+                      operation: "helle_claimed",
+                      request,
+                      ...who,
+                      asked: { slug },
+                      result: Schema.String,
+                      value: slug,
+                    }).pipe(Effect.orDie);
+                  return runs;
+                }),
+              );
+              yield* trimAudit(helleTrail, HELLE_TRAIL).pipe(Effect.orDie);
+              return dropped;
             }),
           ),
         invoke: ({ runId, offer, input: given, request, attachments }, { client }) => {

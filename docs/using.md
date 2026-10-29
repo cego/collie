@@ -1978,6 +1978,14 @@ every project with its holder and queue, yours marked, and it claims or releases
 when you ask. Without a Helle token in Desktop it says how to make one. This works on every
 harness.
 
+You and every Run use one Helle identity, so Helle cannot tell your claim from a Run's, and
+a Run gives back every claim in its record. So when you claim a project with `collie_helle`,
+each Machine Desktop reaches drops it from every Run's claim record, recorded as the chat
+that asked, and the answer names the Runs that will no longer give it back. A Machine that
+cannot be reached is named, and its Runs keep the project in their records. A claim taken
+outside Collie, such as Slack's `/helle` or an agent's own Helle MCP server, reaches no
+Run's record: a Run that recorded that project still gives it back when it ends.
+
 On Pi, write the model as `provider/model`, for example `openai-codex/gpt-6.1-sol`.
 Desktop reads the models and each model's thinking levels from your own Pi install and
 login, once per Desktop start. The reader runs offline, keeps no session, loads none of

@@ -586,7 +586,10 @@ Where they cannot be settled — an application with no project, nothing found, 
 refusing — nothing is merged or tagged: it asks **`go-<n>.claim.unclaimed`**, saying why,
 with **Try again**, **Release without a Helle claim**, recorded on its log as the human's
 say, and **Finish**. Either of the last two first gives back what it did take; a claim
-Helle will not take back parks the Run, naming it, until a resume gives it back. Holding
+Helle will not take back parks the Run, naming it, until a resume gives it back. A Run gives
+back only what is still in its record, and a project you claim through Desktop's
+`collie_helle` leaves every Run's record
+([the Flock chat](using.md#the-flock-chat)); one claimed in Slack does not. Holding
 them, it reads the review again, as
 the claims may have waited. A pipeline still running at the go's head is waited out, as the
 wait before the go waits, and a Hold or Stop ends that wait. The go no longer holds where the
