@@ -2544,6 +2544,8 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
   for (const name of top) {
     if (unstaged(name)) continue;
     names.push(name);
+    const info = yield* fs.stat(`${dir}/${name}`).pipe(Effect.option);
+    if (Option.isNone(info) || info.value.type !== "Directory") continue;
     // A link is named and not followed, as a recursive listing treats it.
     const link = yield* fs.readLink(`${dir}/${name}`).pipe(
       Effect.as(true),

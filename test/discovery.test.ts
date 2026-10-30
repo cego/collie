@@ -220,6 +220,10 @@ test("one revision reads each source once and the next revision reads an edited 
       yield* fs.makeDirectory(dir);
       yield* fs.writeFileString(file, 'export { n } from "../helper";');
       yield* fs.writeFileString(helper, "export const n = 1;");
+      const linked = `${root}/linked-notes`;
+      yield* fs.makeDirectory(linked);
+      yield* fs.writeFileString(`${linked}/note.md`, "Before");
+      yield* fs.symlink(linked, `${dir}/linked-notes`);
       const reads: string[] = [];
       const counted: FileSystem.FileSystem = {
         ...fs,
@@ -232,6 +236,8 @@ test("one revision reads each source once and the next revision reads an edited 
       const before = yield* revision;
       expect(reads.filter((one) => one === file)).toHaveLength(1);
       expect(reads.filter((one) => one === helper)).toHaveLength(1);
+      yield* fs.writeFileString(`${linked}/note.md`, "After");
+      expect(yield* revision).toBe(before);
       reads.length = 0;
       yield* fs.writeFileString(helper, "export const n = 2;");
       expect(yield* revision).not.toBe(before);

@@ -1992,6 +1992,20 @@ only. The six focused loader suites pass, including entry, helper and prompt edi
 while older work keeps its generation. These operation counts establish the removed
 duplication; they do not establish either whole-suite performance target.
 
+Three fixed AB/BA pairs profiled the same three placement cases on `e51af012`
+and `cdd63d94`, using the isolated checkout, Measurement lock and private dependencies
+checked before and after every process. All six processes passed. Median wall time
+was 7.215 versus 6.963 seconds; median CPU time was 11.25 versus 10.77 seconds. One
+candidate process took 10.640 seconds, so these observations do not establish a gain
+beyond noise. Every observation and profile is retained under
+`handoffs/measure/fix2-placement-pairs/`.
+
+The profiles also show platform-error construction from attempts to read ordinary
+source files as directories. The source walker now checks file type before a
+directory read. `fix2-file-directory-red` observed one such attempt; its green check
+observes zero. Directory links remain named without traversal, and the revision
+proof retains that behavior while checking fresh reads after an external-helper edit.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
