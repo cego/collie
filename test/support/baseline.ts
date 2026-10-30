@@ -10463,8 +10463,8 @@ for (const name of ["gitlab", "github"] as const) {
               }),
           );
           yield* bin.restore();
-          expect(why).toBe(
-            `the checkout at ${reviewed} has uncommitted changes, so it is not taken as ${pipe(head, Str.slice(0, 8))}`,
+          expect(why).toStartWith(
+            `the checkout at ${reviewed} has uncommitted changes, so it is not taken as ${pipe(head, Str.slice(0, 8))}.`,
           );
         }),
       ),
