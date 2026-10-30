@@ -1128,15 +1128,17 @@ export const steerRun = (
       if (!answered.ok) return answered;
       const { sent, route } = answered.value;
       const data = { run: options.runId, ...sent };
-      if (sent.delivered)
+      if (sent.delivered || sent.queued === true)
         return {
           ok: true as const,
           data,
           human: withNotice(
             [
-              sent.note === undefined
-                ? deliveredLine(sent)
-                : `Note ${sent.note} kept for Step ${options.step}.`,
+              sent.queued === true
+                ? sent.detail
+                : sent.note === undefined
+                  ? deliveredLine(sent)
+                  : `Note ${sent.note} kept for Step ${options.step}.`,
               sent.kept,
             ]
               .filter((line) => line !== undefined)
@@ -1445,6 +1447,13 @@ export const setSharedSetting = (
       }),
     options.door,
   );
+
+/** A Machine's Harness catalogue, as its host last read it. */
+export const catalogueReadings = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.models(), door);
+
+export const connectionReadings = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.connections(), door);
 
 /** This Machine's Usage readings, as its host last read them. */
 export const usageReadings = (env: PluginEnv, door: Door) =>

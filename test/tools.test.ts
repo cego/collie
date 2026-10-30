@@ -107,11 +107,13 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
   // Said out loud, because it is the boundary. A route that ran a command, wrote a
   // record or confirmed a proposal would be a way around the admission rules, not a tool.
   expect(TOOLS.map((tool) => tool.name).sort()).toEqual([
+    "collie_connections",
     "collie_definitions",
     "collie_do",
     "collie_herd",
     "collie_hold",
     "collie_installation",
+    "collie_models",
     "collie_news",
     "collie_propose",
     "collie_receipts",
@@ -138,11 +140,13 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
 test("the tools are one Toolkit, each saying how it fails and that it needs no approval", () => {
   // Every chat given this Toolkit is held to these, so they are decided here once.
   expect(TOOLS.map((tool) => tool.name).sort()).toEqual([
+    "collie_connections",
     "collie_definitions",
     "collie_do",
     "collie_herd",
     "collie_hold",
     "collie_installation",
+    "collie_models",
     "collie_news",
     "collie_propose",
     "collie_receipts",

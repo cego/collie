@@ -14,7 +14,7 @@ import { childEnv } from "../desktop/src/bun/login-env";
 import { offerOf, opensOn, readPiConfig } from "../desktop/src/bun/chat-choices";
 import { PiConfig } from "../desktop/src/shared/chat-choices";
 import type { DesktopSettings } from "../desktop/src/shared/flock";
-import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
+import { NO_FLOCK_SETTINGS, takeFrom } from "../desktop/src/shared/flock-settings";
 import { harnessLists } from "../desktop/src/bun/harness-lists";
 import { readPiModels } from "../desktop/src/bun/pi-models";
 import { changeSettings } from "../desktop/src/bun/settings";
@@ -361,7 +361,8 @@ test("Pi's own per-model levels constrain settings, selects, the tool and the se
             offers,
           ),
         ).toEqual({
-          refused: '"max" is not an effort GPT-5.5 takes (off, minimal, low, medium, high, xhigh)',
+          refused:
+            '"max" is not an effort this computer\'s pi/openai-codex/gpt-5.5 takes (off, minimal, low, medium, high, xhigh)',
         });
         expect(
           changeSettings(
@@ -375,7 +376,7 @@ test("Pi's own per-model levels constrain settings, selects, the tool and the se
     }),
   ));
 
-test("an unlisted Pi model's configured default agrees in the session, selects, notice and tool", () =>
+test("an added unlisted Pi model's configured default agrees in the session, selects, notice and tool", () =>
   withPi((driver, context) =>
     Effect.gen(function* () {
       const model = "openai-codex/gpt-6-astra";
@@ -393,7 +394,12 @@ test("an unlisted Pi model's configured default agrees in the session, selects, 
         ]),
       });
       const settings: DesktopSettings = { proactive: true, chatHarness: "pi", chatModel: model };
-      const opened = yield* opensOn(settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir), lists);
+      const absent = yield* opensOn(settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir), lists);
+      expect(!absent.ok && absent.problem).toContain('has no model "openai-codex/gpt-6-astra"');
+      const flock = takeFrom(NO_FLOCK_SETTINGS, "vm-gpu", [
+        { key: "models.pi", value: [model], at: "2026-10-29T09:00:00.000Z" },
+      ]).flock;
+      const opened = yield* opensOn(settings, flock, readPiConfig(context.dir), lists);
       expect(opened).toEqual({ ok: true, choice: { harness: "pi", model, effort: "high" } });
       if (!opened.ok) return yield* Effect.die(opened.problem);
       const session = yield* driver.open(
@@ -409,13 +415,7 @@ test("an unlisted Pi model's configured default agrees in the session, selects, 
         model,
         thinking: "high",
       });
-      const offered = yield* offerOf(
-        "pi",
-        settings,
-        NO_FLOCK_SETTINGS,
-        readPiConfig(context.dir),
-        lists,
-      );
+      const offered = yield* offerOf("pi", settings, flock, readPiConfig(context.dir), lists);
       const account = {
         heldOn: "pi",
         runsOn: { harness: "pi", model: "openai-codex/gpt-6.1-sol", effort: "low" },

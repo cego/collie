@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { readClaudeModels, type ModelQuery } from "../desktop/src/bun/claude-models";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 
-test("Claude Code's catalogue is read without a turn or setup, filtered, and closed", () =>
+test("Claude Code's catalogue is read without a turn or setup, omits its default alias, and is closed", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       let closed = 0;
@@ -50,7 +50,7 @@ test("Claude Code's catalogue is read without a turn or setup, filtered, and clo
                 description: "Coding",
                 supportsEffort: true,
               },
-              { value: "not-accepted", displayName: "Unknown", description: "Refused id" },
+              { value: "new-model", displayName: "New model", description: "Newly offered" },
             ]),
           close: () => {
             closed++;
@@ -77,6 +77,7 @@ test("Claude Code's catalogue is read without a turn or setup, filtered, and clo
           efforts: [],
         },
         { id: "sonnet", label: "Sonnet 5", description: "Coding", efforts: [] },
+        { id: "new-model", label: "New model", description: "Newly offered", efforts: [] },
       ]);
       expect(yielded).toBe(false);
       expect(closed).toBe(1);

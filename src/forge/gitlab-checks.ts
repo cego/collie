@@ -4,7 +4,7 @@
 import { hostname } from "node:os";
 import { Clock, Effect, Option, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { gitlabHostOf } from "../config";
+import { gitlabHostOf, readConfig } from "../config";
 import {
   FETCH_LIMIT,
   answered,
@@ -17,9 +17,59 @@ import {
   type Check,
 } from "../doctor-check";
 import type { PluginEnv } from "../env";
-import { daysLeft, RENEW_WITHIN_DAYS, TokenSelf, tokenPage } from "../gitlab-token";
+import { daysLeft, isHostName, RENEW_WITHIN_DAYS, TokenSelf, tokenPage } from "../gitlab-token";
 import { whatItSaid, type Runner } from "../mr";
 import { shellQuote } from "../script";
+import { glabLoginTo } from "./gitlab";
+import { isString } from "../schema";
+import type { ConnectionReading as Probe } from "../connection-model";
+
+export const glabLoginOn = Effect.fn("GitLab.loginOn")(function* <R>(
+  env: PluginEnv,
+  run: Runner<R>,
+) {
+  const config = yield* readConfig(env.userDir);
+  const configured = env.raw.GITLAB_HOST ?? config.gitlab_host;
+  const stored =
+    isString(configured) && isHostName(configured)
+      ? configured
+      : (yield* run("glab", ["config", "get", "host", "--global"], env.cwd)).stdout.trim();
+  const host = isHostName(stored) ? stored : "gitlab.com";
+  return glabLoginTo(host);
+});
+
+const GitlabUser = Schema.fromJsonString(Schema.Struct({ username: Schema.NonEmptyString }));
+
+export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
+  env: PluginEnv,
+  run: Runner<R>,
+) {
+  const login = yield* glabLoginOn(env, run);
+  const host = login.host;
+  const fix = login.relogin;
+  const environmentToken =
+    env.raw.GITLAB_TOKEN || env.raw.GITLAB_ACCESS_TOKEN || env.raw.OAUTH_TOKEN;
+  const storedToken = environmentToken ? null : yield* login.token(run, env.cwd);
+  const token = environmentToken || (storedToken ?? "");
+  if (token === "")
+    return { state: "absent", detail: `no GitLab login for ${host}`, fix } satisfies Probe;
+  const args = ["api", "--hostname", host, "user"];
+  const me = yield* environmentToken
+    ? run("env", [`GITLAB_HOST=${host}`, "glab", ...args], env.cwd)
+    : run("glab", args, env.cwd);
+  const user = Schema.decodeUnknownOption(GitlabUser)(me.stdout);
+  if (me.code !== 0 || Option.isNone(user))
+    return {
+      state: "broken",
+      detail: `${host} did not accept its GitLab login`,
+      fix,
+    } satisfies Probe;
+  return {
+    state: "ok",
+    account: user.value.username,
+    detail: `${host} as ${user.value.username}`,
+  } satisfies Probe;
+});
 
 /**
  * Each host `glab auth status` names (its unindented lines), and whether git reaches it

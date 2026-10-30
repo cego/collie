@@ -55,7 +55,35 @@ import {
   type ReviewRead,
 } from "./review";
 
+import type { PluginEnv } from "../env";
+import type { ConnectionReading as Probe } from "../connection-model";
+
 const HOST = "github.com";
+
+export { LOGIN as ghLogin };
+
+export const probeGithub = Effect.fn("Connections.probeGithub")(function* <R>(
+  env: PluginEnv,
+  run: Runner<R>,
+) {
+  const fix = `${LOGIN.relogin} --web`;
+  const status = yield* run(
+    "gh",
+    ["auth", "status", "--active", "--hostname", "github.com"],
+    env.cwd,
+  );
+  const text = whatItSaid(status);
+  if (status.code === 127 || /not logged into any|not logged in to any/i.test(text))
+    return { state: "absent", detail: "no GitHub login on this Machine", fix } satisfies Probe;
+  const account = /Logged in to github\.com (?:account |as )([^\s(]+)/i.exec(text)?.[1];
+  if (status.code !== 0 || account === undefined)
+    return {
+      state: "broken",
+      detail: "gh could not verify its active GitHub login",
+      fix,
+    } satisfies Probe;
+  return { state: "ok", account, detail: `github.com as ${account}` } satisfies Probe;
+});
 
 const optionalText = Schema.optionalKey(Schema.NullOr(Schema.String));
 const optionalFlag = Schema.optionalKey(Schema.NullOr(Schema.Boolean));

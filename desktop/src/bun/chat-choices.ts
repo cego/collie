@@ -131,7 +131,7 @@ export const opensOn = <R>(
   lists?: HarnessLists,
 ) =>
   Effect.gen(function* () {
-    const checked = chatChoice(settings, flock);
+    const checked = chatChoice({ chatHarness: settings.chatHarness }, flock);
     if (!checked.ok) return checked;
     const { harness } = checked.choice;
     if (lists !== undefined) yield* lists.ready(harness);

@@ -35,6 +35,7 @@ import {
 } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
+import { connection } from "./connections.ts";
 import * as Workflow from "effect/workflow/Workflow";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import { IMPLEMENTER } from "./reviewing.ts";
@@ -43,6 +44,7 @@ import {
   RolledBack,
   StagedMergeRequest,
   claiming,
+  fitting,
   nth,
   plays,
   quoted,
@@ -111,47 +113,53 @@ const pushing = (url: string) =>
 const rollingBack = (url: string) =>
   `rolling ${url}'s stage back to the newest release production carries`;
 
+const releaseCommit = (url: string) =>
+  `a release commit to ${url}'s default branch, where it makes one`;
+
+const watching = "watching the tag's pipeline there, never playing a production job";
+
 export const RELEASE_CLEARS = {
   answer: (url: string) => [
     pushing(url),
-    `never posting on ${url} or resolving a thread there: Collie replies`,
+    "never posting or resolving a thread there: Collie replies",
   ],
   fix: (url: string) => [pushing(url)],
   stageMergeRequest: (url: string) => [
     `playing, retrying and watching ${url}'s stage deploy job and stage check jobs (e2e-stage, smoke or the like) of the merge request's pipeline`,
-    rollingBack(url),
+    "rolling stage back to the newest release production carries",
     "never a production job",
   ],
   tag: (url: string) => [
-    `a release commit to ${url}'s default branch, where the repository makes one`,
-    `pushing an annotated version tag of ${url} to origin`,
-    `creating its release on ${url}, where the package publishes from its tags`,
-    `watching the tag's pipeline on ${url}, never playing a production job`,
+    releaseCommit(url),
+    "pushing an annotated version tag to origin",
+    "creating its release there, where the package publishes from its tags",
+    watching,
   ],
   /** An application's tag step, which stages the tag too. */
   stage: (url: string) => [
-    `a release commit to ${url}'s default branch, where it makes one`,
+    releaseCommit(url),
     "pushing an annotated version tag to origin, with no forge release",
-    "playing, retrying and watching the tag pipeline's stage deploy and check jobs until only production jobs waiting to be started are left",
+    "playing, retrying and watching the tag's stage deploy and check jobs",
     "rolling stage back to the newest release production carries",
     "never a production job",
   ],
   /** An application's tag step after its merge request was tested on stage. */
   tagTested: (url: string) => [
-    `a release commit to ${url}'s default branch, where it makes one`,
+    releaseCommit(url),
     "pushing an annotated version tag to origin, with no forge release",
-    `watching the tag's pipeline on ${url}, never playing a production job`,
+    watching,
   ],
   rollback: (url: string) => [`${rollingBack(url)}, never a production job`],
-  production: (url: string, jobs: ReadonlyArray<JobLink>) => [
-    `playing ${plays(jobs)} on ${url}, and no other job`,
-  ],
+  production: (url: string, jobs: ReadonlyArray<JobLink>) => {
+    const playing = (named: string) => [`playing ${named} on ${url}, and no other job`];
+    const under = (job: JobLink) => (job.url.startsWith(url) ? job.url.slice(url.length) : job.url);
+    return fitting(
+      playing(jobs.map((job) => `\`${job.name}\` at ${under(job)}`).join(", ")),
+      playing(quoted(jobs.map((job) => job.name))),
+      playing(`the ${jobs.length} production jobs its task names`),
+    );
+  },
 };
-
-/** Not one of RELEASE_CLEARS: it is cleared for a Slack channel, not the repository. */
-export const SHARE_CLEARS = (mr: string, channel: string) => [
-  `posting one Slack message in ${channel}: ${mr} linked by its title, and nothing else`,
-];
 
 const verdict = {
   verdict: Schema.Literals(["clean", "findings"]),
@@ -200,7 +208,9 @@ export const Shared = Schema.Struct({
   link: Schema.optionalKey(Schema.String).annotate({
     description: "the posted message's permalink",
   }),
-  why: Schema.optionalKey(Schema.String).annotate({ description: "why nothing was posted" }),
+  why: Schema.optionalKey(Schema.String).annotate({
+    description: "why nothing was posted or its permalink is missing",
+  }),
 });
 
 /** One agent for the whole Run, which each step continues. */
@@ -270,9 +280,8 @@ const shareAsk = step({
 const sharePost = step({
   id: "share",
   title: "Share",
-  description: "The agent posts the merge request in the approval channel, linked by its title.",
-  kind: "agent",
-  role: "implementer",
+  description: "The host posts the merge request in the approval channel, linked by its title.",
+  kind: "check",
 });
 const mergeGo = step({
   id: "go",
@@ -367,6 +376,18 @@ const notReady = (standing: ReviewStanding) => {
 
 export default defineWorkflow({
   id: "release",
+  connections: {
+    needs: {
+      helle: { with: "Holds the release while it ships" },
+      gitlab: { with: "Merges, tags and watches the pipeline" },
+    },
+    uses: {
+      slack: {
+        with: "Posts the merge request in the approval channel",
+        without: "Asks you to share it yourself",
+      },
+    },
+  },
   title: "release — merge and tag a merge request on a human's go",
   description:
     "Takes one merge request the rest of the way: it waits, at no model cost, until the merge request is approved, answered, green and mergeable at a head the Run's checks proved, asks the human for the go, then claims the repository, merges at that head, tags the release and reads the tag back on origin. An application is staged, from its merge request before the merge or from its tag after it, and goes to production on the human's go.",
@@ -731,6 +752,7 @@ export default defineWorkflow({
             `${SHARE_SETTINGS.on} is on but ${SHARE_SETTINGS.channel} names no channel, so nothing is shared for approval`,
           );
         let shared = !sharing.on || channel === "";
+        const slack = sharing.on && channel !== "" ? yield* connection("slack") : null;
         let shares = 0;
         /** After a wait, the question comes again only at a new head. */
         let askedAt: string | null = null;
@@ -750,8 +772,14 @@ export default defineWorkflow({
             const answer = yield* shareAsk(
               ask({
                 name: nth("share-for-approval", shares),
-                prompt: `${mr} at ${short(proved)} waits for a teammate's approval. Check it first. ${SHARE.post} posts it in ${channel} as its title, linked, and nothing else; ${SHARE.wait} posts nothing and asks again once its head moves.`,
-                options: [SHARE.post, SHARE.wait],
+                prompt:
+                  slack !== null && slack.state !== "ok"
+                    ? `${mr} at ${short(proved)} waits for a teammate's approval. Share it in ${channel} yourself: ${slack.detail}. Fix: ${slack.fix}. Confirm when shared, or wait for changes.`
+                    : `${mr} at ${short(proved)} waits for a teammate's approval. Check it first. ${SHARE.post} posts it in ${channel} as its title, linked, and nothing else; ${SHARE.wait} posts nothing and asks again once its head moves.`,
+                options: [
+                  slack !== null && slack.state !== "ok" ? "I shared it" : SHARE.post,
+                  SHARE.wait,
+                ],
               }),
               { round: shares },
             );
@@ -760,6 +788,10 @@ export default defineWorkflow({
                 runId,
                 `not shared at ${short(proved)}: waiting for ${mr} to change`,
               );
+            if (answer === "I shared it") {
+              shared = true;
+              return yield* host.record(runId, `shared by the operator: ${mr} in ${channel}`);
+            }
             // The answer can come long after the question, once nobody need approve it any more.
             if (!waitsOnApproval(yield* standingAt(`${nth("share", shares)}.standing`)))
               return yield* host.record(
@@ -767,24 +799,18 @@ export default defineWorkflow({
                 `not shared: ${mr} no longer waits for a teammate's approval`,
               );
             const posted = yield* sharePost(
-              agentWork({
-                ...as(nth("share", shares)),
-                clears: SHARE_CLEARS(mr, channel),
-                instructions: steps.share,
-                input: { ...input, channel },
-                output: Shared,
-              }).pipe(
-                Effect.catch((failed) =>
-                  Effect.succeed<typeof Shared.Type>({ posted: false, why: failed.reason }),
-                ),
-              ),
+              Activity.make({
+                name: nth("share", shares),
+                success: Shared,
+                execute: host.shareForApproval({ runId, cwd, channel }),
+              }),
               { round: shares },
             );
             shared = posted.posted;
             yield* host.record(
               runId,
               posted.posted
-                ? `shared ${mr} in ${channel} for approval: ${posted.link ?? "no permalink given"}`
+                ? `shared ${mr} in ${channel} for approval: ${posted.link ?? posted.why ?? "permalink missing"}`
                 : `did not share ${mr} in ${channel}: ${posted.why ?? "no reason given"}`,
             );
           });

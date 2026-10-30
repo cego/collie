@@ -1,0 +1,5 @@
+host: gitlab.example
+hosts:
+  gitlab.example:
+    token: fixture-token
+    user: old-cached-name

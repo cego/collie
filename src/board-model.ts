@@ -12,7 +12,10 @@ import { MeasureEvent } from "./measurement-model";
 export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
 import { UsageReading } from "./usage-model";
+import { HarnessCatalogue } from "./catalogue-model";
+import { Connection, ConnectionLogin } from "./connection-model";
 import { HostDefinitions, SharedDefinition } from "./definitions-model";
+import { SlackChoices } from "./slack";
 import { VerifySpecSchema } from "./verify-spec";
 
 const STATE_ORDER = [
@@ -1291,6 +1294,14 @@ export const SharedSettings = Schema.Struct({
 });
 export type SharedSettings = typeof SharedSettings.Type;
 
+export const MachineOwn = Schema.Struct({
+  projectsRoot: Schema.optionalKey(Schema.String),
+  chatHarness: Schema.optionalKey(Schema.String),
+  harnesses: Schema.Array(Schema.String),
+  remembered: Schema.Array(Schema.Struct({ key: Schema.String, value: Schema.String })),
+});
+export type MachineOwn = typeof MachineOwn.Type;
+
 /** Files given with a request, as paths on the host's own Machine, copied into the Run. */
 export const Attachments = Schema.Array(Schema.String);
 
@@ -1596,6 +1607,7 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** Every Workflow and Persona in this host's shipped and user Layers, read in full. */
   Rpc.make("definitions", { success: HostDefinitions, error: HostRefused }),
+  Rpc.make("slackChoices", { success: SlackChoices, error: HostRefused }),
   /** A conversation's pending News, settled as `as` for that conversation alone. */
   Rpc.make("news", {
     payload: {
@@ -1626,6 +1638,7 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** This Machine's settings that a Flock shares: those ever set, each with when. */
   Rpc.make("settings", { success: SharedSettings, error: HostRefused }),
+  Rpc.make("machineOwn", { success: MachineOwn, error: HostRefused }),
   /**
    * The Flock's settings, each written with its own edit's time, where it is newer than
    * this Machine's last edit of that key.
@@ -1648,6 +1661,14 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** This Machine's Usage readings, one per Subscription (ADR-0049). */
   Rpc.make("usage", { success: Schema.Array(UsageReading), error: HostRefused }),
+  /** This Machine's Harness catalogue, one per installed harness. */
+  Rpc.make("models", { success: Schema.Array(HarnessCatalogue), error: HostRefused }),
+  Rpc.make("connections", { success: Schema.Array(Connection), error: HostRefused }),
+  Rpc.make("connectionLogin", {
+    payload: { id: Schema.Literals(["gitlab", "github"]) },
+    success: ConnectionLogin,
+    error: HostRefused,
+  }),
   /** What a sweep would remove now, and what Collie keeps and why (ADR-0045). */
   Rpc.make("cleanup", { success: CleanupReport, error: HostRefused }),
   /** This Machine's Schedules (ADR-0052). */

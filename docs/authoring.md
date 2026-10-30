@@ -59,6 +59,13 @@ input at all has nothing for the words to fill and declares none. `create` write
 Modules are ordinary executable code you chose to save. Importing one to describe it runs
 its top level, which is yours: this is trust, not a sandbox.
 
+Declare service dependencies with [`connections`](sdk.md#what-a-definition-declares).
+Use `needs` when a missing login must refuse the start, and `uses` when the workflow can
+continue without the service. Each entry describes what happens with it; `uses` also
+requires text describing what happens without it. `workflow check` names the workflow and
+Connection when either text is missing. Read `host.connection(id)` inside an Activity
+to implement that fallback with a reading that survives replay.
+
 ## Layers and lookup order
 
 Three directories, nearest first. The same id in a nearer one wins:

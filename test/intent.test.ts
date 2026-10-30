@@ -585,6 +585,7 @@ test(
           "reviewing.ts",
           "review.md",
           "delivering.ts",
+          "connections.ts",
         ])
           yield* fs.copyFile(`${shipped}/${name}`, `${world.user}/${name}`).pipe(Effect.orDie);
         const client = yield* connect(world.state).pipe(Effect.orDie);

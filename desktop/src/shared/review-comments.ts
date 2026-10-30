@@ -117,8 +117,13 @@ export const compose = (drafts: ReadonlyArray<Draft>) => {
     (draft, at) =>
       `${at + 1}. ${locationOf(draft.anchor)}\n${quoted(quoteOf(draft.anchor))}\n\n${draft.text}`,
   );
-  return [
+  const message = [
     `${count} from the human in Desktop. Each names where it is, quotes what it is about, then says what they want.`,
     ...items,
-  ].join("\n\n");
+  ];
+  if (drafts.some((draft) => draft.anchor._tag === "Plan"))
+    message.push(
+      "Revise the plan and tickets where these comments call for changes. Preserve the Run's scope and constraints. Leave its next-choice menu unanswered.",
+    );
+  return message.join("\n\n");
 };

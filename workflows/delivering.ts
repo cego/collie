@@ -42,6 +42,7 @@ import {
   type VerifySpec,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
+import { connection } from "./connections.ts";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
@@ -579,6 +580,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         }
 
         const settledEvidence = yield* host.evidence(runId, cwd);
+        const linear = yield* connection("linear", "connection.mr-linear");
         const opened = yield* agentWork({
           operation: "mr",
           agent: ask.agent,
@@ -605,7 +607,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               noun: ready.noun ?? "merge request",
               assignee: ready.assignee,
               template: ready.template,
-              issues: ready.issues.join(", "),
+              issues: linear.state === "ok" ? ready.issues.join(", ") : "",
               existing: ready.existing ?? "",
               create: ready.commands?.create ?? "",
               comment: ready.commands?.comment ?? "",

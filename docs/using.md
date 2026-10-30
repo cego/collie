@@ -1565,15 +1565,38 @@ absent or not working, and a Linear login onboarding left unfinished. **Skip on 
 Machine** on either step onboards it again with `--skip`, and every later onboarding of
 that Machine skips it too.
 
-What only you can give is asked once, in **Settings** under **GitLab and credentials**, and
+### Connections
+
+**Settings → Every Machine → Connections** shows GitLab, GitHub, Linear, Helle, and Slack.
+Each card names its account and the Machines that can reach it. The index counts cards that need you.
+**Details** lists each Machine's reading and fix, plus the workflows that declare the Connection.
+The **With it** and **Without it** text comes from those declarations; a **needs** row says **Does not start**.
+**Refresh** reads the Machines again after a login finishes.
+
+When a Machine already has a GitLab login, **Use glab's login** reads its host and token through that host's channel.
+Desktop keeps the token and gives it to the missing Machines on stdin.
+If no login is found, **Connect** opens the configured GitLab's token page with **Collie** and both scopes filled in.
+Then choose **Paste from clipboard**. **Use another GitLab…** reveals the host setting.
+
+GitHub's **Give to <machines>** reads the logged-in Machine's token and gives it to gh on each missing Machine's stdin.
+Tokens never appear in command arguments, action events, or recorded shell output.
+Without a reusable login, **Sign in on <machine>** opens `gh auth login --hostname github.com --web` in a terminal.
+Install gh on a Machine that lacks it, then try again. Finish the login and refresh Connections.
+
+Linear's **Set up on <machine>** onboards that Machine, adds its missing MCP, and opens the browser login.
+It restores a previously skipped Linear step while preserving the Machine's other skipped steps.
+The card shows each Machine's remembered team read-only. Renovate asks through Linear when that answer is unset.
+Helle's **Connect** opens the existing paste flow.
+
+What only you can give is asked once, in **Connections**, and
 never pasted on a command line. Desktop keeps the Flock's credentials in a file of Desktop's own,
 `$XDG_CONFIG_HOME/collie-desktop/credentials` (`~/.config/collie-desktop/credentials`
 unless that is set), readable by you alone and replaced whole on every save — the way glab,
 gh and Helle already keep the same tokens on every Machine, so nothing has to be installed
 for it. A Desktop that kept them in the Secret Service through `secret-tool` before has them
-copied into that file the first time, where `secret-tool` is there. What it keeps is one
-GitLab token, made on GitLab's own page — **Make one on GitLab** opens it with the `api` and
-`write_repository` scopes filled in — and Helle's token; Helle's URL is always
+copied into that file the first time, where `secret-tool` is there. It keeps the GitLab token,
+Helle's token, and Slack's bot token. **Make one on GitLab** opens GitLab's token page with the
+`api` and `write_repository` scopes filled in. Helle's URL is always
 `https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab
 accepts it with those scopes, and gives it at once to glab on every Machine it reaches
 (`glab auth login --hostname <host> --stdin`); Helle's goes to each Machine's
@@ -1590,7 +1613,7 @@ is saved, and warns above the board from 14 days before, where **Renew** opens S
 **Renew** there with a new one replaces it on every Machine.
 
 That GitLab is one host for the whole Flock, `gitlab.cego.dk` unless you name another in
-**Settings** (**Use this GitLab**), which is the Flock's `gitlab_host` setting below. It is the token
+**Connections → GitLab → Use another GitLab…**, which is the Flock's `gitlab_host` setting below. It is the token
 page Desktop opens, the GitLab a token is checked against and logged in to, and the
 `--gitlab-host` every Machine is onboarded and doctored with, so each Machine's readiness
 is that host's. A change applies at once, without a restart, and every Machine is doctored
@@ -1599,30 +1622,133 @@ make a new one on the new host's page and save it. The GitLab host is given to e
 Machine but never taken from one: an edit of `gitlab_host` in a Machine's TUI stays that
 Machine's.
 
-**Settings** is a page in the board's column, at a readable line length, and re-reads the
-Flock's settings each time it opens. It is grouped under headings, in order: **Agents**, **Runs**, **Board**, **Chat**,
-**Notifications**, **GitLab and credentials** and **About**. It holds every setting the TUI's
-Settings offers — each default a Run reads, `proactive`, the extra `models.<harness>` and each
-`notifications.<kind>` — and the Flock chat's own settings. Each setting has a plain
-name with its config key in small print, a sentence or two on what it changes (what 0 or
-unset means where that matters, and that `scope`, `density` and `questions` change the TUI's
-board, not Desktop's), a control that fits it (a choice, a number, a switch, or text), its
-default, and the same refusals as the TUI. Durations — `quiet_ms`, `idle_close_ms`,
-`handoff_timeout_ms` and `board_quiet_ms` — are shown and typed in minutes, decimals where a value is not a whole
-number of them, and still stored in milliseconds, so `config.json` and `collie settings` are
-unchanged. **Reset to default**, shown while a setting is set, unsets it. Each says whether
-**Every Machine** shares it or it is for **This computer only**. Under **Chat**, the Flock
-chat's **Machine rule** and **Flock chat speaks first** are this computer's, like the bell in
-the chat's header. The chat's harness, model and effort have no rows here: they are chosen
-beside its message box ([The Flock chat](#the-flock-chat)).
-A change to this computer's settings reaches every Desktop window at once, wherever it was
-made: Settings, the bell and both chat windows show it as soon as it is saved, a choice made
-beside the message box or through `collie_chat_harness` included.
-The groups, names, descriptions and
-units live with each key in the one list of settings (`src/settings.ts`) that the TUI's
-Settings reads too, so a new setting shows up in both, except those for this computer only,
-whose are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI does not show the names,
-descriptions or minutes yet. The ones every Machine shares are the Flock's: Desktop keeps them in
+#### Slack
+
+Open **Connections → Slack → Connect**. One shared **Collie** app serves your Slack workspace.
+Choose **Add Collie to your Slack** and install the prefilled app.
+Skip this step if a teammate already installed it.
+Under the app's **OAuth & Permissions**, copy the **Bot User OAuth Token** (`xoxb-…`).
+Paste it into **Bot token** and choose **Connect**.
+
+Collie checks the token with Slack before keeping it. A refusal appears beside the field with Slack's reason.
+The card reads, for example, **Posts as collie in Example Co**, from Slack's answer.
+Slack does not identify the installer, so Collie does not name one.
+The app has only five bot scopes: `chat:write`, `im:write`, `channels:read`, `groups:read`, and `users:read`.
+It has no event subscriptions, Socket Mode, hosted relay, or sign-in callback.
+Talking to Collie in Slack is not built.
+
+Desktop keeps the token with its other credentials and gives it to every Machine on stdin.
+Each Machine keeps it in `$XDG_CONFIG_HOME/collie/slack.env` (`~/.config/collie/slack.env` by default), readable by its owner alone.
+An unreachable Machine gets it when it connects.
+**Disconnect** removes the token Desktop gave each Machine, including when it next reconnects.
+It does not uninstall the shared app or revoke a teammate's token.
+For a Machine configured without Desktop, give `SLACK_BOT_TOKEN=…` through `collie onboard --secrets-stdin`.
+An explicit `SLACK_BOT_TOKEN` in the host's environment takes precedence over the file.
+
+Invite Collie into each channel with `/invite @Collie`, then choose **Refresh Slack**.
+Only channels it belongs to appear, including private channels it joined.
+**Runs → Slack channel for approval requests** stores the chosen channel's id in `release.approval_channel`.
+An earlier `#name` remains **#name (not checked)** and stays unchanged until you pick again.
+While Slack is disconnected, the channel controls are disabled and point back to Connections.
+
+**Notifications → Post notifications to** stores its destination in `slack.notification_channel`.
+Choose a channel, **Nowhere: toasts only**, or **A direct message to you**.
+The direct-message choice asks **Which of these is you?**; search the workspace's people and pick yourself once.
+Collie stores your user id and then shows **A direct message to** followed by your name.
+The Slack table's **Notifications** row comes from the host's own declaration beside the workflows.
+
+Each Machine's host posts the notification kinds you keep on about its own Runs.
+Desktop can be closed; Desktop never posts these messages.
+A user id opens a direct message before the host posts in its channel.
+An empty destination or a Slack Connection that is not working sends nothing.
+Each event is attempted once, including across host restarts; failed attempts are logged and do not fail the Run.
+Toasts continue independently of Slack.
+
+### Settings
+
+**Settings** is a page in the board's column, at a wide line length, and re-reads the
+Flock's settings each time it opens. Scope is its structure, and a legend states each
+scope's rule once:
+
+- **Every Machine** holds every row but one: the Flock's settings, where the latest edit of
+  a key wins, wherever it was made. It is laid out in the TUI's groups, **Agents**, **Runs**,
+  **Board**, **Chat** and **Notifications**. Agents is split into **Who does the work**,
+  **What agents may do**, **Context and patience**, and **Advanced**, which is collapsed and
+  holds `models.<harness>`, `agent_profile` and `claude_subagents`. Runs keeps **Release
+  approvals** apart, and the ten notification switches sit in a two-column grid. Chat holds
+  the Flock chat's **Machine rule** (`machine_rule`) and **Flock chat speaks first**
+  (`flock_chat.proactive`) beside each Machine's **Native chat speaks first**
+  (`proactive`), so every Desktop routes work the same way, and the TUI shows them too.
+- **This computer** is **Zoom** alone, under Board, marked **This computer** and saved on
+  this computer, since monitors differ between computers. The Flock chat's harness, model,
+  effort and width stay this computer's too, but have no rows here: they are chosen beside
+  its message box ([The Flock chat](#the-flock-chat)).
+- **Each Machine's own** is a read-only table: the Machine and where it is, its settings
+  sync state, `projects.root`, `chat_harness`, harnesses found, and remembered answers such
+  as `linear.team` and `gitlab.assignee`. Change these in that Machine's TUI Settings.
+  A value never configured says **Not set**. A Machine out of reach keeps its last values
+  and says when they were read, including after Desktop reopens. A host without this read
+  says **Not known** and names its Collie version; its paired link and board keep working.
+
+A left index lists the sections by scope, each with how many of its settings are set; a
+search runs over each setting's name, key and description, beside **Only what is set**.
+The header says how the Flock's settings sync: "In sync with all 4 Machines", "In sync with
+3 of 4 · old-mini out of reach", or "Showing the Flock's settings as last read" while they
+cannot be read.
+
+Under **Agents › Who does the work**, harness, model, and effort use the Flock chat's
+pickers. Settings merges the catalogues read on your Machines. Each model and effort says
+how many Machines offer it. An out-of-reach Machine contributes its last catalogue held
+by Desktop; a Machine never read contributes only to the total and is named as not read yet.
+The section gives the oldest reachable reading and names older readings held for Machines out of reach.
+Models from **Collie's table** say why that harness's list could not be read. Models added
+under **Advanced**, in `models.<harness>`, are marked as additions.
+
+Pick a model to see only its reported efforts. Changing model clears an effort the new
+model doesn't support. Changing harness clears the effort and selects that harness's
+default model. Harness, model, and effort are validated and saved together, leaving fallbacks
+alone. Each connected Machine gets them in one settings update.
+The Flock chat's own choice stays in its composer on this computer.
+
+**Fall back to** is an ordered list. Add a harness or model from the same model menu, move
+an entry up or down, or remove it. Each entry shows its Subscription's usage across the
+Flock, where Collie reads one. The first entry with usage left runs the step; an empty list
+waits for the reset. These controls write the existing `harness`, `model`, `effort`, and
+`fallbacks` settings.
+
+Each setting has a plain name with its config key in small print, a sentence or two on what
+it changes (what 0 or unset means where that matters, and that `scope`, `density` and
+`questions` change the TUI's board, not Desktop's), a control that fits it, its default, and
+the same refusals as the TUI. A choice of six options or fewer is a row of radio buttons, so
+every option shows; a boolean is a switch; a number carries its unit in its field; JSON and
+the Machine rule are typed over several lines. Durations — `quiet_ms`, `idle_close_ms`,
+`handoff_timeout_ms` and `board_quiet_ms` — are shown and typed in minutes, decimals where a
+value is not a whole number of them, and still stored in milliseconds, so `config.json` and
+`collie settings` are unchanged. A choice or a switch is saved when it changes; text is saved
+on **Set**, Enter, or Ctrl+Enter over several lines, and Esc puts it back. **Reset to
+default**, shown while a setting is set, unsets it. A refusal is said on the row itself,
+never in a toast, and the field is marked invalid. What a value brings about is stated
+there and never asked to be confirmed: bypassing tool permissions, compaction or the quiet
+nudge at 0, a Pi model not written provider/model, and another GitLab host, which forgets
+the token.
+
+A set row says whose edit it is: "Last edit: vm-build · 28 Oct, 09:05". After a save it says
+how far the edit reached, after a fresh exchange with connected Machines: "Given to all 4 Machines", or
+"Given to 3 of 4 · old-mini gets it when it connects". While the Flock's settings cannot be
+read, an edit to them is not sent, and the row says "Not set: the Flock's settings could not
+be read"; Zoom is still saved. A malformed settings file is kept without overwriting it;
+repair it and restart Desktop to read it again. A Machine that has not exchanged settings
+yet stays behind. Zoom says "Saved on this computer".
+
+A Desktop from before kept the Machine rule and whether the Flock chat speaks first as its
+own. The first start of this one carries each into the Flock's settings once, as an edit
+from Desktop at that moment, where the Flock has none yet, and then drops its own copy. A
+Flock chat left speaking first, the default, carries nothing.
+
+The groups, names, descriptions and units live with each key in the one list of settings
+(`src/settings.ts`) that the TUI's Settings reads too, so a new setting shows up in both,
+except Zoom, whose is in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI
+does not show the names, descriptions or minutes yet. Desktop keeps the Flock's in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
 Machine's host, never by editing a file over SSH. A Machine is synced each time it
 connects and after every edit in Settings, so one out of reach gets an edit when it is
@@ -1632,7 +1758,9 @@ with Desktop closed. Desktop also takes edits when it sees a Machine or Settings
 Each key is decided by whichever edit was made last, wherever it was made
 ([ADR-0043](adr/0043-a-shared-setting-is-its-latest-edit.md)); on the first sync a key set
 on one Machine only is taken from it, and a key set differently on several takes the latest,
-with Settings saying beside it which Machine that came from. A value a Machine holds that
+with the row saying "Taken from vm-gpu over a different value at the first sync" until the
+key is next edited. A Machine on a Collie from before a key was added refuses the Flock's
+settings until it is upgraded, and Machines says it is behind on settings. A value a Machine holds that
 its setting refuses, written into its file by hand, is not taken. What stays each Machine's own
 is everything else in its `config.json`: remembered answers such as `linear.team` and
 `gitlab.assignee`, `chat_harness`, and `projects.root`, which is a path on that Machine.
@@ -1666,7 +1794,7 @@ Desktop is drawn through XWayland, which renders it at one whole-number scale on
 monitor, so on Hyprland Desktop reads the scale of the monitor holding each window from
 `hyprctl -j` and corrects for it with Chromium's own page zoom, again whenever a window
 moves, resizes or takes focus: moving one to another monitor resizes it, and text stays sharp
-([ADR-0047](adr/0047-desktop-draws-at-its-monitors-own-scale.md)). **About** says how the
+([ADR-0047](adr/0047-desktop-draws-at-its-monitors-own-scale.md)). Beside Zoom, Settings says how the
 board's window is drawn — "Drawn at 1.5× on DP-1 (3840×2160, Hyprland scale 1.5). Rendered
 at 2×, so zoom 75% × your 100%." — and says so where the window's pixel ratio is not what
 that zoom should give. Where Desktop cannot read the monitor's scale, as on another
@@ -1867,12 +1995,16 @@ comment is a draft that Desktop keeps for that Run while it runs, through tab sw
 closing the record, and sends to no host until you send it. The Diff tab's viewed ticks are
 kept the same way, until Desktop quits, and no host is told of them. While a Run has drafts, the
 Plan and Diff tabs show them in one list, where you can edit or remove each, choose who
-gets them — **The agent at work** by default (the agent whose step is active, else the
+gets them — **The planner** for plan comments, otherwise **The agent at work** (the agent whose step is active, else the
 builder), a role the Run has a live agent in, or one of its live agents, labelled as the
 Terminal tab labels them; a Run on a Machine whose Collie predates addressed deliveries
-(board protocol 3, or a saved board) offers only its live agents, the newest by default —
-and **Send**. The line it leaves says whether the agent was
-seen to take it. Every draft goes as one message, word
+(board protocol 3, or a saved board) offers only its live agents, with the planner first
+for plan comments and otherwise the newest —
+and **Send**. Your explicit recipient choice takes precedence. Plan comments ask for revision
+without answering the Run's next-choice menu. The line it leaves says whether the agent was
+seen to take it, or whether the message is queued durably until the agent is idle.
+Queued acceptance clears the sent drafts: the host keeps their exact words and submits
+them when supported, including while a planner waits at its menu. Every draft goes as one message, word
 for word, each item naming the plan file, or `path:line` with `(as it was)` for removed
 lines, quoting what you selected and giving your words;
 one the agent would see as more than 3 lines or 700 characters arrives as a file in the Run,
@@ -1956,9 +2088,12 @@ back to the message box. Settings › Chat has no rows for them.
 A refused choice is shown in red above the message box, ending "Nothing was saved.", with
 **Dismiss**; nothing is saved.
 
-Claude Code's model list comes from your own install and login on this computer. Desktop
-reads it once per start, when the chat is first shown, with no turn started and no tokens
-spent, and keeps the successful list until it quits. Each model lists its own effort
+Claude Code's model list comes from your own install and login on this computer. Where this
+computer has a Machine, Desktop reads the list from that Machine's host, the same [Harness
+catalogue](cli.md#models) `collie models` prints. Pi's list comes from there too. Where the
+computer has no Machine, or its Collie is older, Desktop reads each harness itself. Desktop
+reads the list once per start, when the chat is first shown, with no turn started and no
+tokens spent, and keeps the successful list until it quits. Each model lists its own effort
 levels; Haiku 4.5 takes none. The menu says when the list is still being read and still lets
 you type an id. The first message waits at most 20 seconds for it. If the read fails or
 takes longer, the menu warns why and offers Collie's table, the Flock's **More Claude models**
@@ -2166,20 +2301,20 @@ write is refused with "its Collie is older than Desktop's chat; upgrade Collie o
 <machine>. Nothing was done there." A read a host does not answer within ten seconds says
 so; one its host cannot take says its Collie may be older than Desktop's.
 
-The bell turns Desktop's own turns off (and on again); it is on by default, and kept in
-`settings.json` beside the session.
+The bell turns Desktop's own turns off (and on again); it is on by default, and is the
+Flock's `flock_chat.proactive` setting, so it is the same on every Desktop.
 
-**Settings** has the **Machine rule** under **Chat**, for **This computer only**: which Machine each kind
+**Settings** has the **Machine rule** under **Chat**, for **Every Machine**: which Machine each kind
 of work goes to, in your own words — "Frontend work is on the laptop, everything else is on
-the vm". It is kept in `settings.json` on this computer, and given to no Machine. The chat
+the vm". It is the Flock's `machine_rule` setting, so every Desktop routes work by it. The chat
 gets it with every message, its own turns included, beside the Machines Desktop reaches at
 that moment, named as the cards name them, with this computer marked as the one Desktop
 runs on, so "the laptop" can mean it. When it starts work it names the Machine from the
 rule, unless your message names one, which wins. When the rule's Machine is not reachable,
 it says so and starts nothing elsewhere; when the rule does not cover the work, it asks.
 An empty rule changes nothing. You can also tell the chat to change it ("from now on,
-frontend goes on the laptop") or ask what it is; it saves through the same setting, and
-Settings shows the new text the next time it opens. The rule informs the chat's choice and
+frontend goes on the laptop") or ask what it is; it saves through the same setting, as an
+edit from Desktop given to every Machine, and Settings shows the new text. The rule informs the chat's choice and
 nothing more: a start that names no Machine while several are reachable is still refused,
 and a Run the rule placed on another Machine still opens with Go to pane over that
 Machine's own connection.
@@ -2589,10 +2724,12 @@ To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`
 under Settings ([Your defaults](#your-defaults)). While the merge request waits on a
 teammate's approval, the Run asks **Post for approval** or **Wait for changes**. Check the
-merge request first: **Post for approval** has its agent post the merge request in that
-channel, linked by its title and nothing else, and the Run's log keeps the message's link
-or why nothing was posted. **Wait for changes** posts nothing and asks again once the head
-moves.
+merge request first: **Post for approval** has its host post through the [Slack Connection](#slack),
+linked by its forge title and nothing else. The Run's log keeps the message's permalink.
+If the permalink cannot be read, the log says why; the message still counts as shared.
+A failed post is logged, and the Run continues to its review wait.
+Without a working Slack Connection, it asks you to share the merge request yourself and shows its address to copy.
+**Wait for changes** posts nothing and asks again once the head moves.
 
 Then it asks **Release** or **Finish**, naming the head and who approved it. **Release**
 claims the repository, merges at exactly that head and tags the package; the Run ends
@@ -2701,9 +2838,10 @@ be debugged. Leave any of them out and the workflow asks, or works from what the
 itself can tell it.
 
 `release.share_for_approval` ("Ask before sharing a merge request for approval", off until
-set) and `release.approval_channel` ("Slack channel for approval requests", such as
-`#frontend`) are under Settings' Runs, and nest in config.json as
-`"release": {"share_for_approval": true, "approval_channel": "#frontend"}`. Turned on with a
+set) and `release.approval_channel` ("Slack channel for approval requests") are under Settings' Runs.
+Connect [Slack](#slack), then pick the channel by name; Collie stores its id.
+They nest in config.json as `"release": {"share_for_approval": true, "approval_channel": "C0123456789"}`.
+Earlier `#name` values are retained and used as written until picked again. Turned on with a
 channel, a release Run waiting on a teammate's approval asks you whether to post its merge
 request there ([Releasing a merge request](#releasing-a-merge-request)); turned on with no
 channel, it says so on its log and shares nothing.
@@ -2725,8 +2863,18 @@ brings that workspace's Collie tab to the front — the behavior every install h
 it waits there until you go to it. Neither setting hides the question from the board or
 stops you answering it.
 
-`models` adds models the harness adapter table does not already accept. An unknown harness,
-model, effort or scope fails validation before a single tab opens. See
+Before an agent opens a pane, its model and effort are checked against its Machine's
+[Harness catalogue](cli.md#models). A refusal names the Machine, what was asked, and the
+models or efforts it reports. A successful reading replaces the built-in model patterns
+and effort levels. `models.<harness>` adds a model the Harness leaves out, with the table's
+effort levels. If the Harness cannot be read, Collie uses its table and configured
+additions; a refusal says "from Collie's table" and why. An uninstalled Harness is refused.
+
+A pinned default is checked as its pinned model; other defaults stay with the Harness.
+If the catalogue identifies the native default, its effort levels are checked.
+Otherwise an effort is accepted when any reported model of that Harness takes it.
+These checks also apply to fallback candidates and the Flock chat on this
+computer. See
 [Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
 [Permissions](#permissions-auto-by-default) for what `permissions` decides.
 
@@ -2860,6 +3008,29 @@ runbook find tools printing tokens — a second guard against the commands that 
   file Collie passes with `--settings`, Collie's own hooks first. `disableAllHooks`, which
   would switch Collie's hooks off, and any other key are refused with the reason. Codex, Pi
   and OpenCode take `env` only.
+
+For Claude Code 2.1.129 or later, a Run's agent lists unnamed user and project skills by
+name only, saving their descriptions from each context. Skills named by a
+`{{skill:name}}` reference in the persona or first prompt, or by a Step's `skill`, keep
+their full descriptions. Every skill remains available to invoke or read when needed.
+Skill bodies load on use; Collie doesn't preload them to shorten the catalogue.
+This includes legacy Markdown commands in your Claude config directory's `commands/`
+and project `.claude/commands/` directories, including nested commands such as `frontend:component`.
+
+Your `skillOverrides` choices in user, project, local and `agent_profile` settings take
+precedence. Collie also preserves skills' invocation restrictions. Claude discovers
+project skills above the launch directory and can share settings with a worktree's main
+checkout; Collie accounts for both when selecting overrides.
+Use `"on"` in your settings to keep a particular description, or set it in a role's
+`agent_profile` overlay for managed agents only.
+
+This selection runs at each launch, relaunch and recovery. Claude's own compaction
+continues with the same session settings. Plugin and bundled skills, other harnesses and
+Home chat keep their existing behavior. Older or unknown Claude versions keep the full
+catalogue, with the reason in the Run's agents log. Selection also stays inherited when
+the profile holds `CLAUDE_CONFIG_DIR` in a file, whose value only the launch shell reads.
+No installed skill or live settings file is changed. See
+[Claude's visibility settings](https://code.claude.com/docs/en/skills#override-skill-visibility-from-settings).
 
 The shipped `implementer`, `generalist` and `investigator` personas tell their agent that
 a stack it brings up to test — containers, compose projects, workloads in a local cluster
@@ -3076,6 +3247,15 @@ from an idle pane.
 Each Codex agent's server is detached, so it outlives the Run that launched the agent and
 is still there for a hand-off. The next launch puts down the endpoint of any agent herdr
 no longer has, which is also what stops the control directories accumulating.
+
+Collie's managed Codex agents run all enabled hooks without a startup review. Where the
+installed Codex lists `--dangerously-bypass-hook-trust` in its help, Collie passes it to
+the remote TUI, which forwards hook approval to its App Server session. This applies to
+initial launches, fallbacks and replacement agents after a resume; a reused agent and
+its compactions keep that session's approval. New or changed hooks need no saved trust
+hash. Disabled hooks stay disabled, tool permissions keep their configured mode, and
+Collie does not rewrite the user's Codex config. Older Codex versions receive no new flag.
+See Codex's [hook trust documentation](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 
 OpenCode needed the opposite trick. Its servers do not isolate sessions at all — every
 one answers with every session in the project, and its "which sessions are active"
@@ -3324,6 +3504,9 @@ It waits for its Improvements, then writes `summary.md` in its Run directory: ea
 filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
 Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
+When the forge cannot be read, the retrospective still runs and `summary.md` keeps its
+findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
+comment or Improvement is started on that path.
 
 An Improvement that failed to start, because its issues could not be read back, is started
 again by the next `self-improve` Run of the same project, the next day, from an earlier
