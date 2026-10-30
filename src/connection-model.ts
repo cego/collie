@@ -1,0 +1,47 @@
+import { Schema } from "effect";
+
+export const ConnectionId = Schema.Literals(["gitlab", "github", "linear", "helle", "slack"]);
+export type ConnectionId = typeof ConnectionId.Type;
+
+export const ConnectionReading = Schema.Union([
+  Schema.Struct({ state: Schema.Literal("ok"), account: Schema.String, detail: Schema.String }),
+  Schema.Struct({
+    state: Schema.Literals(["absent", "broken"]),
+    detail: Schema.String,
+    fix: Schema.String,
+    reusable: Schema.optionalKey(Schema.Struct({ from: Schema.String })),
+  }),
+]);
+export type ConnectionReading = typeof ConnectionReading.Type;
+
+export const Connection = Schema.Struct({ id: ConnectionId, reading: ConnectionReading });
+export type Connection = typeof Connection.Type;
+
+export const ConnectionLogin = Schema.Struct({ host: Schema.String, token: Schema.String });
+export type ConnectionLogin = typeof ConnectionLogin.Type;
+
+export const ConnectionUse = Schema.Struct({
+  id: Schema.String,
+  connections: Schema.Struct({
+    needs: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({ with: Schema.String }))),
+    uses: Schema.optionalKey(
+      Schema.Record(Schema.String, Schema.Struct({ with: Schema.String, without: Schema.String })),
+    ),
+  }),
+});
+export const HOST_CONNECTION_USES: ReadonlyArray<typeof ConnectionUse.Type> = [
+  {
+    id: "Notifications",
+    connections: {
+      uses: { slack: { with: "Posts the toasts you keep on", without: "Toasts only" } },
+    },
+  },
+];
+
+export const connectionsLines = (connections: ReadonlyArray<Connection>): string =>
+  connections
+    .map(
+      ({ id, reading }) =>
+        `${id.padEnd(10)}${reading.state}${reading.state === "ok" ? ` · ${reading.account}` : ""}: ${reading.detail}${reading.state === "ok" ? "" : `\n          Fix: ${reading.fix}`}`,
+    )
+    .join("\n");

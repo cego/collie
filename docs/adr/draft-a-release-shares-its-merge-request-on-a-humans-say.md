@@ -1,6 +1,6 @@
 # A release shares its merge request for approval on a human's say
 
-**Status: accepted, to be built.** Builds on
+**Status: accepted, built.** Builds on
 [ADR-draft-a-merge-request-is-released-on-a-humans-go](draft-a-merge-request-is-released-on-a-humans-go.md)
 D3 (the host waits for the review) and [ADR-0043](0043-a-shared-setting-is-its-latest-edit.md)
 (settings).
@@ -24,11 +24,16 @@ Run reads the review once. Where it waits on a teammate's approval it asks
 only at a new head. A teammate's approval meanwhile goes on to the go as before, and a Post
 answered after it posts nothing: the review is read again before the message goes.
 
-**D3. One message, by the Run's agent.** Collie has no Slack client of its own, and the
-operator's agent already has their Slack tool. The `share` step is cleared for one message
-in the channel: the merge request's address linked by its title, with nothing else. Collie
-records the permalink, or why nothing was posted. That record is the agent's word, and
-nothing waits on it: a share that fails is recorded and never fails the release.
+**D3. One message, through the host's Slack Connection.** This supersedes D3's original
+choice of the Run's agent and the operator's own Slack tool. D1 and D2 stand.
+The host reads the merge request's title from its forge and posts its address linked by
+that title, with nothing else, in the configured channel. The `share` Activity journals
+the result, so a completed share is reused on replay.
+
+The host requests the permalink with the channel and timestamp Slack returned, and records it.
+A missing permalink is recorded without posting again. A failed post is recorded and never
+fails the release. Without a working Slack Connection, the Run asks the operator to share
+the merge request themselves and shows its address to copy.
 
 ## What this does not decide
 

@@ -54,6 +54,10 @@ here are in [`src/README.md`](src/README.md).
   [`docs/using.md`](docs/using.md#usage), `src/usage-model.ts`, `src/usage.ts`, `src/commands/usage.ts`,
   `resolveWithRoom` in `src/harness.ts`, `choose` in `src/agents.ts`, `test/usage-model.test.ts`,
   `test/usage.test.ts`, `test/fallback.test.ts`.
+- **Harness catalogue**, `collie models` →
+  [ADR-draft-settings-read-what-harnesses-report](docs/adr/draft-settings-read-what-harnesses-report.md),
+  [`docs/cli.md`](docs/cli.md#models), `src/catalogue-model.ts`, `src/catalogue.ts`,
+  `src/commands/models.ts`, `test/catalogue-model.test.ts`, `test/catalogue.test.ts`.
 - **Review comments** → [ADR-0051](docs/adr/0051-a-review-comment-is-written-on-desktops-own-views.md),
   `desktop/src/shared/review-comments.ts`. **Desktop Zoom** → [ADR-0047](docs/adr/0047-desktop-draws-at-its-monitors-own-scale.md).
 - **Schedules** → [ADR-0052](docs/adr/0052-a-schedule-is-a-saved-start-its-host-fires.md),

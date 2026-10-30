@@ -45,6 +45,10 @@ import { readMeasurements } from "./measurement";
 import { finalMeasurementLine, type Measurement } from "./measurement-model";
 import { readLogTail } from "./run-log";
 import { readAudit, startedBy } from "./audit";
+import { onPath } from "./doctor-check";
+import { HARNESSES } from "./harness";
+import type { MachineOwn } from "./board-model";
+import type { Mutable } from "effect/Types";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
 const HISTORY = 200;
@@ -629,4 +633,25 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
     trust: { cwd: env.cwd, state },
     flock: (yield* readSettingsSet(env.userDir)).flock?.by ?? null,
   } satisfies SettingsView;
+});
+
+export const buildMachineOwn = Effect.fn("Views.buildMachineOwn")(function* (env: PluginEnv) {
+  const raw = yield* readConfig(env.userDir);
+  const root = configValue(raw, "projects.root");
+  const chat = configValue(raw, "chat_harness");
+  const found = yield* Effect.filter(Object.keys(HARNESSES), (harness) =>
+    Effect.map(onPath(env.raw["PATH"] ?? "", harness), (dir) => dir !== null),
+  );
+  const own: Mutable<MachineOwn> = {
+    harnesses: found,
+    remembered: flatten(raw).filter(
+      ({ key }) =>
+        key !== "projects.root" &&
+        key !== "chat_harness" &&
+        !SETTINGS.some((setting) => key === setting.key || key.startsWith(`${setting.key}.`)),
+    ),
+  };
+  if (isString(root)) own.projectsRoot = root;
+  if (isString(chat)) own.chatHarness = chat;
+  return own;
 });

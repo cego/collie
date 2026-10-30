@@ -2,7 +2,7 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
-import { DateTime, Effect, Schema, Stream, Struct } from "effect";
+import { DateTime, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
@@ -21,6 +21,10 @@ import { FlockSettings } from "./flock-settings";
 import { CleanupListing } from "./machine-cleanup";
 import { MachineSchedules } from "./schedules";
 import { MachineUsage } from "./usage";
+import { MachineCatalogue } from "./settings-agents";
+import { MachineConnections } from "./connections";
+import { SlackChoices } from "../../../src/slack";
+import { keepOwn, OwnReading } from "./machine-own";
 import {
   BoardMessage,
   CleanupReport,
@@ -182,6 +186,12 @@ export const MachineSynced = Schema.TaggedStruct("Synced", {
 });
 export type MachineSynced = typeof MachineSynced.Type;
 
+export const MachineOwnRead = Schema.TaggedStruct("OwnRead", {
+  machine: KnownMachine,
+  reading: OwnReading,
+});
+export type MachineOwnRead = typeof MachineOwnRead.Type;
+
 /** A Machine's paired link, as Local's `collie machine list` says it now. */
 export const MachineLinked = Schema.TaggedStruct("Linked", {
   machine: KnownMachine,
@@ -190,7 +200,7 @@ export const MachineLinked = Schema.TaggedStruct("Linked", {
 export type MachineLinked = typeof MachineLinked.Type;
 
 /** A credential Desktop gives every Machine. */
-export const Credential = Schema.Literals(["gitlab", "helle"]);
+export const Credential = Schema.Literals(["gitlab", "helle", "slack"]);
 export type Credential = typeof Credential.Type;
 export const CREDENTIALS = Credential.literals;
 
@@ -234,6 +244,7 @@ export const FlockItem = Schema.Union([
   MachineOnboarding,
   MachineDoctored,
   MachineSynced,
+  MachineOwnRead,
   MachineGiven,
   MachineLinked,
 ]);
@@ -361,11 +372,11 @@ export const DesktopUpdates = Schema.Struct({ version: Schema.String, news: Upda
 export type DesktopUpdates = typeof DesktopUpdates.Type;
 /** What the human set in Desktop. */
 export const DesktopSettings = Schema.Struct({
-  /** Whether the Flock chat may start a turn about News nobody asked for. */
-  proactive: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
+  /** An earlier Desktop's own, kept only until carried into the Flock's settings. */
+  proactive: Schema.optionalKey(Schema.Boolean),
   /** The GitLab every Machine is onboarded and doctored against; unset is the default one. */
   gitlabHost: Schema.optionalKey(Schema.String),
-  /** Which Machine each kind of work goes to, in the human's words; empty is no rule. */
+  /** An earlier Desktop's own, kept only until carried into the Flock's settings. */
   machineRule: Schema.optionalKey(Schema.String),
   /** The human's Zoom, 1 the size of the other apps on each monitor; unset is 1. */
   zoom: Schema.optionalKey(Schema.Number),
@@ -382,9 +393,7 @@ export type DesktopSettings = typeof DesktopSettings.Type;
 
 /** The settings a change sets; the rest stay as they are. */
 export const DesktopSettingsChange = Schema.Struct({
-  proactive: Schema.optionalKey(Schema.Boolean),
   gitlabHost: Schema.optionalKey(Schema.String),
-  machineRule: Schema.optionalKey(Schema.String),
   zoom: Schema.optionalKey(Schema.Number),
   chatHarness: Schema.optionalKey(Schema.String),
   /** Empty unsets it. */
@@ -486,10 +495,15 @@ export const DesktopRpcs = RpcGroup.make(
    * The Flock's settings, now and whenever they change. Asking syncs every connected
    * Machine, so an edit made on one since it connected is picked up.
    */
-  Rpc.make("flockSettings", { success: FlockSettings, stream: true }),
+  Rpc.make("flockSettings", { success: FlockSettings, error: ActionFailed, stream: true }),
   /** One of Collie's settings, as typed, for every Machine; what came of it in a line. */
   Rpc.make("setFlockSetting", {
     payload: { key: Schema.String, value: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("setFlockSettings", {
+    payload: { changes: Schema.Array(Schema.Struct({ key: Schema.String, value: Schema.String })) },
     success: Schema.String,
     error: ActionFailed,
   }),
@@ -522,6 +536,13 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
+  Rpc.make("saveSlack", {
+    payload: { token: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("slackChoices", { success: SlackChoices, error: ActionFailed }),
+  Rpc.make("disconnectSlack", { success: Schema.String, error: ActionFailed }),
   /** Logs Claude Code in on the Machine a route reaches, then onboards it again. */
   Rpc.make("claudeLogin", {
     payload: { profile: Schema.String },
@@ -544,6 +565,28 @@ export const DesktopRpcs = RpcGroup.make(
   }),
   /** What each connected Machine's host read of its Usage. */
   Rpc.make("usage", { success: Schema.Array(MachineUsage) }),
+  Rpc.make("catalogues", { success: Schema.Array(MachineCatalogue) }),
+  Rpc.make("connectionReadings", { success: Schema.Array(MachineConnections) }),
+  Rpc.make("reuseConnection", {
+    payload: {
+      id: Schema.Literals(["gitlab", "github"]),
+      from: Schema.String,
+      to: Schema.Array(Schema.String),
+    },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("githubLogin", {
+    payload: { profile: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("linearSetup", {
+    payload: { profile: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("pasteGitlab", { success: Schema.String, error: ActionFailed }),
   /** What each connected Machine's host listed of its Schedules. */
   Rpc.make("schedules", { success: Schema.Array(MachineSchedules) }),
   /** What a sweep would remove now on the Machine with this profile, waited on while it is connected. */
@@ -719,6 +762,7 @@ export interface Flock {
   readonly doctored: ReadonlyMap<string, OnboardRun>;
   /** How each route's latest settings sync ended, by herdr profile. */
   readonly synced: ReadonlyMap<string, string | null>;
+  readonly own: ReadonlyMap<string, OwnReading>;
   /** How each route's latest definitions sync ended, by herdr profile. */
   readonly definitions: ReadonlyMap<string, string | null>;
   /** Each route's credentials, by herdr profile. */
@@ -740,6 +784,7 @@ export const EMPTY_FLOCK: Flock = {
   onboarded: new Map(),
   doctored: new Map(),
   synced: new Map(),
+  own: new Map(),
   definitions: new Map(),
   given: new Map(),
   links: new Map(),
@@ -763,6 +808,7 @@ const removed = (flock: Flock, profile: string): Flock => {
     onboarded: without(flock.onboarded),
     doctored: without(flock.doctored),
     synced: without(flock.synced),
+    own: without(flock.own),
     definitions: without(flock.definitions),
     given: without(flock.given),
     links: without(flock.links),
@@ -792,6 +838,14 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
         };
   if ("_tag" in item && item._tag === "Linked")
     return { ...flock, links: new Map(flock.links).set(item.machine.profile, item.link) };
+  if ("_tag" in item && item._tag === "OwnRead")
+    return {
+      ...flock,
+      own: new Map(flock.own).set(
+        item.machine.profile,
+        keepOwn(item.reading, flock.own.get(item.machine.profile)),
+      ),
+    };
   if ("_tag" in item && item._tag === "Given") {
     const { machine, credential, given, failed } = item;
     const { profile } = machine;
