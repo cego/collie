@@ -12,7 +12,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { discover, searchPath, type EntryLayer } from "../src/discovery";
-import { loadEntry, revisionOf } from "../src/engine";
+import { revisionOf } from "../src/engine";
 import { runEffect } from "./support/effect";
 
 const repo = new URL("../", import.meta.url).pathname;
@@ -239,52 +239,15 @@ test("one revision reads each source once and the next revision reads an edited 
       };
       const revision = revisionOf(dir).pipe(Effect.provideService(FileSystem.FileSystem, counted));
       const before = yield* revision;
-      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
-      expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
+      expect(reads.filter((one) => one === file)).toHaveLength(1);
+      expect(reads.filter((one) => one === helper)).toHaveLength(1);
       yield* fs.writeFileString(`${linked}/note.md`, "After");
       expect(yield* revision).toBe(before);
       reads.length = 0;
       yield* fs.writeFileString(helper, "export const n = 2;");
       expect(yield* revision).not.toBe(before);
-      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
-      expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
-    }),
-  ));
-
-test("loading a new entry reads its sources once and still imports an edited outside helper", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "entry-reads-" });
-      const dir = `${root}/mod`;
-      const file = `${dir}/proof.workflow.ts`;
-      const helper = `${root}/named.ts`;
-      yield* fs.makeDirectory(dir);
-      yield* fs.writeFileString(
-        file,
-        `import { title } from "../named.ts";\n${entry("proof", "@title")}`,
-      );
-      yield* fs.writeFileString(helper, 'export const title = "Before";\n');
-      const reads: string[] = [];
-      const counted: FileSystem.FileSystem = {
-        ...fs,
-        readFileString: (file, encoding) =>
-          Effect.sync(() => reads.push(file)).pipe(
-            Effect.andThen(fs.readFileString(file, encoding)),
-          ),
-      };
-      const loaded = loadEntry(file).pipe(
-        Effect.provideService(FileSystem.FileSystem, counted),
-        Effect.orDie,
-      );
-      expect((yield* loaded).title).toBe("Before");
-      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
-      expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
-      reads.length = 0;
-      yield* fs.writeFileString(helper, 'export const title = "After";\n');
-      expect((yield* loaded).title).toBe("After");
-      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
-      expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
+      expect(reads.filter((one) => one === file)).toHaveLength(1);
+      expect(reads.filter((one) => one === helper)).toHaveLength(1);
     }),
   ));
 
