@@ -234,7 +234,11 @@ with the job's URL; on GitLab a merged-results pipeline counts for the head it w
 from, and records the merge commit beside it. A job that failed, was skipped or cancelled,
 is missing from the pipeline, or has not finished after 2 hours parks the run unproved,
 naming the check, the job and the commit, and a resume waits again; a job already recorded
-is not recorded twice. A merge of the merge request while the run waits stops it, through
+is not recorded twice. A job missing because the merge request conflicts with its target
+branch, by the forge's word, is that conflict and not a missing job: the run parks unproved
+saying the merge request conflicts with its target branch and its branch must take the
+target. A job missing while the forge has not yet said whether it can merge is waited on as
+pending. A merge of the merge request while the run waits stops it, through
 the merge watch, and records nothing for the job.
 
 A failed job is settled before anyone fixes it. The run reads the same job where the branch

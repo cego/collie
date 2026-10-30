@@ -1479,7 +1479,12 @@ every check run on the head has completed; GitLab creates every job up front. A 
 check's `ci` pass, with `job` (`{ name, url, merge? }`, `merge` being the merged-results
 commit) beside its command, start and end tree. That Verification answers `{ proved }`; anything
 else answers `{ unproved, state, url }`, the sentence naming the check, the job and the
-commit. With `wait: true` a pending or running job is read again every 30 s for up to 2
+commit. A job `missing` from the pipeline of a merge request the forge says conflicts with its
+target branch answers `{ unproved, state: "missing", url, conflicts: true }` instead, the
+sentence saying the merge request conflicts with its target branch and its branch must take
+the target, and naming no job: the forge runs no pipeline for a merge request it cannot
+merge. With `wait: true`, a missing job while the forge has not yet said whether it can merge
+is read again, as pending. With `wait: true` a pending or running job is read again every 30 s for up to 2
 hours, the Run's log and `collie run checks` saying which check, job and commit it waits
 on, and a stop ends the wait. `renderRecordedChecks(evidence, leftToCi)` tells a reviewer
 each such check as `left to CI: proved by <job> on the merge request's head`, with the
