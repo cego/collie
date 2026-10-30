@@ -15,7 +15,7 @@ import { RunView } from "../src/engine";
 import { readEnv } from "../src/env";
 import { BUILD, socketOf } from "../src/host";
 import { factsOfView, findRun } from "../src/runs";
-import { toolNamed } from "../src/tools";
+import { answerRead, toolNamed } from "../src/tools";
 import { runEffect } from "./support/effect";
 
 const ROOT = new URL("../", import.meta.url).pathname;
@@ -143,5 +143,35 @@ test("collie_run about a Run that started others lists the Runs once, and still 
       expect(said).toContain("Runs it started");
       expect(said).toContain("child");
       expect(Arr.filter(asked, (one) => one === "runs")).toHaveLength(1);
+    }),
+  ));
+
+test("a host's own collie_run answer uses one local listing and no loopback RPC", () =>
+  inDir((env, dir) =>
+    Effect.gen(function* () {
+      const views = [view("parent"), view("child", "parent")];
+      const asked = yield* hostOf(dir, views);
+      let lists = 0;
+      const runs = yield* Effect.cached(
+        Effect.sync(() => {
+          lists++;
+          return Arr.map(views, (one) => factsOfView(dir, one));
+        }),
+      );
+      const said = yield* answerRead(
+        env,
+        "collie_run",
+        { run: "parent" },
+        {
+          runs,
+          offers: () => Effect.succeed("Nothing is offered."),
+          progress: () => Effect.succeed(null),
+          flow: () => Effect.succeed(null),
+        },
+      );
+      expect(said).toContain("Runs it started");
+      expect(said).toContain("child");
+      expect(lists).toBe(1);
+      expect(asked).toEqual([]);
     }),
   ));

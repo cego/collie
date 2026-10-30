@@ -20,6 +20,7 @@ const SLOW_BUILD_MS = 2_000;
 export const shareBoard = <A, E, R, R2>(options: {
   readonly build: Effect.Effect<A, E, R>;
   readonly changed: Stream.Stream<unknown, never, R2>;
+  readonly refresh?: Stream.Stream<unknown, never, R2>;
 }): Effect.Effect<
   { readonly boards: Stream.Stream<A>; readonly latest: Effect.Effect<A> },
   never,
@@ -37,8 +38,9 @@ export const shareBoard = <A, E, R, R2>(options: {
       if (took > SLOW_BUILD_MS) yield* Effect.logWarning(`the board took ${took} ms to build`);
       return built;
     });
-    yield* Stream.concat(Stream.make(undefined), options.changed).pipe(
-      Stream.map(() => ++seen),
+    const changes = options.changed.pipe(Stream.map(() => ++seen));
+    const refreshes = (options.refresh ?? Stream.never).pipe(Stream.map(() => seen));
+    yield* Stream.concat(Stream.make(0), Stream.merge(changes, refreshes)).pipe(
       Stream.buffer({ capacity: 1, strategy: "sliding" }),
       // A build that fails is skipped: the last board stands until a change builds again.
       Stream.mapEffect((covers) =>

@@ -15,6 +15,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import type { Asker } from "./proposals";
+import { ReadModel } from "./read-model";
 import { actorOf, readAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
@@ -6064,6 +6065,8 @@ const makeRegistry: (
   const catalogue = options?.catalogue;
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const fs = yield* FileSystem.FileSystem;
+  const readModel = yield* Effect.serviceOption(ReadModel);
+  const viewFs = Option.isSome(readModel) ? readModel.value.reading : fs;
   const store = yield* Store;
   const random = yield* SecureRandom.SecureRandom;
   const hostScope = yield* Effect.scope;
@@ -7153,6 +7156,7 @@ const makeRegistry: (
   });
 
   const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow) {
+    const fs = viewFs;
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
     const report = Option.getOrUndefined(
