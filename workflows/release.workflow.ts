@@ -724,26 +724,30 @@ export default defineWorkflow({
         const unconflicted = () =>
           Effect.gen(function* () {
             const n = conflicts++;
-            const standing = yield* Activity.make({
+            const { at, standing } = yield* Activity.make({
               name: `conflict-${n}`,
-              success: ReviewStandingSchema,
+              success: Schema.Struct({ at: Schema.String, standing: ReviewStandingSchema }),
               error: WorkflowError,
               execute: Effect.gen(function* () {
+                const at = (yield* host.evidence(runId, cwd)).final.head_sha;
                 const standing = yield* host.awaitReview({
                   runId,
                   cwd,
-                  proved: (yield* host.evidence(runId, cwd)).final.head_sha,
+                  proved: at,
                   seen: [],
                   whileConflicting: true,
                 });
                 if (standing._tag === "Held")
                   return yield* Workflow.suspend(yield* WorkflowInstance);
-                return standing;
+                return { at, standing };
               }),
             });
             yield* gone(standing);
-            if (standing._tag === "Moved")
-              yield* moveTo(`conflict-${n}.fast-forward`, standing.head);
+            // Taken even where the head is the checkout's own, which refuses changes it does not carry.
+            yield* moveTo(
+              `conflict-${n}.fast-forward`,
+              standing._tag === "Moved" ? standing.head : at,
+            );
             return n;
           });
         /**
