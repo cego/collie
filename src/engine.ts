@@ -6262,7 +6262,7 @@ const makeRegistry: (
    * instance and scope in place — which is the whole linkage between the two.
    */
   const hostServices = yield* Effect.context<HostServices>();
-  const reportsReady = yield* Deferred.make<void>();
+  const generationsRegistered = yield* Deferred.make<void>();
   /** Every other Run's landing and how it ended, weighed by `takeOver`. */
   const landingTakeover = Effect.fn("Host.takeOverLanding")(function* (asked: {
     readonly runId: string;
@@ -6292,7 +6292,7 @@ const makeRegistry: (
     );
   });
   const machineReport = Effect.fn("Host.report")(function* (since: string) {
-    yield* Deferred.await(reportsReady);
+    yield* Deferred.await(generationsRegistered);
     const from = epochMs(since);
     if (!Number.isFinite(from))
       return yield* new WorkflowError({ reason: `since is not a date: ${since}` });
@@ -7398,6 +7398,8 @@ const makeRegistry: (
   });
 
   const routed = Effect.fn("Engine.routed")(function* (runId: string) {
+    // A Run recovered at startup may resume before its child's generation is registered.
+    yield* Deferred.await(generationsRegistered);
     const row = yield* store.run(runId);
     if (row === null) {
       return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
@@ -7974,7 +7976,7 @@ const makeRegistry: (
     );
   }
 
-  yield* Deferred.succeed(reportsReady, undefined);
+  yield* Deferred.succeed(generationsRegistered, undefined);
 
   // What a host admitted and did not live to hand over. Every crash window ends here.
   // Forked, so a hand-over that stalls does not keep the host from serving.
