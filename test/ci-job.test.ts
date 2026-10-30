@@ -556,7 +556,6 @@ test("a job missing while the forge has not said whether it can merge is waited 
             { name: "test", state: "passed" },
           ],
         });
-        // The second read of the job is the forge's later answer.
         let reads = 0;
         const fetch: FetchLike = (input, init) => {
           if (pipe_(input, Str.includes("check-runs?check_name="))) reads++;
