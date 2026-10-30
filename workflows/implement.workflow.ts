@@ -56,6 +56,7 @@ import { DateTime, Deferred, Effect, Fiber, FileSystem, Schema } from "effect";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
+import { connection } from "./connections.ts";
 import markdown from "./implement.md" with { type: "text" };
 import {
   IMPLEMENTER,
@@ -233,6 +234,22 @@ const repoRuns = step({
 
 export default defineWorkflow({
   id: "implement",
+  connections: {
+    uses: {
+      linear: {
+        with: "Moves the issue and links the merge request",
+        without: "Leaves issues alone",
+      },
+      gitlab: {
+        with: "Pushes its branch and opens the merge request",
+        without: "Stops at the merge request step and says why",
+      },
+      github: {
+        with: "Opens a pull request for a github.com repository",
+        without: "Stops at the pull request step and says why",
+      },
+    },
+  },
   title: "implement — build the plan, review it, fix until nothing blocks",
   description:
     "Builds a change on a branch of its own and ends in a merge request: from a plan dir, a Linear issue or a description, it gets one complete review and fixes what blocks until a review finds nothing blocking.",
@@ -264,6 +281,7 @@ export default defineWorkflow({
   followUps: [
     {
       id: "release",
+      connections: ["gitlab"],
       title: "Release",
       workflow: "release",
       when: "succeeded",
@@ -272,6 +290,7 @@ export default defineWorkflow({
     },
     {
       id: "stage",
+      connections: ["gitlab"],
       title: "Stage",
       workflow: "stage",
       when: "succeeded",
@@ -297,6 +316,13 @@ export default defineWorkflow({
         Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
       );
       const share = place.options.repo ?? "";
+      if (source.kind === "linear") {
+        const linear = yield* connection("linear");
+        if (linear.state !== "ok")
+          return yield* new WorkflowError({
+            reason: `Cannot read the work source ${source.value}: ${linear.detail}. Fix: ${linear.fix}. Give the issue text as the work source to build without Linear.`,
+          });
+      }
       if (source.kind === "plan-dir" && share === "") {
         const plan = yield* Activity.make({
           name: "repos",

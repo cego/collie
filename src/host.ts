@@ -123,6 +123,11 @@ import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
 import { sideJobs } from "./side-jobs";
 import { Usage, usageLayer } from "./usage";
+import { HarnessCatalogues, catalogueLayer } from "./catalogue";
+import { connectionsOnMachine } from "./connections";
+import { readConnectionLogin } from "./connection-login";
+import { slackChoicesOnMachine } from "./slack-credentials";
+import { isString } from "./schema";
 import { Schedules, schedulesLayer } from "./schedules";
 import { dataHomeOf, desktopRootOf } from "./desktop";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
@@ -162,7 +167,7 @@ import { readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
-import { buildRunDetail, type PlanCache } from "./views";
+import { buildMachineOwn, buildRunDetail, type PlanCache } from "./views";
 import {
   Answered,
   ASKED_KINDS,
@@ -1306,6 +1311,7 @@ const frontDoorHandlers = (
       const forgeHttp = yield* ForgeHttp;
       const boards = shared.boards.pipe(Stream.map((built) => built.views));
       const usage = yield* Usage;
+      const harnesses = yield* HarnessCatalogues;
       const schedules = yield* Schedules;
       // Trimming rewrites the trail through one temporary file, so one read records at a time.
       const recordingUsage = yield* Semaphore.make(1);
@@ -1806,6 +1812,11 @@ const frontDoorHandlers = (
             Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
             Effect.provideContext(bun),
           ),
+        machineOwn: () =>
+          buildMachineOwn(env).pipe(
+            Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+            Effect.provideContext(bun),
+          ),
         setSettings: ({ settings, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
@@ -1914,6 +1925,28 @@ const frontDoorHandlers = (
               );
               return readings;
             }),
+          ),
+        models: () => harnesses.catalogues,
+        connections: () => connectionsOnMachine(env),
+        slackChoices: () =>
+          slackChoicesOnMachine(env).pipe(
+            Effect.mapError(
+              (error) =>
+                new HostRefused({
+                  reason: isString(error) ? error : "Slack's credentials could not be read",
+                }),
+            ),
+            Effect.provideContext(bun),
+          ),
+        connectionLogin: ({ id }) =>
+          readConnectionLogin(env, id).pipe(
+            Effect.mapError(
+              () =>
+                new HostRefused({
+                  reason: `Could not read ${id}'s login; sign in on this Machine`,
+                }),
+            ),
+            Effect.provideContext(bun),
           ),
         cleanup: () => plainly(judge(listed)),
         schedules: () => schedules.list,
@@ -3208,6 +3241,11 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     const development: Development = installed.release ? {} : { development: installed.build };
     // One reader of this Machine's usage, so every door and every choice of agent paces as one.
     const usage = yield* Usage;
+    const harnesses = yield* HarnessCatalogues;
+    const catalogue = Effect.map(harnesses.catalogues, (harnesses) => ({
+      machine: machineName(),
+      harnesses,
+    }));
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
     const stamp = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
@@ -3259,6 +3297,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
                 schedulesLayer({ dir, env: { ...env, stateDir: dir }, installation, seconds }).pipe(
                   Layer.provideMerge(
                     registryLayer(dir, {
+                      catalogue,
                       locate: locateIn(env),
                       userDir: env.userDir,
                       crashAt,
@@ -3268,6 +3307,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
                   ),
                 ),
                 Layer.succeed(Usage, usage),
+                Layer.succeed(HarnessCatalogues, harnesses),
               ),
             ),
           ),
@@ -3286,12 +3326,12 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
             messagePoll: seconds ? "1 second" : undefined,
           }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
         ),
-        Layer.provide(yield* configuredAgents(dir, usage.readings)),
+        Layer.provide(yield* configuredAgents(dir, usage.readings, catalogue)),
         Layer.provide(forgeHttpLayer),
         Layer.tap(() => Effect.forkScoped(onceAnswering)),
       ),
     );
-  }).pipe(Effect.provide(usageLayer), Effect.orDie);
+  }).pipe(Effect.provide([usageLayer, catalogueLayer(dir)]), Effect.orDie);
 
 /**
  * A client of the host that owns `dir`, starting one if nothing is there. Every client

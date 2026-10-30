@@ -296,6 +296,8 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["cleanup", { route: "read", tool: "collie_installation" }],
   ["cleanup --apply", { route: "propose", kind: "cleanup", action: { kind: "cleanup" } }],
   ["usage", { route: "shell" }],
+  ["models", { route: "read", tool: "collie_models" }],
+  ["connections", { route: "read", tool: "collie_connections" }],
   [
     "schedule add",
     {

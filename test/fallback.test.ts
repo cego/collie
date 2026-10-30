@@ -7,6 +7,7 @@ import { foldCeiling, type Preferences, resolveWithRoom } from "../src/harness";
 import { parseSetting } from "../src/settings";
 import { epochMs } from "../src/time";
 import { roomFor, type UsageReading, type UsageWindow } from "../src/usage-model";
+import type { HarnessCatalogue } from "../src/catalogue-model";
 
 const NOW = epochMs("2026-10-08T08:00:00Z");
 
@@ -48,6 +49,36 @@ const on = ({ choice }: ReturnType<typeof resolved>) =>
   `${choice.harness}/${choice.model}${choice.effort === null ? "" : ` ${choice.effort}`}`;
 
 describe("resolveWithRoom", () => {
+  test("a fallback carries an effort its model reports, even when Collie's table does not", () => {
+    const listed = (harness: string, model: string): HarnessCatalogue => ({
+      harness,
+      at: "2026-10-29T09:00:00.000Z",
+      table: null,
+      entries: [
+        {
+          model,
+          label: model,
+          description: null,
+          efforts: ["high"],
+          defaultEffort: null,
+          hidden: false,
+          from: "harness",
+        },
+      ],
+    });
+    const resolved = resolveWithRoom(
+      [{ harness: "claude", model: "opus", effort: "high" }],
+      ["codex/new-model"],
+      (on) => (on.harness === "codex" ? { room: true } : { room: false, why: "Claude is spent" }),
+      {},
+      { machine: "vm-gpu", harnesses: [listed("claude", "opus"), listed("codex", "new-model")] },
+    );
+    expect(resolved.ok && resolved.chosen.choice).toEqual({
+      harness: "codex",
+      model: "new-model",
+      effort: "high",
+    });
+  });
   test("Claude fallbacks keep their subagent policy and other harnesses clear it", () => {
     const policy = { model: "haiku", maxDepth: 1 };
     const result = resolveWithRoom(

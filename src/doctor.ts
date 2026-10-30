@@ -24,7 +24,8 @@ import { isCheckout, manifestField } from "./release";
 import { isNewer, newestRelease, releasesOf } from "./releases";
 import manifest from "../herdr-plugin.toml";
 import { err } from "./operations";
-import { probeHelle, probeLinearMcp, type Probe } from "./optional";
+import type { ConnectionReading } from "./connection-model";
+import { connectionProbes, readConnections } from "./connections";
 import { projectsRoot } from "./projects";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 import { humanBytes } from "./bytes";
@@ -54,7 +55,7 @@ export type { Check } from "./doctor-check";
 export { onPath } from "./doctor-check";
 
 /** An optional integration, as doctor reports it: absent is a note, broken is a warning. */
-const optional = (probe: Probe): Outcome =>
+const optional = (probe: ConnectionReading): Outcome =>
   probe.state === "ok"
     ? passed(probe.detail)
     : probe.state === "absent"
@@ -500,12 +501,14 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   checks.push(...(yield* gitlabChecks(env, search, run)));
   checks.push(...(yield* githubChecks(env, search, run)));
 
-  // Optional, and only where work could reach for them: Helle for a module that waits
-  // on it, Linear for an agent Claude Code runs. Absent is a note; set up and broken is
-  // a warning, because that one fails a Run that nobody expected to.
-  checks.push({ name: "helle", ...optional(yield* probeHelle(env)) });
-  if (needs.harnesses.includes("claude"))
-    checks.push({ name: "linear mcp", ...optional(yield* probeLinearMcp(env)) });
+  for (const { id, reading } of yield* readConnections(
+    connectionProbes(env, run).filter(
+      ({ id }) => id !== "linear" || needs.harnesses.includes("claude"),
+    ),
+  )) {
+    const name = id === "helle" ? "helle" : id === "linear" ? "linear mcp" : `${id} connection`;
+    checks.push({ name, ...optional(reading) });
+  }
 
   return report(checks);
 });

@@ -12,12 +12,14 @@
 
 import type { ActionFacts } from "./sdk";
 import type { Schema } from "effect";
+import type { ConnectionId } from "./connection-model";
 
 /** A workflow an offer starts that is the one declaring it, whatever that is called. */
 export const SELF = "";
 
 /** What a workflow declares it offers, whichever kind of workflow declared it. */
 export interface Declared {
+  readonly connections?: ReadonlyArray<ConnectionId>;
   readonly id: string;
   readonly title: string;
   /** The workflow it starts, by public id; `SELF` is the one that declared it. */

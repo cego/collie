@@ -13,10 +13,11 @@ import type { Keyring, KeyringEntry } from "./credentials";
 import { sha256Hex } from "../../../src/attachments";
 import type { ShellRoute } from "./machine";
 
-const ENTRY = { gitlab: "gitlab-token", helle: "helle-token" } satisfies Record<
-  Credential,
-  KeyringEntry
->;
+const ENTRY = {
+  gitlab: "gitlab-token",
+  helle: "helle-token",
+  slack: "slack-token",
+} satisfies Record<Credential, KeyringEntry>;
 
 /** Each Machine's fingerprints, by herdr profile and then credential. */
 const GivenFile = Schema.fromJsonString(

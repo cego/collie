@@ -5,7 +5,6 @@ import type { Offered } from "../shared/chat-choices";
 import type { FlockSettings } from "../shared/flock-settings";
 import type { UserMessage } from "./claude-driver";
 import { childEnv, which } from "./login-env";
-import { chatChoice } from "./settings";
 
 export type ListedModel = Omit<Offered, "unsetEffort">;
 
@@ -30,7 +29,7 @@ export type ModelQuery = (params: {
 
 export const readClaudeModels = (
   query: ModelQuery,
-  flock: FlockSettings,
+  _flock: FlockSettings,
   dir: string,
   claude = which("claude"),
 ) =>
@@ -60,11 +59,7 @@ export const readClaudeModels = (
       Effect.ensuring(Deferred.succeed(closed, undefined)),
       Effect.map((models): ReadonlyArray<ListedModel> =>
         models
-          .filter(
-            ({ value }) =>
-              value !== DEFAULT_MODEL &&
-              chatChoice({ proactive: true, chatHarness: "claude", chatModel: value }, flock).ok,
-          )
+          .filter(({ value }) => value !== DEFAULT_MODEL)
           .map(({ value, displayName, description, supportsEffort, supportedEffortLevels }) => ({
             id: value,
             label: displayName,

@@ -3,26 +3,34 @@
 
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Fiber, FileSystem, Stream, SubscriptionRef } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Result, Stream, SubscriptionRef } from "effect";
 import { HostRefused, type SharedSetting, type SharedSettings } from "../src/board-model";
 import {
   desktopChange,
   editSetting,
+  editSettings,
+  flockReach,
   type FlockSettings,
   NO_FLOCK_SETTINGS,
+  type Reached,
   settingSections,
+  syncPill,
   takeFrom,
 } from "../desktop/src/shared/flock-settings";
 import {
   definitionsSync,
   type FlockDefinitions,
   flockSync,
+  readFlockSettings,
+  writeFlockSettings,
 } from "../desktop/src/bun/flock-settings";
 import type { SharedDefinition } from "../src/definitions-model";
 import { latestEdits } from "../src/flock-settings";
+import { epochMs } from "../src/time";
 import { settingStored } from "../src/settings";
 import {
   applyChange,
+  carryIntoFlock,
   changeSettings,
   heldSettings,
   type Offers,
@@ -36,6 +44,29 @@ const set = (key: string, value: SharedSetting["value"], hour: number): SharedSe
   value,
   at: at(hour),
 });
+
+test("unreadable Flock settings refuse reads, carry-over and writes without replacing the saved bytes", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
+      expect(yield* readFlockSettings(dir)).toEqual(NO_FLOCK_SETTINGS);
+      for (const text of ["{broken", '{"settings":42}']) {
+        yield* fs.writeFileString(`${dir}/flock-settings.json`, text);
+        yield* writeSettings(dir, { machineRule: "Keep this rule", proactive: false });
+        expect(Result.isFailure(yield* Effect.result(readFlockSettings(dir)))).toBe(true);
+        expect(Result.isFailure(yield* Effect.result(carryIntoFlock(dir, at(12))))).toBe(true);
+        expect(
+          Result.isFailure(yield* Effect.result(writeFlockSettings(dir, NO_FLOCK_SETTINGS))),
+        ).toBe(true);
+        expect(yield* fs.readFileString(`${dir}/flock-settings.json`)).toBe(text);
+        expect(yield* readSettings(dir)).toEqual({
+          machineRule: "Keep this rule",
+          proactive: false,
+        });
+      }
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  ));
 
 test("the latest edit of each key wins, a removal is an edit, and a tie keeps what is held", () => {
   const held = [
@@ -111,9 +142,12 @@ test("Settings shows every setting with its control, its value and its default",
     set("models.claude", ["claude-x"], 9),
     set("quiet_ms", 90000, 9),
   ]).flock;
-  const sections = settingSections(takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock, {
-    proactive: false,
-  });
+  const sections = settingSections(
+    takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock,
+    {},
+    epochMs(at(12)),
+    "UTC",
+  );
   const rows = sections.flatMap((section) => section.rows);
   const row = (key: string, shared = true) =>
     rows.find((one) => one.key === key && one.shared === shared);
@@ -132,14 +166,13 @@ test("Settings shows every setting with its control, its value and its default",
     value: "local",
     fallback: "local",
     set: true,
-    from: "vm-b",
   });
   expect(row("max_iterations")).toMatchObject({
     kind: "number",
     value: "",
     fallback: "5",
     set: false,
-    from: null,
+    edit: null,
   });
   // In its unit: the value and the default both.
   expect(row("quiet_ms")).toMatchObject({
@@ -164,38 +197,136 @@ test("Settings shows every setting with its control, its value and its default",
   });
   expect(row("models.claude")).toMatchObject({ value: "claude-x" });
   expect(row("proactive")).toMatchObject({ kind: "boolean", shared: true });
-  // The Flock chat's own switch is this computer's, under Chat.
-  expect(sections.find((section) => section.group === "Chat")!.rows).toContainEqual(
-    expect.objectContaining({
-      key: "proactive",
-      shared: false,
-      value: "false",
-      fallback: "true",
-      set: true,
-    }),
-  );
-  // As is the Machine rule, which no Machine is given.
-  expect(row("machineRule", false)).toMatchObject({
-    group: "Chat",
-    kind: "text",
-    value: "",
-    set: false,
-    defaultSaid: "Unset: no rule",
-    multiline: true,
-  });
-  expect(
-    sections
-      .find((section) => section.group === "Chat")!
-      .rows.filter((one) => !one.shared)
-      .map((one) => one.key),
-  ).toEqual(["proactive", "machineRule"]);
   // The GitLab host is shared too, but beside the tokens made for it.
   expect(rows.map((one) => one.key)).not.toContain("gitlab_host");
 });
 
+test("Zoom is the one row kept on this computer, and the Flock chat's rule and switch are every Machine's", () => {
+  const rows = settingSections(NO_FLOCK_SETTINGS, { zoom: 1.1 }, epochMs(at(12)), "UTC").flatMap(
+    (section) => section.rows,
+  );
+  const row = (key: string) => rows.find((one) => one.key === key);
+
+  expect(rows.filter((one) => !one.shared)).toEqual([
+    expect.objectContaining({
+      key: "zoom",
+      group: "Board",
+      value: "110%",
+      set: true,
+      edit: "Saved on this computer",
+    }),
+  ]);
+  expect(
+    rows.filter((one) => one.group === "Chat").map(({ key, shared }) => [key, shared]),
+  ).toEqual([
+    ["flock_chat.proactive", true],
+    ["machine_rule", true],
+    ["proactive", true],
+  ]);
+  expect(row("machine_rule")).toMatchObject({
+    multiline: true,
+    set: false,
+    defaultSaid: "Unset: no rule",
+  });
+  expect(row("fallbacks")!.sub).toBe("Who does the work");
+  expect(row("trust")!.sub).toBe("What agents may do");
+  expect(row("idle_close_ms")!.sub).toBe("Context and patience");
+  expect(row("agent_profile")!.sub).toBe("Advanced");
+  expect(row("release.approval_channel")!.sub).toBe("Release approvals");
+  expect(row("notifications.run-done")!.sub).toBe("Toasts");
+  expect(row("max_iterations")!.sub).toBe("");
+  expect([...new Set(rows.filter((one) => one.group === "Agents").map(({ sub }) => sub))]).toEqual([
+    "Who does the work",
+    "What agents may do",
+    "Context and patience",
+    "Advanced",
+  ]);
+});
+
+test("a row taken over a different value at the first sync says where from, then only its last edit", () => {
+  const edit = (flock: FlockSettings) =>
+    settingSections(flock, {}, epochMs(at(13)), "UTC")
+      .flatMap((section) => section.rows)
+      .find((row) => row.key === "scope")!.edit;
+  const first = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [set("scope", "all", 9)]).flock;
+  const differed = takeFrom(first, "vm-b", [set("scope", "local", 11)]).flock;
+
+  expect(edit(first)).toBe("Last edit: vm-a · 09:00");
+  expect(edit(differed)).toBe("Taken from vm-b over a different value at the first sync");
+  expect(edit(takeFrom(differed, "vm-a", [set("scope", "all", 12)]).flock)).toBe(
+    "Last edit: vm-a · 12:00",
+  );
+  expect(edit(NO_FLOCK_SETTINGS)).toBeNull();
+});
+
+test("a save says how far it reached, from each Machine's latest sync", () => {
+  const live = (name: string) => ({ name, state: "live" as const, settings: { failed: null } });
+  const healthy = [live("laptop"), live("vm-build"), live("vm-gpu"), live("old-mini")];
+  const outOfReach = [
+    ...healthy.slice(0, 3),
+    { name: "old-mini", state: "unreachable" as const, settings: { failed: "timed out" } },
+  ];
+
+  expect(flockReach(true, healthy)).toEqual({ said: "Given to all 4 Machines", tone: "ok" });
+  expect(syncPill(true, healthy)).toEqual({ said: "In sync with all 4 Machines", tone: "ok" });
+
+  expect(flockReach(true, outOfReach)).toEqual({
+    said: "Given to 3 of 4 · old-mini gets it when it connects",
+    tone: "warn",
+  });
+  expect(syncPill(true, outOfReach)).toEqual({
+    said: "In sync with 3 of 4 · old-mini out of reach",
+    tone: "warn",
+  });
+
+  // Nothing is sent while the Flock's settings cannot be read.
+  expect(flockReach(false, healthy)).toEqual({
+    refused: "Not set: the Flock's settings could not be read",
+  });
+  expect(syncPill(false, healthy)).toEqual({
+    said: "Showing the Flock's settings as last read",
+    tone: "warn",
+  });
+});
+
+test("a live Machine with no settings exchange is still waiting for the saved edit", () => {
+  expect(flockReach(true, [{ name: "laptop", state: "live", settings: null }])).toEqual({
+    said: "Given to 0 of 1 · laptop gets it when it connects",
+    tone: "warn",
+  });
+  expect(syncPill(true, [{ name: "laptop", state: "live", settings: null }])).toEqual({
+    said: "In sync with 0 of 1 · laptop behind",
+    tone: "warn",
+  });
+});
+
+test("a value with a consequence says it on its row, and asks nothing", () => {
+  const hint = (key: string, typed: string) => {
+    const edited = editSetting(NO_FLOCK_SETTINGS, key, typed, at(12));
+    if ("refused" in edited) throw new Error(edited.refused);
+    return settingSections(edited, {}, 0)
+      .flatMap((section) => section.rows)
+      .find((row) => row.key === key)!.hint;
+  };
+
+  expect(hint("permissions", "bypass")).toBe(
+    "No one reviews an agent's tool calls: every Machine's agents run what they choose.",
+  );
+  expect(hint("compact_at_tokens", "0")).toBe("Compaction between pieces of work is off.");
+  expect(hint("quiet_ms", "0")).toBe(
+    "A quiet agent is never nudged; it waits as long as it takes.",
+  );
+  expect(hint("models.pi", "openai-codex/gpt-6.1-sol, gpt-6")).toBe(
+    'Pi runs a model written provider/model, such as openai-codex/gpt-6.1-sol, so it cannot run "gpt-6".',
+  );
+  expect(hint("models.pi", "openai-codex/gpt-6.1-sol")).toBeNull();
+  expect(hint("permissions", "auto")).toBeNull();
+  expect(hint("quiet_ms", "15")).toBeNull();
+});
+
 test("a duration typed in minutes is the Flock's in milliseconds, and Reset unsets it", () => {
   const quiet = (flock: FlockSettings) =>
-    settingSections(flock, { proactive: true })
+    settingSections(flock, {}, 0)
       .flatMap((section) => section.rows)
       .find((row) => row.key === "quiet_ms")!;
   const typed = settingStored("quiet_ms", "15");
@@ -236,7 +367,7 @@ test("the agent profile is one shared JSON text: an edit is checked, synced as w
       at(12),
     ),
   ).toEqual({ refused: "*.claude.disableAllHooks would switch off Collie's own hooks" });
-  const row = settingSections(edited, { proactive: true })
+  const row = settingSections(edited, {}, 0)
     .flatMap(({ rows }) => rows)
     .find(({ key }) => key === "agent_profile");
   expect(row).toMatchObject({ value: profile, multiline: true, shared: true });
@@ -280,6 +411,103 @@ const syncerTelling = (
   });
 
 type Machine = ReturnType<typeof machine>;
+
+test("saving one setting or an agent choice waits for a fresh exchange before acknowledging delivery", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      for (const changes of [
+        [{ key: "scope", value: "all" }],
+        [
+          { key: "harness", value: "pi" },
+          { key: "model", value: "default" },
+          { key: "effort", value: "" },
+        ],
+      ]) {
+        const flock = yield* SubscriptionRef.make(NO_FLOCK_SETTINGS);
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        let wait = false;
+        const vm = machine(
+          "laptop",
+          [],
+          Effect.suspend(() =>
+            wait
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released)))
+              : Effect.void,
+          ),
+        );
+        let reached: Reached = {
+          name: "laptop",
+          state: "live",
+          settings: { failed: null },
+        };
+        const sync = yield* flockSync({
+          flock,
+          machines: () => [vm],
+          save: () => Effect.void,
+          request: Effect.succeed("fresh"),
+          told: (_, failed) =>
+            Effect.sync(() => {
+              reached = { ...reached, settings: { failed } };
+            }),
+        });
+        yield* sync.syncOn(vm);
+        wait = true;
+        const saving = yield* Effect.forkChild(sync.edit(changes, at(12)));
+        yield* Deferred.await(entered);
+        yield* Effect.yieldNow;
+        expect(saving.pollUnsafe()).toBeUndefined();
+        expect(flockReach(true, [reached])).toMatchObject({ tone: "warn" });
+        expect(vm.asked).toEqual([[]]);
+        yield* Deferred.succeed(released, undefined);
+        yield* Fiber.join(saving);
+        expect(flockReach(true, [reached])).toEqual({
+          said: "Given to all 1 Machines",
+          tone: "ok",
+        });
+        expect(vm.asked.at(-1)).toEqual(
+          changes.map(({ key, value }) => ({ key, value: value || null, at: at(12) })),
+        );
+      }
+    }),
+  ));
+
+test("an agent choice is validated and given to a Machine as one save, preserving fallbacks", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const before = editSetting(NO_FLOCK_SETTINGS, "fallbacks", "codex", at(9));
+      if ("refused" in before) throw new Error(before.refused);
+      const edited = editSettings(
+        before,
+        [
+          { key: "harness", value: "pi" },
+          { key: "model", value: "default" },
+          { key: "effort", value: "" },
+        ],
+        at(12),
+      );
+      if ("refused" in edited) throw new Error(edited.refused);
+      const flock = yield* SubscriptionRef.make(edited);
+      const vm = machine("vm", [set("fallbacks", ["codex"], 9)]);
+      const { syncOn } = yield* syncer(flock, vm);
+      yield* syncOn(vm);
+      expect(vm.asked).toEqual([
+        [set("harness", "pi", 12), set("model", "default", 12), set("effort", null, 12)],
+      ]);
+      expect((yield* SubscriptionRef.get(flock)).settings.fallbacks?.value).toEqual(["codex"]);
+      expect(
+        editSettings(
+          before,
+          [
+            { key: "model", value: "default" },
+            { key: "harness", value: "missing" },
+          ],
+          at(12),
+        ),
+      ).toMatchObject({ refused: expect.stringContaining("harness") });
+      expect(before.settings.model).toBeUndefined();
+    }),
+  ));
 
 test("a Machine is synced through its host: given what it lacks, and asked even with nothing to give", () =>
   Effect.runPromise(
@@ -467,18 +695,28 @@ test("a host that refuses the definitions leaves its Machine failed in its words
     }),
   ));
 
-test("the Machine rule is kept on this computer with Desktop's own settings, and a file from before it still reads", () =>
+test("a Machine rule and a quiet Flock chat an earlier Desktop kept as its own are carried into the Flock once", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
       const rule = "Frontend work is on the laptop, everything else is on the vm";
-      yield* writeSettings(dir, { proactive: false, machineRule: rule });
-      // As a restarted Desktop reads it.
-      expect(yield* readSettings(dir)).toEqual({ proactive: false, machineRule: rule });
+      yield* fs.writeFileString(
+        `${dir}/settings.json`,
+        `{"proactive":false,"machineRule":"${rule}","zoom":1.25}`,
+      );
 
-      yield* fs.writeFileString(`${dir}/settings.json`, '{"proactive":true}');
-      expect((yield* readSettings(dir)).machineRule).toBeUndefined();
+      const carried = yield* carryIntoFlock(dir, at(12));
+      expect(carried.settings).toEqual({
+        machine_rule: { value: rule, at: at(12), from: "Desktop", differed: false },
+        "flock_chat.proactive": { value: false, at: at(12), from: "Desktop", differed: false },
+      });
+      expect(yield* readFlockSettings(dir)).toEqual(carried);
+      // Desktop's own copy is gone; the rest of its settings stay.
+      expect(yield* readSettings(dir)).toEqual({ zoom: 1.25 });
+
+      // Once: a later start carries nothing again.
+      expect(yield* carryIntoFlock(dir, at(13))).toEqual(carried);
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));
 
@@ -486,7 +724,7 @@ test("Zoom is this computer's, under Board, 100% until set, and kept as a number
   Effect.runPromise(
     Effect.gen(function* () {
       const zoom = (zoom?: number) =>
-        settingSections(NO_FLOCK_SETTINGS, { proactive: true, ...(zoom && { zoom }) })
+        settingSections(NO_FLOCK_SETTINGS, { ...(zoom && { zoom }) }, 0)
           .find((section) => section.group === "Board")!
           .rows.find((row) => row.key === "zoom")!;
       expect(zoom()).toMatchObject({
@@ -501,8 +739,6 @@ test("Zoom is this computer's, under Board, 100% until set, and kept as a number
       expect(zoom(1.25)).toMatchObject({ value: "125%", set: true });
       expect(desktopChange("zoom", "125%")).toEqual({ zoom: 1.25 });
       expect(desktopChange("zoom", "")).toEqual({ zoom: 1 });
-      expect(desktopChange("proactive", "false")).toEqual({ proactive: false });
-      expect(desktopChange("machineRule", " vm for all ")).toEqual({ machineRule: "vm for all" });
 
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "desktop-settings-" });
@@ -520,10 +756,10 @@ test("the Flock chat's width is kept on this computer beside Zoom, a reset unset
       yield* held.save({ zoom: 1.25 });
       yield* held.save({ chatWidth: 640 });
       // As a restarted Desktop reads it.
-      expect(yield* readSettings(dir)).toEqual({ proactive: true, zoom: 1.25, chatWidth: 640 });
+      expect(yield* readSettings(dir)).toEqual({ zoom: 1.25, chatWidth: 640 });
 
       yield* held.save({ chatWidth: null });
-      expect(yield* readSettings(dir)).toEqual({ proactive: true, zoom: 1.25 });
+      expect(yield* readSettings(dir)).toEqual({ zoom: 1.25 });
 
       yield* fs.writeFileString(`${dir}/settings.json`, '{"proactive":true}');
       expect((yield* readSettings(dir)).chatWidth).toBeUndefined();
@@ -551,9 +787,10 @@ test("the Flock chat's model is checked as a Run's is, with the Flock's extra mo
   expect(changeSettings(before, NO_FLOCK_SETTINGS, { chatHarness: "opencode" })).toEqual({
     refused: expect.stringContaining('"opencode"'),
   });
-  expect(
-    changeSettings({ proactive: true, chatModel: "gone" }, NO_FLOCK_SETTINGS, { proactive: false }),
-  ).toEqual({ proactive: false, chatModel: "gone" });
+  expect(changeSettings({ chatModel: "gone" }, NO_FLOCK_SETTINGS, { zoom: 1.25 })).toEqual({
+    zoom: 1.25,
+    chatModel: "gone",
+  });
 });
 
 test("choosing another harness for the Flock chat clears its model, and the same harness keeps it", () => {
@@ -681,14 +918,19 @@ test("Desktop's settings are saved through the check in one place and told to ev
       expect(refused.reason).toBe(
         '"off" is not an effort claude takes (low, medium, high, xhigh, max)',
       );
-      yield* held.save({ proactive: false });
+      yield* held.save({ zoom: 1.25 });
 
       expect(yield* Fiber.join(told)).toEqual([
         { proactive: true, chatModel: "sonnet" },
         { proactive: true, chatHarness: "pi", chatEffort: "off" },
-        { proactive: false, chatHarness: "pi", chatEffort: "off" },
+        { proactive: true, chatHarness: "pi", chatEffort: "off", zoom: 1.25 },
       ]);
-      expect(held.now()).toEqual({ proactive: false, chatHarness: "pi", chatEffort: "off" });
+      expect(held.now()).toEqual({
+        proactive: true,
+        chatHarness: "pi",
+        chatEffort: "off",
+        zoom: 1.25,
+      });
       expect(yield* readSettings(dir)).toEqual(held.now());
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));
@@ -696,7 +938,7 @@ test("Desktop's settings are saved through the check in one place and told to ev
 const HAIKU = "claude-haiku-4-5-20251001";
 const OFFERS: Offers = {
   claude: {
-    from: "table",
+    from: "harness",
     unset: { harness: "claude", model: "opus", effort: "medium" },
     models: [
       {
@@ -724,7 +966,9 @@ test("an effort the chosen model does not list is refused, and any effort on a m
       { chatEffort: "max" },
       OFFERS,
     ),
-  ).toEqual({ refused: '"max" is not an effort Sonnet 5.5 takes (low, medium, high)' });
+  ).toEqual({
+    refused: '"max" is not an effort this computer\'s claude/sonnet takes (low, medium, high)',
+  });
   expect(
     changeSettings(
       { proactive: true },
@@ -732,7 +976,9 @@ test("an effort the chosen model does not list is refused, and any effort on a m
       { chatModel: "sonnet", chatEffort: "xhigh" },
       OFFERS,
     ),
-  ).toEqual({ refused: '"xhigh" is not an effort Sonnet 5.5 takes (low, medium, high)' });
+  ).toEqual({
+    refused: '"xhigh" is not an effort this computer\'s claude/sonnet takes (low, medium, high)',
+  });
   expect(
     changeSettings(
       { proactive: true, chatModel: HAIKU },
@@ -740,7 +986,10 @@ test("an effort the chosen model does not list is refused, and any effort on a m
       { chatEffort: "low" },
       OFFERS,
     ),
-  ).toEqual({ refused: 'Haiku 4.5 takes no effort, so "low" cannot be asked of it' });
+  ).toEqual({
+    refused:
+      '"low" is not an effort this computer\'s claude/claude-haiku-4-5-20251001 takes (none)',
+  });
   expect(
     changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatEffort: "max" }, OFFERS),
   ).toEqual({
@@ -786,34 +1035,36 @@ test("another model keeps the effort only when it lists it, and unsetting the mo
   });
 });
 
-test("a typed model that is not offered is checked as before, takes the table's efforts, and today's refusals keep their words", () => {
+test("a failed reading checks typed models against the table and names the fallback source", () => {
+  const offers: Offers = { claude: { ...OFFERS.claude!, from: "table", why: "Login expired" } };
   expect(
     changeSettings(
       { proactive: true },
       NO_FLOCK_SETTINGS,
       { chatModel: "claude-opus-5", chatEffort: "xhigh" },
-      OFFERS,
+      offers,
     ),
   ).toEqual({ proactive: true, chatModel: "claude-opus-5", chatEffort: "xhigh" });
   expect(
-    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatModel: "gpt-6.1-sol" }, OFFERS),
+    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatModel: "gpt-6.1-sol" }, offers),
   ).toEqual({
-    refused: expect.stringContaining('"gpt-6.1-sol" is not a model claude takes'),
+    refused: expect.stringContaining('this computer\'s claude has no model "gpt-6.1-sol"'),
   });
   expect(
     changeSettings(
       { proactive: true, chatHarness: "pi" },
       NO_FLOCK_SETTINGS,
       { chatModel: "gpt-6.1-sol" },
-      OFFERS,
+      offers,
     ),
   ).toEqual({
     refused: expect.stringContaining("Write provider/model, for example openai-codex/gpt-6.1-sol."),
   });
   expect(
-    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatEffort: "off" }, OFFERS),
+    changeSettings({ proactive: true }, NO_FLOCK_SETTINGS, { chatEffort: "off" }, offers),
   ).toEqual({
-    refused: '"off" is not an effort claude takes (low, medium, high, xhigh, max)',
+    refused:
+      "\"off\" is not an effort this computer's claude/opus takes (low, medium, high, xhigh, max); from Collie's table: Login expired",
   });
 });
 
@@ -836,7 +1087,10 @@ test("the default model id checks effort against the model it resolves to", () =
       { chatEffort: "high" },
       offers,
     ),
-  ).toEqual({ refused: 'Haiku 4.5 takes no effort, so "high" cannot be asked of it' });
+  ).toEqual({
+    refused:
+      '"high" is not an effort this computer\'s claude/claude-haiku-4-5-20251001 takes (none)',
+  });
 });
 
 test("a change saved through Desktop's settings is checked against the models offered then", () =>
@@ -850,11 +1104,10 @@ test("a change saved through Desktop's settings is checked against the models of
         () => Effect.succeed(OFFERS),
       );
       const refused = yield* Effect.flip(held.save({ chatModel: HAIKU, chatEffort: "high" }));
-      expect(refused.reason).toBe('Haiku 4.5 takes no effort, so "high" cannot be asked of it');
+      expect(refused.reason).toBe(
+        '"high" is not an effort this computer\'s claude/claude-haiku-4-5-20251001 takes (none)',
+      );
       yield* held.save({ chatModel: "opus", chatEffort: "max" });
-      expect(yield* held.save({ chatModel: "sonnet" })).toEqual({
-        proactive: true,
-        chatModel: "sonnet",
-      });
+      expect(yield* held.save({ chatModel: "sonnet" })).toEqual({ chatModel: "sonnet" });
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));
