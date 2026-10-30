@@ -10441,6 +10441,37 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
+    `release on ${name}: a checkout with changes its merge request does not carry parks before its checks pass on them`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { bin, head, reviewed } = yield* releasable(name);
+          const runId = `r-dirty-start-${name}`;
+          yield* checkedBy(runId, "check", "test", ["-f", "only-local"]);
+          yield* fs.writeFileString(`${reviewed}/only-local`, "never committed\n");
+          yield* rig.queueOutputs([PACKAGED]);
+          const why = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                const [why] = yield* until(
+                  () => Effect.all([parkedWhy(runId), run.asked]),
+                  ([why, asked]) => why !== "" || Arr.some(asked, (row) => row.decision === "go-1"),
+                );
+                return why;
+              }),
+          );
+          yield* bin.restore();
+          expect(why).toBe(
+            `the checkout at ${reviewed} has uncommitted changes, so it is not taken as ${pipe(head, Str.slice(0, 8))}`,
+          );
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     `release on ${name}: a head pushed during the review that still conflicts with its target is not taken or checked until its branch takes the target`,
     () =>
       runEffect(
