@@ -483,7 +483,6 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
    */
   const signalAll = (ids: ReadonlyArray<string>, name: NodeJS.Signals) =>
     Effect.gen(function* () {
-      if (ids.length === 0) return;
       for (const id of ids) {
         const entry = collecting.get(id);
         if (entry !== undefined)
@@ -644,7 +643,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     for (const entry of collecting.values()) entry.ended = true;
     yield* signalAll(unended(), "SIGKILL");
     const until = (yield* Clock.currentTimeMillis) + KILL_WAIT;
-    while (collecting.size > 0 || spawning.size > 0) {
+    for (;;) {
       const marked = yield* markedBy(installation);
       for (const entry of collecting.values()) {
         const proved = yield* provedIn(entry.record, marked);
