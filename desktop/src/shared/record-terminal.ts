@@ -92,19 +92,17 @@ export const addressOf = (who: Readonly<Address>): Address => {
 export const ADDRESSED_DELIVERY = 4;
 
 /**
- * Who review comments may go to, the first being the default. A Machine on
- * `ADDRESSED_DELIVERY` or later: the agent whose step is active (else the builder), then
- * each role the Run has a live agent in, then each agent. An older or unknown one: each
- * agent, newest first.
+ * Addressed hosts offer roles and agents; older hosts offer agents only.
+ * A live preferred role goes first; otherwise the default is the agent at work, or newest.
  */
 export const deliveryChoices = (
   launches: ReadonlyArray<{ readonly agent: string }> | undefined,
   live: ReadonlyArray<BoardAgent>,
   protocol: number | null,
+  preferred?: "planner",
 ): DeliveryChoice[] => {
   const tabs = recipients(launches, live);
   const byName = Arr.map(tabs, (tab) => ({ key: tab.name, label: tab.label, agent: tab.name }));
-  if (protocol === null || protocol < ADDRESSED_DELIVERY) return byName.reverse();
   if (tabs.length === 0) return [];
   const roles = new Set(
     Arr.flatMap(tabs, (tab) =>
@@ -113,20 +111,36 @@ export const deliveryChoices = (
       ),
     ),
   );
-  return [
-    { key: "@work", label: "The agent at work" },
-    ...Arr.map(
-      Arr.filter(Rec.toEntries(ROLES), ([, covered]) =>
-        Arr.some(covered, (role) => roles.has(role)),
-      ),
-      ([to]) => ({
-        key: `@${to}`,
-        label: `The ${to}`,
-        to,
-      }),
-    ),
-    ...byName,
-  ];
+  const offered: DeliveryChoice[] =
+    protocol === null || protocol < ADDRESSED_DELIVERY
+      ? Arr.reverse(byName)
+      : [
+          { key: "@work", label: "The agent at work" },
+          ...Arr.map(
+            Arr.filter(Rec.toEntries(ROLES), ([, covered]) =>
+              Arr.some(covered, (role) => roles.has(role)),
+            ),
+            ([to]) => ({
+              key: `@${to}`,
+              label: `The ${to}`,
+              to,
+            }),
+          ),
+          ...byName,
+        ];
+  const first =
+    preferred === undefined
+      ? undefined
+      : Option.getOrUndefined(
+          Arr.findFirst(
+            offered,
+            (one) =>
+              one.to === preferred ||
+              (one.agent !== undefined &&
+                Arr.some(live, (agent) => agent.name === one.agent && agent.role === preferred)),
+          ),
+        );
+  return first === undefined ? offered : [first, ...Arr.filter(offered, (one) => one !== first)];
 };
 
 /**

@@ -1867,12 +1867,16 @@ comment is a draft that Desktop keeps for that Run while it runs, through tab sw
 closing the record, and sends to no host until you send it. The Diff tab's viewed ticks are
 kept the same way, until Desktop quits, and no host is told of them. While a Run has drafts, the
 Plan and Diff tabs show them in one list, where you can edit or remove each, choose who
-gets them — **The agent at work** by default (the agent whose step is active, else the
+gets them — **The planner** for plan comments, otherwise **The agent at work** (the agent whose step is active, else the
 builder), a role the Run has a live agent in, or one of its live agents, labelled as the
 Terminal tab labels them; a Run on a Machine whose Collie predates addressed deliveries
-(board protocol 3, or a saved board) offers only its live agents, the newest by default —
-and **Send**. The line it leaves says whether the agent was
-seen to take it. Every draft goes as one message, word
+(board protocol 3, or a saved board) offers only its live agents, with the planner first
+for plan comments and otherwise the newest —
+and **Send**. Your explicit recipient choice takes precedence. Plan comments ask for revision
+without answering the Run's next-choice menu. The line it leaves says whether the agent was
+seen to take it, or whether the message is queued durably until the agent is idle.
+Queued acceptance clears the sent drafts: the host keeps their exact words and submits
+them when supported, including while a planner waits at its menu. Every draft goes as one message, word
 for word, each item naming the plan file, or `path:line` with `(as it was)` for removed
 lines, quoting what you selected and giving your words;
 one the agent would see as more than 3 lines or 700 characters arrives as a file in the Run,
@@ -2861,6 +2865,29 @@ runbook find tools printing tokens — a second guard against the commands that 
   would switch Collie's hooks off, and any other key are refused with the reason. Codex, Pi
   and OpenCode take `env` only.
 
+For Claude Code 2.1.129 or later, a Run's agent lists unnamed user and project skills by
+name only, saving their descriptions from each context. Skills named by a
+`{{skill:name}}` reference in the persona or first prompt, or by a Step's `skill`, keep
+their full descriptions. Every skill remains available to invoke or read when needed.
+Skill bodies load on use; Collie doesn't preload them to shorten the catalogue.
+This includes legacy Markdown commands in your Claude config directory's `commands/`
+and project `.claude/commands/` directories, including nested commands such as `frontend:component`.
+
+Your `skillOverrides` choices in user, project, local and `agent_profile` settings take
+precedence. Collie also preserves skills' invocation restrictions. Claude discovers
+project skills above the launch directory and can share settings with a worktree's main
+checkout; Collie accounts for both when selecting overrides.
+Use `"on"` in your settings to keep a particular description, or set it in a role's
+`agent_profile` overlay for managed agents only.
+
+This selection runs at each launch, relaunch and recovery. Claude's own compaction
+continues with the same session settings. Plugin and bundled skills, other harnesses and
+Home chat keep their existing behavior. Older or unknown Claude versions keep the full
+catalogue, with the reason in the Run's agents log. Selection also stays inherited when
+the profile holds `CLAUDE_CONFIG_DIR` in a file, whose value only the launch shell reads.
+No installed skill or live settings file is changed. See
+[Claude's visibility settings](https://code.claude.com/docs/en/skills#override-skill-visibility-from-settings).
+
 The shipped `implementer`, `generalist` and `investigator` personas tell their agent that
 a stack it brings up to test — containers, compose projects, workloads in a local cluster
 — outlives it: to bring up only what the test needs, take it down once that testing is
@@ -3076,6 +3103,15 @@ from an idle pane.
 Each Codex agent's server is detached, so it outlives the Run that launched the agent and
 is still there for a hand-off. The next launch puts down the endpoint of any agent herdr
 no longer has, which is also what stops the control directories accumulating.
+
+Collie's managed Codex agents run all enabled hooks without a startup review. Where the
+installed Codex lists `--dangerously-bypass-hook-trust` in its help, Collie passes it to
+the remote TUI, which forwards hook approval to its App Server session. This applies to
+initial launches, fallbacks and replacement agents after a resume; a reused agent and
+its compactions keep that session's approval. New or changed hooks need no saved trust
+hash. Disabled hooks stay disabled, tool permissions keep their configured mode, and
+Collie does not rewrite the user's Codex config. Older Codex versions receive no new flag.
+See Codex's [hook trust documentation](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 
 OpenCode needed the opposite trick. Its servers do not isolate sessions at all — every
 one answers with every session in the project, and its "which sessions are active"

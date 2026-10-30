@@ -18,6 +18,7 @@ import { isSettled } from "../src/lifecycle";
 import { carryOutAsked } from "../src/run-actions";
 import { DELIVERY_TOKEN } from "../src/dispatcher";
 import { runDir } from "../src/engine";
+import { readAudit } from "../src/audit";
 import { attachFiles, type FlowPrompts } from "../src/flows";
 import { appendLine, deliveriesOf, ledgerPath, readLedger } from "../src/steering";
 import { capabilitiesOf } from "../src/steering-caps";
@@ -41,6 +42,7 @@ const CallLine = Schema.fromJsonString(
 const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
   world: World,
   workflow = "told",
+  status = "complete",
 ) {
   resetExecutors();
   const env = readEnv({
@@ -57,9 +59,10 @@ const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
     .pipe(Effect.orDie);
   const view = yield* until(
     () => client.run({ runId: started.runId }).pipe(Effect.orDie),
-    (one) => one !== null && isSettled(one),
+    (one) =>
+      one !== null && (status === "suspended" ? one.status.status === status : isSettled(one)),
   );
-  expect(view?.status.status).toBe("complete");
+  expect(view?.status).toMatchObject({ status });
   const fs = yield* FileSystem.FileSystem;
   const herdr = yield* Schema.decodeEffect(FakeState)(
     yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
@@ -77,6 +80,102 @@ const deliver = (runId: string, agent: string, text: string) => ({
 });
 
 let asked = 0;
+
+test(
+  "the host accepts a queued comment with a truthful receipt and later submits it",
+  () =>
+    steerable(
+      "collie-queued-comments-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const status = `${world.home}/status`;
+          yield* fs.writeFileString(status, "idle").pipe(Effect.orDie);
+          yield* fs
+            .writeFileString(
+              `${world.config}/config.json`,
+              encode({ harness: "codex", model: "default", compact_at_tokens: 0, trust: "never" }),
+            )
+            .pipe(Effect.orDie);
+          const before = Bun.env.FAKE_HERDR_AGENT_STATUS_FILE;
+          yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              Bun.env.FAKE_HERDR_AGENT_STATUS_FILE = status;
+            }),
+            () =>
+              Effect.sync(() => {
+                if (before === undefined) delete Bun.env.FAKE_HERDR_AGENT_STATUS_FILE;
+                else Bun.env.FAKE_HERDR_AGENT_STATUS_FILE = before;
+              }),
+          );
+          const { env, client, runId, agent } = yield* finishedWithAgent(
+            world,
+            "commented-plan",
+            "suspended",
+          );
+          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
+          const text = "Preserve this exact comment.\n  Include the attachment.  ";
+          const attachment = `${world.home}/comment.txt`;
+          yield* fs.writeFileString(attachment, "evidence").pipe(Effect.orDie);
+          const request = { origin: "desktop" as const, requestId: "queue-desktop" };
+          const action = {
+            ...deliver(runId, agent.name, text),
+            mode: "now" as const,
+            attachments: [attachment],
+          };
+          const [done] = yield* carryOutAsked(env, [action], request);
+          expect(done).toMatchObject({ state: "applied" });
+          expect(done?.note).toContain("Queued durably");
+          const records = Arr.filter(
+            yield* readAudit(runDir(world.state, runId)),
+            (line) => line.operation === "deliver",
+          );
+          expect(records.at(-1)?.result).toMatchObject({ delivered: false, queued: true });
+          yield* carryOutAsked(env, [action], request);
+          yield* fs.writeFileString(status, "idle").pipe(Effect.orDie);
+          const deliveries = yield* until(
+            () => client.deliveries({ runId }).pipe(Effect.orDie),
+            (lines) =>
+              Arr.some(
+                lines ?? [],
+                (one) => one.cause.kind === "steer" && one.state === "acknowledged",
+              ),
+          );
+          expect(Arr.filter(deliveries ?? [], (one) => one.cause.kind === "steer")).toHaveLength(1);
+          const calls = yield* Effect.forEach(
+            Arr.filter(
+              Str.split(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie), "\n"),
+              Boolean,
+            ),
+            (line) => Schema.decodeEffect(CallLine)(line).pipe(Effect.orDie),
+          );
+          const said =
+            Arr.filter(
+              calls,
+              (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
+            ).at(-1)?.argv[3] ?? "";
+          expect(said).toContain("From the human, in Desktop");
+          const kept = /Their message is in (\S+)\./.exec(said)?.[1];
+          const words =
+            kept === undefined ? said : yield* fs.readFileString(kept).pipe(Effect.orDie);
+          expect(words).toContain(text);
+          expect(words).toContain("Attached:");
+          expect(words).toContain("comment.txt");
+          const view = yield* client.run({ runId }).pipe(Effect.orDie);
+          expect(
+            Option.getOrUndefined(
+              Arr.findFirst(view?.waiting ?? [], (one) => one.name === "next-choice"),
+            ),
+          ).toMatchObject({
+            answer: null,
+          });
+          expect(view?.status.status).toBe("suspended");
+        }),
+      [{ verdict: "built" }],
+      ["commented-plan.workflow.ts"],
+    ),
+  120_000,
+);
 /** Chat, under a request id of each call's own: one id twice is one operation. */
 const chat = () => ({ origin: "chat" as const, requestId: `req-chat-${++asked}` });
 

@@ -267,6 +267,20 @@ const choicesOf = (protocol: number | null) =>
     ({ key, to, agent }) => [key, to ?? agent ?? null],
   );
 
+test.each([3, 4, null])(
+  "plan comments prefer the planner even after a second opinion on protocol %p",
+  (protocol) => {
+    const offered = deliveryChoices(
+      launched("plan-1", "review-1"),
+      [live("plan-1", "planner"), live("review-1", "reviewer", "working")],
+      protocol,
+      "planner",
+    );
+    expect(offered[0]?.to ?? offered[0]?.agent).toBe(protocol === 4 ? "planner" : "plan-1");
+    expect(Arr.some(offered, (one) => one.agent === "review-1")).toBe(true);
+  },
+);
+
 test("review comments go by default to the agent at work, and may name a role the Run has or an agent", () => {
   const offered = [
     ["@work", null],

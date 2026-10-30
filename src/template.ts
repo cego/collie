@@ -31,6 +31,13 @@ export function skillMention(skills: ReadonlyMap<string, string>): (name: string
   };
 }
 
+/** Every skill a text rendered with `skillMention` mentions, in the order it mentions them. */
+export function mentionedSkills(text: string): string[] {
+  return Arr.dedupe(Arr.map(Arr.fromIterable(Str.matchAll(MENTION)(text)), ([, name]) => name!));
+}
+
+const MENTION = /the `([A-Za-z0-9_-]+)` skill \((?:read|not installed)/g;
+
 /** Every skill a body asks for, in the order it asks. */
 export function skillsIn(text: string): string[] {
   const names: string[] = [];

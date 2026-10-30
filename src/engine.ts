@@ -174,6 +174,7 @@ import {
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf } from "./steering";
+import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
 import { reason, taskTitleOf, unsafePathComponent } from "./naming";
@@ -1466,6 +1467,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly agent: string;
     readonly delivered: boolean;
     readonly detail: string;
+    readonly queued?: boolean;
     /** Whether the agent was seen to take it, and how. */
     readonly observed?: boolean;
     readonly how?: string;
@@ -5514,26 +5516,7 @@ export const OpenDecision = Schema.Struct({
 export type OpenDecision = typeof OpenDecision.Type;
 
 /** What became of one delivery to a run's agent. */
-export const Steered = Schema.Struct({
-  note: Schema.optional(Schema.String),
-  agent: Schema.String,
-  /** What could be got out of herdr about it, never "it was accepted for sending". */
-  delivered: Schema.Boolean,
-  detail: Schema.String,
-  /** Not delivered because no incarnation of the agent is alive, rather than refused. */
-  gone: Schema.optionalKey(Schema.Boolean),
-  /** The Run's Workflow has ended, so a gone agent's request is carried on by a new Run. */
-  finished: Schema.optionalKey(Schema.Boolean),
-  /** Whether the agent was seen to take it — a turn, its submit hook, Enter on it — and how. */
-  observed: Schema.optionalKey(Schema.Boolean),
-  how: Schema.optionalKey(Schema.String),
-  /** The pane it went to. */
-  pane: Schema.optionalKey(Schema.String),
-  /** Said to whoever sent it where the words were kept as a file rather than typed. */
-  kept: Schema.optionalKey(Schema.String),
-  /** The kind of each credential-shaped value taken out before anything was written. */
-  redacted: Schema.optionalKey(Schema.Array(Schema.String)),
-});
+export { Steered };
 
 export const RunView = Schema.Struct({
   requestedBy: Schema.optional(RequestedBy),
