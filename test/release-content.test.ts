@@ -141,3 +141,43 @@ test("sharing content describes the host's one approval post and the manual fall
     expect(share).toContain(forge === "gitlab" ? "GitLab" : "GitHub");
   }
 });
+
+const gated = (clears: ReadonlyArray<string>) => Arr.fromIterable(Arr.join(clears, "; ")).length;
+const times = (said: string, url: string) => Str.split(said, url).length - 1;
+
+test("every Clearance fits a 120-character repository URL, and names it exactly once", () => {
+  const url = `https://gitlab.example.com/spilnu/frontend/platform/web-applications/${Str.repeat(51)("a")}`;
+  expect(url.length).toBe(120);
+  const jobs = Arr.map(
+    ["deploy-production", "deploy-production:spilnu", "deploy-production:happytiger"],
+    (name, n) => ({ name, url: `${url}/-/jobs/${987654321 + n}` }),
+  );
+  const measured = Arr.map(Rec.toEntries(RELEASE_CLEARS), ([step, clears]) => {
+    const lines = clears(url, jobs);
+    return [step, gated(lines) <= 400, times(Arr.join(lines, "; "), url)];
+  });
+  expect(measured).toEqual(Arr.map(Rec.keys(RELEASE_CLEARS), (step) => [step, true, 1]));
+});
+
+test("production names its jobs with their URLs, then by name, then by count, whichever first fits", () => {
+  const url = "https://gitlab.example.com/group/app";
+  const job = (name: string, n: number) => ({ name, url: `${url}/-/jobs/${1000000 + n}` });
+
+  const one = Arr.join(RELEASE_CLEARS.production(url, [job("deploy-production", 4)]), "; ");
+  expect(one).toContain("`deploy-production` at /-/jobs/1000004");
+
+  const several = Arr.makeBy(12, (n) => job(`production:app${n}`, 9876540000 + n));
+  const byName = Arr.join(RELEASE_CLEARS.production(url, several), "; ");
+  for (const one of several) expect(byName).toContain(`\`${one.name}\``);
+  expect(byName).not.toContain("/-/jobs/");
+
+  const many = Arr.makeBy(30, (n) => job(`deploy-production:application-${n}`, n));
+  const counted = RELEASE_CLEARS.production(url, many);
+  expect(Arr.join(counted, "; ")).toContain("the 30 production jobs its task names");
+  expect(gated(counted)).toBeLessThanOrEqual(400);
+
+  for (const said of [one, byName, Arr.join(counted, "; ")]) {
+    expect(said).toContain(` on ${url}, and no other job`);
+    expect(times(said, url)).toBe(1);
+  }
+});

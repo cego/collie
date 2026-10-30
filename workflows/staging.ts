@@ -15,7 +15,7 @@ import {
   ask,
   type JobLink,
 } from "collie";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Option } from "effect";
 import * as Activity from "effect/workflow/Activity";
 
 export const short = (sha: string) => pipe_(sha, Str.slice(0, 8));
@@ -33,6 +33,18 @@ export const plays = (jobs: ReadonlyArray<JobLink>) =>
   Arr.join(
     Arr.map(jobs, (job) => `\`${job.name}\` at ${job.url}`),
     ", ",
+  );
+
+/** The step gate's limit on a joined Clearance, counted as it counts. */
+const CLEARANCE_CHARS = 400;
+
+export const fitting = (...forms: Arr.NonEmptyReadonlyArray<ReadonlyArray<string>>) =>
+  Option.getOrElse(
+    Arr.findFirst(
+      forms,
+      (form) => Arr.fromIterable(Arr.join(form, "; ")).length <= CLEARANCE_CHARS,
+    ),
+    () => Arr.lastNonEmpty(forms),
   );
 
 const verdict = {
