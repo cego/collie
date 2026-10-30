@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Exit } from "effect";
 import { actionRunner, type ActionNotice } from "../src/shared/actions";
@@ -45,7 +46,7 @@ test("a successful toast retry clears the original sent drafts and preserves lat
       expect(drafts).toEqual(sent);
       drafts = [...editDraft(drafts, "b", "edited meanwhile"), { ...sent[0]!, id: "c" }];
       expect(yield* Effect.promise(() => notices[0]!.actions![0]!.onClick())).toBe(true);
-      expect(drafts.map((draft) => draft.id)).toEqual(["b", "c"]);
+      expect(Arr.map(drafts, (draft) => draft.id)).toEqual(["b", "c"]);
       expect(calls[1]).toEqual({ installation: "local", action, request: calls[0]!.request });
     }),
   ));

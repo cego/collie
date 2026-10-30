@@ -2,6 +2,8 @@
 // beside Usage (ADR-0049): each harness read at most once per interval, with a timeout per
 // read and a back-off after a failure, which leaves Collie's table in its place.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import {
   Clock,
   Context,
@@ -67,7 +69,7 @@ const SOURCE = {
   opencode: "opencode models",
 } satisfies Record<Harness, string>;
 
-const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
+const firstLine = (text: string) => Str.split(Str.trim(text), "\n")[0] ?? "";
 
 /** A harness that prints a list: its entries, or what it said instead of one. */
 const listed = (
@@ -93,39 +95,44 @@ export const sourcesOf = (adapters: HarnessAdapters): CatalogueSources => ({
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
 /** One harness behind its interval, its back-off after a failure, and its timeout. */
-const paced = Effect.fn("Catalogue.paced")(function* (harness: Harness, source: HarnessSource) {
-  const single = yield* Semaphore.make(1);
-  let until = 0;
-  let failures = 0;
-  let shown: HarnessCatalogue | null | undefined;
-  return single.withPermits(1)(
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      if (shown !== undefined && now < until) return shown;
-      const read = yield* source.pipe(
-        Effect.timeoutOrElse({
-          duration: CATALOGUE_CALL_MS,
-          orElse: () =>
-            Effect.fail(`${SOURCE[harness]} did not answer within ${CATALOGUE_CALL_MS / 1000}s`),
+const paced = Effect.fn("Catalogue.paced")((harness: Harness, source: HarnessSource) =>
+  Semaphore.make(1).pipe(
+    Effect.map((single) => {
+      let until = 0;
+      let failures = 0;
+      let shown: HarnessCatalogue | null | undefined;
+      return single.withPermits(1)(
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          if (shown !== undefined && now < until) return shown;
+          const read = yield* source.pipe(
+            Effect.timeoutOrElse({
+              duration: CATALOGUE_CALL_MS,
+              orElse: () =>
+                Effect.fail(
+                  `${SOURCE[harness]} did not answer within ${CATALOGUE_CALL_MS / 1000}s`,
+                ),
+            }),
+            Effect.result,
+          );
+          if (Result.isSuccess(read)) {
+            failures = 0;
+            until = now + CATALOGUE_INTERVAL_MS;
+            shown =
+              read.success === null
+                ? null
+                : { harness, at: iso(now), table: null, entries: read.success };
+          } else {
+            failures += 1;
+            until = now + Math.min(CATALOGUE_INTERVAL_MS, CATALOGUE_RETRY_MS * 2 ** (failures - 1));
+            shown = { harness, at: iso(now), table: read.failure, entries: tableEntries(harness) };
+          }
+          return shown;
         }),
-        Effect.result,
       );
-      if (Result.isSuccess(read)) {
-        failures = 0;
-        until = now + CATALOGUE_INTERVAL_MS;
-        shown =
-          read.success === null
-            ? null
-            : { harness, at: iso(now), table: null, entries: read.success };
-      } else {
-        failures += 1;
-        until = now + Math.min(CATALOGUE_INTERVAL_MS, CATALOGUE_RETRY_MS * 2 ** (failures - 1));
-        shown = { harness, at: iso(now), table: read.failure, entries: tableEntries(harness) };
-      }
-      return shown;
     }),
-  );
-});
+  ),
+);
 
 export const makeCatalogue = Effect.fn("Catalogue.make")(function* (
   sources: CatalogueSources,
@@ -136,7 +143,10 @@ export const makeCatalogue = Effect.fn("Catalogue.make")(function* (
   return HarnessCatalogues.of({
     catalogues: Effect.all([Effect.all(readers, { concurrency: "unbounded" }), added]).pipe(
       Effect.map(([read, extra]) =>
-        read.filter((one) => one !== null).map((one) => withAdded(one, extra[one.harness] ?? [])),
+        Arr.map(
+          Arr.filter(read, (one) => one !== null),
+          (one) => withAdded(one, extra[one.harness] ?? []),
+        ),
       ),
     ),
   });
@@ -182,7 +192,10 @@ const exchange = <A>(
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const sent = lines.map((line) => `${JSON.stringify(line)}\n`).join("");
+    const sent = Arr.join(
+      Arr.map(lines, (line) => `${JSON.stringify(line)}\n`),
+      "",
+    );
     const spawned = yield* spawner
       .spawn(
         ChildProcess.make(command, args, {
@@ -226,7 +239,7 @@ const decodeClaudeModels = Schema.decodeUnknownOption(ClaudeModels);
 
 const CodexReply = Schema.fromJsonString(
   Schema.Struct({
-    id: Schema.Number,
+    id: Schema.Finite,
     result: Schema.optionalKey(Schema.Unknown),
     error: Schema.optionalKey(Schema.Struct({ message: Schema.String })),
   }),

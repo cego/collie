@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
 import { useFilter } from "@nuxt/ui/composables/useFilter";
 import { type ChoiceSelect, modelMenu } from "../../../src/shared/chat-choices";
 
@@ -11,13 +12,19 @@ const search = ref("");
 const { filterGroups } = useFilter();
 const items = computed(() => {
   const menu = modelMenu(search.value, props.select);
-  return filterGroups(menu.groups, menu.query, { fields: ["label", "value"] }).map((group) =>
-    group.map((option) => ({
-      ...option,
-      value: option.value || UNSET,
-      ...("typed" in option && { icon: "i-lucide-plus" }),
-      onSelect: () => emit("choose", option.value),
-    })),
+  return Arr.map(
+    filterGroups(menu.groups, menu.query, {
+      fields: ["label", "value"],
+    }),
+    (group) =>
+      Arr.map(group, (option) => ({
+        ...option,
+        value: option.value || UNSET,
+        ...("typed" in option && {
+          icon: "i-lucide-plus",
+        }),
+        onSelect: () => emit("choose", option.value),
+      })),
   );
 });
 </script>

@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { Exit, type Schema } from "effect";
 import type { HostDefinitions } from "../../../../src/definitions-model";
 import { failureOf } from "../../../src/shared/actions";
@@ -11,25 +15,56 @@ const { machines } = useFlock();
 const { definitionsOf } = useActions();
 
 // Mounted each time the page opens, so each opening reads again.
-const machine = machines.value.find(({ local }) => local) ?? machines.value[0];
+const machine =
+  Option.getOrUndefined(Arr.findFirst(machines.value, ({ local }) => local)) ?? machines.value[0];
 const read = ref<HostDefinitions | null>(null);
 const failed = ref<string | null>(machine === undefined ? "No Machine is connected" : null);
-onMounted(async () => {
-  if (machine === undefined) return;
-  const exit = await definitionsOf(machine.installation);
-  if (Exit.isSuccess(exit)) read.value = exit.value;
-  else failed.value = failureOf(exit.cause).reason;
+onMounted(() => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (machine === undefined) return;
+      const exit = yield* Effect.promise(() => definitionsOf(machine.installation));
+      if (Exit.isSuccess(exit)) read.value = exit.value;
+      else failed.value = failureOf(exit.cause).reason;
+    }),
+  );
 });
 
 const chosen = ref<{ kind: "workflow" | "persona"; id: string } | null>(null);
 const workflow = computed(() =>
   chosen.value?.kind === "workflow"
-    ? read.value?.workflows.find(({ id }) => id === chosen.value?.id)
+    ? Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(read.value), (present) =>
+          Option.getOrUndefined(
+            Arr.findFirst(
+              present.workflows,
+              ({ id }) =>
+                id ===
+                Option.getOrUndefined(
+                  Option.map(Option.fromNullishOr(chosen.value), (present_) => present_.id),
+                ),
+            ),
+          ),
+        ),
+      )
     : undefined,
 );
 const persona = computed(() =>
   chosen.value?.kind === "persona"
-    ? read.value?.personas.find(({ name }) => name === chosen.value?.id)
+    ? Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(read.value), (present__) =>
+          Option.getOrUndefined(
+            Arr.findFirst(
+              present__.personas,
+              ({ name }) =>
+                name ===
+                Option.getOrUndefined(
+                  Option.map(Option.fromNullishOr(chosen.value), (present___) => present___.id),
+                ),
+            ),
+          ),
+        ),
+      )
     : undefined,
 );
 const isChosen = (kind: "workflow" | "persona", id: string) =>
@@ -48,23 +83,33 @@ const files = shallowRef<
     lines: ReadonlyArray<ReadonlyArray<Token>> | null;
   }>
 >([]);
-watch(workflow, async (now, _, onCleanup) => {
+watch(workflow, (now, _, onCleanup) => {
   let stale = false;
-  onCleanup(() => (stale = true));
-  files.value = (now?.files ?? []).map((file) => ({ ...file, lines: null }));
-  const coloured = await Promise.all(
-    (now?.files ?? []).map(async (file) => ({
-      ...file,
-      lines:
-        shownAs(file.path) === "code"
-          ? await highlightLines(file.text.split("\n"), file.path)
-          : null,
-    })),
+  onCleanup(() => {
+    stale = true;
+  });
+  const sources = now === undefined ? [] : now.files;
+  files.value = Arr.map(sources, (file) => ({ ...file, lines: null }));
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const coloured = yield* Effect.forEach(
+        sources,
+        (file) =>
+          Effect.gen(function* () {
+            const lines =
+              shownAs(file.path) === "code"
+                ? yield* Effect.promise(() => highlightLines(Str.split(file.text, "\n"), file.path))
+                : null;
+            return { ...file, lines };
+          }),
+        { concurrency: "unbounded" },
+      );
+      if (!stale) files.value = coloured;
+    }),
   );
-  if (!stale) files.value = coloured;
 });
 
-const json = (value: typeof Schema.Json.Type | null) => JSON.stringify(value, null, 2);
+const json = (value: Schema.Json | null) => JSON.stringify(value, null, 2);
 const ENTRY =
   "flex w-full flex-col gap-1 border-l-2 px-4 py-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary";
 const entryClass = (chosen: boolean) =>

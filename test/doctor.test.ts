@@ -2,8 +2,11 @@
 // fixes it. Driven at the operation, with the outside world scripted through the
 // fake-PATH rig — the same seam the `upgrade` tests use.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { DateTime, Effect, FileSystem, Option, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeHerdr, Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
@@ -14,7 +17,6 @@ import { withLock } from "../src/lock";
 import { claudeSettingsPath, installStatusLine } from "../src/statusline";
 import { hostname } from "node:os";
 import { shell } from "../src/mr";
-import { shellQuote } from "../src/script";
 import type { OpResult } from "../src/operations";
 import { writeConfigValue } from "../src/config";
 import { withGitlabHost } from "../src/commands/shared";
@@ -104,12 +106,15 @@ const Checks = Schema.Struct({
 });
 
 function reported(result: OpResult) {
-  return Schema.decodeUnknownSync(Checks)(result.ok ? result.data : result.error.details).checks;
+  return flow(
+    Schema.decodeUnknownResult(Checks),
+    Result.getOrThrow,
+  )(result.ok ? result.data : result.error.details).checks;
 }
 
 /** One check by name, as doctor reported it. */
 function check(result: OpResult, name: string) {
-  const found = reported(result).find((c) => c.name === name);
+  const found = Option.getOrUndefined(Arr.findFirst(reported(result), (c) => c.name === name));
   if (!found) throw new Error(`no check named "${name}"`);
   return found;
 }
@@ -170,12 +175,12 @@ test("a healthy machine passes every check and says so", () =>
 
       const result = yield* report();
 
-      if (!result.ok) throw new Error(result.error.message);
+      if (!result.ok) return yield* Effect.die(new Error(result.error.message));
       expect(result.ok && result.human).toContain("ready");
       const checks = reported(result);
-      expect(checks.every((c) => c.ok)).toBe(true);
+      expect(Arr.every(checks, (c) => c.ok)).toBe(true);
       // Every prerequisite, in one run.
-      expect(checks.map((c) => c.name)).toEqual([
+      expect(Arr.map(checks, (c) => c.name)).toEqual([
         "herdr",
         "herdr server",
         "plugin",
@@ -352,8 +357,8 @@ const herdrLines = Effect.fn("doctorTest.herdrLines")(function* (
   );
   const checks = reported(yield* report(overrides));
   return {
-    client: checks.find((c) => c.name === "herdr")!,
-    server: checks.find((c) => c.name === "herdr server"),
+    client: Option.getOrUndefined(Arr.findFirst(checks, (c) => c.name === "herdr"))!,
+    server: Option.getOrUndefined(Arr.findFirst(checks, (c) => c.name === "herdr server")),
   };
 });
 
@@ -644,9 +649,9 @@ test("every failing check carries its fix, and the message lists them", () =>
       });
 
       expect(result.ok).toBe(false);
-      const failed = reported(result).filter((c) => !c.ok);
+      const failed = Arr.filter(reported(result), (c) => !c.ok);
       expect(failed.length).toBeGreaterThan(0);
-      expect(failed.every((c) => c.fix !== "")).toBe(true);
+      expect(Arr.every(failed, (c) => c.fix !== "")).toBe(true);
       expect(result.ok === false && result.error.message).toContain("herdr");
     }),
   ));
@@ -665,16 +670,19 @@ test("what is overridden here is named, never judged and never edited", () =>
       const mine = `${modules}/review.workflow.ts`;
       yield* fs.writeFileString(
         mine,
-        [
-          `import { defineWorkflow } from "collie";`,
-          `import { Effect } from "effect";`,
-          `export default defineWorkflow({`,
-          `  id: "review",`,
-          `  title: "Our review",`,
-          `  description: "One reviewer, ours.",`,
-          `  run: () => Effect.void,`,
-          `});`,
-        ].join("\n"),
+        Arr.join(
+          [
+            `import { defineWorkflow } from "collie";`,
+            `import { Effect } from "effect";`,
+            `export default defineWorkflow({`,
+            `  id: "review",`,
+            `  title: "Our review",`,
+            `  description: "One reviewer, ours.",`,
+            `  run: () => Effect.void,`,
+            `});`,
+          ],
+          "\n",
+        ),
       );
       const found = check(yield* report(), "workflows");
       // Not a failure: a customisation is the user's, and doctor still exits clean.
@@ -710,17 +718,20 @@ test("a template or a persona naming what nothing fills is named with the file i
       const module = `${project}/workflows/templated.workflow.ts`;
       yield* fs.writeFileString(
         module,
-        [
-          `import { defineWorkflow, template } from "collie";`,
-          `import { Effect } from "effect";`,
-          `const told = template("Build {{plan}} as the {{role}}.", {});`,
-          `export default defineWorkflow({`,
-          `  id: "templated",`,
-          `  title: "Templated",`,
-          `  description: "Names a plan it never declares.",`,
-          `  run: () => Effect.succeed(told.text),`,
-          `});`,
-        ].join("\n"),
+        Arr.join(
+          [
+            `import { defineWorkflow, template } from "collie";`,
+            `import { Effect } from "effect";`,
+            `const told = template("Build {{plan}} as the {{role}}.", {});`,
+            `export default defineWorkflow({`,
+            `  id: "templated",`,
+            `  title: "Templated",`,
+            `  description: "Names a plan it never declares.",`,
+            `  run: () => Effect.succeed(told.text),`,
+            `});`,
+          ],
+          "\n",
+        ),
       );
       const workflows = check(yield* report(), "workflows");
       expect(workflows.detail).toContain("templated:");
@@ -859,7 +870,7 @@ test("a Machine that cannot push to its GitLab fails, with the key to make and r
       expect(push.ok).toBe(false);
       expect(push.detail).toContain("gitlab.example");
       expect(push.fix).toContain("glab ssh-key add");
-      expect(push.fix).toContain(`--title ${shellQuote(hostname())}`);
+      expect(push.fix).toContain(`--title ${hostname()}`);
       expect(push.fix).not.toContain("$(");
     }),
   ));
@@ -967,7 +978,7 @@ test("only the GitLab host Collie is set to is checked; another one glab knows i
 
       const result = yield* report();
 
-      if (!result.ok) throw new Error(result.error.message);
+      if (!result.ok) return yield* Effect.die(new Error(result.error.message));
       expect(check(result, "glab").detail).toContain("gitlab.cego.dk");
       expect(check(result, "gitlab token").detail).toContain("gitlab.cego.dk");
       expect(check(result, "git push").detail).toContain("gitlab.cego.dk");
@@ -976,7 +987,9 @@ test("only the GitLab host Collie is set to is checked; another one glab knows i
       expect(other.warn).toBeUndefined();
       expect(other.detail).toContain("gitlab.com");
       expect(other.detail).toStartWith("gitlab.com:");
-      expect(reported(result).filter((c) => c.name.includes("gitlab.com"))).toEqual([]);
+      expect(
+        Arr.filter(reported(result), (c) => pipe_(c.name, Str.includes("gitlab.com"))),
+      ).toEqual([]);
     }),
   ));
 
@@ -1012,7 +1025,7 @@ test("--gitlab-host names the host doctor checks, and a URL is refused", () =>
       const pluginEnv = env({ FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]` });
 
       const named = withGitlabHost(pluginEnv, Option.some("gitlab.com"));
-      if ("ok" in named) throw new Error(named.error.message);
+      if ("ok" in named) return yield* Effect.die(new Error(named.error.message));
       const result = yield* doctor(named, undefined, new FakeHerdr(named));
       expect(check(result, "git push").detail).toContain("gitlab.com");
       expect(check(result, "other gitlabs").detail).toContain("gitlab.cego.dk");
@@ -1048,7 +1061,8 @@ const checkouts = Effect.fn("doctorTest.checkouts")(function* (names: ReadonlyAr
   return { GITTE_CWD: root };
 });
 
-const ghCheck = (result: OpResult) => reported(result).find((one) => one.name === "gh");
+const ghCheck = (result: OpResult) =>
+  Option.getOrUndefined(Arr.findFirst(reported(result), (one) => one.name === "gh"));
 
 test("a Machine with no GitHub checkout is not asked about gh, even with no gh at all", () =>
   runEffect(
@@ -1131,7 +1145,7 @@ test("a host started with no Herd is a warning, saying its judgements will be sk
           `${rig.stateDir}/host.build`,
           JSON.stringify({ pid: process.pid, build: "0.0.0", root: rig.baselineDir, herd }),
         );
-      expect(reported(yield* report()).map((c) => c.name)).not.toContain("host herd");
+      expect(Arr.map(reported(yield* report()), (c) => c.name)).not.toContain("host herd");
 
       yield* withLock(
         `${rig.stateDir}/host.lock`,

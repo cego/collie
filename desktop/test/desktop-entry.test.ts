@@ -1,5 +1,7 @@
 // The launcher entry's name and comment, and the macOS bundle's name, as people see them.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { withCollieBundleName, withCollieName } from "../src/desktop-entry";
 
@@ -45,6 +47,6 @@ test("a macOS bundle's name says Collie, and its identifier and executable stay 
     <string>collie-desktop-dev</string>
 </dict>`;
   expect(withCollieBundleName(plist, "collie-desktop")).toBe(
-    plist.replace("<string>collie-desktop-dev</string>", "<string>Collie-dev</string>"),
+    pipe(plist, Str.replace("<string>collie-desktop-dev</string>", "<string>Collie-dev</string>")),
   );
 });

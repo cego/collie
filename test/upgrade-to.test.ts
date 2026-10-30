@@ -1,6 +1,8 @@
 // Checkouts of Collie. A development checkout is pulled with its work riding through and never
 // moved to a release. Real git, because what counts is git's answer.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { exec } from "./support/command";
@@ -28,8 +30,8 @@ const git = (cwd: string, ...args: string[]) =>
   }).pipe(
     Effect.flatMap((done) =>
       done.exitCode === 0
-        ? Effect.succeed(done.stdout.trim())
-        : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+        ? Effect.succeed(Str.trim(done.stdout))
+        : Effect.die(new Error(`git ${Arr.join(args, " ")}: ${done.stderr}`)),
     ),
   );
 
@@ -76,7 +78,8 @@ test("a clone at the Collie directory is the installation, whatever its state", 
   ));
 
 // What Collie Desktop's launcher made every child of it write to stderr.
-const LD_SO_NOISE = ["./libcef.so", "./libvk_swiftshader.so"].map(
+const LD_SO_NOISE = Arr.map(
+  ["./libcef.so", "./libvk_swiftshader.so"],
   (lib) =>
     `ERROR: ld.so: object '${lib}' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.`,
 );

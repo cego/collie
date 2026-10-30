@@ -1,6 +1,8 @@
 // What a Measurement refuses to say: readings it did not take, samples it did not get, trees
 // that moved under it, a plan changed without a reason, and a benchmark a dead host left.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Option } from "effect";
 import { CheckProcesses, hostCheckProcesses } from "../src/check-processes";
@@ -26,7 +28,7 @@ const project = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* git("add", "-A");
       yield* git("commit", "-qm", message);
-      return (yield* git("rev-parse", "HEAD")).stdout.trim();
+      return Str.trim((yield* git("rev-parse", "HEAD")).stdout);
     });
   yield* git("init", "-q");
   yield* write("value", "10\n");
@@ -286,7 +288,7 @@ test.skipIf(process.platform !== "linux")(
         );
         yield* until(
           () => fs.readFileString(pidFile).pipe(Effect.orElseSucceed(() => "")),
-          (text) => text.trim() !== "",
+          (text) => Str.trim(text) !== "",
         );
         yield* checks.endAll;
         expect(
@@ -316,9 +318,10 @@ test(
 
         const again = yield* measuring(root, { base, cwd: repo, plan });
         expect(resultOf(again)._tag).toBe("Judged");
-        expect(again.samples.find((one) => one.tree === "base")?.readings["bench.counter"]).toBe(
-          10,
-        );
+        expect(
+          Option.getOrUndefined(Arr.findFirst(again.samples, (one) => one.tree === "base"))
+            ?.readings["bench.counter"],
+        ).toBe(10);
       }),
     ),
   30_000,
@@ -377,7 +380,7 @@ test.skipIf(process.platform !== "linux")(
         const pid = Number(
           yield* until(
             () => fs.readFileString(pidFile).pipe(Effect.orElseSucceed(() => "")),
-            (text) => text.trim() !== "",
+            (text) => Str.trim(text) !== "",
           ),
         );
         const left = { pid, started: (yield* startedOf(pid)) ?? "" };

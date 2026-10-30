@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Schema } from "effect";
 import { isString } from "../../../src/schema";
 import type { AguiEvent } from "../shared/agui";
@@ -13,30 +16,30 @@ const ToolCall = Schema.Struct({
 const Update = Schema.Union([
   Schema.Struct({
     type: Schema.Literals(["text_start", "text_end", "thinking_start", "thinking_end"]),
-    contentIndex: Schema.Number,
+    contentIndex: Schema.Finite,
   }),
   Schema.Struct({
     type: Schema.Literals(["text_delta", "thinking_delta"]),
-    contentIndex: Schema.Number,
+    contentIndex: Schema.Finite,
     delta: Schema.String,
   }),
   Schema.Struct({
     type: Schema.Literal("toolcall_start"),
-    contentIndex: Schema.Number,
+    contentIndex: Schema.Finite,
     id: Schema.String,
     toolName: Schema.String,
   }),
   Schema.Struct({
     type: Schema.Literal("toolcall_end"),
-    contentIndex: Schema.Number,
+    contentIndex: Schema.Finite,
     toolCall: ToolCall,
   }),
 ]);
 const Usage = Schema.Struct({
-  input: Schema.optionalKey(Schema.Number),
-  output: Schema.optionalKey(Schema.Number),
-  cacheRead: Schema.optionalKey(Schema.Number),
-  cacheWrite: Schema.optionalKey(Schema.Number),
+  input: Schema.optionalKey(Schema.Finite),
+  output: Schema.optionalKey(Schema.Finite),
+  cacheRead: Schema.optionalKey(Schema.Finite),
+  cacheWrite: Schema.optionalKey(Schema.Finite),
 });
 const Record = Schema.Union([
   Schema.Struct({ type: Schema.Literal("agent_start") }),
@@ -83,11 +86,14 @@ export const decodePiRecord = Schema.decodeUnknownOption(Schema.fromJsonString(R
 export type PiRecord = typeof Record.Type;
 
 export const piToolName = (name: string) => {
-  const stable = name.replace(/^mcp__cf_[0-9a-f]{32}__/, "mcp__collie__");
+  const stable = pipe(name, Str.replace(/^mcp__cf_[0-9a-f]{32}__/, "mcp__collie__"));
   return stable === "mcp__collie__AskUserQuestion" ? "AskUserQuestion" : stable;
 };
 export const piText = (content: typeof Content.Type) =>
-  content.flatMap((part) => ("text" in part ? [part.text] : [])).join("\n");
+  Arr.join(
+    Arr.flatMap(content, (part) => ("text" in part ? [part.text] : [])),
+    "\n",
+  );
 
 export const piEvents = (thread: string) => {
   let turn = 0;

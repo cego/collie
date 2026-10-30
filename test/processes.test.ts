@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -87,12 +89,12 @@ test("a look for bound processes on a busy machine takes about one process's rea
     Effect.gen(function* () {
       const pids = Array.from({ length: 100 }, (_, at) => String(at + 1));
       const stat = (pid: string) =>
-        [`${pid} (sh)`, "S", ...Array(18).fill("1"), `start-${pid}`].join(" ");
+        Arr.join([`${pid} (sh)`, "S", ...Array(18).fill("1"), `start-${pid}`], " ");
       const slowProc = FileSystem.makeNoop({
         exists: () => Effect.succeed(true),
         readDirectory: () => Effect.succeed(pids),
         readFileString: (path) => {
-          const [, , pid, file] = path.split("/");
+          const [, , pid, file] = Str.split(path, "/");
           const environ = pid === "7" ? "COLLIE_PROBE=carried\0HOME=/x" : "HOME=/x";
           return Effect.sleep("20 millis").pipe(Effect.as(file === "stat" ? stat(pid!) : environ));
         },

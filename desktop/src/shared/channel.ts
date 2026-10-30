@@ -1,7 +1,7 @@
 // Effect RPC between Desktop's main process and its view, over any channel that carries
 // JSON values. In the app that channel is Electrobun's own RPC, one `frame` message each way.
 
-import { Effect, Option, Queue, Schema } from "effect";
+import { Effect, Queue, Schema } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
@@ -83,7 +83,7 @@ export const serverProtocol = (channel: Channel<ToView, ToMain>) =>
           }),
         end: () => Effect.void,
         clientIds: Effect.sync(() => new Set([clientId])),
-        initialMessage: Effect.succeed(Option.none()),
+        initialMessage: Effect.succeedNone,
         supportsAck: true,
         supportsTransferables: false,
         supportsSpanPropagation: true,

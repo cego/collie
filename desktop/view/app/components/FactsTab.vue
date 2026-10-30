@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
 import { requestedByLine } from "../../../../src/board-model";
 import type { RunDetail, TaskView } from "../../../../src/board-model";
 import { attachmentsShown } from "../../../src/shared/attachments";
@@ -79,7 +80,7 @@ const agents = computed(() => agentRows(props.detail?.agents ?? []));
           </div>
           <p v-if="card.narrative">{{ card.narrative }}</p>
           <p v-if="card.missing.length > 0" class="text-warning">
-            Missing: {{ card.missing.join(", ") }}
+            Missing: {{ Arr.join(card.missing, ", ") }}
           </p>
         </li>
       </ul>

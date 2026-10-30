@@ -10,6 +10,7 @@
 // The agents are herdr's through the real dispatcher, the engine is Effect's over real
 // SQLite in a directory, and every second pass below is a second host on the same file.
 
+import * as Arr from "effect/Array";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, Result, Schema } from "effect";
@@ -52,16 +53,19 @@ const ticket = (
     Effect.flatMap((fs) =>
       fs.writeFileString(
         `${plan}/issues/${file}`,
-        [
-          `# ${title}`,
-          "",
-          `**Blocked by:** ${over?.blockedBy ?? "None"}`,
-          "",
-          "**Repo:** .",
-          "",
-          `**Checks:** ${over?.checks ?? "test"}`,
-          "",
-        ].join("\n"),
+        Arr.join(
+          [
+            `# ${title}`,
+            "",
+            `**Blocked by:** ${over?.blockedBy ?? "None"}`,
+            "",
+            "**Repo:** .",
+            "",
+            `**Checks:** ${over?.checks ?? "test"}`,
+            "",
+          ],
+          "\n",
+        ),
       ),
     ),
     Effect.orDie,
@@ -98,9 +102,23 @@ const session = <A, E>(
   >,
 ) =>
   run.pipe(
-    Effect.provide(agentsLayer(hostOf())),
-    Effect.provide(Layer.succeed(Children)(Children.of({ start: nothing, result: nothing }))),
-    Effect.provide(foundationLayer({ dir })),
+    Effect.provide(
+      agentsLayer(hostOf()).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(
+            Children.of({
+              start: nothing,
+              result: nothing,
+            }),
+          ),
+        ),
+        Layer.provideMerge(
+          foundationLayer({
+            dir,
+          }),
+        ),
+      ),
+    ),
     Effect.scoped,
     Effect.orDie,
   );
@@ -118,6 +136,7 @@ const worked = (runId: string, entry = "roster.workflow.ts") =>
   session(
     Effect.gen(function* () {
       const made = yield* loaded(entry, runId);
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       return yield* made.workflow
         .execute(payloadFor(runId))
         .pipe(Effect.result, Effect.provide(made.layer));
@@ -138,7 +157,7 @@ const parked = (runId: string, entry = "roster.workflow.ts") =>
         yield* made.workflow.execute(payloadFor(runId), { discard: true });
         return yield* until(
           () => store.asked(runId),
-          (rows) => rows.some((row) => row.decision === "carry-on"),
+          (rows) => Arr.some(rows, (row) => row.decision === "carry-on"),
         );
       }).pipe(Effect.provide(made.layer));
     }),
@@ -156,6 +175,7 @@ const answered = (runId: string, value: string, entry = "roster.workflow.ts") =>
           executionId: yield* made.workflow.executionId(payload),
           value,
         }).pipe(Effect.orDie);
+        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
         return yield* made.workflow.execute(payload).pipe(Effect.result);
       }).pipe(Effect.provide(made.layer));
     }),
@@ -168,7 +188,7 @@ const failed = (result: Result.Result<unknown, unknown>) =>
   Result.isFailure(result) && Schema.is(WorkflowError)(result.failure) ? result.failure.reason : "";
 
 const prompts = () =>
-  rig.calls().pipe(Effect.map((calls) => calls.filter((call) => call.cmd === "agent prompt")));
+  rig.calls().pipe(Effect.map((calls) => Arr.filter(calls, (call) => call.cmd === "agent prompt")));
 
 /** What an operation was actually asked, which is the file its message named. */
 const promptFile = (runId: string, operation: string) =>
@@ -178,7 +198,7 @@ const promptFile = (runId: string, operation: string) =>
   );
 
 const starts = () =>
-  rig.cmds().pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
+  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
 
 const built = (what: string, findings: ReadonlyArray<Schema.Json> = []) => ({
   verdict: findings.length === 0 ? "clean" : "findings",
@@ -237,7 +257,7 @@ test(
 
         // The blocking finding parks the run on its question rather than ending the list.
         const asking = yield* parked("r-findings");
-        expect(asking.map((row) => row.prompt)).toEqual(["Findings were raised. Carry on?"]);
+        expect(Arr.map(asking, (row) => row.prompt)).toEqual(["Findings were raised. Carry on?"]);
         expect(yield* prompts()).toHaveLength(2);
 
         const done = yield* answered("r-findings", "yes");
@@ -307,7 +327,7 @@ test(
         // The reason is recorded, and nothing was written as though an agent had answered.
         expect(yield* events(dir, "r-skipped")).toEqual(["skipped 01-api.md: it names no checks"]);
         expect(yield* prompts()).toHaveLength(1);
-        const tabs = (yield* rig.cmds()).filter((cmd) => cmd === "tab create");
+        const tabs = Arr.filter(yield* rig.cmds(), (cmd) => cmd === "tab create");
         expect(tabs).toHaveLength(1);
       }),
     ),

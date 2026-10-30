@@ -2,6 +2,10 @@
 // each the host's operations, under the front door that asked, and the same request twice
 // is one operation.
 
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schema } from "effect";
 import { readAudit } from "../src/audit";
@@ -25,7 +29,7 @@ import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
 const answers = (lines: ReadonlyArray<{ readonly kind: string }>) =>
-  lines.filter((line) => line.kind === "confirmed" || line.kind === "declined");
+  Arr.filter(lines, (line) => line.kind === "confirmed" || line.kind === "declined");
 
 test(
   "a proposal is confirmed or declined by the host, by its id and hash, once per request",
@@ -113,7 +117,7 @@ test(
           );
           yield* until(
             () => readProposals(file),
-            (lines) => lines.some((line) => line.kind === "step" && line.state === "started"),
+            (lines) => Arr.some(lines, (line) => line.kind === "step" && line.state === "started"),
           );
           yield* Fiber.interrupt(first);
           // A confirm under another request is refused, and leaves the running one alone.
@@ -157,7 +161,7 @@ test(
           expect(said.ok).toBe(true);
           expect(yield* client.propose(asked)).toEqual(said);
           const lines = yield* readProposals(file);
-          expect(lines.filter((line) => line.kind === "proposal")).toMatchObject([
+          expect(Arr.filter(lines, (line) => line.kind === "proposal")).toMatchObject([
             { by: "chat:q-1" },
           ]);
           expect(answers(lines)).toMatchObject([{ kind: "confirmed", by: "chat:q-1" }]);
@@ -239,7 +243,8 @@ test(
           };
           const acted = yield* client.act(followUp);
           expect(yield* client.act(followUp)).toEqual(acted);
-          const children = (yield* client.runs({ task: null })).filter(
+          const children = Arr.filter(
+            yield* client.runs({ task: null }),
             (one) => one.parent === runId,
           );
           expect(children).toHaveLength(1);
@@ -253,7 +258,8 @@ test(
           yield* client.propose(proposed);
           yield* fs.remove(`${world.state}/herd/some-herd/operations.jsonl`);
           yield* client.propose(proposed);
-          const afterPropose = (yield* client.runs({ task: null })).filter(
+          const afterPropose = Arr.filter(
+            yield* client.runs({ task: null }),
             (one) => one.parent === runId,
           );
           expect(afterPropose).toHaveLength(2);
@@ -285,7 +291,7 @@ test(
           const dir = runDir(world.state, runId);
           expect(yield* readDispositions(dir)).toEqual([line]);
           expect(
-            (yield* readAudit(dir)).map((one) => [one.operation, one.actor.origin, one.request]),
+            Arr.map(yield* readAudit(dir), (one) => [one.operation, one.actor.origin, one.request]),
           ).toEqual([
             ["start", "board", "s-1"],
             ["followup", "board", "a-1:0"],
@@ -301,17 +307,20 @@ test(
   120_000,
 );
 
-const CLAUDE_HELP = [
-  "--print",
-  "--output-format",
-  "--json-schema",
-  "--tools",
-  "--restricted",
-  "--strict-mcp-config",
-  "--setting-sources",
-  "--no-session-persistence",
-  "--append-system-prompt-file",
-].join(" ");
+const CLAUDE_HELP = Arr.join(
+  [
+    "--print",
+    "--output-format",
+    "--json-schema",
+    "--tools",
+    "--restricted",
+    "--strict-mcp-config",
+    "--setting-sources",
+    "--no-session-persistence",
+    "--append-system-prompt-file",
+  ],
+  " ",
+);
 
 test(
   "a steer from the command line is the host's: it asks, records and carries out",
@@ -349,7 +358,7 @@ test(
           );
           expect(said.envelope).toMatchObject({ ok: true });
           const audit = yield* readAudit(runDir(world.state, runId));
-          expect(audit.map((one) => [one.operation, one.actor.origin])).toContainEqual([
+          expect(Arr.map(audit, (one) => [one.operation, one.actor.origin])).toContainEqual([
             "steer",
             "cli",
           ]);
@@ -365,9 +374,12 @@ test(
           expect(answers(journal)).toMatchObject([{ kind: "confirmed" }, { kind: "confirmed" }]);
           // A steer from another herdr session is carried out in that session.
           const other = `${world.state}/other.sock`;
-          const defaults = answer.replace(
-            '{"kind":"none","why":"it is fine"}',
-            '{"kind":"update_defaults","change":"add-constraint","workspace":"w1","text":"no rebase"}',
+          const defaults = pipe_(
+            answer,
+            Str.replace(
+              '{"kind":"none","why":"it is fine"}',
+              '{"kind":"update_defaults","change":"add-constraint","workspace":"w1","text":"no rebase"}',
+            ),
           );
           yield* fs.writeFileString(
             `${bin}/claude`,
@@ -382,9 +394,13 @@ test(
             world.state,
             scopeKey({ session: other, workspaceId: "w1", cwd: world.project }),
           );
-          expect((yield* readDefaults(theirs))?.constraints.map((c) => c.text)).toEqual([
-            "no rebase",
-          ]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(yield* readDefaults(theirs)), (present) =>
+                Arr.map(present.constraints, (c) => c.text),
+              ),
+            ),
+          ).toEqual(["no rebase"]);
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["plain.workflow.ts"],
@@ -426,7 +442,7 @@ test(
           });
           expect((yield* client.run({ runId }))?.status.status).toBe("suspended");
           expect(
-            (yield* readAudit(runDir(world.state, runId))).map((one) => one.operation),
+            Arr.map(yield* readAudit(runDir(world.state, runId)), (one) => one.operation),
           ).not.toContain("grant");
 
           yield* client.grant({
@@ -473,14 +489,14 @@ test(
           yield* client.declare({ frontDoor: "chat" });
           const asked = { herd: "some-herd", conversation: "flock@pc", as: "read" as const };
           const peeked = yield* client.news({ ...asked, request: "k-1", keys: [] });
-          expect(peeked.items.map(({ key, significance }) => [key, significance])).toEqual([
+          expect(Arr.map(peeked.items, ({ key, significance }) => [key, significance])).toEqual([
             ["r1:ended:failed", "consequential"],
             ["r2:asking:x", "decision"],
           ]);
           yield* client.news({ ...asked, request: "k-2", keys: ["r2:asking:x"] });
           const left = yield* client.news({ ...asked, request: "k-3", keys: [] });
           yield* stopHost(world.state);
-          expect(left.items.map(({ key }) => key)).toEqual(["r1:ended:failed"]);
+          expect(Arr.map(left.items, ({ key }) => key)).toEqual(["r1:ended:failed"]);
         }),
       [],
     ),
@@ -505,7 +521,7 @@ test(
             request: "n-1",
           };
           const first = yield* client.news(asked);
-          expect(first.items.map((item) => item.key)).toEqual(["r1:ended:failed"]);
+          expect(Arr.map(first.items, (item) => item.key)).toEqual(["r1:ended:failed"]);
           // The same request is the same batch, not the nothing a second read would find.
           expect(yield* client.news(asked)).toEqual(first);
           expect((yield* client.news({ ...asked, request: "n-2" })).items).toEqual([]);
@@ -515,7 +531,7 @@ test(
           expect(pending(lines, NATIVE).items).toHaveLength(1);
           const trail = yield* newsTrail(world.state, "some-herd");
           const audit = yield* readAudit(trail);
-          expect(audit.map((one) => [one.operation, one.actor.origin, one.request])).toEqual([
+          expect(Arr.map(audit, (one) => [one.operation, one.actor.origin, one.request])).toEqual([
             ["news", "chat", "n-1"],
             ["news", "chat", "n-2"],
           ]);

@@ -1,7 +1,9 @@
 // The Flock chat resumes one warm session on the harness named in Desktop's Settings.
 
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import {
-  Crypto,
   Deferred,
   Duration,
   Effect,
@@ -16,7 +18,10 @@ import {
   Semaphore,
   Stream,
   SubscriptionRef,
+  flow,
+  Result,
 } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Base64 from "effect/encoding/Base64";
 import { type AguiEvent, ends } from "../shared/agui";
 import { saidOf } from "../shared/said";
@@ -165,7 +170,8 @@ const contentOf = Effect.fnUntraced(function* (
   const files: Staged[] = [];
   for (const id of ids) {
     const held = yield* describeAttachment(dir, id).pipe(Effect.orElseSucceed(() => null));
-    if (held === null) return `Desktop no longer has ${id.split("/").at(-1)}; attach it again.`;
+    if (held === null)
+      return `Desktop no longer has ${Str.split(id, "/").at(-1)}; attach it again.`;
     files.push(held);
   }
   const images: ContentBlock[] = [];
@@ -230,7 +236,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     | Effect.Effect<
         Readonly<Record<string, ChatDriver>>,
         never,
-        Scope.Scope | Crypto.Crypto | FileSystem.FileSystem
+        Scope.Scope | SecureRandom.SecureRandom | FileSystem.FileSystem
       >;
   readonly dir: string;
   readonly conversation: string;
@@ -265,7 +271,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
 }) {
   const fs = yield* FileSystem.FileSystem;
   const scope = yield* Effect.scope;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   yield* fs.makeDirectory(opts.dir, { recursive: true });
   const file = (yield* Path.Path).join(opts.dir, "flock-chat.json");
   const saved = yield* fs
@@ -277,9 +283,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   const asking = new Map<string, Deferred.Deferred<Answers>>();
   const questions = new Set<string>();
   const clicked = new Map<string, Answers>();
-  const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem | Path.Path>();
-  const run = <A>(effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>) =>
-    Effect.runPromise(effect.pipe(Effect.provideContext(services)));
+  const services = yield* Effect.context<
+    SecureRandom.SecureRandom | FileSystem.FileSystem | Path.Path
+  >();
+  const run = Effect.runPromiseWith(services);
   /** The session warm now, if one is. */
   let live:
     | { readonly running: Live; readonly scope: Scope.Closeable; readonly choice: Resolved }
@@ -300,7 +307,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     chatHarness: opts.chatHarness,
     chatChoices: Effect.suspend(() =>
       Effect.forEach(
-        Object.entries(drivers).filter(([, driver]) => driver.installed),
+        Arr.filter(Rec.toEntries(drivers), ([, driver]) => driver.installed),
         ([harness]) => readModels(harness),
       ).pipe(Effect.andThen(Effect.suspend(() => accountOf(SubscriptionRef.getUnsafe(held))))),
     ),
@@ -322,7 +329,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     }
     const answered = Deferred.makeUnsafe<Answers>();
     asking.set(toolUseID, answered);
-    return Effect.runPromise(
+    return run(
       Deferred.await(answered).pipe(Effect.ensuring(Effect.sync(() => asking.delete(toolUseID)))),
       { signal },
     );
@@ -334,12 +341,18 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     ask,
     noticed: () => (noticed === undefined ? undefined : flockNewsText(noticed)),
     placement: () => {
-      const rule = opts.machineRule()?.trim() ?? "";
+      const rule =
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(opts.machineRule()), (present) => Str.trim(present)),
+        ) ?? "";
       return rule === ""
         ? undefined
         : {
             rule,
-            machines: opts.machines().map(({ name, local }) => ({ name, local: local === true })),
+            machines: Arr.map(opts.machines(), ({ name, local }) => ({
+              name,
+              local: local === true,
+            })),
           };
     },
   });
@@ -372,7 +385,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   });
 
   type Live = Effect.Success<ReturnType<typeof start>>;
-  let id = Option.isSome(saved) ? saved.value.session : yield* crypto.randomUUIDv4;
+  let id = Option.isSome(saved) ? saved.value.session : yield* random.uuidV4();
   let heldOn = Option.isSome(saved) ? saved.value.harness : opts.chatHarness().harness;
   const changed = yield* SubscriptionRef.make(id);
   const held = yield* SubscriptionRef.make<Held>({ heldOn, runsOn: null, turning: false });
@@ -385,7 +398,10 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   );
   const remember = Effect.suspend(() =>
     fs
-      .writeFileString(file, Schema.encodeSync(SessionFile)({ session: id, harness: heldOn }))
+      .writeFileString(
+        file,
+        flow(Schema.encodeResult(SessionFile), Result.getOrThrow)({ session: id, harness: heldOn }),
+      )
       .pipe(Effect.andThen(SubscriptionRef.set(changed, id)), Effect.andThen(tell)),
   );
   if (Option.isNone(saved)) yield* remember;
@@ -430,7 +446,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     Effect.gen(function* () {
       if (harness === heldOn) return;
       yield* end;
-      id = yield* crypto.randomUUIDv4;
+      id = yield* random.uuidV4();
       heldOn = harness;
       yield* remember;
     }).pipe(Effect.orDie);
@@ -541,11 +557,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       Effect.ensuring(SubscriptionRef.set(desktopTurns, "ended")),
     );
     // A turn that failed before the model had its News waits for the next look, not the next nudge.
-    resting = fresh.items.every((placed) => !spoken.has(newsKey(placed)));
+    resting = Arr.every(fresh.items, (placed) => !spoken.has(newsKey(placed)));
     const result = running.session.lastTurn();
     if (result !== undefined && result !== before)
       yield* appendJournal(usage, UsageLine, {
-        at: yield* nowIso(),
+        at: yield* nowIso,
         session: id,
         turn: "desktop",
         harness: choice.harness,
@@ -561,7 +577,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   }).pipe(Effect.andThen(nudge), Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
 
   const accountOf = (now: Held) =>
-    Effect.forEach(Object.entries(drivers), ([harness, driver]) =>
+    Effect.forEach(Rec.toEntries(drivers), ([harness, driver]) =>
       opts.offered(harness).pipe(
         Effect.map((offered) => ({
           harness,
@@ -618,18 +634,16 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     transcript: Effect.suspend(() => drivers[heldOn]?.transcript(id) ?? Effect.succeed([])),
     conversations: Effect.suspend(() =>
       Effect.forEach(
-        Object.entries(drivers).filter(([, driver]) => driver.installed),
+        Arr.filter(Rec.toEntries(drivers), ([, driver]) => driver.installed),
         ([harness, driver]) =>
           driver
             .earlier(HISTORY + 1)
-            .pipe(Effect.map((sessions) => sessions.map((one) => ({ ...one, harness })))),
+            .pipe(Effect.map((sessions) => Arr.map(sessions, (one) => ({ ...one, harness })))),
         { concurrency: "unbounded" },
       ).pipe(
         Effect.map((listed) => ({
           current: id,
-          earlier: listed
-            .flat()
-            .filter(({ session }) => session !== id)
+          earlier: Arr.filter(listed.flat(), ({ session }) => session !== id)
             .sort((a, b) => b.at - a.at)
             .slice(0, HISTORY),
         })),
@@ -647,7 +661,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
               if (refused !== null) return refused;
             }
             yield* end;
-            id = conversation?.session ?? (yield* crypto.randomUUIDv4);
+            id = conversation?.session ?? (yield* random.uuidV4());
             heldOn = conversation?.harness ?? set;
             yield* remember;
             return null;

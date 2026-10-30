@@ -1,6 +1,8 @@
 // `integrateDefault`: the default branch merged into a Run's branch where it has moved, over
 // real repositories — a remote, a clone that moves master, and the Run's own clone.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { integrateDefault } from "../src/integrate";
@@ -11,9 +13,9 @@ import { runEffect } from "./support/effect";
 const git = (cwd: string, ...args: ReadonlyArray<string>) =>
   exec(["git", ...args], { cwd }).pipe(
     Effect.tap((done) =>
-      done.exitCode === 0 ? Effect.void : Effect.die(`git ${args.join(" ")}: ${done.stderr}`),
+      done.exitCode === 0 ? Effect.void : Effect.die(`git ${Arr.join(args, " ")}: ${done.stderr}`),
     ),
-    Effect.map((done) => done.stdout.trim()),
+    Effect.map((done) => Str.trim(done.stdout)),
   );
 
 const commit = (root: string, file: string, body: string) =>
@@ -58,7 +60,7 @@ const repositories = Effect.gen(function* () {
 
 const parents = (cwd: string) =>
   Effect.map(git(cwd, "rev-list", "--parents", "-n", "1", "HEAD"), (line) =>
-    line.split(" ").slice(1),
+    Str.split(line, " ").slice(1),
   );
 
 test("an unchanged default branch is skipped, and nothing is committed", () =>

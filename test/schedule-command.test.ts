@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { hostname } from "node:os";
 import { Effect, FileSystem } from "effect";
@@ -34,16 +36,19 @@ test(
             "a",
             "typed",
             ...daily,
-            ...[
-              "note=n",
-              "count=1",
-              "draft=true",
-              "labels=[]",
-              "ticket=",
-              "mode=slow",
-              "ref=r",
-              "spec=",
-            ].flatMap((one) => ["--input", one]),
+            ...Arr.flatMap(
+              [
+                "note=n",
+                "count=1",
+                "draft=true",
+                "labels=[]",
+                "ticket=",
+                "mode=slow",
+                "ref=r",
+                "spec=",
+              ],
+              (one) => ["--input", one],
+            ),
           ]);
           expect(typed.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
           expect(typed.envelope.error?.message).toContain("mode");
@@ -123,7 +128,7 @@ test(
             "--request-id",
             "add-1",
           ]);
-          const installation = (yield* fs.readFileString(`${world.state}/installation`)).trim();
+          const installation = Str.trim(yield* fs.readFileString(`${world.state}/installation`));
           const machine = { installation, hostname: hostname() };
           expect(added).toMatchObject({
             ok: true,
@@ -175,7 +180,7 @@ test(
           });
           // What changed and who asked stays beside the Schedule after it is gone.
           const trail = yield* fs.readFileString(`${world.state}/schedules/daily/operations.jsonl`);
-          expect(trail.split("\n").filter((line) => line !== "")).toHaveLength(4);
+          expect(Arr.filter(Str.split(trail, "\n"), (line) => line !== "")).toHaveLength(4);
         }),
       MODULES,
     ),

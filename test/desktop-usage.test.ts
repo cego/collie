@@ -1,8 +1,9 @@
 // What Desktop draws of each Machine's Usage readings: the header's entry per Subscription
 // and account, and the Usage page.
 
+import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
-import { Config, Effect, Option, Schema } from "effect";
+import { Config, Effect, Option, Schema, flow, Result } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -72,7 +73,7 @@ describe("the header", () => {
       LIVE,
       NOW,
     );
-    expect(entries.map(({ text, level }) => [text, level])).toEqual([["Claude 72%", "ok"]]);
+    expect(Arr.map(entries, ({ text, level }) => [text, level])).toEqual([["Claude 72%", "ok"]]);
     expect(entries[0]?.title).toContain("vm-mk");
     expect(entries[0]?.title).toContain("me@example.com");
     expect(entries[0]?.title).toMatch(/Session resets \S+ \(in 2h 10m\)/);
@@ -90,7 +91,7 @@ describe("the header", () => {
       LIVE,
       NOW,
     );
-    expect(entries.map(({ text }) => text)).toEqual([
+    expect(Arr.map(entries, ({ text }) => text)).toEqual([
       "Claude me@example.com 31%",
       "Claude ops@example.com 31%",
       "ChatGPT 31%",
@@ -108,7 +109,7 @@ describe("the header", () => {
       LIVE,
       NOW,
     );
-    expect(entries.map(({ text }) => text)).toEqual([
+    expect(Arr.map(entries, ({ text }) => text)).toEqual([
       "Claude me@example.com 31%",
       "Claude me@example.com (Cego) 31%",
     ]);
@@ -116,10 +117,10 @@ describe("the header", () => {
 
   test("amber at 90%, red and out when Exhausted, naming a model whose own window is the busiest", () => {
     const at = (windows: ReadonlyArray<UsageWindow>) =>
-      usageEntries([machine("mk-pc", [reading({ windows })])], LIVE, NOW).map(({ text, level }) => [
-        text,
-        level,
-      ]);
+      Arr.map(
+        usageEntries([machine("mk-pc", [reading({ windows })])], LIVE, NOW),
+        ({ text, level }) => [text, level],
+      );
     expect(at([window({ usedPercent: 90 })])).toEqual([["Claude 90%", "warn"]]);
     expect(at([window({ usedPercent: 40, reached: true })])).toEqual([["Claude out", "out"]]);
     expect(
@@ -145,7 +146,7 @@ describe("the header", () => {
       LIVE,
       NOW,
     );
-    expect(entries.map(({ text }) => text)).toEqual(["Claude 31%"]);
+    expect(Arr.map(entries, ({ text }) => text)).toEqual(["Claude 31%"]);
   });
 
   test("two ChatGPT seats of one workspace are two entries, each named by its email", () => {
@@ -157,7 +158,7 @@ describe("the header", () => {
       LIVE,
       NOW,
     );
-    expect(entries.map(({ text }) => text)).toEqual([
+    expect(Arr.map(entries, ({ text }) => text)).toEqual([
       "ChatGPT me@example.com 31%",
       "ChatGPT ops@example.com 31%",
     ]);
@@ -174,7 +175,7 @@ describe("the header", () => {
       LIVE,
       NOW,
     );
-    expect(entries.map(({ text }) => text)).toEqual(["ChatGPT 72%"]);
+    expect(Arr.map(entries, ({ text }) => text)).toEqual(["ChatGPT 72%"]);
     expect(entries[0]?.title).toContain("mk-pc");
   });
 
@@ -189,7 +190,7 @@ describe("the header", () => {
       LIVE,
       NOW,
     );
-    expect(entries.map(({ text }) => text)).toEqual(["Claude 31%", "Claude 50%"]);
+    expect(Arr.map(entries, ({ text }) => text)).toEqual(["Claude 31%", "Claude 50%"]);
     expect(entries[1]?.title).toContain("vm-mk");
   });
 });
@@ -206,8 +207,14 @@ describe("a Subscription account across Machines", () => {
     const accounts = usageAccounts(machines, ["p-mk-pc"]);
     expect(accounts).toHaveLength(1);
     expect(accounts[0]?.newest?.machine).toBe("mk-pc");
-    expect(accounts[0]?.machines.map(({ machine }) => machine)).toEqual(["mk-pc"]);
-    expect(usageEntries(machines, ["p-mk-pc"], NOW).map(({ text }) => text)).toEqual([
+    expect(
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(accounts[0]), (present) =>
+          Arr.map(present.machines, ({ machine }) => machine),
+        ),
+      ),
+    ).toEqual(["mk-pc"]);
+    expect(Arr.map(usageEntries(machines, ["p-mk-pc"], NOW), ({ text }) => text)).toEqual([
       "Claude 31%",
     ]);
   });
@@ -220,12 +227,16 @@ describe("a Subscription account across Machines", () => {
     );
     expect(accounts).toHaveLength(1);
     expect(accounts[0]?.newest?.machine).toBe("mk-pc");
-    expect(accounts[0]?.machines.map(({ machine, reading }) => [machine, reading.problem])).toEqual(
-      [
-        ["vm-mk", "Claude Code's login expired"],
-        ["mk-pc", null],
-      ],
-    );
+    expect(
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(accounts[0]), (present_) =>
+          Arr.map(present_.machines, ({ machine, reading }) => [machine, reading.problem]),
+        ),
+      ),
+    ).toEqual([
+      ["vm-mk", "Claude Code's login expired"],
+      ["mk-pc", null],
+    ]);
   });
 
   test("an account read only with problems is a group with no newest reading", () => {
@@ -233,7 +244,9 @@ describe("a Subscription account across Machines", () => {
       [machine("mk-pc", [reading({ windows: [], problem: "Claude Code's login expired" })])],
       ["p-mk-pc"],
     );
-    expect(accounts.map(({ newest, machines }) => [newest, machines.length])).toEqual([[null, 1]]);
+    expect(Arr.map(accounts, ({ newest, machines }) => [newest, machines.length])).toEqual([
+      [null, 1],
+    ]);
   });
 
   test("ordered by Subscription, then by account label with none last", () => {
@@ -248,7 +261,7 @@ describe("a Subscription account across Machines", () => {
       ],
       ["p-mk-pc"],
     );
-    expect(accounts.map(({ subscription, label }) => [subscription, label])).toEqual([
+    expect(Arr.map(accounts, ({ subscription, label }) => [subscription, label])).toEqual([
       ["claude", "a@example.com"],
       ["claude", "z@example.com"],
       ["claude", null],
@@ -280,9 +293,9 @@ describe("the Usage page", () => {
     );
     expect(page.notRead).toEqual([]);
     expect(
-      page.sections.map(({ title, windows, said, machines }) => [
+      Arr.map(page.sections, ({ title, windows, said, machines }) => [
         title,
-        windows.map(({ percent }) => percent),
+        Arr.map(windows, ({ percent }) => percent),
         said,
         machines,
       ]),
@@ -320,7 +333,13 @@ describe("the Usage page", () => {
       NOW,
     );
     expect(page.sections).toHaveLength(1);
-    expect(page.sections[0]?.windows.map(({ percent }) => percent)).toEqual([31]);
+    expect(
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(page.sections[0]), (present__) =>
+          Arr.map(present__.windows, ({ percent }) => percent),
+        ),
+      ),
+    ).toEqual([31]);
     expect(page.sections[0]?.said).toContain("read on vm-mk");
     expect(page.sections[0]?.machines).toEqual([
       { name: "mk-laptop", problem: EXPIRED },
@@ -368,7 +387,7 @@ describe("the Usage page", () => {
       NOW,
     );
     expect(page.sections).toEqual([]);
-    expect(page.notRead.map(({ said }) => said)).toEqual([
+    expect(Arr.map(page.notRead, ({ said }) => said)).toEqual([
       "mk-laptop: can't say; upgrade this Machine",
       "vm-mk · ChatGPT: Codex is not logged in on this Machine; run `codex login`",
     ]);
@@ -390,7 +409,13 @@ describe("the Usage page", () => {
       LAPTOP,
       NOW,
     );
-    expect(page.sections[0]?.windows.map(({ percent, level }) => [percent, level])).toEqual([
+    expect(
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(page.sections[0]), (present___) =>
+          Arr.map(present___.windows, ({ percent, level }) => [percent, level]),
+        ),
+      ),
+    ).toEqual([
       [0, "ok"],
       [100, "out"],
       [95, "warn"],
@@ -408,7 +433,7 @@ describe("the Usage page", () => {
       ["p-mk-laptop"],
       NOW,
     );
-    expect(page.sections.map(({ machines }) => machines)).toEqual([
+    expect(Arr.map(page.sections, ({ machines }) => machines)).toEqual([
       [{ name: "mk-laptop", problem: null }],
     ]);
     expect(page.notRead).toEqual([]);
@@ -422,7 +447,10 @@ test("Desktop asks first at once, then each minute while it is shown", () => {
   expect(usageDue(NOW - 600_000, NOW, false)).toBe(false);
 });
 
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
 const mkPc = { profile: "local", name: "mk-pc" };
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
@@ -452,11 +480,11 @@ describe("the main process asks each Machine's host", () => {
             });
             const read = yield* usageOn(mkPc, door);
             expect(read).toMatchObject({ profile: "local", name: "mk-pc", problem: null });
-            expect(read.readings.map(({ subscription }) => subscription)).toEqual([
+            expect(Arr.map(read.readings, ({ subscription }) => subscription)).toEqual([
               "claude",
               "chatgpt",
             ]);
-            expect(read.readings.every(({ problem }) => problem !== null)).toBe(true);
+            expect(Arr.every(read.readings, ({ problem }) => problem !== null)).toBe(true);
             yield* stopHost(world.state);
           }).pipe(Effect.orDie),
         [],

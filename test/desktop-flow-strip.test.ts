@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { FlowStrip } from "../src/board-model";
 import { cardFlow } from "../desktop/src/shared/flow-strip";
@@ -46,8 +47,8 @@ test("more than ten Run glyphs fold done Steps together without folding the rele
     release: 3,
     current: { title: "Build", said: "Slice 4 of 6" },
   })!;
-  expect(strip.run.map((one) => one.title)).toEqual(["9 done", "Build", "Review", "MR"]);
-  expect(strip.release.map((one) => one.title)).toEqual(["CI", "Merged", "In prod"]);
+  expect(Arr.map(strip.run, (one) => one.title)).toEqual(["9 done", "Build", "Review", "MR"]);
+  expect(Arr.map(strip.release, (one) => one.title)).toEqual(["CI", "Merged", "In prod"]);
   expect(strip.name).toBe("Flow: Build, Slice 4 of 6. 9 of 12 Steps done.");
 });
 

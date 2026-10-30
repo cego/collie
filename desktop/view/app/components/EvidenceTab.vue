@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
 import type { RunDetail, VerificationView } from "../../../../src/board-model";
 import { hasEvidence, sortEvidence } from "../../../src/shared/evidence";
 import { webLinks } from "../../../src/shared/links";
@@ -15,10 +16,10 @@ const links = computed(() => {
   const { outputs, handoffs, review, findings, mr } = props.detail;
   return webLinks({
     texts: [
-      ...outputs.map((output) => output.text),
+      ...Arr.map(outputs, (output) => output.text),
       ...handoffs,
       review._tag === "Text" ? review.text : "",
-      ...findings.map((finding) => finding.detail ?? ""),
+      ...Arr.map(findings, (finding) => finding.detail ?? ""),
     ],
     mr,
   });
@@ -74,8 +75,8 @@ const metrics = computed(() => {
       "Peak context",
       m.peakContext === null ? "—" : `${m.peakContext.tokens} tokens (${m.peakContext.agent})`,
     ],
-    ["Halts", m.halts.join(", ") || "none"],
-    ["Obstacles", m.obstacles.join(", ") || "none"],
+    ["Halts", Arr.join(m.halts, ", ") || "none"],
+    ["Obstacles", Arr.join(m.obstacles, ", ") || "none"],
   ] as const;
 });
 </script>

@@ -3,6 +3,8 @@
 // components, because the launch flow is where a human meets the most questions and it
 // is the worst place to have a second input model.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/solid";
@@ -66,7 +68,7 @@ function Menu(props: { pending: Pending }) {
     if (key.name === "return") return answer();
     if (key.name === "up") return setAt((n) => Math.max(0, n - 1));
     if (key.name === "down") return setAt((n) => Math.min(items().length - 1, n + 1));
-    if (key.name === "backspace") return setQuery((q) => q.slice(0, -1));
+    if (key.name === "backspace") return setQuery((q) => pipe(q, Str.slice(0, -1)));
     // Ctrl-U, which is what clears a line everywhere else a line is typed.
     if (key.ctrl && key.name === "u") return setQuery("");
     if (/^[\x20-\x7e]$/.test(key.sequence)) return setQuery((q) => q + key.sequence);
@@ -118,7 +120,7 @@ function Question(props: { pending: Pending }) {
     if (key.name === "escape") return props.pending.answer(null);
     if (key.ctrl && key.name === "c") return props.pending.answer(null);
     if (key.name === "return") return props.pending.answer(typed());
-    if (key.name === "backspace") return setTyped((value) => value.slice(0, -1));
+    if (key.name === "backspace") return setTyped((value) => pipe(value, Str.slice(0, -1)));
     if (key.ctrl && key.name === "u") return setTyped("");
     if (/^[\x20-\x7e]$/.test(key.sequence)) return setTyped((value) => value + key.sequence);
   });

@@ -1,6 +1,7 @@
 // Desktop's view: a Nuxt SPA generated to static files that Electrobun serves from
 // views://mainview/. Nothing may come from the network at runtime.
 
+import * as Arr from "effect/Array";
 import { iconScan } from "./icon-scan";
 
 export default defineNuxtConfig({
@@ -14,19 +15,22 @@ export default defineNuxtConfig({
       meta: [
         {
           "http-equiv": "Content-Security-Policy",
-          content: [
-            "default-src 'self' views:",
-            "script-src 'self' views: 'unsafe-inline' 'wasm-unsafe-eval'",
-            "style-src 'self' views: 'unsafe-inline'",
-            "img-src 'self' views: data: blob:",
-            "media-src 'self' views: data: blob:",
-            "font-src 'self' views: data:",
-            "connect-src 'self' views: ws://127.0.0.1:*",
-            "frame-src 'self' views:",
-            "worker-src 'self' views: blob:",
-            "object-src 'none'",
-            "base-uri 'none'",
-          ].join("; "),
+          content: Arr.join(
+            [
+              "default-src 'self' views:",
+              "script-src 'self' views: 'unsafe-inline' 'wasm-unsafe-eval'",
+              "style-src 'self' views: 'unsafe-inline'",
+              "img-src 'self' views: data: blob:",
+              "media-src 'self' views: data: blob:",
+              "font-src 'self' views: data:",
+              "connect-src 'self' views: ws://127.0.0.1:*",
+              "frame-src 'self' views:",
+              "worker-src 'self' views: blob:",
+              "object-src 'none'",
+              "base-uri 'none'",
+            ],
+            "; ",
+          ),
         },
       ],
     },

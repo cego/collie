@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { parseDocument, parseYaml, setFrontmatterKey, YamlError } from "../src/yaml";
 
@@ -165,8 +168,8 @@ test("frontmatter that sets no keys is an empty mapping", () => {
 test("a `---` inside a block scalar does not end the frontmatter", () => {
   const doc = `---\nname: plan\ndescription: |\n  a heading\n  ---\n  more text\nforked_from_hash: OLD\n---\n\nbody\n`;
   const written = setFrontmatterKey(doc, "forked_from_hash", "NEW");
-  expect(written.split("\n").filter((line) => line.startsWith("forked_from_hash"))).toEqual([
-    "forked_from_hash: NEW",
-  ]);
+  expect(
+    Arr.filter(Str.split(written, "\n"), (line) => pipe(line, Str.startsWith("forked_from_hash"))),
+  ).toEqual(["forked_from_hash: NEW"]);
   expect(parseDocument(written).data.forked_from_hash).toBe("NEW");
 });

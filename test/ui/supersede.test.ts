@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 // The bridge's own behaviour, with no renderer to own: a newer focus interrupts the read
 // in flight, and a slow command never stalls the next keypress. Both were real holes —
 // holding a cursor key queued one full read per press and ran every one of them, and a
@@ -64,7 +65,7 @@ const until = Effect.fn("supersede.until")(function* (what: string, ready: () =>
     if (ready()) return;
     yield* Effect.sleep("5 millis");
   }
-  return yield* Effect.fail(new Error(`${what} never happened`));
+  return yield* new Cause.TimeoutError(`${what} never happened`);
 });
 
 test("a newer focus interrupts the read in flight, and the newer one lands", () =>
@@ -185,7 +186,10 @@ test("a command that fails leaves its reason in the footer", () =>
           origin: "w1",
           stateDir: rig.stateDir,
           load: (focus: Focus) => Effect.succeed(stateFor(focus.selected)),
-          act: () => Effect.fail(new Error("glab could not reach gitlab.example.com")),
+          act: () =>
+            Effect.fail(
+              new Cause.UnknownError(undefined, "glab could not reach gitlab.example.com"),
+            ),
         });
 
         driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });

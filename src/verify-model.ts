@@ -37,7 +37,7 @@ export const VerificationSchema = Schema.Struct({
   start: SnapshotSchema,
   end: SnapshotSchema,
   exit: Schema.Int,
-  seconds: Schema.Number,
+  seconds: Schema.Finite,
   tail: Schema.Struct({ stdout: Schema.String, stderr: Schema.String }),
   /**
    * What a pass looks like for this command. `fail` is how a bug is proved to exist: a
@@ -76,13 +76,11 @@ export const VerificationSchema = Schema.Struct({
 });
 export type Verification = typeof VerificationSchema.Type;
 export const VerifyEvent = Schema.Union([
-  Schema.Struct({
-    _tag: Schema.Literal("Output"),
+  Schema.TaggedStruct("Output", {
     stream: Schema.Literals(["stdout", "stderr"]),
     text: Schema.String,
   }),
-  Schema.Struct({
-    _tag: Schema.Literal("Result"),
+  Schema.TaggedStruct("Result", {
     verification: VerificationSchema,
     /** False where an earlier pass answered and nothing ran. */
     ran: Schema.optionalKey(Schema.Boolean),

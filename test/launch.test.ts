@@ -1,9 +1,11 @@
 // The Launch flow as a human drives it (ADR-0033): which Workflow, then one question, then
 // — only where something was inferred — one row saying where it starts and what it took.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Schema, Scope } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { writeConfigValue } from "../src/config";
 import { currentEnv, type PluginEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
@@ -37,7 +39,9 @@ const answering = (script: ReadonlyArray<string>) => {
       asked.push(options.header);
       rows.push(...items);
       const wanted = answers.shift();
-      return Effect.succeed(items.find((item) => item.id === wanted) ?? null);
+      return Effect.succeed(
+        Option.getOrUndefined(Arr.findFirst(items, (item) => item.id === wanted)) ?? null,
+      );
     },
     ask: (question) => {
       asked.push(question);
@@ -49,7 +53,7 @@ const answering = (script: ReadonlyArray<string>) => {
 
 const launching = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) => proves(prefix, (world) => body(world).pipe(Effect.ensuring(stopHost(world.state))), MODULES);
 
 /** `glab` answering with this branch's open merge request, for the flow's own inference. */
@@ -292,7 +296,7 @@ const withRouter = <A, E, R>(
     const answer =
       route === null
         ? "exit 1"
-        : `printf '%s' '${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ type: "result", structured_output: route })}'`;
+        : `printf '%s' '${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({ type: "result", structured_output: route }).pipe(Effect.orDie)}'`;
     yield* fs.makeDirectory(bin, { recursive: true });
     yield* fs.writeFileString(
       `${bin}/claude`,
@@ -385,7 +389,7 @@ test(
             const budget = yield* readBudget(
               yield* budgetPath(world.state, yield* herdOf(home.socketPath)),
             );
-            const reserved = budget.filter((line) => line.kind === "reserve");
+            const reserved = Arr.filter(budget, (line) => line.kind === "reserve");
             expect(reserved).toHaveLength(2);
             for (const line of reserved)
               expect(line).toMatchObject({ model: "haiku", effort: "low" });

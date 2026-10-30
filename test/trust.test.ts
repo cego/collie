@@ -1,10 +1,13 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { runEffect } from "./support/effect";
 import { claudeTrust } from "../src/trust";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "../src/yaml";
 
-const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
 
 interface TrustRig {
   root: string;
@@ -44,14 +47,18 @@ const claudeConfig = Effect.fn("test.claudeConfig")(function* (projects: ClaudeP
   const path = join(rig.root, ".claude.json");
   yield* fs.writeFileString(
     path,
-    Schema.encodeSync(ClaudeConfigJson)({ installMethod: "native", numStartups: 12, projects }),
+    yield* Schema.encodeEffect(ClaudeConfigJson)({
+      installMethod: "native",
+      numStartups: 12,
+      projects,
+    }).pipe(Effect.orDie),
   );
   return path;
 });
 
 const readConfig = Effect.fn("test.readConfig")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
-  return yield* Schema.decodeUnknownEffect(ClaudeConfigJson)(yield* fs.readFileString(path));
+  return yield* Schema.decodeEffect(ClaudeConfigJson)(yield* fs.readFileString(path));
 });
 
 function project(config: YamlMap, path: string): YamlMap {
@@ -226,7 +233,8 @@ test("a config claude keeps rewriting is left alone rather than overwritten", ()
         readFileString: (file, encoding) =>
           file === path
             ? Effect.sync(
-                () => `${Schema.encodeSync(ClaudeConfigJson)({ projects: {}, n: n++ })}\n`,
+                () =>
+                  `${flow(Schema.encodeResult(ClaudeConfigJson), Result.getOrThrow)({ projects: {}, n: n++ })}\n`,
               )
             : fs.readFileString(file, encoding),
       });

@@ -1,3 +1,5 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { runDir } from "./engine";
 import { IntentSchema } from "./intent";
@@ -24,7 +26,7 @@ export const DoneCheck = Schema.Struct({
   pass: Schema.String,
   round: Schema.NullOr(Schema.Int),
   result: Schema.String,
-  seconds: Schema.Number,
+  seconds: Schema.Finite,
   revision: Schema.String,
   at: Schema.String,
   log: Schema.NullOr(Schema.String),
@@ -34,8 +36,8 @@ export const RunChecks = Schema.Struct({
   done: Schema.Array(DoneCheck),
 });
 export const CheckEvent = Schema.Union([
-  Schema.Struct({ _tag: Schema.Literal("Output"), text: Schema.String }),
-  Schema.Struct({ _tag: Schema.Literal("Ended"), check: Schema.NullOr(VerificationSchema) }),
+  Schema.TaggedStruct("Output", { text: Schema.String }),
+  Schema.TaggedStruct("Ended", { check: Schema.NullOr(VerificationSchema) }),
 ]);
 
 export const outputsOf = Effect.fn("RunRecord.outputs")(function* (state: string, run: string) {
@@ -54,13 +56,13 @@ export const outputsOf = Effect.fn("RunRecord.outputs")(function* (state: string
         if (
           real === "" ||
           relative === ".." ||
-          relative.startsWith(`..${path.sep}`) ||
+          pipe_(relative, Str.startsWith(`..${path.sep}`)) ||
           path.isAbsolute(relative)
         )
           continue;
         const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
         if (info?.type === "Directory") yield* walk(file, depth + 1);
-        else if (info !== null && name.endsWith(".json")) files.push(file);
+        else if (info !== null && pipe_(name, Str.endsWith(".json"))) files.push(file);
       }
     });
   yield* walk(dir, 0);

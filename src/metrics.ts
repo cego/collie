@@ -11,6 +11,9 @@
 // limit. The one judgement it makes is `repeatedFailure`, and what that produces is a
 // sentence for a human and for the next prompt, never a halt.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import type { Metrics } from "./board-model";
@@ -30,7 +33,7 @@ export const MetricSchema = Schema.Struct({
   /** What it is about: an agent, a step, a verification name, a ticket. */
   subject: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
   /** The number that matters for this kind: tokens, an exit code, an iteration, a count. */
-  value: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
+  value: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
   /** The word that matters: a result, a status, a reason. */
   note: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
 });
@@ -80,7 +83,7 @@ export const noteContext = (runDir: string, at: string, agent: string, tokens: n
 export const readMetrics = Effect.fn("Metrics.read")(function* (runDir: string) {
   const none: Metric[] = [];
   return yield* readJournal(yield* metricsPath(runDir), MetricJson).pipe(
-    Effect.catch(() => Effect.succeed(none)),
+    Effect.orElseSucceed(() => none),
   );
 });
 
@@ -117,11 +120,11 @@ export function repeatedFailure(
   for (const [name, all] of byName) {
     const last = all.slice(-n);
     if (last.length < n) continue;
-    if (!last.every((record) => record.result === "fail")) continue;
+    if (!Arr.every(last, (record) => record.result === "fail")) continue;
     const first = last[0]!;
-    if (!last.every((record) => record.exit === first.exit)) continue;
+    if (!Arr.every(last, (record) => record.exit === first.exit)) continue;
     const line = lastLine(first.tail.stderr);
-    if (!last.every((record) => lastLine(record.tail.stderr) === line)) continue;
+    if (!Arr.every(last, (record) => lastLine(record.tail.stderr) === line)) continue;
     return { name, times: n, exit: first.exit, line };
   }
   return null;
@@ -129,10 +132,10 @@ export function repeatedFailure(
 
 /** The last line that says anything, which is what a failure is usually recognised by. */
 function lastLine(text: string): string {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
+  const lines = Arr.filter(
+    Arr.map(Str.split(text, "\n"), (line) => Str.trim(line)),
+    (line) => line !== "",
+  );
   return lines[lines.length - 1] ?? "";
 }
 
@@ -152,7 +155,7 @@ export function obstacleOf(found: {
 
 export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metrics {
   const created = epochMs(createdAt);
-  const first = lines.find((line) => line.kind === "verification");
+  const first = Option.getOrUndefined(Arr.findFirst(lines, (line) => line.kind === "verification"));
   const verifications = { pass: 0, fail: 0, unstable: 0, byCollie: 0 };
   const slices = { done: 0, total: 0 };
   let rework = 0;

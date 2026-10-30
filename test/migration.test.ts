@@ -6,6 +6,8 @@
 // release. `migrate-down` is the same tree read by the release before this one — the
 // rollback — which has to find its Home and its records exactly as it left them.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { append, conversationPath, read as readConversation } from "../src/conversation";
@@ -88,7 +90,7 @@ function fake(initial: { workspaces: WorkspaceInfo[]; panes: PaneInfo[] }) {
     markWorkspace: () => Effect.void,
     markPane: (paneId, tokens) =>
       Effect.sync(() => {
-        calls.push(`markPane ${paneId} ${Object.keys(tokens).sort().join(",")}`);
+        calls.push(`markPane ${paneId} ${Arr.join(Rec.keys(tokens).sort(), ",")}`);
       }),
     closePane: (paneId) =>
       Effect.sync(() => {
@@ -151,7 +153,7 @@ test("migrate-up: an existing Home gains native chat and loses nothing", () =>
       // The archive is untouched, byte for byte, and so is everything beside it.
       expect(yield* fs.readFileString(journal)).toBe(before);
       expect(yield* fs.readFileString(proposals)).toBe('{"kind":"proposal","id":"p-1"}\n');
-      expect((yield* readConversation(journal)).map((turn) => turn.role)).toEqual([
+      expect(Arr.map(yield* readConversation(journal), (turn) => turn.role)).toEqual([
         "human",
         "collie",
       ]);
@@ -195,18 +197,20 @@ test("migrate-down: the release before this one reads the same tree", () =>
 
       // The old decoder still reads it: the two keys this release added are ones it
       // ignores, so a rollback finds its Home rather than an ownership question.
-      const old = Schema.decodeUnknownOption(OldRecord)(yield* fs.readFileString(file));
+      const old = Schema.decodeOption(OldRecord)(yield* fs.readFileString(file));
       expect(old._tag).toBe("Some");
       if (old._tag === "Some")
         expect(old.value).toMatchObject({ workspaceId: "w1", paneId: "1-1", state: "ready" });
 
       // And the conversation the old board draws is still there to draw.
-      expect((yield* readConversation(journal)).map((turn) => turn.text)).toEqual([
+      expect(Arr.map(yield* readConversation(journal), (turn) => turn.text)).toEqual([
         "how is the flock?",
       ]);
 
       // The chat pane the rollback cannot use is marked as its own thing, so it can be
       // found and closed rather than mistaken for the board's.
-      expect(h.calls).toContain(`markPane 1-2 ${[CHAT_PANE_TOKEN, HOME_TOKEN].sort().join(",")}`);
+      expect(h.calls).toContain(
+        `markPane 1-2 ${Arr.join([CHAT_PANE_TOKEN, HOME_TOKEN].sort(), ",")}`,
+      );
     }),
   ));

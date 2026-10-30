@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
 import type { PlanPanel } from "../../../../src/board-model";
 import { planProgress, type SpecHeading, specHeadings } from "../../../src/shared/plan-view";
 import { locationOf, type PlanAnchor, planAnchor } from "../../../src/shared/review-comments";
@@ -12,7 +14,7 @@ const ticketFile = (file: string) => `issues/${file}`;
 
 /** Each ticket's stamp by its path in the plan; none for a plan file that is not a ticket. */
 const stamps = computed(
-  () => new Map(props.plan.tickets.map((ticket) => [ticketFile(ticket.file), ticket.stamp])),
+  () => new Map(Arr.map(props.plan.tickets, (ticket) => [ticketFile(ticket.file), ticket.stamp])),
 );
 
 /** Each plan file asked for, by its path in the plan; null while it is first read. */
@@ -33,10 +35,16 @@ const load = (file: string) => {
 /** The plan file a link opened, shown above the plan until it is closed. */
 const opened = ref<string | null>(null);
 const openedBox = ref<HTMLElement | null>(null);
-provide("openPlanFile", async (file: string) => {
-  opened.value = file;
-  await nextTick();
-  openedBox.value?.scrollIntoView({ block: "start" });
+provide("openPlanFile", (file: string) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      opened.value = file;
+      yield* Effect.promise(() => Promise.resolve(nextTick()));
+      openedBox.value?.scrollIntoView({
+        block: "start",
+      });
+    }),
+  );
 });
 const wholeSpec = useWhole(
   () => props,
@@ -54,16 +62,20 @@ const spec = computed<PlanText>(() =>
 const headings = shallowRef<ReadonlyArray<SpecHeading>>([]);
 watch(
   () => ("text" in spec.value ? spec.value.text : ""),
-  async (text, _, onCleanup) => {
-    let stale = false;
-    onCleanup(() => (stale = true));
-    const found = await specHeadings(text);
-    if (!stale) headings.value = found;
+  (text, _, onCleanup) => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        let stale = false;
+        onCleanup(() => (stale = true));
+        const found = yield* Effect.promise(() => Promise.resolve(specHeadings(text)));
+        if (!stale) headings.value = found;
+      }),
+    );
   },
   { immediate: true },
 );
 const contents = computed(() =>
-  headings.value.length < 2 ? [] : headings.value.filter(({ level }) => level <= 3),
+  headings.value.length < 2 ? [] : Arr.filter(headings.value, ({ level }) => level <= 3),
 );
 const scroller = inject<Ref<HTMLElement | null>>("recordScroller", ref(null));
 const specBox = ref<HTMLElement | null>(null);
@@ -76,7 +88,7 @@ const jump = (position: number) => {
 
 const progress = computed(() => planProgress(props.plan.tickets));
 const tickets = computed(() =>
-  props.plan.tickets.map((ticket) => ({
+  Arr.map(props.plan.tickets, (ticket) => ({
     label: ticket.title,
     value: ticket.file,
     icon: ticket.done ? "i-lucide-circle-check" : "i-lucide-circle",
@@ -84,7 +96,7 @@ const tickets = computed(() =>
 );
 const expanded = ref<string[]>([]);
 watch([expanded, opened, stamps], () => {
-  expanded.value.forEach((file) => load(ticketFile(file)));
+  Arr.forEach(expanded.value, (file) => load(ticketFile(file)));
   if (opened.value !== null && opened.value !== SPEC) load(opened.value);
 });
 
@@ -162,7 +174,7 @@ const comment = (text: string) => {
         variant="ghost"
         label="Expand all"
         data-testid="expand-tickets"
-        @click="expanded = tickets.map(({ value }) => value)"
+        @click="expanded = Arr.map(tickets, ({ value }) => value)"
       />
       <UButton
         size="xs"

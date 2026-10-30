@@ -1,5 +1,9 @@
 // The Diff tab's logic: the tree of changed files and which file is being read.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
 import type { DiffFile } from "../../../src/board-model";
 
 export type DiffTreeNode =
@@ -35,17 +39,19 @@ interface Building {
 
 /** Every folder key above a file, outermost first. */
 export const foldersOn = (path: string): ReadonlyArray<string> => {
-  const parts = path.split("/").slice(0, -1);
-  return parts.map((_, at) => `${parts.slice(0, at + 1).join("/")}/`);
+  const parts = Str.split(path, "/").slice(0, -1);
+  return Arr.map(parts, (_, at) => `${Arr.join(parts.slice(0, at + 1), "/")}/`);
 };
 
 export const diffTree = (changed: ReadonlyArray<DiffFile>): DiffTree => {
   const root: Array<DiffTreeNode> = [];
   for (const file of changed) {
-    const parts = file.path.split("/");
+    const parts = Str.split(file.path, "/");
     let level = root;
-    foldersOn(file.path).forEach((key, at) => {
-      let folder = level.find((node): node is Building => node.key === key);
+    Arr.forEach(foldersOn(file.path), (key, at) => {
+      let folder = Option.getOrUndefined(
+        Arr.findFirst(level, (node): node is Building => node.key === key),
+      );
       if (folder === undefined) {
         folder = { kind: "folder", key, label: parts[at]!, children: [] };
         level.push(folder);
@@ -56,14 +62,16 @@ export const diffTree = (changed: ReadonlyArray<DiffFile>): DiffTree => {
   }
   const tree = merged(root);
   const filesOf = (nodes: ReadonlyArray<DiffTreeNode>): ReadonlyArray<DiffFile> =>
-    nodes.flatMap((node) => (node.kind === "file" ? [node.file] : filesOf(node.children)));
+    Arr.flatMap(nodes, (node) => (node.kind === "file" ? [node.file] : filesOf(node.children)));
   const foldersOf = (nodes: ReadonlyArray<DiffTreeNode>): ReadonlyArray<string> =>
-    nodes.flatMap((node) => (node.kind === "file" ? [] : [node.key, ...foldersOf(node.children)]));
+    Arr.flatMap(nodes, (node) =>
+      node.kind === "file" ? [] : [node.key, ...foldersOf(node.children)],
+    );
   return { tree, files: filesOf(tree), folders: foldersOf(tree) };
 };
 
 const merged = (nodes: ReadonlyArray<DiffTreeNode>): ReadonlyArray<DiffTreeNode> =>
-  nodes.map((node) => {
+  Arr.map(nodes, (node) => {
     if (node.kind === "file") return node;
     const children = merged(node.children);
     const [only] = children;
@@ -89,7 +97,7 @@ export interface Folders {
 
 /** Every folder the filter leaves while it is in effect; else all but those the human closed. */
 export const openFolders = ({ all, listed, closed, filtering }: Folders): ReadonlyArray<string> =>
-  filtering ? listed : all.filter((folder) => !closed.has(folder));
+  filtering ? listed : Arr.filter(all, (folder) => !closed.has(folder));
 
 /** The folders the human has closed once the tree says which are open; none close while filtering. */
 export const closedFolders = (
@@ -98,12 +106,12 @@ export const closedFolders = (
 ): ReadonlySet<string> =>
   folders.filtering
     ? folders.closed
-    : new Set(folders.all.filter((folder) => !open.includes(folder)));
+    : new Set(Arr.filter(folders.all, (folder) => !open.includes(folder)));
 
 /** A row's click selects nothing itself, so the active file stays the only selection. */
 export const fileSelected = (event: { preventDefault(): void }, key: string): string | null => {
   event.preventDefault();
-  return key.endsWith("/") ? null : key;
+  return pipe(key, Str.endsWith("/")) ? null : key;
 };
 
 export interface RowFacts {
@@ -116,7 +124,7 @@ export interface RowFacts {
 export const rowFacts = (file: DiffFile, drafts: ReadonlyArray<string>): RowFacts => ({
   status: file.status,
   lines: file.added === null ? "binary" : { added: file.added, removed: file.removed ?? 0 },
-  drafts: drafts.filter((path) => path === file.path).length,
+  drafts: Arr.filter(drafts, (path) => path === file.path).length,
 });
 
 /** The tree's row geometry in px; the view draws from these. */
@@ -157,14 +165,19 @@ const countsWidth = (lines: RowFacts["lines"]) =>
     : (1 + digits(lines.added) + 1 + digits(lines.removed)) * FACTS.char + FACTS.gap;
 
 const factsWidth = ({ facts, viewed }: FileRow, counts: boolean) =>
-  [
-    FACTS.mark,
-    viewed ? FACTS.tick : 0,
-    facts.drafts > 0 ? FACTS.draftIcon + digits(facts.drafts) * FACTS.char : 0,
-    counts ? countsWidth(facts.lines) : 0,
-  ]
-    .filter((width) => width > 0)
-    .reduce((sum, width, at) => sum + width + (at === 0 ? 0 : FACTS.gap), 0);
+  Arr.reduce(
+    Arr.filter(
+      [
+        FACTS.mark,
+        viewed ? FACTS.tick : 0,
+        facts.drafts > 0 ? FACTS.draftIcon + digits(facts.drafts) * FACTS.char : 0,
+        counts ? countsWidth(facts.lines) : 0,
+      ],
+      (width) => width > 0,
+    ),
+    0,
+    (sum, width, at) => sum + width + (at === 0 ? 0 : FACTS.gap),
+  );
 
 export interface FileRow {
   readonly facts: RowFacts;
@@ -206,11 +219,12 @@ export const filterTree = (
   tree: ReadonlyArray<DiffTreeNode>,
   text: string,
 ): ReadonlyArray<DiffTreeNode> => {
-  const wanted = text.trim().toLowerCase();
+  const wanted = Str.toLowerCase(Str.trim(text));
   if (wanted === "") return tree;
   const kept = (nodes: ReadonlyArray<DiffTreeNode>): ReadonlyArray<DiffTreeNode> =>
-    nodes.flatMap((node): ReadonlyArray<DiffTreeNode> => {
-      if (node.kind === "file") return node.key.toLowerCase().includes(wanted) ? [node] : [];
+    Arr.flatMap(nodes, (node): ReadonlyArray<DiffTreeNode> => {
+      if (node.kind === "file")
+        return pipe(Str.toLowerCase(node.key), Str.includes(wanted)) ? [node] : [];
       const children = kept(node.children);
       return children.length === 0 ? [] : [{ ...node, children }];
     });
@@ -255,7 +269,7 @@ export const viewedFiles = (
   base: string,
 ): ReadonlySet<string> =>
   new Set(
-    files.flatMap((file) => (stillTrue(ticks.get(file.path), file, base) ? [file.path] : [])),
+    Arr.flatMap(files, (file) => (stillTrue(ticks.get(file.path), file, base) ? [file.path] : [])),
   );
 
 /** The ticks the diff now shown still bears out; the rest are gone even if it changes back. */
@@ -265,7 +279,7 @@ export const ticksStillTrue = (
   base: string,
 ): ViewedTicks =>
   new Map(
-    files.flatMap((file) => {
+    Arr.flatMap(files, (file) => {
       const seen = ticks.get(file.path);
       return seen !== undefined && stillTrue(seen, file, base) ? [[file.path, seen] as const] : [];
     }),
@@ -288,7 +302,7 @@ export const fileOpen = (file: DiffFile, choices: ReadonlyMap<string, boolean>):
 export const choiceForEvery = (
   files: ReadonlyArray<DiffFile>,
   open: boolean,
-): ReadonlyMap<string, boolean> => new Map(files.map(({ path }) => [path, open]));
+): ReadonlyMap<string, boolean> => new Map(Arr.map(files, ({ path }) => [path, open]));
 
 /** The file one step from the active one in drawn order; the first while none is active. */
 export const fileBeside = (
@@ -296,7 +310,10 @@ export const fileBeside = (
   active: string | null,
   step: 1 | -1,
 ): string | null => {
-  const at = files.findIndex(({ path }) => path === active);
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(files, ({ path }) => path === active),
+    () => -1,
+  );
   return (at === -1 ? files[0] : files[at + step])?.path ?? null;
 };
 
@@ -323,10 +340,12 @@ export interface Reading {
 }
 
 export const activeFile = ({ sections, readingLine, atEnd, held }: Reading): string | null => {
-  if (sections.some(({ path }) => path === held)) return held;
+  if (Arr.some(sections, ({ path }) => path === held)) return held;
   if (atEnd) return sections.at(-1)?.path ?? null;
-  const spanning = sections.find(({ top, bottom }) => top <= readingLine && readingLine < bottom);
-  const above = sections.findLast(({ top }) => top <= readingLine);
+  const spanning = Option.getOrUndefined(
+    Arr.findFirst(sections, ({ top, bottom }) => top <= readingLine && readingLine < bottom),
+  );
+  const above = Option.getOrUndefined(Arr.findLast(sections, ({ top }) => top <= readingLine));
   return (spanning ?? above ?? sections[0])?.path ?? null;
 };
 

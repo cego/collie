@@ -2,9 +2,14 @@
 // installation runs: the Dispatcher, the ledger and the receipt a running Run gets, and a
 // status nothing rewrites.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Config, Crypto, Effect, FileSystem, Option, Schema, type Scope } from "effect";
+import type { PlatformServices } from "../src/platform";
+import { Config, Effect, FileSystem, Option, Schema, type Scope, flow, Result } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
 import { readEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
@@ -23,7 +28,7 @@ import { root, stopHost, until } from "./support/host";
 import { hosted, hostedRun } from "./support/hosted";
 import { collie, proves, type World } from "./support/world";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const FakeState = Schema.fromJsonString(
   Schema.Struct({
     agents: Schema.Array(Schema.Struct({ name: Schema.String, pane_id: Schema.String })),
@@ -48,7 +53,7 @@ const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
     COLLIE_CWD: world.project,
   });
   const client = yield* connect(world.state).pipe(Effect.orDie);
-  const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const started = yield* client
     .start({ project: world.project, id: workflow, request, input: { work: "the picker" } })
     .pipe(Effect.orDie);
@@ -59,9 +64,9 @@ const finishedWithAgent = Effect.fn("test.finishedWithAgent")(function* (
   );
   expect(view?.status).toMatchObject({ status });
   const fs = yield* FileSystem.FileSystem;
-  const herdr = Schema.decodeUnknownSync(FakeState)(
+  const herdr = yield* Schema.decodeEffect(FakeState)(
     yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
-  );
+  ).pipe(Effect.orDie);
   const agent = herdr.agents[0]!;
   return { env, client, runId: started.runId, agent };
 });
@@ -121,7 +126,8 @@ test(
           const [done] = yield* carryOutAsked(env, [action], request);
           expect(done).toMatchObject({ state: "applied" });
           expect(done?.note).toContain("Queued durably");
-          const records = (yield* readAudit(runDir(world.state, runId))).filter(
+          const records = Arr.filter(
+            yield* readAudit(runDir(world.state, runId)),
             (line) => line.operation === "deliver",
           );
           expect(records.at(-1)?.result).toMatchObject({ delivered: false, queued: true });
@@ -130,19 +136,24 @@ test(
           const deliveries = yield* until(
             () => client.deliveries({ runId }).pipe(Effect.orDie),
             (lines) =>
-              (lines ?? []).some(
+              Arr.some(
+                lines ?? [],
                 (one) => one.cause.kind === "steer" && one.state === "acknowledged",
               ),
           );
-          expect(deliveries?.filter((one) => one.cause.kind === "steer")).toHaveLength(1);
-          const calls = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie))
-            .split("\n")
-            .filter(Boolean)
-            .map((line) => Schema.decodeUnknownSync(CallLine)(line));
+          expect(Arr.filter(deliveries ?? [], (one) => one.cause.kind === "steer")).toHaveLength(1);
+          const calls = yield* Effect.forEach(
+            Arr.filter(
+              Str.split(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie), "\n"),
+              Boolean,
+            ),
+            (line) => Schema.decodeEffect(CallLine)(line).pipe(Effect.orDie),
+          );
           const said =
-            calls
-              .filter((call) => call.cmd === "agent prompt" && call.argv[2] === agent.name)
-              .at(-1)?.argv[3] ?? "";
+            Arr.filter(
+              calls,
+              (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
+            ).at(-1)?.argv[3] ?? "";
           expect(said).toContain("From the human, in Desktop");
           const kept = /Their message is in (\S+)\./.exec(said)?.[1];
           const words =
@@ -151,7 +162,11 @@ test(
           expect(words).toContain("Attached:");
           expect(words).toContain("comment.txt");
           const view = yield* client.run({ runId }).pipe(Effect.orDie);
-          expect(view?.waiting.find((one) => one.name === "next-choice")).toMatchObject({
+          expect(
+            Option.getOrUndefined(
+              Arr.findFirst(view?.waiting ?? [], (one) => one.name === "next-choice"),
+            ),
+          ).toMatchObject({
             answer: null,
           });
           expect(view?.status.status).toBe("suspended");
@@ -167,7 +182,7 @@ const chat = () => ({ origin: "chat" as const, requestId: `req-chat-${++asked}` 
 /** A world whose fake agent answers its one prompt with an Output, and is then left alive. */
 const steerable = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   /** What the fake agent answers its prompts with; none leaves it working for good. */
   answers: ReadonlyArray<{ readonly verdict: string }> = [{ verdict: "built" }],
   modules: ReadonlyArray<string> = ["told.workflow.ts"],
@@ -188,13 +203,15 @@ const steerable = <A, E>(
         };
         yield* Effect.acquireRelease(
           Effect.sync(() => {
-            const before = Object.fromEntries(Object.keys(set).map((key) => [key, Bun.env[key]]));
+            const before = Rec.fromEntries(
+              Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const),
+            );
             Object.assign(Bun.env, set);
             return before;
           }),
           (before) =>
             Effect.sync(() => {
-              for (const [key, value] of Object.entries(before))
+              for (const [key, value] of Rec.toEntries(before))
                 if (value === undefined) delete Bun.env[key];
                 else Bun.env[key] = value;
             }),
@@ -214,7 +231,9 @@ test(
         // Cleared here rather than by the host, so it has to reach this world's herdr.
         const env = { ...finished.env, binPath: Bun.env.HERDR_BIN_PATH! };
         const live = yield* new Herdr(env).agentList().pipe(Effect.orDie);
-        const terminal = live.find((one) => one.name === agent.name)!.terminalId!;
+        const terminal = Option.getOrUndefined(
+          Arr.findFirst(live, (one) => one.name === agent.name),
+        )!.terminalId!;
         const ledger = yield* ledgerPath(world.state, terminal);
         yield* appendLine(ledger, {
           kind: "manual_override",
@@ -249,20 +268,36 @@ test(
         const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "merge it")], chat());
         expect(done).toMatchObject({ kind: "deliver", state: "applied" });
 
-        const steered = (yield* deliveriesOf(world.state, runId)).filter(
+        const steered = Arr.filter(
+          yield* deliveriesOf(world.state, runId),
           (one) => one.delivery.cause.kind === "steer",
         );
         expect(steered).toHaveLength(1);
         const fs = yield* FileSystem.FileSystem;
-        const prompts = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie))
-          .split("\n")
-          .filter((line) => line !== "")
-          .map((line) => Schema.decodeUnknownSync(CallLine)(line))
-          .filter((call) => call.cmd === "agent prompt" && call.argv[2] === agent.name);
-        expect(prompts.at(-1)?.argv.join(" ")).toContain(
-          `${DELIVERY_TOKEN}${steered[0]!.delivery.id}`,
+        const prompts = Arr.filter(
+          Arr.map(
+            Arr.filter(
+              Str.split(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie), "\n"),
+              (line) => line !== "",
+            ),
+            (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
+          ),
+          (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
         );
-        expect(prompts.at(-1)?.argv.join(" ")).toContain("merge it");
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(prompts.at(-1)), (present) =>
+              Arr.join(present.argv, " "),
+            ),
+          ),
+        ).toContain(`${DELIVERY_TOKEN}${steered[0]!.delivery.id}`);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(prompts.at(-1)), (present_) =>
+              Arr.join(present_.argv, " "),
+            ),
+          ),
+        ).toContain("merge it");
       }),
     ),
   120_000,
@@ -278,12 +313,13 @@ test(
         const typed = Effect.map(
           fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
           (log) =>
-            log
-              .split("\n")
-              .filter((line) => line !== "")
-              .map((line) => Schema.decodeUnknownSync(CallLine)(line))
-              .filter((call) => call.cmd === "agent prompt" && call.argv[2] === agent.name)
-              .at(-1)?.argv[3] ?? "",
+            Arr.filter(
+              Arr.map(
+                Arr.filter(Str.split(log, "\n"), (line) => line !== ""),
+                (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
+              ),
+              (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
+            ).at(-1)?.argv[3] ?? "",
         );
         const steer = (
           text: string,
@@ -296,10 +332,10 @@ test(
             if (attachments !== undefined) action.attachments = attachments;
             const [done] = yield* carryOutAsked(env, [action], actor);
             expect(done).toMatchObject({ kind: "deliver", state: "applied" });
-            const lines = (yield* typed).split("\n");
+            const lines = Str.split(yield* typed, "\n");
             expect(lines[0]).toStartWith(`${DELIVERY_TOKEN}${runId}-${actor.requestId}`);
             expect(lines.length).toBeLessThanOrEqual(3);
-            expect(Array.from(lines.join("\n")).length).toBeLessThanOrEqual(700);
+            expect(Array.from(Arr.join(lines, "\n")).length).toBeLessThanOrEqual(700);
             const file =
               /^Their message is in (\S+)\. Read it whole and act on it as theirs\.$/.exec(
                 lines[2] ?? "",
@@ -324,17 +360,17 @@ test(
         expect(twoLines.note).toContain(AUTO_MODE);
 
         const room = 700 - plain.lines[0]!.length - plain.lines[1]!.length - 2;
-        const fills = yield* steer("y".repeat(room), board(3));
+        const fills = yield* steer(Str.repeat(room)("y"), board(3));
         expect(fills.kept).toBeNull();
-        const over = yield* steer("z".repeat(room + 1), board(4));
-        expect(over.kept).toBe("z".repeat(room + 1));
+        const over = yield* steer(Str.repeat(room + 1)("z"), board(4));
+        expect(over.kept).toBe(Str.repeat(room + 1)("z"));
 
         const shot = `${world.project}/shot.png`;
         yield* fs.writeFileString(shot, "png").pipe(Effect.orDie);
         const attached = yield* steer("look at this", board(5), [shot]);
         expect(attached.kept).toMatch(/^look at this\nAttached: \S+shot\.png$/);
 
-        const longSaid = "s".repeat(900);
+        const longSaid = pipe_("s", Str.repeat(900));
         for (const [n, said] of [longSaid, "first line\nsecond line"].entries()) {
           const chatted = yield* steer("merge it", {
             origin: "chat",
@@ -348,11 +384,11 @@ test(
 
         const desktop = yield* steer("merge it", { origin: "desktop", requestId: "desktop-1" });
         expect(desktop.lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
-        const desktopLong = yield* steer(`${"é".repeat(5_000)}\n  kept as typed  `, {
+        const desktopLong = yield* steer(`${pipe_("é", Str.repeat(5_000))}\n  kept as typed  `, {
           origin: "desktop",
           requestId: "desktop-2",
         });
-        expect(desktopLong.kept).toBe(`${"é".repeat(5_000)}\n  kept as typed  `);
+        expect(desktopLong.kept).toBe(`${pipe_("é", Str.repeat(5_000))}\n  kept as typed  `);
         expect(desktopLong.lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
       }),
     ),
@@ -407,17 +443,22 @@ test(
         yield* act(reached, "desktop-comments-1", comment).pipe(Effect.orDie);
         yield* act(reached, "desktop-comments-1", comment).pipe(Effect.orDie);
 
-        const steered = (yield* deliveriesOf(world.state, runId)).filter(
+        const steered = Arr.filter(
+          yield* deliveriesOf(world.state, runId),
           (one) => one.delivery.cause.kind === "steer",
         );
         expect(steered).toHaveLength(1);
-        const typed = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie))
-          .split("\n")
-          .filter((line) => line !== "")
-          .map((line) => Schema.decodeUnknownSync(CallLine)(line))
-          .filter((call) => call.cmd === "agent prompt" && call.argv[2] === agent.name)
-          .at(-1)?.argv[3];
-        const lines = (typed ?? "").split("\n");
+        const typed = Arr.filter(
+          Arr.map(
+            Arr.filter(
+              Str.split(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie), "\n"),
+              (line) => line !== "",
+            ),
+            (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
+          ),
+          (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
+        ).at(-1)?.argv[3];
+        const lines = Str.split(typed ?? "", "\n");
         expect(lines[0]).toStartWith(`${DELIVERY_TOKEN}${steered[0]!.delivery.id}`);
         expect(lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
         const file = /^Their message is in (\S+)\./.exec(lines[2] ?? "")?.[1];
@@ -459,11 +500,22 @@ test(
 
         const swept = yield* until(
           () => client.sweep({ request: `sweep-${++asked}` }).pipe(Effect.orDie),
-          (report) => report.remove.some((item) => item.kind === "idle-agent"),
+          (report) => Arr.some(report.remove, (item) => item.kind === "idle-agent"),
         );
-        expect(swept?.remove.find((item) => item.kind === "idle-agent")?.target).toBe(
-          `${agent.name} of ${runId}`,
-        );
+        expect(
+          Option.getOrUndefined(
+            Option.flatMap(Option.fromNullishOr(swept), (present__) =>
+              Option.map(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst(present__.remove, (item) => item.kind === "idle-agent"),
+                  ),
+                ),
+                (present___) => present___.target,
+              ),
+            ),
+          ),
+        ).toBe(`${agent.name} of ${runId}`);
 
         const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "tag it")], chat());
         expect(done?.state).toBe("failed");
@@ -484,10 +536,10 @@ test(
         expect(done).toMatchObject({ kind: "stop", state: "applied" });
         expect(done?.note).toContain(`Closed ${agent.name}`);
         const fs = yield* FileSystem.FileSystem;
-        const herdr = Schema.decodeUnknownSync(FakeState)(
+        const herdr = yield* Schema.decodeEffect(FakeState)(
           yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
-        );
-        expect(herdr.agents.map((one) => one.name)).not.toContain(agent.name);
+        ).pipe(Effect.orDie);
+        expect(Arr.map(herdr.agents, (one) => one.name)).not.toContain(agent.name);
 
         const view = yield* client.run({ runId }).pipe(Effect.orDie);
         expect(view?.status.status).toBe("complete");
@@ -601,7 +653,7 @@ test(
             COLLIE_CWD: world.project,
           });
           const client = yield* connect(world.state).pipe(Effect.orDie);
-          const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+          const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
           const { runId } = yield* client
             .start({ project: world.project, id: "told", request, input: { work: "the picker" } })
             .pipe(Effect.orDie);
@@ -610,7 +662,7 @@ test(
           const herdr = yield* until(
             () =>
               fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(
-                Effect.map((text) => Schema.decodeUnknownSync(FakeState)(text)),
+                Effect.map((text) => flow(Schema.decodeResult(FakeState), Result.getOrThrow)(text)),
                 Effect.orElseSucceed(() => ({ agents: [] })),
               ),
             (state) => state.agents.length > 0,
@@ -656,13 +708,27 @@ test(
         expect(note).toStartWith("Delivered to ");
         const dir = `${runDir(world.state, runId)}/attachments`;
         expect(yield* fs.readFileString(`${dir}/my shot.png`).pipe(Effect.orDie)).toBe("png");
-        const told = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie))
-          .split("\n")
-          .filter((line) => line !== "")
-          .map((line) => Schema.decodeUnknownSync(CallLine)(line))
-          .filter((call) => call.cmd === "agent prompt")
-          .map((call) => call.argv.join(" "))
-          .findLast((text) => text.includes("Their message is in"));
+        const told = Option.getOrUndefined(
+          Arr.findLast(
+            Arr.map(
+              Arr.filter(
+                Arr.map(
+                  Arr.filter(
+                    Str.split(
+                      yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
+                      "\n",
+                    ),
+                    (line) => line !== "",
+                  ),
+                  (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
+                ),
+                (call) => call.cmd === "agent prompt",
+              ),
+              (call) => Arr.join(call.argv, " "),
+            ),
+            (text) => pipe_(text, Str.includes("Their message is in")),
+          ),
+        );
         const kept = /Their message is in (\S+)\./.exec(told ?? "")?.[1] ?? "";
         expect(yield* fs.readFileString(kept).pipe(Effect.orDie)).toBe(
           `Attached: ${dir}/my shot.png\nAttached: ${dir}/log.txt`,

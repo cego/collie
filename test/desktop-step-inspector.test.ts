@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import type { FlowRun, VerificationView } from "../src/board-model";
 import {
@@ -55,9 +57,28 @@ test("the Step's evidence excludes other Steps and narrows to a picked Slice", (
     check("c", "review"),
     check("legacy"),
   ];
-  expect(stepEvidence(checks, "build", null)?.map((one) => one.id)).toEqual(["a", "b"]);
   expect(
-    stepEvidence(checks, "build", flowNode("build@02", { place: "02" }))?.map((one) => one.id),
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(stepEvidence(checks, "build", null)), (present) =>
+        Arr.map(present, (one) => one.id),
+      ),
+    ),
+  ).toEqual(["a", "b"]);
+  expect(
+    Option.getOrUndefined(
+      Option.map(
+        Option.fromNullishOr(
+          stepEvidence(
+            checks,
+            "build",
+            flowNode("build@02", {
+              place: "02",
+            }),
+          ),
+        ),
+        (present_) => Arr.map(present_, (one) => one.id),
+      ),
+    ),
   ).toEqual(["b"]);
 });
 test.each<[string, Partial<FlowRun>, boolean, InspectorPart]>([

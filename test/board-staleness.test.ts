@@ -1,6 +1,8 @@
 // The board's line about a newer release, for an installation that is a release: read in the
 // background at most every few minutes, and never waited on while the board draws.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -49,7 +51,7 @@ const settled = (root: string, releases: string) =>
   Effect.gen(function* () {
     for (let tries = 0; tries < 20; tries++) {
       const text = yield* board(root, releases);
-      if (text.includes("is out")) return text;
+      if (pipe_(text, Str.includes("is out"))) return text;
       yield* Effect.sleep("50 millis");
     }
     return yield* board(root, releases);

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { ansiLines } from "../../../src/shared/ansi";
 
 /** Terminal output in its colours, with a search that keeps the lines that match. */
@@ -6,15 +9,19 @@ const props = defineProps<{ text: string }>();
 const search = ref("");
 const lines = computed(() => ansiLines(props.text));
 const shown = computed(() => {
-  const wanted = search.value.trim().toLowerCase();
+  const wanted = Str.toLowerCase(Str.trim(search.value));
   return wanted === ""
     ? lines.value
-    : lines.value.filter((line) =>
-        line
-          .map((span) => span.text)
-          .join("")
-          .toLowerCase()
-          .includes(wanted),
+    : Arr.filter(lines.value, (line) =>
+        pipe(
+          Str.toLowerCase(
+            Arr.join(
+              Arr.map(line, (span) => span.text),
+              "",
+            ),
+          ),
+          Str.includes(wanted),
+        ),
       );
 });
 </script>

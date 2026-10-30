@@ -16,6 +16,22 @@ so D3 serves the new path, and serves the old one as an alias until Collie 0.42.
 saved before the upgrade still loads. That alias is a time-boxed exception to ADR-0028's "No
 aliases": it spares an author's saved module, not a name of Collie's. The upgrade found a fifth upstream behaviour, below.
 
+**Amended 2026-10-29: Effect 4.1.0.** The proof was rerun on 4.1.0, from source and against
+the compiled executable, and the six behaviours below still hold. D2's two settings keep
+their names and their upstream defaults; 4.1 adds `runnerJoinDebounce`, left at its default
+of zero. A state directory a 4.0.1 host wrote is read as it is:
+
+- A workflow's execution id and idempotency key are the same `makeHashDigest` in both
+  releases, the first 16 bytes of SHA-256 as hex, so behaviour 5 does not recur.
+  `test/engine.test.ts` pins one execution id to the value 4.0.1 derived.
+- Every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
+  `cluster/SqlRunnerStorage.js` is unchanged.
+
+4.1 removed `effect/Crypto` and took crypto out of the platform's services, so the runner is
+given `Digest` itself. D3 serves `effect/crypto` beside `effect/workflow`, and refuses
+`effect/Crypto` with what replaces it, so a module that still imports it is told why it
+will not load.
+
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
 will run it. That means Collie either builds durability, replay, suspension and recovery,
 or it uses Effect's. This says it uses Effect's, records exactly which settings that takes,

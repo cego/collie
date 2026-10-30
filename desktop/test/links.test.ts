@@ -1,5 +1,8 @@
 // The web links a Run produced, as the record's cards show them.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { mrHeading, mrTab, shortUrl, webLinks } from "../src/shared/links";
 
@@ -124,32 +127,40 @@ test("a pipeline's own page is its card, and a page that only starts with digits
 });
 
 test("a URL is drawn without its scheme or a trailing slash, and elided in the middle past 60", () => {
-  const sixty = `${"a".repeat(57)}.dk`;
+  const sixty = `${pipe("a", Str.repeat(57))}.dk`;
   expect(shortUrl(`https://${sixty}`)).toBe(sixty);
   expect(shortUrl(`https://${sixty}/`)).toBe(sixty);
-  expect(shortUrl(`http://${"b".repeat(58)}.dk`)).toBe(`${"b".repeat(40)}…${"b".repeat(12)}.dk`);
+  expect(shortUrl(`http://${pipe("b", Str.repeat(58))}.dk`)).toBe(
+    `${pipe("b", Str.repeat(40))}…${pipe("b", Str.repeat(12))}.dk`,
+  );
   expect(shortUrl("http://example.com/")).toBe("example.com");
 });
 
 test("a merge request or pull request named in an Output is an mr card", () => {
   expect(
-    webLinks({
-      texts: [
-        "Opened https://github.com/cego/collie/pull/30 and https://gitlab.cego.dk/cego/app/-/merge_requests/7",
-      ],
-      mr: null,
-    }).map((card) => card.kind),
+    Arr.map(
+      webLinks({
+        texts: [
+          "Opened https://github.com/cego/collie/pull/30 and https://gitlab.cego.dk/cego/app/-/merge_requests/7",
+        ],
+        mr: null,
+      }),
+      (card) => card.kind,
+    ),
   ).toEqual(["mr", "mr"]);
 });
 
 test("a pull request's card is titled #30 and its merge request's !7", () => {
   expect(
-    webLinks({
-      texts: [
-        "Opened https://github.com/cego/collie/pull/30 and https://gitlab.cego.dk/cego/app/-/merge_requests/7",
-      ],
-      mr: null,
-    }).map((card) => card.title),
+    Arr.map(
+      webLinks({
+        texts: [
+          "Opened https://github.com/cego/collie/pull/30 and https://gitlab.cego.dk/cego/app/-/merge_requests/7",
+        ],
+        mr: null,
+      }),
+      (card) => card.title,
+    ),
   ).toEqual(["#30", "!7"]);
 });
 

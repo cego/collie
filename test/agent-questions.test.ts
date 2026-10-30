@@ -2,8 +2,12 @@
 // answered the way a Workflow's question is: from `collie run answer` and from the card,
 // in any words. The host here is a real one over a fake herdr.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { readEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
@@ -15,8 +19,11 @@ import { Launched } from "../src/launches";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const decodeLaunched = Schema.decodeUnknownSync(Schema.fromJsonString(Launched));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const decodeLaunched = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Launched)),
+  Result.getOrThrow,
+);
 
 const askedTwo = encode({
   session_id: "s-1",
@@ -71,13 +78,13 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
   };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const before = Object.fromEntries(Object.keys(set).map((key) => [key, Bun.env[key]]));
+      const before = Rec.fromEntries(Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const));
       Object.assign(Bun.env, set);
       return before;
     }),
     (before) =>
       Effect.sync(() => {
-        for (const [key, value] of Object.entries(before))
+        for (const [key, value] of Rec.toEntries(before))
           if (value === undefined) delete Bun.env[key];
           else Bun.env[key] = value;
       }),
@@ -141,7 +148,7 @@ test(
           const log = Bun.env.FAKE_HERDR_LOG ?? "";
           const prompts = yield* until(
             () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
-            (all) => all.includes("Your question Checks is answered:"),
+            (all) => pipe_(all, Str.includes("Your question Checks is answered:")),
           );
           expect(prompts).toMatch(
             /From cli, [^\n]*\.\\nYour question Database is answered: SQLite; it is only a demo/,
@@ -155,7 +162,7 @@ test(
           );
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
-            (view) => (view?.waiting ?? []).some((one) => one.name === "ask-build-3"),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "ask-build-3"),
           );
           const [chatted] = yield* carryOutAsked(
             env,
@@ -165,7 +172,7 @@ test(
           expect(chatted).toMatchObject({ kind: "answer", state: "applied" });
           const again = yield* until(
             () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
-            (all) => all.includes("Your question Region is answered: Postgres"),
+            (all) => pipe_(all, Str.includes("Your question Region is answered: Postgres")),
           );
           expect(again).toMatch(
             /From chat for the human, [^\n]*\. The human said: \\"use postgres\\"\\nYour question Region is answered: Postgres/,
@@ -228,9 +235,9 @@ test(
 
           const asked = yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
-            (one) => (one?.waiting ?? []).some((question) => question.answer === null),
+            (one) => Arr.some(one?.waiting ?? [], (question) => question.answer === null),
           );
-          const [open] = (asked?.waiting ?? []).filter((question) => question.answer === null);
+          const [open] = Arr.filter(asked?.waiting ?? [], (question) => question.answer === null);
           expect(open?.prompt).toContain("Which region?");
 
           const [answered] = yield* carryOutAsked(
@@ -242,7 +249,7 @@ test(
           yield* until(
             () =>
               fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
-            (all) => all.includes("Your question Region is answered: eu-west"),
+            (all) => pipe_(all, Str.includes("Your question Region is answered: eu-west")),
           );
         }).pipe(Effect.ensuring(stopHost(world.state))),
       ["told.workflow.ts"],

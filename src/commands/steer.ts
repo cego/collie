@@ -6,6 +6,9 @@
 // It is about a Run, always. Questions about the flock are the Home's native chat, which
 // reads through `collie tools` rather than paying for a model to be asked one here.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
@@ -41,7 +44,7 @@ export const steer = Command.make(
   ({ text, target, from, dryRun, requestId }) =>
     answering((env) =>
       Effect.gen(function* () {
-        const run = target.replace(/^run:/, "");
+        const run = pipe_(target, Str.replace(/^run:/, ""));
         if (run === "") return err("invalid_input", "--target is `run:<id>`.");
         return yield* mutation(env, "steer", requestId, (id) =>
           Effect.flatMap(cliDoor(env), (door) =>
@@ -73,8 +76,12 @@ const hashOf = Effect.fn("Steer.hashOf")(function* (stateDir: string, id: string
   const file = yield* journalOf(stateDir, id);
   const found = file === null ? [] : yield* readProposals(file);
   return (
-    found.find((line): line is ProposalRecord => line.kind === "proposal" && line.id === id)
-      ?.content_hash ?? ""
+    Option.getOrUndefined(
+      Arr.findFirst(
+        found,
+        (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
+      ),
+    )?.content_hash ?? ""
   );
 });
 
@@ -154,15 +161,18 @@ export const runDeliveries = Command.make(
             ok: true as const,
             data: { deliveries: mine },
             human:
-              mine
-                .map((e) => [e.id, e.state, e.cause.kind, e.note ?? ""].join("\t").trimEnd())
-                .join("\n") || "Nothing has been sent to this Run's agents.",
+              Arr.join(
+                Arr.map(mine, (e) =>
+                  Str.trimEnd(Arr.join([e.id, e.state, e.cause.kind, e.note ?? ""], "\t")),
+                ),
+                "\n",
+              ) || "Nothing has been sent to this Run's agents.",
           };
 
         const how = Option.getOrNull(as);
         if (how !== "sent" && how !== "not-sent")
           return err("invalid_input", "--as is `sent` or `not-sent`.");
-        if (!mine.some((entry) => entry.id === settleId))
+        if (!Arr.some(mine, (entry) => entry.id === settleId))
           return err("invalid_input", `No delivery "${settleId}" for this Run.`);
         const door = yield* cliDoor(env);
         return yield* mutation(env, "run-deliveries-reconcile", requestId, (id) =>

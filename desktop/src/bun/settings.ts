@@ -1,6 +1,11 @@
 // What the human set in Desktop, kept on this computer beside the Flock chat's session.
 
-import { Effect, FileSystem, Path, Schema, Semaphore, SubscriptionRef } from "effect";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import { Effect, FileSystem, Path, Schema, Semaphore, SubscriptionRef, flow, Result } from "effect";
 import { DEFAULT_MODEL, HARNESS_MODELS, resolveChoice } from "../../../src/harness-choice";
 import { isString } from "../../../src/schema";
 import { effortsOf, type Offer } from "../shared/chat-choices";
@@ -21,7 +26,7 @@ export const readSettings = Effect.fn("Settings.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString((yield* Path.Path).join(dir, FILE)).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(SettingsFile)),
-    Effect.orElseSucceed(() => Schema.decodeUnknownSync(DesktopSettings)({})),
+    Effect.orElseSucceed(() => flow(Schema.decodeResult(DesktopSettings), Result.getOrThrow)({})),
   );
 });
 
@@ -33,7 +38,7 @@ export const writeSettings = Effect.fn("Settings.write")(function* (
   yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(
     (yield* Path.Path).join(dir, FILE),
-    Schema.encodeSync(SettingsFile)(settings),
+    yield* Schema.encodeEffect(SettingsFile)(settings).pipe(Effect.orDie),
   );
 });
 
@@ -48,16 +53,18 @@ export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
   const { proactive, machineRule, ...own } = yield* readSettings(dir);
   const flock = yield* readFlockSettings(dir);
   if (proactive === undefined && machineRule === undefined) return flock;
-  const carried = (
+  const carried = Arr.reduce(
     [
       ["machine_rule", machineRule ?? ""],
       ["flock_chat.proactive", proactive === false ? "false" : ""],
-    ] as const
-  ).reduce((held, [key, typed]) => {
-    if (typed === "" || held.settings[key] !== undefined) return held;
-    const edited = editSetting(held, key, typed, now);
-    return "refused" in edited ? held : edited;
-  }, flock);
+    ] as const,
+    flock,
+    (held, [key, typed]) => {
+      if (typed === "" || held.settings[key] !== undefined) return held;
+      const edited = editSetting(held, key, typed, now);
+      return "refused" in edited ? held : edited;
+    },
+  );
   yield* writeFlockSettings(dir, carried);
   yield* writeSettings(dir, own);
   return carried;
@@ -74,7 +81,19 @@ const modelOf = (settings: DesktopSettings, offers: Offers) => {
       ? offer?.unset.model
       : (settings.chatModel ?? offer?.unset.model);
   return {
-    label: offer?.models.find((model) => model.id === id)?.label ?? id ?? harness,
+    label:
+      Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(offer), (present) =>
+          Option.map(
+            Option.fromNullishOr(
+              Option.getOrUndefined(Arr.findFirst(present.models, (model) => model.id === id)),
+            ),
+            (present_) => present_.label,
+          ),
+        ),
+      ) ??
+      id ??
+      harness,
     efforts:
       id === undefined
         ? (HARNESS_MODELS[harness]?.efforts ?? [])
@@ -119,11 +138,13 @@ export const applyChange = (
 };
 
 /** Extra models per harness, from the Flock's `models.<harness>`. */
-export const extraModels = (flock: FlockSettings) =>
-  Object.fromEntries(
-    Object.entries(flock.settings).flatMap(([key, { value }]) =>
-      key.startsWith("models.") && Array.isArray(value) && value.every(isString)
-        ? [[key.slice("models.".length), value]]
+export const extraModels = (
+  flock: FlockSettings,
+): Readonly<Record<string, ReadonlyArray<string>>> =>
+  Rec.fromEntries(
+    Arr.flatMap(Rec.toEntries(flock.settings), ([key, { value }]) =>
+      pipe_(key, Str.startsWith("models.")) && Arr.isArray(value) && Arr.every(value, isString)
+        ? [[pipe_(key, Str.slice("models.".length)), value]]
         : [],
     ),
   );
@@ -138,7 +159,7 @@ export const chatChoice = (
   if (!CHAT_HARNESSES.includes(harness))
     return {
       ok: false as const,
-      problem: `the Flock chat has no harness called "${harness}" (${CHAT_HARNESSES.join(", ")})`,
+      problem: `the Flock chat has no harness called "${harness}" (${Arr.join(CHAT_HARNESSES, ", ")})`,
     };
   const resolved = resolveChoice(
     [
@@ -156,10 +177,10 @@ export const chatChoice = (
       ? undefined
       : {
           machine: "this computer",
-          harnesses: Object.entries(offers).map(([harness, offer]) => ({
+          harnesses: Arr.map(Rec.toEntries(offers), ([harness, offer]) => ({
             harness,
             table: offer.from === "harness" ? null : (offer.why ?? "the harness has not been read"),
-            entries: offer.models.map(({ id, efforts }) => ({ model: id, efforts })),
+            entries: Arr.map(offer.models, ({ id, efforts }) => ({ model: id, efforts })),
           })),
         },
   );
@@ -167,7 +188,7 @@ export const chatChoice = (
     !resolved.ok &&
     harness === "pi" &&
     settings.chatModel !== undefined &&
-    !settings.chatModel.includes("/")
+    !pipe_(settings.chatModel, Str.includes("/"))
   )
     return {
       ok: false as const,

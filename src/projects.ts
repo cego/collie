@@ -1,6 +1,10 @@
 // The Projects root (ADR-0033): the one directory every checkout a human works in lives
 // under, and the checkouts found there.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, FileSystem, Path, Result } from "effect";
 import { configValue, readConfig } from "./config";
 import type { PluginEnv } from "./env";
@@ -51,7 +55,7 @@ export const checkoutsUnder = Effect.fn("Projects.checkoutsUnder")(function* (ro
       if (depth === DEPTH) return;
       const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
       for (const name of names) {
-        if (name.startsWith(".") || name === SKIPPED) continue;
+        if (pipe_(name, Str.startsWith(".")) || name === SKIPPED) continue;
         const child = path.join(dir, name);
         if (yield* isDirectory(child)) yield* visit(child, depth + 1);
       }
@@ -66,16 +70,18 @@ export const repositoryCheckout = Effect.fn("Projects.repositoryCheckout")(funct
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const expanded = named.startsWith("~/") ? path.join(env.home, named.slice(2)) : named;
+  const expanded = pipe_(named, Str.startsWith("~/"))
+    ? path.join(env.home, pipe_(named, Str.slice(2)))
+    : named;
   const local = yield* fs.stat(path.resolve(env.cwd, expanded)).pipe(Effect.result);
   if (
     (Result.isSuccess(local) && local.success.type === "Directory") ||
-    named.startsWith("/") ||
-    named.startsWith(".") ||
-    named.startsWith("~")
+    pipe_(named, Str.startsWith("/")) ||
+    pipe_(named, Str.startsWith(".")) ||
+    pipe_(named, Str.startsWith("~"))
   )
     return null;
-  const project = projectFromRemote(named.replace(/\/+$/, ""));
+  const project = projectFromRemote(pipe_(named, Str.replace(/\/+$/, "")));
   const bare = project === null && /^[^/:\s]+(?:\/[^/:\s]+)+$/.test(named);
   if (project === null && !bare) return null;
   const root = yield* projectsRoot(env);
@@ -84,15 +90,20 @@ export const repositoryCheckout = Effect.fn("Projects.repositoryCheckout")(funct
     for (const remote of ["origin", "upstream"]) {
       const url = yield* shell("git", ["remote", "get-url", remote], path);
       const configured = yield* shell("git", ["config", "--get", `remote.${remote}.url`], path);
-      const names = [url, configured]
-        .filter((one) => one.code === 0)
-        .map((one) => projectFromRemote(one.stdout));
+      const names = Arr.map(
+        Arr.filter([url, configured], (one) => one.code === 0),
+        (one) => projectFromRemote(one.stdout),
+      );
       if (
-        names.some(
+        Arr.some(
+          names,
           (actual) =>
             actual !== null &&
             (project === null
-              ? actual.slice(actual.indexOf("/") + 1) === named
+              ? pipe_(
+                  actual,
+                  Str.slice(Option.getOrElse(pipe_(actual, Str.indexOf("/")), () => -1) + 1),
+                ) === named
               : actual === project),
         )
       ) {
@@ -106,6 +117,9 @@ export const repositoryCheckout = Effect.fn("Projects.repositoryCheckout")(funct
     error:
       found.length === 0
         ? `No checkout whose origin or upstream names "${named}" under the Projects root ${root.path}.`
-        : `"${named}" names ${found.length} checkouts under ${root.path} (${found.map((one) => one.path).join(", ")}); name its path.`,
+        : `"${named}" names ${found.length} checkouts under ${root.path} (${Arr.join(
+            Arr.map(found, (one) => one.path),
+            ", ",
+          )}); name its path.`,
   };
 });

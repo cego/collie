@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem } from "effect";
 import { inspect } from "node:util";
@@ -25,10 +29,10 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
       const events: MachineGiven[] = [];
       const run: Runner = (cmd, args) =>
         Effect.sync(() => {
-          commands.push(`${cmd} ${args.join(" ")}`);
+          commands.push(`${cmd} ${Arr.join(args, " ")}`);
           return { code: 0, stdout: args.includes("host") ? "gitlab.example.org" : secret };
         });
-      const targets: ShellRoute[] = ["vm", "mini"].map((name) => ({
+      const targets: ShellRoute[] = Arr.map(["vm", "mini"], (name) => ({
         ...localRoute([], name),
         machine: { profile: `p-${name}`, name },
         execute: (script, bytes) =>
@@ -86,7 +90,7 @@ test("Give to vm reads gh's token and sends it only on stdin; no login offers th
       const commands: string[] = [];
       const run: Runner = (cmd, args) =>
         Effect.sync(() => {
-          commands.push(`${cmd} ${args.join(" ")}`);
+          commands.push(`${cmd} ${Arr.join(args, " ")}`);
           return { code: 0, stdout: token };
         });
       const login = yield* readConnectionLogin(rig.pluginEnv(), "github", run);
@@ -103,27 +107,32 @@ test("Give to vm reads gh's token and sends it only on stdin; no login offers th
       const result = yield* giveGithub([target], login.token);
       expect(commands).toContain("gh auth token --hostname github.com");
       expect(
-        commands.some((command) =>
-          command.includes("gh auth login --hostname github.com --with-token"),
+        Arr.some(commands, (command) =>
+          pipe_(command, Str.includes("gh auth login --hostname github.com --with-token")),
         ),
       ).toBe(true);
       expect(inputs).toEqual([`${token}\n`]);
       expect(inspect({ commands, result })).not.toContain(token);
       expect(result[0]!.failed).toContain("<redacted>");
-      const card = connectionCards([
-        {
-          profile: "p-vm",
-          name: "vm",
-          connections: [
+      const card = Option.getOrUndefined(
+        Arr.findFirst(
+          connectionCards([
             {
-              id: "github",
-              reading: { state: "absent", detail: "no login", fix: "gh auth login --web" },
+              profile: "p-vm",
+              name: "vm",
+              connections: [
+                {
+                  id: "github",
+                  reading: { state: "absent", detail: "no login", fix: "gh auth login --web" },
+                },
+              ],
+              workflows: [],
+              problem: null,
             },
-          ],
-          workflows: [],
-          problem: null,
-        },
-      ]).find((card) => card.id === "github")!;
+          ]),
+          (card) => card.id === "github",
+        ),
+      )!;
       expect(card.primary).toMatchObject({ kind: "login", to: ["p-vm"] });
       const opened: ReadonlyArray<string>[] = [];
       const loginRoute = {

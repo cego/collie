@@ -24,7 +24,8 @@
 //
 // One journal per Herd; receipts are per conversation (CONTEXT.md, News).
 
-import { Effect, FileSystem, Path, Schema } from "effect";
+import * as Arr from "effect/Array";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { NEWS_BATCH, NewsReceipt, Significance } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
 import { herdDir } from "./steering";
@@ -85,9 +86,7 @@ export const newsTrail = Effect.fn("News.trail")(function* (stateDir: string, ke
 });
 
 export const read = (file: string) =>
-  readJournal(file, LineJson).pipe(
-    Effect.catch((): Effect.Effect<ReadonlyArray<Line>> => Effect.succeed([])),
-  );
+  readJournal(file, LineJson).pipe(Effect.orElseSucceed((): ReadonlyArray<Line> => []));
 
 /** A batch as it is handed over: what is in it, and how much it left behind. */
 export interface Batch {
@@ -107,9 +106,10 @@ export function pending(
   conversation = NATIVE,
   bound = NEWS_BATCH,
 ): Batch {
-  const all = live(lines)
-    .filter((entry) => !entry.read.has(conversation))
-    .map((entry) => entry.item);
+  const all = Arr.map(
+    Arr.filter(live(lines), (entry) => !entry.read.has(conversation)),
+    (entry) => entry.item,
+  );
   const kept = all.length > bound ? all.slice(-bound) : all;
   return { items: kept, omitted: all.length - kept.length };
 }
@@ -149,9 +149,11 @@ function live(lines: ReadonlyArray<Line>): ReadonlyArray<Entry> {
  * new news, whatever has been said before.
  */
 export function retired(lines: ReadonlyArray<Line>): ReadonlySet<string> {
-  const alive = new Set(live(lines).map((entry) => entry.item.key));
+  const alive = new Set(Arr.map(live(lines), (entry) => entry.item.key));
   return new Set(
-    lines.flatMap((line) => (line.kind === "superseded" && !alive.has(line.key) ? [line.key] : [])),
+    Arr.flatMap(lines, (line) =>
+      line.kind === "superseded" && !alive.has(line.key) ? [line.key] : [],
+    ),
   );
 }
 
@@ -160,7 +162,7 @@ export function uncertain(
   lines: ReadonlyArray<Line>,
   conversation = NATIVE,
 ): ReadonlyArray<string> {
-  return live(lines).flatMap((entry) =>
+  return Arr.flatMap(live(lines), (entry) =>
     entry.uncertain.has(conversation) && !entry.read.has(conversation) ? [entry.item.key] : [],
   );
 }
@@ -177,12 +179,12 @@ export const append = Effect.fn("News.append")(function* (
   item: Omit<Item, "at" | "significance"> & { readonly significance?: Significance },
 ) {
   const lines = yield* read(file);
-  if (live(lines).some((known) => known.item.key === item.key)) return false;
+  if (Arr.some(live(lines), (known) => known.item.key === item.key)) return false;
   yield* appendJournal(file, LineJson, {
     kind: "item",
     significance: "routine",
     ...item,
-    at: yield* nowIso(),
+    at: yield* nowIso,
   }).pipe(Effect.orDie);
   yield* trim(file);
   return true;
@@ -196,7 +198,7 @@ export const settle = Effect.fn("News.settle")(function* (
   conversation: string,
   note?: string,
 ) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   const line: Line =
     note === undefined
       ? { kind: as, key, conversation, at }
@@ -209,12 +211,12 @@ export const supersede = Effect.fn("News.supersede")(function* (
   file: string,
   holds: (item: Item) => boolean,
 ) {
-  const gone = live(yield* read(file)).filter((entry) => !holds(entry.item));
+  const gone = Arr.filter(live(yield* read(file)), (entry) => !holds(entry.item));
   for (const { item } of gone)
     yield* appendJournal(file, LineJson, {
       kind: "superseded",
       key: item.key,
-      at: yield* nowIso(),
+      at: yield* nowIso,
     }).pipe(Effect.orDie);
   return gone.length;
 });
@@ -225,9 +227,15 @@ const trim = Effect.fn("News.trim")(function* (file: string) {
   const lines = yield* read(file);
   if (lines.length <= KEEP) return;
   const kept = lines.slice(-KEEP);
-  const encode = Schema.encodeSync(LineJson);
+  const encode = flow(Schema.encodeResult(LineJson), Result.getOrThrow);
   const tmp = `${file}.${process.pid}.tmp`;
-  yield* fs.writeFileString(tmp, kept.map((line) => `${encode(line)}\n`).join(""));
+  yield* fs.writeFileString(
+    tmp,
+    Arr.join(
+      Arr.map(kept, (line) => `${encode(line)}\n`),
+      "",
+    ),
+  );
   yield* fs.rename(tmp, file);
 });
 
@@ -238,10 +246,13 @@ const trim = Effect.fn("News.trim")(function* (file: string) {
  */
 export function asText(batch: Batch): string {
   if (batch.items.length === 0) return "Nothing has happened that you have not seen.";
-  return [
-    ...batch.items.map((item) => `- ${item.text}`),
-    ...(batch.omitted > 0
-      ? [`- (${batch.omitted} older item(s) not listed here; they are still waiting)`]
-      : []),
-  ].join("\n");
+  return Arr.join(
+    [
+      ...Arr.map(batch.items, (item) => `- ${item.text}`),
+      ...(batch.omitted > 0
+        ? [`- (${batch.omitted} older item(s) not listed here; they are still waiting)`]
+        : []),
+    ],
+    "\n",
+  );
 }

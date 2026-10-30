@@ -1,9 +1,14 @@
 // The four Views are projections of state Effect produces. These are the producers'
 // own tests; the components are tested against fixtures in app.test.tsx.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { DateTime, Effect, FileSystem, Path, PlatformError, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Path, PlatformError, Schema, flow, Result } from "effect";
 import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { installFakeSkills } from "../support/defs";
@@ -23,15 +28,28 @@ import { writeSettingsSet } from "../../src/config";
 import { Launched } from "../../src/launches";
 
 let rig: Rig;
-const encodeFindings = Schema.encodeSync(Schema.fromJsonString(Schema.Array(FindingSchema)));
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const encodeLaunched = Schema.encodeSync(Schema.fromJsonString(Launched));
+const encodeFindings = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(FindingSchema))),
+  Result.getOrThrow,
+);
+const encodeJson = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
+const encodeLaunched = flow(
+  Schema.encodeResult(Schema.fromJsonString(Launched)),
+  Result.getOrThrow,
+);
 /** Every Run a test has made, newest first, as the host would list them. */
 let runs: RunFacts[] = [];
 
 function effectTest(
   name: string,
-  body: () => Effect.gen.Return<void, RigError | PlatformError.PlatformError | Error, BunServices>,
+  body: () => Effect.gen.Return<
+    void,
+    RigError | PlatformError.PlatformError | Error,
+    PlatformServices
+  >,
 ) {
   test(name, () => runEffect(Effect.gen(body)));
 }
@@ -114,8 +132,8 @@ effectTest("History is this repo's finished runs whatever session they came from
   const history = yield* buildHistory({ cwd: env.cwd, runs });
 
   expect(history).toHaveLength(2);
-  expect(history.every((r) => r.title.startsWith("Review"))).toBe(true);
-  expect(history.map((r) => r.target)).toEqual(["worktree", "mr:host/g/p!1"]);
+  expect(Arr.every(history, (r) => pipe(r.title, Str.startsWith("Review")))).toBe(true);
+  expect(Arr.map(history, (r) => r.target)).toEqual(["worktree", "mr:host/g/p!1"]);
 });
 
 effectTest("a run that can supply the work says so, and one that cannot does not", function* () {
@@ -126,7 +144,8 @@ effectTest("a run that can supply the work says so, and one that cannot does not
   yield* seed({ workflow: "plan" });
 
   const history = yield* buildHistory({ cwd: env.cwd, runs });
-  const by = (target: string | null) => history.find((r) => r.target === target)!;
+  const by = (target: string | null) =>
+    Option.getOrUndefined(Arr.findFirst(history, (r) => r.target === target))!;
 
   expect(by("worktree").fixable).toBe(true);
   expect(by("worktree").detail).toContain("2 finding(s) open");
@@ -142,21 +161,23 @@ effectTest("Workflows carry their layer, their inputs and what checking them say
 
   const { workflows } = yield* buildWorkflows(env);
 
-  const review = workflows.find((w) => w.name === "review")!;
+  const review = Option.getOrUndefined(Arr.findFirst(workflows, (w) => w.name === "review"))!;
   expect(review.layer).toBe("shipped");
   expect(review.inputs).toContain("target");
   expect(review.path).toContain("review.workflow.ts");
 
   // Workflows and nothing else: a persona cannot be run, so the view does not list one
   // and there is no row here to build from it.
-  expect(workflows.map((w) => w.name)).not.toContain("reviewer");
+  expect(Arr.map(workflows, (w) => w.name)).not.toContain("reviewer");
 });
 
 effectTest("Settings shows the defaults and remembered values it can write back", function* () {
   const env = rig.pluginEnv();
 
   const before = yield* buildSettings(env);
-  expect(before.defaults.find((d) => d.key === "harness")!.value).not.toBe("");
+  expect(
+    Option.getOrUndefined(Arr.findFirst(before.defaults, (d) => d.key === "harness"))!.value,
+  ).not.toBe("");
 
   yield* buildSettings(env);
   const fs = yield* FileSystem.FileSystem;
@@ -168,7 +189,9 @@ effectTest("Settings shows the defaults and remembered values it can write back"
   );
 
   const after = yield* buildSettings(env);
-  expect(after.defaults.find((d) => d.key === "model")!.value).toBe("opus");
+  expect(
+    Option.getOrUndefined(Arr.findFirst(after.defaults, (d) => d.key === "model"))!.value,
+  ).toBe("opus");
   expect(after.remembered).toContainEqual({ key: "linear.team", value: "CEG" });
 });
 
@@ -197,16 +220,23 @@ effectTest("Settings offers every key loadDefaults reads, and repeats none of th
   const settings = yield* buildSettings(env);
 
   // A key a Run reads and Settings does not offer is one nobody can inspect or edit.
-  expect(settings.defaults.find((d) => d.key === "handoff_timeout_ms")!.value).toBe("60000");
-  expect(settings.remembered.map((r) => r.key)).not.toContain("handoff_timeout_ms");
+  expect(
+    Option.getOrUndefined(Arr.findFirst(settings.defaults, (d) => d.key === "handoff_timeout_ms"))!
+      .value,
+  ).toBe("60000");
+  expect(Arr.map(settings.remembered, (r) => r.key)).not.toContain("handoff_timeout_ms");
   // Nothing about unattended agents is silent: the mode is a row like any other.
-  expect(settings.defaults.find((d) => d.key === "permissions")!.value).toBe("auto");
+  expect(
+    Option.getOrUndefined(Arr.findFirst(settings.defaults, (d) => d.key === "permissions"))!.value,
+  ).toBe("auto");
 
   // And a hand-edited nonsense value still renders, because Settings is where it is put
   // right: a read that threw would take the repair tool down with the problem.
   yield* fs.writeFileString(path.join(env.userDir, "config.json"), `{ "permissions": "yolo" }`);
   const broken = yield* buildSettings(env);
-  expect(broken.defaults.find((d) => d.key === "permissions")!.value).toBe("yolo");
+  expect(
+    Option.getOrUndefined(Arr.findFirst(broken.defaults, (d) => d.key === "permissions"))!.value,
+  ).toBe("yolo");
 });
 
 effectTest("a run's detail is its inputs and its review", function* () {
@@ -261,7 +291,7 @@ effectTest("a run with no review says so", function* () {
 effectTest("a review too big to read is capped and says so", function* () {
   // Two orders of magnitude past the cap: an agent writes these, so a run dir can hold
   // an artifact this size, and the panel must neither show it all nor read it all.
-  const run = yield* seed({ workflow: "review", review: "x".repeat(4_000_000) });
+  const run = yield* seed({ workflow: "review", review: pipe("x", Str.repeat(4_000_000)) });
 
   const detail = yield* detailOf(run);
 
@@ -273,7 +303,7 @@ effectTest("a review too big to read is capped and says so", function* () {
 });
 
 effectTest("a paged review reads another cap for each page asked for", function* () {
-  const run = yield* seed({ workflow: "review", review: "x".repeat(4_000_000) });
+  const run = yield* seed({ workflow: "review", review: pipe("x", Str.repeat(4_000_000)) });
 
   const first = yield* detailOf(run);
   const third = yield* detailOf(run, { pages: 3 });
@@ -302,7 +332,7 @@ effectTest("the log tail is the end of a long log, and only when it is asked for
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const lines = Array.from({ length: 20_000 }, (_, i) => `line ${i}`);
-  yield* fs.writeFileString(path.join(run.dir, "log.txt"), `${lines.join("\n")}\n`);
+  yield* fs.writeFileString(path.join(run.dir, "log.txt"), `${Arr.join(lines, "\n")}\n`);
 
   const off = yield* detailOf(run);
   expect(off?.tail).toBeNull();
@@ -314,7 +344,7 @@ effectTest("the log tail is the end of a long log, and only when it is asked for
   expect(on.tail.text).toContain("line 19999");
   // Only the end, and no line cut in half at the start of it.
   expect(on.tail.text).not.toContain("line 0\n");
-  expect(on.tail.text.split("\n")[0]).toMatch(/^line \d+$/);
+  expect(Str.split(on.tail.text, "\n")[0]).toMatch(/^line \d+$/);
 });
 
 effectTest("a run with no log says so where the tail would be", function* () {
@@ -387,7 +417,7 @@ effectTest(
     });
 
     const started = yield* detailOf(builder);
-    expect(started!.plan!.tickets.map((t) => t.title)).toEqual(["First", "Second"]);
+    expect(Arr.map(started!.plan!.tickets, (t) => t.title)).toEqual(["First", "Second"]);
 
     // A run built from a review rather than a plan dir has no plan at all.
     const fixer = yield* seed({
@@ -441,7 +471,7 @@ const planned = Effect.fn("viewsTest.planned")(function* (
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.join(dir, "issues"), { recursive: true });
   const before = DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-01T00:00:00.000Z"));
-  for (const [file, text] of Object.entries(tickets)) {
+  for (const [file, text] of Rec.toEntries(tickets)) {
     yield* fs.writeFileString(path.join(dir, "issues", file), text);
     yield* fs.utimes(path.join(dir, "issues", file), before, before);
   }
@@ -451,7 +481,7 @@ const planned = Effect.fn("viewsTest.planned")(function* (
 const hostDetailOf = (
   run: { id: string },
   over: Partial<Parameters<typeof buildRunDetail>[0]> = {},
-) => detailOf(run, { runs: runs.map((one) => ({ ...one, finished: null })), ...over });
+) => detailOf(run, { runs: Arr.map(runs, (one) => ({ ...one, finished: null })), ...over });
 
 /** What the implement workflow records as a slice starts and lands. */
 const progressed = Effect.fn("viewsTest.progressed")(function* (
@@ -464,7 +494,7 @@ const progressed = Effect.fn("viewsTest.progressed")(function* (
   const dir = path.join(run.dir, "steering", "progress");
   yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(
-    path.join(dir, ticket.replace(/\.md$/, ".json")),
+    path.join(dir, pipe(ticket, Str.replace(/\.md$/, ".json"))),
     encodeJson({ ticket, status, claims: [], at: "2026-09-01T10:30:00.000Z" }),
   );
 });
@@ -601,7 +631,7 @@ effectTest("a long ticket's repository is read past what the panel shows", funct
   const dir = path.join(planner.dir, "plan");
   yield* planned(dir, {
     "01-root.md": "# Root\n\n**Repo:** .\n",
-    "02-web.md": `# Web\n\n${"Prose.\n".repeat(1500)}\n**Repo:** web\n`,
+    "02-web.md": `# Web\n\n${pipe("Prose.\n", Str.repeat(1500))}\n**Repo:** web\n`,
   });
   const root = yield* seed({
     workflow: "implement",
@@ -623,7 +653,7 @@ effectTest("a root build leaves a ticket whose repository it cannot tell", funct
   yield* planned(dir, {
     "01-root.md": "# Root\n\n**Repo:** .\n",
     "02-wrapped.md": "# Wrapped\n\n**Repo:**\nweb\n",
-    "03-far.md": `# Far\n\n${"x".repeat(1024 * 1024)}\n**Repo:** web\n`,
+    "03-far.md": `# Far\n\n${Str.repeat(1024 * 1024)("x")}\n**Repo:** web\n`,
   });
   const root = yield* seed({
     workflow: "implement",
@@ -683,17 +713,21 @@ effectTest(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
-    expect((yield* buildSettings(env)).defaults.find((d) => d.key === "questions")!.value).toBe(
-      "focus",
-    );
+    expect(
+      Option.getOrUndefined(
+        Arr.findFirst((yield* buildSettings(env)).defaults, (d) => d.key === "questions"),
+      )!.value,
+    ).toBe("focus");
 
     yield* fs.makeDirectory(env.userDir, { recursive: true });
     yield* fs.writeFileString(path.join(env.userDir, "config.json"), `{ "questions": "notify" }`);
 
     const set = yield* buildSettings(env);
-    expect(set.defaults.find((d) => d.key === "questions")!.value).toBe("notify");
+    expect(
+      Option.getOrUndefined(Arr.findFirst(set.defaults, (d) => d.key === "questions"))!.value,
+    ).toBe("notify");
     // Offered as a default, not left in the remembered values nobody can edit.
-    expect(set.remembered.map((r) => r.key)).not.toContain("questions");
+    expect(Arr.map(set.remembered, (r) => r.key)).not.toContain("questions");
   },
 );
 

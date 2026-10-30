@@ -1,6 +1,8 @@
 // What a sweep would remove on each Machine, as the Cleanup dialog draws it (ADR-0045). Pure,
 // so the main process and the view read one thing.
 
+import * as Num from "effect/Number";
+import * as Arr from "effect/Array";
 import { Schema } from "effect";
 import { type CleanupItem, type CleanupKept, CleanupReport } from "../../../src/board-model";
 import { humanBytes } from "../../../src/bytes";
@@ -74,23 +76,30 @@ const STILL_SWEPT = "Its host still cleans up there every ten minutes.";
 
 const groupsOf = (remove: ReadonlyArray<CleanupItem>): ReadonlyArray<CleanupGroup> => {
   const byKind = Map.groupBy(remove, ({ kind }) => kind);
-  return [...byKind]
-    .map(([kind, items]) => ({
-      kind,
-      bytes: items.reduce((sum, { bytes }) => sum + bytes, 0),
-      items: items.toSorted((a, b) => b.bytes - a.bytes),
-    }))
-    .toSorted((a, b) => b.bytes - a.bytes)
-    .map(({ kind, bytes, items }) => ({
-      kind,
-      count: items.length,
+  const totals = Arr.map([...byKind], ([kind, items]) => ({
+    kind,
+    bytes: Arr.reduce(items, 0, (sum, { bytes }) => sum + bytes),
+    items: Arr.sortWith(
+      items,
+      (value) => value,
+      (a, b) => Num.sign(b.bytes - a.bytes),
+    ),
+  }));
+  const largest = Arr.sortWith(
+    totals,
+    (value) => value,
+    (a, b) => Num.sign(b.bytes - a.bytes),
+  );
+  return Arr.map(largest, ({ kind, bytes, items }) => ({
+    kind,
+    count: items.length,
+    size: humanBytes(bytes),
+    items: Arr.map(items, ({ target, bytes, reason }) => ({
+      target,
       size: humanBytes(bytes),
-      items: items.map(({ target, bytes, reason }) => ({
-        target,
-        size: humanBytes(bytes),
-        reason,
-      })),
-    }));
+      reason,
+    })),
+  }));
 };
 
 const keptOf = (keep: ReadonlyArray<CleanupKept>) =>
@@ -167,7 +176,7 @@ export const cleanupView = (
   now = 0,
 ): CleanupView => {
   const swept = sweeps.size > 0;
-  const rows = shown.map((one) => {
+  const rows = Arr.map(shown, (one) => {
     const read = reads.get(one.profile);
     const listed = rowOf(one, read, undefined, now, !swept);
     const row = rowOf(one, read, sweeps.get(one.profile), now, !swept);
@@ -176,12 +185,15 @@ export const cleanupView = (
       : listed.choosable && (chosen?.has(one.profile) ?? true);
     return { ...row, choosable: !swept && row.choosable, chosen: picked, bytes: listed.bytes };
   });
-  const picked = rows.filter((row) => row.chosen);
-  const total = picked.reduce((sum, { bytes }) => sum + bytes, 0);
+  const picked = Arr.filter(rows, (row) => row.chosen);
+  const total = Arr.reduce(picked, 0, (sum, { bytes }) => sum + bytes);
   const machines = `${picked.length} Machine${picked.length === 1 ? "" : "s"}`;
   return {
     rows,
-    choosable: rows.filter((row) => row.choosable).map(({ profile }) => profile),
+    choosable: Arr.map(
+      Arr.filter(rows, (row) => row.choosable),
+      ({ profile }) => profile,
+    ),
     chosen: `${machines} chosen · would free ${humanBytes(total)}`,
     button: { said: `Clean up ${machines}`, disabled: swept || picked.length === 0 },
   };

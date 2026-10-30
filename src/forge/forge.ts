@@ -3,6 +3,9 @@
 // doctor checks) and `gh` only by the GitHub one (ADR-0050 D1); a caller asks the forge of
 // the reference or checkout in front of it.
 
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import type { Effect, FileSystem, Path } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { forgeOfRef, parseMrTarget, type MrForge, type MrPanel, type MrRef } from "../board-model";
@@ -368,7 +371,7 @@ export const FORGES: Readonly<Record<MrForge, Forge>> = {
 
 /** The forge a pipeline or Actions run's URL is on: GitHub on github.com, GitLab elsewhere. */
 export function forgeOfUrl(url: string): Forge {
-  return /^https?:\/\/github\.com\//i.test(url.trim()) ? github : gitlab;
+  return /^https?:\/\/github\.com\//i.test(Str.trim(url)) ? github : gitlab;
 }
 
 /** The forge a merge request is on. */
@@ -381,9 +384,16 @@ export function forgeOf(ref: MrRef): Forge {
  * GitLab host or any host whose name says `gitlab`, and none anywhere else.
  */
 export function forgeOfHost(host: string, gitlabHost?: string): MrForge | null {
-  const name = host.toLowerCase();
+  const name = Str.toLowerCase(host);
   if (name === "github.com") return "github";
-  if (name === gitlabHost?.toLowerCase() || name.includes("gitlab")) return "gitlab";
+  if (
+    name ===
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(gitlabHost), (present) => Str.toLowerCase(present)),
+      ) ||
+    pipe(name, Str.includes("gitlab"))
+  )
+    return "gitlab";
   return null;
 }
 

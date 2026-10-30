@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { planProgress, specHeadings } from "../desktop/src/shared/plan-view";
 
@@ -17,23 +18,27 @@ describe("the plan's progress", () => {
   });
 });
 
-const texts = (spec: string) => specHeadings(spec).then((found) => found.map(({ text }) => text));
+const texts = (spec: string) =>
+  specHeadings(spec).then((found) => Arr.map(found, ({ text }) => text));
 
 describe("the spec's headings", () => {
   test("are ATX headings at each level, trailing #s trimmed", () =>
     expect(
       specHeadings(
-        [
-          "# One #",
-          "## Two ##",
-          "   ### Three",
-          "#### Four ####   ",
-          "##### Five",
-          "###### Six #",
-          "####### Seven",
-          "#Not",
-          "# a # b #",
-        ].join("\n"),
+        Arr.join(
+          [
+            "# One #",
+            "## Two ##",
+            "   ### Three",
+            "#### Four ####   ",
+            "##### Five",
+            "###### Six #",
+            "####### Seven",
+            "#Not",
+            "# a # b #",
+          ],
+          "\n",
+        ),
       ),
     ).resolves.toEqual([
       { level: 1, text: "One", position: 0 },
@@ -56,22 +61,25 @@ describe("the spec's headings", () => {
   test("skip heading-like lines inside fenced code and indented four spaces", () =>
     expect(
       texts(
-        [
-          "# Before",
-          "```md",
-          "# In backticks",
-          "~~~",
-          "# Still in backticks",
-          "```",
-          "~~~~",
-          "## In tildes",
-          "```",
-          "~~~~",
-          "    # Indented",
-          "Para",
-          "    ---",
-          "# After",
-        ].join("\n"),
+        Arr.join(
+          [
+            "# Before",
+            "```md",
+            "# In backticks",
+            "~~~",
+            "# Still in backticks",
+            "```",
+            "~~~~",
+            "## In tildes",
+            "```",
+            "~~~~",
+            "    # Indented",
+            "Para",
+            "    ---",
+            "# After",
+          ],
+          "\n",
+        ),
       ),
     ).resolves.toEqual(["Before", "After"]));
 
@@ -85,7 +93,7 @@ describe("the spec's headings", () => {
   test("are counted across all levels", () =>
     expect(
       specHeadings("# A\n#### deep\n## B\n###### deeper\n### C").then((found) =>
-        found.map(({ level, position }) => [level, position]),
+        Arr.map(found, ({ level, position }) => [level, position]),
       ),
     ).resolves.toEqual([
       [1, 0],
@@ -100,22 +108,28 @@ describe("the spec's headings", () => {
 
   test("are read from the spec trimmed, as it is drawn", () =>
     Promise.all([
-      expect(texts("\n---\ntitle: x\n---\n\n# A\n")).resolves.toEqual(["A"]),
-      expect(texts("    # Indented first\n\n## B")).resolves.toEqual(["Indented first", "B"]),
-    ]));
+      texts("\n---\ntitle: x\n---\n\n# A\n"),
+      texts("    # Indented first\n\n## B"),
+    ]).then(([first, second]) => {
+      expect(first).toEqual(["A"]);
+      expect(second).toEqual(["Indented first", "B"]);
+    }));
 
   test("are counted inside quotes, raw HTML and components, as they are drawn", () =>
     expect(
       texts(
-        [
-          "# Start",
-          "> ## Quoted heading",
-          "<h3>Raw</h3>",
-          "::card",
-          "## In card",
-          "::",
-          "## End",
-        ].join("\n\n"),
+        Arr.join(
+          [
+            "# Start",
+            "> ## Quoted heading",
+            "<h3>Raw</h3>",
+            "::card",
+            "## In card",
+            "::",
+            "## End",
+          ],
+          "\n\n",
+        ),
       ),
     ).resolves.toEqual(["Start", "Quoted heading", "Raw", "In card", "End"]));
 });

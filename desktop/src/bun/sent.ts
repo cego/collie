@@ -1,8 +1,12 @@
 // Every write Desktop sends a host: done only on the host's reply, sent again under the same
 // request when none comes, and each attempt's end kept in `actions.log` on this computer.
 
-import { Cause, Data, Effect, FileSystem, Option, Schema, Semaphore } from "effect";
-import { isJsonObject, isString } from "../../../src/schema";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import { Cause, Data, Effect, FileSystem, Option, Result, Schema, Semaphore, flow } from "effect";
+import { isString } from "../../../src/schema";
 import { nowIso } from "../../../src/time";
 
 /** How long an attempt waits for the host's reply, and how many are made. */
@@ -24,8 +28,11 @@ export const Attempted = Schema.Struct({
 });
 export type Attempted = typeof Attempted.Type;
 
-const lineOf = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ at: Schema.String, ...Attempted.fields })),
+const lineOf = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(Schema.Struct({ at: Schema.String, ...Attempted.fields })),
+  ),
+  Result.getOrThrow,
 );
 
 export type ActionsLog = (line: Attempted) => Effect.Effect<void>;
@@ -43,7 +50,7 @@ export const actionsLog = (dir: string, maxBytes = LOG_BYTES) =>
     writing.set(file, lock);
     return (line) =>
       Effect.gen(function* () {
-        const at = yield* nowIso();
+        const at = yield* nowIso;
         const bytes = new TextEncoder().encode(`${lineOf({ at, ...line })}\n`);
         const size = yield* fs.stat(file).pipe(
           Effect.map((info) => Number(info.size)),
@@ -95,23 +102,21 @@ const IDS = new Set([
 ]);
 
 /** Every string an action carries but its ids and kinds: what a log line never holds. */
-export const withheldOf = (action: Schema.Json, key = ""): ReadonlyArray<string> =>
-  IDS.has(key)
+export const withheldOf = (action: Schema.Json, key = ""): ReadonlyArray<string> => {
+  if (IDS.has(key)) return [];
+  if (isString(action)) return action === "" ? [] : [action];
+  if (Arr.isArray<typeof action>(action)) return Arr.flatMap(action, (value) => withheldOf(value));
+  const object = asObject(action);
+  return Result.isFailure(object)
     ? []
-    : isString(action)
-      ? action === ""
-        ? []
-        : [action]
-      : Array.isArray(action)
-        ? action.flatMap((value) => withheldOf(value))
-        : isJsonObject(action)
-          ? Object.entries(action).flatMap(([at, value]) => withheldOf(value, at))
-          : [];
+    : Arr.flatMap(Rec.toEntries(object.success), ([at, value]) => withheldOf(value, at));
+};
+
+const asObject = Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Json));
 
 const without = (reason: string, withheld: ReadonlyArray<string>) =>
-  withheld.reduce(
-    (left, secret) => left.replace(new RegExp(RegExp.escape(secret), "gi"), "…"),
-    reason,
+  Arr.reduce(withheld, reason, (left, secret) =>
+    pipe(left, Str.replace(new RegExp(RegExp.escape(secret), "gi"), "…")),
   );
 
 export interface Sending extends Omit<Attempted, "attempt" | "ended" | "reason"> {

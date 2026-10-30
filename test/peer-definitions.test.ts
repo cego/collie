@@ -1,6 +1,7 @@
 // Paired hosts keep the user Layer level without Desktop: each file is its latest edit,
 // a removal included, and the text that lost is kept where it lost.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { readAudit } from "../src/audit";
@@ -91,7 +92,7 @@ test(
             );
             yield* until(
               () => Effect.all([text(first, "personas/both.md"), text(second, "personas/both.md")]),
-              (both) => both.every((has) => has === "second's\n"),
+              (both) => Arr.every(both, (has) => has === "second's\n"),
             );
             expect(
               yield* fs.readFileString(
@@ -106,11 +107,11 @@ test(
 
             // Once the last round has finished, a sync's own writes start no more.
             const shares = Effect.all(
-              [first, second].map((side) =>
+              Arr.map([first, second], (side) =>
                 readAudit(`${side.world.state}/definitions`).pipe(
                   Effect.map(
                     (lines) =>
-                      lines.filter((line) => line.operation === "share definitions").length,
+                      Arr.filter(lines, (line) => line.operation === "share definitions").length,
                   ),
                 ),
               ),

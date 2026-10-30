@@ -2,6 +2,7 @@
 // Machine's sweep. Kept here, not in the dialog, so a sweep outlives it; each one's end is also
 // told in a toast.
 
+import * as Arr from "effect/Array";
 import { AsyncResult, Atom, AtomRegistry, injectRegistry, useAtomValue } from "@effect/atom-vue";
 import { Clock, Effect, Exit } from "effect";
 import { failureOf, newRequest } from "../../../src/shared/actions";
@@ -35,7 +36,7 @@ export const useCleanup = () => {
       ),
     );
   const reading = computed(() =>
-    [...reads.value.values()].some(({ state }) => state === "reading"),
+    Arr.some([...reads.value.values()], ({ state }) => state === "reading"),
   );
   const clock = useAtomValue(() => (reading.value ? secondsAtom : stillAtom));
   const setRead = (profile: string, read: CleanupRead) => {
@@ -60,9 +61,9 @@ export const useCleanup = () => {
     reads.value = new Map();
     chosen.value = null;
     sweeps.value = new Map();
-    return Promise.all(live.map(readOne));
+    return Promise.all(Arr.map(live, readOne));
   };
-  const running = () => [...sweeps.value.values()].some(({ state }) => state === "running");
+  const running = () => Arr.some([...sweeps.value.values()], ({ state }) => state === "running");
   const set = (profile: string, sweep: CleanupSweep) => {
     sweeps.value = new Map(sweeps.value).set(profile, sweep);
   };
@@ -95,10 +96,13 @@ export const useCleanup = () => {
     readAgain: readOne,
     clean: (view: CleanupView) =>
       Promise.all(
-        view.rows
-          .filter((row) => row.chosen)
-          .flatMap(listed)
-          .map((machine) => send(machine, newRequest())),
+        Arr.map(
+          Arr.flatMap(
+            Arr.filter(view.rows, (row) => row.chosen),
+            listed,
+          ),
+          (machine) => send(machine, newRequest()),
+        ),
       ),
     tryAgain: (row: { profile: string; name: string }) => {
       const failed = sweeps.value.get(row.profile);

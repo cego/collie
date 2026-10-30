@@ -14,7 +14,8 @@
 //     subscribes this client and immediately replays the current token usage — and that
 //     is the only way Collie can read a Codex agent's current context.
 
-import { Clock, Data, Effect, Schema } from "effect";
+import * as Arr from "effect/Array";
+import { Data, Effect, Option, Queue, Schema, flow, Result } from "effect";
 
 /** What the client sends as itself, which the server echoes into its user agent. */
 const CLIENT_INFO = { name: "collie", version: "0", title: "Collie" };
@@ -34,12 +35,12 @@ const failed = (message: string, code?: number) =>
   new CodexError(code === undefined ? { message } : { message, code });
 
 const Reply = Schema.Struct({
-  id: Schema.optionalKey(Schema.Number),
+  id: Schema.optionalKey(Schema.Finite),
   method: Schema.optionalKey(Schema.String),
   result: Schema.optionalKey(Schema.Unknown),
   params: Schema.optionalKey(Schema.Unknown),
   error: Schema.optionalKey(
-    Schema.Struct({ message: Schema.String, code: Schema.optionalKey(Schema.Number) }),
+    Schema.Struct({ message: Schema.String, code: Schema.optionalKey(Schema.Finite) }),
   ),
 });
 interface Reply extends Schema.Schema.Type<typeof Reply> {}
@@ -60,8 +61,8 @@ export interface CodexParams {
 export interface CodexClient {
   /** One request/response. Fails on a JSON-RPC error or a silent server. */
   call(method: string, params: CodexParams): Effect.Effect<unknown, CodexError>;
-  /** Notifications received so far, in arrival order. */
-  notifications(): ReadonlyArray<{ method: string; params: unknown }>;
+  /** Notifications as they arrive, each taken once. */
+  readonly notifications: Queue.Dequeue<{ method: string; params: unknown }>;
 }
 
 interface Live {
@@ -72,12 +73,12 @@ interface Live {
 const Request = Schema.fromJsonString(
   Schema.Struct({
     jsonrpc: Schema.String,
-    id: Schema.Number,
+    id: Schema.Finite,
     method: Schema.String,
     params: Schema.Unknown,
   }),
 );
-const encodeRequest = Schema.encodeSync(Request);
+const encodeRequest = flow(Schema.encodeResult(Request), Result.getOrThrow);
 
 /**
  * The socket, behind one `Effect.callback`. Kept to this function: everything above it
@@ -85,67 +86,90 @@ const encodeRequest = Schema.encodeSync(Request);
  * is request/response over a stream, and Effect has none for it.
  */
 const open = (url: string) =>
-  Effect.callback<Live, CodexError>((resume) => {
-    const socket = new WebSocket(url);
-    const notifications: { method: string; params: unknown }[] = [];
-    const pending = new Map<number, (reply: Reply) => void>();
-    let nextId = 0;
+  Effect.flatMap(
+    Queue.unbounded<{
+      method: string;
+      params: unknown;
+    }>(),
+    (notifications) =>
+      Effect.callback<Live, CodexError>((resume) => {
+        const socket = new WebSocket(url);
+        const pending = new Map<number, (reply: Reply) => void>();
+        let nextId = 0;
 
-    // Every frame goes through the reply schema, which is where the protocol becomes
-    // domain values: a binary frame, a half-written one and a method Collie does not
-    // know all fall out here rather than reaching the policy.
-    socket.onmessage = (event) => {
-      const decodedReply = decodeReply(event.data);
-      if (decodedReply._tag === "None") return;
-      const reply = decodedReply.value;
-      const waiting = reply.id === undefined ? undefined : pending.get(reply.id);
-      if (waiting !== undefined && reply.id !== undefined) {
-        pending.delete(reply.id);
-        waiting(reply);
-      } else if (reply.method !== undefined) {
-        notifications.push({ method: reply.method, params: reply.params });
-      }
-    };
-    // A close answers everyone still waiting, so a server that goes away fails the
-    // exchange rather than leaving the boundary holding its budget open.
-    socket.onclose = () => {
-      for (const waiting of pending.values()) {
-        waiting({ error: { message: "the connection closed" } });
-      }
-      pending.clear();
-    };
-    socket.onerror = () => resume(Effect.fail(failed(`${url} refused the connection`)));
-    socket.onopen = () => {
-      const call: CodexClient["call"] = (method, params) =>
-        Effect.callback<unknown, CodexError>((answer) => {
-          const id = ++nextId;
-          pending.set(id, (reply) =>
-            answer(
-              reply.error
-                ? Effect.fail(failed(`${method}: ${reply.error.message}`, reply.error.code))
-                : Effect.succeed(reply.result),
-            ),
+        // Every frame goes through the reply schema, which is where the protocol becomes
+        // domain values: a binary frame, a half-written one and a method Collie does not
+        // know all fall out here rather than reaching the policy.
+        socket.onmessage = (event) => {
+          const decodedReply = decodeReply(event.data);
+          if (decodedReply._tag === "None") return;
+          const reply = decodedReply.value;
+          const waiting = reply.id === undefined ? undefined : pending.get(reply.id);
+          if (waiting !== undefined && reply.id !== undefined) {
+            pending.delete(reply.id);
+            waiting(reply);
+          } else if (reply.method !== undefined) {
+            Queue.offerUnsafe(notifications, {
+              method: reply.method,
+              params: reply.params,
+            });
+          }
+        };
+        // A close answers everyone still waiting, so a server that goes away fails the
+        // exchange rather than leaving the boundary holding its budget open.
+        socket.onclose = () => {
+          for (const waiting of pending.values()) {
+            waiting({
+              error: {
+                message: "the connection closed",
+              },
+            });
+          }
+          pending.clear();
+        };
+        socket.onerror = () => resume(Effect.fail(failed(`${url} refused the connection`)));
+        socket.onopen = () => {
+          const call: CodexClient["call"] = (method, params) =>
+            Effect.callback<unknown, CodexError>((answer) => {
+              const id = ++nextId;
+              pending.set(id, (reply) =>
+                answer(
+                  reply.error
+                    ? Effect.fail(failed(`${method}: ${reply.error.message}`, reply.error.code))
+                    : Effect.succeed(reply.result),
+                ),
+              );
+              socket.send(
+                encodeRequest({
+                  jsonrpc: "2.0",
+                  id,
+                  method,
+                  params,
+                }),
+              );
+              return Effect.sync(() => pending.delete(id));
+            }).pipe(
+              Effect.timeoutOrElse({
+                duration: CALL_MS,
+                orElse: () => Effect.fail(failed(`${method} was not answered within ${CALL_MS}ms`)),
+              }),
+            );
+          resume(
+            Effect.succeed({
+              client: {
+                call,
+                notifications,
+              },
+              close: () => socket.close(),
+            }),
           );
-          socket.send(encodeRequest({ jsonrpc: "2.0", id, method, params }));
-          return Effect.sync(() => pending.delete(id));
-        }).pipe(
-          Effect.timeout(CALL_MS),
-          Effect.catchTag("TimeoutError", () =>
-            Effect.fail(failed(`${method} was not answered within ${CALL_MS}ms`)),
-          ),
-        );
-      resume(
-        Effect.succeed({
-          client: { call, notifications: () => notifications },
-          close: () => socket.close(),
-        }),
-      );
-    };
-  }).pipe(
-    Effect.timeout(CALL_MS),
-    Effect.catchTag("TimeoutError", () =>
-      Effect.fail(failed(`${url} did not accept a connection within ${CALL_MS}ms`)),
-    ),
+        };
+      }),
+  ).pipe(
+    Effect.timeoutOrElse({
+      duration: CALL_MS,
+      orElse: () => Effect.fail(failed(`${url} did not accept a connection within ${CALL_MS}ms`)),
+    }),
   );
 
 /**
@@ -221,7 +245,7 @@ const TokenUsage = Schema.Struct({
      * `cachedInputTokens`, `cacheWriteInputTokens`, `outputTokens` and
      * `reasoningOutputTokens` beside it are its overlapping parts, not addends.
      */
-    last: Schema.Struct({ totalTokens: Schema.Number }),
+    last: Schema.Struct({ totalTokens: Schema.Finite }),
   }),
 });
 
@@ -274,10 +298,8 @@ export const boundThread = Effect.fn("Codex.boundThread")(function* (
     mine.push(threadId);
   }
   if (mine.length > 1) {
-    return yield* Effect.fail(
-      failed(
-        `this agent's endpoint has ${mine.length} threads on it; Collie starts one server per agent and cannot say which is this one`,
-      ),
+    return yield* failed(
+      `this agent's endpoint has ${mine.length} threads on it; Collie starts one server per agent and cannot say which is this one`,
     );
   }
   const threadId = mine[0];
@@ -286,10 +308,8 @@ export const boundThread = Effect.fn("Codex.boundThread")(function* (
     // context and must not be measured as if it were.
     return elsewhere.length === 0
       ? null
-      : yield* Effect.fail(
-          failed(
-            `no thread of this agent's on this endpoint: ${elsewhere.join(", ")} — not ${cwd}`,
-          ),
+      : yield* failed(
+          `no thread of this agent's on this endpoint: ${Arr.join(elsewhere, ", ")} — not ${cwd}`,
         );
   }
   return threadId;
@@ -305,16 +325,15 @@ export const currentContext = Effect.fn("Codex.currentContext")(function* (
   threadId: string,
 ) {
   yield* client.call("thread/resume", { threadId });
-  const deadline = (yield* Clock.currentTimeMillis) + REPLAY_MS;
-  for (;;) {
-    for (const note of client.notifications()) {
+  const replayed = Effect.gen(function* () {
+    for (;;) {
+      const note = yield* Queue.take(client.notifications);
       if (note.method !== "thread/tokenUsage/updated") continue;
       const usage = yield* decoded("thread/tokenUsage/updated", TokenUsage, note.params);
       if (usage.threadId === threadId) return usage.tokenUsage.last.totalTokens;
     }
-    if ((yield* Clock.currentTimeMillis) >= deadline) return null;
-    yield* Effect.sleep(100);
-  }
+  });
+  return Option.getOrNull(yield* replayed.pipe(Effect.timeoutOption(REPLAY_MS)));
 });
 
 export interface CompactionItem {
@@ -332,9 +351,10 @@ export const compactionItems = Effect.fn("Codex.compactionItems")(function* (
     ItemsList,
     yield* client.call("thread/items/list", { threadId, sortDirection: "desc", limit: 100 }),
   );
-  return items.data
-    .filter((entry) => entry.item.type === "contextCompaction")
-    .map((entry): CompactionItem => ({ id: entry.item.id, turnId: entry.turnId }));
+  return Arr.map(
+    Arr.filter(items.data, (entry) => entry.item.type === "contextCompaction"),
+    (entry): CompactionItem => ({ id: entry.item.id, turnId: entry.turnId }),
+  );
 });
 
 /**
@@ -352,7 +372,7 @@ export const turnOutcome = Effect.fn("Codex.turnOutcome")(function* (
     TurnsList,
     yield* client.call("thread/turns/list", { threadId, sortDirection: "desc", limit: 20 }),
   );
-  const turn = turns.data.find((entry) => entry.id === turnId);
+  const turn = Option.getOrUndefined(Arr.findFirst(turns.data, (entry) => entry.id === turnId));
   if (!turn || turn.status === "inProgress") return { kind: "running" } as const;
   if (turn.status === "completed") return { kind: "completed" } as const;
   return {
@@ -396,7 +416,7 @@ export const agentThreads = Effect.fn("Codex.agentThreads")(function* (
     );
     const own = thread.ephemeral !== true && !thread.parentThreadId;
     if (own && thread.cwd !== undefined && thread.cwd !== cwd)
-      return yield* Effect.fail(failed(`thread ${threadId} works in ${thread.cwd}, not ${cwd}`));
+      return yield* failed(`thread ${threadId} works in ${thread.cwd}, not ${cwd}`);
     const idle = thread.status?.type === "idle" && thread.turns?.length === 0;
     const unlistable = idle && thread.historyMode === "paginated" && thread.preview === "";
     threads.push({
@@ -433,7 +453,10 @@ export const runningTurns = Effect.fn("Codex.runningTurns")(function* (
     TurnsList,
     yield* client.call("thread/turns/list", { threadId, sortDirection: "desc", limit: 20 }),
   );
-  return turns.data.filter((turn) => turn.status === "inProgress").map((turn) => turn.id);
+  return Arr.map(
+    Arr.filter(turns.data, (turn) => turn.status === "inProgress"),
+    (turn) => turn.id,
+  );
 });
 
 /** Asks the server to end this turn. The empty reply accepts cancellation and promises nothing. */

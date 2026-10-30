@@ -1,6 +1,7 @@
 // A conversation already had, read back from the transcript Claude Code keeps of it. Decoded
 // rather than typed against the SDK, like the live stream; anything unknown is skipped.
 
+import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
 import { attachmentPart, fromListing } from "../shared/attachments";
@@ -64,7 +65,10 @@ const textOf = (
 ) =>
   isString(content)
     ? content
-    : content.flatMap((part) => (isString(part.text) ? [part.text] : [])).join("\n");
+    : Arr.join(
+        Arr.flatMap(content, (part) => (isString(part.text) ? [part.text] : [])),
+        "\n",
+      );
 
 /**
  * The human's words, then the files Desktop listed after them, and the card Desktop noted
@@ -75,18 +79,24 @@ const humanMessage = (content: Parameters<typeof textOf>[0]) => {
     const parts: Part[] = content === "" ? [] : [{ type: "text", content }];
     return { parts, about: null };
   }
-  const texts = content.flatMap((part) =>
+  const texts = Arr.flatMap(content, (part) =>
     part.type === "text" && isString(part.text) ? [part.text] : [],
   );
-  const noted = texts.findIndex((text) => fromAboutNote(text) !== null);
+  const noted = Option.getOrElse(
+    Arr.findFirstIndex(texts, (text) => fromAboutNote(text) !== null),
+    () => -1,
+  );
   const about = noted < 0 ? null : fromAboutNote(texts[noted]!);
-  const own = texts.filter((_, at) => at !== noted);
-  const at = own.findIndex((text) => fromListing(text) !== null);
-  const words = (at < 0 ? own : own.slice(0, at)).join("\n");
+  const own = Arr.filter(texts, (_, at) => at !== noted);
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(own, (text) => fromListing(text) !== null),
+    () => -1,
+  );
+  const words = Arr.join(at < 0 ? own : own.slice(0, at), "\n");
   const files = at < 0 ? [] : (fromListing(own[at]!) ?? []);
   const parts: Part[] = [
     ...(words === "" ? [] : [{ type: "text" as const, content: words }]),
-    ...files.map(attachmentPart),
+    ...Arr.map(files, attachmentPart),
   ];
   return { parts, about };
 };
@@ -99,15 +109,22 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<Cha
     parts: Part[];
     metadata?: { about: About };
   }> = [];
-  for (const entry of entries.map((entry) => decodeEntry(entry)).flatMap(Option.toArray)) {
+  for (const entry of Arr.flatMap(
+    Arr.map(entries, (entry) => decodeEntry(entry)),
+    Option.toArray,
+  )) {
     if (entry.type === "user") {
       const content = entry.message.content;
       const said = textOf(content);
       for (const part of isString(content) ? [] : content) {
         if (!("tool_use_id" in part)) continue;
         const answering = messages.at(-1)?.parts ?? [];
-        const at = answering.findIndex(
-          (call) => call.type === "tool-call" && call.id === part.tool_use_id,
+        const at = Option.getOrElse(
+          Arr.findFirstIndex(
+            answering,
+            (call) => call.type === "tool-call" && call.id === part.tool_use_id,
+          ),
+          () => -1,
         );
         const call = answering[at];
         if (call?.type === "tool-call") answering[at] = { ...call, output: textOf(part.content) };
@@ -122,7 +139,7 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<Cha
         );
       continue;
     }
-    const parts = entry.message.content.flatMap((block): Part[] =>
+    const parts = Arr.flatMap(entry.message.content, (block): Part[] =>
       "text" in block
         ? [{ type: "text", content: block.text }]
         : "thinking" in block

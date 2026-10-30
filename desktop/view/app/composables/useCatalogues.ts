@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { useAtomSet } from "@effect/atom-vue";
 import { Cause, Exit } from "effect";
 import { rememberCatalogues, type MachineCatalogue } from "../../../src/shared/settings-agents";
@@ -23,7 +24,14 @@ export const useCatalogues = () => {
   };
   const { now, rows } = useFlock();
   watch(
-    [now, () => rows.value.map(({ profile, state }) => `${profile}:${state}`).join(",")],
+    [
+      now,
+      () =>
+        Arr.join(
+          Arr.map(rows.value, ({ profile, state }) => `${profile}:${state}`),
+          ",",
+        ),
+    ],
     () => {
       void refresh();
     },

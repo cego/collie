@@ -1,6 +1,9 @@
 // `collie usage`: how much of each Subscription this Machine's logins have used, per
 // window, as its host last read it (ADR-0049).
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Clock, Effect } from "effect";
 import { Command } from "effect/cli";
 import { usageReadings } from "../lifecycle";
@@ -10,11 +13,14 @@ import { answering, cliDoor } from "./shared";
 
 /** One line per window, then the reading's age and source, or its problem. */
 export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): string {
-  return readings
-    .flatMap((reading) => {
-      const who = [reading.plan, reading.accountLabel].filter((part) => part !== null).join(" · ");
-      const head = `${reading.subscription.padEnd(8)}${who === "" ? "" : `${who}  `}`;
-      const windows = reading.windows.map((read) => {
+  return Arr.join(
+    Arr.flatMap(readings, (reading) => {
+      const who = Arr.join(
+        Arr.filter([reading.plan, reading.accountLabel], (part) => part !== null),
+        " · ",
+      );
+      const head = `${pipe_(reading.subscription, Str.padEnd(8))}${who === "" ? "" : `${who}  `}`;
+      const windows = Arr.map(reading.windows, (read) => {
         const window = current(read, now);
         const used = `${window.label} ${Math.round(window.usedPercent)}%${window.reached ? " (reached)" : ""}`;
         return window.resetsAt === null
@@ -28,9 +34,10 @@ export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): 
           : windows.length === 0
             ? reading.problem
             : `${reading.problem}; ${age}`;
-      return [...windows, `${reading.subscription.padEnd(8)}${said}`];
-    })
-    .join("\n");
+      return [...windows, `${pipe_(reading.subscription, Str.padEnd(8))}${said}`];
+    }),
+    "\n",
+  );
 }
 
 export const usage = Command.make("usage", {}, () =>

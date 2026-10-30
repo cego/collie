@@ -2,6 +2,9 @@
 // no engine state — it draws the Runs the host reports and the live-agent register,
 // so deleting the tab loses nothing and the next Run recreates it.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Clock, Effect, FileSystem, Option, Path } from "effect";
 import { behindRemote } from "./doctor";
 import { newerRelease, RELEASES } from "./releases";
@@ -197,7 +200,12 @@ const RECENT_PER_GROUP = 2;
  * workspace is quiet.
  */
 function leader(runs: Pick<WideGroup, "active" | "recent">): RunRow | null {
-  return runs.active.find((r) => r.needsYou) ?? runs.active[0] ?? runs.recent[0] ?? null;
+  return (
+    Option.getOrUndefined(Arr.findFirst(runs.active, (r) => r.needsYou)) ??
+    runs.active[0] ??
+    runs.recent[0] ??
+    null
+  );
 }
 
 /** Whether Collie has anything at all in a workspace: a run, an agent, or a history. */
@@ -212,7 +220,7 @@ function summarise(run: RunFacts): string {
 }
 
 function groupGlyph(runs: Pick<WideGroup, "active" | "recent">): string {
-  if (runs.active.some((r) => r.needsYou)) return GLYPH.waiting;
+  if (Arr.some(runs.active, (r) => r.needsYou)) return GLYPH.waiting;
   if (runs.active.length > 0) return GLYPH.running;
   // Nothing running: the newest finished run's own glyph, so a workspace whose last
   // run failed or stopped does not wear a tick.
@@ -221,12 +229,7 @@ function groupGlyph(runs: Pick<WideGroup, "active" | "recent">): string {
 
 /** The last component of a path, which is the name a human uses for a checkout. */
 function checkoutName(cwd: string): string {
-  return (
-    cwd
-      .split("/")
-      .filter((part) => part !== "")
-      .at(-1) ?? "somewhere else"
-  );
+  return Arr.filter(Str.split(cwd, "/"), (part) => part !== "").at(-1) ?? "somewhere else";
 }
 
 /** Where a Run lives: a workspace of its own, else its Task's; null where neither says. */
@@ -264,7 +267,7 @@ const activeDetail = Effect.fn("activeDetail")(function* (
   const parts = [run.workflow];
   const quiet = yield* quietFor(run.dir, now, quietMs);
   if (quiet) parts.push(quiet);
-  return parts.join(" · ");
+  return Arr.join(parts, " · ");
 });
 
 /**
@@ -276,7 +279,7 @@ const mtimeOf = Effect.fn("mtimeOf")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.stat(file).pipe(
     Effect.map((s) => (Option.isSome(s.mtime) ? s.mtime.value.getTime() : 0)),
-    Effect.catch(() => Effect.succeed(0)),
+    Effect.orElseSucceed(() => 0),
   );
 });
 
@@ -290,7 +293,7 @@ const mtimeOf = Effect.fn("mtimeOf")(function* (file: string) {
 export const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
+  const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
   let newest = 0;
   for (const name of names) {
     const at = yield* mtimeOf(path.join(dir, name));
@@ -337,9 +340,7 @@ function outcomeOf(run: RunFacts): Pick<RunRow, "outcome" | "gaps" | "obstacle" 
  */
 const deliveredOf = Effect.fn("deliveredOf")(function* (run: RunFacts) {
   if (run.state === "succeeded") return null;
-  const line = latest(
-    yield* readDispositions(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
-  );
+  const line = latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])));
   if (line === null) return null;
   return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
 });
@@ -348,7 +349,7 @@ function recentDetail(run: RunFacts): string {
   const parts: string[] = [run.state];
   if (run.state !== "succeeded" && run.note !== null) parts.push(run.note);
   if (run.mr !== null) parts.push(run.mr);
-  return parts.join(" · ");
+  return Arr.join(parts, " · ");
 }
 
 function glyphFor(run: RunFacts): string {
@@ -411,22 +412,23 @@ export const buildView = Effect.fn("buildView")(function* (
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
   // Only agents in this workspace count, whatever a run says.
-  const here = opts.alive.filter(
+  const here = Arr.filter(
+    opts.alive,
     (a) => a.workspaceId === null || a.workspaceId === opts.workspaceId,
   );
-  const live = new Map(here.map((a) => [a.name, a]));
+  const live = new Map(Arr.map(here, (a) => [a.name, a]));
   const alive = liveEntries(opts.registered, here);
-  const tasks = new Map(opts.tasks.map((task) => [task.id, task]));
-  const agentsHere = (run: RunFacts) => alive.filter((entry) => entry.runId === run.id);
+  const tasks = new Map(Arr.map(opts.tasks, (task) => [task.id, task]));
+  const agentsHere = (run: RunFacts) => Arr.filter(alive, (entry) => entry.runId === run.id);
 
-  const runs = opts.runs.filter((r) =>
+  const runs = Arr.filter(opts.runs, (r) =>
     belongs(workspaceOf(r, tasks), opts, agentsHere(r), opts.grouped ?? false),
   );
 
   const rows: AgentRow[] = [];
   for (const run of runs) {
     for (const entry of agentsHere(run)) {
-      if (rows.some((r) => r.agent === entry.agent)) continue;
+      if (Arr.some(rows, (r) => r.agent === entry.agent)) continue;
       const agent = live.get(entry.agent);
       rows.push({
         key: "",
@@ -442,16 +444,16 @@ export const buildView = Effect.fn("buildView")(function* (
   // the digits there are numbered down the whole tree.
   const agents = opts.grouped
     ? rows
-    : rows.slice(0, MAX_AGENTS).map((r, i) => ({ ...r, key: String(i + 1) }));
+    : Arr.map(rows.slice(0, MAX_AGENTS), (r, i) => ({ ...r, key: String(i + 1) }));
 
   const fixable = new Set<string>();
   for (const r of runs) if (yield* fixableRun(r)) fixable.add(r.id);
 
   const active: RunRow[] = [];
-  for (const r of runs.filter((r) => !settled(r))) {
+  for (const r of Arr.filter(runs, (r) => !settled(r))) {
     // herdr's own word for an agent sitting at its harness's dialog: a permission
     // prompt mid-step, which nothing records — the pane is there, asking.
-    const blocked = rows.some((row) => row.run === r.id && row.status === "blocked");
+    const blocked = Arr.some(rows, (row) => row.run === r.id && row.status === "blocked");
     active.push({
       id: r.id,
       dir: r.dir,
@@ -473,7 +475,7 @@ export const buildView = Effect.fn("buildView")(function* (
   }
 
   const recent: RunRow[] = [];
-  for (const r of runs.filter(settled).slice(0, RECENT)) {
+  for (const r of Arr.filter(runs, settled).slice(0, RECENT)) {
     recent.push({
       id: r.id,
       dir: r.dir,
@@ -533,24 +535,30 @@ const groupOf = Effect.fn("groupOf")(function* (
   // the repo, the worktrees and how far behind the installation is are the Session's,
   // not one workspace's.
   const kept = { active: view.active, recent: view.recent.slice(0, RECENT_PER_GROUP) };
-  const needsYou = kept.active.filter((r) => r.needsYou).length;
+  const needsYou = Arr.filter(kept.active, (r) => r.needsYou).length;
   // The run that speaks for the group, as its record: its step and its round are what
   // the group row says, and a row carries neither.
   const lead = leader(kept);
-  const leading = lead ? (opts.runs.find((r) => r.id === lead.id) ?? null) : null;
+  const leading = lead
+    ? (Option.getOrUndefined(Arr.findFirst(opts.runs, (r) => r.id === lead.id)) ?? null)
+    : null;
   return {
     workspaceId: opts.workspaceId,
     label: opts.label,
     glyph: groupGlyph(kept),
     running: kept.active.length,
     needsYou,
-    summary: [
-      kept.active.length > 0 ? `${kept.active.length} running` : "nothing running",
-      needsYou > 0 ? `${needsYou} need you` : "",
-      leading ? summarise(leading) : "",
-    ]
-      .filter((part) => part !== "")
-      .join(" · "),
+    summary: Arr.join(
+      Arr.filter(
+        [
+          kept.active.length > 0 ? `${kept.active.length} running` : "nothing running",
+          needsYou > 0 ? `${needsYou} need you` : "",
+          leading ? summarise(leading) : "",
+        ],
+        (part) => part !== "",
+      ),
+      " · ",
+    ),
     ...kept,
     agents: view.agents,
   } satisfies WideGroup;
@@ -576,7 +584,7 @@ export const buildWideView = Effect.fn("buildWideView")(function* (opts: {
 }) {
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const runs = opts.runs;
-  const tasks = new Map(opts.tasks.map((task) => [task.id, task]));
+  const tasks = new Map(Arr.map(opts.tasks, (task) => [task.id, task]));
   const shared = {
     session: opts.session,
     stateDir: opts.stateDir,
@@ -602,26 +610,34 @@ export const buildWideView = Effect.fn("buildWideView")(function* (opts: {
         // herdr's own label, minus the status glyph it starts with — the gutter carries
         // one already. Never an id: this is the workspace's name. The boundary's own
         // regex, which is what keeps a workspace called `.dotfiles` called that.
-        label: workspace.label.replace(LEADING_GLYPH, ""),
+        label: pipe(workspace.label, Str.replace(LEADING_GLYPH, "")),
       }),
     );
   }
 
   // Collie's workspaces are the board; the rest of the session is one line at the end.
-  const groups = all.filter(collies);
-  const quiet = all.filter((group) => !collies(group)).map((group) => group.label);
+  const groups = Arr.filter(all, collies);
+  const quiet = Arr.map(
+    Arr.filter(all, (group) => !collies(group)),
+    (group) => group.label,
+  );
 
   // Elsewhere: every workspace id an active run names that this session has no
   // workspace for — one that was closed, or another herdr session's. Nothing is hidden;
   // a run still going somewhere this board cannot show is still news.
-  const mine = new Set(opts.workspaces.map((w) => w.workspaceId));
-  const living = runs.filter((r) => !settled(r));
+  const mine = new Set(Arr.map(opts.workspaces, (w) => w.workspaceId));
+  const living = Arr.filter(runs, (r) => !settled(r));
   const foreign = new Set(
-    living.flatMap((r) => workspaceOf(r, tasks) ?? []).filter((id) => !mine.has(id)),
+    Arr.filter(
+      Arr.flatMap(living, (r) => Arr.ensure(workspaceOf(r, tasks) ?? [])),
+      (id) => !mine.has(id),
+    ),
   );
   const away: WideGroup[] = [];
   for (const workspaceId of foreign) {
-    const cwd = living.find((r) => workspaceOf(r, tasks) === workspaceId)?.cwd ?? "";
+    const cwd =
+      Option.getOrUndefined(Arr.findFirst(living, (r) => workspaceOf(r, tasks) === workspaceId))
+        ?.cwd ?? "";
     away.push(
       yield* groupOf({
         ...shared,
@@ -640,16 +656,19 @@ export const buildWideView = Effect.fn("buildWideView")(function* (opts: {
   }
   // Only the ones that actually contributed a row: a foreign id whose runs all turned
   // out to be abandoned is not something to name in a heading.
-  const named = away.filter((group) => group.active.length > 0);
+  const named = Arr.filter(away, (group) => group.active.length > 0);
   if (named.length > 0) {
     groups.push({
       workspaceId: null,
-      label: `Elsewhere · ${named.map((g) => g.label).join(" · ")}`,
-      glyph: named.some((g) => g.needsYou > 0) ? GLYPH.waiting : GLYPH.running,
-      running: named.reduce((n, g) => n + g.running, 0),
-      needsYou: named.reduce((n, g) => n + g.needsYou, 0),
+      label: `Elsewhere · ${Arr.join(
+        Arr.map(named, (g) => g.label),
+        " · ",
+      )}`,
+      glyph: Arr.some(named, (g) => g.needsYou > 0) ? GLYPH.waiting : GLYPH.running,
+      running: Arr.reduce(named, 0, (n, g) => n + g.running),
+      needsYou: Arr.reduce(named, 0, (n, g) => n + g.needsYou),
       summary: "a workspace this session no longer has — nothing to jump to",
-      active: named.flatMap((g) => g.active),
+      active: Arr.flatMap(named, (g) => g.active),
       // Nothing finished, and no agents: their panes are in a workspace this session
       // cannot reach, so there is nothing here to focus or to give a digit to.
       recent: [],
@@ -689,7 +708,7 @@ function askingRows(choice: PendingChoice, asking: Asking): string[] {
   }
   for (const [i, item] of choice.items.entries()) {
     const marker = i === asking.index ? "❯" : " ";
-    rows.push(`      ${marker} ${item.title.padEnd(26)}${item.subtitle ?? ""}`);
+    rows.push(`      ${marker} ${pipe(item.title, Str.padEnd(26))}${item.subtitle ?? ""}`);
   }
   rows.push("      ↑↓ move · Enter choose · Esc leave the run open");
   return rows;
@@ -706,12 +725,12 @@ function liveLines(live: Live): string[] {
       ? []
       : ownershipLines(live.ownership.why, live.ownership.candidates)),
     ...newsLines(live.news),
-    ...live.cards.flatMap(cardLines),
-    ...live.drift.flatMap((report) => driftLines(report)),
-    ...live.pending.flatMap((report) => driftLines(report, true)),
-    ...live.deliveries.map(deliveryLine),
+    ...Arr.flatMap(live.cards, cardLines),
+    ...Arr.flatMap(live.drift, (report) => driftLines(report)),
+    ...Arr.flatMap(live.pending, (report) => driftLines(report, true)),
+    ...Arr.map(live.deliveries, deliveryLine),
   ];
-  return lines.map((entry) => `  ${asText(entry)}`);
+  return Arr.map(lines, (entry) => `  ${asText(entry)}`);
 }
 
 /**
@@ -720,15 +739,15 @@ function liveLines(live: Live): string[] {
  * about the same Runs is exactly what one Home per Herd exists to prevent (ADR-0009).
  */
 export function renderRedirect(): string {
-  return [
-    "Collie moved to the Home — one board for the whole herdr session.",
-    "o open Collie",
-  ].join("\n");
+  return Arr.join(
+    ["Collie moved to the Home — one board for the whole herdr session.", "o open Collie"],
+    "\n",
+  );
 }
 
 /** The run whose question is being answered, if any: the first one asking. */
 export function askingRun(view: WorkspaceView): RunRow | null {
-  return view.active.find((r) => r.choice) ?? null;
+  return Option.getOrUndefined(Arr.findFirst(view.active, (r) => Boolean(r.choice))) ?? null;
 }
 
 /** Plain lists, one screen, no boxes: this is a status board, not an application. */
@@ -748,8 +767,10 @@ export function renderWorkspace(
   }
   if (view.newer) lines.push(newerLine(view.newer));
 
-  const agents = view.agents.map(
-    (a) => `  ${a.key}  ${a.name.padEnd(22)}${a.status.padEnd(9)}${a.now ?? a.run}`,
+  const agents = Arr.map(
+    view.agents,
+    (a) =>
+      `  ${a.key}  ${pipe(a.name, Str.padEnd(22))}${pipe(a.status, Str.padEnd(9))}${a.now ?? a.run}`,
   );
   if (view.extraAgents > 0) agents.push(`     … and ${view.extraAgents} more without a key`);
 
@@ -772,7 +793,7 @@ export function renderWorkspace(
   lines.push(
     // Only where there are any: a repository Collie has no checkout of has nothing to
     // say here, and an empty section would be noise on every refresh.
-    ...(view.worktrees.length > 0 ? section("Worktrees", view.worktrees.map(indent), "") : []),
+    ...(view.worktrees.length > 0 ? section("Worktrees", Arr.map(view.worktrees, indent), "") : []),
     ...section("Agents", agents, "none live here"),
     // The board's own three sections, as the pane draws them. One model behind both, so
     // a human on the escape hatch and a human on the board are told the same thing —
@@ -783,12 +804,12 @@ export function renderWorkspace(
     ),
     ...(steering.live ? section("Live", liveLines(steering.live), "nothing yet") : []),
     "",
-    keys.join(" · "),
+    Arr.join(keys, " · "),
   );
   if (note) lines.push("", note);
-  return lines.join("\n");
+  return Arr.join(lines, "\n");
 }
 
 export function agentForKey(view: WorkspaceView, key: string): AgentRow | null {
-  return view.agents.find((a) => a.key === key) ?? null;
+  return Option.getOrUndefined(Arr.findFirst(view.agents, (a) => a.key === key)) ?? null;
 }

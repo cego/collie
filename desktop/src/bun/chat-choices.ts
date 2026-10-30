@@ -1,6 +1,10 @@
 // What each harness offers the Flock chat, and what its session opens on: the set choice,
 // with an unset model and effort resolved as the harness, or Pi's own configuration, has them.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { homedir } from "node:os";
 import { Effect, FileSystem, Path, Schema, Stream } from "effect";
 import { HARNESS_MODELS } from "../../../src/harness-choice";
@@ -15,8 +19,11 @@ import { chatChoice, extraModels, type Offers } from "./settings";
 export const readPiConfig = Effect.fn("PiConfig.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const configured = childEnv().PI_CODING_AGENT_DIR;
   const agent =
-    childEnv().PI_CODING_AGENT_DIR?.replace(/^~(?=\/|$)/, homedir()) ?? `${homedir()}/.pi/agent`;
+    configured === undefined
+      ? `${homedir()}/.pi/agent`
+      : Str.replace(/^~(?=\/|$)/, homedir())(configured);
   return yield* fs.readFileString(path.resolve(dir, agent, "settings.json")).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PiConfig))),
     Effect.orElseSucceed((): PiConfig => ({})),
@@ -33,19 +40,23 @@ export const tableOffer = (
   const set =
     (settings.chatHarness ?? DEFAULT_CHAT_HARNESS) === harness ? settings.chatModel : undefined;
   const efforts = HARNESS_MODELS[harness]?.efforts ?? [];
-  const listed = [
-    ...new Set([
-      ...(HARNESS_MODELS[harness]?.models ?? []),
-      ...(extraModels(flock)[harness] ?? []),
-      ...(set === undefined ? [] : [set]),
-    ]),
-  ]
-    .filter((id) => chatChoice({ proactive: true, chatHarness: harness, chatModel: id }, flock).ok)
-    .map((id) => ({ id, efforts }));
+  const listed = Arr.map(
+    Arr.filter(
+      [
+        ...new Set([
+          ...(HARNESS_MODELS[harness]?.models ?? []),
+          ...(extraModels(flock)[harness] ?? []),
+          ...(set === undefined ? [] : [set]),
+        ]),
+      ],
+      (id) => chatChoice({ proactive: true, chatHarness: harness, chatModel: id }, flock).ok,
+    ),
+    (id) => ({ id, efforts }),
+  );
   return {
     from: "table",
     unset: runsAs({ harness }, listed, pi),
-    models: listed.map(({ id }) => ({
+    models: Arr.map(listed, ({ id }) => ({
       id,
       label: id,
       efforts,
@@ -68,14 +79,17 @@ const withList = (
   const harness = table.unset.harness;
   const typed =
     (settings.chatHarness ?? DEFAULT_CHAT_HARNESS) === harness &&
-    table.models.find(
-      ({ id }) => id === settings.chatModel && !list.models.some((model) => model.id === id),
+    Option.getOrUndefined(
+      Arr.findFirst(
+        table.models,
+        ({ id }) => id === settings.chatModel && !Arr.some(list.models, (model) => model.id === id),
+      ),
     );
   return {
     from: "harness",
     unset: runsAs({ harness }, list.models, pi),
     ...(typed && { typed: runsAs({ harness, model: typed.id }, list.models, pi) }),
-    models: list.models.map((model) => ({
+    models: Arr.map(list.models, (model) => ({
       ...model,
       unsetEffort: runsAs({ harness, model: model.id }, list.models, pi).effort,
     })),
@@ -121,7 +135,7 @@ export const offersOf = <R>(
           ] as const,
       ),
     ),
-  ).pipe(Effect.map((offered): Offers => Object.fromEntries(offered)));
+  ).pipe(Effect.map((offered): Offers => Rec.fromEntries(offered)));
 
 /** The checked session choice, with Pi's configuration read afresh. */
 export const opensOn = <R>(

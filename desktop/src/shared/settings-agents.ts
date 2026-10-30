@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { Schema } from "effect";
 import { type CatalogueEntry, HarnessCatalogue } from "../../../src/catalogue-model";
 import { chainEntry, DEFAULT_MODEL, HARNESS_MODELS } from "../../../src/harness-choice";
@@ -22,9 +25,9 @@ export const rememberCatalogues = (
   fresh: ReadonlyArray<MachineCatalogue>,
   machines: ReadonlyArray<Pick<MachineRow, "profile" | "name" | "state">>,
 ): ReadonlyArray<MachineCatalogue> =>
-  machines.map(({ profile, name, state }) => {
-    const read = fresh.find((one) => one.profile === profile);
-    const before = held.find((one) => one.profile === profile);
+  Arr.map(machines, ({ profile, name, state }) => {
+    const read = Option.getOrUndefined(Arr.findFirst(fresh, (one) => one.profile === profile));
+    const before = Option.getOrUndefined(Arr.findFirst(held, (one) => one.profile === profile));
     return {
       profile,
       name,
@@ -53,12 +56,13 @@ export const settingsAgentSelects = (
   set: AgentSettings,
   now = 0,
 ) => {
-  const live = readings.filter(({ profile }) => profiles.includes(profile));
-  const merged = HARNESS_NAMES.map((harness) => {
-    const sources = live.flatMap(({ profile, name, catalogues }) =>
-      catalogues
-        .filter((one) => one.harness === harness)
-        .map((catalogue) => ({ profile, name, ...catalogue })),
+  const live = Arr.filter(readings, ({ profile }) => profiles.includes(profile));
+  const merged = Arr.map(HARNESS_NAMES, (harness) => {
+    const sources = Arr.flatMap(live, ({ profile, name, catalogues }) =>
+      Arr.map(
+        Arr.filter(catalogues, (one) => one.harness === harness),
+        (catalogue) => ({ profile, name, ...catalogue }),
+      ),
     );
     const models = new Map<
       string,
@@ -99,7 +103,7 @@ export const settingsAgentSelects = (
     heldOn: set.harness,
     runsOn: null,
     turning: false,
-    harnesses: merged.map(({ harness, sources, models }) => ({
+    harnesses: Arr.map(merged, ({ harness, sources, models }) => ({
       harness,
       label: harnessName(harness),
       installed: sources.length > 0,
@@ -110,7 +114,7 @@ export const settingsAgentSelects = (
           model: HARNESS_MODELS[harness]?.defaultModel ?? DEFAULT_MODEL,
           effort: null,
         },
-        models: [...models].map(([id, { entry, efforts }]) => ({
+        models: Arr.map([...models], ([id, { entry, efforts }]) => ({
           id,
           label: entry.label,
           description: entry.description ?? undefined,
@@ -129,9 +133,11 @@ export const settingsAgentSelects = (
     },
     choices,
   );
-  const selected = merged.find(({ harness }) => harness === set.harness);
+  const selected = Option.getOrUndefined(
+    Arr.findFirst(merged, ({ harness }) => harness === set.harness),
+  );
   const model = (id: string) => selected?.models.get(id);
-  const modelOptions = selects.model.options.map((option) => {
+  const modelOptions = Arr.map(selects.model.options, (option) => {
     if (option.value === "")
       return { ...option, description: "The harness's default model for workflow steps" };
     const entry = model(option.value);
@@ -139,13 +145,17 @@ export const settingsAgentSelects = (
       ? option
       : {
           ...option,
-          description: [
-            count(entry.machines.size, profiles.length),
-            ...entry.origins,
-            entry.entry.description,
-          ]
-            .filter(Boolean)
-            .join(" · "),
+          description: Arr.join(
+            Arr.filter(
+              [
+                count(entry.machines.size, profiles.length),
+                ...entry.origins,
+                entry.entry.description,
+              ],
+              (part) => part !== null,
+            ),
+            " · ",
+          ),
         };
   });
   const effective =
@@ -156,28 +166,32 @@ export const settingsAgentSelects = (
   const efforts = picked?.efforts ?? new Map<string, Set<string>>();
   if ((!set.model || set.model === DEFAULT_MODEL) && !HARNESS_MODELS[set.harness]?.defaultModel)
     for (const source of selected?.sources ?? []) {
-      const defaultModel = source.entries.find((entry) => entry.isDefault);
+      const defaultModel = Option.getOrUndefined(
+        Arr.findFirst(source.entries, (entry) => entry.isDefault === true),
+      );
       for (const effort of defaultModel?.efforts ??
-        source.entries.flatMap((entry) => entry.efforts)) {
+        Arr.flatMap(source.entries, (entry) => entry.efforts)) {
         const on = efforts.get(effort) ?? new Set<string>();
         on.add(source.profile);
         efforts.set(effort, on);
       }
     }
-  const times = live
-    .filter(({ problem }) => problem === null)
-    .flatMap(({ catalogues }) => catalogues.map(({ at }) => at))
-    .sort();
+  const times = Arr.flatMap(
+    Arr.filter(live, ({ problem }) => problem === null),
+    (reading: MachineCatalogue) => Arr.map(reading.catalogues, ({ at }) => at),
+  ).sort();
   if (times.length === 0)
-    times.push(...live.flatMap(({ catalogues }) => catalogues.map(({ at }) => at)).sort());
-  const problems = live.flatMap(({ name, problem, catalogues }) => {
+    times.push(
+      ...Arr.flatMap(live, ({ catalogues }) => Arr.map(catalogues, ({ at }) => at)).sort(),
+    );
+  const problems = Arr.flatMap(live, ({ name, problem, catalogues }) => {
     if (catalogues.length === 0)
       return [
         problem === null
           ? `${name}: no harnesses reported`
           : `${name} not read yet${problem === "not read yet" ? "" : `: ${problem}`}`,
       ];
-    const at = catalogues.map(({ at }) => at).sort()[0]!;
+    const at = Arr.map(catalogues, ({ at }) => at).sort()[0]!;
     return problem === null ? [] : [`${name}'s at ${whenOf(at, now)}: ${problem}`];
   });
   const effort: ChoiceSelect = {
@@ -187,7 +201,7 @@ export const settingsAgentSelects = (
     name: `Effort: ${set.effort || "default"}`,
     options: [
       { value: "", label: "Default · the harness decides" },
-      ...[...efforts].map(([value, on]) => ({
+      ...Arr.map([...efforts], ([value, on]) => ({
         value,
         label: value,
         description: count(on.size, profiles.length),
@@ -198,10 +212,11 @@ export const settingsAgentSelects = (
   return {
     harness: {
       ...selects.harness,
-      options: selects.harness.options.map((option) => ({
+      options: Arr.map(selects.harness.options, (option) => ({
         ...option,
         description: count(
-          merged.find(({ harness }) => harness === option.value)?.sources.length ?? 0,
+          Option.getOrUndefined(Arr.findFirst(merged, ({ harness }) => harness === option.value))
+            ?.sources.length ?? 0,
           profiles.length,
         ),
         ...(option.disabled && { description: "Not reported on any Machine" }),
@@ -222,20 +237,23 @@ export const settingsAgentSelects = (
           : undefined,
     },
     effort,
-    lead: [
-      times.length === 0
-        ? "No harness catalogues available yet."
-        : `Catalogues read ${whenOf(times[0]!, now)} · ${live.filter(({ catalogues }) => catalogues.length > 0).length} of ${profiles.length} Machines read`,
-      ...problems,
-    ].join(" · "),
+    lead: Arr.join(
+      [
+        times.length === 0
+          ? "No harness catalogues available yet."
+          : `Catalogues read ${whenOf(times[0]!, now)} · ${Arr.filter(live, ({ catalogues }) => catalogues.length > 0).length} of ${profiles.length} Machines read`,
+        ...problems,
+      ],
+      " · ",
+    ),
   };
 };
 
 const fallbackValues = (value: string) =>
-  value
-    .split(",")
-    .map((one) => one.trim())
-    .filter(Boolean);
+  Arr.filter(
+    Arr.map(Str.split(value, ","), (one) => Str.trim(one)),
+    Boolean,
+  );
 
 export const agentSettingChanges = (
   catalogues: ReadonlyArray<MachineCatalogue>,
@@ -253,7 +271,7 @@ export const agentSettingChanges = (
   if (key === "harness" && value !== current.harness)
     next = { ...next, model: DEFAULT_MODEL, effort: "" };
   const select = settingsAgentSelects(catalogues, profiles, next);
-  if (key === "model" && !select.effort.options.some((option) => option.value === next.effort))
+  if (key === "model" && !Arr.some(select.effort.options, (option) => option.value === next.effort))
     next = { ...next, effort: "" };
   return [
     { key: "harness", value: next.harness },
@@ -279,7 +297,7 @@ export const changeFallbacks = (
         [values[action.at], values[to]] = [values[to]!, values[action.at]!];
     }
   }
-  return values.join(", ");
+  return Arr.join(values, ", ");
 };
 
 export const fallbackList = (
@@ -290,7 +308,7 @@ export const fallbackList = (
   now: number,
 ) => {
   const values = fallbackValues(value);
-  const entries = values.map((value) => {
+  const entries = Arr.map(values, (value) => {
     const choice = chainEntry(value);
     const subscription = subscriptionOf({
       harness: choice.harness!,
@@ -302,9 +320,10 @@ export const fallbackList = (
         subscription === null
           ? []
           : usageEntries(
-              usage.map((machine) => ({
+              Arr.map(usage, (machine) => ({
                 ...machine,
-                readings: machine.readings.filter(
+                readings: Arr.filter(
+                  machine.readings,
                   (reading) => reading.subscription === subscription,
                 ),
               })),
@@ -313,20 +332,29 @@ export const fallbackList = (
             ),
     };
   });
-  const options = HARNESS_NAMES.flatMap((harness) => {
-    const selects = settingsAgentSelects(catalogues, profiles, { harness });
-    if (selects.harness.options.find(({ value }) => value === harness)?.disabled) return [];
-    return [
-      { value: harness, label: `${harnessName(harness)} · its default model` },
-      ...selects.model.options
-        .filter(({ value }) => value !== "")
-        .map((option) => ({
-          ...option,
-          value: `${harness}/${option.value}`,
-          label: `${harnessName(harness)} · ${option.label}`,
-        })),
-    ];
-  }).filter((option) => !values.includes(option.value));
+  const options = Arr.filter(
+    Arr.flatMap(HARNESS_NAMES, (harness) => {
+      const selects = settingsAgentSelects(catalogues, profiles, { harness });
+      if (
+        Option.getOrUndefined(
+          Arr.findFirst(selects.harness.options, ({ value }) => value === harness),
+        )?.disabled
+      )
+        return [];
+      return [
+        { value: harness, label: `${harnessName(harness)} · its default model` },
+        ...Arr.map(
+          Arr.filter(selects.model.options, ({ value }) => value !== ""),
+          (option) => ({
+            ...option,
+            value: `${harness}/${option.value}`,
+            label: `${harnessName(harness)} · ${option.label}`,
+          }),
+        ),
+      ];
+    }),
+    (option) => !values.includes(option.value),
+  );
   const add: ChoiceSelect = {
     value: "",
     label: "Add a fallback…",

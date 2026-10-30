@@ -1,6 +1,9 @@
 // Each Machine's Usage readings as Desktop draws them: the header's entry per Subscription
 // and account across the Flock, and the Usage page (ADR-0049).
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Schema } from "effect";
 import { ago, epochMs } from "../../../src/time";
 import {
@@ -74,7 +77,7 @@ const accountKey = (reading: UsageReading, machine: string) =>
       : `${reading.subscription}:${reading.account}`;
 
 const byLabel = (a: string | null, b: string | null) =>
-  a === b ? 0 : a === null ? 1 : b === null ? -1 : a.localeCompare(b);
+  a === b ? 0 : a === null ? 1 : b === null ? -1 : pipe(a, Str.localeCompare(b));
 
 /** The live Machines' readings, one group per Subscription account (ADR-0049). */
 export const usageAccounts = (
@@ -83,7 +86,7 @@ export const usageAccounts = (
 ): ReadonlyArray<UsageAccount> => {
   const groups = new Map<string, UsageAccount>();
   for (const profile of live)
-    for (const { name, readings } of machines.filter((machine) => machine.profile === profile))
+    for (const { name, readings } of Arr.filter(machines, (machine) => machine.profile === profile))
       for (const reading of readings) {
         const key = accountKey(reading, name);
         const held = groups.get(key);
@@ -116,13 +119,13 @@ export const usageEntries = (
   live: ReadonlyArray<string>,
   now: number,
 ): ReadonlyArray<UsageEntry> => {
-  const shown = usageAccounts(machines, live).flatMap(({ key, newest }) =>
+  const shown = Arr.flatMap(usageAccounts(machines, live), ({ key, newest }) =>
     newest === null ? [] : [{ key, ...newest }],
   );
   const accounts = new Map<Subscription, number>();
   for (const { reading } of shown)
     accounts.set(reading.subscription, (accounts.get(reading.subscription) ?? 0) + 1);
-  return shown.flatMap(({ key, reading, machine }) => {
+  return Arr.flatMap(shown, ({ key, reading, machine }) => {
     const used = busiestWindow(reading, now);
     if (used === null) return [];
     const label =
@@ -138,9 +141,13 @@ export const usageEntries = (
         key,
         text: `${NAMES[reading.subscription]}${label} ${usedPhrase(used)}`,
         level: levelOf(used.usedPercent, used.exhausted),
-        title: [reading.accountLabel, reset, `read on ${machine} ${ago(reading.at, now)}`]
-          .filter((part) => part !== null)
-          .join(" · "),
+        title: Arr.join(
+          Arr.filter(
+            [reading.accountLabel, reset, `read on ${machine} ${ago(reading.at, now)}`],
+            (part) => part !== null,
+          ),
+          " · ",
+        ),
       },
     ];
   });
@@ -174,7 +181,7 @@ export interface UsagePageView {
 }
 
 const windowsOf = (reading: UsageReading, now: number): ReadonlyArray<WindowView> =>
-  reading.windows.map((raw, i) => {
+  Arr.map(reading.windows, (raw, i) => {
     const window = current(raw, now);
     const full = isFull(window);
     return {
@@ -187,9 +194,13 @@ const windowsOf = (reading: UsageReading, now: number): ReadonlyArray<WindowView
   });
 
 const titleOf = (reading: UsageReading) =>
-  [NAMES[reading.subscription], reading.plan, reading.accountLabel]
-    .filter((part) => part !== null)
-    .join(" · ");
+  Arr.join(
+    Arr.filter(
+      [NAMES[reading.subscription], reading.plan, reading.accountLabel],
+      (part) => part !== null,
+    ),
+    " · ",
+  );
 
 /** The Usage page: one section per Subscription account across the live Machines. */
 export const usagePage = (
@@ -197,12 +208,15 @@ export const usagePage = (
   live: ReadonlyArray<string>,
   now: number,
 ): UsagePageView => {
-  const sections = usageAccounts(machines, live).flatMap(
+  const sections = Arr.flatMap(
+    usageAccounts(machines, live),
     ({ key, account, newest, machines: readers }): ReadonlyArray<UsageSection> => {
       if (account === null && newest === null) return [];
       const titled =
         newest?.reading ??
-        readers.reduce((a, b) => (epochMs(b.reading.at) > epochMs(a.reading.at) ? b : a)).reading;
+        Arr.reduce(Arr.drop(readers, 1), Option.getOrThrow(Arr.head(readers)), (a, b) =>
+          epochMs(b.reading.at) > epochMs(a.reading.at) ? b : a,
+        ).reading;
       return [
         {
           key,
@@ -212,7 +226,7 @@ export const usagePage = (
             newest === null
               ? null
               : `as of ${ago(newest.reading.at, now)} · read on ${newest.machine} · ${SOURCES[newest.reading.source]}`,
-          machines: readers.map(({ machine, reading }) => ({
+          machines: Arr.map(readers, ({ machine, reading }) => ({
             name: machine,
             problem: reading.problem,
           })),
@@ -220,24 +234,35 @@ export const usagePage = (
       ];
     },
   );
-  const notRead = live.flatMap((profile) =>
-    machines
-      .filter((machine) => machine.profile === profile)
-      .flatMap(({ name, readings, problem }) => [
-        ...(problem === null ? [] : [{ key: profile, said: `${name}: ${problem}` }]),
-        ...readings.flatMap((reading, i) =>
-          reading.account === null && reading.windows.length === 0
-            ? [
-                {
-                  key: `${profile}:${i}`,
-                  said: [`${name} · ${NAMES[reading.subscription]}`, reading.problem]
-                    .filter((part) => part !== null)
-                    .join(": "),
-                },
-              ]
-            : [],
+  const notRead = Arr.flatMap(live, (profile) =>
+    Arr.ensure(
+      pipe(
+        machines,
+        Arr.filter((machine) => machine.profile === profile),
+        Arr.flatMap(({ name, readings, problem }) =>
+          Arr.ensure([
+            ...(problem === null ? [] : [{ key: profile, said: `${name}: ${problem}` }]),
+            ...Arr.flatMap(readings, (reading, i) =>
+              reading.account === null && reading.windows.length === 0
+                ? [
+                    {
+                      key: `${profile}:${i}`,
+                      said: Arr.join(
+                        Arr.filter(
+                          [`${name} · ${NAMES[reading.subscription]}`, reading.problem],
+                          (part) => part !== null,
+                        ),
+                        ": ",
+                      ),
+                    },
+                  ]
+                : [],
+            ),
+          ]),
         ),
-      ]),
+      ),
+    ),
   );
   return { sections, notRead };
 };
+import * as Option from "effect/Option";

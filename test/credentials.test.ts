@@ -2,8 +2,12 @@
 // its kind before the host writes or forwards anything, and the operation still happens.
 // The values here are built at runtime, synthetic, and only shaped like credentials.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { readEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
@@ -17,9 +21,9 @@ import { runDir } from "../src/engine";
 import { removedNotice } from "../src/redact";
 import { until } from "./support/host";
 
-const GITLAB = ["glpat", "synthetic0000000000test"].join("-");
-const GITHUB = ["ghp", "Synthetic0000000000000000000000000Test"].join("_");
-const AWS = ["AKIA", "SYNTHETIC0000TST"].join("");
+const GITLAB = Arr.join(["glpat", "synthetic0000000000test"], "-");
+const GITHUB = Arr.join(["ghp", "Synthetic0000000000000000000000000Test"], "_");
+const AWS = Arr.join(["AKIA", "SYNTHETIC0000TST"], "");
 
 /** Every file under `dir` that holds `value`. */
 const holding = (dir: string, values: ReadonlyArray<string>) =>
@@ -35,7 +39,8 @@ const holding = (dir: string, values: ReadonlyArray<string>) =>
           if (info?.type === "Directory") yield* walk(file);
           else if (info?.type === "File") {
             const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-            for (const value of values) if (text.includes(value)) found.push(`${file}: ${value}`);
+            for (const value of values)
+              if (pipe_(text, Str.includes(value))) found.push(`${file}: ${value}`);
           }
         }
       });
@@ -99,7 +104,7 @@ test(
   120_000,
 );
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const FakeState = Schema.fromJsonString(
   Schema.Struct({ agents: Schema.Array(Schema.Struct({ name: Schema.String })) }),
 );
@@ -121,13 +126,15 @@ test(
           };
           yield* Effect.acquireRelease(
             Effect.sync(() => {
-              const before = Object.fromEntries(Object.keys(set).map((key) => [key, Bun.env[key]]));
+              const before = Rec.fromEntries(
+                Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const),
+              );
               Object.assign(Bun.env, set);
               return before;
             }),
             (before) =>
               Effect.sync(() => {
-                for (const [key, value] of Object.entries(before))
+                for (const [key, value] of Rec.toEntries(before))
                   if (value === undefined) delete Bun.env[key];
                   else Bun.env[key] = value;
               }),
@@ -155,9 +162,9 @@ test(
             (one) => one !== null && isSettled(one),
           );
           expect(view?.status.status).toBe("complete");
-          const agent = Schema.decodeUnknownSync(FakeState)(
+          const agent = (yield* Schema.decodeEffect(FakeState)(
             yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
-          ).agents[0]!.name;
+          ).pipe(Effect.orDie)).agents[0]!.name;
 
           const [delivered] = yield* carryOutAsked(
             env,

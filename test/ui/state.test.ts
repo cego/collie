@@ -1,3 +1,7 @@
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   actionsFor,
@@ -80,7 +84,7 @@ function run(id: string, over: Partial<WorkspaceView["active"][number]> = {}) {
 }
 
 function agent(key: string, name: string, run: string, now: string | null = null) {
-  return { key, name, agent: `${name.toLowerCase()}-1`, status: "working", run, now };
+  return { key, name, agent: `${Str.toLowerCase(name)}-1`, status: "working", run, now };
 }
 
 const MENU: PendingChoice = {
@@ -107,14 +111,14 @@ test("every row carries the stable id its actions are aimed at", () => {
     }),
   );
 
-  expect(rows.map((r) => [r.kind, r.id])).toEqual([
+  expect(Arr.map(rows, (r) => [r.kind, r.id])).toEqual([
     ["active", "run:r1"],
     ["agent", "agent:impl-1"],
     ["recent", "run:r0"],
   ]);
   // Ids never carry a position: the list re-sorts every refresh and an index
   // would silently retarget the action.
-  expect(rows.map((r) => r.id)).not.toContain("0");
+  expect(Arr.map(rows, (r) => r.id)).not.toContain("0");
 });
 
 test("an agent is listed under the run it works for", () => {
@@ -132,7 +136,7 @@ test("an agent is listed under the run it works for", () => {
     }),
   );
 
-  expect(rows.map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(rows, (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r1"],
     ["agent", "├ Implementer"],
     ["agent", "└ Reviewer"],
@@ -146,7 +150,7 @@ test("an agent is listed under the run it works for", () => {
   // Every agent row keeps what a key and an action are aimed at.
   expect(rows[1]!.agent).toBe("implementer-1");
   expect(rows[1]!.key).toBe("1");
-  expect(actionsFor(rows[1]!, HERE).map((a) => a.key)).toEqual(["1"]);
+  expect(Arr.map(actionsFor(rows[1]!, HERE), (a) => a.key)).toEqual(["1"]);
 });
 
 test("a run's children are listed under it, and its agents under those", () => {
@@ -162,7 +166,7 @@ test("a run's children are listed under it, and its agents under those", () => {
     }),
   );
 
-  expect(rows.map((r) => [r.kind, r.title, r.depth])).toEqual([
+  expect(Arr.map(rows, (r) => [r.kind, r.title, r.depth])).toEqual([
     ["active", "Implement · plan-1", 0],
     ["active", "Implement · child-api", 1],
     ["agent", "└ Implementer", 1],
@@ -182,7 +186,7 @@ test("an ordinary chain's child is a row of its own, not nested under a finished
     }),
   );
 
-  expect(rows.map((r) => [r.kind, r.title, r.depth])).toEqual([
+  expect(Arr.map(rows, (r) => [r.kind, r.title, r.depth])).toEqual([
     ["active", "Implement · implement-1", 0],
     ["recent", "Implement · plan-1", 0],
   ]);
@@ -201,8 +205,8 @@ test("a run that needs you is under the header, and the header only when one is"
     }),
   );
 
-  expect(nestedOnly.map((r) => r.kind)).toEqual(["active", "active"]);
-  expect(nestedOnly.map((r) => r.title)).not.toContain(NEEDS_YOU);
+  expect(Arr.map(nestedOnly, (r) => r.kind)).toEqual(["active", "active"]);
+  expect(Arr.map(nestedOnly, (r) => r.title)).not.toContain(NEEDS_YOU);
 
   // And a top-level run that needs you still gets it.
   const asking = rowsOf(board({ active: [run("r1", { needsYou: true, choice: MENU })] }));
@@ -224,7 +228,7 @@ test("an agent whose run is not on the board goes in a group of its own", () => 
     }),
   );
 
-  expect(rows.map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(rows, (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r1"],
     ["agent", "└ Implementer"],
     ["recent", "Implement · r0"],
@@ -233,13 +237,12 @@ test("an agent whose run is not on the board goes in a group of its own", () => 
     ["agent", "└ Stray"],
   ]);
   // An orphan has no run above it, so its own row is the only place the run can be said.
-  expect(rows.find((r) => r.agent === "stray-1")!.detail).toBe("working · gone");
+  expect(Option.getOrUndefined(Arr.findFirst(rows, (r) => r.agent === "stray-1"))!.detail).toBe(
+    "working · gone",
+  );
   // The header names a group; it is not a row anything can be asked of.
   expect(
-    actionsFor(
-      rows.find((r) => r.kind === "header")!,
-      HERE,
-    ),
+    actionsFor(Option.getOrUndefined(Arr.findFirst(rows, (r) => r.kind === "header"))!, HERE),
   ).toEqual([]);
 });
 
@@ -281,7 +284,7 @@ test("the wide board is one tree: workspaces, their runs, and each run's agents"
     ),
   );
 
-  expect(rows.map((r) => [r.kind, r.depth, r.title])).toEqual([
+  expect(Arr.map(rows, (r) => [r.kind, r.depth, r.title])).toEqual([
     ["group", 0, "Implement · glass"],
     // Named by workflow alone: the group row above already says what it is for.
     ["active", 1, "Implement"],
@@ -297,7 +300,7 @@ test("the wide board is one tree: workspaces, their runs, and each run's agents"
     ["header", 0, "2 more workspace(s)"],
   ]);
   // A group row is selectable and a spacer is not, so the arrows walk workspaces.
-  expect(selectableRows(rows).map((r) => r.kind)).toEqual([
+  expect(Arr.map(selectableRows(rows), (r) => r.kind)).toEqual([
     "group",
     "active",
     "agent",
@@ -329,7 +332,10 @@ test("the digits are numbered across the tree, so one names the row it is on", (
     ]),
   );
 
-  const digits = rows.filter((r) => r.kind === "agent").map((r) => [r.title, r.key]);
+  const digits = Arr.map(
+    Arr.filter(rows, (r) => r.kind === "agent"),
+    (r) => [r.title, r.key],
+  );
   expect(digits).toEqual([
     ["├ Implementer", "1"],
     ["└ Reviewer", "2"],
@@ -337,16 +343,19 @@ test("the digits are numbered across the tree, so one names the row it is on", (
   ]);
   // Past the ninth the row stays and the digit goes, as on the local board: there are
   // nine digits, and a board of every workspace can hold more agents than that.
-  const many = wideRows(
-    wideView([
-      group("Implement · glass", {
-        agents: Array.from({ length: 10 }, (_, i) => agent("", `Agent ${i}`, "r1")),
-        active: [run("r1")],
-      }),
-    ]),
-  ).filter((r) => r.kind === "agent");
+  const many = Arr.filter(
+    wideRows(
+      wideView([
+        group("Implement · glass", {
+          agents: Array.from({ length: 10 }, (_, i) => agent("", `Agent ${i}`, "r1")),
+          active: [run("r1")],
+        }),
+      ]),
+    ),
+    (r) => r.kind === "agent",
+  );
   expect(many).toHaveLength(10);
-  expect(many.map((r) => r.key)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", null]);
+  expect(Arr.map(many, (r) => r.key)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", null]);
 
   // And the digit reaches that agent: the second workspace's is `3`, not another `1`.
   const context = keys({ rows, row: rows[0]! });
@@ -369,7 +378,7 @@ test("an agent in the tree keeps the model that tells two variants apart", () =>
     ]),
   );
 
-  expect(rows.map((r) => r.title)).toEqual([
+  expect(Arr.map(rows, (r) => r.title)).toEqual([
     "Implement · glass",
     // The run is still named by its workflow alone.
     "Implement",
@@ -389,7 +398,7 @@ test("an Elsewhere run keeps what it is pointed at, because its group names seve
   );
 
   // The group row names both checkouts, so the run rows are what say which is which.
-  expect(rows.map((r) => r.title)).toEqual([
+  expect(Arr.map(rows, (r) => r.title)).toEqual([
     "Elsewhere · one · two",
     "Implement · r1",
     "Implement · two",
@@ -433,7 +442,7 @@ test("a group keeps a run's question, so it is answered where it is seen", () =>
 
   // The waiting run first inside its group, and its question travels with the row —
   // the same rendering the local board gives it.
-  expect(rows.map((r) => r.runId)).toEqual([null, "r1", "r2"]);
+  expect(Arr.map(rows, (r) => r.runId)).toEqual([null, "r1", "r2"]);
   expect(rows[1]!.choice).toBe(MENU);
   // How many of its runs are waiting is in the group row's own summary, and not on it
   // as `needsYou`: the footer counts those, and a workspace counted beside its own
@@ -508,7 +517,7 @@ test("Enter goes to it in the local scope too", () => {
     }),
   );
 
-  expect(rows.map((r) => r.jump?.kind)).toEqual(["run", "agent", "run"]);
+  expect(Arr.map(rows, (r) => r.jump?.kind)).toEqual(["run", "agent", "run"]);
 });
 
 test("a History row is not somewhere to jump: its run is a record, not a pane", () => {
@@ -560,7 +569,7 @@ test("a setting a Desktop shares with the Flock says so, and a remembered one do
     stopping: [],
   });
 
-  expect(rows.map((row) => row.detail)).toEqual([
+  expect(Arr.map(rows, (row) => row.detail)).toEqual([
     "opus · shared with the Flock by laptop",
     "CEG",
     "trusted · /w",
@@ -596,10 +605,10 @@ test("starting a workflow is this Session's, so a wide row is not offered one", 
   // SAFETY: one recent row goes in, so one row comes out.
   const [row] = rowsOf(board({ recent: [run("r0", { target, fixable: true })] })) as [Row];
 
-  expect(actionsFor(row, HERE).map((a) => a.key)).toEqual(["l", "x", "o", "w"]);
+  expect(Arr.map(actionsFor(row, HERE), (a) => a.key)).toEqual(["l", "x", "o", "w"]);
   // The merge request is still the run's own: opening it and posting its review act on
   // the run, not on this checkout.
-  expect(actionsFor(row, EVERYWHERE).map((a) => a.key)).toEqual(["l", "o", "w"]);
+  expect(Arr.map(actionsFor(row, EVERYWHERE), (a) => a.key)).toEqual(["l", "o", "w"]);
   // And the keys go with the buttons, so neither can be pressed from a wide board.
   expect(keyIntent(keys({ row, filter: HERE }), press("x"))).toEqual({
     _tag: "Do",
@@ -646,15 +655,15 @@ test("a row's actions name the row, not the newest run", () => {
   // length is asserted above, so the three rows are there in that order.
   const [active, working, recent] = rows as [Row, Row, Row];
 
-  expect(actionsFor(working, HERE).map((a) => [a.key, a.command])).toEqual([
+  expect(Arr.map(actionsFor(working, HERE), (a) => [a.key, a.command])).toEqual([
     ["3", { _tag: "FocusAgent", agent: "rev-1" }],
   ]);
-  expect(actionsFor(active, HERE).map((a) => [a.key, a.command])).toEqual([
+  expect(Arr.map(actionsFor(active, HERE), (a) => [a.key, a.command])).toEqual([
     ["l", { _tag: "OpenLog", runId: "r1" }],
     ["k", { _tag: "StopRun", runId: "r1" }],
   ]);
   // A finished run has nothing to stop; what it offers next is its module's to say.
-  expect(actionsFor(recent, HERE).map((a) => a.key)).toEqual(["l", "x"]);
+  expect(Arr.map(actionsFor(recent, HERE), (a) => a.key)).toEqual(["l", "x"]);
 });
 
 test("a clean review can still be opened in a browser", () => {
@@ -666,8 +675,8 @@ test("a clean review can still be opened in a browser", () => {
 
   // Nothing to fix and nothing to post, but the merge request is still there to look at:
   // opening it has nothing to do with whether the review found anything.
-  expect(actionsFor(clean, HERE).map((a) => a.key)).toEqual(["l", "x", "w"]);
-  expect(actionsFor(withFindings, HERE).map((a) => a.key)).toEqual(["l", "x", "o", "w"]);
+  expect(Arr.map(actionsFor(clean, HERE), (a) => a.key)).toEqual(["l", "x", "w"]);
+  expect(Arr.map(actionsFor(withFindings, HERE), (a) => a.key)).toEqual(["l", "x", "o", "w"]);
 });
 
 test("one thing owns the keyboard, in one order", () => {
@@ -714,17 +723,17 @@ test("a filter keeps a matching agent under the run it works for", () => {
   );
 
   // The agent matches and its run does not, so the run comes with it, above it.
-  expect(matching(rows, "Reviewer").map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(matching(rows, "Reviewer"), (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r1"],
     ["agent", "└ Reviewer"],
   ]);
   // A run that matches brings only itself: its agents are not what was asked for.
-  expect(matching(rows, "r2").map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(matching(rows, "r2"), (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r2"],
   ]);
   // The order is the board's, whatever order the matches were ranked in: a pick list
   // wants the best match first, and here that would lift an agent above its own run.
-  const order = (kept: Row[]) => kept.map((r) => rows.indexOf(r));
+  const order = (kept: Row[]) => Arr.map(kept, (r) => rows.indexOf(r));
   expect(order(matching(rows, "Planner"))).toEqual([2, 3]);
   expect(order(matching(rows, "r"))).toEqual([0, 1, 2, 3]);
   expect(matching(rows, "")).toEqual(rows);
@@ -740,7 +749,7 @@ test("a filter keeps a matching orphan under its header", () => {
     }),
   );
 
-  expect(matching(rows, "Stray").map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(matching(rows, "Stray"), (r) => [r.kind, r.title])).toEqual([
     ["header", "agents with no run here"],
     ["agent", "└ Stray"],
   ]);
@@ -760,15 +769,15 @@ test("a filtered wide board keeps the workspace a matching run is in", () => {
   // A run in the wide board is named by its workflow alone, so the row that says which
   // workspace it is in is the one thing a filtered list cannot drop.
   const byAgent = matching(rows, "Implementer");
-  expect(byAgent.map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(byAgent, (r) => [r.kind, r.title])).toEqual([
     ["group", "Implement · glass"],
     ["active", "Implement"],
     ["agent", "└ Implementer"],
   ]);
   // And a workspace that matched brings what is in it along: narrowing to a workspace
   // means its runs, not one row saying its name.
-  expect(matching(rows, "Collie").map((r) => r.kind)).toEqual(["group", "active"]);
-  expect(matching(rows, "glass").map((r) => r.kind)).toEqual(["group", "active", "agent"]);
+  expect(Arr.map(matching(rows, "Collie"), (r) => r.kind)).toEqual(["group", "active"]);
+  expect(Arr.map(matching(rows, "glass"), (r) => r.kind)).toEqual(["group", "active", "agent"]);
 });
 
 test("a header is never kept without the group it names", () => {
@@ -785,7 +794,7 @@ test("a header is never kept without the group it names", () => {
   expect(matching(rows, "agents with no run")).toEqual([]);
   expect(matching(rows, "no run here")).toEqual([]);
   // It comes back the moment something in its group does match.
-  expect(matching(rows, "Stray").map((r) => r.kind)).toEqual(["header", "agent"]);
+  expect(Arr.map(matching(rows, "Stray"), (r) => r.kind)).toEqual(["header", "agent"]);
 });
 
 test("a capped question shows a window of options that follows the cursor", () => {
@@ -847,9 +856,13 @@ test("the long and short renderings never disagree about the unit", () => {
     const at = NOW - seconds * 1000;
     const long = ago(FIXED_ISO(at), NOW);
     const short = agoShort(at, NOW);
-    const unit = long.includes("day") ? "d" : long.includes("hour") ? "h" : "m";
+    const unit = pipe(long, Str.includes("day"))
+      ? "d"
+      : pipe(long, Str.includes("hour"))
+        ? "h"
+        : "m";
     if (long === "just now") continue;
-    expect([seconds, short.includes(unit)]).toEqual([seconds, true]);
+    expect([seconds, pipe(short, Str.includes(unit))]).toEqual([seconds, true]);
   }
 });
 
@@ -920,7 +933,10 @@ test("an agent's row says what it is doing, and its run only where that is all i
       active: [run("r1")],
     }),
   );
-  expect(rows.map((r) => r.detail)).toEqual(["build", "working · Simplify cego.collie plugin"]);
+  expect(Arr.map(rows, (r) => r.detail)).toEqual([
+    "build",
+    "working · Simplify cego.collie plugin",
+  ]);
 
   // A harness that publishes no title leaves the status alone.
   const quiet = rowsOf(board({ agents: [agent("1", "Reviewer", "r1")], active: [run("r1")] }));
@@ -941,7 +957,7 @@ test("a run that needs you is listed first, under a header saying so", () => {
   );
 
   // The waiting run first, its own agents still nested under it.
-  expect(rows.map((r) => [r.kind, r.id])).toEqual([
+  expect(Arr.map(rows, (r) => [r.kind, r.id])).toEqual([
     ["header", "header:Needs you"],
     ["active", "run:r2"],
     ["agent", "agent:implementer-1"],
@@ -950,7 +966,7 @@ test("a run that needs you is listed first, under a header saying so", () => {
   ]);
   expect(rows[0]!.title).toBe("Needs you");
   // No header where nothing is waiting: an empty section is noise on every refresh.
-  expect(rowsOf(board({ active: [run("r1")] })).map((r) => r.kind)).toEqual(["active"]);
+  expect(Arr.map(rowsOf(board({ active: [run("r1")] })), (r) => r.kind)).toEqual(["active"]);
 });
 
 test("nothing acts on a header row", () => {
@@ -1016,9 +1032,9 @@ test("a field that has taken the keys says what they do instead", () => {
 });
 
 test("the help overlay lists every key the board handles, each with what it does", () => {
-  const keys = ALL_KEYS.map((k) => k.key);
+  const keys = Arr.map(ALL_KEYS, (k) => k.key);
   for (const key of ["Tab", "/", "Esc", "m", "r", "?", "q"]) expect(keys).toContain(key);
-  expect(ALL_KEYS.every((k) => k.what !== "")).toBe(true);
+  expect(Arr.every(ALL_KEYS, (k) => k.what !== "")).toBe(true);
 });
 
 /** The two boards the Session-local keys distinguish: this workspace's, and the Herd's. */
@@ -1273,8 +1289,11 @@ test("a Task pointed at a merge request can open it, however it got there", () =
   // A `review` Run is given one and opens none; an `implement` Run opens one. Both are
   // a merge request the human can ask for from the card.
   const given = menuFor(task({ mr: "mr:gitlab.cego.dk/mk/collie!151" }));
-  expect(given.map((one) => one.label)).toContain("Open merge request");
-  expect(given.find((one) => one.label === "Open merge request")?.command).toMatchObject({
+  expect(Arr.map(given, (one) => one.label)).toContain("Open merge request");
+  expect(
+    Option.getOrUndefined(Arr.findFirst(given, (one) => one.label === "Open merge request"))
+      ?.command,
+  ).toMatchObject({
     _tag: "OpenMr",
     target: "mr:gitlab.cego.dk/mk/collie!151",
   });
@@ -1283,15 +1302,18 @@ test("a Task pointed at a merge request can open it, however it got there", () =
 test("every key a card's menu offers is one the overlay advertises", () => {
   // Two lists that have to agree: the menu is built per Task state, and a key offered
   // on a card and missing from `?` is a key nobody can look up.
-  const advertised = new Set(ALL_KEYS.map((entry) => entry.key));
+  const advertised = new Set(Arr.map(ALL_KEYS, (entry) => entry.key));
   const states = ["blocked", "active", "quiet", "failed", "stopped", "done"] as const;
   const offered = new Set(
-    states.flatMap((state) =>
-      menuFor(task({ state, mr: "https://host/g/p/-/merge_requests/42" })).map((item) => item.key),
+    Arr.flatMap(states, (state) =>
+      Arr.map(
+        menuFor(task({ state, mr: "https://host/g/p/-/merge_requests/42" })),
+        (item) => item.key,
+      ),
     ),
   );
   expect(offered.size).toBeGreaterThan(4);
-  expect([...offered].filter((key) => !advertised.has(key))).toEqual([]);
+  expect(Arr.filter([...offered], (key) => !advertised.has(key))).toEqual([]);
 });
 
 test("a filter keeps a matching agent under a finished run too", () => {
@@ -1305,7 +1327,7 @@ test("a filter keeps a matching agent under a finished run too", () => {
     }),
   );
 
-  expect(matching(rows, "Reviewer").map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(matching(rows, "Reviewer"), (r) => [r.kind, r.title])).toEqual([
     ["recent", "Implement · r1"],
     ["agent", "└ Reviewer"],
   ]);
@@ -1322,12 +1344,12 @@ test('the "Needs you" header survives a filter its runs match', () => {
     }),
   );
 
-  expect(matching(rows, "r1").map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(matching(rows, "r1"), (r) => [r.kind, r.title])).toEqual([
     ["header", "Needs you"],
     ["active", "Implement · r1"],
   ]);
   // A run outside the group does not bring the header with it.
-  expect(matching(rows, "r2").map((r) => [r.kind, r.title])).toEqual([
+  expect(Arr.map(matching(rows, "r2"), (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r2"],
   ]);
 });
@@ -1342,7 +1364,7 @@ test("the next unanswered question is the one after the Selection, wrapping once
       ],
     }),
   );
-  const ids = selectableRows(rows).map((r) => r.id);
+  const ids = Arr.map(selectableRows(rows), (r) => r.id);
   const [first, middle, last] = [ids[0]!, ids[1]!, ids[2]!];
 
   // Runs that need you sort to the top, so the two asking rows bracket the third.
@@ -1443,7 +1465,8 @@ test("a row says what steering has found about its Run, worst mark first", () =>
     board({ active: [run("r1"), run("r2"), run("r3")], agents: [agent("1", "Fix", "r3")] }),
     marks,
   );
-  const marked = (id: string) => rows.find((r) => r.id === id)!.marks;
+  const marked = (id: string) =>
+    Option.getOrUndefined(Arr.findFirst(rows, (r) => r.id === id))!.marks;
   expect(marked("run:r1")).toBe("↯ ▶");
   expect(marked("run:r2")).toBe("⏸");
   expect(marked("run:r3")).toBe("⚠ manual !");
@@ -1475,7 +1498,7 @@ test("a workspace row inherits the worst mark of the runs under it", () => {
     r1: { ...NO_MARKS, proposal: true },
     r2: { ...NO_MARKS, drift: true },
   });
-  expect(rows.find((r) => r.id === "group:w1")!.marks).toBe("↯");
+  expect(Option.getOrUndefined(Arr.findFirst(rows, (r) => r.id === "group:w1"))!.marks).toBe("↯");
 });
 
 test("`:` is no longer a mode: the board keeps its keys", () => {
@@ -1526,12 +1549,12 @@ test("a run filter keeps that run's agents and its repository runs", () => {
   // The run, and what hangs off it. On the local board an agent sits at its run's own
   // depth — the connector is what joins them — so depth alone cannot say where the
   // group ends.
-  expect(rows.map((r) => r.id)).toEqual(["run:r1", "agent:implementer-1"]);
+  expect(Arr.map(rows, (r) => r.id)).toEqual(["run:r1", "agent:implementer-1"]);
 });
 
 test("a card's menu offers only what that Task can be asked for", () => {
   const working = menuFor(task());
-  expect(working.map((item) => [item.key, item.label])).toEqual([
+  expect(Arr.map(working, (item) => [item.key, item.label])).toEqual([
     ["enter", "Open record"],
     ["g", "Go to its tab"],
     ["s", "Steer…"],
@@ -1550,22 +1573,28 @@ test("a card's menu offers only what that Task can be asked for", () => {
   expect(working[5]!.command).toEqual({ _tag: "HoldRun", runId: "r1", set: true });
   expect(working[6]!.command).toEqual({ _tag: "StopRun", runId: "r1" });
   // A held run offers its release instead.
-  expect(menuFor(task({ held: "⏸ Held." })).find((item) => item.key === "h")?.command).toEqual({
+  expect(
+    Option.getOrUndefined(
+      Arr.findFirst(menuFor(task({ held: "⏸ Held." })), (item) => item.key === "h"),
+    )?.command,
+  ).toEqual({
     _tag: "HoldRun",
     runId: "r1",
     set: false,
   });
 
   // A run nobody is driving cannot be stopped or steered; it can be taken up again.
-  expect(menuFor(task({ state: "failed" })).map((item) => item.label)).toEqual([
+  expect(Arr.map(menuFor(task({ state: "failed" })), (item) => item.label)).toEqual([
     "Open record",
     "Go to its tab",
     "What it offers…",
     "Resume run",
   ]);
-  expect(menuFor(task({ state: "stopped" })).map((item) => item.label)).toContain("Resume run");
+  expect(Arr.map(menuFor(task({ state: "stopped" })), (item) => item.label)).toContain(
+    "Resume run",
+  );
   // Only a run that finished has work to build on.
-  expect(menuFor(task({ state: "done" })).map((item) => item.label)).toEqual([
+  expect(Arr.map(menuFor(task({ state: "done" })), (item) => item.label)).toEqual([
     "Open record",
     "Go to its tab",
     "What it offers…",
@@ -1581,16 +1610,18 @@ test("a ready plan's first action is the offer its module declares, under its ow
     label: "Build these tickets",
     command: { _tag: "InvokeOffer", runId: "r1", offer: "build-it" },
   });
-  expect(menuFor(ready).map((item) => item.label)).toContain("Build these tickets");
+  expect(Arr.map(menuFor(ready), (item) => item.label)).toContain("Build these tickets");
   // A plan whose module offers nothing gets no button for something nobody declared.
   const undeclared = task({ state: "done", landed: false, planReady: true, offer: null });
   expect(primaryFor(undeclared)).toBeNull();
-  expect(menuFor(undeclared).map((item) => item.label)).not.toContain("Implement now");
+  expect(Arr.map(menuFor(undeclared), (item) => item.label)).not.toContain("Implement now");
 });
 
 test("the merge request is offered when there is one to open, named the way glab takes it", () => {
   const withMr = task({ mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/151" });
-  const item = menuFor(withMr).find((one) => one.label === "Open merge request");
+  const item = Option.getOrUndefined(
+    Arr.findFirst(menuFor(withMr), (one) => one.label === "Open merge request"),
+  );
   expect(item?.key).toBe("w");
   expect(item?.command).toEqual({
     _tag: "OpenMr",
@@ -1599,7 +1630,7 @@ test("the merge request is offered when there is one to open, named the way glab
   });
   // A URL nothing can resolve is not offered: a menu item that would fail is worse than
   // none at all.
-  expect(menuFor(task({ mr: "see the ticket" })).map((one) => one.label)).not.toContain(
+  expect(Arr.map(menuFor(task({ mr: "see the ticket" })), (one) => one.label)).not.toContain(
     "Open merge request",
   );
 });
@@ -1637,11 +1668,11 @@ test("older… offers the finished runs of this checkout the board is not alread
 
   // A run already on the board as a card is not repeated under it.
   const first = olderFinished(history, onBoard, 1, 1);
-  expect(first.rows.map((row) => row.id)).toEqual(["r3"]);
+  expect(Arr.map(first.rows, (row) => row.id)).toEqual(["r3"]);
   expect(first.more).toBe(true);
 
   const second = olderFinished(history, onBoard, 2, 1);
-  expect(second.rows.map((row) => row.id)).toEqual(["r3", "r4"]);
+  expect(Arr.map(second.rows, (row) => row.id)).toEqual(["r3", "r4"]);
   expect(second.more).toBe(false);
 
   // Before anyone asks, none of it is drawn.

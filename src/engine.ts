@@ -9,20 +9,23 @@
 // `docs/adr/0014-native-workflows-run-on-effects-own-engine.md` records why each of the
 // pieces below is upstream's rather than Collie's.
 
+import * as Struct from "effect/Struct";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import type { Asker } from "./proposals";
 import { actorOf, readAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
 import { hostname } from "node:os";
-import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
   Cache,
   Cause,
   Clock,
   Context,
-  Crypto,
   Data,
   Deferred,
   DateTime,
@@ -41,7 +44,11 @@ import {
   Scope,
   Semaphore,
   Stream,
+  flow,
+  Result,
 } from "effect";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { ConfigError } from "effect/Config";
 import type { PlatformError } from "effect/PlatformError";
@@ -52,8 +59,10 @@ import * as Activity from "effect/workflow/Activity";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as WorkflowModules from "effect/workflow";
 import * as ProcessModules from "effect/process";
+import * as CryptoModules from "effect/crypto";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
+import { HOLD, STOP, controlPath, controlSet } from "./controls";
 import manifest from "../herdr-plugin.toml";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
@@ -126,13 +135,7 @@ import {
   type RollbackRead,
   type StageRead,
 } from "./releasing";
-import {
-  blockedLine,
-  reviewWaitOf,
-  standingOf,
-  type ReviewHead,
-  type ReviewStanding,
-} from "./review-wait";
+import { blockedLine, reviewWaitOf, standingOf, type ReviewStanding } from "./review-wait";
 import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
@@ -148,15 +151,7 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import {
-  forgeOfRef,
-  mrLabel,
-  mrRefOf,
-  mrWords,
-  parseMrTarget,
-  parseMrUrl,
-  readMrRef,
-} from "./board-model";
+import { forgeOfRef, mrLabel, mrRefOf, mrWords, parseMrTarget, readMrRef } from "./board-model";
 import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
@@ -205,7 +200,6 @@ import {
   Answered,
   Controlled,
   HostRefused,
-  OfferView,
   RequestConflict,
   RequestedBy,
   RunReport,
@@ -254,14 +248,13 @@ import {
   type StepNote,
 } from "./steps";
 import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import {
   approvedFile,
   approvedFrom,
   approvedIn,
   encodeApproved,
   PROJECT_FILE,
-  VerifySpecSchema,
   type VerifySpec,
 } from "./verify-spec";
 import { rerunArgv } from "./bun-tests";
@@ -290,10 +283,13 @@ import type * as MessageStorage from "effect/cluster/MessageStorage";
 
 /** A module that cannot be loaded, named by its own file. Schema-backed, so the local
  *  host can fail a client with the same value rather than a copy of it. */
-export class EntryError extends Schema.TaggedError<EntryError>()("EntryError", {
-  file: Schema.String,
-  message: Schema.String,
-}) {}
+export class EntryError extends Schema.TaggedError<EntryError, { readonly brand: unique symbol }>()(
+  "EntryError",
+  {
+    file: Schema.String,
+    message: Schema.String,
+  },
+) {}
 
 /** What a refusal says first where the input is why, which a front door reads back. */
 export const REFUSED_INPUT = "invalid_input";
@@ -301,7 +297,10 @@ export const REFUSED_INPUT = "invalid_input";
 export const NEEDS_INPUT = "needs_input";
 
 /** A placement that may have changed something outside, which nothing here can prove either way. */
-class PlacementUncertain extends Schema.TaggedError<PlacementUncertain>()("PlacementUncertain", {
+class PlacementUncertain extends Schema.TaggedError<
+  PlacementUncertain,
+  { readonly brand: unique symbol }
+>()("PlacementUncertain", {
   reason: Schema.String,
 }) {}
 
@@ -324,8 +323,17 @@ const NAMESPACES = [
   ["effect", EffectRoot],
   ["effect/workflow", WorkflowModules],
   ["effect/process", ProcessModules],
+  ["effect/crypto", CryptoModules],
   // rc.117's path, so a module saved before 4.0.0 moved it still loads. Goes in Collie 0.42.0.
   ["effect/unstable/workflow", WorkflowModules],
+] as const;
+
+/** What Effect removed that a module saved before may still import, and what replaces it. */
+const REMOVED = [
+  [
+    "effect/Crypto",
+    "Effect 4.1 removed effect/Crypto: ids come from effect/crypto's SecureRandom and hashes from its Digest",
+  ],
 ] as const;
 
 export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
@@ -335,8 +343,8 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
   const served: Array<readonly [string, object]> = [["collie", { ...Sdk, ...AgentsSdk }]];
   for (const [prefix, namespace] of NAMESPACES) {
     served.push([prefix, namespace]);
-    for (const [name, member] of Object.entries(namespace))
-      served.push([`${prefix}/${name}`, member]);
+    for (const name of Struct.keys(namespace))
+      served.push([Arr.join([prefix, name], "/"), namespace[name]]);
   }
   return served;
 };
@@ -344,7 +352,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
 /** Kept in step with package.json, which `engine.test.ts` checks: the host and an
  *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
-  effect: "4.0.1",
+  effect: "4.1.0",
   typescript: "^7.0.2",
 } as const;
 
@@ -2207,7 +2215,7 @@ const itself = (workflow: string) => (workflow === "self" ? SELF : workflow);
  * and a projection of one would be a copy that stops agreeing with it.
  */
 export function declaredByModule(metadata: WorkflowMetadata | undefined): Declared[] {
-  const actions = (metadata?.actions ?? []).map((action) => ({
+  const actions = Arr.map(metadata?.actions ?? [], (action) => ({
     id: action.id,
     title: action.title,
     workflow: itself(action.workflow),
@@ -2217,7 +2225,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     connections: action.connections,
     eligible: action.eligible,
   }));
-  const followUps = (metadata?.followUps ?? []).map((offer) => ({
+  const followUps = Arr.map(metadata?.followUps ?? [], (offer) => ({
     id: offer.id,
     title: offer.title,
     workflow: itself(offer.workflow),
@@ -2243,6 +2251,10 @@ export function installSdk(): void {
         // the values in it stay the very functions and keys the binary is running on.
         build.module(specifier, () => ({ exports: { ...namespace }, loader: "object" }));
       }
+      for (const [specifier, reason] of REMOVED)
+        build.module(specifier, () => {
+          throw new Error(reason);
+        });
     },
   });
 }
@@ -2271,7 +2283,8 @@ export const loadEntry: (
   const staged = yield* stagedEntry(file, revision);
   const loaded = yield* Effect.tryPromise({
     try: () => import(staged.file),
-    catch: (cause) => new EntryError({ file, message: String(cause).replaceAll(staged.root, "") }),
+    catch: (cause) =>
+      new EntryError({ file, message: pipe(String(cause), Str.replaceAll(staged.root, "")) }),
   });
   const read = readDefinition(loaded.default);
   if (read._tag === "Failure" || !isWritten(loaded.default)) {
@@ -2286,7 +2299,7 @@ export const loadEntry: (
   const entry = entryOf(definitionOf(loaded.default));
   const problems = checkEntry(entry);
   if (problems.length > 0) {
-    return yield* new EntryError({ file, message: problems.join("; ") });
+    return yield* new EntryError({ file, message: Arr.join(problems, "; ") });
   }
   return entry;
 });
@@ -2313,24 +2326,25 @@ const isWritten = (exported: unknown): exported is WrittenDefinition =>
 /** A definition as the entry the rest of the host reads. */
 const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
   const { outcome, checkout, closes, followUps, actions, connections } = definition;
-  const path = definition.path?.map((one) => one.meta);
+  const path = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(definition.path), (present) =>
+      Arr.map(present, (one) => one.meta),
+    ),
+  );
   const hints =
     definition.hints === undefined
       ? undefined
-      : Object.fromEntries(
-          Object.entries(definition.hints).map(([name, hint]) => [name, strategyNamed(hint)]),
+      : Rec.fromEntries(
+          Arr.map(
+            Rec.toEntries(definition.hints),
+            ([name, hint]) => [name, strategyNamed(hint)] as const,
+          ),
         );
-  const declared = Object.fromEntries(
-    Object.entries({
-      hints,
-      outcome,
-      checkout,
-      closes,
-      followUps,
-      actions,
-      path,
-      connections,
-    }).filter(([, value]) => value !== undefined),
+  const declared = Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries({ hints, outcome, checkout, closes, followUps, actions, path, connections }),
+      ([, value]) => value !== undefined,
+    ),
   );
   // SAFETY: checkEntry refuses an input field that is not a schema before anything settles one.
   return {
@@ -2351,14 +2365,17 @@ const WorkflowHints = Context.Reference<Readonly<Record<string, InputStrategy>>>
 );
 
 /** The envelope a definition is executed with, read where the host hands it over. */
-const readEnvelope = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }));
+const readEnvelope = flow(
+  Schema.decodeUnknownResult(Schema.Struct({ runId: Schema.String })),
+  Result.getOrThrow,
+);
 
 /** One line of a Run's Step records, stamped now. The host is their only writer. */
 const noteStep = (dir: string, note: StepNote) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     // SAFETY: a note is a line without its time, which is added here.
-    const line = { ...note, at: yield* nowIso() } as StepLine;
+    const line = { ...note, at: yield* nowIso } as StepLine;
     yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
     yield* fs
       .writeFileString(`${dir}/${STEPS_FILE}`, `${encodeStepLine(line)}\n`, { flag: "a" })
@@ -2399,7 +2416,12 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
   });
   const entries = new Map<string, number>();
   entriesOf.set(workflow, entries);
-  const path = definition.path?.map((one) => one.meta) ?? [];
+  const path =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(definition.path), (present_) =>
+        Arr.map(present_, (one) => one.meta),
+      ),
+    ) ?? [];
   const body = workflow.toLayer((envelope) => {
     // SAFETY: the envelope decoded against the definition's own input struct.
     const input = envelope.input as never;
@@ -2418,7 +2440,11 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
           execute: host.step(run.id, { kind: "forecast", steps: path }),
         });
     });
-    return entered.pipe(Effect.andThen(definition.run({ input }))).pipe(
+    return entered.pipe(
+      Effect.andThen(
+        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded author error schemas are erased; the workflow's codec retains their actual values.
+        definition.run({ input }),
+      ),
       Effect.provideService(Run, run),
       Effect.provideService(WorkflowAgents, definition.agents),
       Effect.provideService(WorkflowHints, definition.hints ?? {}),
@@ -2458,7 +2484,7 @@ const told = (runId: string, status: typeof RunStatus.Type) =>
       if (status.status !== "failed") return Effect.void;
       return found.value.notify(
         runId,
-        status.reason.startsWith("output-unusable:") ? "output-unusable" : "run-failed",
+        pipe(status.reason, Str.startsWith("output-unusable:")) ? "output-unusable" : "run-failed",
         status.reason,
       );
     }),
@@ -2522,7 +2548,8 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
  * What beside an entry is not its code: the installed toolchain, linked rather than copied,
  * and the project file a typecheck writes for itself and removes again.
  */
-const unstaged = (name: string) => name === "node_modules" || name.startsWith(CHECK_PROJECT);
+const unstaged = (name: string) =>
+  name === "node_modules" || pipe(name, Str.startsWith(CHECK_PROJECT));
 const CHECK_PROJECT = ".collie-check";
 
 /**
@@ -2546,7 +2573,7 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
     const below = yield* fs
       .readDirectory(`${dir}/${name}`, { recursive: true })
       .pipe(Effect.orElseSucceed((): Array<string> => []));
-    names.push(...below.map((one) => `${name}/${one}`));
+    names.push(...Arr.map(below, (one) => `${name}/${one}`));
   }
   return names;
 });
@@ -2566,10 +2593,10 @@ export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSyste
     const installed = yield* fs
       .readDirectory(`${dir}/node_modules`, { recursive: true })
       .pipe(Effect.orElseSucceed((): Array<string> => []));
-    let read = installed
-      .sort()
-      .map((name) => `node_modules/${name}\n`)
-      .join("");
+    let read = Arr.join(
+      Arr.map(installed.sort(), (name) => `node_modules/${name}\n`),
+      "",
+    );
     for (const name of (yield* sourcesIn(dir)).sort()) {
       // A directory reads as nothing, and what is inside it is in the list under a name
       // of its own.
@@ -2591,13 +2618,13 @@ export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSyste
  */
 const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const pending = (yield* sourcesIn(dir)).map((name) => `${dir}/${name}`);
+  const pending = Arr.map(yield* sourcesIn(dir), (name) => `${dir}/${name}`);
   const outside = new Set<string>();
   const looked = new Set<string>();
   for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
     for (let at = parentOf(file); !looked.has(at); at = parentOf(at)) {
       looked.add(at);
-      if (at === dir || at.startsWith(`${dir}/`)) continue;
+      if (at === dir || pipe(at, Str.startsWith(`${dir}/`))) continue;
       const manifest = `${at}/package.json`;
       if (yield* fs.exists(manifest).pipe(Effect.orElseSucceed(() => false))) {
         outside.add(manifest);
@@ -2607,7 +2634,7 @@ const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
     if (loader === null) continue;
     const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
     for (const target of importedBy(file, text, loader)) {
-      if (target.startsWith(`${dir}/`) || outside.has(target)) continue;
+      if (pipe(target, Str.startsWith(`${dir}/`)) || outside.has(target)) continue;
       outside.add(target);
       pending.push(target);
     }
@@ -2632,11 +2659,11 @@ const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => 
   } catch {
     return [];
   }
-  return imports.flatMap((one) => {
-    if (!one.path.startsWith(".") && !one.path.startsWith("#")) return [];
+  return Arr.flatMap(imports, (one) => {
+    if (!pipe(one.path, Str.startsWith(".")) && !pipe(one.path, Str.startsWith("#"))) return [];
     try {
       const target = Bun.resolveSync(one.path, directoryOf(file));
-      return target.includes("/node_modules/") ? [] : [target];
+      return pipe(target, Str.includes("/node_modules/")) ? [] : [target];
     } catch {
       return [];
     }
@@ -2681,7 +2708,7 @@ export const stageGeneration: (options: {
       .pipe(Effect.andThen(fs.copyFile(file, staged(file))), Effect.mapError(failed));
   }
   const looked = new Set<string>();
-  for (const start of [from, ...outside.map((file) => path.dirname(file))]) {
+  for (const start of [from, ...Arr.map(outside, (file) => path.dirname(file))]) {
     for (let at = start; !looked.has(at); at = path.dirname(at)) looked.add(at);
   }
   for (const at of looked) {
@@ -2698,12 +2725,29 @@ export const stageGeneration: (options: {
 
 const loaderOf = (name: string): "ts" | "tsx" | "js" | null => {
   if (/\.(ts|mts|cts)$/.test(name)) return "ts";
-  if (name.endsWith(".tsx")) return "tsx";
+  if (pipe(name, Str.endsWith(".tsx"))) return "tsx";
   return /\.(js|mjs|cjs|jsx)$/.test(name) ? "js" : null;
 };
 
-const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
-const parentOf = (at: string) => at.slice(0, Math.max(at.lastIndexOf("/"), 1));
+const directoryOf = (file: string) =>
+  pipe(
+    file,
+    Str.slice(
+      0,
+      Option.getOrElse(pipe(file, Str.lastIndexOf("/")), () => -1),
+    ),
+  );
+const parentOf = (at: string) =>
+  pipe(
+    at,
+    Str.slice(
+      0,
+      Math.max(
+        Option.getOrElse(pipe(at, Str.lastIndexOf("/")), () => -1),
+        1,
+      ),
+    ),
+  );
 
 /** A file and what was in its directory when it was read, as one value. */
 const sourceOf = (entry: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
@@ -2712,8 +2756,8 @@ const sourceOf = (entry: string): Effect.Effect<string, never, FileSystem.FileSy
 /** Every generation a host staged, gone: a new host stages from the sources again. */
 export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.remove(`${dir}/generations`, { recursive: true })),
-    Effect.ignore,
+    Effect.flatMap((fs) => fs.remove(`${dir}/generations`, { recursive: true, force: true })),
+    Effect.ignore({ log: "Warn" }),
   );
 
 /**
@@ -2763,7 +2807,7 @@ export function engineLayer(options: {
     ).pipe(
       Effect.map(([SingleRunner, ClusterWorkflowEngine]) => {
         const cluster = SingleRunner.layer({ shardingConfig: polled }).pipe(
-          Layer.provide([sql, BunCrypto.layer]),
+          Layer.provide([sql, Digest.layerWebCrypto]),
         );
         // The message storage too: forgetting a Run clears what the engine kept of it.
         return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
@@ -2802,8 +2846,7 @@ export const forgetExecution = (name: string, execution: string) =>
 /** How long a start waits for the engine to take its Run before it is refused. */
 const HAND_OVER_TIMEOUT = "30 seconds";
 
-export const HOLD = "hold";
-export const STOP = "stop";
+export { HOLD, STOP, controlPath };
 /** Why work parked; the host clears it when taking that work up. */
 export const PARKED = "parked";
 /** A wait that ends by itself; the host clears it when the wait ends. */
@@ -2821,20 +2864,6 @@ const UsageWaitJson = Schema.fromJsonString(UsageWaitSchema);
 
 /** What a Run nobody classified proves: the approved set, and no ticket's evidence. */
 const UNSPECIFIED = "unspecified";
-
-/**
- * What a workflow reads about its own run: the controls an operator has set over it, and
- * the question it is waiting on.
- *
- * A control is one file in the host's own directory, and the host is its only writer —
- * no client writes one and nothing consumes it as a command. It stays a file rather than
- * a row because a workflow reads it at its boundaries, from the engine's own fiber:
- * answering that read out of this process's memory or its database settles the boundary
- * fast enough to race a resume, and the run parks again before the resume has landed.
- * `docs/adr/0021-one-host-answers-for-a-run.md` has the measurement.
- */
-export const controlPath = (dir: string, control: string, runId: string): string =>
-  `${dir}/${control}.${runId}`;
 
 /**
  * Where one Run's evidence lives: the verification journal `verify.ts` writes and
@@ -2862,7 +2891,7 @@ const lineageIn = (store: StoreApi) =>
       const row = yield* store.run(lineage[at]!);
       if (row === null) continue;
       const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
-      const plan = Object.values(input).filter(Schema.is(Schema.String)).map(planRunOf);
+      const plan = Arr.map(Arr.filter(Rec.values(input), Schema.is(Schema.String)), planRunOf);
       for (const from of [row.parent, ...plan])
         if (from != null && !lineage.includes(from)) lineage.push(from);
     }
@@ -2903,7 +2932,9 @@ const recordedIn =
   (at) =>
     store.runs.pipe(
       Effect.map((rows) => {
-        const one = rows.find((row) => placedOf(row, {}).worktree?.path === at);
+        const one = Option.getOrUndefined(
+          Arr.findFirst(rows, (row) => placedOf(row, {}).worktree?.path === at),
+        );
         return one === undefined
           ? null
           : {
@@ -2948,7 +2979,7 @@ const refusedCheckout = (o: {
 /** The merge request a Run opened, or null where it recorded none. */
 const mergeRequestOf = (fs: FileSystem.FileSystem, dir: string, runId: string) =>
   fs.readFileString(mergeRequestPath(dir, runId)).pipe(
-    Effect.map((url) => url.trim() || null),
+    Effect.map((url) => Str.trim(url) || null),
     Effect.orElseSucceed(() => null),
   );
 
@@ -3016,7 +3047,10 @@ const claimPath = (dir: string, runId: string) => `${runDir(dir, runId)}/helle.j
 const decodeClaims = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Union([HelleClaimSchema, Schema.Array(HelleClaimSchema)])),
 );
-const encodeClaims = Schema.encodeSync(Schema.fromJsonString(Schema.Array(HelleClaimSchema)));
+const encodeClaims = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(HelleClaimSchema))),
+  Result.getOrThrow,
+);
 
 /** What this Run already claimed, empty where it has claimed nothing yet. */
 const recordedClaims = (
@@ -3147,28 +3181,32 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
     if (runId === options.to) continue;
     const file = claimPath(options.dir, runId);
     const record = yield* recordedClaims(file);
-    if (!record.some((one) => one.slug === options.slug)) continue;
+    if (!Arr.some(record, (one) => one.slug === options.slug)) continue;
     const refused = (left: ReadonlyArray<string>) =>
       new HelleError({
-        message: `the claim on ${options.slug} is ${runId}'s, and its agents did not all close (${left.join("; ")}); close them, then resume ${options.to}`,
+        message: `the claim on ${options.slug} is ${runId}'s, and its agents did not all close (${Arr.join(left, "; ")}); close them, then resume ${options.to}`,
       });
     const tree = yield* options.stop(runId);
     if (tree.left.length > 0) return yield* refused(tree.left);
     const deadline = (yield* Clock.currentTimeMillis) + patience.forMs;
     for (const one of tree.runs) {
-      while (!(yield* options.stopped(one))) {
-        if ((yield* Clock.currentTimeMillis) >= deadline) {
-          return yield* new HelleError({
-            message: `the claim on ${options.slug} is ${runId}'s, and ${one} is still running a step its stop has not reached; resume ${options.to} once ${one} has stopped`,
-          });
-        }
-        yield* Effect.sleep(Duration.millis(patience.everyMs));
-      }
+      const stopped = yield* options.stopped(one).pipe(
+        Effect.repeat({
+          until: (stopped) => stopped,
+          schedule: Schedule.spaced(patience.everyMs).pipe(
+            Schedule.while(({ now }) => now < deadline),
+          ),
+        }),
+      );
+      if (!stopped)
+        return yield* new HelleError({
+          message: `the claim on ${options.slug} is ${runId}'s, and ${one} is still running a step its stop has not reached; resume ${options.to} once ${one} has stopped`,
+        });
     }
     const late: string[] = [];
     for (const one of tree.runs) late.push(...(yield* options.halt(one)).left);
     if (late.length > 0) return yield* refused(late);
-    yield* updateClaims(file, (now) => now.filter((one) => one.slug !== options.slug)).pipe(
+    yield* updateClaims(file, (now) => Arr.filter(now, (one) => one.slug !== options.slug)).pipe(
       Effect.orDie,
     );
     yield* appendLog(
@@ -3211,7 +3249,7 @@ const defaultMergeBase = (cwd: string) =>
     const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
     const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
     if (merged.code !== 0) return { found: false, why: `no merge-base with ${branch}` } as const;
-    return { found: true, branch, base: merged.stdout.trim() } as const;
+    return { found: true, branch, base: Str.trim(merged.stdout) } as const;
   });
 
 /**
@@ -3228,15 +3266,15 @@ const atDefaultBase = <A, R>(
     const git = (...args: string[]) => runShell("git", args, cwd);
     const refuse = (why: string) =>
       new WorkflowError({ reason: `not compared at the default branch: ${why}` });
-    if ((yield* git("status", "--porcelain")).stdout.trim() !== "") {
+    if (Str.trim((yield* git("status", "--porcelain")).stdout) !== "") {
       return yield* refuse("the checkout has changes of its own");
     }
     const found = yield* defaultMergeBase(cwd);
     if (!found.found) return yield* refuse(found.why);
     const { branch, base } = found;
-    const head = (yield* git("rev-parse", "HEAD")).stdout.trim();
+    const head = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
     const named = yield* git("symbolic-ref", "-q", "--short", "HEAD");
-    const back = named.code === 0 ? named.stdout.trim() : head;
+    const back = named.code === 0 ? Str.trim(named.stdout) : head;
     yield* fs.writeFileString(away, back).pipe(Effect.orDie);
     if ((yield* git("checkout", "-q", "--detach", base)).code !== 0) {
       yield* fs.remove(away).pipe(Effect.ignore);
@@ -3264,7 +3302,11 @@ export const hostLayer = (options: {
   readonly issuePrivacyBudget?: Duration.Input;
   /** How often a wait for review reads the merge request again. */
   readonly reviewPoll?: Duration.Input;
-}): Layer.Layer<Host | Notifier | Oversight | Reliance, never, Store | BunServices | ForgeHttp> =>
+}): Layer.Layer<
+  Host | Notifier | Oversight | Reliance,
+  never,
+  Store | PlatformServices | ForgeHttp
+> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const dir = options.dir;
@@ -3277,15 +3319,17 @@ export const hostLayer = (options: {
         | ChildProcessSpawner.ChildProcessSpawner
         | ForgeHttp;
       const services = yield* Effect.context<Collecting>();
-      const bun = yield* Effect.context<BunServices>();
+      const bun = yield* Effect.context<PlatformServices>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
-      const set = (control: string, runId: string) =>
-        fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
-      const untilStopped = (runId: string) =>
-        set(STOP, runId).pipe(
-          Effect.repeat({ until: (stop) => stop, schedule: Schedule.spaced("1 second") }),
+      const anySet = (runId: string, ...controls: ReadonlyArray<string>) =>
+        controlSet(dir, runId, ...controls).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+      const set = (control: string, runId: string) => anySet(runId, control);
+      const untilSet = (runId: string, ...controls: ReadonlyArray<string>) =>
+        anySet(runId, ...controls).pipe(
+          Effect.repeat({ until: (on) => on, schedule: Schedule.spaced("1 second") }),
         );
+      const untilStopped = (runId: string) => untilSet(runId, STOP);
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
       yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
@@ -3300,14 +3344,14 @@ export const hostLayer = (options: {
             if (!wanted(settings, kind)) return;
             const raw = yield* readConfig(options.userDir ?? dir);
             const configured = configValue(raw, "slack.notification_channel");
-            const channel = isText(configured) ? configured.trim() : "";
+            const channel = isText(configured) ? Str.trim(configured) : "";
             const row = yield* store.run(runId);
             if (toast === undefined && (channel === "" || row === null)) return;
             // Mark before delivery: a replay must not repeat an attempted post.
-            const said = `${kind}:${(about.key ?? "").replaceAll("\n", " ")}`;
+            const said = `${kind}:${pipe(about.key ?? "", Str.replaceAll("\n", " "))}`;
             const file = notifiedPath(dir, runId);
             const before = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-            if (before.split("\n").includes(said)) return;
+            if (Arr.contains(Str.split(before, "\n"), said)) return;
             yield* fs.writeFileString(file, `${said}\n`, { flag: "a" });
             const cwd =
               row === null
@@ -3357,7 +3401,7 @@ export const hostLayer = (options: {
           }),
         ).pipe(notifying.withPermits(1), Effect.ignore);
       const lineageOf = lineageIn(store);
-      const hostStarted = yield* nowIso();
+      const hostStarted = yield* nowIso;
       /** A pass this host collected that answers for this check now, said in the Run log. */
       const relyOn = (runId: string, run: CheckRun, spec: VerifySpec, recorded: CheckPass) =>
         Effect.gen(function* () {
@@ -3374,7 +3418,9 @@ export const hostLayer = (options: {
         under(
           Effect.gen(function* () {
             const approved = yield* approvedOf(dir, asked.runId);
-            const spec = approved.find((entry) => entry.name === asked.name);
+            const spec = Option.getOrUndefined(
+              Arr.findFirst(approved, (entry) => entry.name === asked.name),
+            );
             if (spec === undefined) {
               return yield* new WorkflowError({
                 reason: `"${asked.name}" is not among this Run's checks`,
@@ -3420,20 +3466,23 @@ export const hostLayer = (options: {
                 // A test is asked about once per base revision.
                 if (base !== null && rerun !== undefined) {
                   const checkDir = yield* checkCwd({ ...own, cwd: asked.cwd }, spec);
-                  const known = (yield* readVerifications(journal).pipe(Effect.orDie)).findLast(
-                    (v) =>
-                      v.pass === "baseline" &&
-                      v.name === spec.name &&
-                      v.cwd === checkDir &&
-                      v.test?.file === rerun.file &&
-                      v.test.name === rerun.name &&
-                      v.start.head_sha === head.stdout.trim(),
+                  const known = Option.getOrUndefined(
+                    Arr.findLast(
+                      yield* readVerifications(journal).pipe(Effect.orDie),
+                      (v) =>
+                        v.pass === "baseline" &&
+                        v.name === spec.name &&
+                        v.cwd === checkDir &&
+                        v.test?.file === rerun.file &&
+                        v.test.name === rerun.name &&
+                        v.start.head_sha === Str.trim(head.stdout),
+                    ),
                   );
                   if (known !== undefined) return known;
                 }
-                const started = yield* nowIso();
+                const started = yield* nowIso;
                 // A file per run of the check, beside the journal its record goes to.
-                const log = `${journal}/checks/${started.replace(/[:.]/g, "-")}-${spec.name.replace(/[^\w.-]/g, "_")}.log`;
+                const log = `${journal}/checks/${pipe(started, Str.replace(/[:.]/g, "-"))}-${pipe(spec.name, Str.replace(/[^\w.-]/g, "_"))}.log`;
                 yield* fs
                   .writeFileString(
                     marker,
@@ -3443,7 +3492,7 @@ export const hostLayer = (options: {
                       argv: rerun === undefined ? spec.argv : rerunArgv(rerun),
                       pass: recorded.pass,
                       round: recorded.round ?? null,
-                      revision: head.code === 0 ? head.stdout.trim() : "",
+                      revision: head.code === 0 ? Str.trim(head.stdout) : "",
                       base,
                       started,
                       log,
@@ -3479,7 +3528,7 @@ export const hostLayer = (options: {
               (asked.at === "default-base"
                 ? atDefaultBase(asked.cwd, away, verified)
                 : verified(null)
-              ).pipe(Effect.map(Option.some)),
+              ).pipe(Effect.asSome),
               untilStopped(asked.runId).pipe(Effect.as(Option.none<Verification>())),
             ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
             if (Option.isSome(ran)) return ran.value;
@@ -3650,8 +3699,14 @@ export const hostLayer = (options: {
             return yield* new WorkflowError({
               reason: `issue privacy check could not read remotes: ${checkout}`,
             });
-          return remotes.stdout.split("\n").flatMap((line) => {
-            const name = remoteOf(line.split("\t")[1]?.replace(/\s+\((?:fetch|push)\)$/, "") ?? "");
+          return Arr.flatMap(Str.split(remotes.stdout, "\n"), (line) => {
+            const name = remoteOf(
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(Str.split(line, "\t")[1]), (present__) =>
+                  pipe(present__, Str.replace(/\s+\((?:fetch|push)\)$/, "")),
+                ),
+              ) ?? "",
+            );
             return name === null ? [] : [name];
           });
         });
@@ -3665,13 +3720,16 @@ export const hostLayer = (options: {
             [],
             [
               ...new Set(
-                [
-                  ...(yield* store.runs).flatMap((row) => {
-                    const placed = placedOf(row, {});
-                    return [row.project, placed.cwd, placed.worktree?.path ?? ""];
-                  }),
-                  ...open.flatMap((workspace) => [workspace.cwd, workspace.worktree ?? ""]),
-                ].filter((dir) => dir.startsWith("/")),
+                Arr.filter(
+                  [
+                    ...Arr.flatMap(yield* store.runs, (row) => {
+                      const placed = placedOf(row, {});
+                      return [row.project, placed.cwd, placed.worktree?.path ?? ""];
+                    }),
+                    ...Arr.flatMap(open, (workspace) => [workspace.cwd, workspace.worktree ?? ""]),
+                  ],
+                  (dir) => pipe(dir, Str.startsWith("/")),
+                ),
               ),
             ],
           );
@@ -3719,19 +3777,20 @@ export const hostLayer = (options: {
             return yield* new WorkflowError({
               reason: "issue checkout's Git identity could not be read",
             });
-          const own = yield* fs.realPath(common.stdout.replace(/\n$/, ""));
-          const ownRemote = here.project.split("/").slice(1).join("/");
+          const own = yield* fs.realPath(pipe(common.stdout, Str.replace(/\n$/, "")));
+          const ownRemote = Arr.join(Str.split(here.project, "/").slice(1), "/");
           for (const { checkout, canonical, repository, names } of inventory.checkouts) {
             if (
               !(
-                text.includes(checkout) ||
-                expanded.includes(canonical) ||
-                names.some(
+                pipe(text, Str.includes(checkout)) ||
+                pipe(expanded, Str.includes(canonical)) ||
+                Arr.some(
+                  names,
                   (name) =>
                     (name.project !== here.project &&
-                      (text.includes(name.project) ||
-                        text.includes(name.project.replace("/", ":")))) ||
-                    (name.path !== ownRemote && text.includes(name.path)),
+                      (pipe(text, Str.includes(name.project)) ||
+                        pipe(text, Str.includes(pipe(name.project, Str.replace("/", ":")))))) ||
+                    (name.path !== ownRemote && pipe(text, Str.includes(name.path))),
                 )
               )
             )
@@ -3749,7 +3808,7 @@ export const hostLayer = (options: {
               return yield* new WorkflowError({
                 reason: `issue privacy check could not identify checkout: ${checkout}`,
               });
-            if ((yield* fs.realPath(shared.stdout.replace(/\n$/, ""))) === own) continue;
+            if ((yield* fs.realPath(pipe(shared.stdout, Str.replace(/\n$/, "")))) === own) continue;
             return yield* new WorkflowError({
               reason: `issue text names another checkout: ${checkout}`,
             });
@@ -3785,7 +3844,7 @@ export const hostLayer = (options: {
           const awaiting = {
             on: wait.on,
             who: wait.who,
-            since: Option.isSome(before) ? before.value.since : yield* nowIso(),
+            since: Option.isSome(before) ? before.value.since : yield* nowIso,
           };
           const overdue = overdueLine(awaiting, yield* Clock.currentTimeMillis);
           if (
@@ -3793,7 +3852,10 @@ export const hostLayer = (options: {
             before.value.on !== awaiting.on ||
             before.value.who !== awaiting.who
           ) {
-            yield* fs.writeFileString(path, Schema.encodeSync(AwaitingJson)(awaiting));
+            yield* fs.writeFileString(
+              path,
+              yield* Schema.encodeEffect(AwaitingJson)(awaiting).pipe(Effect.orDie),
+            );
             if (overdue === null && !parked) yield* store.announce;
           }
           if (overdue !== null || parked) yield* host.parked(runId, overdue);
@@ -3959,10 +4021,22 @@ export const hostLayer = (options: {
             wait === null
               ? fs.remove(path, { force: true })
               : fs
-                  .makeDirectory(path.slice(0, path.lastIndexOf("/")), { recursive: true })
+                  .makeDirectory(
+                    pipe(
+                      path,
+                      Str.slice(
+                        0,
+                        Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1),
+                      ),
+                    ),
+                    { recursive: true },
+                  )
                   .pipe(
                     Effect.andThen(
-                      fs.writeFileString(path, Schema.encodeSync(UsageWaitJson)(wait)),
+                      fs.writeFileString(
+                        path,
+                        flow(Schema.encodeResult(UsageWaitJson), Result.getOrThrow)(wait),
+                      ),
                     ),
                   )
           ).pipe(Effect.orDie, Effect.andThen(store.announce));
@@ -3972,7 +4046,8 @@ export const hostLayer = (options: {
             const where = runDir(dir, runId);
             if (note.kind === "enter") {
               if (
-                (yield* readStepLines(where)).some(
+                Arr.some(
+                  yield* readStepLines(where),
                   (one) => one.kind === "enter" && one.key === note.key,
                 )
               )
@@ -4003,7 +4078,7 @@ export const hostLayer = (options: {
             const first =
               note.kind === "entry" &&
               note.cause === "restarted" &&
-              !(yield* readStepLines(where)).some((line) => line.kind === "entry");
+              !Arr.some(yield* readStepLines(where), (line) => line.kind === "entry");
             yield* noteStep(where, first ? { kind: "entry", cause: null } : note);
             if (note.kind === "leave") {
               const row = yield* store.run(runId);
@@ -4033,7 +4108,7 @@ export const hostLayer = (options: {
                   yield* under(
                     Effect.gen(function* () {
                       yield* appendMetric(evidenceDir(dir, runId), {
-                        at: yield* nowIso(),
+                        at: yield* nowIso,
                         kind: "halt",
                         subject: "",
                         value: 0,
@@ -4067,11 +4142,15 @@ export const hostLayer = (options: {
             const audit = yield* under(readAudit(runDir(dir, runId))).pipe(
               Effect.orElseSucceed(() => []),
             );
-            return rows.map((row) => {
+            return Arr.map(rows, (row) => {
               const actor =
                 row.answerer ??
-                audit.find((line) => line.operation === "answer" && line.request === row.request)
-                  ?.actor;
+                Option.getOrUndefined(
+                  Arr.findFirst(
+                    audit,
+                    (line) => line.operation === "answer" && line.request === row.request,
+                  ),
+                )?.actor;
               if (actor === undefined) return { name: row.decision, answer: row.answer };
               const { requestId: _, schedule: __, ...by } = actor;
               return { name: row.decision, answer: row.answer, by };
@@ -4120,7 +4199,7 @@ export const hostLayer = (options: {
             readConfig(options.userDir ?? dir).pipe(
               Effect.map((raw) => {
                 const value = configValue(raw, dotted);
-                return Schema.is(Schema.Union([Schema.String, Schema.Number, Schema.Boolean]))(
+                return Schema.is(Schema.Union([Schema.String, Schema.Finite, Schema.Boolean]))(
                   value,
                 )
                   ? String(value)
@@ -4158,12 +4237,10 @@ export const hostLayer = (options: {
                 ? { posted: true, link: link.success }
                 : { posted: true, why: `permalink missing: ${link.failure}` };
             }).pipe(
-              Effect.catch((reason) =>
-                Effect.succeed({
-                  posted: false,
-                  why: isText(reason) ? reason : "Slack approval post could not be completed",
-                }),
-              ),
+              Effect.orElseSucceed((reason) => ({
+                posted: false,
+                why: isText(reason) ? reason : "Slack approval post could not be completed",
+              })),
             ),
           ),
         mr: (asked) =>
@@ -4226,8 +4303,11 @@ export const hostLayer = (options: {
         ciJob: (asked) =>
           under(
             Effect.gen(function* () {
-              const spec = (yield* approvedOf(dir, asked.runId)).find(
-                (one) => one.name === asked.name,
+              const spec = Option.getOrUndefined(
+                Arr.findFirst(
+                  yield* approvedOf(dir, asked.runId),
+                  (one) => one.name === asked.name,
+                ),
               );
               if (spec?.ci === undefined)
                 return {
@@ -4297,7 +4377,7 @@ export const hostLayer = (options: {
                       dir,
                       slug: claim.slug,
                       to: asked.runId,
-                      runs: (yield* store.runs).map((row) => row.run),
+                      runs: Arr.map(yield* store.runs, (row) => row.run),
                       stop: (runId) =>
                         Option.isSome(executions)
                           ? executions.value.stop(runId)
@@ -4320,7 +4400,7 @@ export const hostLayer = (options: {
                     .pipe(
                       Effect.andThen(
                         updateClaims(file, (before) => [
-                          ...before.filter((one) => one.slug !== claim.slug),
+                          ...Arr.filter(before, (one) => one.slug !== claim.slug),
                           claim,
                         ]),
                       ),
@@ -4328,7 +4408,7 @@ export const hostLayer = (options: {
                     );
                 }),
               forget: (slug) =>
-                updateClaims(file, (before) => before.filter((one) => one.slug !== slug)).pipe(
+                updateClaims(file, (before) => Arr.filter(before, (one) => one.slug !== slug)).pipe(
                   Effect.orDie,
                 ),
               out: asked.say,
@@ -4383,14 +4463,17 @@ export const hostLayer = (options: {
               );
               if (released._tag === "Success") given.add(one.slug);
             }
-            yield* updateClaims(file, (now) => now.filter((one) => !given.has(one.slug)));
-            return held.filter((one) => !given.has(one.slug)).map((one) => one.slug);
+            yield* updateClaims(file, (now) => Arr.filter(now, (one) => !given.has(one.slug)));
+            return Arr.map(
+              Arr.filter(held, (one) => !given.has(one.slug)),
+              (one) => one.slug,
+            );
           }).pipe(
             Effect.provideContext(services),
             // Helle not asked at all gave nothing back.
             Effect.catch(() =>
               recordedClaims(claimPath(dir, runId)).pipe(
-                Effect.map((held) => held.map((one) => one.slug)),
+                Effect.map((held) => Arr.map(held, (one) => one.slug)),
                 Effect.provideContext(services),
               ),
             ),
@@ -4436,11 +4519,11 @@ export const hostLayer = (options: {
         defaultHead: (cwd) =>
           under(runShell("git", ["ls-remote", "origin", "HEAD"], cwd)).pipe(
             Effect.flatMap((said) => {
-              const sha = said.code === 0 ? (said.stdout.trim().split(/\s/)[0] ?? "") : "";
+              const sha = said.code === 0 ? (Str.split(Str.trim(said.stdout), /\s/)[0] ?? "") : "";
               return sha === ""
                 ? Effect.fail(
                     new WorkflowError({
-                      reason: `origin's default branch could not be read from ${cwd}: ${(said.stderr ?? "").trim()}`,
+                      reason: `origin's default branch could not be read from ${cwd}: ${Str.trim(said.stderr ?? "")}`,
                     }),
                   )
                 : Effect.succeed(sha);
@@ -4453,10 +4536,10 @@ export const hostLayer = (options: {
               const found = yield* defaultMergeBase(cwd);
               if (!found.found) return null;
               const ahead = yield* git("rev-list", "--count", `${found.base}..HEAD`);
-              if (ahead.code !== 0 || ahead.stdout.trim() !== "0") return null;
+              if (ahead.code !== 0 || Str.trim(ahead.stdout) !== "0") return null;
               const status = yield* git("status", "--porcelain");
-              if (status.code !== 0 || status.stdout.trim() !== "") return null;
-              const why = `nothing to land: no commits over ${found.base.slice(0, 12)}, where this branch leaves ${found.branch}, and nothing uncommitted`;
+              if (status.code !== 0 || Str.trim(status.stdout) !== "") return null;
+              const why = `nothing to land: no commits over ${pipe(found.base, Str.slice(0, 12))}, where this branch leaves ${found.branch}, and nothing uncommitted`;
               yield* fs.writeFileString(nothingToLandFile(runDir(dir, runId)), `${why}\n`);
               yield* appendLog(runDir(dir, runId), why);
               return why;
@@ -4478,11 +4561,9 @@ export const hostLayer = (options: {
         review: (asked) => reviewRead(asked).pipe(Effect.map(({ standing }) => standing)),
         awaitReview: (asked) =>
           Effect.gen(function* () {
-            const controlled = Effect.gen(function* () {
-              while (!((yield* set(HOLD, asked.runId)) || (yield* set(STOP, asked.runId))))
-                yield* Effect.sleep("1 second");
-              return { _tag: "Held" } satisfies ReviewStanding;
-            });
+            const controlled = untilSet(asked.runId, HOLD, STOP).pipe(
+              Effect.as({ _tag: "Held" } satisfies ReviewStanding),
+            );
             const polled = Effect.gen(function* () {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
@@ -4503,7 +4584,9 @@ export const hostLayer = (options: {
         reply: (asked) =>
           Effect.gen(function* () {
             const { mr, ref, read } = yield* readable(asked);
-            const comment = read.comments.find((one) => one.id === asked.comment);
+            const comment = Option.getOrUndefined(
+              Arr.findFirst(read.comments, (one) => one.id === asked.comment),
+            );
             if (comment === undefined)
               return yield* new WorkflowError({
                 reason: `${mr} has no comment ${asked.comment} to reply to`,
@@ -4521,22 +4604,23 @@ export const hostLayer = (options: {
               ).pipe(Effect.orDie);
             if (comment.answered) {
               // The forge may have taken this Run's reply before the host could record it.
-              const others = read.comments.filter((one) => one !== comment);
-              const posted = read.comments
-                .slice(read.comments.indexOf(comment) + 1)
-                .find(
+              const others = Arr.filter(read.comments, (one) => one !== comment);
+              const posted = Option.getOrUndefined(
+                Arr.findFirst(
+                  read.comments.slice(read.comments.indexOf(comment) + 1),
                   (one) =>
                     one.author === read.login &&
-                    one.body.includes(signature) &&
+                    pipe(one.body, Str.includes(signature)) &&
                     (links(one.body, comment.url) ||
                       (comment.thread !== null &&
                         one.thread === comment.thread &&
-                        !others.some((other) => links(one.body, other.url)))),
-                );
+                        !Arr.some(others, (other) => links(one.body, other.url)))),
+                ),
+              );
               const recorded = yield* under(readReplies(runDir(dir, asked.runId))).pipe(
                 Effect.orDie,
               );
-              if (posted !== undefined && !recorded.some((one) => one.comment === comment.url))
+              if (posted !== undefined && !Arr.some(recorded, (one) => one.comment === comment.url))
                 yield* record(posted.body, posted.at);
               return "already" as const;
             }
@@ -4548,7 +4632,7 @@ export const hostLayer = (options: {
               return yield* new WorkflowError({
                 reason: `the forge refused the reply to ${comment.url}: ${replied.reason}`,
               });
-            yield* record(body, yield* nowIso());
+            yield* record(body, yield* nowIso);
             return "posted" as const;
           }),
         reviewHead: (asked) =>
@@ -4560,9 +4644,10 @@ export const hostLayer = (options: {
             return {
               head: read.head,
               carries,
-              open: read.comments
-                .filter((one) => one.external && !one.answered)
-                .map((one) => one.id),
+              open: Arr.map(
+                Arr.filter(read.comments, (one) => one.external && !one.answered),
+                (one) => one.id,
+              ),
             };
           }),
         fastForward: (asked) =>
@@ -4616,31 +4701,30 @@ export const hostLayer = (options: {
           ),
         awaitProduction: (asked) =>
           Effect.gen(function* () {
-            const short = asked.sha.slice(0, 8);
-            const plays = asked.jobs.map((job) => `\`${job.name}\` at ${job.url ?? asked.url}`);
+            const short = pipe(asked.sha, Str.slice(0, 8));
+            const plays = Arr.map(
+              asked.jobs,
+              (job) => `\`${job.name}\` at ${job.url ?? asked.url}`,
+            );
             const held = asked.slug === undefined ? null : `The claim on \`${asked.slug}\` is held`;
             const awaited =
               plays.length > 0 && asked.played !== true
                 ? null
                 : waitOn(asked.runId, {
-                    on: `production to carry \`${short}\` of ${asked.url}${plays.length === 0 ? "" : `, from ${plays.join(", ")}`}${asked.slug === undefined ? "" : `, holding the claim on \`${asked.slug}\``}`,
+                    on: `production to carry \`${short}\` of ${asked.url}${plays.length === 0 ? "" : `, from ${Arr.join(plays, ", ")}`}${asked.slug === undefined ? "" : `, holding the claim on \`${asked.slug}\``}`,
                     who: null,
                   });
             yield* (
               awaited ??
                 host.parked(
                   asked.runId,
-                  `Waiting for production: play ${plays.join(", ")}. ${held ?? "The Run waits"} until the forge shows production carries \`${short}\`.`,
+                  `Waiting for production: play ${Arr.join(plays, ", ")}. ${held ?? "The Run waits"} until the forge shows production carries \`${short}\`.`,
                 )
             );
             const { gitlabHost } = yield* loadDefaults(options.userDir ?? dir).pipe(
               Effect.orElseSucceed(() => ({ gitlabHost: undefined })),
             );
-            const controlled = Effect.gen(function* () {
-              while (!((yield* set(HOLD, asked.runId)) || (yield* set(STOP, asked.runId))))
-                yield* Effect.sleep("1 second");
-              return false;
-            });
+            const controlled = untilSet(asked.runId, HOLD, STOP).pipe(Effect.as(false));
             const carried = Effect.gen(function* () {
               while (!(yield* productionCarries(asked.cwd, asked.sha, runShell, gitlabHost))) {
                 if (awaited !== null) yield* awaited;
@@ -4741,7 +4825,7 @@ export const hostLayer = (options: {
             cwd,
             worktree,
             mr: yield* mergeRequestOf(fs, dir, runId),
-            asking: (yield* store.asked(runId)).some((one) => one.answer === null),
+            asking: Arr.some(yield* store.asked(runId), (one) => one.answer === null),
             held: yield* set(HOLD, runId),
             family:
               row === null
@@ -4774,10 +4858,7 @@ export const hostLayer = (options: {
             evaluator: built.evaluator,
             budgetFile: yield* budgetPath(dir, built.herdKey),
             limits: built.limits,
-            newId: Crypto.Crypto.pipe(
-              Effect.flatMap((one) => one.randomUUIDv4),
-              Effect.orDie,
-            ),
+            newId: SecureRandom.SecureRandom.pipe(Effect.flatMap((one) => one.uuidV4())),
             log: (line: string) => said(at, line).pipe(Effect.provideContext(services)),
           } satisfies JudgementDeps;
         }).pipe(Effect.orElseSucceed(() => null));
@@ -4818,19 +4899,19 @@ export const hostLayer = (options: {
               key: `escalated:${constraint}`,
               subject: constraint,
             });
-        }).pipe(Effect.ignore);
+        }).pipe(Effect.ignore({ log: "Unhandled" }));
       const oversight = Oversight.of({
         card: (runId, what) =>
           watched(runId).pipe(
             Effect.flatMap((at) => under(writeCard(at, what))),
             Effect.flatMap((card) => told(runId, [card])),
-            Effect.ignore,
+            Effect.ignore({ log: "Unhandled" }),
           ),
         checkpoints: (runId, step) =>
           watched(runId).pipe(
             Effect.flatMap((at) => under(cardCheckpoints(at, step))),
             Effect.flatMap((cards) => told(runId, cards)),
-            Effect.ignore,
+            Effect.ignore({ log: "Unhandled" }),
           ),
         drift,
         finish: (runId) =>
@@ -4865,7 +4946,7 @@ export const hostLayer = (options: {
             // owed cross-run check, which is what makes it something a human has to know.
             if (card.cross_run === "pending")
               yield* notify(runId, "drift-unresolved", "cross_run_pending", { key: "cross_run" });
-          }).pipe(Effect.ignore),
+          }).pipe(Effect.ignore({ log: "Unhandled" })),
       });
       const relied: Reliance["Service"]["relied"] = (runId, command) =>
         under(
@@ -4902,7 +4983,7 @@ export interface Herd {
   readonly socketPath: string | null;
   readonly pluginRoot: string;
   /** Where herdr's server listens, asked while `socketPath` is null. */
-  readonly locate?: Effect.Effect<string | null, never, BunServices>;
+  readonly locate?: Effect.Effect<string | null, never, PlatformServices>;
 }
 
 /** Which toasts a Run has raised, so a replay or a second host does not raise them again. */
@@ -4920,7 +5001,7 @@ const notifiedPath = (dir: string, runId: string) => `${dir}/notified.${runId}`;
 export const nextRegistrationName = (
   known: ReadonlyArray<{ readonly workflow: string }>,
   id: string,
-): string => `${id}@${known.filter((entry) => entry.workflow === id).length + 1}`;
+): string => `${id}@${Arr.filter(known, (entry) => entry.workflow === id).length + 1}`;
 
 /** The exit a decision is answered with, encoded by the decision's own schema. */
 export const answerDecision = (
@@ -5010,7 +5091,7 @@ const isWorkflowError = Schema.is(WorkflowError);
 const reasonOf = (cause: Cause.Cause<unknown>): string => {
   const failure = Cause.findErrorOption(cause);
   if (Option.isSome(failure) && isWorkflowError(failure.value)) return failure.value.reason;
-  const [reason = ""] = Cause.pretty(cause).split("\n");
+  const [reason] = Str.split(Cause.pretty(cause), "\n");
   return reason;
 };
 
@@ -5023,7 +5104,9 @@ const pointedAt = (
   generation: Generation,
   input: Readonly<Record<string, Schema.Json>>,
 ): string | null => {
-  const field = Object.entries(generation.hints).find(([, hint]) => hint === "diff-target")?.[0];
+  const field = Option.getOrUndefined(
+    Arr.findFirst(Rec.toEntries(generation.hints), ([, hint]) => hint === "diff-target"),
+  )?.[0];
   const value = field === undefined ? undefined : input[field];
   return isText(value) && value !== "" ? value : null;
 };
@@ -5038,7 +5121,7 @@ const mrKeyOf = (said: string | null) => {
 
 /** The field a module gives this strategy, if it gives it to one. */
 const fieldWith = (hints: Readonly<Record<string, InputStrategy>>, strategy: InputStrategy) =>
-  Object.entries(hints).find(([, hint]) => hint === strategy)?.[0];
+  Option.getOrUndefined(Arr.findFirst(Rec.toEntries(hints), ([, hint]) => hint === strategy))?.[0];
 
 /** Where placement reads a reviewed target the building module has no field for. */
 const REVIEWED = "reviewed";
@@ -5083,18 +5166,22 @@ export const settleInput = (
   fields: InputFields,
   given: Given,
 ): Effect.Effect<Settled, HostRefused> => {
-  const undeclared = [...Object.keys(given.json), ...Object.keys(given.text)]
-    .filter((name) => !(name in fields))
-    .sort();
+  const undeclared = Arr.filter(
+    [...Struct.keys(given.json), ...Struct.keys(given.text)],
+    (name) => !(name in fields),
+  ).sort();
   if (undeclared.length > 0) {
-    const names = undeclared.map((name) => `"${name}"`).join(", ");
+    const names = Arr.join(
+      Arr.map(undeclared, (name) => `"${name}"`),
+      ", ",
+    );
     return refusedInput(
       `${names} ${undeclared.length === 1 ? "is not an input" : "are not inputs"}`,
     );
   }
   const input: Record<string, Schema.Json> = {};
   const provenance: Record<string, string> = {};
-  for (const [name, field] of Object.entries(fields)) {
+  for (const [name, field] of Rec.toEntries(fields)) {
     const typed = given.json[name];
     if (typed !== undefined) {
       input[name] = typed;
@@ -5124,7 +5211,7 @@ export interface Settled {
 }
 
 const asParsedJson = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json));
-const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
 /** One field's value from what a human typed: as text, or as the JSON the text spells. */
 const asText = (field: InputField, text: string) => {
@@ -5140,7 +5227,8 @@ const describe = (field: InputField): string => {
   const drawn = jsonSchemaFor(field).document;
   if (!isDrawn(drawn)) return "what this input takes";
   const options = drawn.enum;
-  if (Array.isArray(options)) return `one of ${options.map(asWord).join(", ")}`;
+  if (Arr.isArray<typeof options>(options))
+    return `one of ${Arr.join(Arr.map(options, asWord), ", ")}`;
   const kind = drawn.type;
   return isWord(kind) ? `a ${kind}` : "what this input takes";
 };
@@ -5164,16 +5252,21 @@ const refuseOptions = (
   options: Readonly<Record<string, string>>,
 ): Effect.Effect<void, HostRefused> => {
   // Scoped policy travels separately from inputs without reserving another input name.
-  const strange = Object.keys(options).filter(
+  const strange = Arr.filter(
+    Struct.keys(options),
     (name) => name !== "claudeSubagents" && !(name in RESERVED_INPUTS),
   );
   if (strange.length > 0) {
     return refusedInput(
-      `no host option is called ${strange.map((name) => `"${name}"`).join(", ")}: ` +
-        `the host's own are ${Object.keys(RESERVED_INPUTS).join(", ")}`,
+      `no host option is called ${Arr.join(
+        Arr.map(strange, (name) => `"${name}"`),
+        ", ",
+      )}: ` + `the host's own are ${Arr.join(Struct.keys(RESERVED_INPUTS), ", ")}`,
     );
   }
-  const asked = options.outcome?.trim();
+  const asked = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(options.outcome), (present___) => Str.trim(present___)),
+  );
   if (asked === undefined || asked === "") return Effect.void;
   const fixed = generation.fixedOutcome;
   if (fixed !== null && fixed !== asked) {
@@ -5183,7 +5276,7 @@ const refuseOptions = (
   }
   if (fixed === null && asked !== UNSPECIFIED && !REQUESTABLE.includes(asked)) {
     return refusedInput(
-      `"${asked}" is not an outcome a Run can be asked for; one of ${REQUESTABLE.join(", ")}`,
+      `"${asked}" is not an outcome a Run can be asked for; one of ${Arr.join(REQUESTABLE, ", ")}`,
     );
   }
   return Effect.void;
@@ -5207,7 +5300,10 @@ const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
   /** The Projects root the front door resolved, which `projects-root` names; null for none. */
   root: string | null,
 ) {
-  const given = asked.workspace?.trim() ?? "";
+  const given =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(asked.workspace), (present____) => Str.trim(present____)),
+    ) ?? "";
   if (given === "") return { kind: "declared" } satisfies CheckoutRequest;
   if (isSeparate(given)) {
     if (generation.checkout === "none") {
@@ -5223,7 +5319,7 @@ const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
     );
   }
   const path = given === PROJECTS_ROOT_OPTION ? (root ?? "") : given;
-  if (!path.startsWith("/")) {
+  if (!pipe(path, Str.startsWith("/"))) {
     return yield* refusedInput(
       `workspace: "${given}" is neither "new", "${PROJECTS_ROOT_OPTION}" nor the absolute path of a checkout`,
     );
@@ -5248,12 +5344,13 @@ const Placed = Schema.Struct({
 type Placed = typeof Placed.Type;
 const PlacedJson = Schema.fromJsonString(Placed);
 const decodePlaced = Schema.decodeUnknownOption(PlacedJson);
-const encodePlaced = Schema.encodeSync(PlacedJson);
+const encodePlaced = flow(Schema.encodeResult(PlacedJson), Result.getOrThrow);
 
 const CLAIM_STRIPES = 16;
 const stripeOf = (key: string) => {
   let hash = 0;
-  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  for (const char of key)
+    hash = (hash * 31 + Option.getOrElse(Str.charCodeAt(char, 0), () => Number.NaN)) >>> 0;
   return hash % CLAIM_STRIPES;
 };
 
@@ -5284,7 +5381,7 @@ const Placing = Schema.Struct({
 type Placing = typeof Placing.Type;
 const PlacingJson = Schema.fromJsonString(Placing);
 const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
-const encodePlacing = Schema.encodeSync(PlacingJson);
+const encodePlacing = flow(Schema.encodeResult(PlacingJson), Result.getOrThrow);
 
 /** Whether a Run's report is owed: an agent started it, or its Task closes once it is reported. */
 export const owesReport = (row: RunRow) =>
@@ -5343,7 +5440,10 @@ const optionsNow = (dir: string, runId: string, options: Readonly<Record<string,
 
 const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
   Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
-    cwd: options.workspace?.startsWith("/") ? options.workspace : row.project,
+    cwd: Option.getOrElse(
+      Option.filter(Option.fromNullishOr(options.workspace), Str.startsWith("/")),
+      () => row.project,
+    ),
     branch: null,
     workspace: null,
     worktree: null,
@@ -5356,8 +5456,8 @@ const branchInputs = Effect.fn("Engine.branchInputs")(function* (
   options: Readonly<Record<string, string>>,
 ) {
   const inputs: Record<string, string> = {};
-  for (const [name, value] of Object.entries(input)) if (isText(value)) inputs[name] = value;
-  for (const [name, hint] of Object.entries(generation.hints)) {
+  for (const [name, value] of Rec.toEntries(input)) if (isText(value)) inputs[name] = value;
+  for (const [name, hint] of Rec.toEntries(generation.hints)) {
     const value = inputs[name];
     if (hint !== "work-source" || value === undefined) continue;
     const source = yield* classifyWorkSource(value).pipe(
@@ -5402,7 +5502,7 @@ const checksOfStart = Effect.fn("Engine.checksOfStart")(function* (o: {
   readonly verify: ReadonlyArray<VerifySpec> | undefined;
   readonly userDir: string;
   /** Where a checkout for the Run starts, by placement's rule. */
-  readonly start: Effect.Effect<string | null, never, BunServices>;
+  readonly start: Effect.Effect<string | null, never, PlatformServices>;
 }) {
   const readApproved = (cwd: string, ref: string | null) =>
     approvedAt(cwd, o.userDir, ref).pipe(Effect.catch((cause) => refusedInput(cause.message)));
@@ -5579,7 +5679,7 @@ export const RunView = Schema.Struct({
 export type RunView = typeof RunView.Type;
 
 /** What a run reads as, for comparing one poll with the last. */
-const encodeView = Schema.encodeSync(Schema.fromJsonString(RunView));
+const encodeView = flow(Schema.encodeResult(Schema.fromJsonString(RunView)), Result.getOrThrow);
 
 /**
  * How often a host asks the engine about work it has not finished. One fiber does it for
@@ -5878,7 +5978,11 @@ export const registryLayer = (
 ): Layer.Layer<
   Registry,
   never,
-  HostServices | Store | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner | BunServices
+  | HostServices
+  | Store
+  | SecureRandom.SecureRandom
+  | ChildProcessSpawner.ChildProcessSpawner
+  | PlatformServices
 > => Layer.effect(Registry)(makeRegistry(dir, options));
 
 /**
@@ -5915,7 +6019,7 @@ export const foundationLayer = (options: {
   | Reactivity.Reactivity
   | ForgeHttp,
   ConfigError,
-  BunServices
+  PlatformServices
 > =>
   hostLayer(options).pipe(
     Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
@@ -5930,10 +6034,10 @@ const makeRegistry: (
   never,
   | HostServices
   | Store
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | Scope.Scope
   | ChildProcessSpawner.ChildProcessSpawner
-  | BunServices
+  | PlatformServices
 > = Effect.fn("Engine.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
   const crashAt = options?.crashAt;
   const locate = options?.locate;
@@ -5942,7 +6046,7 @@ const makeRegistry: (
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const fs = yield* FileSystem.FileSystem;
   const store = yield* Store;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const hostScope = yield* Effect.scope;
   const placing =
     options?.placing ??
@@ -5951,7 +6055,7 @@ const makeRegistry: (
       Effect.orDie,
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
-  const bun = yield* Effect.context<BunServices | Crypto.Crypto>();
+  const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom>();
 
   /**
    * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
@@ -5968,15 +6072,15 @@ const makeRegistry: (
   ) {
     const field = fieldWith(generation.hints, "repository");
     const value = field === undefined ? undefined : settled.input[field];
-    if (generation.checkout !== "branch" || !isText(value) || value.trim() === "") return;
-    const named = value.trim();
+    if (generation.checkout !== "branch" || !isText(value) || Str.trim(value) === "") return;
+    const named = Str.trim(value);
     const top = (at: string) =>
       runShell("git", ["rev-parse", "--show-toplevel"], at).pipe(
-        Effect.map((said) => (said.code === 0 ? said.stdout.trim() : null)),
+        Effect.map((said) => (said.code === 0 ? Str.trim(said.stdout) : null)),
         Effect.orElseSucceed(() => null),
         Effect.provideContext(bun),
       );
-    const there = named.startsWith("/") ? yield* top(named) : null;
+    const there = pipe(named, Str.startsWith("/")) ? yield* top(named) : null;
     if (there !== null && there === (yield* top(cwd))) return;
     return yield* refusedInput(
       `"${field}" names ${named}, and a ${generation.id} Run works in the checkout it is started in, ${cwd}, and never clones: start it in that checkout, or from Home, which places it there`,
@@ -5991,7 +6095,7 @@ const makeRegistry: (
     yield* refuseElsewhere(generation, settled, cwd);
     const field = fieldWith(generation.hints, "diff-target");
     const value = field === undefined ? undefined : settled.input[field];
-    if (field === undefined || !isText(value) || value.trim() === "") return settled;
+    if (field === undefined || !isText(value) || Str.trim(value) === "") return settled;
     const target = yield* classifyGivenTarget(value, { cwd }).pipe(Effect.provideContext(bun));
     if (target === null) {
       return yield* refusedInput(
@@ -6132,8 +6236,8 @@ const makeRegistry: (
     readonly runId: string;
     readonly cwd: string;
   }) {
-    const rows = (yield* store.runs).filter((row) => row.run !== asked.runId);
-    const runs = (yield* Effect.forEach(rows, viewOf)).map((view) => ({
+    const rows = Arr.filter(yield* store.runs, (row) => row.run !== asked.runId);
+    const runs = Arr.map(yield* Effect.forEach(rows, viewOf), (view) => ({
       runId: view.runId,
       landing: view.landing,
       ended:
@@ -6160,7 +6264,7 @@ const makeRegistry: (
     const from = epochMs(since);
     if (!Number.isFinite(from))
       return yield* new WorkflowError({ reason: `since is not a date: ${since}` });
-    const rows = (yield* store.runs).filter((row) => epochMs(row.admitted) >= from);
+    const rows = Arr.filter(yield* store.runs, (row) => epochMs(row.admitted) >= from);
     const views = yield* Effect.forEach(rows, viewOf);
     const metrics = new Map<string, Metrics>();
     const recorded = new Map<string, Recorded>();
@@ -6197,7 +6301,7 @@ const makeRegistry: (
     const asked = yield* preferencesFromOptions(options).pipe(
       Effect.catch((cause) => refusedInput(`claudeSubagents: ${String(cause)}`)),
     );
-    if (Object.keys(asked).length === 0) return;
+    if (Struct.keys(asked).length === 0) return;
     const defaults = yield* loadDefaults(userDir).pipe(
       Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
     );
@@ -6228,7 +6332,9 @@ const makeRegistry: (
 
   /** What the review Run whose directory this is was pointed at, or null. */
   const reviewedTarget = Effect.fn("Engine.reviewedTarget")(function* (dirOfRun: string) {
-    const row = yield* store.run(dirOfRun.replace(/\/+$/, "").split("/").at(-1) ?? "");
+    const row = yield* store.run(
+      Str.split(pipe(dirOfRun, Str.replace(/\/+$/, "")), "/").at(-1) ?? "",
+    );
     const generation = row === null ? undefined : live.get(row.generation);
     if (row === null || generation === undefined) return null;
     return pointedAt(
@@ -6389,11 +6495,14 @@ const makeRegistry: (
         recordedBy: (at) =>
           Effect.gen(function* () {
             const rows = yield* store.runs;
-            const others = rows.filter((row) => row.run !== ask.runId);
-            const recorders = others
-              .filter((row) => workingPlace(row).worktree?.path === at)
-              .map((row) => row.run);
-            const latest = others.findLast((row) => workingPlace(row).worktree?.path === at);
+            const others = Arr.filter(rows, (row) => row.run !== ask.runId);
+            const recorders = Arr.map(
+              Arr.filter(others, (row) => workingPlace(row).worktree?.path === at),
+              (row) => row.run,
+            );
+            const latest = Option.getOrUndefined(
+              Arr.findLast(others, (row) => workingPlace(row).worktree?.path === at),
+            );
             if (latest === undefined) return null;
             // Whoever works in it, recorded or not and by whatever path, gives it up too.
             const real = (dir: string) => fs.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
@@ -6401,17 +6510,20 @@ const makeRegistry: (
             const users: string[] = [];
             for (const row of others) {
               const cwd = yield* real(workingPlace(row).cwd);
-              if (cwd === here || cwd.startsWith(`${here}/`)) users.push(row.run);
+              if (cwd === here || pipe(cwd, Str.startsWith(`${here}/`))) users.push(row.run);
             }
             const runs = new Set(
-              [...recorders, ...users].flatMap((run) => [run, ...descendantsOf(rows, run)]),
+              Arr.flatMap([...recorders, ...users], (run) => [run, ...descendantsOf(rows, run)]),
             );
             return {
               run: latest.run,
               worktree: workingPlace(latest).worktree ?? null,
               live: unended([...runs]),
               release: releaseRuns([...runs]).pipe(
-                Effect.flatMap((why) => (why === null ? agentIn(here) : Effect.succeed(why))),
+                Effect.filterOrElse(
+                  (why) => why !== null,
+                  () => agentIn(here),
+                ),
               ),
             };
           }),
@@ -6528,14 +6640,16 @@ const makeRegistry: (
     const open = new Set(
       branch === null
         ? []
-        : (yield* placing.herdr
-            .workspaceList()
-            .pipe(Effect.orElseSucceed((): ReadonlyArray<{ workspaceId: string }> => []))).map(
+        : Arr.map(
+            yield* placing.herdr
+              .workspaceList()
+              .pipe(Effect.orElseSucceed((): ReadonlyArray<{ workspaceId: string }> => [])),
             (one) => one.workspaceId,
           ),
     );
     const tasks = new Map(
-      (yield* listTasks(placing.env.stateDir).pipe(Effect.orElseSucceed(() => []))).map(
+      Arr.map(
+        yield* listTasks(placing.env.stateDir).pipe(Effect.orElseSucceed(() => [])),
         (task) => [task.id, task] as const,
       ),
     );
@@ -6545,10 +6659,13 @@ const makeRegistry: (
       if (mr !== null) {
         const recorded = live.get(row.generation);
         const given = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
-        const mrs = [
-          yield* mergeRequestOf(fs, dir, row.run),
-          recorded === undefined ? null : pointedAt(recorded, given),
-        ].map(mrKeyOf);
+        const mrs = Arr.map(
+          [
+            yield* mergeRequestOf(fs, dir, row.run),
+            recorded === undefined ? null : pointedAt(recorded, given),
+          ],
+          mrKeyOf,
+        );
         if (mrs.includes(mr)) return task;
       }
       if (branch === null || !open.has(task.workspace) || unplaced(row)) continue;
@@ -6692,13 +6809,14 @@ const makeRegistry: (
       Effect.flatMap((given) => settleTargets(generation, given, from)),
       Effect.mapError((failure) => refused(failure.reason)),
     );
-    const payload = yield* Schema.decodeUnknownEffect(
-      generation.registration.workflow.payloadSchema,
-    )({ runId, input: settled.input }).pipe(
-      Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
-    );
-    const launch = Object.entries(generation.hints).find(([, strategy]) =>
-      EXCLUSIVE_STRATEGIES.includes(strategy),
+    const payload = yield* Schema.decodeEffect(generation.registration.workflow.payloadSchema)({
+      runId,
+      input: settled.input,
+    }).pipe(Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)));
+    const launch = Option.getOrUndefined(
+      Arr.findFirst(Rec.toEntries(generation.hints), ([, strategy]) =>
+        EXCLUSIVE_STRATEGIES.includes(strategy),
+      ),
     )?.[0];
     // An admitted child's saved placement also covers replay and crash recovery.
     const taskLabel =
@@ -6741,10 +6859,10 @@ const makeRegistry: (
       project: request.kind === "existing" ? request.path : parent.project,
       userDir,
       approved: parentChecks.length > 0 ? parentChecks : undefined,
-    }).pipe(Effect.provideContext(bun), Effect.ignore);
+    }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
     yield* seedIntentOf({ dir, row: claimed.row, generation, seed: undefined, parent }).pipe(
       Effect.provideContext(bun),
-      Effect.ignore,
+      Effect.ignore({ log: "Unhandled" }),
     );
     if (claimed.row.accepted === null) yield* attachInto(claimed.row);
     // The parent hands its own children over, so the receipt is written here: a host
@@ -6791,8 +6909,10 @@ const makeRegistry: (
     const derived = row.execution === (yield* workflow.executionId(payload));
     return yield* Effect.suspend(() =>
       derived
-        ? workflow.execute(payload)
-        : engine.execute(workflow, {
+        ? // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- A loaded child's erased error schema is encoded and translated to WorkflowError below.
+          workflow.execute(payload)
+        : // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Saved execution ids use the same erased child error schema and translation below.
+          engine.execute(workflow, {
             executionId: row.execution,
             payload,
             suspendedRetrySchedule: workflow.suspendedRetrySchedule,
@@ -6827,7 +6947,7 @@ const makeRegistry: (
   const payloadOf = (registration: Registration, row: RunRow) =>
     decodeInput(row.input).pipe(
       Effect.flatMap((input) =>
-        Schema.decodeUnknownEffect(registration.workflow.payloadSchema)({
+        Schema.decodeEffect(registration.workflow.payloadSchema)({
           runId: row.run,
           input,
         }),
@@ -6855,6 +6975,7 @@ const makeRegistry: (
     const old = yield* fs.readFileString(controlPath(dir, PARKED, row.run)).pipe(Effect.option);
     if (clear) yield* clearParked(row.run);
     // Upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
+    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- The registered author's erased error schema reaches this discard call; failures become defects below.
     yield* engine
       .execute(generation.registration.workflow, {
         executionId: row.execution,
@@ -6927,7 +7048,8 @@ const makeRegistry: (
     for (const row of yield* store.runs) {
       const generation = live.get(row.generation);
       if (generation === undefined) continue;
-      const answered = (yield* store.asked(row.run)).filter(
+      const answered = Arr.filter(
+        yield* store.asked(row.run),
         (one) => one.answer !== null && one.asker === null,
       );
       if (answered.length === 0) continue;
@@ -6954,12 +7076,20 @@ const makeRegistry: (
   }).pipe(waking.withPermits(1));
 
   /** The file a generation was built from, which a row keeps naming after it has gone. */
-  const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
+  const entryOf = (name: string) =>
+    Option.getOrUndefined(Arr.findFirst(known, (route) => route.name === name))?.entry ?? "";
 
   /** The projects a Run still holds a claim on, as one line; null where it holds none. */
   const claimOf = (runId: string) =>
     recordedClaims(claimPath(dir, runId)).pipe(
-      Effect.map((held) => (held.length === 0 ? null : held.map((one) => one.slug).join(", "))),
+      Effect.map((held) =>
+        held.length === 0
+          ? null
+          : Arr.join(
+              Arr.map(held, (one) => one.slug),
+              ", ",
+            ),
+      ),
       Effect.provideService(FileSystem.FileSystem, fs),
     );
 
@@ -6994,7 +7124,7 @@ const makeRegistry: (
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
     const report = Option.getOrUndefined(
-      Schema.decodeUnknownOption(Schema.fromJsonString(RunReport))(
+      Schema.decodeOption(Schema.fromJsonString(RunReport))(
         yield* fs
           .readFileString(`${runDir(dir, row.run)}/report.json`)
           .pipe(Effect.orElseSucceed(() => "")),
@@ -7150,10 +7280,11 @@ const makeRegistry: (
     }
     yield* engine.poll(workflow, found.execution).pipe(
       Effect.map((result) => pollStatus(result, found.generation.entry).status),
-      Effect.flatMap((status) =>
-        status === "pending" ? Effect.fail(new Error("still running")) : Effect.void,
-      ),
-      Effect.retry({ times: WAKE_TRIES, schedule: Schedule.spaced(WAKE_INTERVAL) }),
+      Effect.repeat({
+        until: (status) => status !== "pending",
+        times: WAKE_TRIES,
+        schedule: Schedule.spaced(WAKE_INTERVAL),
+      }),
       Effect.ignore,
     );
     return status === "suspended";
@@ -7216,7 +7347,7 @@ const makeRegistry: (
   /** What this host is holding, as a caller may see it. */
   const held = Effect.sync(() => ({
     live: [...live.keys()].sort(),
-    unavailable: [...unavailable.entries()].map(([name, why]) => `${name}: ${why}`).sort(),
+    unavailable: Arr.map([...unavailable.entries()], ([name, why]) => `${name}: ${why}`).sort(),
   }));
 
   const newest = Effect.fn("Engine.newest")(function* (id: string) {
@@ -7275,7 +7406,7 @@ const makeRegistry: (
     const sessions =
       listed.success.length === 0
         ? [placing.herdr]
-        : listed.success.map((one) => placing.herdr.inSession(one.socketPath));
+        : Arr.map(listed.success, (one) => placing.herdr.inSession(one.socketPath));
     for (const herdr of sessions) {
       const panes = yield* Effect.result(herdr.paneList());
       if (panes._tag === "Failure") return "herdr would not say which agents work in it";
@@ -7284,7 +7415,7 @@ const makeRegistry: (
         for (const at of [pane.cwd, pane.foregroundCwd]) {
           if (at === null) continue;
           const there = yield* real(at);
-          if (there === dir || there.startsWith(`${dir}/`)) {
+          if (there === dir || pipe(there, Str.startsWith(`${dir}/`))) {
             return `agent ${pane.agent} in pane ${pane.paneId} works in it`;
           }
         }
@@ -7294,7 +7425,7 @@ const makeRegistry: (
     if (servers === null) return "herdr would not say which agents it has";
     for (const record of servers) {
       const there = yield* real(record.cwd);
-      if (there === dir || there.startsWith(`${dir}/`))
+      if (there === dir || pipe(there, Str.startsWith(`${dir}/`)))
         return `${record.agent}'s server may still be writing in it`;
     }
     return null;
@@ -7315,7 +7446,7 @@ const makeRegistry: (
     const agents = yield* Agents;
     const left: string[] = [];
     for (const runId of runs) left.push(...(yield* agents.halt(runId)).left);
-    return left.length === 0 ? null : `its agents did not all close (${left.join("; ")})`;
+    return left.length === 0 ? null : `its agents did not all close (${Arr.join(left, "; ")})`;
   }, Effect.provideContext(hostServices));
 
   /** Sets a control, and a stop over every child the Run started, then wakes what must look again. */
@@ -7420,11 +7551,11 @@ const makeRegistry: (
   const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, Schema.Json>>) =>
     resolve({ project, id: offer.workflow }).pipe(
       Effect.map((target) => {
-        const rest = Object.entries(target.fields).filter(([name]) => !(name in filled));
+        const rest = Arr.filter(Rec.toEntries(target.fields), ([name]) => !(name in filled));
         if (rest.length === 0) return offer;
         return {
           ...offer,
-          arguments: jsonSchemaFor(Schema.Struct(Object.fromEntries(rest))).document,
+          arguments: jsonSchemaFor(Schema.Struct(Rec.fromEntries(rest))).document,
         };
       }),
       Effect.orElseSucceed(() => offer),
@@ -7494,7 +7625,9 @@ const makeRegistry: (
     // A plan spanning repositories is a fan-out, which an offer does not start.
     const refused = new Map<string, string>();
     for (const offer of generation.offers) {
-      const field = Object.entries(offer.inputs).find(([, source]) => source === "plan-dir")?.[0];
+      const field = Option.getOrUndefined(
+        Arr.findFirst(Rec.toEntries(offer.inputs), ([, source]) => source === "plan-dir"),
+      )?.[0];
       if (field === undefined) continue;
       const read = yield* planReposOf(`${where}/plan`, placedOf(row, options).cwd).pipe(
         Effect.provideContext(bun),
@@ -7506,7 +7639,10 @@ const makeRegistry: (
         refused.set(
           offer.id,
           read.success.refusal?.message ??
-            `its plan spans repositories (${read.success.repos.map((one) => one.path).join(", ")}), which a card does not fan out. \`collie run start ${offer.workflow === SELF ? row.workflow : offer.workflow} --input ${field}=${where}/plan\` does, one Run per repository.`,
+            `its plan spans repositories (${Arr.join(
+              Arr.map(read.success.repos, (one) => one.path),
+              ", ",
+            )}), which a card does not fan out. \`collie run start ${offer.workflow === SELF ? row.workflow : offer.workflow} --input ${field}=${where}/plan\` does, one Run per repository.`,
         );
       }
     }
@@ -7528,7 +7664,8 @@ const makeRegistry: (
     }
     // Starting this workflow again meets the same reviewed checkout, so it is asked whether
     // that would still be refused (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
-    const again = generation.offers.filter(
+    const again = Arr.filter(
+      generation.offers,
       (offer) => offer.kind === "follow-up" && offer.workflow === SELF && !refused.has(offer.id),
     );
     if (
@@ -7560,7 +7697,7 @@ const makeRegistry: (
     const target = field === undefined ? undefined : input[field];
     const ref = isText(target) ? parseMrTarget(target) : null;
     let here: import("./mr").ForgeHere | null = null;
-    if (ids.some((id) => id === "gitlab" || id === "github") && ref === null) {
+    if (Arr.some(ids, (id) => id === "gitlab" || id === "github") && ref === null) {
       const defaults = yield* loadDefaults(userDir).pipe(
         Effect.provideContext(bun),
         Effect.mapError(
@@ -7575,10 +7712,12 @@ const makeRegistry: (
     const forge = ref !== null ? forgeOfRef(ref) : here?.ok ? here.forge.name : null;
     return [
       ...new Set(
-        ids
-          .filter(Schema.is(ConnectionId))
-          .map((id) => (id === "gitlab" && forge === "github" ? "github" : id))
-          .filter((id) => id !== "github" || forge !== "gitlab" || !ids.includes("gitlab")),
+        Arr.filter(
+          Arr.map(Arr.filter(ids, Schema.is(ConnectionId)), (id) =>
+            id === "gitlab" && forge === "github" ? "github" : id,
+          ),
+          (id) => id !== "github" || forge !== "gitlab" || !Arr.contains(ids, "gitlab"),
+        ),
       ),
     ];
   });
@@ -7616,15 +7755,16 @@ const makeRegistry: (
         ),
       ),
     );
-    const payload = yield* Schema.decodeUnknownEffect(
-      generation.registration.workflow.payloadSchema,
-    )({ runId, input: settled.input }).pipe(
+    const payload = yield* Schema.decodeEffect(generation.registration.workflow.payloadSchema)({
+      runId,
+      input: settled.input,
+    }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
     );
     if ((yield* store.requested(options.request)) === null) {
       const cwd = request.kind === "existing" ? request.path : options.project;
       const needed = yield* connectionIds(
-        Object.keys(generation.connections?.needs ?? {}),
+        Struct.keys(generation.connections?.needs ?? {}),
         generation,
         cwd,
         settled.input,
@@ -7642,8 +7782,11 @@ const makeRegistry: (
     const provenance = {
       ...settled.provenance,
       // A host option a front door worked out, such as the checkout it placed the Run in.
-      ...Object.fromEntries(
-        (options.inferred ?? []).filter((name) => name in asked).map((name) => [name, INFERRED]),
+      ...Rec.fromEntries(
+        Arr.map(
+          Arr.filter(options.inferred ?? [], (name) => name in asked),
+          (name) => [name, INFERRED] as const,
+        ),
       ),
     };
     // A retry of a Run already admitted is not a new start: it keeps what it froze, or
@@ -7678,9 +7821,7 @@ const makeRegistry: (
 
   const startWork = Effect.fn("Engine.Registry.start")(function* (options: StartOptions) {
     const generation = options.generation;
-    const runId =
-      options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
-    const asked = options.options ?? {};
+    const runId = options.runId ?? `run-${pipe(yield* random.uuidV4(), Str.slice(0, 8))}`;
     const { request, launch, settled, provenance, payload, approved } = yield* settleStart(
       options,
       runId,
@@ -7715,14 +7856,14 @@ const makeRegistry: (
       project: options.project,
       userDir,
       approved,
-    }).pipe(Effect.provideContext(bun), Effect.ignore);
+    }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
     yield* seedIntentOf({
       dir,
       row: claimed.row,
       generation,
       seed: options.intent,
       parent: options.parent ? yield* store.run(options.parent) : null,
-    }).pipe(Effect.provideContext(bun), Effect.ignore);
+    }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
     // A retry of work the engine already has is nothing more to do; one that crashed
     // before it heard is handed over now, under the identity it was admitted with.
     // A caller that executes the Run itself has the receipt first, as a parent does.
@@ -7802,8 +7943,8 @@ const makeRegistry: (
         const dropped: string[] = [];
         for (const { run } of yield* store.runs) {
           const file = claimPath(dir, run);
-          if (!(yield* recordedClaims(file)).some((one) => one.slug === slug)) continue;
-          yield* updateClaims(file, (now) => now.filter((one) => one.slug !== slug));
+          if (!Arr.some(yield* recordedClaims(file), (one) => one.slug === slug)) continue;
+          yield* updateClaims(file, (now) => Arr.filter(now, (one) => one.slug !== slug));
           dropped.push(run);
         }
         return dropped;
@@ -7811,9 +7952,13 @@ const makeRegistry: (
     views: (task: string | null) =>
       store.runs.pipe(
         Effect.flatMap((rows) =>
-          Effect.forEach(task === null ? rows : rows.filter((row) => row.task === task), viewOf, {
-            concurrency: VIEW_CONCURRENCY,
-          }),
+          Effect.forEach(
+            task === null ? rows : Arr.filter(rows, (row) => row.task === task),
+            viewOf,
+            {
+              concurrency: VIEW_CONCURRENCY,
+            },
+          ),
         ),
       ),
     mergeRequest: (runId: string, url: string) =>
@@ -7897,11 +8042,16 @@ const makeRegistry: (
       const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
       // Asked again here, of the module as it is now: the card this was read from may
       // have been drawn before the file was edited, and a card is not authority.
-      const offer = offersFrom(generation.offers, facts, {
-        self: generation.id,
-        keepUnavailable: true,
-        refused,
-      }).find((one) => one.id === options.offer);
+      const offer = Option.getOrUndefined(
+        Arr.findFirst(
+          offersFrom(generation.offers, facts, {
+            self: generation.id,
+            keepUnavailable: true,
+            refused,
+          }),
+          (one) => one.id === options.offer,
+        ),
+      );
       if (offer === undefined || offer.unavailable !== null) {
         const why = offer?.unavailable ? `: ${offer.unavailable}` : " now";
         return yield* new HostRefused({
@@ -7960,30 +8110,34 @@ const makeRegistry: (
       if (found._tag === "Failure" && (yield* store.run(options.runId)) === null)
         return yield* found.failure;
       const asks = yield* asked(options.runId);
-      const open = asks.filter((one) => one.answer === null);
+      const open = Arr.filter(asks, (one) => one.answer === null);
       const sole = options.decision === null ? soleOpen(options.runId, open) : null;
       if (sole !== null) return yield* sole;
       const name = options.decision ?? open[0]?.name ?? "";
       // Every question, not only the open ones: one already answered and one never
       // asked are different refusals, and an operator is owed the difference.
-      const question = asks.find((one) => one.name === name);
+      const question = Option.getOrUndefined(Arr.findFirst(asks, (one) => one.name === name));
       if (question === undefined) {
         return yield* new HostRefused({
           reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
         });
       }
       // An option is its own title: taken in any case, kept as declared.
-      const named = question.options.find(
-        (option) => option.toLowerCase() === options.value.toLowerCase(),
+      const named = Option.getOrUndefined(
+        Arr.findFirst(
+          question.options,
+          (option) => Str.toLowerCase(option) === Str.toLowerCase(options.value),
+        ),
       );
       if (question.options.length > 0 && named === undefined) {
         return yield* new HostRefused({
-          reason: `"${options.value}" is not one of ${question.options.join(", ")}`,
+          reason: `"${options.value}" is not one of ${Arr.join(question.options, ", ")}`,
         });
       }
       const value = named ?? options.value;
       // An agent's question needs no workflow to wake: a finished Run's module may be gone.
-      const byAgent = (yield* store.asked(options.runId)).some(
+      const byAgent = Arr.some(
+        yield* store.asked(options.runId),
         (row) => row.decision === name && row.asker !== null,
       );
       if (!byAgent && found._tag === "Failure") return yield* found.failure;
@@ -8098,7 +8252,8 @@ const makeRegistry: (
       }
       return yield* granting.withPermits(1)(
         Effect.gen(function* () {
-          const kept = (yield* approvedOf(dir, options.runId)).filter(
+          const kept = Arr.filter(
+            yield* approvedOf(dir, options.runId),
             (spec) => spec.name !== options.name,
           );
           const next =
@@ -8154,8 +8309,11 @@ const makeRegistry: (
               : whoActed(actorOf(options.actor, options.request)),
           text: options.text,
         });
-        const launch = (yield* readLaunches(dir, options.runId)).findLast(
-          (one) => one.step?.step === options.step,
+        const launch = Option.getOrUndefined(
+          Arr.findLast(
+            yield* readLaunches(dir, options.runId),
+            (one) => one.step?.step === options.step,
+          ),
         );
         if (launch !== undefined && !(yield* fs.exists(launch.output).pipe(Effect.orDie))) {
           const sent = yield* (yield* Agents).steer({
@@ -8194,10 +8352,11 @@ const decodeOptions = Schema.decodeUnknownEffect(
 
 /** Every child this Run started, however deep; an offer's Run has a request of its own. */
 const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArray<string> => {
-  const children = rows
-    .filter((row) => row.parent === runId && row.request === row.run)
-    .map((row) => row.run);
-  return children.flatMap((child) => [child, ...descendantsOf(rows, child)]);
+  const children = Arr.map(
+    Arr.filter(rows, (row) => row.parent === runId && row.request === row.run),
+    (row) => row.run,
+  );
+  return Arr.flatMap(children, (child) => [child, ...descendantsOf(rows, child)]);
 };
 
 /**
@@ -8211,14 +8370,20 @@ const soleOpen = (runId: string, open: ReadonlyArray<OpenDecision>): HostRefused
     reason:
       open.length === 0
         ? `run "${runId}" is not waiting on a decision`
-        : `run "${runId}" is waiting on ${open.map((one) => `"${one.name}"`).join(", ")}: say which`,
+        : `run "${runId}" is waiting on ${Arr.join(
+            Arr.map(open, (one) => `"${one.name}"`),
+            ", ",
+          )}: say which`,
   });
 };
 
-const encodeCheckProject = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({ extends: Schema.String, files: Schema.Array(Schema.String) }),
+const encodeCheckProject = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Struct({ extends: Schema.String, files: Schema.Array(Schema.String) }),
+    ),
   ),
+  Result.getOrThrow,
 );
 
 /**
@@ -8256,7 +8421,7 @@ const SDK_FILE = "collie.d.ts";
 
 /** Every file the toolchain puts beside a workflow directory, which is each Machine's own. */
 export const TOOLCHAIN_NAMES: ReadonlyArray<string> = [
-  ...Object.keys(TOOLCHAIN_FILES),
+  ...Struct.keys(TOOLCHAIN_FILES),
   SDK_FILE,
   "bun.lock",
   "node_modules",
@@ -8265,7 +8430,10 @@ export const TOOLCHAIN_NAMES: ReadonlyArray<string> = [
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const isJsonObject = Schema.is(JsonObject);
 const readJsonObject = Schema.decodeUnknownOption(Schema.fromJsonString(JsonObject));
-const writeJsonObject = Schema.encodeSync(Schema.fromJsonString(JsonObject, { space: 2 }));
+const writeJsonObject = flow(
+  Schema.encodeResult(Schema.fromJsonString(JsonObject, { space: 2 })),
+  Result.getOrThrow,
+);
 const objectIn = (value: Schema.Json | undefined): Readonly<Record<string, Schema.Json>> =>
   isJsonObject(value) ? value : {};
 
@@ -8344,7 +8512,7 @@ export const provisionToolchain: (
   }
   if (unmerged.length > 0) {
     return yield* unavailable(
-      `${unmerged.join(" and ")} in ${dir} is not plain JSON, so nothing was merged into it: add "effect" and "typescript" to package.json and map "collie" to ./collie.d.ts under compilerOptions.paths`,
+      `${Arr.join(unmerged, " and ")} in ${dir} is not plain JSON, so nothing was merged into it: add "effect" and "typescript" to package.json and map "collie" to ./collie.d.ts under compilerOptions.paths`,
     );
   }
   // A successful dry run or an install omitting dev dependencies is not a toolchain.
@@ -8424,12 +8592,14 @@ export const typecheckEntry: (options: {
     project,
   ]).pipe(Effect.mapError(unavailable), Effect.ensuring(fs.remove(project).pipe(Effect.ignore)));
   if (ran.code === 0) return [];
-  const diagnostics = ran.output.split("\n").filter((line) => /\(\d+,\d+\): error /.test(line));
+  const diagnostics = Arr.filter(Str.split(ran.output, "\n"), (line) =>
+    /\(\d+,\d+\): error /.test(line),
+  );
   // tsc exits non-zero for the diagnostics it printed; a failure that printed none is the
   // toolchain's problem, not the module's, and must not read as a clean module.
   if (diagnostics.length === 0) {
     return yield* unavailable(
-      `the typechecker exited ${ran.code} without checking: ${ran.output.trim()}`,
+      `the typechecker exited ${ran.code} without checking: ${Str.trim(ran.output)}`,
     );
   }
   return diagnostics;
@@ -8468,7 +8638,7 @@ const runBun = (
     return { code: Number(yield* child.exitCode), output };
   }).pipe(
     Effect.scoped,
-    Effect.catch((cause) => Effect.fail(String(cause))),
+    Effect.mapError((cause) => String(cause)),
   );
 
 const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>

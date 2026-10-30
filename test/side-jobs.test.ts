@@ -1,7 +1,10 @@
 // What the host does on its own, with no pane open: the merge watch, News and pruning.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schedule, Schema, Stream } from "effect";
+import { Effect, FileSystem, Schedule, Schema, Stream, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
 import { recordReply } from "../src/replies";
@@ -40,10 +43,13 @@ const mergedForge = Effect.fn("sideJobs.mergedForge")(function* (dir: string) {
   return { PATH: `${bin.dir}:/usr/bin:/bin`, COLLIE_FORGE_API };
 });
 
-const asSessions = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
+const asSessions = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
+    ),
   ),
+  Result.getOrThrow,
 );
 
 const runIdOf = (envelope: { readonly data?: unknown }) =>
@@ -82,7 +88,7 @@ test(
             (lines) => lines.length > 0,
           );
           yield* stopHost(world.state);
-          expect(recorded.map((line) => [line.by, line.kind, line.ref])).toEqual([
+          expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
             ["gitlab", "merged", "mk/project!7"],
           ]);
         }),
@@ -115,13 +121,13 @@ test(
           const runId = yield* runIdOf(started.envelope);
           const stops = yield* until(
             readAudit(`${world.state}/runs/${runId}`).pipe(
-              Effect.map((lines) => lines.filter((line) => line.operation === "stop")),
+              Effect.map((lines) => Arr.filter(lines, (line) => line.operation === "stop")),
               Effect.orElseSucceed(() => []),
             ),
             (lines) => lines.length > 0,
           );
           yield* stopHost(world.state);
-          expect(stops.map((line) => [line.actor.origin, line.reason])).toEqual([
+          expect(Arr.map(stops, (line) => [line.actor.origin, line.reason])).toEqual([
             ["host", "mk/project!7 merged"],
           ]);
         }),
@@ -159,7 +165,7 @@ test(
           );
           yield* until(
             readAudit(`${world.state}/runs/${runId}`).pipe(
-              Effect.map((lines) => lines.some((line) => line.operation === "stop")),
+              Effect.map((lines) => Arr.some(lines, (line) => line.operation === "stop")),
               Effect.orElseSucceed(() => false),
             ),
             (stopped) => stopped,
@@ -200,7 +206,7 @@ test(
           const file = yield* newsPath(world.state, yield* herdOf(socket));
           // Another conversation's view, so nothing Native chat read can hide an item here.
           const keys = readNews(file).pipe(
-            Effect.map((lines) => pending(lines, "flock@pc").items.map((item) => item.key)),
+            Effect.map((lines) => Arr.map(pending(lines, "flock@pc").items, (item) => item.key)),
           );
           const asked = `${runId}:asking:decision`;
           const ended = `${runId}:ended:succeeded`;
@@ -224,12 +230,14 @@ test(
           expect(after).toEqual([]);
           // Retired, and kept: the journal still says what was news and that it stopped being.
           expect(
-            lines.flatMap((line) => (line.kind === "superseded" ? [line.key] : [])).sort(),
+            Arr.flatMap(lines, (line) => (line.kind === "superseded" ? [line.key] : [])).sort(),
           ).toEqual([asked, ended].sort());
-          expect(lines.filter((line) => line.kind === "item").map((line) => line.key)).toEqual([
-            asked,
-            ended,
-          ]);
+          expect(
+            Arr.map(
+              Arr.filter(lines, (line) => line.kind === "item"),
+              (line) => line.key,
+            ),
+          ).toEqual([asked, ended]);
         }),
       ["proof.workflow.ts", "helper.ts", "notes.md"],
     ),
@@ -270,13 +278,14 @@ test(
             }),
           ).pipe(Effect.orDie);
           const newsOf = (name: string) =>
-            newsPath(world.state, herds.find((herd) => herd.name === name)!.id).pipe(
-              Effect.flatMap(readNews),
-            );
+            newsPath(
+              world.state,
+              Option.getOrUndefined(Arr.findFirst(herds, (herd) => herd.name === name))!.id,
+            ).pipe(Effect.flatMap(readNews));
           const builds = yield* until(newsOf("builds"), (lines) => lines.length > 0);
           const desk = yield* newsOf("desk");
           yield* stopHost(world.state);
-          expect(builds.map((line) => line.kind === "item" && line.run)).toEqual([
+          expect(Arr.map(builds, (line) => line.kind === "item" && line.run)).toEqual([
             yield* runIdOf(started.envelope),
           ]);
           expect(desk).toEqual([]);
@@ -341,7 +350,9 @@ test("News reads which herdr sessions there are as often as the host does, not o
         sweepers: Effect.succeed([]),
       }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
       // Three News looks and the Homes' first restating, within one SESSIONS_EVERY.
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "session list")).toEqual(["session list"]);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "session list")).toEqual([
+        "session list",
+      ]);
     }),
   ));
 
@@ -359,9 +370,11 @@ test(
             ["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "one"],
             { cwd: world.project },
           );
-          const head = (yield* exec(["git", "rev-parse", "HEAD"], {
-            cwd: world.project,
-          })).stdout.trim();
+          const head = Str.trim(
+            (yield* exec(["git", "rev-parse", "HEAD"], {
+              cwd: world.project,
+            })).stdout,
+          );
           yield* writeTask(world.state, {
             id: "task-1",
             workspace: "w1",
@@ -424,8 +437,10 @@ test(
           expect(factsOfView(world.state, ended!).state).toBe("stopped");
           expect(ended?.status.status).toBe("suspended");
           expect(log).toContain(`ci: waiting on job nuxi-job for nuxi on ${head}`);
-          expect(recorded.filter((one) => one.pass === "ci")).toEqual([]);
-          expect(merged.map((line) => [line.kind, line.ref])).toEqual([["merged", "mk/project!7"]]);
+          expect(Arr.filter(recorded, (one) => one.pass === "ci")).toEqual([]);
+          expect(Arr.map(merged, (line) => [line.kind, line.ref])).toEqual([
+            ["merged", "mk/project!7"],
+          ]);
         }),
       ["waits-on-ci.workflow.ts"],
     ),
@@ -457,7 +472,7 @@ test(
           const runId = yield* runIdOf(started.envelope);
           const file = yield* newsPath(world.state, yield* herdOf(socket));
           const keys = readNews(file).pipe(
-            Effect.map((lines) => pending(lines, "flock@pc").items.map((item) => item.key)),
+            Effect.map((lines) => Arr.map(pending(lines, "flock@pc").items, (item) => item.key)),
           );
           const ended = `${runId}:ended:succeeded`;
           expect(yield* until(keys, (now) => now.includes(ended))).toEqual([ended]);
@@ -466,9 +481,9 @@ test(
           const lines = yield* readNews(file);
           yield* stopHost(world.state);
           expect(after).toEqual([]);
-          expect(lines.flatMap((line) => (line.kind === "superseded" ? [line.key] : []))).toEqual([
-            ended,
-          ]);
+          expect(
+            Arr.flatMap(lines, (line) => (line.kind === "superseded" ? [line.key] : [])),
+          ).toEqual([ended]);
         }),
       ["plain.workflow.ts"],
     ),
@@ -503,7 +518,7 @@ test(
             Effect.map((lines) => pending(lines, "flock@pc").items),
           );
           const ended = `${runId}:ended:succeeded`;
-          yield* until(items, (now) => now.some((item) => item.key === ended));
+          yield* until(items, (now) => Arr.some(now, (item) => item.key === ended));
           const mr = "https://github.com/acme/app/pull/7";
           for (const [id, kind, body] of [
             [41, "fixed", "Fixed in `c0ffee12`: renamed it"],
@@ -518,7 +533,7 @@ test(
             });
           const told = yield* until(items, (now) => now.length === 2);
           yield* stopHost(world.state);
-          expect(told.map((item) => item.key)).toEqual([
+          expect(Arr.map(told, (item) => item.key)).toEqual([
             ended,
             `${runId}:disputed:${mr}#issuecomment-42`,
           ]);

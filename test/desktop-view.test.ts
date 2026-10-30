@@ -1,8 +1,10 @@
 // Desktop's view hears the Flock from its main process over Effect RPC on a channel that
 // carries JSON values, as Electrobun's does, and decodes it with the board's own Schemas.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Schema, Stream, flow, Result } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { foldFinished, headerSentence, primaryAction, sectionsOf } from "../src/board-model";
@@ -50,8 +52,11 @@ import { PeerView } from "../src/peers-model";
 import { epochMs } from "../src/time";
 import { task } from "./support/task";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const fromJson = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const fromJson = flow(
+  Schema.decodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** Both ends of a channel that copies every frame through JSON, as Electrobun's does. */
 const channels = () => {
@@ -186,8 +191,8 @@ test("the view decodes every board message its main process relays, a reload inc
         const { heard, flock } = yield* listen;
         expect(heard).toEqual([...told]);
         const tasks = flockCards(flock ?? EMPTY_FLOCK).tasks;
-        expect(tasks.map((one) => [one.id, one.state])).toEqual([["t-work", "blocked"]]);
-        expect(sectionsOf(tasks, "").needs.map((one) => one.name)).toEqual(["Busy"]);
+        expect(Arr.map(tasks, (one) => [one.id, one.state])).toEqual([["t-work", "blocked"]]);
+        expect(Arr.map(sectionsOf(tasks, "").needs, (one) => one.name)).toEqual(["Busy"]);
         expect(headerSentence(tasks).text).toBe("One task is waiting on you. 0 working.");
       }
     }).pipe(Effect.scoped),
@@ -225,8 +230,8 @@ const vm = {
   target: "mk@vm-mk.cegohost.dk",
 };
 const where = (items: ReadonlyArray<FlockItem>) => {
-  const { tasks, placedOf } = flockCards(items.reduce(applyItem, EMPTY_FLOCK));
-  return tasks.map((one) => [one.id, placedOf(one).where]);
+  const { tasks, placedOf } = flockCards(Arr.reduce(items, EMPTY_FLOCK, applyItem));
+  return Arr.map(tasks, (one) => [one.id, placedOf(one).where]);
 };
 
 test("a snapshot replaces what its installation said before, whatever it is called, and leaves other Machines alone", () => {
@@ -288,24 +293,35 @@ test("Machines that share a name are told apart by how they are reached, and not
 
 test("the chat calls a live Machine what its cards call it, a saved board's Machine among them", () => {
   const away = { installation: "inst-away", profile: "p-away", name: "mk-pc", target: "mk@away" };
-  const flock = [
-    { _tag: "Saved", machine: away, herds: [{ id: "default" }], tasks: [working], at: 7 } as const,
-    snapshot(pc, [asking]),
-  ].reduce(applyItem, EMPTY_FLOCK);
+  const flock = Arr.reduce(
+    [
+      {
+        _tag: "Saved",
+        machine: away,
+        herds: [{ id: "default" }],
+        tasks: [working],
+        at: 7,
+      } as const,
+      snapshot(pc, [asking]),
+    ],
+    EMPTY_FLOCK,
+    applyItem,
+  );
   expect(nameAsShown(flock)(pc)).toBe("mk-pc (local)");
   const { tasks, placedOf } = flockCards(flock);
-  const card = tasks.find((one) => one.id === "t-ask")!;
+  const card = Option.getOrUndefined(Arr.findFirst(tasks, (one) => one.id === "t-ask"))!;
   expect(placedOf(card).machine).toBe("mk-pc (local)");
 });
 
 test("the sections and the header sentence count every Machine's Tasks", () => {
   const { tasks } = flockCards(
-    [snapshot(pc, [asking]), snapshot(vm, [{ ...asking, id: "t-vm" }, working])].reduce(
-      applyItem,
+    Arr.reduce(
+      [snapshot(pc, [asking]), snapshot(vm, [{ ...asking, id: "t-vm" }, working])],
       EMPTY_FLOCK,
+      applyItem,
     ),
   );
-  expect(sectionsOf(tasks, "").needs.map((one) => one.id)).toEqual(["t-ask", "t-vm"]);
+  expect(Arr.map(sectionsOf(tasks, "").needs, (one) => one.id)).toEqual(["t-ask", "t-vm"]);
   expect(headerSentence(tasks).text).toBe("2 tasks are waiting on you. 1 working.");
 });
 
@@ -320,12 +336,12 @@ const seenDone = task({ id: "t-seen", name: "Read", state: "done", unseen: false
 
 test("an Unseen Finished Task is drawn outside the collapsed list, a seen one only inside, and Finished counts both", () => {
   const { tasks, placedOf } = flockCards(
-    [snapshot(pc, [seenDone]), snapshot(vm, [unseenDone])].reduce(applyItem, EMPTY_FLOCK),
+    Arr.reduce([snapshot(pc, [seenDone]), snapshot(vm, [unseenDone])], EMPTY_FLOCK, applyItem),
   );
   const { finished } = sectionsOf(tasks, "");
   const { unseen, seen } = foldFinished(finished);
-  expect(unseen.map((one) => placedOf(one).key)).toEqual(["inst-vm:t-unseen"]);
-  expect(seen.map((one) => placedOf(one).key)).toEqual(["inst-pc:t-seen"]);
+  expect(Arr.map(unseen, (one) => placedOf(one).key)).toEqual(["inst-vm:t-unseen"]);
+  expect(Arr.map(seen, (one) => placedOf(one).key)).toEqual(["inst-pc:t-seen"]);
   expect(finished).toHaveLength(2);
 });
 
@@ -337,19 +353,19 @@ const lostVm = (state: "unreachable" | "sso" | "no-collie", at = 1_000): FlockIt
   at,
 });
 const asOf = (flock: ReturnType<typeof applyItem>) =>
-  flockCards(flock).tasks.map((one) => [one.id, flockCards(flock).placedOf(one).asOf]);
+  Arr.map(flockCards(flock).tasks, (one) => [one.id, flockCards(flock).placedOf(one).asOf]);
 
 test("a route out of reach is said by name until its Machine reports through it again", () => {
-  const after = [snapshot(pc, [asking]), lostVm("unreachable")].reduce(applyItem, EMPTY_FLOCK);
+  const after = Arr.reduce([snapshot(pc, [asking]), lostVm("unreachable")], EMPTY_FLOCK, applyItem);
   expect([...after.lost.values()]).toEqual([
     { name: "vm-mk", state: "unreachable", reason: "ssh: connection refused" },
   ]);
-  expect(flockCards(after).tasks.map((one) => one.id)).toEqual(["t-ask"]);
+  expect(Arr.map(flockCards(after).tasks, (one) => one.id)).toEqual(["t-ask"]);
   expect([...applyItem(after, snapshot(vm, [])).lost]).toEqual([]);
 });
 
 test("a Machine's row says why it isn't live, and nothing once it is", () => {
-  const lost = [routed(vm), lostVm("unreachable")].reduce(applyItem, EMPTY_FLOCK);
+  const lost = Arr.reduce([routed(vm), lostVm("unreachable")], EMPTY_FLOCK, applyItem);
   expect(machineRows(lost)[0]).toMatchObject({
     state: "unreachable",
     reason: "ssh: connection refused",
@@ -361,16 +377,16 @@ test("a Machine's row says why it isn't live, and nothing once it is", () => {
 });
 
 test("a Machine that drops keeps its cards as of when, off the machines a run can start on, until it is live again", () => {
-  const dropped = [
-    snapshot(pc, [asking]),
-    snapshot(vm, [working]),
-    lostVm("unreachable", 5),
-  ].reduce(applyItem, EMPTY_FLOCK);
+  const dropped = Arr.reduce(
+    [snapshot(pc, [asking]), snapshot(vm, [working]), lostVm("unreachable", 5)],
+    EMPTY_FLOCK,
+    applyItem,
+  );
   expect(asOf(dropped)).toEqual([
     ["t-ask", null],
     ["t-work", 5],
   ]);
-  expect(flockCards(dropped).machines.map((one) => one.name)).toEqual(["mk-pc"]);
+  expect(Arr.map(flockCards(dropped).machines, (one) => one.name)).toEqual(["mk-pc"]);
   // Still out of reach later, it is as of when it dropped.
   expect(asOf(applyItem(dropped, lostVm("sso", 9)))).toEqual([
     ["t-ask", null],
@@ -390,15 +406,15 @@ test("a saved board stands in, as of when it was saved, until its Machine is liv
     tasks: [working],
     at: 7,
   };
-  const launched = [saved].reduce(applyItem, EMPTY_FLOCK);
+  const launched = Arr.reduce([saved], EMPTY_FLOCK, applyItem);
   expect(asOf(launched)).toEqual([["t-work", 7]]);
   expect(asOf(applyItem(launched, snapshot(vm, [asking])))).toEqual([["t-ask", null]]);
-  const live = [snapshot(vm, [asking]), saved].reduce(applyItem, EMPTY_FLOCK);
+  const live = Arr.reduce([snapshot(vm, [asking]), saved], EMPTY_FLOCK, applyItem);
   expect(asOf(live)).toEqual([["t-ask", null]]);
 });
 
 test("a Machine without Collie is known by its herdr profile until its host names its installation", () => {
-  const bare = [snapshot(pc, [asking]), lostVm("no-collie")].reduce(applyItem, EMPTY_FLOCK);
+  const bare = Arr.reduce([snapshot(pc, [asking]), lostVm("no-collie")], EMPTY_FLOCK, applyItem);
   expect([...bare.lost.keys()]).toEqual(["p-vm"]);
   const installed = applyItem(bare, snapshot(vm, [working]));
   expect([...installed.lost]).toEqual([]);
@@ -434,7 +450,10 @@ const routed = (machine: Machine): FlockItem => ({
 const linked = (fields: Partial<typeof PeerView.Encoded>): FlockItem => ({
   _tag: "Linked",
   machine: { profile: vm.profile, name: vm.name, target: vm.target },
-  link: Schema.decodeUnknownSync(PeerView)({
+  link: flow(
+    Schema.decodeResult(PeerView),
+    Result.getOrThrow,
+  )({
     installation: vm.installation,
     name: vm.name,
     dials: "out",
@@ -448,7 +467,7 @@ const linked = (fields: Partial<typeof PeerView.Encoded>): FlockItem => ({
 
 test("a Machine's row says which way its paired link goes, and why not direct", () => {
   const rowWith = (...items: ReadonlyArray<FlockItem>) =>
-    machineRows([routed(vm), snapshot(vm, []), ...items].reduce(applyItem, EMPTY_FLOCK))[0];
+    machineRows(Arr.reduce([routed(vm), snapshot(vm, []), ...items], EMPTY_FLOCK, applyItem))[0];
   const refused = "wss://vm-mk:4100 refused the connection";
   expect(rowWith(linked({ transport: "ssh", direct: refused }))).toMatchObject({
     transport: "ssh",
@@ -481,7 +500,10 @@ test("the chat reads each Machine the window shows: a live one's board and proto
   const old = { ...vm, installation: "inst-old" };
   const savedOld: FlockItem = { _tag: "Saved", machine: old, herds: [], tasks: [working], at: 7 };
   const boards = (items: ReadonlyArray<FlockItem>, since = new Map<string, number>()) =>
-    chatBoards(items.reduce(applyItem, EMPTY_FLOCK), since).map(({ name, board }) => [name, board]);
+    Arr.map(chatBoards(Arr.reduce(items, EMPTY_FLOCK, applyItem), since), ({ name, board }) => [
+      name,
+      board,
+    ]);
   expect(boards([routed(pc), snapshot(pc, [asking]), routed(vm), lostVm("unreachable")])).toEqual([
     [
       "mk-pc",
@@ -497,7 +519,7 @@ test("the chat reads each Machine the window shows: a live one's board and proto
     ["vm-mk", { _tag: "Connecting", since: 1_000 }],
   ]);
   // Its route now reaches another installation, so nothing will make that board live again.
-  expect(boards([routed(vm), snapshot(vm, []), savedOld]).map(([, board]) => board)).toEqual([
+  expect(Arr.map(boards([routed(vm), snapshot(vm, []), savedOld]), ([, board]) => board)).toEqual([
     { _tag: "Live", herds: [{ id: "default" }], tasks: [], protocol: 1, files: false },
     { _tag: "Saved", at: 7 },
   ]);
@@ -510,10 +532,17 @@ test("a saved board and the live Machine its route now reaches are named apart, 
     [savedOld, routed(vm), snapshot(vm, [])],
     [routed(vm), snapshot(vm, []), savedOld],
   ]) {
-    const named = chatBoards(items.reduce(applyItem, EMPTY_FLOCK), new Map()).map(
+    const named = Arr.map(
+      chatBoards(Arr.reduce(items, EMPTY_FLOCK, applyItem), new Map()),
       ({ name, board }) => [name, board._tag],
     );
-    expect(named.toSorted()).toEqual([
+    expect(
+      Arr.sortWith(
+        named,
+        (value) => value,
+        (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+      ),
+    ).toEqual([
       ["vm-mk (mk@vm-mk.cegohost.dk)", "Live"],
       ["vm-mk (mk@vm-mk.cegohost.dk, saved)", "Saved"],
     ]);
@@ -553,7 +582,12 @@ test("a Machine's build is kept from its Snapshot, and a saved board's stands in
     at: 7,
   };
   const rowOf = (items: ReadonlyArray<FlockItem>) =>
-    machineRows(items.reduce(applyItem, EMPTY_FLOCK)).find(({ profile }) => profile === vm.profile);
+    Option.getOrUndefined(
+      Arr.findFirst(
+        machineRows(Arr.reduce(items, EMPTY_FLOCK, applyItem)),
+        ({ profile }) => profile === vm.profile,
+      ),
+    );
   expect(rowOf([routed(vm)])).toMatchObject({ build: null, development: null });
   expect(rowOf([routed(vm), saved])).toMatchObject({ build: "0.34.0", development: null });
   expect(rowOf([routed(vm), saved, built(vm, "0.35.0+abc1234", "0.35.0+abc1234")])).toMatchObject({
@@ -769,7 +803,7 @@ test("a Machine's settings sync and its credentials are kept on its row, and dro
     { _tag: "Given", machine: vm, credential: "gitlab", given: false, failed: "nope" },
     { _tag: "Given", machine: vm, credential: "gitlab", given: true, failed: null },
   ];
-  const flock = items.reduce(applyItem, EMPTY_FLOCK);
+  const flock = Arr.reduce(items, EMPTY_FLOCK, applyItem);
   expect(machineRows(flock)[0]).toMatchObject({
     settings: { failed: "host refused" },
     definitions: { failed: "no such operation" },
@@ -783,15 +817,16 @@ test("a Machine's settings sync and its credentials are kept on its row, and dro
 });
 
 test("a Flock held across a new subscription drops each Machine its routes no longer name", () => {
-  const held = [routed(pc), snapshot(pc, [asking]), routed(vm), snapshot(vm, [working])].reduce(
-    applyItem,
+  const held = Arr.reduce(
+    [routed(pc), snapshot(pc, [asking]), routed(vm), snapshot(vm, [working])],
     EMPTY_FLOCK,
+    applyItem,
   );
-  const again = [
-    { _tag: "Routes", profiles: [pc.profile] } as const,
-    routed(pc),
-    snapshot(pc, [asking]),
-  ].reduce(applyItem, held);
+  const again = Arr.reduce(
+    [{ _tag: "Routes", profiles: [pc.profile] } as const, routed(pc), snapshot(pc, [asking])],
+    held,
+    applyItem,
+  );
   expect([...again.routes.keys()]).toEqual([pc.profile]);
   expect([...again.machines.keys()]).toEqual([pc.installation]);
 });
@@ -967,7 +1002,7 @@ test("a record's Agents section is one row per agent, in launch order, saying wh
 test("a record says its Machine is not live in the board's words, and nothing once it is", () => {
   const live = snapshot(vm, [working]);
   expect(notLiveOf(applyItem(EMPTY_FLOCK, live), vm.installation)).toBeNull();
-  const dropped = [live, lostVm("unreachable")].reduce(applyItem, EMPTY_FLOCK);
+  const dropped = Arr.reduce([live, lostVm("unreachable")], EMPTY_FLOCK, applyItem);
   expect(notLiveOf(dropped, vm.installation)).toEqual({
     icon: "i-lucide-unplug",
     title: "vm-mk is out of reach",

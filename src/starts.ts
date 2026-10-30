@@ -1,3 +1,7 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Config, Effect, FileSystem } from "effect";
 
 /**
@@ -9,11 +13,14 @@ export const recordStart = (name: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const file = yield* Config.String("COLLIE_TEST_STARTS").pipe(Config.withDefault(""));
     if (file === "") return;
-    const at = args.findIndex((arg) => !arg.startsWith("-"));
+    const at = Option.getOrElse(
+      Arr.findFirstIndex(args, (arg) => !pipe_(arg, Str.startsWith("-"))),
+      () => -1,
+    );
     const asked =
-      at === -1 ? [] : args.slice(at, at + 2).filter((arg) => /^[a-z][a-z-]*$/.test(arg));
+      at === -1 ? [] : Arr.filter(args.slice(at, at + 2), (arg) => /^[a-z][a-z-]*$/.test(arg));
     const by = yield* Config.String("COLLIE_TEST_FILE").pipe(Config.withDefault(""));
     const fs = yield* FileSystem.FileSystem;
-    const line = [name, ...asked].join(" ");
+    const line = Arr.join([name, ...asked], " ");
     yield* fs.writeFileString(file, `${by === "" ? line : `${line}\t${by}`}\n`, { flag: "a" });
   }).pipe(Effect.ignore);

@@ -1,6 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Fiber, FileSystem, Schema, Scope } from "effect";
+import { Effect, Fiber, FileSystem, Schema, Scope, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { CATALOGUE_CALL_MS, CATALOGUE_RETRY_MS, makeCatalogue } from "../src/catalogue";
 import { HarnessCatalogue, modelsLines } from "../src/catalogue-model";
@@ -28,9 +30,15 @@ describe("a harness that cannot be read", () => {
         );
 
         const read = yield* catalogue.catalogues;
-        const said = read.find((one) => one.harness === "claude");
+        const said = Option.getOrUndefined(Arr.findFirst(read, (one) => one.harness === "claude"));
         expect(said?.table).toBe("claude exited 1: not logged in");
-        expect(said?.entries.map(({ model, from }) => [model, from])).toEqual([
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(said), (present) =>
+              Arr.map(present.entries, ({ model, from }) => [model, from]),
+            ),
+          ),
+        ).toEqual([
           ["fable", "table"],
           ["opus", "table"],
           ["sonnet", "table"],
@@ -40,7 +48,9 @@ describe("a harness that cannot be read", () => {
         expect(modelsLines(read)).toContain(
           "claude    from Collie's table: claude exited 1: not logged in",
         );
-        expect(read.find((one) => one.harness === "codex")?.table).toBeNull();
+        expect(
+          Option.getOrUndefined(Arr.findFirst(read, (one) => one.harness === "codex"))?.table,
+        ).toBeNull();
 
         yield* TestClock.adjust(CATALOGUE_RETRY_MS - 1);
         yield* catalogue.catalogues;
@@ -65,7 +75,9 @@ describe("a harness that cannot be read", () => {
         const catalogue = yield* makeCatalogue(fakeSources({ pi: pi.read }), Effect.succeed({}));
         const asking = yield* Effect.forkChild(catalogue.catalogues);
         yield* TestClock.adjust(CATALOGUE_CALL_MS);
-        const said = (yield* Fiber.join(asking)).find((one) => one.harness === "pi");
+        const said = Option.getOrUndefined(
+          Arr.findFirst(yield* Fiber.join(asking), (one) => one.harness === "pi"),
+        );
         expect(said).toMatchObject({
           table: "pi --list-models did not answer within 20s",
           entries: [],
@@ -85,9 +97,11 @@ describe("what a Machine's catalogue holds", () => {
           Effect.succeed({ codex: ["gpt-reserve", "gpt-internal"] }),
         );
         const read = yield* catalogue.catalogues;
-        expect(read.map((one) => one.harness)).toEqual(["claude", "codex", "pi"]);
-        const codex = read.find((one) => one.harness === "codex")?.entries ?? [];
-        expect(codex.filter((entry) => entry.model === "gpt-reserve")).toMatchObject([
+        expect(Arr.map(read, (one) => one.harness)).toEqual(["claude", "codex", "pi"]);
+        const codex =
+          Option.getOrUndefined(Arr.findFirst(read, (one) => one.harness === "codex"))?.entries ??
+          [];
+        expect(Arr.filter(codex, (entry) => entry.model === "gpt-reserve")).toMatchObject([
           { hidden: false, from: "added" },
         ]);
         expect(codex.at(-1)).toMatchObject({ model: "gpt-internal", from: "added" });
@@ -125,11 +139,15 @@ describe("collie models", () => {
               COLLIE_USER_DIR: `${dir}/config`,
               HOME: dir,
             },
-          }).pipe(Effect.map((ran) => Schema.decodeUnknownSync(CliEnvelope)(ran.stdout).data));
+          }).pipe(
+            Effect.map(
+              (ran) => flow(Schema.decodeResult(CliEnvelope), Result.getOrThrow)(ran.stdout).data,
+            ),
+          );
 
         const every = yield* cli();
         expect(every.machine).toBeNull();
-        expect(every.catalogues.map((one) => [one.harness, one.table])).toEqual([
+        expect(Arr.map(every.catalogues, (one) => [one.harness, one.table])).toEqual([
           ["claude", null],
           ["codex", null],
           ["pi", null],
@@ -146,10 +164,14 @@ describe("collie models", () => {
         });
 
         const pi = yield* cli("--harness", "pi");
-        expect(pi.catalogues.map((one) => one.harness)).toEqual(["pi"]);
-        expect(pi.catalogues[0]?.entries.map((entry) => entry.model)).toContain(
-          "ollama/qwen3-coder:30b",
-        );
+        expect(Arr.map(pi.catalogues, (one) => one.harness)).toEqual(["pi"]);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(pi.catalogues[0]), (present_) =>
+              Arr.map(present_.entries, (entry) => entry.model),
+            ),
+          ),
+        ).toContain("ollama/qwen3-coder:30b");
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
     ));
 });

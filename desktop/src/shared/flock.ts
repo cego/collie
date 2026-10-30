@@ -2,6 +2,10 @@
 // by its Machine, and the board those messages add up to. No Bun-only import: the view
 // bundles this.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { DateTime, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -80,7 +84,7 @@ export const MachineLost = Schema.TaggedStruct("Lost", {
   machine: KnownMachine,
   state: NotLive,
   reason: Schema.String,
-  at: Schema.Number,
+  at: Schema.Finite,
 });
 export type MachineLost = typeof MachineLost.Type;
 
@@ -91,7 +95,7 @@ export const MachineSaved = Schema.TaggedStruct("Saved", {
   tasks: Schema.Array(TaskView),
   build: Schema.optionalKey(Schema.NullOr(Schema.String)),
   development: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  at: Schema.Number,
+  at: Schema.Finite,
 });
 export type MachineSaved = typeof MachineSaved.Type;
 
@@ -102,7 +106,7 @@ export type MachineMerged = typeof MachineMerged.Type;
 /** A route Desktop reopens on purpose, as Sync now or an upgrade does, and since when. */
 export const MachineReconnecting = Schema.TaggedStruct("Reconnecting", {
   machine: KnownMachine,
-  at: Schema.Number,
+  at: Schema.Finite,
 });
 export type MachineReconnecting = typeof MachineReconnecting.Type;
 
@@ -159,7 +163,7 @@ export const OnboardRun = Schema.Struct({
   ready: Schema.NullOr(Schema.Boolean),
   /** Why it ended short where no step says. */
   reason: Schema.NullOr(Schema.String),
-  at: Schema.Number,
+  at: Schema.Finite,
 });
 export type OnboardRun = typeof OnboardRun.Type;
 
@@ -295,7 +299,10 @@ export const DesktopAction = Schema.Union([
 export type DesktopAction = typeof DesktopAction.Type;
 
 /** What a Machine's host said no with, or why it could not be asked. */
-export class ActionFailed extends Schema.TaggedError<ActionFailed>()("ActionFailed", {
+export class ActionFailed extends Schema.TaggedError<
+  ActionFailed,
+  { readonly brand: unique symbol }
+>()("ActionFailed", {
   reason: Schema.String,
   /** The id it was asked under, which a retry sends again so the host does it once. */
   request: Schema.optional(Schema.String),
@@ -379,7 +386,7 @@ export const DesktopSettings = Schema.Struct({
   /** An earlier Desktop's own, kept only until carried into the Flock's settings. */
   machineRule: Schema.optionalKey(Schema.String),
   /** The human's Zoom, 1 the size of the other apps on each monitor; unset is 1. */
-  zoom: Schema.optionalKey(Schema.Number),
+  zoom: Schema.optionalKey(Schema.Finite),
   /** The harness the Flock chat runs on; unset is claude. */
   chatHarness: Schema.optionalKey(Schema.String),
   /** The model the Flock chat runs on; unset is the harness's own default. */
@@ -387,21 +394,21 @@ export const DesktopSettings = Schema.Struct({
   /** The effort the Flock chat runs at; unset is the harness's own default. */
   chatEffort: Schema.optionalKey(Schema.String),
   /** The Flock chat's width beside the board in CSS pixels; unset is `chatWidth`'s start. */
-  chatWidth: Schema.optionalKey(Schema.Number),
+  chatWidth: Schema.optionalKey(Schema.Finite),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
 /** The settings a change sets; the rest stay as they are. */
 export const DesktopSettingsChange = Schema.Struct({
   gitlabHost: Schema.optionalKey(Schema.String),
-  zoom: Schema.optionalKey(Schema.Number),
+  zoom: Schema.optionalKey(Schema.Finite),
   chatHarness: Schema.optionalKey(Schema.String),
   /** Empty unsets it. */
   chatModel: Schema.optionalKey(Schema.String),
   /** Empty unsets it. */
   chatEffort: Schema.optionalKey(Schema.String),
   /** Null unsets it. */
-  chatWidth: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  chatWidth: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
@@ -413,8 +420,8 @@ export interface MachineToAdd {
 
 /** What Add Machine sends, trimmed, once every field is filled. */
 export const machineToAdd = (typed: MachineToAdd): MachineToAdd | null => {
-  const [target, label, session] = [typed.target, typed.label, typed.session].map((one) =>
-    one.trim(),
+  const [target, label, session] = Arr.map([typed.target, typed.label, typed.session], (one) =>
+    Str.trim(one),
   );
   return target && label && session ? { target, label, session } : null;
 };
@@ -812,7 +819,9 @@ const removed = (flock: Flock, profile: string): Flock => {
     definitions: without(flock.definitions),
     given: without(flock.given),
     links: without(flock.links),
-    machines: new Map([...flock.machines].filter(([, { machine }]) => machine.profile !== profile)),
+    machines: new Map(
+      Arr.filter([...flock.machines], ([, { machine }]) => machine.profile !== profile),
+    ),
   };
 };
 
@@ -858,11 +867,13 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if ("_tag" in item && item._tag === "Routes") {
     const kept = new Set(item.profiles);
     const shown = [...flock.routes.keys(), ...flock.lost.keys()].concat(
-      [...flock.machines.values()].map(({ machine }) => machine.profile),
+      Arr.map([...flock.machines.values()], ({ machine }) => machine.profile),
     );
-    return [...new Set(shown)]
-      .filter((profile) => !kept.has(profile))
-      .reduce((left, profile) => removed(left, profile), flock);
+    return Arr.reduce(
+      Arr.filter([...new Set(shown)], (profile) => !kept.has(profile)),
+      flock,
+      (left, profile) => removed(left, profile),
+    );
   }
   if ("_tag" in item && item._tag === "Removed") return removed(flock, item.machine.profile);
   if ("_tag" in item && item._tag === "Saved") {
@@ -871,7 +882,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
     const saved = {
       machine,
       herds,
-      tasks: new Map(tasks.map((task) => [task.id, task])),
+      tasks: new Map(Arr.map(tasks, (task) => [task.id, task])),
       asOf: at,
       build: item.build ?? null,
       development: item.development ?? null,
@@ -899,7 +910,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
   if (message._tag === "Unknown") return flock;
   const known = flock.machines.get(machine.installation);
   const tasks = new Map(
-    message._tag === "Snapshot" ? message.tasks.map((task) => [task.id, task]) : known?.tasks,
+    message._tag === "Snapshot" ? Arr.map(message.tasks, (task) => [task.id, task]) : known?.tasks,
   );
   if (message._tag === "Upsert") tasks.set(message.task.id, message.task);
   if (message._tag === "Remove") tasks.delete(message.id);
@@ -931,7 +942,7 @@ export const machineNames = (machines: ReadonlyArray<Machine>) => {
   const counts = new Map<string, number>();
   for (const { name } of machines) counts.set(name, (counts.get(name) ?? 0) + 1);
   return new Map(
-    machines.map((m) => [
+    Arr.map(machines, (m) => [
       m.installation,
       counts.get(m.name)! > 1 ? `${m.name} (${m.target ?? "local"})` : m.name,
     ]),
@@ -940,13 +951,13 @@ export const machineNames = (machines: ReadonlyArray<Machine>) => {
 
 /** `machineNames`, with a saved board told apart from a live Machine reached the same way. */
 const shownNames = (flock: Flock) => {
-  const names = machineNames([...flock.machines.values()].map(({ machine }) => machine));
+  const names = machineNames(Arr.map([...flock.machines.values()], ({ machine }) => machine));
   const counts = new Map<string, number>();
   for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
   for (const [installation, { asOf }] of flock.machines) {
     const name = names.get(installation)!;
     if (asOf !== null && counts.get(name)! > 1)
-      names.set(installation, `${name.replace(/\)$/, "")}, saved)`);
+      names.set(installation, `${pipe_(name, Str.replace(/\)$/, ""))}, saved)`);
   }
   return names;
 };
@@ -979,7 +990,10 @@ export const flockCards = (flock: Flock) => {
   const placed = new Map<TaskView, PlacedTask>();
   for (const [installation, { herds, tasks, asOf }] of flock.machines) {
     for (const task of tasks.values()) {
-      const herd = herds.length > 1 ? herds.find(({ id }) => id === task.herd) : undefined;
+      const herd =
+        herds.length > 1
+          ? Option.getOrUndefined(Arr.findFirst(herds, ({ id }) => id === task.herd))
+          : undefined;
       const where = [
         flock.machines.size > 1 ? names.get(installation) : undefined,
         herd === undefined ? undefined : (herd.name ?? herd.id),
@@ -990,7 +1004,10 @@ export const flockCards = (flock: Flock) => {
         // SAFETY: `names` holds every Machine of this Flock.
         machine: names.get(installation)!,
         task,
-        where: where.filter((part) => part !== undefined).join(" · "),
+        where: Arr.join(
+          Arr.filter(where, (part) => part !== undefined),
+          " · ",
+        ),
         asOf,
       });
     }
@@ -1000,13 +1017,14 @@ export const flockCards = (flock: Flock) => {
     // SAFETY: the board's helpers filter and sort these Tasks; they never make new ones.
     placedOf: (task: TaskView) => placed.get(task)!,
     /** Each live Machine by its display name, and whether it is this computer's. */
-    machines: [...flock.machines]
-      .filter(([, { asOf }]) => asOf === null)
-      .map(([installation, { machine }]) => ({
+    machines: Arr.map(
+      Arr.filter([...flock.machines], ([, { asOf }]) => asOf === null),
+      ([installation, { machine }]) => ({
         installation,
         name: names.get(installation)!,
         local: machine.profile === "local",
-      })),
+      }),
+    ),
   };
 };
 
@@ -1037,9 +1055,10 @@ export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => 
       ? { _tag: "Connecting", since: since.get(profile) ?? null }
       : { _tag: "Lost", state: lost.state, reason: lost.reason };
   };
-  const shown = [...flock.machines].map(([installation, known]) => {
+  const shown = Arr.map([...flock.machines], ([installation, known]) => {
     const { profile } = known.machine;
-    const liveThere = [...flock.machines.values()].some(
+    const liveThere = Arr.some(
+      [...flock.machines.values()],
       (other) => other.machine.profile === profile && other.asOf === null,
     );
     const board: ChatBoard =
@@ -1059,9 +1078,13 @@ export const chatBoards = (flock: Flock, since: ReadonlyMap<string, number>) => 
     // SAFETY: `names` holds every Machine of this Flock.
     return { name: names.get(installation)!, profile, installation, board };
   });
-  const unshown = [...flock.routes.values()]
-    .filter(({ profile }) => !shown.some((one) => one.profile === profile))
-    .map(({ profile, name }) => ({ name, profile, installation: null, board: waiting(profile) }));
+  const unshown = Arr.map(
+    Arr.filter(
+      [...flock.routes.values()],
+      ({ profile }) => !Arr.some(shown, (one) => one.profile === profile),
+    ),
+    ({ profile, name }) => ({ name, profile, installation: null, board: waiting(profile) }),
+  );
   return [...shown, ...unshown];
 };
 
@@ -1089,7 +1112,7 @@ export const unreadBecause = (
         ? `${name} is still connecting; Desktop has had no board from it yet`
         : `${name} is still connecting; Desktop has waited ${waited(now - board.since)} for its first board`;
     case "Lost":
-      return `${LOST_SAID[board.state](name)}: ${board.reason.replace(/\.$/, "")}`;
+      return `${LOST_SAID[board.state](name)}: ${pipe_(board.reason, Str.replace(/\.$/, ""))}`;
     case "Saved":
       return `${name} is only a board Desktop saved at ${DateTime.formatIso(DateTime.makeUnsafe(board.at))}, with no live host since`;
   }
@@ -1138,16 +1161,24 @@ const standing = (onboarding?: OnboardRun, doctor?: OnboardRun): OnboardRun | nu
   if (doctor === undefined || (onboarding !== undefined && onboarding.at > doctor.at))
     return onboarding ?? null;
   const skipped = new Set(
-    onboarding?.steps.filter(({ status }) => status === "skipped").map(({ step }) => step),
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(onboarding), (present) =>
+        Arr.map(
+          Arr.filter(present.steps, ({ status }) => status === "skipped"),
+          ({ step }) => step,
+        ),
+      ),
+    ),
   );
-  const listed = new Set(doctor.steps.map(({ step }) => step));
-  const left = (onboarding?.steps ?? []).filter(
+  const listed = new Set(Arr.map(doctor.steps, ({ step }) => step));
+  const left = Arr.filter(
+    onboarding?.steps ?? [],
     ({ step, status }) =>
-      Skippable.literals.some((one) => one === step) &&
+      Arr.some(Skippable.literals, (one) => one === step) &&
       !listed.has(step) &&
       !SETTLED.includes(status),
   );
-  const steps = [...doctor.steps.filter(({ step }) => !skipped.has(step)), ...left];
+  const steps = [...Arr.filter(doctor.steps, ({ step }) => !skipped.has(step)), ...left];
   return { ...doctor, steps, ready: steps.length === 0 };
 };
 
@@ -1167,10 +1198,14 @@ export const notLiveOf = (flock: Flock, installation: string) => {
 
 /** Every route, in the order Desktop opened them. */
 export const machineRows = (flock: Flock): ReadonlyArray<MachineRow> =>
-  [...flock.routes.values()].map(({ profile, name, target }) => {
-    const seen = [...flock.machines.values()].filter(({ machine }) => machine.profile === profile);
+  Arr.map([...flock.routes.values()], ({ profile, name, target }) => {
+    const seen = Arr.filter(
+      [...flock.machines.values()],
+      ({ machine }) => machine.profile === profile,
+    );
     const shown =
-      seen.find(({ asOf }) => asOf === null) ?? seen.sort((a, b) => b.asOf! - a.asOf!)[0];
+      Option.getOrUndefined(Arr.findFirst(seen, ({ asOf }) => asOf === null)) ??
+      seen.sort((a, b) => b.asOf! - a.asOf!)[0];
     const live = shown?.asOf === null;
     const lost = flock.lost.get(profile);
     const link = flock.links.get(profile);

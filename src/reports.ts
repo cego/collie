@@ -1,4 +1,5 @@
-import { Effect, FileSystem, Layer, Option, Schedule, Schema } from "effect";
+import * as Arr from "effect/Array";
+import { Effect, FileSystem, Layer, Option, Schedule, Schema, flow, Result } from "effect";
 import type { PluginEnv } from "./env";
 import { Registry, owesReport, runDir, type CrashPoint, type RunView } from "./engine";
 import { Store } from "./store";
@@ -17,7 +18,7 @@ import { isJsonObject, isString } from "./schema";
 import type { Asker } from "./proposals";
 import { notifyRunLink } from "./run-link-delivery";
 
-const encodeReport = Schema.encodeSync(Schema.fromJsonString(RunReport));
+const encodeReport = flow(Schema.encodeResult(Schema.fromJsonString(RunReport)), Result.getOrThrow);
 
 export const reportsLayer = (opts: {
   env: PluginEnv;
@@ -44,7 +45,7 @@ export const reportsLayer = (opts: {
       const close = (view: RunView) =>
         Effect.gen(function* () {
           const stopped = yield* agents.halt(view.runId);
-          if (stopped.left.length > 0) return { done: false, note: stopped.left.join("; ") };
+          if (stopped.left.length > 0) return { done: false, note: Arr.join(stopped.left, "; ") };
           if (view.task === null)
             return { done: true, note: "The Run's agents are closed; it has no Task workspace." };
           return yield* withTaskLock(
@@ -55,13 +56,15 @@ export const reportsLayer = (opts: {
               if (task === null)
                 return { done: true, note: "The Run's agents are closed; its Task is gone." };
               const tasks = yield* listTasks(env.stateDir);
-              if (tasks.some((one) => one.id !== task.id && one.workspace === task.workspace))
+              if (Arr.some(tasks, (one) => one.id !== task.id && one.workspace === task.workspace))
                 return { done: true, note: "The workspace is kept: another Task names it." };
               const runs = yield* registry.views(task.id);
-              if (runs.some((one) => one.runId !== view.runId && !isSettled(one)))
+              if (Arr.some(runs, (one) => one.runId !== view.runId && !isSettled(one)))
                 return { done: true, note: "The workspace is kept: another Run needs it." };
               const workspaces = yield* herdr.workspaceList();
-              const open = workspaces.find((one) => one.workspaceId === task.workspace);
+              const open = Option.getOrUndefined(
+                Arr.findFirst(workspaces, (one) => one.workspaceId === task.workspace),
+              );
               if (open === undefined)
                 return { done: true, note: "The Task workspace is already closed." };
               if ("collie_home" in open.tokens)
@@ -69,10 +72,14 @@ export const reportsLayer = (opts: {
               const panes = yield* herdr.paneList();
               const siblings = yield* launchedPanes(
                 env.stateDir,
-                runs.filter((one) => one.runId !== view.runId).map((one) => one.runId),
+                Arr.map(
+                  Arr.filter(runs, (one) => one.runId !== view.runId),
+                  (one) => one.runId,
+                ),
               );
               if (
-                panes.some(
+                Arr.some(
+                  panes,
                   (pane) => pane.workspaceId === task.workspace && isLaunched(siblings, pane),
                 )
               )
@@ -98,7 +105,7 @@ export const reportsLayer = (opts: {
       const tell = (view: RunView) =>
         Effect.gen(function* () {
           const who = view.requestedBy;
-          const at = yield* nowIso();
+          const at = yield* nowIso;
           const undelivered = (note: string): RunReport => ({
             state: "undelivered",
             at,
@@ -109,8 +116,11 @@ export const reportsLayer = (opts: {
           const peer =
             who.machine.installation === opts.installation
               ? null
-              : (yield* peersOf(env.stateDir)).find(
-                  (one) => one.installation === who.machine.installation,
+              : Option.getOrUndefined(
+                  Arr.findFirst(
+                    yield* peersOf(env.stateDir),
+                    (one) => one.installation === who.machine.installation,
+                  ),
                 );
           if (peer === undefined)
             return undelivered(`The requesting Machine ${who.machine.name} is no longer paired.`);
@@ -180,12 +190,13 @@ export const reportsLayer = (opts: {
       const sweep = Effect.gen(function* () {
         if (!(yield* fs.exists(socketOf(env.stateDir)))) return;
         const views = yield* Effect.forEach(
-          (yield* store.runs).filter(owesReport),
+          Arr.filter(yield* store.runs, owesReport),
           (row) => registry.view(row.run),
           { concurrency: 4 },
         );
         yield* Effect.forEach(
-          views.filter(
+          Arr.filter(
+            views,
             (view): view is RunView =>
               view !== null &&
               isSettled(view) &&

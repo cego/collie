@@ -3,7 +3,8 @@
 // nothing is inferred that the files do not say, and a Run nothing has found anything
 // about is unmarked rather than reassuringly marked clean.
 
-import { Effect, FileSystem, Path, Schema } from "effect";
+import * as Arr from "effect/Array";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { DriftReportSchema } from "../src/evaluator";
 import { expect, test } from "bun:test";
 import { appendCard, type Card } from "../src/cards";
@@ -16,7 +17,10 @@ import { proposalsPath, record as recordProposal } from "../src/proposals";
 import { herdOf } from "../src/steering";
 import { runEffect } from "./support/effect";
 
-const encodeReport = Schema.encodeSync(Schema.fromJsonString(DriftReportSchema));
+const encodeReport = flow(
+  Schema.encodeResult(Schema.fromJsonString(DriftReportSchema)),
+  Result.getOrThrow,
+);
 
 const REVISION = { branch: "main", head_sha: "abc1234def", fingerprint: "f1", dirty: false };
 
@@ -84,8 +88,8 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
         region: true,
       });
 
-      expect(live!.cards.map((c) => c.id)).toEqual(["c1"]);
-      expect(live!.drift.map((d) => d.id)).toEqual(["d1"]);
+      expect(Arr.map(live!.cards, (c) => c.id)).toEqual(["c1"]);
+      expect(Arr.map(live!.drift, (d) => d.id)).toEqual(["d1"]);
       // No Herd — no socket — is no proposals, not a failed read.
       expect(live!.proposals).toEqual([]);
     }),
@@ -120,7 +124,7 @@ test("one pass answers both: the region and the row's marks", () =>
         region: true,
       });
 
-      expect(live!.drift.map((d) => d.id)).toEqual(["d1"]);
+      expect(Arr.map(live!.drift, (d) => d.id)).toEqual(["d1"]);
       expect(marks.r1).toEqual({
         tryIt: true,
         drift: true,
@@ -279,7 +283,9 @@ test("an undelivered report is read for its Run and never delivered by reading i
         })}\n`,
       );
       const reports = yield* readPendingReports(stateDir, "herd1", "r1");
-      expect(reports.map((r) => r.constraint)).toEqual(["the sibling repo's API must not change"]);
+      expect(Arr.map(reports, (r) => r.constraint)).toEqual([
+        "the sibling repo's API must not change",
+      ]);
       // Reading it changed nothing: the file is still there, with the entry still in it.
       expect(yield* fs.exists(file)).toBe(true);
     }),
@@ -318,7 +324,7 @@ test("a proposal about the installation is drawn whatever row is selected", () =
           ownership: null,
           region: true,
         });
-        expect(live!.proposals.map((p) => p.id)).toEqual([herdWide.id]);
+        expect(Arr.map(live!.proposals, (p) => p.id)).toEqual([herdWide.id]);
       }
     }),
   ));

@@ -1,6 +1,8 @@
 // Release signatures: CI signs each runner binary with the release key, and every downloaded
 // runner is checked against it before it is installed. The private key is only ever a CI secret.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import releaseKey from "../release.pub" with { type: "text" };
 import releaseP256Key from "../release-p256.pub" with { type: "text" };
@@ -21,7 +23,9 @@ export const P256_SIGNATURE_SUFFIX = ".p256.sig";
  * over its decompressed tar, which is what an installed update is made of.
  */
 export const appliedSignatureOf = (archive: string): string | null =>
-  archive.endsWith(".tar.zst") ? `${archive.slice(0, -".zst".length)}${SIGNATURE_SUFFIX}` : null;
+  pipe(archive, Str.endsWith(".tar.zst"))
+    ? `${pipe(archive, Str.slice(0, -".zst".length))}${SIGNATURE_SUFFIX}`
+    : null;
 
 export type Verified = { ok: true } | { ok: false; reason: string };
 
@@ -45,10 +49,10 @@ export function verifyRelease(
   signature: string | null,
   publicKeyPem: string = RELEASE_PUBLIC_KEY,
 ): Verified {
-  if (signature === null || signature.trim() === "") {
+  if (signature === null || Str.trim(signature) === "") {
     return { ok: false, reason: "the download is unsigned, so it was refused" };
   }
-  const decoded = Buffer.from(signature.trim(), "base64");
+  const decoded = Buffer.from(Str.trim(signature), "base64");
   const valid =
     decoded.length === 64 && verify(null, bytes, createPublicKey(publicKeyPem), decoded);
   return valid

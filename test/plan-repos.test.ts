@@ -2,6 +2,7 @@
 // checkouts that exist go in, what the fan-out would do comes out, so every rule and
 // every refusal is one small case.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import {
@@ -327,20 +328,20 @@ test("tickets build in an order that respects Blocked by, and plan order otherwi
     ticket("04-docs.md", "None", "the docs"),
   ]);
 
-  expect(order.map((s) => s.file)).toEqual([
+  expect(Arr.map(order, (s) => s.file)).toEqual([
     // 01 and 04 wait for nothing, in plan order; 03 waits for 01; 02 waits for 03.
     "01-api.md",
     "04-docs.md",
     "03-schema.md",
     "02-web.md",
   ]);
-  expect(order.map((s) => s.title)).toEqual([
+  expect(Arr.map(order, (s) => s.title)).toEqual([
     "the API",
     "the docs",
     "the schema",
     "the web client",
   ]);
-  expect(order.map((s) => s.number)).toEqual(["1", "4", "3", "2"]);
+  expect(Arr.map(order, (s) => s.number)).toEqual(["1", "4", "3", "2"]);
   expect(order[2]!.blockedBy).toEqual(["1"]);
 });
 
@@ -350,14 +351,14 @@ test("only this repository's tickets are sliced, and every ticket is returned ex
     { file: "02-web.md", text: "# Web\n\n**Blocked by:** 01\n**Repo:** cego/web\n" },
     { file: "03-more.md", text: "# More\n\n**Blocked by:** None\n**Repo:** cego/api\n" },
   ];
-  expect(orderedTickets(tickets, "cego/api").map((s) => s.file)).toEqual([
+  expect(Arr.map(orderedTickets(tickets, "cego/api"), (s) => s.file)).toEqual([
     "01-api.md",
     "03-more.md",
   ]);
   // An edge onto a ticket that is not in this slice's repo does not hold it back: that
   // ordering is the fan-out's, between Runs, and it has already been settled.
-  expect(orderedTickets(tickets, "cego/web").map((s) => s.file)).toEqual(["02-web.md"]);
-  expect(orderedTickets(tickets).map((s) => s.file)).toHaveLength(3);
+  expect(Arr.map(orderedTickets(tickets, "cego/web"), (s) => s.file)).toEqual(["02-web.md"]);
+  expect(Arr.map(orderedTickets(tickets), (s) => s.file)).toHaveLength(3);
 });
 
 test("a cycle nothing refused still yields every ticket rather than losing one", () => {
@@ -367,7 +368,7 @@ test("a cycle nothing refused still yields every ticket rather than losing one",
     { file: "01-a.md", text: "# A\n\n**Blocked by:** 02\n" },
     { file: "02-b.md", text: "# B\n\n**Blocked by:** 01\n" },
   ]);
-  expect(order.map((s) => s.file)).toEqual(["01-a.md", "02-b.md"]);
+  expect(Arr.map(order, (s) => s.file)).toEqual(["01-a.md", "02-b.md"]);
 });
 
 test("a ticket with no heading is still called something a hand-off can print", () => {
@@ -417,23 +418,26 @@ test("under a Projects root that is no repository, a checkout five levels down i
   ));
 
 test("a ticket's acceptance criteria are its checkboxes, each one whole", () => {
-  const text = [
-    "# 05: a",
-    "",
-    "## Acceptance criteria",
-    "",
-    "- [ ] **The field.** The Output gains `criteria`, with one",
-    "  entry per criterion.",
-    "- [x] **Before round one.** Blocking.",
-    "  - A nested note, not part of what is copied.",
-    "* [ ] Starred.",
-    "",
-    "- a plain bullet is not a criterion",
-    "",
-    "## Not in this ticket",
-    "",
-    "- [ ] Outside its section, a checkbox is not this ticket's.",
-  ].join("\n");
+  const text = Arr.join(
+    [
+      "# 05: a",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- [ ] **The field.** The Output gains `criteria`, with one",
+      "  entry per criterion.",
+      "- [x] **Before round one.** Blocking.",
+      "  - A nested note, not part of what is copied.",
+      "* [ ] Starred.",
+      "",
+      "- a plain bullet is not a criterion",
+      "",
+      "## Not in this ticket",
+      "",
+      "- [ ] Outside its section, a checkbox is not this ticket's.",
+    ],
+    "\n",
+  );
   expect(criteriaIn(text)).toEqual([
     "**The field.** The Output gains `criteria`, with one entry per criterion.",
     "**Before round one.** Blocking.",
@@ -447,21 +451,24 @@ test("a ticket's acceptance criteria are its checkboxes, each one whole", () => 
 });
 
 test("what only a merge can show is not a criterion, and is read as the ticket's after-merge list", () => {
-  const afterMerge = [
-    "## After merge",
-    "",
-    "- [ ] The nightly deploy counts each registry once.",
-    "- The dashboard shows it,",
-    "  a day later.",
-  ].join("\n");
+  const afterMerge = Arr.join(
+    [
+      "## After merge",
+      "",
+      "- [ ] The nightly deploy counts each registry once.",
+      "- The dashboard shows it,",
+      "  a day later.",
+    ],
+    "\n",
+  );
   const unheaded = ["# 01: a", "", "- [ ] One.", "", afterMerge, "", "## Notes", "", "- [ ] Two."];
-  expect(criteriaIn(unheaded.join("\n"))).toEqual(["One.", "Two."]);
-  expect(afterMergeIn(unheaded.join("\n"))).toEqual([
+  expect(criteriaIn(Arr.join(unheaded, "\n"))).toEqual(["One.", "Two."]);
+  expect(afterMergeIn(Arr.join(unheaded, "\n"))).toEqual([
     "The nightly deploy counts each registry once.",
     "The dashboard shows it, a day later.",
   ]);
 
   const headed = ["# 01: a", "", "## Acceptance criteria", "", "- [ ] One.", "", afterMerge];
-  expect(criteriaIn(headed.join("\n"))).toEqual(["One."]);
+  expect(criteriaIn(Arr.join(headed, "\n"))).toEqual(["One."]);
   expect(afterMergeIn("# 01: a\n\n- [ ] One.\n")).toEqual([]);
 });

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import {
   findingKey,
@@ -177,24 +178,27 @@ test("the rendered review is the summary and the findings, worst first, and noth
   };
 
   expect(renderReview(synthesis)).toBe(
-    [
-      "Adds a --version flag. One blocker.",
-      "",
-      "**Blocker**",
-      "",
-      "- `cli.js:4` — Exits 1 on success",
-      "  A caller cannot tell.",
-      "",
-      "**Minor**",
-      "",
-      "- `cli.js:9` — Loose equality",
-      "- No test for the flag",
-      "",
-      "**Nit**",
-      "",
-      "- A vocabulary this repo does not use",
-      "",
-    ].join("\n"),
+    Arr.join(
+      [
+        "Adds a --version flag. One blocker.",
+        "",
+        "**Blocker**",
+        "",
+        "- `cli.js:4` — Exits 1 on success",
+        "  A caller cannot tell.",
+        "",
+        "**Minor**",
+        "",
+        "- `cli.js:9` — Loose equality",
+        "- No test for the flag",
+        "",
+        "**Nit**",
+        "",
+        "- A vocabulary this repo does not use",
+        "",
+      ],
+      "\n",
+    ),
   );
 });
 
@@ -294,9 +298,9 @@ test("a finding the implementer already disputed is settled, unless a reviewer a
 
   const split = splitDisputed(raised, disputed);
 
-  expect(split.live.map((f) => f.title)).toEqual(["no engines field", "brand new problem"]);
-  expect(split.settled.map((f) => f.title)).toEqual(["--version wins everywhere"]);
-  expect(split.rebutted.map((f) => f.title)).toEqual(["no engines field"]);
+  expect(Arr.map(split.live, (f) => f.title)).toEqual(["no engines field", "brand new problem"]);
+  expect(Arr.map(split.settled, (f) => f.title)).toEqual(["--version wins everywhere"]);
+  expect(Arr.map(split.rebutted, (f) => f.title)).toEqual(["no engines field"]);
   expect(splitDisputed(raised, []).live).toHaveLength(3);
 });
 
@@ -382,7 +386,7 @@ test("a fix Output carries what it fixed, disputed and checked, keyed like findi
   expect(parsed.value.fixed).toEqual([
     { file: "cli.js", title: "no exit code", note: "process.exit(1)" },
   ]);
-  expect(parsed.value.disputed.map((f) => f.title)).toEqual(["loose equality"]);
+  expect(Arr.map(parsed.value.disputed, (f) => f.title)).toEqual(["loose equality"]);
   expect(parsed.value.checks).toEqual([{ name: "bun test", note: "12 pass" }]);
   // The line is not part of the key, and neither is the title's case.
   expect(findingKey(parsed.value.fixed[0]!)).toBe(findingKey(BLOCKER));
@@ -424,7 +428,7 @@ test("the last fix cannot both fix and dispute a finding, and what it still repo
     },
     PASSED,
   );
-  expect(both.ok ? "(ok)" : `${both.halt}: ${both.reasons.join("; ")}`).toBe(
+  expect(both.ok ? "(ok)" : `${both.halt}: ${Arr.join(both.reasons, "; ")}`).toBe(
     "fix_unverified: both fixed and disputed: [blocker] No exit code (cli.js)",
   );
   const twice = settleFinalFix(
@@ -492,7 +496,7 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
   };
   const halt = (fix: FixOutput, evidence = PASSED) => {
     const r = settleFinalFix([BLOCKER, MINOR], fix, evidence);
-    return r.ok ? "(ok)" : `${r.halt}: ${r.reasons.join("; ")}`;
+    return r.ok ? "(ok)" : `${r.halt}: ${Arr.join(r.reasons, "; ")}`;
   };
   expect(halt({ ...good, fixed: [] })).toBe(
     "fix_unverified: no disposition for [blocker] No exit code (cli.js)",
@@ -575,7 +579,7 @@ test("a serious dispute the latest review left out still blocks the last fix", (
     checks: [{ name: "bun test" }],
   };
   const settled = settleFinalFix([MAJOR_NEW], fix, PASSED);
-  expect(settled.ok ? "(ok)" : `${settled.halt}: ${settled.reasons.join("; ")}`).toBe(
+  expect(settled.ok ? "(ok)" : `${settled.halt}: ${Arr.join(settled.reasons, "; ")}`).toBe(
     "dispute_unresolved: disputed blocking finding: [blocker] No exit code (cli.js)",
   );
   if (settled.ok) throw new Error("expected halt");
@@ -671,5 +675,5 @@ test("a last fix naming one of the Run's Checks with no record on the tree is to
   expect(reasons).toEqual([
     'check "check" has no verification record on this tree — Collie\'s gate runs it itself, on the final tree',
   ]);
-  expect(reasons.join("\n")).not.toContain("run it through collie verify");
+  expect(Arr.join(reasons, "\n")).not.toContain("run it through collie verify");
 });

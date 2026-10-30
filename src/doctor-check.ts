@@ -1,5 +1,8 @@
 // What every doctor check is made of, shared by the doctor and each forge's own checks.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Option, Path, Result } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { Ran } from "./mr";
@@ -59,7 +62,7 @@ export const answered = (
  */
 export const onPath = Effect.fn("Doctor.onPath")(function* (search: string, name: string) {
   const path = yield* Path.Path;
-  for (const dir of search.split(":").filter((d) => d !== "")) {
+  for (const dir of Arr.filter(Str.split(search, ":"), (d) => d !== "")) {
     if (yield* runnable(path.join(dir, name))) return dir;
   }
   return null;
@@ -73,8 +76,14 @@ export const runnable = Effect.fn("Doctor.runnable")(function* (file: string) {
 
 /** The JSON object in a command's output, from the line it starts on, so a preamble is skipped. */
 export const jsonIn = (text: string) => {
-  const lines = text.split("\n");
-  const from = lines.findIndex((line) => line.trimStart().startsWith("{"));
-  const json = from === -1 ? "" : lines.slice(from).join("\n");
-  return json.slice(0, json.lastIndexOf("}") + 1);
+  const lines = Str.split(text, "\n");
+  const from = Option.getOrElse(
+    Arr.findFirstIndex(lines, (line) => pipe_(Str.trimStart(line), Str.startsWith("{"))),
+    () => -1,
+  );
+  const json = from === -1 ? "" : Arr.join(lines.slice(from), "\n");
+  return pipe_(
+    json,
+    Str.slice(0, Option.getOrElse(pipe_(json, Str.lastIndexOf("}")), () => -1) + 1),
+  );
 };

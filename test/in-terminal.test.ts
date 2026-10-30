@@ -1,5 +1,7 @@
 // A command in a terminal of its own: what it prints, what is typed at it, how it exits.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, Stream } from "effect";
 import { inTerminal } from "../src/in-terminal";
@@ -18,7 +20,7 @@ test("a command started in a terminal has one, says what it prints, takes what i
         Stream.runForEach((chunk) =>
           Effect.gen(function* () {
             said += chunk;
-            if (chunk.includes("name? ")) yield* asked.type("collie\n");
+            if (pipe_(chunk, Str.includes("name? "))) yield* asked.type("collie\n");
           }),
         ),
       );

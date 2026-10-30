@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { decodeAgentList, decodeWorkspaceList, Herdr } from "../src/herdr";
@@ -286,7 +287,7 @@ test("a pane carries the harness session herdr reports for it, and none where it
       }
 
       const panes = yield* new CurrentHerdr(rig.pluginEnv()).paneList();
-      expect(panes.map((pane) => pane.agentSession)).toEqual([
+      expect(Arr.map(panes, (pane) => pane.agentSession)).toEqual([
         { kind: "pi", value: "/s/impl.jsonl" },
         null,
       ]);
@@ -342,7 +343,7 @@ test("a worktree-backed workspace decodes, and its checkout is its directory", (
         },
       });
 
-      expect(list.map((w) => w.cwd)).toEqual(["", "/home/u/.herdr/worktrees/collie/feature"]);
+      expect(Arr.map(list, (w) => w.cwd)).toEqual(["", "/home/u/.herdr/worktrees/collie/feature"]);
       expect(list[1]!.worktree).toBe("/home/u/.herdr/worktrees/collie/feature");
     }),
   ));
@@ -533,7 +534,12 @@ test("a submission herdr saw no turn come of is finished with one Enter, not sen
 
       const calls = yield* rig.calls();
       // Once: sending the text again would run the reviewer's whole turn twice.
-      expect(calls.filter((call) => call.cmd === "agent prompt").map((call) => call.argv)).toEqual([
+      expect(
+        Arr.map(
+          Arr.filter(calls, (call) => call.cmd === "agent prompt"),
+          (call) => call.argv,
+        ),
+      ).toEqual([
         [
           "agent",
           "prompt",
@@ -549,10 +555,18 @@ test("a submission herdr saw no turn come of is finished with one Enter, not sen
         ],
       ]);
       expect(
-        calls.filter((call) => call.cmd === "agent send-keys").map((call) => call.argv),
+        Arr.map(
+          Arr.filter(calls, (call) => call.cmd === "agent send-keys"),
+          (call) => call.argv,
+        ),
       ).toEqual([["agent", "send-keys", "reviewer", "enter"]]);
       // And the Enter is a recovery only once herdr has seen the turn it started.
-      expect(calls.filter((call) => call.cmd === "agent wait").map((call) => call.argv)).toEqual([
+      expect(
+        Arr.map(
+          Arr.filter(calls, (call) => call.cmd === "agent wait"),
+          (call) => call.argv,
+        ),
+      ).toEqual([
         [
           "agent",
           "wait",
@@ -580,7 +594,7 @@ test("an Enter with no turn seen after it is unobserved, not a turn that never r
       // A turn can start and finish inside that wait, so nothing seen is not proof the
       // Enter was lost. Failing here would block a variant whose Output already exists.
       expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toHaveLength(1);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent send-keys")).toHaveLength(1);
     }),
   ));
 
@@ -591,7 +605,7 @@ test("a status herdr could not give is not read as an agent between turns", () =
       // one out cannot make a match evidence of this prompt.
       const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "unknown" }));
       expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent send-keys")).toEqual([]);
     }),
   ));
 
@@ -602,10 +616,10 @@ test("a submission the wait ran out on is finished with one Enter at an agent be
       // text still in its editor. Left there, the Run sits forever with an idle agent.
       const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_PROMPT_ERROR: "timeout" }));
       expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("observed");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent prompt")).toHaveLength(1);
-      expect((yield* rig.calls()).filter((call) => call.cmd === "agent send-keys")).toMatchObject([
-        { argv: ["agent", "send-keys", "reviewer", "enter"] },
-      ]);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent prompt")).toHaveLength(1);
+      expect(
+        Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent send-keys"),
+      ).toMatchObject([{ argv: ["agent", "send-keys", "reviewer", "enter"] }]);
     }),
   ));
 
@@ -621,7 +635,7 @@ test("a stall at an agent with no status yet waits for one before the Enter", ()
         }),
       );
       expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("observed");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toHaveLength(1);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent send-keys")).toHaveLength(1);
     }),
   ));
 
@@ -639,7 +653,7 @@ test(
             }),
           );
           expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
-          expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+          expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent send-keys")).toEqual([]);
         }),
       ),
     ),
@@ -652,7 +666,7 @@ test("an agent already working cannot vouch for a new prompt, so nothing pretend
       // herdr matches the turn already running, which says nothing about this prompt.
       const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" }));
       expect(yield* herdr.agentPrompt("reviewer", "steer left")).toBe("unobserved");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent send-keys")).toEqual([]);
     }),
   ));
 
@@ -668,7 +682,7 @@ test("no Enter goes to an agent that blocked after the stall", () =>
       // That Enter would answer the dialog with whatever its default is, which is the
       // one thing herdr refuses to do on a caller's behalf.
       expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent send-keys")).toEqual([]);
     }),
   ));
 
@@ -682,6 +696,6 @@ test("a submission that failed for any other reason still fails, and nothing is 
       expect(failure._tag).toBe("HerdrError");
       // An Enter into a pane whose agent is gone, or whose dialog is waiting, is not a
       // recovery.
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent send-keys")).toEqual([]);
     }),
   ));

@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import type { Connection, ConnectionId, ConnectionReading } from "../../../src/connection-model";
 import { Option, Schema } from "effect";
 import {
@@ -11,7 +14,7 @@ export type ConnectionWorkflow = typeof ConnectionWorkflow.Type;
 export const workflowConnections = (
   workflows: ReadonlyArray<{ readonly id: string; readonly metadata: Schema.Json }>,
 ) =>
-  workflows.flatMap(({ id, metadata }) => {
+  Arr.flatMap(workflows, ({ id, metadata }) => {
     const decoded = Schema.decodeUnknownOption(
       Schema.Struct({ connections: ConnectionWorkflow.fields.connections }),
     )(metadata);
@@ -19,7 +22,7 @@ export const workflowConnections = (
   });
 
 export const connectionUses = (id: ConnectionId, workflows: ReadonlyArray<ConnectionWorkflow>) =>
-  workflows.flatMap((workflow) => {
+  Arr.flatMap(workflows, (workflow) => {
     const needs = workflow.connections.needs?.[id];
     if (needs !== undefined)
       return [{ id: workflow.id, declares: "needs", with: needs.with, without: "Does not start" }];
@@ -53,18 +56,26 @@ export type ConnectionPrimary =
   | { readonly kind: "login" | "setup"; readonly label: string; readonly to: ReadonlyArray<string> }
   | { readonly kind: "connect"; readonly label: string };
 
-const names = (values: ReadonlyArray<string>) => values.join(", ").replace(/, ([^,]*)$/, " and $1");
+const names = (values: ReadonlyArray<string>) =>
+  pipe(Arr.join(values, ", "), Str.replace(/, ([^,]*)$/, " and $1"));
 
 export const connectionCards = (machines: ReadonlyArray<MachineConnections>) =>
-  ConnectionIds.literals.map((id) => {
-    const readings = machines.map((machine) => ({
+  Arr.map(ConnectionIds.literals, (id) => {
+    const readings = Arr.map(machines, (machine) => ({
       ...machine,
-      reading: machine.connections.find((one) => one.id === id)?.reading,
+      reading: Option.getOrUndefined(Arr.findFirst(machine.connections, (one) => one.id === id))
+        ?.reading,
     }));
-    const ready = readings.filter((one) => one.problem === null && one.reading?.state === "ok");
-    const lacking = readings.filter((one) => one.problem !== null || one.reading?.state !== "ok");
+    const ready = Arr.filter(
+      readings,
+      (one) => one.problem === null && one.reading?.state === "ok",
+    );
+    const lacking = Arr.filter(
+      readings,
+      (one) => one.problem !== null || one.reading?.state !== "ok",
+    );
     const source = ready[0];
-    const targets = lacking.map((one) => one.profile);
+    const targets = Arr.map(lacking, (one) => one.profile);
     let primary: ConnectionPrimary | null = null;
     if (lacking.length > 0) {
       if ((id === "gitlab" || id === "github") && source !== undefined)
@@ -73,7 +84,7 @@ export const connectionCards = (machines: ReadonlyArray<MachineConnections>) =>
           label:
             id === "gitlab"
               ? "Use glab's login"
-              : `Give to ${names(lacking.map((one) => one.name))}`,
+              : `Give to ${names(Arr.map(lacking, (one) => one.name))}`,
           from: source.profile,
           to: targets,
         };
@@ -107,7 +118,7 @@ export const connectionCards = (machines: ReadonlyArray<MachineConnections>) =>
       where:
         ready.length === machines.length
           ? `On all ${machines.length} Machines`
-          : `${ready.length === 0 ? "No login found" : `On ${names(ready.map((one) => one.name))}`} · missing on ${names(lacking.map((one) => one.name))}`,
+          : `${ready.length === 0 ? "No login found" : `On ${names(Arr.map(ready, (one) => one.name))}`} · missing on ${names(Arr.map(lacking, (one) => one.name))}`,
       machines: readings,
     };
   });
@@ -136,16 +147,20 @@ export const mergeConnections = (
       group.push({ machine, reading });
       groups.set(id, group);
     }
-  return [...groups].map(([id, readings]) => {
-    const ready = readings.find(({ reading }) => reading.state === "ok");
+  return Arr.map([...groups], ([id, readings]) => {
+    const ready = Option.getOrUndefined(
+      Arr.findFirst(readings, ({ reading }) => reading.state === "ok"),
+    );
     const chosen =
-      ready ?? readings.find(({ reading }) => reading.state === "broken") ?? readings[0]!;
+      ready ??
+      Option.getOrUndefined(Arr.findFirst(readings, ({ reading }) => reading.state === "broken")) ??
+      readings[0]!;
     return {
       id,
       state: chosen.reading.state,
       account: chosen.reading.state === "ok" ? chosen.reading.account : null,
       fix: chosen.reading.state === "ok" ? null : chosen.reading.fix,
-      machines: readings.map(({ machine, reading }) => ({
+      machines: Arr.map(readings, ({ machine, reading }) => ({
         machine,
         reading:
           reading.state === "ok" || ready === undefined

@@ -2,6 +2,10 @@
 // repo run can start when, and the reasons a plan cannot be fanned out at all
 // (CONTEXT.md, Repo run and Wave).
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, FileSystem, Path } from "effect";
 
 export const REPO_LINE = /^\s*\*\*Repo:\*\*\s*(.*?)\s*$/m;
@@ -14,12 +18,19 @@ const CHECKS_LINE = /^\s*\*\*Checks:\*\*\s*(.*?)\s*$/m;
  * either way what is kept is the name a `collie verify` record carries.
  */
 export function checksIn(text: string): string[] {
-  const line = CHECKS_LINE.exec(text)?.[1]?.trim() ?? "";
+  const line =
+    Option.getOrUndefined(
+      Option.flatMap(Option.fromNullishOr(CHECKS_LINE.exec(text)), (present) =>
+        Option.map(Option.fromNullishOr(present[1]), (present_) => Str.trim(present_)),
+      ),
+    ) ?? "";
   if (line === "" || /^none\b/i.test(line)) return [];
-  return line
-    .split(",")
-    .map((part) => part.trim().replace(/^`|`$/g, "").trim())
-    .filter((part) => part !== "");
+  return Arr.filter(
+    Arr.map(Str.split(line, ","), (part) =>
+      Str.trim(pipe_(Str.trim(part), Str.replace(/^`|`$/g, ""))),
+    ),
+    (part) => part !== "",
+  );
 }
 
 const ACCEPTANCE = /^#+\s+acceptance criteria\b/i;
@@ -30,10 +41,16 @@ const LIST_ITEM = /^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/;
 
 /** The lines under the first heading `heading` matches, up to the next heading; null where it has none. */
 function sectionOf(lines: ReadonlyArray<string>, heading: RegExp): ReadonlyArray<string> | null {
-  const at = lines.findIndex((line) => heading.test(line));
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(lines, (line) => heading.test(line)),
+    () => -1,
+  );
   if (at === -1) return null;
   const rest = lines.slice(at + 1);
-  const end = rest.findIndex((line) => HEADING.test(line));
+  const end = Option.getOrElse(
+    Arr.findFirstIndex(rest, (line) => HEADING.test(line)),
+    () => -1,
+  );
   return end === -1 ? rest : rest.slice(0, end);
 }
 
@@ -46,7 +63,7 @@ function itemsIn(lines: ReadonlyArray<string>, item: RegExp): string[] {
     if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
     const found = fenced ? null : item.exec(line);
     if (found) {
-      open = [found[1]!.trim()];
+      open = [Str.trim(found[1]!)];
       items.push(open);
     } else if (
       !fenced &&
@@ -54,10 +71,10 @@ function itemsIn(lines: ReadonlyArray<string>, item: RegExp): string[] {
       /^\s+\S/.test(line) &&
       !/^\s+([-*+]|\d+[.)])\s/.test(line)
     )
-      open.push(line.trim());
+      open.push(Str.trim(line));
     else open = null;
   }
-  return items.map((parts) => parts.join(" "));
+  return Arr.map(items, (parts) => Arr.join(parts, " "));
 }
 
 /**
@@ -66,18 +83,21 @@ function itemsIn(lines: ReadonlyArray<string>, item: RegExp): string[] {
  * list and fenced code are not.
  */
 export function criteriaIn(text: string): string[] {
-  const lines = text.split("\n");
+  const lines = Str.split(text, "\n");
   const section = sectionOf(lines, ACCEPTANCE);
   if (section !== null) return itemsIn(section, CHECKBOX);
   const afterMerge = sectionOf(lines, AFTER_MERGE);
   if (afterMerge === null) return itemsIn(lines, CHECKBOX);
-  const at = lines.findIndex((line) => AFTER_MERGE.test(line));
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(lines, (line) => AFTER_MERGE.test(line)),
+    () => -1,
+  );
   return itemsIn([...lines.slice(0, at), ...lines.slice(at + 1 + afterMerge.length)], CHECKBOX);
 }
 
 /** What only CI, a merge or a deploy can show: the items under a ticket's `## After merge`. */
 export function afterMergeIn(text: string): string[] {
-  return itemsIn(sectionOf(text.split("\n"), AFTER_MERGE) ?? [], LIST_ITEM);
+  return itemsIn(sectionOf(Str.split(text, "\n"), AFTER_MERGE) ?? [], LIST_ITEM);
 }
 
 /**
@@ -89,8 +109,8 @@ export const planIssuesIn = Effect.fn("Plan.planIssuesIn")(function* (dir: strin
   const path = yield* Path.Path;
   const names = yield* fs
     .readDirectory(path.join(dir, "plan", "issues"))
-    .pipe(Effect.catch(() => Effect.succeed([])));
-  return names.filter((name) => name.endsWith(".md")).length;
+    .pipe(Effect.orElseSucceed(() => []));
+  return Arr.filter(names, (name) => pipe_(name, Str.endsWith(".md"))).length;
 });
 
 /** One repository the plan changes, and the tickets that change it, in plan order. */
@@ -142,13 +162,13 @@ function ticketId(raw: string): string {
  * names one.
  */
 function blockersIn(said: string): ReadonlyArray<string> | null {
-  const ids = said
-    .split(/[\s,;]+/)
-    // Punctuation off the ends, never letters: `(01)` and `01.` name a ticket, and
-    // trimming any non-digit instead would turn the `v2` this rule exists for into one.
-    .map((word) => word.replaceAll(/^[([{'"]+|[)\]}'".:]+$/g, ""))
-    .filter((word) => /^\d+$/.test(word));
-  if (ids.length > 0) return ids.map(ticketId);
+  const ids = Arr.filter(
+    Arr.map(Str.split(said, /[\s,;]+/), (word) =>
+      pipe_(word, Str.replaceAll(/^[([{'"]+|[)\]}'".:]+$/g, "")),
+    ),
+    (word) => /^\d+$/.test(word),
+  );
+  if (ids.length > 0) return Arr.map(ids, ticketId);
   return said === "" || /none/i.test(said) ? [] : null;
 }
 
@@ -182,11 +202,15 @@ type Placed = Ticket & { repo: string };
  * Collie open a merge request in a repository the operator never named.
  */
 function repoUnderRoot(raw: string): string | null {
-  const value = raw.trim();
-  if (value === "" || value.startsWith("/") || value.startsWith("~")) return null;
-  const segments = value.split("/").filter((segment) => segment !== "" && segment !== ".");
-  if (segments.some((segment) => segment === "..")) return null;
-  return segments.length === 0 ? "." : segments.join("/");
+  const value = Str.trim(raw);
+  if (value === "" || pipe_(value, Str.startsWith("/")) || pipe_(value, Str.startsWith("~")))
+    return null;
+  const segments = Arr.filter(
+    Str.split(value, "/"),
+    (segment) => segment !== "" && segment !== ".",
+  );
+  if (Arr.some(segments, (segment) => segment === "..")) return null;
+  return segments.length === 0 ? "." : Arr.join(segments, "/");
 }
 
 function refuse(kind: PlanRefusal["kind"], message: string): PlanRepos {
@@ -226,9 +250,21 @@ export function readPlanRepos(
   tickets: ReadonlyArray<{ file: string; text: string }>,
   checkouts: ReadonlySet<string>,
 ): PlanRepos {
-  const parsed: Ticket[] = tickets.map((ticket) => {
-    const written = REPO_LINE.exec(ticket.text)?.[1]?.trim() ?? "";
-    const blockedText = BLOCKED_LINE.exec(ticket.text)?.[1]?.trim() ?? "";
+  const parsed: Ticket[] = Arr.map(tickets, (ticket) => {
+    const written =
+      Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(REPO_LINE.exec(ticket.text)), (present__) =>
+          Option.map(Option.fromNullishOr(present__[1]), (present___) => Str.trim(present___)),
+        ),
+      ) ?? "";
+    const blockedText =
+      Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(BLOCKED_LINE.exec(ticket.text)), (present____) =>
+          Option.map(Option.fromNullishOr(present____[1]), (present_____) =>
+            Str.trim(present_____),
+          ),
+        ),
+      ) ?? "";
     return {
       file: ticket.file,
       id: ticketId(ticket.file),
@@ -242,12 +278,12 @@ export function readPlanRepos(
 
   // Said something that is not a path under the root, as against having said nothing:
   // both leave `repo` null, and `written` is what tells the two apart.
-  const escaping = parsed.filter((ticket) => ticket.written !== "" && ticket.repo === null);
+  const escaping = Arr.filter(parsed, (ticket) => ticket.written !== "" && ticket.repo === null);
   if (escaping.length > 0) {
-    const named = escaping.map((ticket) => `${ticket.file} (${ticket.written})`);
+    const named = Arr.map(escaping, (ticket) => `${ticket.file} (${ticket.written})`);
     return refuse(
       "outside-root",
-      `These tickets name a repository that is not under the plan's root: ${named.join(", ")}. ` +
+      `These tickets name a repository that is not under the plan's root: ${Arr.join(named, ", ")}. ` +
         `A **Repo:** line is a path relative to the root: it cannot be absolute, and it cannot contain "..".`,
     );
   }
@@ -259,47 +295,52 @@ export function readPlanRepos(
   // another as two — and the order those lines describe is what a build is sliced along.
   const claiming = new Map<string, string[]>();
   for (const ticket of parsed) indexBy(claiming, ticket.id, ticket.file);
-  const twice = [...claiming.values()].filter((files) => files.length > 1);
+  const twice = Arr.filter([...claiming.values()], (files) => files.length > 1);
   if (twice.length > 0) {
     return refuse(
       "duplicate-ticket",
-      `These tickets are numbered the same, so a "Blocked by" line cannot say which it means: ${twice
-        .map((files) => files.join(" and "))
-        .join(", ")}. Number every ticket of a plan once.`,
+      `These tickets are numbered the same, so a "Blocked by" line cannot say which it means: ${Arr.join(
+        Arr.map(twice, (files) => Arr.join(files, " and ")),
+        ", ",
+      )}. Number every ticket of a plan once.`,
     );
   }
 
-  const unreadable = parsed.flatMap((ticket) =>
+  const unreadable = Arr.flatMap(parsed, (ticket) =>
     ticket.blockedBy === null
       ? [`${ticket.file} (blocked by "${ticket.blockedText}")`]
-      : ticket.blockedBy
-          .filter((id) => !claiming.has(id))
-          .map((id) => `${ticket.file} (blocked by ${id})`),
+      : Arr.map(
+          Arr.filter(ticket.blockedBy, (id) => !claiming.has(id)),
+          (id) => `${ticket.file} (blocked by ${id})`,
+        ),
   );
   if (unreadable.length > 0) {
     return refuse(
       "unknown-blocker",
-      `These tickets are blocked by something that is not a ticket of this plan: ${unreadable.join(", ")}. ` +
+      `These tickets are blocked by something that is not a ticket of this plan: ${Arr.join(unreadable, ", ")}. ` +
         `A "Blocked by" line names the numbers of the tickets it waits for, or "None".`,
     );
   }
 
   // Every ticket in one repository, whether it says so or not: today's plans, and the
   // ones written inside a repo, where `.` is the only answer there is.
-  if (parsed.every((ticket) => ticket.repo === null || ticket.repo === ".")) {
+  if (Arr.every(parsed, (ticket) => ticket.repo === null || ticket.repo === ".")) {
     return {
-      repos: [{ path: ".", tickets: parsed.map((ticket) => ticket.file) }],
+      repos: [{ path: ".", tickets: Arr.map(parsed, (ticket) => ticket.file) }],
       waves: [["."]],
       refusal: null,
     };
   }
 
-  const placed = parsed.filter((ticket): ticket is Placed => ticket.repo !== null);
+  const placed = Arr.filter(parsed, (ticket): ticket is Placed => ticket.repo !== null);
   if (placed.length < parsed.length) {
-    const silent = parsed.filter((ticket) => ticket.repo === null).map((ticket) => ticket.file);
+    const silent = Arr.map(
+      Arr.filter(parsed, (ticket) => ticket.repo === null),
+      (ticket) => ticket.file,
+    );
     return refuse(
       "missing-repo",
-      `Some tickets name a repository and these do not: ${silent.join(", ")}. Every ticket in a plan that spans repositories needs a **Repo:** line.`,
+      `Some tickets name a repository and these do not: ${Arr.join(silent, ", ")}. Every ticket in a plan that spans repositories needs a **Repo:** line.`,
     );
   }
 
@@ -316,7 +357,9 @@ export function readPlanRepos(
 
   // Cross-repo blocking edges only: an edge inside a repo orders that run's tickets,
   // which is the implementer's business rather than the fan-out's.
-  const blockers = new Map<string, Set<string>>(paths.map((path) => [path, new Set<string>()]));
+  const blockers = new Map<string, Set<string>>(
+    Arr.map(paths, (path) => [path, new Set<string>()]),
+  );
   const interleaving = new Map<string, string[]>();
   for (const ticket of placed) {
     // Never null past the guard above, which refuses a line it could not read.
@@ -333,8 +376,10 @@ export function readPlanRepos(
   const waves: string[][] = [];
   const settled = new Set<string>();
   while (settled.size < paths.length) {
-    const left = paths.filter((path) => !settled.has(path));
-    const wave = left.filter((path) => [...blockers.get(path)!].every((from) => settled.has(from)));
+    const left = Arr.filter(paths, (path) => !settled.has(path));
+    const wave = Arr.filter(left, (path) =>
+      Arr.every([...blockers.get(path)!], (from) => settled.has(from)),
+    );
     if (wave.length === 0) {
       // Only the repositories on the cycle, not everything downstream of it: a repo
       // nothing else waits for is stuck because the cycle is, and telling the planner to
@@ -342,17 +387,17 @@ export function readPlanRepos(
       // dropping whatever has no dependent left, until only what waits on itself remains.
       let cyclic = left;
       for (;;) {
-        const waited = cyclic.filter((path) =>
-          cyclic.some((other) => blockers.get(other)!.has(path)),
+        const waited = Arr.filter(cyclic, (path) =>
+          Arr.some(cyclic, (other) => blockers.get(other)!.has(path)),
         );
         if (waited.length === cyclic.length) break;
         cyclic = waited;
       }
-      const interleaved = cyclic.flatMap((path) => interleaving.get(path) ?? []);
+      const interleaved = Arr.flatMap(cyclic, (path) => interleaving.get(path) ?? []);
       return refuse(
         "cycle",
-        `These repositories block each other, so no run can go first: ${cyclic.join(", ")}. ` +
-          `The tickets that interleave them: ${interleaved.join(", ")}. ` +
+        `These repositories block each other, so no run can go first: ${Arr.join(cyclic, ", ")}. ` +
+          `The tickets that interleave them: ${Arr.join(interleaved, ", ")}. ` +
           `Move a repository's tickets so that once it is blocked by another, none of that one's is blocked by it.`,
       );
     }
@@ -360,16 +405,16 @@ export function readPlanRepos(
     waves.push(wave);
   }
 
-  const missing = paths.filter((path) => !checkouts.has(path));
+  const missing = Arr.filter(paths, (path) => !checkouts.has(path));
   if (missing.length > 0) {
     return refuse(
       "missing-checkout",
-      `These repositories are named by a ticket but not checked out under the plan's root: ${missing.join(", ")}. ` +
+      `These repositories are named by a ticket but not checked out under the plan's root: ${Arr.join(missing, ", ")}. ` +
         `Clone them there and answer again — Collie does not clone.`,
     );
   }
 
-  const repos = [...ticketsOf].map(([path, tickets]) => ({ path, tickets }));
+  const repos = Arr.map([...ticketsOf], ([path, tickets]) => ({ path, tickets }));
   return { repos, waves, refusal: null };
 }
 
@@ -383,14 +428,15 @@ export const planReposOf = Effect.fn("Plan.planReposOf")(function* (planDir: str
   const path = yield* Path.Path;
 
   const issues = path.join(planDir, "issues");
-  const files = (yield* fs.readDirectory(issues).pipe(Effect.catch(() => Effect.succeed([]))))
-    .filter((name) => name.endsWith(".md"))
-    .sort();
+  const files = Arr.filter(
+    yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])),
+    (name) => pipe_(name, Str.endsWith(".md")),
+  ).sort();
   const tickets: Array<{ file: string; text: string }> = [];
   for (const file of files) {
     const text = yield* fs
       .readFileString(path.join(issues, file))
-      .pipe(Effect.catch(() => Effect.succeed("")));
+      .pipe(Effect.orElseSucceed(() => ""));
     tickets.push({ file, text });
   }
 
@@ -427,11 +473,13 @@ export interface Slice {
 /** The first heading, else the file name without its number — what a hand-off calls it. */
 function titleOf(file: string, text: string): string {
   const heading = /^#+\s+(.+?)\s*$/m.exec(text)?.[1];
-  if (heading) return heading.replace(/^\d+[\s:.-]+/, "").trim();
-  return file
-    .replace(/\.md$/, "")
-    .replace(/^\d+[-_]?/, "")
-    .replaceAll("-", " ");
+  if (heading) return Str.trim(pipe_(heading, Str.replace(/^\d+[\s:.-]+/, "")));
+  return pipe_(
+    file,
+    Str.replace(/\.md$/, ""),
+    Str.replace(/^\d+[-_]?/, ""),
+    Str.replaceAll("-", " "),
+  );
 }
 
 /**
@@ -450,29 +498,38 @@ export function orderedTickets(
   tickets: ReadonlyArray<{ file: string; text: string }>,
   repo?: string,
 ): Slice[] {
-  const mine = tickets.filter((ticket) => {
+  const mine = Arr.filter(tickets, (ticket) => {
     if (repo === undefined || repo === "") return true;
     const written = repoUnderRoot(REPO_LINE.exec(ticket.text)?.[1] ?? "");
     return written === repo || (written === null && repo === ".");
   });
-  const slices: Slice[] = mine.map((ticket) => ({
+  const slices: Slice[] = Arr.map(mine, (ticket) => ({
     file: ticket.file,
     number: ticketId(ticket.file),
     title: titleOf(ticket.file, ticket.text),
-    blockedBy: blockersIn(BLOCKED_LINE.exec(ticket.text)?.[1]?.trim() ?? "") ?? [],
+    blockedBy:
+      blockersIn(
+        Option.getOrUndefined(
+          Option.flatMap(Option.fromNullishOr(BLOCKED_LINE.exec(ticket.text)), (present______) =>
+            Option.map(Option.fromNullishOr(present______[1]), (present_______) =>
+              Str.trim(present_______),
+            ),
+          ),
+        ) ?? "",
+      ) ?? [],
     checks: checksIn(ticket.text),
     criteria: criteriaIn(ticket.text),
   }));
 
-  const here = new Set(slices.map((slice) => slice.number));
+  const here = new Set(Arr.map(slices, (slice) => slice.number));
   const done = new Set<string>();
   const out: Slice[] = [];
   let left = slices;
   while (left.length > 0) {
     // Plan order among the ready ones: the planner numbered them for a reason, and two
     // tickets that wait for nothing should build in the order they were written.
-    const ready = left.filter((slice) =>
-      slice.blockedBy.every((id) => !here.has(id) || done.has(id)),
+    const ready = Arr.filter(left, (slice) =>
+      Arr.every(slice.blockedBy, (id) => !here.has(id) || done.has(id)),
     );
     // A cycle nothing refused: take what is left in plan order rather than lose it.
     const taking = ready.length > 0 ? ready : left;
@@ -480,7 +537,7 @@ export function orderedTickets(
       out.push(slice);
       done.add(slice.number);
     }
-    left = left.filter((slice) => !done.has(slice.number));
+    left = Arr.filter(left, (slice) => !done.has(slice.number));
   }
   return out;
 }
@@ -493,14 +550,15 @@ export const orderedTicketsOf = Effect.fn("Plan.orderedTicketsOf")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const issues = path.join(planDir, "issues");
-  const files = (yield* fs.readDirectory(issues).pipe(Effect.catch(() => Effect.succeed([]))))
-    .filter((name) => name.endsWith(".md"))
-    .sort();
+  const files = Arr.filter(
+    yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])),
+    (name) => pipe_(name, Str.endsWith(".md")),
+  ).sort();
   const tickets: Array<{ file: string; text: string }> = [];
   for (const file of files) {
     const text = yield* fs
       .readFileString(path.join(issues, file))
-      .pipe(Effect.catch(() => Effect.succeed("")));
+      .pipe(Effect.orElseSucceed(() => ""));
     tickets.push({ file, text });
   }
   return orderedTickets(tickets, repo);

@@ -1,8 +1,10 @@
 // Who is acting: every operation on a Run is recorded with the front door its channel
 // declared, and a request id sent again is the same operation, not a second one.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
 import { cliOrigin } from "../src/commands/shared";
 import { currentEnv } from "../src/env";
@@ -15,7 +17,7 @@ import { readSeen } from "../src/seen";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 /** Who the Run's agents are told started it, read once its host has stopped. */
 const startedOf = (state: string, runId: string) =>
@@ -27,7 +29,7 @@ const startedOf = (state: string, runId: string) =>
 const audited = (state: string, runId: string) =>
   readAudit(runDir(state, runId)).pipe(
     Effect.map((lines) =>
-      lines.map((line) => [line.operation, line.actor.origin, line.actor.requestId]),
+      Arr.map(lines, (line) => [line.operation, line.actor.origin, line.actor.requestId]),
     ),
   );
 
@@ -126,7 +128,10 @@ test(
           const held = yield* collie(world, ["run", "hold", runId, "--reason", "lunch"]);
           expect(held.envelope.ok).toBe(true);
           const lines = yield* readAudit(runDir(world.state, runId));
-          expect(lines.find((line) => line.operation === "hold")?.reason).toBe("lunch");
+          expect(
+            Option.getOrUndefined(Arr.findFirst(lines, (line) => line.operation === "hold"))
+              ?.reason,
+          ).toBe("lunch");
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
       ["proof.workflow.ts", "helper.ts", "notes.md"],
@@ -190,7 +195,7 @@ test(
           expect(yield* stopRun(env, runId)).toMatch(/^Stop/);
           const trail = yield* audited(world.state, runId);
           yield* stopHost(world.state);
-          expect(trail.map(([operation, origin]) => [operation, origin])).toEqual([
+          expect(Arr.map(trail, ([operation, origin]) => [operation, origin])).toEqual([
             ["start", "cli"],
             ["stop", "board"],
           ]);
@@ -220,9 +225,9 @@ test(
           const door = yield* frontDoor(socketOf(world.state));
           yield* door.declare({ frontDoor: "desktop", from: { client: "mk-pc" } });
           const startable = yield* door.workflows({ project: world.project });
-          expect(startable.find((one) => one.id === "offered")?.inputs).toEqual([
-            expect.objectContaining({ name: "note", required: true }),
-          ]);
+          expect(
+            Option.getOrUndefined(Arr.findFirst(startable, (one) => one.id === "offered"))?.inputs,
+          ).toEqual([expect.objectContaining({ name: "note", required: true })]);
           const { runId } = yield* door.start({
             project: world.project,
             id: "offered",
@@ -235,7 +240,7 @@ test(
             (status) => status.status === "complete",
           );
           const offers = yield* door.offers({ runId });
-          expect(offers.map((offer) => offer.id)).toContain("look-again");
+          expect(Arr.map(offers, (offer) => offer.id)).toContain("look-again");
           const refused = yield* door.offers({ runId: "r-nobody" }).pipe(Effect.flip);
           expect(refused._tag).toBe("HostRefused");
           yield* stopHost(world.state);
@@ -270,7 +275,7 @@ test(
           yield* door.control({ runId, control: "hold", set: true, request: "hold-1" });
 
           const trail = yield* readAudit(runDir(world.state, runId));
-          expect(trail.map(({ operation, actor }) => [operation, actor.said])).toEqual([
+          expect(Arr.map(trail, ({ operation, actor }) => [operation, actor.said])).toEqual([
             ["start", "start the proof"],
             ["hold", "hold it"],
           ]);
@@ -342,17 +347,17 @@ test(
               FAKE_HERDR_OUTPUTS: outputs,
             },
           );
-          const byAgent = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
-            attended.envelope.data,
-          ).runId;
+          const byAgent = (yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ runId: Schema.String }),
+          )(attended.envelope.data).pipe(Effect.orDie)).runId;
           // Connected after the start, so the host is the one the CLI spawned with the Outputs.
           const host = yield* connect(world.state);
           yield* until(
             () => host.run({ runId: byAgent }),
-            (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
           );
-          const agent = (yield* everyRegistered(world.state)).find(
-            (entry) => entry.runId === byAgent,
+          const agent = Option.getOrUndefined(
+            Arr.findFirst(yield* everyRegistered(world.state), (entry) => entry.runId === byAgent),
           )!;
           const { runId: byCli } = yield* host.start({
             project: world.project,
@@ -379,11 +384,16 @@ test(
           ).toBe(true);
 
           const seenBy = (runId: string) =>
-            Effect.map(readSeen(runDir(world.state, runId)), (lines) => lines.map((one) => one.by));
+            Effect.map(readSeen(runDir(world.state, runId)), (lines) =>
+              Arr.map(lines, (one) => one.by),
+            );
           expect(yield* seenBy(byAgent)).toEqual([expect.stringMatching(/^agent:/)]);
           expect(
-            (yield* readAudit(runDir(world.state, byAgent))).find(
-              (line) => line.operation === "seen",
+            Option.getOrUndefined(
+              Arr.findFirst(
+                yield* readAudit(runDir(world.state, byAgent)),
+                (line) => line.operation === "seen",
+              ),
             )?.actor,
           ).toMatchObject({ origin: "agent", from: { run: byAgent, agent: agent.agent } });
           expect(yield* seenBy(byCli)).toEqual(["cli:seen-cli"]);

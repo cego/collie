@@ -1,6 +1,9 @@
 // Every subscription the view holds retries by itself: it keeps its last value, says what
 // went wrong and when it tries again, backs off, and wakes on Retry now.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Exit, Fiber, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -18,9 +21,9 @@ const scripted = (subscriptions: ReadonlyArray<string>) => {
     const now = subscriptions[at++] ?? "fail";
     if (now === "fail") return Stream.fail(new ActionFailed({ reason: "the host refused" }));
     if (now === "interrupt") return Stream.fromEffect(Effect.interrupt);
-    if (now.endsWith(".")) return Stream.make(now.slice(0, -1));
-    return now.endsWith("!")
-      ? Stream.make(now.slice(0, -1)).pipe(
+    if (pipe_(now, Str.endsWith("."))) return Stream.make(pipe_(now, Str.slice(0, -1)));
+    return pipe_(now, Str.endsWith("!"))
+      ? Stream.make(pipe_(now, Str.slice(0, -1))).pipe(
           Stream.concat(Stream.fail(new ActionFailed({ reason: "the host refused" }))),
         )
       : Stream.make(now).pipe(Stream.concat(Stream.never));
@@ -62,7 +65,7 @@ test("a value starts the backoff afresh, and the wait never passes a minute", ()
         { _tag: "Retrying", said: "the host refused", attempt: 1, at: 4_000 },
         { _tag: "Value", value: "up" },
       ]);
-      expect([0, 5, 6, 20].map(backoff)).toEqual([1_000, 32_000, 60_000, 60_000]);
+      expect(Arr.map([0, 5, 6, 20], backoff)).toEqual([1_000, 32_000, 60_000, 60_000]);
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
@@ -123,7 +126,7 @@ test("a page's fold carries on from what it held when its subscription is taken 
         (held: Option.Option<string>, value: string) => Option.getOrElse(held, () => "") + value,
       ).pipe(Stream.take(4), Stream.runCollect, Effect.forkChild);
       yield* TestClock.adjust("1 second");
-      expect((yield* Fiber.join(seen)).map(({ value }) => Option.getOrNull(value))).toEqual([
+      expect(Arr.map(yield* Fiber.join(seen), ({ value }) => Option.getOrNull(value))).toEqual([
         null,
         "a",
         "a",

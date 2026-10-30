@@ -1,6 +1,8 @@
 // A Run's landing of the merge request it recorded: an attempt written before the forge is
 // asked, then landed or withdrawn. The merge watch reads it to leave the lander running.
 
+import * as Num from "effect/Number";
+import * as Arr from "effect/Array";
 import { DateTime, Effect, FileSystem, Option, Schema } from "effect";
 import { mrLabel, mrRefOf } from "./board-model";
 import { forgeOf } from "./forge/forge";
@@ -48,7 +50,7 @@ export const landingNow = new Set<string>();
 export const readLanding = Effect.fn("Landing.read")(function* (runDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const text = yield* fs.readFileString(landingPath(runDir)).pipe(Effect.orElseSucceed(() => ""));
-  return Option.getOrNull(Schema.decodeUnknownOption(LandingJson)(text));
+  return Option.getOrNull(Schema.decodeOption(LandingJson)(text));
 });
 
 const lineOf = (record: Landing) => {
@@ -64,7 +66,10 @@ const lineOf = (record: Landing) => {
 export const writeLanding = Effect.fn("Landing.write")(function* (runDir: string, record: Landing) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(runDir, { recursive: true });
-  yield* fs.writeFileString(landingPath(runDir), Schema.encodeSync(LandingJson)(record));
+  yield* fs.writeFileString(
+    landingPath(runDir),
+    yield* Schema.encodeEffect(LandingJson)(record).pipe(Effect.orDie),
+  );
   yield* appendLog(runDir, lineOf(record));
 });
 
@@ -218,7 +223,8 @@ export const takeOver = Effect.fn("Landing.takeOver")(function* <R>(opts: {
     });
   const mr = opts.mr;
   const refused = (why: string): Takeover => ({ _tag: "Refused", why });
-  const ended = (runId: string) => opts.runs.find((one) => one.runId === runId)?.ended ?? null;
+  const ended = (runId: string) =>
+    Option.getOrUndefined(Arr.findFirst(opts.runs, (one) => one.runId === runId))?.ended ?? null;
   const own = yield* readLanding(opts.runDir);
   if (own?.state === "landed" && own.from !== undefined && own.sha !== undefined)
     return {
@@ -228,13 +234,16 @@ export const takeOver = Effect.fn("Landing.takeOver")(function* <R>(opts: {
       head: own.head,
       failure: ended(own.from)?.failure ?? "",
     } satisfies Takeover;
-  const landed = opts.runs
-    .flatMap((one) =>
-      one.landing?.state === "landed" && mrLabel(one.landing.mr) === mrLabel(mr)
-        ? [{ ...one, landing: one.landing }]
-        : [],
-    )
-    .toSorted((a, b) => epochMs(b.landing.at) - epochMs(a.landing.at));
+  const finished = Arr.flatMap(opts.runs, (one) =>
+    one.landing?.state === "landed" && mrLabel(one.landing.mr) === mrLabel(mr)
+      ? [{ ...one, landing: one.landing }]
+      : [],
+  );
+  const landed = Arr.sortWith(
+    finished,
+    (value) => value,
+    (a, b) => Num.sign(epochMs(b.landing.at) - epochMs(a.landing.at)),
+  );
   const newest = landed[0];
   if (newest === undefined)
     return refused(`${mr} was merged outside a Release Run: no Run on this host landed it`);

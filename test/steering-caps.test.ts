@@ -2,11 +2,15 @@
 // tested here is what happens when there is no result: the gate refuses, and the refusal
 // is written down where a human looking for their steer will find it.
 
-import { Effect, FileSystem, Path } from "effect";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import { Effect, FileSystem } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { CAPABILITIES, gate, interruptKeys, needed } from "../src/steering-caps";
-import { DELIVERY_TOKEN, transaction } from "../src/dispatcher";
-import { appendLine, ledgerPath, readLedger, type Delivery } from "../src/steering";
+import { transaction } from "../src/dispatcher";
+import { ledgerPath, readLedger } from "../src/steering";
 import type { AgentEntry } from "../src/registry";
 import type { AgentInfo } from "../src/herdr";
 import { runEffect } from "./support/effect";
@@ -71,7 +75,7 @@ function fake() {
           }),
         agentSendKeys: (target: string, keys: ReadonlyArray<string>) =>
           Effect.sync(() => {
-            calls.push(`agentSendKeys ${target} ${keys.join("+")}`);
+            calls.push(`agentSendKeys ${target} ${Arr.join(keys, "+")}`);
           }),
       },
       log: () => Effect.void,
@@ -79,28 +83,11 @@ function fake() {
   };
 }
 
-const delivery = (over: Partial<Delivery> = {}): Delivery => ({
-  id: "d1",
-  at: "2026-09-09T10:00:00Z",
-  run: "r1",
-  incarnation: "term-1",
-  agent: "impl-1",
-  causal_key: "k1",
-  request_id: "req-1",
-  cause: { kind: "steer", ref: "s1" },
-  mode: "boundary",
-  text_hash: "h",
-  intent_version: 2,
-  attempt: 1,
-  state: "submitted",
-  ...over,
-});
-
 test("proven is a recorded date, attribution and the other harnesses are not, and a boundary needs nothing proven", () =>
   runEffect(
     Effect.gen(function* () {
-      for (const row of Object.values(CAPABILITIES))
-        for (const [capability, record] of Object.entries(row)) {
+      for (const row of Rec.values(CAPABILITIES))
+        for (const [capability, record] of Rec.toEntries(row)) {
           // A capability moves to `proven` only with the day it was recorded.
           if (record.status === "proven") expect(record.tested_at).not.toBeNull();
           else expect(record.tested_at).toBeNull();
@@ -111,8 +98,8 @@ test("proven is a recorded date, attribution and the other harnesses are not, an
       // The live rows from 2026-09-11, kept with their evidence in CAPABILITIES.md: Claude
       // took a delivery while working and acknowledged it, and both Claude and pi left
       // `working` on Escape and acknowledged what followed. Nothing else has a pass.
-      const proven = Object.entries(CAPABILITIES).flatMap(([harness, row]) =>
-        Object.entries(row).flatMap(([capability, record]) =>
+      const proven = Arr.flatMap(Rec.toEntries(CAPABILITIES), ([harness, row]) =>
+        Arr.flatMap(Rec.toEntries(row), ([capability, record]) =>
           record.status === "proven" ? [`${harness}.${capability}`] : [],
         ),
       );
@@ -183,7 +170,7 @@ test("an interrupt is a key and a message, and is never called stopping", () =>
       for (const name of ["dispatcher.ts", "steering-caps.ts"]) {
         const source = new URL(`../src/${name}`, import.meta.url).pathname;
         const text = yield* fs.readFileString(source);
-        expect([name, text.includes(`"stopped"`)]).toEqual([name, false]);
+        expect([name, pipe_(text, Str.includes(`"stopped"`))]).toEqual([name, false]);
       }
     }),
   ));

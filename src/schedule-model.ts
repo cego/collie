@@ -1,6 +1,9 @@
 // A Schedule as every door reads it, and the two decisions its firing is made of
 // (ADR-0052). Pure, so the host, the CLI and Desktop share one reading.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Cron, DateTime, Result, Schema } from "effect";
 import { VerifySpecSchema } from "./verify-spec";
 
@@ -106,20 +109,26 @@ export const lastLine = (last: ScheduleEntry["last"]) => {
 };
 
 export const scheduleLine = (entry: ScheduleEntry) =>
-  [
-    entry.name,
-    `${entry.cron} ${entry.tz}`,
-    entry.workflow,
-    entry.checkout,
-    entry.paused ? "paused" : `next ${entry.next ?? "when its Run ends"}`,
-    `last ${lastLine(entry.last)}`,
-  ].join("\t");
+  Arr.join(
+    [
+      entry.name,
+      `${entry.cron} ${entry.tz}`,
+      entry.workflow,
+      entry.checkout,
+      entry.paused ? "paused" : `next ${entry.next ?? "when its Run ends"}`,
+      `last ${lastLine(entry.last)}`,
+    ],
+    "\t",
+  );
 
 export const scheduleLines = (listing: ScheduleListing) =>
-  [
-    `schedules on ${listing.machine.hostname} (${listing.machine.installation}), as \`collie schedule list\` lists them:`,
-    ...(listing.schedules.length === 0 ? ["- (none)"] : listing.schedules.map(scheduleLine)),
-  ].join("\n");
+  Arr.join(
+    [
+      `schedules on ${listing.machine.hostname} (${listing.machine.installation}), as \`collie schedule list\` lists them:`,
+      ...(listing.schedules.length === 0 ? ["- (none)"] : Arr.map(listing.schedules, scheduleLine)),
+    ],
+    "\n",
+  );
 
 /** The one write: add (paused or not), pause, resume or remove. */
 export const ScheduleChange = Schema.Union([
@@ -176,13 +185,13 @@ export const parseSchedule = (
   tz: string,
   allow: { readonly seconds: boolean },
 ): Result.Result<Cron.Cron, string> => {
-  const fields = expression.trim().split(/\s+/).length;
+  const fields = Str.split(Str.trim(expression), /\s+/).length;
   if (fields !== 5 && !(allow.seconds && fields === 6))
     return Result.fail(
       `"${expression}" is not a cron expression of five fields: minute, hour, day of month, month, day of week`,
     );
   return Result.mapError(Cron.parse(expression, tz), (failure) =>
-    failure.message.includes("time zone")
+    pipe(failure.message, Str.includes("time zone"))
       ? `"${tz}" is not a time zone`
       : `"${expression}" is not a cron expression: ${failure.message}`,
   );

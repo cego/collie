@@ -1,3 +1,7 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { deepStrictEqual, equal } from "node:assert/strict";
 import { Console, Effect, FileSystem, Path, Schema } from "effect";
 import { FakeBin } from "../test/support/bin";
@@ -60,7 +64,7 @@ await runEffect(
           iid: "17",
           state: "open",
           sourceBranch: "smoke",
-          head: "a".repeat(40),
+          head: pipe("a", Str.repeat(40)),
         },
       ],
     });
@@ -77,14 +81,16 @@ await runEffect(
       },
     });
     equal(ran.exitCode, 2, `${ran.stdout}\n${ran.stderr}`);
-    const reply = Schema.decodeUnknownSync(Refusal)(ran.stdout);
+    const reply = yield* Schema.decodeEffect(Refusal)(ran.stdout).pipe(Effect.orDie);
     deepStrictEqual(
-      reply.error.details.inputs.find((one) => one.name === "target")?.facts,
+      Option.getOrUndefined(
+        Arr.findFirst(reply.error.details.inputs, (one) => one.name === "target"),
+      )?.facts,
       ["mr:github.com/smoke/repo#17 (branch smoke's open pull request #17)"],
       ran.stdout,
     );
     deepStrictEqual(
-      fake.requests.map((one) => [one.method, one.url, one.token]),
+      Arr.map(fake.requests, (one) => [one.method, one.url, one.token]),
       [
         [
           "GET",

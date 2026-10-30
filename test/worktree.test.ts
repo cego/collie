@@ -1,6 +1,10 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Clock, DateTime, Effect, FileSystem, Layer, Option, Schema } from "effect";
+import { Clock, DateTime, Effect, FileSystem, Layer, Option, Schema, flow, Result } from "effect";
 import { forgeHttpOnPath, forgeOnPath, runOnPath } from "./support/forge";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
@@ -27,7 +31,7 @@ import { Herdr } from "../src/herdr";
 import { processOf } from "../src/processes";
 import type { CompactionPorts, Stopped } from "../src/compaction";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 let rig: Rig;
 let bin: FakeBin;
@@ -44,25 +48,25 @@ let claims: Array<{ path: string; locked: boolean }>;
 /** What the merge watch and the Tasks say, beside the checkouts themselves. */
 let settling: Settling;
 
-const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
 
 const readLines = Effect.fn("worktreeTest.readLines")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
-  return text.split("\n").filter((line) => line !== "");
+  const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  return Arr.filter(Str.split(text, "\n"), (line) => line !== "");
 });
 
 /** Every git command the fixture was asked, and the directory it was asked in. */
 const askedIn = Effect.fn("worktreeTest.askedIn")(function* () {
   const lines = yield* readLines(gitLog());
-  return lines.map((line) => {
-    const [cwd = "", command = ""] = line.split("\t");
+  return Arr.map(lines, (line) => {
+    const [cwd, command = ""] = Str.split(line, "\t");
     return { cwd, command };
   });
 });
 
 const asked = Effect.fn("worktreeTest.asked")(function* () {
-  return (yield* askedIn()).map((call) => call.command);
+  return Arr.map(yield* askedIn(), (call) => call.command);
 });
 
 beforeEach(() =>
@@ -105,20 +109,25 @@ const fakeGitAnswering = (
   /** Written to stderr before every answer, as a git with something to warn about does. */
   warning = "",
 ) => {
-  const branches = [
-    // A refusal wins over an answer for the same question: `case` takes the first
-    // pattern that matches, and a test naming both means it wants the refusal.
-    ...Object.entries(answers)
-      .filter(([match]) => !(match in refusals))
-      .map(([match, out]) => `  "${match}"*) printf '%b' "${out}" ;;`),
-    // On stderr, where git writes what it will not do, so the board's line has to
-    // come from there rather than from stdout.
-    ...Object.entries(refusals).map(
-      ([match, why]) => `  "${match}"*) printf '%b' "${why}" >&2; exit 1 ;;`,
-    ),
-    ...Object.entries(scripts).map(([match, body]) => `  "${match}"*) ${body} ;;`),
-    "  *) exit 1 ;;",
-  ].join("\n");
+  const branches = Arr.join(
+    [
+      // A refusal wins over an answer for the same question: `case` takes the first
+      // pattern that matches, and a test naming both means it wants the refusal.
+      ...Arr.map(
+        Arr.filter(Rec.toEntries(answers), ([match]) => !(match in refusals)),
+        ([match, out]) => `  "${match}"*) printf '%b' "${out}" ;;`,
+      ),
+      // On stderr, where git writes what it will not do, so the board's line has to
+      // come from there rather than from stdout.
+      ...Arr.map(
+        Rec.toEntries(refusals),
+        ([match, why]) => `  "${match}"*) printf '%b' "${why}" >&2; exit 1 ;;`,
+      ),
+      ...Arr.map(Rec.toEntries(scripts), ([match, body]) => `  "${match}"*) ${body} ;;`),
+      "  *) exit 1 ;;",
+    ],
+    "\n",
+  );
   // The directory as well as the question: a command about the repository has to run
   // somewhere that outlives the checkout being removed.
   return bin.add(
@@ -140,8 +149,8 @@ const gitAnswers = (branch = "add-picker", remoteBranches: string[] = []) => ({
   "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master",
   // Both shapes the module asks a ref about: what a new checkout is cut from, and
   // whether the ref is a branch at all.
-  ...Object.fromEntries(
-    ["master", ...remoteBranches].flatMap((ref) => [
+  ...Rec.fromEntries(
+    Arr.flatMap(["master", ...remoteBranches], (ref) => [
       [`rev-parse --verify origin/${ref}`, "deadbeef"],
       [`rev-parse --verify --quiet refs/remotes/origin/${ref}`, "deadbeef"],
       [`rev-parse --verify --quiet origin/${ref}^{commit}`, "deadbeef"],
@@ -157,7 +166,10 @@ const fakeGit = (branch = "add-picker", remoteBranches: string[] = []) =>
 
 /** `git worktree list --porcelain`, as git writes it. */
 const porcelain = (checkouts: ReadonlyArray<{ path: string; branch: string }>) =>
-  checkouts.map((c) => `worktree ${c.path}\nbranch refs/heads/${c.branch}\n`).join("\n");
+  Arr.join(
+    Arr.map(checkouts, (c) => `worktree ${c.path}\nbranch refs/heads/${c.branch}\n`),
+    "\n",
+  );
 
 /**
  * A git that lists the repository's own checkouts and really makes a directory when it
@@ -210,7 +222,7 @@ const plan = (inputs: Record<string, string>, explicit?: string, extra: Partial<
     // The resolver only names a branch after an Input a human gave, so the default
     // here is what `--input` records — the cases about what Collie itself worked out
     // override it.
-    sources: Object.fromEntries(Object.keys(inputs).map((key) => [key, "explicit"])),
+    sources: Rec.fromEntries(Arr.map(Rec.keys(inputs), (key) => [key, "explicit"] as const)),
     explicit,
     // What the environment told the front door; the cases about glab pass null.
     login: LOGIN,
@@ -229,9 +241,9 @@ test("a roaming workflow owns a checkout but no branch, so none is asked for", (
   expect(roams("branch")).toBe(false);
   expect(roams("none")).toBe(false);
 
-  expect(Object.keys(branchListed("branch", { plan: "work-source" }))).toEqual(["plan", "branch"]);
+  expect(Rec.keys(branchListed("branch", { plan: "work-source" }))).toEqual(["plan", "branch"]);
   // Nothing to ask: a Renovate Run moves across every branch it merges and owns none.
-  expect(Object.keys(branchListed("roaming", { repository: "optional" }))).toEqual(["repository"]);
+  expect(Rec.keys(branchListed("roaming", { repository: "optional" }))).toEqual(["repository"]);
 });
 
 test("a run described in words branches off the default branch, under the operator's login", () =>
@@ -449,7 +461,7 @@ test("a name too long to slug is bounded and made distinct, never asked for", ()
       const one = yield* at("/home/mk/work/gitte2/gitlab.cego.dk/tasks/collie-global-board");
       const two = yield* at("/home/mk/work/gitte2/gitlab.cego.dk/tasks/collie-run-board");
       expect(one.refused).toBeNull();
-      expect(one.branch.startsWith(`${LOGIN}/`)).toBe(true);
+      expect(pipe_(one.branch, Str.startsWith(`${LOGIN}/`))).toBe(true);
       expect(one.branch.length).toBeLessThanOrEqual(64);
       expect(one.branch).not.toBe(two.branch);
       // Stable: the same work asked for twice is one branch, so a retry reuses it.
@@ -670,7 +682,9 @@ test("a branch with a worktree is opened, and one without gets a new one", () =>
         "worktree open",
       ]);
       // Never a label on `open`: that renames whatever workspace it opens.
-      const opened = (yield* rig.calls()).find((call) => call.cmd === "worktree open");
+      const opened = Option.getOrUndefined(
+        Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "worktree open"),
+      );
       expect(opened?.argv).not.toContain("--label");
     }),
   ));
@@ -742,7 +756,7 @@ const collieWorktree = (
       },
     });
     recorded.push(run);
-    registered.push(...(opts.panes ?? []).map((pane) => agentIn(run.id, pane)));
+    registered.push(...Arr.map(opts.panes ?? [], (pane) => agentIn(run.id, pane)));
     return worktreePath;
   });
 
@@ -778,7 +792,7 @@ const mergedMr = (head?: string) =>
     settling = {
       ...settling,
       landedOn: new Map(
-        recorded.map((run) => [onBranch(run.project, run.worktree?.branch ?? ""), landed]),
+        Arr.map(recorded, (run) => [onBranch(run.project, run.worktree?.branch ?? ""), landed]),
       ),
     };
   });
@@ -802,7 +816,7 @@ test("a settled worktree is removed, and the board says why", () =>
 
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
       // Through herdr, so the workspace goes with the checkout, and never forced.
-      const calls = (yield* rig.calls()).filter((c) => c.cmd === "worktree remove");
+      const calls = Arr.filter(yield* rig.calls(), (c) => c.cmd === "worktree remove");
       expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w7"]);
     }),
   ));
@@ -835,7 +849,9 @@ test("a Renovate Run's detached checkout is pruned by the same sweep, with no br
       expect(yield* prune()).toEqual(["♻ removed roaming · its Run is over and it holds nothing"]);
       expect(yield* asked()).toContain(`worktree remove ${at}`);
       // Nothing was ever bound to it, so nothing is deleted with it.
-      expect((yield* asked()).some((command) => command.startsWith("branch -d"))).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("branch -d"))),
+      ).toBe(false);
     }),
   ));
 
@@ -911,7 +927,9 @@ test("a Renovate checkout with work still in it is kept, like any other", () =>
       yield* settledGit({ "status --porcelain": " M package.json" });
 
       expect(yield* prune()).toEqual(["kept roaming · uncommitted changes"]);
-      expect((yield* asked()).some((command) => command.startsWith("worktree remove"))).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree remove"))),
+      ).toBe(false);
     }),
   ));
 
@@ -949,7 +967,7 @@ test("with no upstream, commits no remote has keep the checkout", () =>
       });
 
       expect(yield* prune()).toEqual(["kept wt · 1 commit(s) on no remote"]);
-      expect((yield* askedIn()).map((asked) => asked.command)).toContain(
+      expect(Arr.map(yield* askedIn(), (asked) => asked.command)).toContain(
         "rev-list HEAD --not --remotes",
       );
     }),
@@ -1112,8 +1130,8 @@ test("a settled git-managed checkout is removed with git, and its dead tabs go w
       const cmds = yield* rig.cmds();
       expect(cmds).not.toContain("worktree remove");
       expect(cmds).not.toContain("worktree open");
-      const closed = (yield* rig.calls()).filter((call) => call.cmd === "tab close");
-      expect(closed.map((call) => call.argv?.at(2))).toEqual(["1:5"]);
+      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "tab close");
+      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["1:5"]);
     }),
   ));
 
@@ -1190,12 +1208,12 @@ test("a git-managed checkout herdr has a workspace on is still removed through h
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
       // herdr owns every worktree it has open, whoever made the checkout: removing one
       // behind its back would leave it listing a checkout that is not there.
-      const calls = (yield* rig.calls()).filter((call) => call.cmd === "worktree remove");
+      const calls = Arr.filter(yield* rig.calls(), (call) => call.cmd === "worktree remove");
       expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w7"]);
       expect(yield* asked()).not.toContain(`worktree remove ${worktreePath}`);
       // The dead tab still goes, whichever manager removed the checkout under it.
-      const closed = (yield* rig.calls()).filter((call) => call.cmd === "tab close");
-      expect(closed.map((call) => call.argv?.at(2))).toEqual(["1:5"]);
+      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "tab close");
+      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["1:5"]);
     }),
   ));
 
@@ -1241,11 +1259,9 @@ test("a checkout whose workspace was closed is opened again to be removed", () =
 
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
       // Opened for the removal, then removed through herdr, never around it.
-      expect((yield* rig.cmds()).filter((cmd) => cmd.startsWith("worktree"))).toEqual([
-        "worktree list",
-        "worktree open",
-        "worktree remove",
-      ]);
+      expect(
+        Arr.filter(yield* rig.cmds(), (cmd) => pipe_(cmd, Str.startsWith("worktree"))),
+      ).toEqual(["worktree list", "worktree open", "worktree remove"]);
     }),
   ));
 
@@ -1369,9 +1385,9 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
 test("a run still going keeps its checkout, whether or not an agent is in it", () =>
   runOnPath(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt");
       // Nothing is working in it that herdr can see, and the Run is still going.
-      recorded = recorded.map((run) => ({ ...run, state: "running" as const }));
+      yield* collieWorktree("wt");
+      recorded = Arr.map(recorded, (run) => ({ ...run, state: "running" as const }));
       yield* settledGit();
       yield* mergedMr();
 
@@ -1764,7 +1780,9 @@ const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.project
     workspaceLabel: "Tasks",
     recordedBy: (at) =>
       Effect.sync(() => {
-        const run = recorded.find((one) => one.worktree?.path === at);
+        const run = Option.getOrUndefined(
+          Arr.findFirst(recorded, (one) => one.worktree?.path === at),
+        );
         if (run === undefined) return null;
         const release = Effect.sync(() => {
           releases += 1;
@@ -1812,8 +1830,8 @@ test("a roaming Run's repository is cloned through its URL's forge, and one on n
       });
       expect(fromGitlab.refused ?? "").not.toContain("could not clone");
       expect(
-        (yield* asked()).some((c) =>
-          c.startsWith("clone --quiet https://gitlab.example.com/acme/app.git"),
+        Arr.some(yield* asked(), (c) =>
+          pipe_(c, Str.startsWith("clone --quiet https://gitlab.example.com/acme/app.git")),
         ),
       ).toBe(true);
 
@@ -1846,17 +1864,20 @@ test("a clone made before Collie kept its credentials gets the helper on its nex
       const checkout = yield* renovateCheckout({ repository: url });
 
       expect(checkout.refused).toBeNull();
-      const configured = (yield* askedIn()).filter(
-        (call) => call.cwd === source && call.command.startsWith("config --local"),
+      const configured = Arr.filter(
+        yield* askedIn(),
+        (call) => call.cwd === source && pipe_(call.command, Str.startsWith("config --local")),
       );
-      expect(configured.map((call) => call.command)).toEqual([
+      expect(Arr.map(configured, (call) => call.command)).toEqual([
         "config --local --unset-all credential.https://gitlab.example.com.helper",
         "config --local --add credential.https://gitlab.example.com.helper ",
         expect.stringMatching(
-          /^config --local --add credential\.https:\/\/gitlab\.example\.com\.helper !.*glab config get token --host 'gitlab\.example\.com'/,
+          /^config --local --add credential\.https:\/\/gitlab\.example\.com\.helper !.*glab config get token --host gitlab\.example\.com/,
         ),
       ]);
-      expect((yield* asked()).some((command) => command.startsWith("clone"))).toBe(false);
+      expect(Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("clone")))).toBe(
+        false,
+      );
     }),
   ));
 
@@ -1895,10 +1916,13 @@ test("a Renovate Run gets a detached checkout at the default branch, bound to no
         command: `worktree add --detach ${at} origin/master`,
       });
       const commands = yield* asked();
-      expect(commands.some((c) => c.startsWith("worktree add") && !c.includes("--detach"))).toBe(
-        false,
-      );
-      expect(commands.some((c) => /^(checkout|switch|stash|commit)\b/.test(c))).toBe(false);
+      expect(
+        Arr.some(
+          commands,
+          (c) => pipe_(c, Str.startsWith("worktree add")) && !pipe_(c, Str.includes("--detach")),
+        ),
+      ).toBe(false);
+      expect(Arr.some(commands, (c) => /^(checkout|switch|stash|commit)\b/.test(c))).toBe(false);
     }),
   ));
 
@@ -2026,9 +2050,17 @@ test("the roaming checkout fetches first, and falls back to a local default bran
 
       // "As the remote has it" means asking the remote, not this checkout's memory.
       const commands = yield* asked();
-      expect(commands.some((c) => c.startsWith("fetch"))).toBe(true);
-      expect(commands.indexOf(commands.find((c) => c.startsWith("fetch"))!)).toBeLessThan(
-        commands.indexOf(commands.find((c) => c.startsWith("worktree add"))!),
+      expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("fetch")))).toBe(true);
+      expect(
+        commands.indexOf(
+          Option.getOrUndefined(Arr.findFirst(commands, (c) => pipe_(c, Str.startsWith("fetch"))))!,
+        ),
+      ).toBeLessThan(
+        commands.indexOf(
+          Option.getOrUndefined(
+            Arr.findFirst(commands, (c) => pipe_(c, Str.startsWith("worktree add"))),
+          )!,
+        ),
       );
     }),
   ));
@@ -2044,7 +2076,9 @@ test("a roaming checkout whose origin will not fetch is refused rather than cut 
 
       expect(checkout.refused).toContain("could not fetch origin");
       expect(checkout.refused).toContain("Could not read from remote repository");
-      expect((yield* asked()).some((command) => command.startsWith("worktree add"))).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree add"))),
+      ).toBe(false);
     }),
   ));
 
@@ -2118,18 +2152,21 @@ const fakeGitWithRoaming = (
   scripts: Record<string, string> = {},
 ) =>
   fakeGitAnswering(
-    Object.fromEntries(
-      Object.entries({
-        ...gitAnswers(),
-        "worktree list --porcelain": porcelain([
-          { path: rig.projectDir, branch: "master" },
-          { path: taken, branch: "master" },
-        ]),
-        "status --porcelain": "",
-        "rev-list HEAD --not --branches --remotes": "",
-        "checkout --quiet --no-overwrite-ignore --detach": "",
-        ...answers,
-      }).filter(([match]) => !(match in scripts)),
+    Rec.fromEntries(
+      Arr.filter(
+        Rec.toEntries({
+          ...gitAnswers(),
+          "worktree list --porcelain": porcelain([
+            { path: rig.projectDir, branch: "master" },
+            { path: taken, branch: "master" },
+          ]),
+          "status --porcelain": "",
+          "rev-list HEAD --not --branches --remotes": "",
+          "checkout --quiet --no-overwrite-ignore --detach": "",
+          ...answers,
+        }),
+        ([match]) => !(match in scripts),
+      ),
     ),
     refusals,
     { "worktree add --detach": 'mkdir -p "$4"', ...scripts },
@@ -2157,9 +2194,9 @@ test("a second Renovate Run on one repository is refused while the first may go 
       expect(yield* asked()).not.toContain(`worktree add --detach ${taken} origin/master`);
       // Neither checkout nor repository is touched: no add, no remove, nothing moved.
       const commands = yield* asked();
-      expect(commands.some((c) => c.startsWith("worktree add"))).toBe(false);
-      expect(commands.some((c) => c.startsWith("worktree remove"))).toBe(false);
-      expect(commands.some((c) => c.startsWith("checkout"))).toBe(false);
+      expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("worktree add")))).toBe(false);
+      expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("worktree remove")))).toBe(false);
+      expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("checkout")))).toBe(false);
       expect(yield* (yield* FileSystem.FileSystem).readFileString(`${taken}/.git`)).toContain(
         `gitdir: ${rig.projectDir}/.git/worktrees/renovate`,
       );
@@ -2188,8 +2225,8 @@ test("a Renovate Run takes over the checkout an ended Run of the repository left
         command: "checkout --quiet --no-overwrite-ignore --detach origin/master",
       });
       const commands = yield* asked();
-      expect(commands.some((c) => c.startsWith("worktree add"))).toBe(false);
-      expect(commands.some((c) => c.startsWith("worktree remove"))).toBe(false);
+      expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("worktree add")))).toBe(false);
+      expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("worktree remove")))).toBe(false);
       // A fetch can prune the only ref a commit was on, so what would be lost is read after it.
       const fetched = commands.indexOf("fetch --quiet origin");
       expect(fetched).toBeGreaterThanOrEqual(0);
@@ -2215,7 +2252,7 @@ test("a checkout made at a recorded path since the Run recorded it is passed ove
         `passed over ${taken}: a checkout of ${rig.projectDir}, recorded by Run ${runId}, kept: not the checkout that Run made; created worktree ${taken}-2 detached at origin/master`,
       );
       expect(releases).toBe(0);
-      expect((yield* asked()).some((c) => c.startsWith("checkout"))).toBe(false);
+      expect(Arr.some(yield* asked(), (c) => pipe_(c, Str.startsWith("checkout")))).toBe(false);
     }),
   ));
 
@@ -2239,7 +2276,7 @@ test("an ended Run's checkout that holds work is kept for it and passed over, an
       expect(dirty.note).toStartWith(`${held} uncommitted changes; created worktree ${taken}-2`);
       expect(unpushed.note).toStartWith(`${held} 2 commits on no branch or remote; `);
       expect(releases).toBe(0);
-      expect((yield* asked()).some((c) => c.startsWith("checkout"))).toBe(false);
+      expect(Arr.some(yield* asked(), (c) => pipe_(c, Str.startsWith("checkout")))).toBe(false);
     }),
   ));
 
@@ -2269,7 +2306,7 @@ test("a roaming start is refused when git will not list the worktrees under the 
 
       expect(checkout.refused).toContain(`could not list the worktrees of ${rig.projectDir}`);
       expect(checkout.cwd).toBe(rig.projectDir);
-      expect((yield* asked()).some((c) => c.startsWith("worktree add"))).toBe(false);
+      expect(Arr.some(yield* asked(), (c) => pipe_(c, Str.startsWith("worktree add")))).toBe(false);
     }),
   ));
 
@@ -2296,7 +2333,7 @@ test("an ended Run's checkout git cannot read is refused, never passed over for 
       expect(unpushed.refused).toContain(`${held} could not read what is unpushed`);
       expect(status.cwd).toBe(rig.projectDir);
       expect(releases).toBe(0);
-      expect((yield* asked()).some((c) => c.startsWith("worktree add"))).toBe(false);
+      expect(Arr.some(yield* asked(), (c) => pipe_(c, Str.startsWith("worktree add")))).toBe(false);
     }),
   ));
 
@@ -2325,8 +2362,8 @@ test("an ended Run's checkout its agents wrote to while being closed is refused,
       expect(checkout.cwd).toBe(rig.projectDir);
       expect(releases).toBe(1);
       const commands = yield* asked();
-      expect(commands.some((c) => c.startsWith("worktree add"))).toBe(false);
-      expect(commands.some((c) => c.startsWith("checkout"))).toBe(false);
+      expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("worktree add")))).toBe(false);
+      expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("checkout")))).toBe(false);
     }),
   ));
 
@@ -2391,7 +2428,9 @@ test("a destination another Run is claiming right now is refused, not looked at 
         `no worktree for ${rig.projectDir}: ${at} is being claimed by another Run starting now`,
       );
       expect(checkout.worktree).toBe(null);
-      expect((yield* asked()).some((command) => command.startsWith("worktree add"))).toBe(false);
+      expect(
+        Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("worktree add"))),
+      ).toBe(false);
     }),
   ));
 
@@ -2538,8 +2577,8 @@ test("a finished Run's own agent, idle in the tab it left behind, does not keep 
       yield* rig.addPane("1-5", "1:5", worktreePath, "claude");
 
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
-      const closed = (yield* rig.calls()).filter((call) => call.cmd === "tab close");
-      expect(closed.map((call) => call.argv?.at(2))).toEqual(["1:5"]);
+      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "tab close");
+      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["1:5"]);
     }),
   ));
 
@@ -2658,7 +2697,7 @@ test("the branch is deleted from the repository's own checkout, not the one that
 
       expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
       // The removed checkout no longer exists, so a command run there cannot work.
-      const deleted = (yield* askedIn()).filter((call) => call.command === "branch -d wt");
+      const deleted = Arr.filter(yield* askedIn(), (call) => call.command === "branch -d wt");
       expect(deleted).toHaveLength(1);
       expect(deleted[0]?.cwd).not.toBe(worktreePath);
       expect(deleted[0]?.cwd).toBe(rig.projectDir);
@@ -2701,7 +2740,7 @@ test("a run parked for a human keeps the checkout it will carry on in", () =>
       yield* collieWorktree("wt");
       // A question nobody answered, or a pane that would not take a prompt: the Run picks
       // up again in the directory it works in.
-      recorded = recorded.map((run) => ({ ...run, state: "waiting" as const }));
+      recorded = Arr.map(recorded, (run) => ({ ...run, state: "waiting" as const }));
       yield* settledGit();
       yield* mergedMr();
 
@@ -2713,14 +2752,14 @@ test("a stopped run keeps the checkout a resume carries on in, until its work la
   runOnPath(
     Effect.gen(function* () {
       const at = yield* collieWorktree("wt");
-      recorded = recorded.map((run) => ({ ...run, state: "stopped" as const }));
+      recorded = Arr.map(recorded, (run) => ({ ...run, state: "stopped" as const }));
       yield* settledGit();
       settling = { ...settling, openOn: new Map([[onBranch(rig.projectDir, "wt"), "!14"]]) };
       expect(yield* prune()).toEqual(["kept wt · a stopped run can resume in it"]);
 
       yield* mergedMr();
       // Judged afresh, past the verdict the last round left standing.
-      expect((yield* sweeper().judge).remove.map((item) => item.target)).toEqual([at]);
+      expect(Arr.map((yield* sweeper().judge).remove, (item) => item.target)).toEqual([at]);
     }),
   ));
 
@@ -2856,7 +2895,7 @@ test("a run chained from inside a worktree still opens the branch's checkout", (
         path: first.worktree.path,
         created_by_collie: false,
       });
-      const opens = (yield* rig.calls()).filter((call) => call.cmd === "worktree open");
+      const opens = Arr.filter(yield* rig.calls(), (call) => call.cmd === "worktree open");
       expect(opens.at(0)?.argv).toEqual([
         "worktree",
         "open",
@@ -3024,7 +3063,7 @@ test("cleanup lists a settled worktree as removable, and sweeping removes it", (
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
 
       const report = yield* sweep([sweeper()], rig.stateDir, "host");
-      expect(report.remove.map((item) => item.target)).toEqual([at]);
+      expect(Arr.map(report.remove, (item) => item.target)).toEqual([at]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(true);
     }),
   ));
@@ -3066,7 +3105,7 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const at = yield* collieWorktree("wt");
-      recorded = recorded.map((run) => ({ ...run, mr: "https://github.com/o/r/pull/5" }));
+      recorded = Arr.map(recorded, (run) => ({ ...run, mr: "https://github.com/o/r/pull/5" }));
       yield* settledGit({ "ls-remote --heads origin": "deadbeef refs/heads/wt" });
       yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
       yield* fs.writeFileString(
@@ -3084,7 +3123,7 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
       expect(yield* prune()).toEqual(["♻ removed wt · merged in o/r#5"]);
       expect(yield* asked()).not.toContain(`ls-remote --heads origin wt`);
       expect(
-        (yield* askedIn()).some((one) => one.cwd === at && one.command === "status --porcelain"),
+        Arr.some(yield* askedIn(), (one) => one.cwd === at && one.command === "status --porcelain"),
       ).toBe(true);
     }),
   ));
@@ -3210,7 +3249,7 @@ test("a Renovate clone no Run uses and no checkout is left of goes; one a Run us
         rig.stateDir,
         "host",
       );
-      expect(report.remove.map((item) => item.target)).toEqual([unused]);
+      expect(Arr.map(report.remove, (item) => item.target)).toEqual([unused]);
       expect(report.keep).toEqual([
         { kind: "renovate-clone", target: used, reason: "a Run with a row cut a checkout from it" },
       ]);
@@ -3218,7 +3257,10 @@ test("a Renovate clone no Run uses and no checkout is left of goes; one a Run us
     }),
   ));
 
-const asRecord = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asRecord = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** The Run's agent idle in pane 1-5, launched and served where its work runs; `state` is what a stop reaches. */
 const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
@@ -3262,7 +3304,7 @@ const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
     const stops: Array<{ agent: string; tabClosed: boolean }> = [];
     const ports: CompactionPorts = {
       served: {
-        gate: () => Effect.void,
+        gate: Effect.void,
         install: () => Effect.succeed({ args: [] }),
         request: () => Effect.die("unused"),
         poll: () => Effect.die("unused"),
@@ -3308,8 +3350,8 @@ test("the worktree sweep stops a finished Run's Quiet agent before it closes the
 
       expect(yield* pruneWith(ports)).toEqual(["♻ removed wt · merged in !14"]);
       expect(stops).toEqual([{ agent: "impl-1-5", tabClosed: false }]);
-      const closed = (yield* rig.calls()).filter((call) => call.cmd === "tab close");
-      expect(closed.map((call) => call.argv?.at(2))).toEqual(["1:5"]);
+      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "tab close");
+      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["1:5"]);
       const log = yield* (yield* FileSystem.FileSystem).readFileString(
         `${rig.stateDir}/agents/run-wt/agents.log`,
       );
@@ -3375,7 +3417,7 @@ test("the worktree sweep keeps the tab of a finished Run's agent that is not Qui
       expect(yield* pruneWith(ports)).toEqual([
         "♻ removed wt · merged in !14 · 1 tab(s) left open",
       ]);
-      expect(stops.map((one) => one.agent)).toEqual(["impl-1-5"]);
+      expect(Arr.map(stops, (one) => one.agent)).toEqual(["impl-1-5"]);
       expect(yield* rig.cmds()).not.toContain("tab close");
     }),
   ));

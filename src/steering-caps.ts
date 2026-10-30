@@ -9,6 +9,8 @@
 // records a pass in `CAPABILITIES.md`. Nothing here may be flipped to `proven` because a
 // harness's `--help` mentions a flag: help text is a claim, not a result.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import { Data, Effect } from "effect";
 import { atLeast, installedVersion } from "./compactors";
 
@@ -90,8 +92,8 @@ export const CAPABILITIES = {
 
 /** One harness's row, or none: a harness nobody has tested is not in the table. */
 function rowFor(harness: string): Record<Capability, CapabilityRecord> | undefined {
-  // SAFETY: `hasOwn` has just established that `harness` is one of the table's own keys.
-  return Object.hasOwn(CAPABILITIES, harness)
+  // SAFETY: the check establishes that `harness` is one of the table's own keys.
+  return Arr.some(Rec.keys(CAPABILITIES), (key) => key === harness)
     ? CAPABILITIES[harness as keyof typeof CAPABILITIES]
     : undefined;
 }

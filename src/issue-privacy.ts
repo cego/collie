@@ -1,3 +1,6 @@
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Path } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 
@@ -7,11 +10,21 @@ interface DirectoryAlias {
 }
 
 export function remoteOf(url: string): { project: string; path: string } | null {
-  const raw = url.trim();
-  const parsed = raw.includes("://") ? URL.parse(raw) : null;
+  const raw = Str.trim(url);
+  const parsed = pipe_(raw, Str.includes("://")) ? URL.parse(raw) : null;
   const scp = parsed === null ? /^(?:[^@\s]+@)?([^:/\s]+)[:/](.+)$/.exec(raw) : null;
   const host = parsed?.host ?? scp?.[1];
-  const path = (parsed?.pathname ?? scp?.[2])?.replace(/^\/+/, "").replace(/\.git$/, "");
+  const path = Option.getOrUndefined(
+    Option.map(
+      Option.fromNullishOr(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(parsed), (present) => present.pathname),
+        ) ??
+          Option.getOrUndefined(Option.map(Option.fromNullishOr(scp), (present_) => present_[2])),
+      ),
+      (present__) => pipe_(present__, Str.replace(/^\/+/, ""), Str.replace(/\.git$/, "")),
+    ),
+  );
   return host && path ? { project: `${host}/${path}`, path } : null;
 }
 
@@ -72,7 +85,7 @@ export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(fun
     Effect.gen(function* () {
       const canonical = yield* record(dir);
       const fromRoot = path.relative(root, canonical);
-      if (fromRoot === ".." || fromRoot.startsWith(`..${path.sep}`)) return [];
+      if (fromRoot === ".." || pipe_(fromRoot, Str.startsWith(`..${path.sep}`))) return [];
       if (left === 0 || (walked.get(canonical) ?? -1) >= left) return [];
       walked.set(canonical, left);
       const directories: string[] = [];
@@ -110,9 +123,13 @@ export const gitDirOf = Effect.fn("Issues.gitDirOf")(function* (dir: string) {
   const gitfile =
     (yield* fs.stat(marker)).type === "Directory"
       ? null
-      : (yield* fs.readFileString(marker)).replace(/[\r\n]+$/, "");
-  if (gitfile !== null && !gitfile.startsWith("gitdir: ")) return null;
-  const named = gitfile?.slice("gitdir: ".length);
+      : pipe_(yield* fs.readFileString(marker), Str.replace(/[\r\n]+$/, ""));
+  if (gitfile !== null && !pipe_(gitfile, Str.startsWith("gitdir: "))) return null;
+  const named = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(gitfile), (present___) =>
+      pipe_(present___, Str.slice("gitdir: ".length)),
+    ),
+  );
   // Joined unnormalised, as Git does, so `..` leaves a linked `dir` physically.
   const gitDir = named === undefined ? marker : path.isAbsolute(named) ? named : `${dir}/${named}`;
   return (yield* fs.exists(`${gitDir}/HEAD`)) ? gitDir : null;
@@ -122,7 +139,8 @@ export function throughAliases(text: string, aliases: ReadonlyArray<DirectoryAli
   let expanded = text;
   for (let pass = 0; pass <= text.length; pass++) {
     let next = expanded;
-    for (const alias of aliases) next = next.replaceAll(`${alias.from}/`, `${alias.to}/`);
+    for (const alias of aliases)
+      next = pipe_(next, Str.replaceAll(`${alias.from}/`, `${alias.to}/`));
     if (next === expanded) return expanded;
     expanded = next;
   }

@@ -1,6 +1,8 @@
 // Every Herd on this Machine, as the host sees them: each running herdr session, the
 // agents in it, and herdr's own word when any of them changes.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, Schedule, Stream } from "effect";
 import type { PaneAt } from "./board-model";
 import type { PluginEnv } from "./env";
@@ -62,27 +64,36 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
   for (const session of sessions) {
     const { herdr } = session;
     const live = yield* herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => []));
-    const agent = agents.flatMap((name) => live.filter((one) => one.name === name))[0];
+    const agent = Arr.flatMap(agents, (name) => Arr.filter(live, (one) => one.name === name))[0];
     const pane =
       agent === undefined
         ? undefined
-        : (yield* herdr.paneList().pipe(Effect.orElseSucceed((): PaneInfo[] => []))).find(
-            (one) => one.paneId === agent.paneId,
+        : Option.getOrUndefined(
+            Arr.findFirst(
+              yield* herdr.paneList().pipe(Effect.orElseSucceed((): PaneInfo[] => [])),
+              (one) => one.paneId === agent.paneId,
+            ),
           );
     // Workspace ids are only unique within a session.
     const home = herd === undefined ? sessions.length === 1 : session.herd === herd;
     const workspaceId = pane?.workspaceId ?? agent?.workspaceId ?? (home ? workspace : null);
     if (workspaceId === null) continue;
-    const named = (yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []))).find(
-      (one) => one.workspaceId === workspaceId,
+    const named = Option.getOrUndefined(
+      Arr.findFirst(
+        yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => [])),
+        (one) => one.workspaceId === workspaceId,
+      ),
     );
     if (named === undefined) continue;
     yield* agent === undefined ? herdr.workspaceFocus(workspaceId) : herdr.agentFocus(agent.name);
     const tab =
       pane === undefined
         ? null
-        : ((yield* herdr.tabList(workspaceId).pipe(Effect.orElseSucceed(() => []))).find(
-            (one) => one.tabId === pane.tabId,
+        : (Option.getOrUndefined(
+            Arr.findFirst(
+              yield* herdr.tabList(workspaceId).pipe(Effect.orElseSucceed(() => [])),
+              (one) => one.tabId === pane.tabId,
+            ),
           )?.label ?? null);
     const at: PaneAt = {
       session: session.default === true ? null : (session.name ?? null),
@@ -106,7 +117,7 @@ export const agentsIn = (sessions: ReadonlyArray<LiveHerd>) =>
         Effect.flatMap((alive) =>
           restoredPanes(session, alive).pipe(
             Effect.map((panes) =>
-              panes.map((pane) => ({
+              Arr.map(panes, (pane) => ({
                 terminalId: pane.terminalId,
                 status: pane.agentStatus ?? null,
               })),
@@ -120,8 +131,8 @@ export const agentsIn = (sessions: ReadonlyArray<LiveHerd>) =>
     { concurrency: "unbounded" },
   ).pipe(
     Effect.map((each) => ({
-      alive: each.flatMap((one) => one.alive),
-      restored: each.flatMap((one) => one.restored),
+      alive: Arr.flatMap(each, (one) => one.alive),
+      restored: Arr.flatMap(each, (one) => one.restored),
     })),
   );
 
@@ -131,9 +142,11 @@ const restoredPanes = (session: LiveHerd, agents: ReadonlyArray<AgentInfo>) =>
     .paneList()
     .pipe(
       Effect.map((panes) =>
-        panes.filter(
+        Arr.filter(
+          panes,
           (pane) =>
-            pane.agentSession !== null && !agents.some((agent) => agent.paneId === pane.paneId),
+            pane.agentSession !== null &&
+            !Arr.some(agents, (agent) => agent.paneId === pane.paneId),
         ),
       ),
     );
@@ -152,7 +165,7 @@ const changesIn = (session: LiveHerd) =>
           const restored = yield* restoredPanes(session, agents);
           return [
             ...PANE_EVENTS,
-            ...[...agents, ...restored].map((one) => ({
+            ...Arr.map([...agents, ...restored], (one) => ({
               type: "pane.agent_status_changed",
               pane_id: one.paneId,
             })),
@@ -170,7 +183,7 @@ export const herdChanges = (herdr: Herdr, env: PluginEnv) =>
   Stream.unwrap(
     liveHerds(herdr, env).pipe(
       Effect.map((sessions) =>
-        Stream.mergeAll(sessions.map(changesIn), { concurrency: "unbounded" }),
+        Stream.mergeAll(Arr.map(sessions, changesIn), { concurrency: "unbounded" }),
       ),
     ),
   ).pipe(

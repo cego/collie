@@ -2,10 +2,14 @@
 // own persisted clock wakes each occurrence. The host is told seconds are allowed
 // (`COLLIE_HOST_SCHEDULE_SECONDS`), so an occurrence is seconds away rather than a minute.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { hostname } from "node:os";
-import { Clock, Effect, Fiber, FileSystem, Schema } from "effect";
+import { Clock, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
 import { connect, ownerOf } from "../src/host";
 import { isoOf, ScheduleChanged, ScheduleListing } from "../src/schedule-model";
@@ -35,14 +39,17 @@ const scheduled = (world: World, name: string) =>
       .pipe(Effect.orElseSucceed((): Array<string> => []));
     const found: Array<{ run: string; occurrence: string; line: unknown }> = [];
     for (const run of runs) {
-      const start = (yield* readAudit(`${world.state}/runs/${run}`).pipe(
-        Effect.orElseSucceed(() => []),
-      )).find((line) => line.operation === "start");
+      const start = Option.getOrUndefined(
+        Arr.findFirst(
+          yield* readAudit(`${world.state}/runs/${run}`).pipe(Effect.orElseSucceed(() => [])),
+          (line) => line.operation === "start",
+        ),
+      );
       const prefix = `schedule:${name}:`;
-      if (start?.request.startsWith(prefix) === true)
-        found.push({ run, occurrence: start.request.slice(prefix.length), line: start });
+      if (start !== undefined && pipe(start.request, Str.startsWith(prefix)))
+        found.push({ run, occurrence: pipe(start.request, Str.slice(prefix.length)), line: start });
     }
-    return found.sort((one, other) => one.occurrence.localeCompare(other.occurrence));
+    return found.sort((one, other) => pipe(one.occurrence, Str.localeCompare(other.occurrence)));
   });
 
 /** Waits until the wall clock is past `ms`: what an occurrence that must not fire is given. */
@@ -72,7 +79,7 @@ test(
             world.project,
           ]);
           expect(added.envelope).toMatchObject({ ok: true, data: { change: "add" } });
-          const installation = (yield* fs.readFileString(`${world.state}/installation`)).trim();
+          const installation = Str.trim(yield* fs.readFileString(`${world.state}/installation`));
 
           const fired = yield* until(
             () => scheduled(world, "hello-often"),
@@ -88,7 +95,7 @@ test(
             },
           });
           const runs = yield* scheduled(world, "hello-often");
-          expect(new Set(runs.map((one) => one.occurrence)).size).toBe(runs.length);
+          expect(new Set(Arr.map(runs, (one) => one.occurrence)).size).toBe(runs.length);
 
           // A listing says `run` only once that Run has ended; until then, `waiting-for-run`.
           const list = yield* until(
@@ -134,11 +141,15 @@ test(
 const taskLabelOf = (world: World, runId: string) => {
   const db = new Database(`${world.state}/host.db`, { readonly: true });
   try {
-    const row = Schema.decodeUnknownSync(Schema.Struct({ placing: Schema.String }))(
-      db.query("select placing from collie_runs where run = ?").get(runId),
-    );
-    return Schema.decodeUnknownSync(
-      Schema.fromJsonString(Schema.Struct({ taskLabel: Schema.NullOr(Schema.String) })),
+    const row = flow(
+      Schema.decodeUnknownResult(Schema.Struct({ placing: Schema.String })),
+      Result.getOrThrow,
+    )(db.query("select placing from collie_runs where run = ?").get(runId));
+    return flow(
+      Schema.decodeResult(
+        Schema.fromJsonString(Schema.Struct({ taskLabel: Schema.NullOr(Schema.String) })),
+      ),
+      Result.getOrThrow,
     )(row.placing).taskLabel;
   } finally {
     db.close();
@@ -187,7 +198,8 @@ const viewed = (world: World, runId: string) =>
 const asking = (world: World, runId: string) =>
   until(
     () => viewed(world, runId),
-    (view) => (view?.waiting ?? []).some((one) => one.name === "decision" && one.answer === null),
+    (view) =>
+      Arr.some(view?.waiting ?? [], (one) => one.name === "decision" && one.answer === null),
   );
 
 const answer = (world: World, runId: string) =>
@@ -259,9 +271,9 @@ const markRemoving = (world: World, name: string, request: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const record = `${world.state}/schedules/${name}/schedule.json`;
-    const { added } = Schema.decodeUnknownSync(
+    const { added } = yield* Schema.decodeEffect(
       Schema.fromJsonString(Schema.Struct({ added: Schema.String })),
-    )(yield* fs.readFileString(record));
+    )(yield* fs.readFileString(record)).pipe(Effect.orDie);
     yield* fs.writeFileString(`${world.state}/schedules/${name}/removed`, `${request} ${added}\n`);
     return record;
   });
@@ -302,7 +314,9 @@ test(
             ok: true,
             data: { change: "remove", schedule: null },
           });
-          expect((yield* listed(world)).schedules.map((one) => one.cron)).toEqual(["0 8 * * *"]);
+          expect(Arr.map((yield* listed(world)).schedules, (one) => one.cron)).toEqual([
+            "0 8 * * *",
+          ]);
         }).pipe(Effect.orDie),
       MODULES,
     ),
@@ -337,7 +351,7 @@ test(
             () => listed(world),
             (now) =>
               now.schedules.length === 2 &&
-              now.schedules.every((one) => one.last?.outcome.kind === "waiting-for-herdr"),
+              Arr.every(now.schedules, (one) => one.last?.outcome.kind === "waiting-for-herdr"),
           );
           yield* collie(world, ["schedule", "remove", "removed"], env);
           yield* collie(world, ["schedule", "pause", "paused"], env);
@@ -455,10 +469,20 @@ test(
           // Its first occurrence falls after the host is stopped, which under load takes seconds.
           const second = Math.floor((yield* Clock.currentTimeMillis) / 1000);
           const seconds = Array.from({ length: 26 }, (_, at) => (second + 8 + 2 * at) % 60);
-          const added = yield* addAsking(world, "missed", `${seconds.join(",")} * * * * *`);
+          const added = yield* addAsking(
+            world,
+            "missed",
+            `${Arr.join(
+              Arr.map(seconds, (part) =>
+                part === null || part === undefined ? "" : globalThis.String(part),
+              ),
+              ",",
+            )} * * * * *`,
+          );
           yield* stopHost(world.state);
-          const pending = Schema.decodeUnknownSync(ScheduleChanged)(added.envelope.data).schedule
-            ?.next;
+          const pending = (yield* Schema.decodeUnknownEffect(ScheduleChanged)(
+            added.envelope.data,
+          ).pipe(Effect.orDie)).schedule?.next;
           // Three occurrences fall with no host to fire them.
           yield* past(epochMs(pending!) + 6_000);
           const restarted = yield* Clock.currentTimeMillis;
@@ -506,10 +530,11 @@ test(
               readAudit(trail).pipe(
                 // The first occurrence can fall before the checkout has gone.
                 Effect.map((all) =>
-                  all.filter(
+                  Arr.filter(
+                    all,
                     (line) =>
                       line.operation === "occurrence" &&
-                      JSON.stringify(line.result).includes('"refused"'),
+                      pipe(JSON.stringify(line.result), Str.includes('"refused"')),
                   ),
                 ),
                 Effect.orElseSucceed(() => []),
@@ -517,7 +542,7 @@ test(
             (all) => all.length >= 2,
           );
           yield* schedule(world, ["pause", "refused"]);
-          expect(new Set(lines.map((line) => line.request)).size).toBe(lines.length);
+          expect(new Set(Arr.map(lines, (line) => line.request)).size).toBe(lines.length);
           expect(lines[0]).toMatchObject({
             actor: { origin: "schedule" },
             result: { kind: "refused", reason: expect.stringContaining(gone) },
@@ -586,14 +611,14 @@ test(
           yield* addAsking(world, "lost", "*/2 * * * * *");
           yield* stopHost(world.state);
           // An occurrence that fired before the stop lost its Run's execution with the engine.
-          const before = new Set((yield* scheduled(world, "lost")).map((one) => one.run));
+          const before = new Set(Arr.map(yield* scheduled(world, "lost"), (one) => one.run));
           for (const name of yield* fs.readDirectory(world.state))
-            if (name.startsWith("host.db")) yield* fs.remove(`${world.state}/${name}`);
+            if (pipe(name, Str.startsWith("host.db"))) yield* fs.remove(`${world.state}/${name}`);
           yield* listed(world);
           const [run] = yield* until(
             () =>
               Effect.map(scheduled(world, "lost"), (runs) =>
-                runs.filter((one) => !before.has(one.run)),
+                Arr.filter(runs, (one) => !before.has(one.run)),
               ),
             (runs) => runs.length >= 1,
           );

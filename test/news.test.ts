@@ -4,6 +4,7 @@
 // proactivity was meant to replace, so a burst has to become a batch. And writing a
 // notification is not evidence that anybody read it, so `sent` must never settle an item.
 
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -139,7 +140,7 @@ test("what one conversation read is still news to another", () =>
       yield* settle(file, "r1:ended", "uncertain", NATIVE, "the pane went away");
       const lines = yield* read(file);
       expect(pending(lines, NATIVE).items).toEqual([]);
-      expect(pending(lines, "flock@pc").items.map((item) => item.key)).toEqual(["r1:ended"]);
+      expect(Arr.map(pending(lines, "flock@pc").items, (item) => item.key)).toEqual(["r1:ended"]);
       expect(uncertain(lines, "flock@pc")).toEqual([]);
       // Already news for one conversation, so noticing it again queues nothing new.
       expect(yield* append(file, { key: "r1:ended", run: "r1", text: "r1 ended." })).toBe(false);
@@ -157,11 +158,13 @@ test("news whose cause has gone drops out of every batch and stays in the journa
       expect(yield* supersede(file, (item) => item.key !== "r1:parked:x")).toBe(0);
       const lines = yield* read(file);
       for (const conversation of [NATIVE, "flock@pc"])
-        expect(pending(lines, conversation).items.map((item) => item.key)).toEqual([
+        expect(Arr.map(pending(lines, conversation).items, (item) => item.key)).toEqual([
           "r2:ended:failed",
         ]);
       expect(uncertain(lines, NATIVE)).toEqual([]);
-      expect(lines.some((line) => line.kind === "item" && line.key === "r1:parked:x")).toBe(true);
+      expect(Arr.some(lines, (line) => line.kind === "item" && line.key === "r1:parked:x")).toBe(
+        true,
+      );
       // The same cause arising again later is news again.
       expect(yield* append(file, { key: "r1:parked:x", run: "r1", text: "r1 parked." })).toBe(true);
       expect(pending(yield* read(file), "flock@pc").items).toHaveLength(2);
@@ -174,7 +177,7 @@ test("a resumed halt, an answered question and a disposed finished Run no longer
     record({ id: "r2", state: "waiting", asking: [{ name: "scope", prompt: "?", options: [] }] }),
     record({ id: "r3", state: "succeeded" }),
   ];
-  const keys = eventsIn(before).map((event) => event.key);
+  const keys = Arr.map(eventsIn(before), (event) => event.key);
   expect([...holding(before)].sort()).toEqual([...keys].sort());
   const after = [
     record({ id: "r1", state: "running" }),
@@ -231,10 +234,10 @@ test("each item says how much it matters, and one written before items did is ro
       });
       yield* fs.writeFileString(
         file,
-        `${yield* fs.readFileString(file)}${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ kind: "item", key: "r0:ended:done", run: "r0", text: "r0 ended.", at: "2026-01-01T00:00:00Z" })}\n`,
+        `${yield* fs.readFileString(file)}${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({ kind: "item", key: "r0:ended:done", run: "r0", text: "r0 ended.", at: "2026-01-01T00:00:00Z" }).pipe(Effect.orDie)}\n`,
       );
       expect(
-        pending(yield* read(file)).items.map(({ key, significance }) => [key, significance]),
+        Arr.map(pending(yield* read(file)).items, ({ key, significance }) => [key, significance]),
       ).toEqual([
         ["r1:asking:x", "decision"],
         ["r0:ended:done", "routine"],
@@ -259,7 +262,7 @@ test("a conversation that takes every pending item is not limited to one batch",
 
 test("a question and drift Collie could not correct are decisions, an end or a park is consequential, and Ready is worth trying", () => {
   const of = (events: ReturnType<typeof eventsIn>) =>
-    events.map(({ significance }) => significance);
+    Arr.map(events, ({ significance }) => significance);
   expect(
     of(
       eventsIn([

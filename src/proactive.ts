@@ -15,6 +15,9 @@
 // Activity is not a trigger. A step starting, a pane changing, a commit, time passing —
 // none of them are on the list, for the same reason a changing pane is not progress.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import { runTitle } from "./naming";
@@ -64,7 +67,7 @@ export function eventsIn(
   /** Reopened Runs whose agent has finished what it was told, by Run (`idleAgain`). */
   done: ReadonlyMap<string, Reopened> = new Map(),
 ): Event[] {
-  return runs.flatMap((run) => [
+  return Arr.flatMap(runs, (run) => [
     ...reopenedOf(run, done),
     ...causesOf(run, drifting, ready).slice(0, 1),
   ]);
@@ -82,13 +85,18 @@ export function holding(
   done: ReadonlyMap<string, Reopened> = new Map(),
 ): Set<string> {
   return new Set(
-    runs.flatMap((run) =>
-      [
-        ...reopenedOf(run, done),
-        ...causesOf(run, drifting, ready).filter(
-          (event) => !(disposed.has(run.id) && event.key.startsWith(`${run.id}:ended:`)),
-        ),
-      ].map((event) => event.key),
+    Arr.flatMap(runs, (run) =>
+      Arr.map(
+        [
+          ...reopenedOf(run, done),
+          ...Arr.filter(
+            causesOf(run, drifting, ready),
+            (event) =>
+              !(disposed.has(run.id) && pipe_(event.key, Str.startsWith(`${run.id}:ended:`))),
+          ),
+        ],
+        (event) => event.key,
+      ),
     ),
   );
 }
@@ -135,7 +143,7 @@ function causesOf(
   ready: ReadonlyMap<string, { at: string; sentence: string }>,
 ): Event[] {
   const about = runTitle(run);
-  const out: Event[] = run.asking.map((asked): Event => ({
+  const out: Event[] = Arr.map(run.asking, (asked): Event => ({
     run: run.id,
     key: `${run.id}:asking:${asked.name}`,
     significance: "decision",
@@ -200,9 +208,9 @@ export const saidPath = Effect.fn("Proactive.saidPath")(function* (herdDir: stri
 
 export const readSaid = Effect.fn("Proactive.readSaid")(function* (herdDir: string) {
   const lines = yield* readJournal(yield* saidPath(herdDir), SaidJson).pipe(
-    Effect.catch(() => Effect.succeed([])),
+    Effect.orElseSucceed(() => []),
   );
-  return new Set(lines.map((line) => line.key));
+  return new Set(Arr.map(lines, (line) => line.key));
 });
 
 export const remember = Effect.fn("Proactive.remember")(function* (

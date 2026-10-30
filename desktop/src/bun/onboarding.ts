@@ -2,12 +2,15 @@
 // of the human; Desktop's own version of the runner goes there only once its signature
 // verifies; and `collie onboard` runs with it, each step told as it comes.
 
-import { Clock, Crypto, Effect, FileSystem, Option, Schema, Stream } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import { Clock, Effect, Option, Result, Schema, Stream } from "effect";
+import { CommandLine } from "effect/process";
 import { inTerminal } from "../../../src/in-terminal";
 import { verifiedRunner as sharedVerifiedRunner } from "../../../src/releases";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
 import { type Route, type ShellRoute, spawned } from "./machine";
-import { quoted } from "../../../src/ssh-argv";
 import { CHILD_CWD, childEnv } from "./login-env";
 
 export const RELEASES = "https://github.com/cego/collie/releases/download";
@@ -25,7 +28,7 @@ const ARCH = new Map([
 
 /** The release asset's platform for what `uname -sm` printed, or null where there is none. */
 export const platformOf = (uname: string) => {
-  const [os = "", arch = ""] = uname.trim().split(/\s+/);
+  const [os, arch = ""] = Str.split(Str.trim(uname), /\s+/);
   const [named, cpu] = [OS.get(os), ARCH.get(arch)];
   return named !== undefined && cpu !== undefined ? `${named}-${cpu}` : null;
 };
@@ -72,19 +75,22 @@ const place = (route: ShellRoute, version: string, runner: { bytes: Uint8Array; 
   Effect.gen(function* () {
     const file = placedAt(version);
     const there = yield* shOn(route, `${SHA256} < ${file} 2>/dev/null`);
-    if (there.out.slice(0, 64) === runner.sha256) return;
+    if (pipe_(there.out, Str.slice(0, 64)) === runner.sha256) return;
     const put = yield* shOn(
       route,
-      [
-        `set -e; mkdir -p "$HOME/.cache/collie/runners"; f=${file}; cat > "$f.new"`,
-        `[ "$(${SHA256} < "$f.new" | cut -c1-64)" = ${runner.sha256} ] || { rm -f "$f.new"; echo "the runner changed on its way to ${route.machine.name}" >&2; exit 1; }`,
-        `chmod +x "$f.new"; mv "$f.new" "$f"`,
-      ].join("; "),
+      Arr.join(
+        [
+          `set -e; mkdir -p "$HOME/.cache/collie/runners"; f=${file}; cat > "$f.new"`,
+          `[ "$(${SHA256} < "$f.new" | cut -c1-64)" = ${runner.sha256} ] || { rm -f "$f.new"; echo "the runner changed on its way to ${route.machine.name}" >&2; exit 1; }`,
+          `chmod +x "$f.new"; mv "$f.new" "$f"`,
+        ],
+        "; ",
+      ),
       runner.bytes,
     );
     if (put.code !== 0)
       return yield* Effect.fail(
-        put.err.trim() || `could not put the runner on ${route.machine.name}`,
+        Str.trim(put.err) || `could not put the runner on ${route.machine.name}`,
       );
   });
 
@@ -106,7 +112,7 @@ const Line = Schema.fromJsonString(
       step: Schema.String,
       detail: Schema.String,
       url: Schema.String,
-      port: Schema.optionalKey(Schema.Number),
+      port: Schema.optionalKey(Schema.Finite),
     }),
     Schema.Struct({
       event: Schema.Literal("result"),
@@ -132,11 +138,12 @@ export const onboardingSkips = (
   skipping: ReadonlyArray<Skippable>,
   restoring?: Skippable,
 ) =>
-  (["helle", "linear"] as const).filter(
+  Arr.filter(
+    ["helle", "linear"] as const,
     (step) =>
       step !== restoring &&
       (skipping.includes(step) ||
-        before.some((one) => one.step === step && one.status === "skipped")),
+        Arr.some(before, (one) => one.step === step && one.status === "skipped")),
   );
 
 /** Each change to a run, told as it is made; the run as it stands is the last one told. */
@@ -153,11 +160,14 @@ export const tracked = (told: (run: OnboardRun) => Effect.Effect<void>, start = 
     /** A new step, or what changed about one already told. */
     step: (step: Pick<OnboardStep, "step"> & Partial<OnboardStep>) =>
       change((now) => {
-        const at = now.steps.findIndex(({ step: name }) => name === step.step);
+        const at = Option.getOrElse(
+          Arr.findFirstIndex(now.steps, ({ step: name }) => name === step.step),
+          () => -1,
+        );
         const steps =
           at === -1
             ? [...now.steps, { title: step.step, status: "running" as const, ...step }]
-            : now.steps.map((one, i) => (i === at ? { ...one, ...step } : one));
+            : Arr.map(now.steps, (one, i) => (i === at ? { ...one, ...step } : one));
         return { ...now, steps };
       }),
     end: (ready: boolean, reason: string | null) =>
@@ -209,7 +219,9 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
     const uname = yield* shOn(route, "uname -sm");
     const platform = platformOf(uname.out);
     if (platform === null)
-      return yield* Effect.fail(`Collie has no runner for ${uname.out.trim() || "this Machine"}`);
+      return yield* Effect.fail(
+        `Collie has no runner for ${Str.trim(uname.out) || "this Machine"}`,
+      );
     const verified = yield* verifiedRunner(releases, version, platform, runners, key);
     yield* place(route, version, verified);
     return verified;
@@ -227,12 +239,24 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
 
   const ended = yield* Effect.gen(function* () {
     const command = yield* route.sh(
-      [
-        `exec ${placedAt(version)} --json onboard --to ${quoted(version)}`,
-        ...(secrets === "" ? [] : ["--secrets-stdin"]),
-        ...skip.map((step) => `--skip ${step}`),
-        ...(gitlabHost === undefined ? [] : [`--gitlab-host ${quoted(gitlabHost)}`]),
-      ].join(" "),
+      Arr.join(
+        [
+          `exec ${placedAt(version)}`,
+          ...Arr.map(
+            [
+              "--json",
+              "onboard",
+              "--to",
+              version,
+              ...(secrets === "" ? [] : ["--secrets-stdin"]),
+              ...Arr.flatMap(skip, (step) => ["--skip", step]),
+              ...(gitlabHost === undefined ? [] : ["--gitlab-host", gitlabHost]),
+            ],
+            (word) => Result.getOrThrow(CommandLine.quote(word)),
+          ),
+        ],
+        " ",
+      ),
     );
     const child = yield* spawned(() =>
       Bun.spawn([...command], {
@@ -254,7 +278,7 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
           onNone: () => Effect.void,
           onSome: (line) => {
             if ("ok" in line) {
-              const left = run.current().steps.some(({ status }) => !SETTLED.includes(status));
+              const left = Arr.some(run.current().steps, ({ status }) => !SETTLED.includes(status));
               return run.end(line.ok, line.ok || left ? null : line.error.message);
             }
             if (line.event === "start")
@@ -280,7 +304,7 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
       Effect.ignore,
     );
     const code = yield* Effect.promise(() => child.exited);
-    return { code, said: (yield* Effect.promise(() => said)).trim() };
+    return { code, said: Str.trim(yield* Effect.promise(() => said)) };
   }).pipe(Effect.scoped, Effect.result);
   if (run.current().ready === null)
     yield* run.end(
@@ -327,11 +351,11 @@ export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
       ...(gitlabHost === undefined ? [] : ["--gitlab-host", gitlabHost]),
     ])
     .pipe(
-      Effect.flatMap(({ out }) => Schema.decodeUnknownEffect(DoctorSaid)(out.trim())),
+      Effect.flatMap(({ out }) => Schema.decodeEffect(DoctorSaid)(Str.trim(out))),
       Effect.map((said) => ("data" in said ? said.data : said.error.details).checks),
       Effect.flatMap((checks) =>
         Effect.map(Clock.currentTimeMillis, (at): OnboardRun => {
-          const steps = checks.flatMap(({ name, ok, detail, fix, warn }): OnboardStep[] => {
+          const steps = Arr.flatMap(checks, ({ name, ok, detail, fix, warn }): OnboardStep[] => {
             const byDefault = DEFAULT_STEPS.get(name);
             if (byDefault !== undefined && (!ok || warn === true || fix !== ""))
               return [
@@ -340,7 +364,7 @@ export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
             if (ok) return [];
             return [
               {
-                step: name.replaceAll(" ", "-"),
+                step: pipe_(name, Str.replaceAll(" ", "-")),
                 title: name,
                 status: "failed",
                 detail,
@@ -363,13 +387,13 @@ const QUESTION = /\[(y\/N|Y\/n)\]\s*$/;
 const questionIn = (text: string) => {
   const asked = QUESTION.exec(text);
   if (asked === null) return null;
-  const lines = text.slice(0, asked.index).split("\n");
-  const blank = lines.findLastIndex((line, at) => at < lines.length - 1 && line.trim() === "");
+  const lines = Str.split(pipe_(text, Str.slice(0, asked.index)), "\n");
+  const blank = Option.getOrElse(
+    Arr.findLastIndex(lines, (line, at) => at < lines.length - 1 && Str.trim(line) === ""),
+    () => -1,
+  );
   return {
-    text: lines
-      .slice(blank + 1)
-      .join("\n")
-      .trim(),
+    text: Str.trim(Arr.join(lines.slice(blank + 1), "\n")),
     yes: asked[1] === "Y/n",
   };
 };
@@ -399,9 +423,9 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
     Stream.decodeText(),
     Stream.runForEach((chunk) =>
       Effect.gen(function* () {
-        said += chunk.replace(TERMINAL_CODES, "");
+        said += pipe_(chunk, Str.replace(TERMINAL_CODES, ""));
         // Less the terminal's echo of the last answer.
-        const asked = questionIn(said.slice(answered).replace(/^\s*[yn]\n/, ""));
+        const asked = questionIn(pipe_(said, Str.slice(answered), Str.replace(/^\s*[yn]\n/, "")));
         if (asked === null) return;
         answered = said.length;
         const yes = yield* ask(asked.text, asked.yes);
@@ -412,7 +436,7 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
   );
   const code = yield* herdrAdd.exitCode;
   if (code !== 0) {
-    const last = said.trim().split("\n").slice(-3).join("\n");
+    const last = Arr.join(Str.split(Str.trim(said), "\n").slice(-3), "\n");
     return yield* Effect.fail(last || `herdr machine add exited ${code}`);
   }
 }, Effect.scoped);

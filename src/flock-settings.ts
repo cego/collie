@@ -1,5 +1,7 @@
 // A Flock's latest edits, shared by Desktop and paired hosts.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Effect, Option, Schema } from "effect";
 import type { SharedSetting } from "./board-model";
 import { parseShared, SettingValue, settingText } from "./settings";
@@ -43,12 +45,14 @@ export const latestEdits = <
   keyOf: (edit: Held | Has) => string,
 ) => {
   const later = (one: Held | Has, others: ReadonlyArray<Held | Has>) => {
-    const other = others.find((each) => keyOf(each) === keyOf(one));
+    const other = Option.getOrUndefined(
+      Arr.findFirst(others, (each) => keyOf(each) === keyOf(one)),
+    );
     return other === undefined || epochMs(one.at) > epochMs(other.at);
   };
   return {
-    take: has.filter((one) => later(one, held)),
-    give: held.filter((one) => later(one, has)),
+    take: Arr.filter(has, (one) => later(one, held)),
+    give: Arr.filter(held, (one) => later(one, has)),
   };
 };
 
@@ -65,8 +69,9 @@ export const takeFrom = (
   const settings = { ...flock.settings };
   const first = !flock.synced.includes(machine);
   const held = (edits: FlockSettings["settings"]) =>
-    Object.entries(edits).map(([key, { value, at }]): SharedSetting => ({ key, value, at }));
-  const takeable = has.filter(
+    Arr.map(Rec.toEntries(edits), ([key, { value, at }]): SharedSetting => ({ key, value, at }));
+  const takeable = Arr.filter(
+    has,
     ({ key, value }) => key !== GIVEN_ONLY && !("refused" in parseShared(key, value)),
   );
   for (const { key, value, at } of latestEdits(held(settings), takeable, byKey).take) {
