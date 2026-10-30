@@ -3,7 +3,7 @@
 
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Tracer } from "effect";
-import { taskFlowOf } from "../src/board";
+import { buildBoard, taskFlowOf } from "../src/board";
 import { readEnv } from "../src/env";
 import type { RunFacts } from "../src/runs";
 import { runEffect } from "./support/effect";
@@ -41,4 +41,37 @@ test("a running Run's Flow reads no agent's delivery ledger", () =>
 test("a finished Run's Flow reads the ledgers that say whether it was Reopened", () =>
   spansOfFlow({ state: "succeeded", finished: "2026-09-14T10:00:00Z" }).then((names) =>
     expect(names).toContain("Steering.everyDelivery"),
+  ));
+
+test("two Tasks share one reading of the installation and step duration index", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-flow-inputs-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const runs = [
+        yield* madeRun(dir, { id: "first", task: "task-a", state: "running" }),
+        yield* madeRun(dir, { id: "second", task: "task-b", state: "running" }),
+      ];
+      const reads: string[] = [];
+      const views = yield* buildBoard({
+        env,
+        runs,
+        tasks: [],
+        registered: [],
+        proposals: [],
+        mrStates: new Map(),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: (path, encoding) =>
+            Effect.sync(() => reads.push(path)).pipe(
+              Effect.andThen(fs.readFileString(path, encoding)),
+            ),
+        }),
+      );
+      expect(views).toHaveLength(2);
+      expect(reads.filter((path) => path === `${dir}/installation`)).toHaveLength(1);
+      expect(reads.filter((path) => path === `${dir}/step-durations.json`)).toHaveLength(1);
+    }),
   ));

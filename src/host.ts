@@ -54,6 +54,7 @@ import * as RpcSchema from "effect/rpc/RpcSchema";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
+import { readModelLayer, ReadModel, type ReadModelApi } from "./read-model";
 import {
   EntryError,
   REFUSED_INPUT,
@@ -278,7 +279,7 @@ import {
 } from "./peers-model";
 import { latest, readDispositions } from "./disposition";
 import { operationsOf, readLaunches, runAgents } from "./launches";
-import { factsOfView, settled, type RunFacts } from "./runs";
+import { factsOfView, newestFirst, settled, type RunFacts } from "./runs";
 import { Store } from "./store";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
 import {
@@ -977,6 +978,7 @@ interface BoardSource<E, F> {
 
 const hostBoard = (dir: string) =>
   Effect.gen(function* () {
+    const model = yield* ReadModel;
     const registry = yield* Registry;
     const checks = yield* CheckProcesses;
     const bun = yield* Effect.context<BunServices>();
@@ -1009,7 +1011,10 @@ const hostBoard = (dir: string) =>
               Effect.orElseSucceed(() => []),
             ),
         });
-      }).pipe(Effect.provideContext(bun));
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, model.reading),
+        Effect.provideContext(bun),
+      );
     /** The board, with the Runs it was built from. */
     const listingOf = (agents: typeof agentsNow) =>
       Effect.gen(function* () {
@@ -1173,17 +1178,20 @@ const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
   );
 };
 
-const watched = (dir: string) =>
+const watched = (dir: string, failed: Effect.Effect<void> = Effect.void) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      return fs.watch(dir, { recursive: true }).pipe(Stream.catch(() => Stream.empty));
+      return fs
+        .watch(dir, { recursive: true })
+        .pipe(Stream.catch(() => Stream.fromEffect(failed).pipe(Stream.drain)));
     }),
   );
 
 /** Each write under the state directory that may move the board, by its path inside it. */
-export const boardWrites = (dir: string) =>
-  watched(dir).pipe(
+export const boardWrites = (dir: string, model?: ReadModelApi) =>
+  watched(dir, model?.disable).pipe(
+    Stream.tap((event) => model?.invalidate(`${dir}/${event.path}`) ?? Effect.void),
     Stream.filter((event) => !isBookkeeping(event)),
     Stream.map((event) => event.path),
   );
@@ -1203,16 +1211,16 @@ const sharedBoardLayer = (dir: string) =>
   Layer.effect(SharedBoard)(
     Effect.gen(function* () {
       const store = yield* Store;
+      const model = yield* ReadModel;
       const { listing, herdrMoved, ...board } = yield* hostBoard(dir);
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
       // Shared, so every subscriber rides one recursive watch: setting one up walks the tree.
-      const changed = yield* Stream.mergeAll(
+      const writes = yield* Stream.mergeAll(
         [
-          boardWrites(dir).pipe(
+          boardWrites(dir, model).pipe(
             Stream.debounce("200 millis"),
             Stream.map(() => undefined),
           ),
-          Stream.tick(BOARD_TICK).pipe(Stream.tap(() => herdrMoved)),
           herdChanges(board.herdr, board.env).pipe(
             Stream.provideContext(board.bun),
             Stream.catch(() => Stream.empty),
@@ -1222,7 +1230,16 @@ const sharedBoardLayer = (dir: string) =>
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
-      const { boards, latest } = yield* shareBoard({ build: listing, changed });
+      const refresh = yield* Stream.tick(BOARD_TICK).pipe(
+        Stream.tap(() => herdrMoved),
+        Stream.share({ capacity: 1, strategy: "sliding" }),
+      );
+      const changed = Stream.merge(writes, refresh);
+      const { boards, latest } = yield* shareBoard({
+        build: listing,
+        changed: writes,
+        refresh,
+      });
       const listed = board.sweepersOver({
         runs: Effect.map(latest, (built) => built.runs),
         views: () => Effect.map(latest, (built) => built.views),
@@ -1549,6 +1566,25 @@ const frontDoorHandlers = (
           detail: `${runId} was stopped after its merge request merged; there is nothing left to resume`,
         };
       });
+      const progressFor = (runId: string) =>
+        Effect.gen(function* () {
+          const view = yield* registry.view(runId);
+          if (view === null) return null;
+          const board = Option.getOrElse(yield* Stream.runHead(boards), () => []);
+          const card = board.find((one) => one.runs.includes(runId));
+          const mr = card?.run === runId ? card.mr : null;
+          const forged =
+            mr === null ? undefined : (yield* readForge(env.stateDir)).get(mrLabel(mr));
+          return {
+            ready: readinessOfRun(
+              runId,
+              card,
+              view.status.status === "complete" || view.status.status === "failed",
+            ),
+            ci: forged?.checks ?? null,
+            steps: yield* operationsOf(env.stateDir, runId),
+          };
+        }).pipe(Effect.provideContext(bun));
       return FrontDoorRpcs.of({
         declare: ({ frontDoor, session, from, stamp: stamped, ...voice }, { client }) => {
           // Which Machine a channel came from is said by this host's own link, never by the channel.
@@ -2897,28 +2933,51 @@ const frontDoorHandlers = (
         },
         read: ({ tool, input }, { client }) =>
           Effect.promise(() => import("./tools")).pipe(
-            Effect.flatMap(({ answerRead }) => answerRead(askerEnv(client), tool, input)),
+            Effect.flatMap(({ answerRead }) =>
+              Effect.gen(function* () {
+                if (tool !== "collie_run") return yield* answerRead(askerEnv(client), tool, input);
+                const { describeOffers, refusal } = yield* Effect.promise(
+                  () => import("./lifecycle"),
+                );
+                const runs = yield* Effect.cached(
+                  registry
+                    .views(null)
+                    .pipe(
+                      Effect.map((views) =>
+                        newestFirst(views.map((view) => factsOfView(dir, view))),
+                      ),
+                    ),
+                );
+                const offers = (id: string) =>
+                  registry.offers(id).pipe(Effect.provideContext(hosted));
+                return yield* answerRead(askerEnv(client), tool, input, {
+                  runs,
+                  offers: (id) =>
+                    offers(id).pipe(
+                      Effect.map((listed) =>
+                        listed.length === 0 ? "Nothing is offered." : describeOffers(listed),
+                      ),
+                      Effect.catch((cause) => Effect.succeed(refusal(cause).error.message)),
+                    ),
+                  progress: progressFor,
+                  flow: (id) =>
+                    Effect.gen(function* () {
+                      return yield* taskFlowOf(
+                        {
+                          env: askerEnv(client),
+                          runs: yield* runs,
+                          alive: yield* shared.aliveNow,
+                          offers: (run) => offers(run).pipe(Effect.orElseSucceed(() => [])),
+                        },
+                        id,
+                      );
+                    }).pipe(Effect.orElseSucceed(() => null)),
+                });
+              }),
+            ),
             Effect.provideContext(bun),
           ),
-        progress: ({ runId }) =>
-          Effect.gen(function* () {
-            const view = yield* registry.view(runId);
-            if (view === null) return null;
-            const board = Option.getOrElse(yield* Stream.runHead(boards), () => []);
-            const card = board.find((one) => one.runs.includes(runId));
-            const mr = card?.run === runId ? card.mr : null;
-            const forged =
-              mr === null ? undefined : (yield* readForge(env.stateDir)).get(mrLabel(mr));
-            return {
-              ready: readinessOfRun(
-                runId,
-                card,
-                view.status.status === "complete" || view.status.status === "failed",
-              ),
-              ci: forged?.checks ?? null,
-              steps: yield* operationsOf(env.stateDir, runId),
-            };
-          }).pipe(Effect.provideContext(bun)),
+        progress: ({ runId }) => progressFor(runId),
         runDetail: ({ runId, tail, pages, refreshMr }) => {
           let fresh = refreshMr;
           const detail = Effect.gen(function* () {
@@ -3083,7 +3142,10 @@ export const serve = (named: string): Effect.Effect<void, never, BunServices | S
         yield* Effect.forkScoped(
           rotateInPlace(outputOf(dir)).pipe(Effect.repeat(Schedule.spaced("1 minute"))),
         );
-        yield* Effect.race(own(dir, checks, sweep), orphaned(dir).pipe(Effect.flatMap(stop)));
+        yield* Effect.race(
+          own(dir, checks, sweep).pipe(Effect.provide(readModelLayer(dir))),
+          orphaned(dir).pipe(Effect.flatMap(stop)),
+        );
       }).pipe(Effect.provide(Logger.layer([hostLogger(logOf(dir))], { mergeWithExisting: true }))),
       0,
     );

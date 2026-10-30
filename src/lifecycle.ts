@@ -1275,7 +1275,7 @@ export const offersOf = (
     Effect.map((answered) => (answered.ok ? answered.value : answered)),
   );
 
-const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
+export const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
   offers
     .map((offer) => {
       const why = offer.unavailable === null ? "" : ` — unavailable: ${offer.unavailable}`;

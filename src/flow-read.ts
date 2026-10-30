@@ -24,7 +24,7 @@ import { machineName } from "./peers";
 import type { RunFacts, RunState } from "./runs";
 import { readStepLines } from "./steps";
 import { readStepSteering } from "./step-steering";
-import { usualStepTimes } from "./step-durations";
+import { stepTimesByWorkflow, usualStepTimes } from "./step-durations";
 import { readRunLinks } from "./run-links";
 import { epochMs } from "./time";
 import { readVerifications } from "./verify";
@@ -98,6 +98,7 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
   env: PluginEnv,
   run: RunFacts,
   context: LaneContext = ALONE,
+  usual?: ReadonlyMap<string, number>,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const launches = yield* Effect.forEach(yield* readLaunches(env.stateDir, run.id), (launch) =>
@@ -122,7 +123,7 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
     machine: machineOf(env),
     lines: yield* readStepLines(run.dir),
     steering: yield* readStepSteering(run.dir),
-    usual: yield* usualStepTimes(env.stateDir, run.workflow),
+    usual: usual ?? (yield* usualStepTimes(env.stateDir, run.workflow)),
     launches,
     questions: run.engine?.questions ?? [],
     verifications: yield* readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => [])),
@@ -174,19 +175,49 @@ export interface TaskFacts {
   readonly mrLabel: (mr: string) => string;
 }
 
-/** A Task drawn as the work it took (ADR-draft-a-step-is-declared-where-its-work-is-written D3, D5). */
-export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, task: TaskFacts) {
-  const rows = [...task.rows].sort((one, other) => one.created.localeCompare(other.created));
-  const inTask = new Set(rows.map((run) => run.id));
-  const machine = machineOf(env);
+export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
+  env: PluginEnv,
+  all: ReadonlyArray<RunFacts>,
+) {
   const fs = yield* FileSystem.FileSystem;
   const installation = (yield* fs
     .readFileString(`${env.stateDir}/installation`)
     .pipe(Effect.orElseSucceed(() => ""))).trim();
+  const children = new Map<string, RunFacts[]>();
+  const requested = new Map<string, RunFacts[]>();
+  for (const run of all) {
+    if (run.parent !== null) {
+      const rows = children.get(run.parent) ?? [];
+      rows.push(run);
+      children.set(run.parent, rows);
+    }
+    if (run.requestedBy?.machine.installation === installation) {
+      const rows = requested.get(run.requestedBy.run) ?? [];
+      rows.push(run);
+      requested.set(run.requestedBy.run, rows);
+    }
+  }
+  return { installation, children, requested, usual: yield* stepTimesByWorkflow(env.stateDir) };
+});
+
+/** A Task drawn as the work it took (ADR-draft-a-step-is-declared-where-its-work-is-written D3, D5). */
+export const taskFlowFor = Effect.fn("Flow.task")(function* (
+  env: PluginEnv,
+  task: TaskFacts,
+  given?: Effect.Success<ReturnType<typeof flowInputsFor>>,
+) {
+  const inputs = given ?? (yield* flowInputsFor(env, task.all));
+  const { installation } = inputs;
+  const rows = [...task.rows].sort((one, other) => one.created.localeCompare(other.created));
+  const byId = new Map(rows.map((run) => [run.id, run]));
+  const inTask = new Set(rows.map((run) => run.id));
+  const machine = machineOf(env);
+  const lane = (run: RunFacts, context: LaneContext = ALONE) =>
+    laneFor(env, run, context, inputs.usual.get(run.workflow) ?? new Map());
 
   const linkOf = Effect.fn("Flow.link")(function* (child: RunFacts) {
-    const lane = yield* laneFor(env, child);
-    const at = currentOf(lane);
+    const linked = yield* lane(child);
+    const at = currentOf(linked);
     const mr = task.mrOf(child);
     return {
       run: child.id,
@@ -204,7 +235,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
         mr,
         mrState: mr === null ? null : (task.mrStates.get(task.mrLabel(mr)) ?? null),
         current:
-          at === null ? null : (lane.nodes.find((node) => node.id === at.node)?.said ?? null),
+          at === null ? null : (linked.nodes.find((node) => node.id === at.node)?.said ?? null),
       }),
     };
   });
@@ -212,8 +243,8 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
   const lanes: FlowLane[] = [];
   for (const run of rows) {
     const repos = task.repoRunsOf.get(run.id) ?? [];
-    const own = task.all.filter(
-      (one) => one.parent === run.id && !inTask.has(one.id) && !repos.includes(one),
+    const own = (inputs.children.get(run.id) ?? []).filter(
+      (one) => !inTask.has(one.id) && !repos.includes(one),
     );
     const children: ChildFact[] = [];
     for (const child of own)
@@ -237,7 +268,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
         link: yield* linkOf(repo),
         wave: waves.find((one) => one.run === repo.id)?.wave ?? 1,
       });
-    const lane = yield* laneFor(env, run, {
+    const ownLane = yield* lane(run, {
       children,
       toCome: waves.filter((one) => one.run === null),
       wait: task.waitOf(run),
@@ -248,12 +279,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
       step: one.step,
       node: requestedLink(one),
     }));
-    const requested = task.all.filter(
-      (one) =>
-        !inTask.has(one.id) &&
-        one.requestedBy?.run === run.id &&
-        one.requestedBy.machine.installation === installation,
-    );
+    const requested = (inputs.requested.get(run.id) ?? []).filter((one) => !inTask.has(one.id));
     if (requested.length > 0) {
       const launches = yield* readLaunches(env.stateDir, run.id);
       for (const child of requested) {
@@ -277,7 +303,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
         });
       }
     }
-    const nodes: FlowNode[] = lane.nodes.map((node) => {
+    const nodes: FlowNode[] = ownLane.nodes.map((node) => {
       const own = links.filter((one) => one.step === node.id);
       const mr = mrRefOf(task.mrOf(run) ?? task.mr);
       return {
@@ -289,8 +315,8 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
     });
     for (const link of links.filter((one) => !nodes.some((node) => node.id === one.step)))
       nodes.push({ ...link.node, offPath: true, runs: [] });
-    const linked = { ...lane, nodes };
-    const parent = run.parent === null ? undefined : rows.find((one) => one.id === run.parent);
+    const linked = { ...ownLane, nodes };
+    const parent = run.parent === null ? undefined : byId.get(run.parent);
     lanes.push(
       parent === undefined
         ? linked
