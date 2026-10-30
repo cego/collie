@@ -9452,14 +9452,25 @@ const PIPELINE_PASSED = {
 const revParse = (ref: string, cwd = rig.projectDir) =>
   exec(["git", "rev-parse", ref], { cwd }).pipe(Effect.map((ran) => Str.trim(ran.stdout)));
 
-/** A commit on `parent`'s tree, made without a checkout and pushed to origin's `feature`. */
+/** A commit on `parent` that changes a byte, made without a checkout and pushed to origin's `feature`. */
 const pushedBySomebody = (parent: string, force = false) =>
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const content = `${rig.root}/pushed-by-somebody`;
+    yield* fs.writeFileString(content, `${parent}\n`).pipe(Effect.orDie);
+    const cwd = rig.projectDir;
+    const blob = Str.trim((yield* exec(["git", "hash-object", "-w", content], { cwd })).stdout);
+    const env = { ...process.env, GIT_INDEX_FILE: `${rig.root}/pushed-by-somebody.index` };
+    yield* exec(["git", "read-tree", parent], { cwd, env });
+    yield* exec(["git", "update-index", "--add", "--cacheinfo", `100644,${blob},pushed.txt`], {
+      cwd,
+      env,
+    });
+    const tree = Str.trim((yield* exec(["git", "write-tree"], { cwd, env })).stdout);
     const sha = Str.trim(
-      (yield* exec(
-        ["git", "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", "pushed by somebody"],
-        { cwd: rig.projectDir },
-      )).stdout,
+      (yield* exec(["git", "commit-tree", tree, "-p", parent, "-m", "pushed by somebody"], {
+        cwd,
+      })).stdout,
     );
     yield* exec(
       ["git", "push", "-q", ...(force ? ["-f"] : []), "origin", `${sha}:refs/heads/feature`],

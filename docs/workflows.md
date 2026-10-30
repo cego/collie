@@ -560,7 +560,8 @@ moves; a teammate who approves meanwhile takes the Run on to its go. Turned on w
 channel, the Run says so on its log and asks nothing.
 
 **Checks** run on every head before it can be asked about, the one a round pushed
-included, and a check Collie leaves to CI is waited on there. A failure goes to a fix
+included, and a check Collie leaves to CI is waited on there. A check that already passed
+on a head with the same bytes is relied on there rather than run again. A failure goes to a fix
 round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. Four rounds in a
 row that leave a check failing, or one that changes nothing, park the Run with why;
 resuming it runs the checks again. Collie's own `check` is left to CI's `test` job, so a
