@@ -2910,6 +2910,11 @@ Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
 (`drift-unresolved`) — each once per run and thing, however often the work is replayed or
 its host restarts Its title is the repository and what the task is called —
 `collie · Offer banner fix finished` — or the run's id where it belongs to no task.
+The host sends each toast to every Desktop connected to it, over a paired link too, and
+Desktop shows it as an OS notification whose second line names the Machine and the Run
+(`vm-mk · run-1a2b3c4d`). Clicking it does nothing: Electrobun reports no click. With no
+Desktop connected the toast is dropped, not kept for one that connects later; Slack, where
+it is set up, still gets it.
 
 `max_iterations`, `handoff_timeout_ms` and `quiet_ms` are still read and shown under
 Settings, but a run of a workflow module consults none of them: `implement` carries its own

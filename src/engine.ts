@@ -3392,7 +3392,8 @@ export const hostLayer = (options: {
               task === null ? runId : taskTitleOf(task.label),
               about.subject,
             );
-            if (toast !== undefined) yield* toast(title, body, SOUND[kind]).pipe(Effect.ignore);
+            if (toast !== undefined)
+              yield* toast(title, body, SOUND[kind], runId).pipe(Effect.ignore);
             if (channel === "" || row === null) return;
             yield* Effect.gen(function* () {
               const reading = yield* host.connection("slack");
@@ -4995,8 +4996,13 @@ export const hostLayer = (options: {
     }),
   );
 
-/** Where a toast is raised: herdr's, in a host. */
-export type Toast = (title: string, body: string, sound: Sound) => Effect.Effect<void>;
+/** Where a toast is raised: to each connected Desktop, in a host. */
+export type Toast = (
+  title: string,
+  body: string,
+  sound: Sound,
+  runId: string,
+) => Effect.Effect<void>;
 
 /** The Herd a host works for: whose budget a judgement is charged to, and whose prompts it reads. */
 export interface Herd {

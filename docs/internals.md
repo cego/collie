@@ -1762,7 +1762,7 @@ its time.
   fixture hosts use 500 ms. Cleanup waits for process exit as well as lock release: a
   host can give back its lock before its final write finishes.
   On Linux, a world's cleanup also waits for processes carrying its exact fake-herdr log
-  binding: a notification can outlive its host and recreate a removed log directory. This
+  binding: a herdr call can outlive its host and recreate a removed log directory. This
   uses the preload's existing `/proc` process markers; its marker-specific regression runs
   on Linux.
 - **A fixture runs a command.** `test/support/command.ts` uses asynchronous `Bun.spawn`,

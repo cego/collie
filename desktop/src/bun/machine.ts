@@ -43,6 +43,7 @@ import {
   type ProposalRefused,
   type RequestConflict,
   type RunDetail,
+  type Toasted,
 } from "../../../src/board-model";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
@@ -273,12 +274,22 @@ export const openDoors = (
       desktop,
       chat,
       board: desktop.board(),
+      toasts: desktop.toasts(),
     })),
   );
 
 export interface BoardSource {
   readonly machine?: KnownMachine;
   readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
+  readonly toasts?: Stream.Stream<Toasted, unknown>;
+}
+
+/** What Electrobun's `showNotification` takes. */
+export interface Notification {
+  readonly title: string;
+  readonly subtitle: string;
+  readonly body: string;
+  readonly silent: boolean;
 }
 
 /**
@@ -743,6 +754,7 @@ export const flockStream = <D extends BoardSource>(
   doors: Map<string, D>,
   version: string,
   changes: Stream.Stream<RouteChange<D>> = Stream.empty,
+  show: (notification: Notification) => void = () => {},
 ): Stream.Stream<FlockItem> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -876,7 +888,25 @@ export const flockStream = <D extends BoardSource>(
                 upgradeThenReopen(route, installation, from),
               ),
             );
-            return Stream.merge(board, upgrade, { haltStrategy: "left" }).pipe(
+            // ponytail: a route merged into another may show a toast in the moment before it ends.
+            const toasts = (door.toasts ?? Stream.empty).pipe(
+              Stream.tap((toast) =>
+                Effect.sync(() =>
+                  show({
+                    title: toast.title,
+                    subtitle: `${route.machine.name} · ${toast.runId}`,
+                    body: toast.body,
+                    silent: toast.sound === "none",
+                  }),
+                ),
+              ),
+              Stream.drain,
+              // A host too old to send toasts still shows its board.
+              Stream.ignoreCause,
+            );
+            return Stream.merge(Stream.merge(board, upgrade, { haltStrategy: "left" }), toasts, {
+              haltStrategy: "left",
+            }).pipe(
               Stream.interruptWhen(
                 Queue.take(reopens[at]!).pipe(
                   Effect.andThen(Effect.fail<RouteFailure>({ state: "reopen", reason: "asked" })),

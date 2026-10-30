@@ -144,13 +144,13 @@ test("socket calls are recorded in the same ordered log as cli calls", () =>
 
       yield* herdr.tabCreate({ label: "a" });
       yield* herdr.agentViewSet("run-1", "run 1", ["1-2", "1-3"]);
-      yield* herdr.notify("done");
+      yield* herdr.tabCreate({ label: "b" });
       yield* herdr.agentViewClear("run-1");
 
       expect(yield* rig.cmds()).toEqual([
         "tab create",
         "agent.view.set",
-        "notification show",
+        "tab create",
         "agent.view.clear",
       ]);
       const calls = yield* rig.calls();

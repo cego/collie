@@ -1028,6 +1028,15 @@ export const BoardMessage = Schema.Union([
 ]);
 export type BoardMessage = typeof BoardMessage.Type;
 
+/** A toast about a Run, as the host sends it to every Desktop listening. */
+export const Toasted = Schema.Struct({
+  runId: Schema.String,
+  title: Schema.String,
+  body: Schema.String,
+  sound: Schema.Literals(["none", "done", "request"]),
+});
+export type Toasted = typeof Toasted.Type;
+
 /** Anything else a host will not do, said in one sentence a caller can show. */
 export class HostRefused extends Schema.TaggedError<
   HostRefused,
@@ -1353,6 +1362,8 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("board", { success: BoardMessage, stream: true }),
+  /** Each toast raised while subscribed; one raised with nobody subscribed is dropped. */
+  Rpc.make("toasts", { success: Toasted, stream: true }),
   /**
    * Once per channel, for good; a channel that never declares is stamped `cli`, never a
    * human. A chat declares again each turn, with that turn's words.

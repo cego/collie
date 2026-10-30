@@ -2627,7 +2627,7 @@ step that was cut short runs again. A check the old host was running is ended wi
 runs again on the new one. One a host left without ending it, because it was killed or
 crashed, is ended by the next host to start, named in the Run's log, and runs once more.
 The herdr action "Restart the Collie host" does the
-same and says what it did as a notification.
+same and prints what it did.
 
 A host works for one Herd: the herdr session a judgement is charged to and its cross-run
 checks are held in. It is the one `HERDR_SOCKET_PATH` names, which a client that starts a

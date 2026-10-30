@@ -794,7 +794,7 @@ Collie does with each outcome, and what it shows while a compaction is unresolve
 minutes (it keeps waiting and sends the work once the compaction ends):
 `docs/using.md`.
 
-**Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
+**Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail. Shown by each Desktop connected to the Run's host, and dropped where none is.
 
 **Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite until **Cleanup** forgets them, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A check it runs ends with it. Whatever stops a host ends its checks' processes first. A host that starts ends any check a previous host left running before it hands Runs back, so the check runs once more and never twice at once (ADR-draft-a-check-ends-with-the-host-that-runs-it). A client of another build is told to restart it before `HostRpcs` (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
 

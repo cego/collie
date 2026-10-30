@@ -36,6 +36,7 @@ import {
   Layer,
   Logger,
   Option,
+  PubSub,
   Queue,
   Result,
   Path,
@@ -185,6 +186,7 @@ import {
   Seen,
   FrontDoorRpcs,
   HostRefused,
+  type Toasted,
   NewsBatch,
   PaneAt,
   SharedSettings,
@@ -1354,6 +1356,7 @@ const frontDoorHandlers = (
   panels: MrPanels,
   declared: Declared,
   stamp: string,
+  toasted: PubSub.PubSub<Toasted>,
 ) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
@@ -3138,6 +3141,7 @@ const frontDoorHandlers = (
             Effect.provideContext(bun),
             Effect.provideService(ForgeHttp, forgeHttp),
           ),
+        toasts: () => Stream.fromPubSub(toasted),
         board: () =>
           Stream.unwrap(
             liveHerds(herdr, env).pipe(
@@ -3425,6 +3429,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
     const stamp = yield* (yield* SecureRandom.SecureRandom).uuidV4();
+    const toasted = yield* PubSub.unbounded<Toasted>();
     const peers = yield* startPeers({
       dir,
       userDir: env.userDir,
@@ -3464,7 +3469,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
         Layer.provide(
           Layer.mergeAll(
             handlers(dir, installation, development, declared, peers),
-            frontDoorHandlers(dir, installation, development, panels, declared, stamp),
+            frontDoorHandlers(dir, installation, development, panels, declared, stamp, toasted),
             sideJobsLayer(panels),
             questionsLayer,
             slowRpcsLayer,
@@ -3503,8 +3508,8 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
           foundationLayer({
             dir,
             userDir: env.userDir,
-            toast: (title, body, sound) =>
-              herdr.notify(title, body, sound).pipe(Effect.provideContext(bun), Effect.ignore),
+            toast: (title, body, sound, runId) =>
+              PubSub.publish(toasted, { runId, title, body, sound }).pipe(Effect.asVoid),
             herd: { socketPath: herdSocket, pluginRoot: env.pluginRoot, locate },
             readings: usage.readings,
             messagePoll: seconds ? "1 second" : undefined,

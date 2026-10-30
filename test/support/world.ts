@@ -205,7 +205,7 @@ export const proves = <A, E>(
       // Before the directory goes, or a host left running can write it back.
       yield* Effect.addFinalizer(() =>
         stopHost(world.state).pipe(
-          // A notification can outlive the host that started it. Let this world's commands
+          // A herdr call can outlive the host that started it. Let this world's commands
           // finish before removing their log directory; another world's processes are left alone.
           Effect.andThen(
             marker === ""

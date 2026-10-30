@@ -14,6 +14,7 @@ import {
   Clock,
   Config,
   ConfigProvider,
+  Console,
   Duration,
   Effect,
   Fiber,
@@ -42,7 +43,7 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { FakeHerdr, Rig } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { restartHostFlow } from "../src/flows";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -494,22 +495,24 @@ test(
           connect(env.stateDir).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.provide(starting), Effect.orDie);
 
-        expect(yield* restartHostFlow(new FakeHerdr(env), env).pipe(Effect.provide(starting))).toBe(
-          0,
-        );
+        const said: string[] = [];
+        const capturing = {
+          ...console,
+          log: (...line: unknown[]) => void said.push(Arr.join(Arr.map(line, String), " ")),
+        };
+        expect(
+          yield* restartHostFlow(env).pipe(
+            Effect.provide(starting),
+            Effect.provideService(Console.Console, capturing),
+          ),
+        ).toBe(0);
         const owner = yield* ownerOf(env.stateDir);
         expect(owner?.pid).not.toBe(old.pid);
-        const shown = Option.getOrUndefined(
-          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "notification show"),
-        );
-        expect(shown?.argv).toContain("Collie host restarted");
+        expect(said).toEqual([expect.stringContaining("Collie host restarted")]);
+        expect(said[0]).toContain(`pid ${old.pid}`);
         expect(
-          Option.getOrUndefined(
-            Option.flatMap(Option.fromNullishOr(shown), (present) =>
-              Option.map(Option.fromNullishOr(present.argv), (present_) => Arr.join(present_, " ")),
-            ),
-          ),
-        ).toContain(`pid ${old.pid}`);
+          Arr.filter(yield* rig.calls(), (call) => pipe_(call.cmd, Str.startsWith("notification"))),
+        ).toEqual([]);
         yield* stopHost(env.stateDir);
       }).pipe(Effect.scoped, Effect.orDie),
     ),

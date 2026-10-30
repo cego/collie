@@ -18,7 +18,7 @@ import {
   flow,
   Result,
 } from "effect";
-import { type BoardMessage, type BoardSnapshot, PROTOCOL } from "../src/board-model";
+import { type BoardMessage, type BoardSnapshot, PROTOCOL, type Toasted } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import {
@@ -191,6 +191,7 @@ const snapshot = (installation: string): BoardSnapshot => ({
 interface Fake {
   readonly name: string;
   readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
+  readonly toasts?: Stream.Stream<Toasted, unknown>;
 }
 const fakeRoute = (
   name: string,
@@ -930,4 +931,39 @@ test("Sync now on a Machine behind on settings, definitions or credentials syncs
         "definitions",
       ]);
     }),
+  ));
+
+test("a toast a Machine's host sends is shown once as an OS notification that names its Run", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const shown: unknown[] = [];
+      const drained = yield* Deferred.make<void>();
+      const toast: Toasted = {
+        runId: "run-7",
+        title: "collie · Fix the login finished",
+        body: "merged",
+        sound: "done",
+      };
+      const route = fakeRoute("vm", Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)));
+      const toasting: Route<Fake> = {
+        ...route,
+        open: (waiting) =>
+          Effect.map(route.open(waiting), (door) => ({
+            ...door,
+            toasts: Stream.make(toast).pipe(Stream.ensuring(Deferred.succeed(drained, undefined))),
+          })),
+      };
+      yield* flockStream([toasting], new Map(), "0.31.0", Stream.empty, (notification) =>
+        shown.push(notification),
+      ).pipe(Stream.runDrain, Effect.forkScoped);
+      yield* Deferred.await(drained);
+      expect(shown).toEqual([
+        {
+          title: "collie · Fix the login finished",
+          subtitle: "vm · run-7",
+          body: "merged",
+          silent: false,
+        },
+      ]);
+    }).pipe(Effect.scoped),
   ));

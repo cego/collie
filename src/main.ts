@@ -51,7 +51,7 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
         case "workspace":
           return workspaceFlow(client, env);
         case "restart-host":
-          return restartHostFlow(client, env);
+          return restartHostFlow(env);
         default:
           return Console.error(`Unknown Herdr entrypoint "${command}".`).pipe(Effect.as(2));
       }

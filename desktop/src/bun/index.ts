@@ -984,6 +984,7 @@ const main = Effect.gen(function* () {
                     doors,
                     manifest.version,
                     Stream.fromSubscription(changed),
+                    Utils.showNotification,
                   ).pipe(Stream.tap(doctorOnceLive), Stream.tap(syncOnceLive)),
                   Stream.fromSubscription(told),
                 ],

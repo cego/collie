@@ -1319,16 +1319,6 @@ export class Herdr {
     return this.cli(["pane", "close", paneId]).pipe(Effect.asVoid);
   }
 
-  notify(
-    title: string,
-    body?: string,
-    sound: "none" | "done" | "request" = "done",
-  ): HerdrEffect<void> {
-    const args = ["notification", "show", title, "--sound", sound];
-    if (body) args.push("--body", body);
-    return this.cli(args).pipe(Effect.asVoid);
-  }
-
   pluginPaneOpen(opts: {
     entrypoint: string;
     env?: Record<string, string>;
