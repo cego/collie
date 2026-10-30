@@ -21,7 +21,7 @@ import {
   Result,
 } from "effect";
 import { ensureLockDir } from "./lock";
-import { herdrFailureReason, isSettled, type Herdr, type Submission } from "./herdr";
+import { HerdrError, herdrFailureReason, isSettled, type Herdr, type Submission } from "./herdr";
 import { verifyIncarnation, type AgentEntry } from "./registry";
 import {
   appendLine,
@@ -166,7 +166,8 @@ export interface DeliveryDraft {
  * Refusals that name a pane condition which clears by itself. By herdr's code, never its
  * prose: a message is for people and can change under a release that keeps the code.
  */
-const TRANSIENT_REFUSALS: ReadonlySet<string> = new Set(["agent_blocked"]);
+const AGENT_BLOCKED = "agent_blocked";
+const TRANSIENT_REFUSALS: ReadonlySet<string> = new Set([AGENT_BLOCKED]);
 
 type Refusal =
   | "blocked"
@@ -221,6 +222,11 @@ export interface DispatcherDeps {
   readonly log: (
     line: string,
   ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path | PlatformServices>;
+  /**
+   * Why this agent cannot take Collie's own prompt yet, or null: a question it asked is
+   * still open on its Run, and the prompt would land as its answer.
+   */
+  readonly asking?: (agent: string) => Effect.Effect<string | null>;
 }
 
 /** Nothing was sent, and the caller is told which of its own rules stopped it. */
@@ -469,7 +475,17 @@ const send = Effect.fn("Dispatcher.send")(function* (
   const reserved: Delivery = draft.note === undefined ? line : { ...line, note: draft.note };
   yield* appendLine(file, reserved);
 
-  const sent = yield* deps.herdr.agentPrompt(entry.agent, marked(text, id)).pipe(Effect.result);
+  const asking =
+    draft.cause.kind === "step" || draft.cause.kind === "repair"
+      ? yield* deps.asking?.(entry.agent) ?? Effect.succeed(null)
+      : null;
+  // Refused as herdr refuses a pane in a dialog, so it is waited out the same way.
+  const sent =
+    asking === null
+      ? yield* deps.herdr.agentPrompt(entry.agent, marked(text, id)).pipe(Effect.result)
+      : Result.fail(
+          new HerdrError({ message: asking, detail: "", code: AGENT_BLOCKED, answered: true }),
+        );
   const settledAt = yield* nowIso;
   if (Result.isSuccess(sent)) {
     // `submitted` either way: the text and the Enter were written. What herdr could not

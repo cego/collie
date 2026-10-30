@@ -69,6 +69,7 @@ import {
   atLeast,
   installedVersion,
   questionsSince,
+  takeHarnessQuestions,
   ranOutSince,
   submittedDelivery,
   type AgentQuestion,
@@ -1464,15 +1465,23 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const skills = (names: ReadonlyArray<string>) => installedSkills(host.env, names);
   const personaOf = (role: string) => personaText(host.env, role);
 
+  /** The questions holding each agent, as collection and tending last saw them. */
+  const openQuestions = new Map<string, Set<string>>();
   const deps: dispatch.DispatcherDeps = {
     stateDir: host.env.stateDir,
     herdr: host.herdr,
     log: (line) => append(`${host.dir}/agents/deliveries.log`, line),
+    asking: (agent) =>
+      Effect.sync(() => {
+        const open = [...(openQuestions.get(agent) ?? [])];
+        return open.length === 0 ? null : `its question ${Arr.join(open, ", ")} is waiting`;
+      }),
   };
 
   // A harness nobody here has an adapter for falls back to the operator's own, which is
   // the nearest true thing: the agent still starts, on what this machine is set up for.
   const configured = HARNESSES[host.harness] ?? HARNESSES.claude!;
+  const ports = host.ports ?? COMPACTION_PORTS;
   const adapterFor = (harness: string) => HARNESSES[harness] ?? configured;
 
   /** Null places it where herdr says the agent is. */
@@ -2422,6 +2431,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const closings = [closedAnswer(launched.operation), goneAnswer(launched.agent)];
       return (closing: string | null) =>
         Effect.gen(function* () {
+          yield* takeHarnessQuestions(host.env.stateDir, ports, launched.agent);
           let n = 0;
           const calls = Arr.map(
             Arr.filter(yield* questionsSince(dir, launched.at ?? 0), (call) => call.at < until),
@@ -2434,6 +2444,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const answers = new Map(Arr.map(asked, (one) => [one.name, one.answer]));
           const answerers = new Map(Arr.map(asked, (one) => [one.name, one.by]));
           let open = false;
+          const opened = openQuestions.get(launched.agent) ?? new Set<string>();
+          openQuestions.set(launched.agent, opened);
           for (const { call, names } of calls) {
             for (const [at, question] of call.questions.entries()) {
               const name = names[at] ?? "";
@@ -2445,21 +2457,31 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               answers.set(name, null);
             }
             const given = Arr.map(names, (name) => answers.get(name) ?? null);
+            const key = `${launched.agent}\n${call.id}`;
+            // Until its answers are sent, so Collie's next prompt cannot reach it first.
+            const holds = (holding: boolean) => {
+              for (const name of names)
+                if (holding) opened.add(`${name} on ${launched.runId}`);
+                else opened.delete(`${name} on ${launched.runId}`);
+            };
             if (closing !== null) {
               for (const [at, name] of names.entries())
                 if (given[at] === null) yield* questions.close(name, closing);
+              holds(false);
               continue;
             }
             if (Arr.some(given, (answer) => answer === null)) {
               open = true;
+              holds(true);
               continue;
             }
-            const key = `${launched.agent}\n${call.id}`;
             if (
               Arr.some(given, (answer) => closings.includes(answer ?? "")) ||
               answeredCalls.has(key)
-            )
+            ) {
+              holds(false);
               continue;
+            }
             let sentAll = true;
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
@@ -2497,6 +2519,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               }
             }
             if (sentAll) answeredCalls.add(key);
+            holds(!answeredCalls.has(key));
           }
           return open;
         }).pipe(Effect.orElseSucceed(() => false));
@@ -2522,6 +2545,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const named = yield* fs
           .readDirectory(yield* controlDir(host.env.stateDir, ""))
           .pipe(Effect.orElseSucceed(() => []));
+        yield* Effect.forEach(named, (agent) =>
+          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(Effect.ignore),
+        );
         const asking = yield* Effect.filter(named, (agent) =>
           Effect.map(
             Effect.flatMap(controlDir(host.env.stateDir, agent), (dir) => questionsSince(dir, 0)),

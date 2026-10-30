@@ -1,0 +1,18 @@
+{
+  "turnId": "01a18d12-d46d-71e1-9dc3-c7efcf8cde95",
+  "item": {
+    "type": "agentMessage",
+    "id": "call_1609d68ebfce4ed1a396547cd4bac2cd",
+    "text": "Which colour should the file be, red or blue?\n- Red\n- Blue",
+    "phase": "final_answer",
+    "memoryCitation": null,
+    "delivery": "async",
+    "questions": [
+      { "title": "Which colour should the file be, red or blue?", "options": ["Red", "Blue"] }
+    ],
+    "startedAtMs": 1793368189169,
+    "completedAtMs": 1793368189169
+  },
+  "startedAtMs": 1793368189169,
+  "completedAtMs": 1793368189169
+}

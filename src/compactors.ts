@@ -30,6 +30,7 @@ import {
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   agentThreads,
+  askedQuestions,
   boundThread,
   compactionItems,
   interruptTurn,
@@ -69,6 +70,7 @@ import {
   type StopTarget,
   type SeenProcess,
   type Stopped,
+  readControl,
 } from "./compaction";
 import {
   processOf,
@@ -746,6 +748,33 @@ export const questionsSince = Effect.fn("Compactors.questionsSince")(function* (
     (call) => call.at >= since,
   );
 });
+/**
+ * Records each question the agent's harness reports through its controls that is not
+ * recorded yet, for a harness with no hook to record it as it is asked. A harness that
+ * cannot be read now has asked nothing yet as far as anyone can tell.
+ */
+export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")(function* (
+  stateDir: string,
+  ports: CompactionPorts,
+  agent: string,
+) {
+  const record = yield* readControl(stateDir, agent);
+  const read = record === null ? undefined : ports[record.harness]?.questions;
+  if (record === null || read === undefined) return;
+  const asked = yield* read(record).pipe(Effect.orElseSucceed(() => []));
+  const known = new Set(Arr.map(yield* questionsSince(record.dir, 0), (call) => call.id));
+  const fresh = Arr.filter(asked, (call) => !known.has(call.id));
+  if (fresh.length === 0) return;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const at = yield* Clock.currentTimeMillis;
+  const lines = Arr.map(fresh, (call) =>
+    encodeAskedCall({ at, session: null, id: call.id, questions: call.questions }),
+  );
+  yield* fs.writeFileString(path.join(record.dir, QUESTIONS), `${Arr.join(lines, "\n")}\n`, {
+    flag: "a",
+  });
+});
 const decodeLimits = Schema.decodeUnknownOption(StatusLineLimits);
 
 /**
@@ -1197,7 +1226,7 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
 });
 
 /** The endpoint this agent's controls talk to, or a failure naming what is missing. */
-const codexAt = (ctx: AgentContext) =>
+const codexAt = (ctx: ReadyContext) =>
   ctx.endpoint === null
     ? Effect.fail(
         new Cause.NoSuchElementError(`${ctx.agent} has no Codex App Server endpoint recorded`),
@@ -1429,6 +1458,23 @@ export const codexPort = (server: string): CompactionPort => ({
       })),
     ),
   stop: stopCodex,
+  questions: (ctx) =>
+    Effect.gen(function* () {
+      const url = yield* codexAt(ctx);
+      return yield* withCodex(url, (client) =>
+        Effect.gen(function* () {
+          const threadId = yield* boundThread(client, ctx.cwd);
+          if (threadId === null) return [];
+          return Arr.map(yield* askedQuestions(client, threadId), (asked) => ({
+            id: asked.id,
+            questions: Arr.map(asked.questions, (one) => ({
+              question: one.title,
+              options: Arr.map(one.options ?? [], (label) => ({ label })),
+            })),
+          }));
+        }),
+      );
+    }),
   usage: (ctx) =>
     Effect.gen(function* () {
       const url = yield* codexAt(ctx);

@@ -216,11 +216,20 @@ const ThreadRead = Schema.Struct({
     turns: Schema.optionalKey(Schema.Array(Schema.Unknown)),
   }),
 });
+/** One question of an `agentMessage` that asks the human, as 0.166.0 sends it. */
+const AsyncQuestion = Schema.Struct({
+  title: Schema.String,
+  options: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+});
 const ItemsList = Schema.Struct({
   data: Schema.Array(
     Schema.Struct({
       turnId: Schema.String,
-      item: Schema.Struct({ id: Schema.String, type: Schema.String }),
+      item: Schema.Struct({
+        id: Schema.String,
+        type: Schema.String,
+        questions: Schema.optionalKey(Schema.NullOr(Schema.Array(AsyncQuestion))),
+      }),
     }),
   ),
 });
@@ -354,6 +363,26 @@ export const compactionItems = Effect.fn("Codex.compactionItems")(function* (
   return Arr.map(
     Arr.filter(items.data, (entry) => entry.item.type === "contextCompaction"),
     (entry): CompactionItem => ({ id: entry.item.id, turnId: entry.turnId }),
+  );
+});
+
+/**
+ * The messages in which this thread asked the human something, oldest first. Codex's
+ * question tool returns at once, so this message is all there is of a question.
+ */
+export const askedQuestions = Effect.fn("Codex.askedQuestions")(function* (
+  client: CodexClient,
+  threadId: string,
+) {
+  const items = yield* decoded(
+    "thread/items/list",
+    ItemsList,
+    yield* client.call("thread/items/list", { threadId, sortDirection: "desc", limit: 100 }),
+  );
+  return Arr.reverse(
+    Arr.flatMap(items.data, ({ item }) =>
+      item.questions?.length ? [{ id: item.id, questions: item.questions }] : [],
+    ),
   );
 });
 

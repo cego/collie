@@ -325,7 +325,8 @@ const verdict =
   rewrite is awaited parks the wait, as it does the first; the resume starts an agent that
   went with the stop again on the work.
 - **A busy pane is waited out, then parked.** Where herdr answers that the agent's pane
-  cannot take a prompt yet (`agent_blocked`: a dialog is up), the prompt and its repair are
+  cannot take a prompt yet (`agent_blocked`: a dialog is up, or a question it asked is open
+  on its Run), the prompt and its repair are
   tried again, under the same delivery, for up to ten minutes. Past that the Run is
   `suspended` rather than failed, `run show` says what held and for how long, and
   `collie run resume` hands the same prompt to the same agent.

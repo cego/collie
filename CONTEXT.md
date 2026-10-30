@@ -284,7 +284,8 @@ across the compaction decision, the composition and the send.
 names a process. A registry entry without one is never a delivery target. Where a Harness's
 work runs outside its pane — Codex's, in the App Server Collie starts for that one agent —
 the incarnation is the pane's process and that server, with every thread loaded on it,
-until the server is **Quiet**.
+until the server is **Quiet**. That server is also where a Codex agent's question is read
+from: its question tool never shows the agent as blocked.
 
 **Drift** — A recorded evidence–Intent mismatch. `rule` drift Collie establishes itself;
 `semantic` drift is judged against bounded actual evidence. Nothing passes on an absence.
@@ -391,7 +392,9 @@ to no Task is a TaskView of its own.
 **Decision** — What a Task is waiting on a human for, and one of the two things that put
 it in **Needs you**: a **question** a Run asked, or a **Proposal** Collie made. A question
 is the Workflow's, asked with `ask`, or one a Run's agent asked with its harness's own
-question tool, which Collie puts on the Run and whose answer it delivers to that agent. Any of a
+question tool, which Collie puts on the Run and whose answer it delivers to that agent. A
+Codex agent's is read from the App Server Collie runs it through. While one is open,
+Collie's own prompts to that agent wait. Any of a
 Task's Runs can be waiting on one, a fan-out's Repo runs included, and each is answered on
 the Run that asked. Both are answered on the card, from the CLI or from chat, and survive
 the board closing. A Run's **Checks** are never one: nobody approves them (ADR-0055).

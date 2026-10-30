@@ -28,7 +28,7 @@ import type { Channel } from "./dispatcher";
 import type { Herdr, HerdrError, Submission } from "./herdr";
 import type { CodexError } from "./codex";
 import type { OpenCodeError } from "./opencode";
-import type { HarnessVersionError, Submitting } from "./compactors";
+import type { AgentQuestion, HarnessVersionError, Submitting } from "./compactors";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import { COMPACTION_OFF } from "./settings";
@@ -245,6 +245,17 @@ export interface CompactionPort {
     note: (line: string) => Effect.Effect<void>,
     budgetMs: number,
   ) => Effect.Effect<Stopped, never, PortServices>;
+  /**
+   * The questions this agent put to the human through its controls, each call by its own
+   * id, for a harness whose question never shows as `blocked`.
+   */
+  readonly questions?: (
+    ctx: ReadyContext,
+  ) => Effect.Effect<
+    ReadonlyArray<{ readonly id: string; readonly questions: ReadonlyArray<AgentQuestion> }>,
+    PortError,
+    PortServices
+  >;
   /** What this request has established, or `null` while it is still unresolved. */
   poll(
     ctx: AgentContext,
