@@ -15,11 +15,12 @@ import { type ShellRoute, spawned } from "./machine";
 import { quoted } from "../../../src/ssh-argv";
 import { CHILD_CWD, childEnv, which } from "./login-env";
 import { ranWith, shOn, tracked } from "./onboarding";
+import { redact } from "../../../src/redact";
 
 export const GITLAB = `https://${GITLAB_HOST}`;
 
 /** What Desktop keeps, by name. */
-export type KeyringEntry = "gitlab-token" | "helle-token";
+export type KeyringEntry = "gitlab-token" | "helle-token" | "slack-token";
 
 export interface Keyring {
   readonly lookup: (key: KeyringEntry) => Effect.Effect<string | null, string>;
@@ -27,7 +28,7 @@ export interface Keyring {
   readonly clear: (key: KeyringEntry) => Effect.Effect<void, string>;
 }
 
-const ENTRIES: ReadonlyArray<KeyringEntry> = ["gitlab-token", "helle-token"];
+const ENTRIES: ReadonlyArray<KeyringEntry> = ["gitlab-token", "helle-token", "slack-token"];
 
 const parsed = (text: string) =>
   new Map(
@@ -112,6 +113,7 @@ export const secretsFor = (keyring: Keyring) =>
     const lines: Array<readonly [string, KeyringEntry]> = [
       ["GITLAB_TOKEN", "gitlab-token"],
       ["HELLE_API_TOKEN", "helle-token"],
+      ["SLACK_BOT_TOKEN", "slack-token"],
     ];
     let text = "";
     for (const [name, key] of lines) {
@@ -189,7 +191,7 @@ export const helleOwner = (base: string, token: string) =>
 const GIVE_LIMIT = "15 seconds";
 
 /** Runs `script` on every Machine with `stdin`, and says how each went. */
-const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: string) =>
+const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: string, token: string) =>
   Effect.forEach(
     routes,
     (route) =>
@@ -201,14 +203,30 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
           duration: GIVE_LIMIT,
           orElse: () => Effect.fail("not reached; it is given when it next connects"),
         }),
-        Effect.catch((failed) => Effect.succeed(failed)),
+        Effect.catch((failed) => Effect.succeed(redact(failed.split(token).join("<redacted>")))),
         Effect.map((failed) => ({ name: route.machine.name, failed })),
       ),
     { concurrency: "unbounded" },
   );
 
+// Suppress login output before a paired host records its shell result.
 export const giveToken = (routes: ReadonlyArray<ShellRoute>, host: string, token: string) =>
-  onEvery(routes, `exec glab auth login --hostname ${quoted(host)} --stdin`, `${token}\n`);
+  onEvery(
+    routes,
+    `command -v glab >/dev/null 2>&1 || { echo "Install glab on this Machine, then try again" >&2; exit 127; }; glab auth login --hostname ${quoted(host)} --stdin >/dev/null 2>&1 || { echo "glab refused the login; check the token and host" >&2; exit 1; }`,
+    `${token}\n`,
+    token,
+  );
+
+export const GITHUB_WEB_LOGIN = "gh auth login --hostname github.com --web";
+
+export const giveGithub = (routes: ReadonlyArray<ShellRoute>, token: string) =>
+  onEvery(
+    routes,
+    'command -v gh >/dev/null 2>&1 || { echo "Install gh on this Machine, then try again" >&2; exit 127; }; gh auth login --hostname github.com --with-token >/dev/null 2>&1 || { echo "gh refused the login; check the token" >&2; exit 1; }',
+    `${token}\n`,
+    token,
+  );
 
 /** Writes Helle's credentials file, owner-only, on every Machine, as onboarding does. */
 export const giveHelle = (routes: ReadonlyArray<ShellRoute>, url: string, token: string) =>
@@ -216,7 +234,21 @@ export const giveHelle = (routes: ReadonlyArray<ShellRoute>, url: string, token:
     routes,
     'umask 077 && mkdir -p "$HOME/.config/helle" && cat > "$HOME/.config/helle/env.new" && mv "$HOME/.config/helle/env.new" "$HOME/.config/helle/env"',
     `HELLE_API_URL=${url}\nHELLE_API_TOKEN=${token}\n`,
+    token,
   );
+
+export const giveSlack = (routes: ReadonlyArray<ShellRoute>, token: string) =>
+  token === ""
+    ? clearSlack(routes)
+    : onEvery(
+        routes,
+        'umask 077 && mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/collie" && rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env.new" && cat > "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env.new" && mv "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env.new" "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env"',
+        `SLACK_BOT_TOKEN=${token}\n`,
+        token,
+      );
+
+export const clearSlack = (routes: ReadonlyArray<ShellRoute>) =>
+  onEvery(routes, 'rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env"', "", "<no-token>");
 
 /** Whether a credential can go on a `KEY=value` line, as every Machine is given it. */
 export const oneLine = (value: string) => value !== "" && !/[\r\n]/.test(value);

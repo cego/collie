@@ -23,6 +23,7 @@ import {
 import { loadDefinitions, personaData } from "./definitions";
 import type { Described, HostDefinitions } from "./definitions-model";
 import { reason } from "./naming";
+import { HOST_CONNECTION_USES } from "./connection-model";
 
 export { Described, Drawn } from "./definitions-model";
 import { loadEntry, provisionToolchain, refreshToolchain, typecheckEntry } from "./engine";
@@ -124,6 +125,7 @@ export const readDefinitions = Effect.fn("Authoring.readDefinitions")(function* 
   ]);
   return {
     workflows,
+    connectionUses: HOST_CONNECTION_USES,
     problems,
     personas: [...personas.values()].sort((a, b) => a.name.localeCompare(b.name)).map(personaData),
     errors,

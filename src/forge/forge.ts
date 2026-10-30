@@ -356,7 +356,15 @@ export interface Forge {
   readonly review: (ref: MrRef) => ReviewCommands;
 }
 
-export const FORGES: Readonly<Record<MrForge, Forge>> = { gitlab, github };
+// The adapters import mr.ts, which imports this registry before they finish initializing.
+export const FORGES: Readonly<Record<MrForge, Forge>> = {
+  get gitlab() {
+    return gitlab;
+  },
+  get github() {
+    return github;
+  },
+};
 
 /** The forge a pipeline or Actions run's URL is on: GitHub on github.com, GitLab elsewhere. */
 export function forgeOfUrl(url: string): Forge {

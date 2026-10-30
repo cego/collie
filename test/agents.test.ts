@@ -45,6 +45,8 @@ import {
   controlPath,
   evidenceDir,
   foundationLayer,
+  Registry,
+  registryLayer,
   loadEntry,
   pollStatus,
   runDir,
@@ -86,6 +88,7 @@ import type { AgentProfile } from "../src/profile";
 import type { ClaudeSubagents } from "../src/subagents";
 import { FakeBin } from "./support/bin";
 import { forgeHttpOnPath, forgeOnPath } from "./support/forge";
+import type { HarnessCatalogue } from "../src/catalogue-model";
 
 let rig: Rig;
 let dir: string;
@@ -235,7 +238,108 @@ const session = <A, E>(
 const started = (runId: string, skip = false) =>
   work.execute({ runId, input: { skip } }).pipe(Effect.result);
 
+const machineCatalogue: HarnessCatalogue = {
+  harness: "claude",
+  at: "2026-10-29T09:00:00.000Z",
+  table: null,
+  entries: [
+    {
+      model: "sonnet",
+      label: "Sonnet",
+      description: null,
+      efforts: ["low", "medium", "high"],
+      defaultEffort: null,
+      hidden: false,
+      from: "harness",
+    },
+  ],
+};
+
+test("a model absent from this Machine's catalogue starts no agent or pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "unexpected launch" }]);
+      const result = yield* session(started("r-catalogue"), {
+        catalogue: Effect.succeed({ machine: "vm-gpu", harnesses: [machineCatalogue] }),
+      });
+      expect(result._tag).toBe("Failure");
+      const problem = result._tag === "Failure" ? result.failure.reason : "";
+      expect(problem).toContain("vm-gpu");
+      expect(problem).toContain('"opus"');
+      expect(problem).toContain("sonnet");
+      expect(everyLaunch(yield* rig.calls())).toEqual([]);
+      expect(yield* rig.cmds()).not.toContain("tab create");
+    }),
+  ));
+
 const agentFor = (runId: string) => agentName(runId, "review", null, 1);
+
+test("an effort absent from this Machine's model starts no agent and names the supported efforts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "unexpected launch" }]);
+      const result = yield* session(started("r-effort"), {
+        model: "sonnet",
+        effort: "max",
+        catalogue: Effect.succeed({ machine: "vm-gpu", harnesses: [machineCatalogue] }),
+      });
+      expect(result._tag).toBe("Failure");
+      const problem = result._tag === "Failure" ? result.failure.reason : "";
+      expect(problem).toContain('"max"');
+      expect(problem).toContain("vm-gpu's claude/sonnet");
+      expect(problem).toContain("low, medium, high");
+      expect(everyLaunch(yield* rig.calls())).toEqual([]);
+      expect(yield* rig.cmds()).not.toContain("tab create");
+    }),
+  ));
+
+test("a start accepts a table-only model only while its Machine's harness cannot be read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      let table: string | null = "Claude login expired";
+      yield* Effect.gen(function* () {
+        const registry = yield* Registry;
+        const generation = yield* registry.load(
+          new URL("./fixtures/workflows/quiet.workflow.ts", import.meta.url).pathname,
+        );
+        const start = {
+          generation,
+          project: rig.projectDir,
+          input: {},
+          request: "table-check",
+          options: { model: "opusplan" },
+        };
+        expect((yield* registry.check(start).pipe(Effect.result))._tag).toBe("Success");
+        table = null;
+        const read = yield* registry.check(start).pipe(Effect.result);
+        expect(read._tag).toBe("Failure");
+        expect(read._tag === "Failure" ? read.failure.reason : "").toContain(
+          "vm-gpu's claude has no model",
+        );
+        table = "Claude login expired";
+        const bad = yield* registry
+          .check({ ...start, options: { model: "gpt-5" } })
+          .pipe(Effect.result);
+        expect(bad._tag === "Failure" ? bad.failure.reason : "").toContain(
+          "from Collie's table: Claude login expired",
+        );
+      }).pipe(
+        Effect.provide(
+          registryLayer(dir, {
+            userDir: rig.userDir,
+            placing: { env: rig.pluginEnv(), herdr: new FakeHerdr(rig.pluginEnv()) },
+            catalogue: Effect.sync(() => ({
+              machine: "vm-gpu",
+              harnesses: [{ ...machineCatalogue, table }],
+            })),
+          }),
+        ),
+        Effect.provide(agentsLayer(hostOf())),
+        Effect.provide(foundationLayer({ dir })),
+        Effect.scoped,
+      );
+    }),
+  ));
 
 /**
  * A parked Run picked up again, as a host's control does it: the execution is resumed and

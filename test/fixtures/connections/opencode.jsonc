@@ -1,0 +1,10 @@
+{
+  // OpenCode's global MCP settings
+  "mcp": {
+    "linear": {
+      "type": "remote",
+      "url": "https://mcp.linear.app/mcp",
+      "enabled": true,
+    },
+  },
+}

@@ -35,7 +35,7 @@ const items = computed(() => {
     variant="soft"
     size="sm"
     class="max-w-full"
-    :ui="{ content: 'min-w-72' }"
+    :ui="{ content: 'min-w-72', itemDescription: 'whitespace-normal' }"
   >
     <span class="truncate">{{ select.label }}</span>
     <template v-if="select.warning" #content-top>

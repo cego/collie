@@ -75,6 +75,8 @@ import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
 import type { FastForward, ProductionRead, RollbackRead, StageRead, TagRead } from "./releasing";
 import type { Holders } from "./helle";
+import { ConnectionId, type ConnectionReading } from "./connection-model";
+export { ConnectionId, ConnectionReading } from "./connection-model";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
 
@@ -550,8 +552,16 @@ export type Lent =
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner;
 
+export interface WorkflowConnections {
+  readonly needs?: Partial<Record<ConnectionId, { readonly with: string }>>;
+  readonly uses?: Partial<
+    Record<ConnectionId, { readonly with: string; readonly without: string }>
+  >;
+}
+
 /** What a definition declares about itself beside what it does. */
 export interface Declarations {
+  readonly connections?: WorkflowConnections;
   /** The Steps it expects to take, in order: a forecast, never a precondition. */
   readonly path?: ReadonlyArray<Step>;
   /** Input field to the strategy that infers it. At most one field per exclusive one. */
@@ -826,14 +836,14 @@ export interface HostApi {
    * rather than written into its content.
    */
   readonly config: (dotted: string) => Effect.Effect<string>;
-  /**
-   * Whether an agent Claude Code runs in `cwd` has a Linear MCP server, read as `collie
-   * doctor` reads it, with where it is or why not. Read it inside an Activity of the
-   * workflow's own where it branches on it.
-   */
-  readonly linear: (
-    cwd: string,
-  ) => Effect.Effect<{ readonly reachable: boolean; readonly detail: string }>;
+  /** This Machine's reading; take it inside an Activity when branching on it. */
+  readonly connection: (id: ConnectionId) => Effect.Effect<ConnectionReading>;
+  /** Posts this Run's recorded merge request, linked by its forge title; a refusal never fails the Run. */
+  readonly shareForApproval: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly channel: string;
+  }) => Effect.Effect<{ readonly posted: boolean; readonly link?: string; readonly why?: string }>;
   /**
    * Whether a merge request can be opened from this checkout, and what it would carry —
    * the configured assignee, the repository's own template, the issues this branch
@@ -1271,17 +1281,17 @@ export const ask = (question: {
   Effect.gen(function* () {
     const host = yield* Host;
     const runId = (yield* Run).id;
-    yield* host.asking(runId, {
-      name: question.name,
-      prompt: question.prompt ?? question.name,
-      options: question.options ?? [],
-    });
     const at = yield* CurrentStep;
     if (at !== null)
       yield* Activity.make({
         name: `ask.${question.name}.step`,
         execute: host.step(runId, { kind: "question", key: at.key, name: question.name }),
       });
+    yield* host.asking(runId, {
+      name: question.name,
+      prompt: question.prompt ?? question.name,
+      options: question.options ?? [],
+    });
     return yield* DurableDeferred.await(
       DurableDeferred.make(question.name, { success: Schema.String }),
     );
@@ -1543,6 +1553,7 @@ const isDeclaredCheckout = Schema.is(DeclaredCheckout);
  * the Flow forecasts. A workflow's body never consults any of it.
  */
 export interface WorkflowMetadata {
+  readonly connections?: WorkflowConnections;
   /** Input field to the strategy that infers it. At most one field per exclusive one. */
   readonly hints?: Readonly<Record<string, InputStrategy>>;
   readonly outcome?: OutcomeContract;
@@ -1571,6 +1582,7 @@ export interface OutcomeContract {
 
 /** What a finished Run offers next, named by the public id of the workflow it starts. */
 export interface FollowUp {
+  readonly connections?: ReadonlyArray<ConnectionId>;
   readonly id: string;
   readonly title: string;
   readonly workflow: string;
@@ -1608,6 +1620,7 @@ export interface ActionFacts {
  * title would start a different one. `arguments` is the child's schema, not presentation.
  */
 export interface ActionProvider {
+  readonly connections?: ReadonlyArray<ConnectionId>;
   readonly id: string;
   readonly title: string;
   readonly workflow: string;
@@ -1647,6 +1660,7 @@ const KNOWN_STRATEGIES: ReadonlySet<string> = new Set(INPUT_STRATEGIES);
 
 const Callable = Schema.declare(Predicate.isFunction);
 const OfferFields = {
+  connections: Schema.optionalKey(Schema.Array(ConnectionId)),
   id: Schema.String,
   title: Schema.String,
   workflow: Schema.String,
@@ -1655,6 +1669,19 @@ const OfferFields = {
 
 /** What metadata has to be before any of it can be read: a module is JavaScript by now. */
 const DeclaredMetadata = Schema.Struct({
+  connections: Schema.optionalKey(
+    Schema.Struct({
+      needs: Schema.optionalKey(
+        Schema.Record(Schema.String, Schema.Struct({ with: Schema.NonEmptyString })),
+      ),
+      uses: Schema.optionalKey(
+        Schema.Record(
+          Schema.String,
+          Schema.Struct({ with: Schema.NonEmptyString, without: Schema.NonEmptyString }),
+        ),
+      ),
+    }),
+  ),
   hints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   closes: Schema.optionalKey(Schema.Literal("reported")),
   outcome: Schema.optionalKey(
@@ -1706,7 +1733,20 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
   }
   const declared = entry.metadata === undefined ? null : readMetadata(entry.metadata);
   if (declared?._tag === "Failure") {
-    return [...problems, `metadata is not what a workflow declares: ${declared.failure.message}`];
+    return [
+      ...problems,
+      `${entry.id}: metadata is not what a workflow declares: ${declared.failure.message}`,
+    ];
+  }
+  for (const kind of ["needs", "uses"] as const) {
+    for (const [id, text] of Object.entries(entry.metadata?.connections?.[kind] ?? {})) {
+      if (!Schema.is(ConnectionId)(id)) problems.push(`${entry.id}: unknown Connection "${id}"`);
+      for (const [column, value] of Object.entries(text))
+        if (value.trim() === "")
+          problems.push(`${entry.id}: ${kind}.${id}.${column} must have text`);
+      if (kind === "uses" && id in (entry.metadata?.connections?.needs ?? {}))
+        problems.push(`${entry.id}: Connection "${id}" is both needed and used`);
+    }
   }
   problems.push(...hintProblems(entry.metadata?.hints ?? {}, fields));
   problems.push(...outcomeProblems(entry.metadata?.outcome));
@@ -1714,7 +1754,7 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
   if (checkout !== undefined && !isDeclaredCheckout(checkout)) {
     problems.push(`checkout ${JSON.stringify(checkout)} is not branch or roaming`);
   }
-  problems.push(...offerProblems(entry.metadata));
+  problems.push(...offerProblems(entry.metadata, entry.id));
   for (const id of repeatedIds(entry.metadata?.path ?? []))
     problems.push(`path lists the Step "${id}" more than once`);
   return problems;
@@ -1756,10 +1796,22 @@ function outcomeProblems(outcome: OutcomeContract | undefined): ReadonlyArray<st
   return problems;
 }
 
-function offerProblems(metadata: WorkflowMetadata | undefined): ReadonlyArray<string> {
+function offerProblems(
+  metadata: WorkflowMetadata | undefined,
+  workflow: string,
+): ReadonlyArray<string> {
   const problems: string[] = [];
   const seen = new Set<string>();
   for (const offer of [...(metadata?.actions ?? []), ...(metadata?.followUps ?? [])]) {
+    for (const id of offer.connections ?? []) {
+      if (
+        !(id in (metadata?.connections?.uses ?? {})) &&
+        !(id in (metadata?.connections?.needs ?? {}))
+      )
+        problems.push(
+          `${workflow}: offer "${offer.id}" lists Connection "${id}", which its workflow does not declare`,
+        );
+    }
     if (!IDENTITY.test(offer.id)) problems.push(`"${offer.id}" is not an identity for an offer`);
     if (seen.has(offer.id)) problems.push(`two offers are called "${offer.id}"`);
     seen.add(offer.id);
@@ -1777,7 +1829,7 @@ function offerProblems(metadata: WorkflowMetadata | undefined): ReadonlyArray<st
  * values themselves stay here — presentation travels, behaviour does not.
  */
 export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema.Json {
-  return {
+  const described = {
     hints: { ...metadata?.hints },
     outcome: metadata?.outcome?.fixed ?? null,
     selectable: [...(metadata?.outcome?.selectable ?? [])],
@@ -1789,6 +1841,7 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema
       title: offer.title,
       workflow: offer.workflow,
       when: offer.when,
+      connections: [...(offer.connections ?? [])],
     })),
     actions: (metadata?.actions ?? []).map((action) => {
       const projected = jsonSchemaFor(Schema.Struct(action.arguments));
@@ -1796,11 +1849,20 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema
         id: action.id,
         title: action.title,
         workflow: action.workflow,
+        connections: [...(action.connections ?? [])],
         arguments: projected.document,
         // What the drawing does not say. The action is offered either way.
         limits: [...projected.limits],
       };
     }),
+  };
+  if (metadata?.connections === undefined) return described;
+  return {
+    ...described,
+    connections: {
+      needs: { ...metadata.connections.needs },
+      uses: { ...metadata.connections.uses },
+    },
   };
 }
 

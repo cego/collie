@@ -30,6 +30,7 @@ export interface DesktopHolds {
 export const CREDENTIAL_SAID = {
   gitlab: { lacks: "the GitLab token", none: "GitLab token" },
   helle: { lacks: "Helle's token", none: "Helle token" },
+  slack: { lacks: "Slack's token", none: "Slack token" },
 } satisfies Record<Credential, { lacks: string; none: string }>;
 
 export const NOT_LIVE_SAID = {
@@ -145,9 +146,9 @@ export const flockInSync = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHol
       `${row.name}: ${state === "behind" ? `behind on ${[...new Set(behind.map(({ part }) => part))].join(" and ")}` : NOT_LIVE_SAID[state]}`,
     ];
   });
-  const none = CREDENTIALS.filter((credential) => !desktop.credentials.includes(credential)).map(
-    (credential) => `Desktop has no ${CREDENTIAL_SAID[credential].none} to give`,
-  );
+  const none = CREDENTIALS.filter(
+    (credential) => credential !== "slack" && !desktop.credentials.includes(credential),
+  ).map((credential) => `Desktop has no ${CREDENTIAL_SAID[credential].none} to give`);
   return {
     said: [
       lagging.length === 0

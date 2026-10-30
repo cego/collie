@@ -28,6 +28,8 @@ import {
 import { HELLE_TOKEN_STEPS } from "../../../src/helle-url";
 import { isString, type JsonObject } from "../../../src/schema";
 import { scheduleLines } from "../../../src/schedule-model";
+import { modelsLines } from "../../../src/catalogue-model";
+import { connectionsLines } from "../../../src/connection-model";
 import { DEFAULT_MODEL } from "../../../src/harness-choice";
 import {
   answerWith,
@@ -69,6 +71,8 @@ export const chatDoor = (door: Door) => ({
   read: (asked: Parameters<Door["read"]>[0]) => door.read(asked),
   progress: (asked: Parameters<Door["progress"]>[0]) => door.progress(asked),
   schedules: () => door.schedules(),
+  models: () => door.models(),
+  connections: () => door.connections(),
   changeSchedule: (asked: Parameters<Door["changeSchedule"]>[0]) => door.changeSchedule(asked),
   claimedInHelle: (asked: Parameters<Door["claimedInHelle"]>[0]) => door.claimedInHelle(asked),
 });
@@ -238,6 +242,8 @@ export const FlockTools = Toolkit.make(
   CollieTools.tools.collie_workspaces,
   CollieTools.tools.collie_receipts,
   CollieTools.tools.collie_news,
+  CollieTools.tools.collie_models,
+  CollieTools.tools.collie_connections,
   CollieTools.tools.collie_hold,
   CollieTools.tools.collie_do,
   CollieTools.tools.collie_propose,
@@ -565,6 +571,75 @@ const schedules = Effect.fn("FlockTools.schedules")(function* (flock: FlockChat)
     { concurrency: "unbounded" },
   );
   return sections.length === 0 ? "No Machines to read Schedules from." : sections.join("\n\n");
+});
+
+/** Each Machine's Harness catalogue, or the one Machine `machine` names. */
+const models = Effect.fn("FlockTools.models")(function* (
+  flock: FlockChat,
+  asked: { readonly machine?: string; readonly harness?: string },
+) {
+  const machines = flock
+    .machines()
+    .filter((machine) => asked.machine === undefined || machine.name === asked.machine);
+  if (machines.length === 0)
+    return asked.machine === undefined
+      ? "No Machines to read models from."
+      : `No Machine "${asked.machine}". Nothing was read; collie_herd names the Machines.`;
+  const sections = yield* Effect.forEach(
+    machines,
+    (machine) =>
+      reach(machine).pipe(
+        Effect.flatMap(({ door }) => door.models()),
+        Effect.map((catalogues) => modelsLines(catalogues, asked.harness)),
+        Effect.timeout(ANSWER_WITHIN),
+        Effect.catch((error) => Effect.succeed(`Its models could not be read: ${reasonOf(error)}`)),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.succeed(
+                `Its models could not be read; upgrade Collie on ${machine.name}, whose host may have no models operation.`,
+              ),
+        ),
+        Effect.map((text) => `## ${machine.name}\n\n${text}`),
+      ),
+    { concurrency: "unbounded" },
+  );
+  return sections.join("\n\n");
+});
+
+const connections = Effect.fn("FlockTools.connections")(function* (
+  flock: FlockChat,
+  asked: { readonly machine?: string },
+) {
+  const machines = flock
+    .machines()
+    .filter((machine) => asked.machine === undefined || machine.name === asked.machine);
+  if (machines.length === 0)
+    return asked.machine === undefined
+      ? "No Machines to read Connections from."
+      : `No Machine "${asked.machine}". Nothing was read; collie_herd names the Machines.`;
+  const sections = yield* Effect.forEach(
+    machines,
+    (machine) =>
+      reach(machine).pipe(
+        Effect.flatMap(({ door }) => door.connections()),
+        Effect.map(connectionsLines),
+        Effect.timeout(ANSWER_WITHIN),
+        Effect.catch((error) =>
+          Effect.succeed(`Its Connections could not be read: ${reasonOf(error)}`),
+        ),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.succeed(
+                `Its Connections could not be read; upgrade Collie on ${machine.name}, whose host may have no connections operation.`,
+              ),
+        ),
+        Effect.map((text) => `## ${machine.name}\n\n${text}`),
+      ),
+    { concurrency: "unbounded" },
+  );
+  return sections.join("\n\n");
 });
 
 type NewsItem = (typeof NewsBatch.Type)["items"][number];
@@ -1231,6 +1306,8 @@ const handlersFor = (flock: FlockChat, sent: JsonObject) =>
       collie_schedules: () => answer(schedules(flock)),
       collie_receipts: (input) => answer(receipts(flock, input)),
       collie_news: () => answer(news(flock)),
+      collie_models: (asked) => answer(models(flock, asked)),
+      collie_connections: (asked) => answer(connections(flock, asked)),
       collie_hold: (input) => answer(hold(flock, input)),
       collie_do: () => answer(carryOut(flock, sent)),
       collie_propose: () => answer(propose(flock, sent)),

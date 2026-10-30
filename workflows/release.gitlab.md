@@ -244,11 +244,12 @@ production carries the merge, whatever your Output says.
 
 ## share
 
-The human checked {{inputs.mr}} and asked for it to be shared for approval in the Slack
-channel {{channel}}. Read its title with `glab mr view`. Then post exactly one message
-in {{channel}}: {{inputs.mr}} as a Slack link whose text is that title, written
-`<URL|TITLE>`, with no other words, no emoji, no mention and no thread reply. Post nowhere
-else, and change nothing in this checkout or on the merge request.
+The human checked {{inputs.mr}} and asked for it to be shared for approval in {{channel}}.
+The host reads its title from GitLab and posts through the host's Slack adapter:
+{{inputs.mr}} linked by that title, written `<URL|TITLE>`, with
+no other words, no emoji, no mention and no thread reply.
+The host records the message's permalink, or why the post failed or its permalink is missing.
+The release continues to its review wait even when Slack refuses.
 
-If you have no Slack tool, or cannot post in {{channel}}, post nothing and say why in your
-Output. Then write your Output: whether you posted, and the message's permalink.
+Without a working Slack Connection, the Run asks you to share it yourself and shows the address to copy.
+No agent posts in Slack.
