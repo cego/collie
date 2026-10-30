@@ -13,6 +13,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
+import * as Struct from "effect/Struct";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
@@ -1492,6 +1493,7 @@ scenario(
         const result = yield* ran({
           entry: shipped("plan"),
           runId: "r-plan-alone",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
           input: { ...GOAL, then: "implement" },
         });
 
@@ -1581,6 +1583,7 @@ scenario(
         yield* ran({
           entry: shipped("plan"),
           runId: "r-plan-flow-alone",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
           input: { ...GOAL, then: "implement" },
         });
         expect(statesOf(yield* laneNow("r-plan-flow-alone", "succeeded"))).toEqual([
@@ -1607,6 +1610,7 @@ scenario(
         const result = yield* ran({
           entry: shipped("plan"),
           runId: "r-plan-alone-bad",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
           input: { ...GOAL, then: "implement" },
         });
 
@@ -2039,13 +2043,13 @@ scenario(
 
 const REVIEWED = {
   gitlab: {
-    diff: "glab mr diff '30' --repo 'gitlab.example.com/group/app'",
-    view: "glab mr view '30' --repo 'gitlab.example.com/group/app'",
+    diff: "glab mr diff 30 --repo gitlab.example.com/group/app",
+    view: "glab mr view 30 --repo gitlab.example.com/group/app",
     other: "gh",
   },
   github: {
-    diff: "gh pr diff '30' --repo 'owner/repo'",
-    view: "gh pr view '30' --repo 'owner/repo'",
+    diff: "gh pr diff 30 --repo owner/repo",
+    view: "gh pr view 30 --repo owner/repo",
     other: "glab",
   },
 } as const;
@@ -7745,7 +7749,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(said(result)).toBe(OPENED.mr_url);
           const prompt = yield* asked(runId, "mr");
           expect(prompt).toContain(`${CLI[name]} ${name === "gitlab" ? "mr" : "pr"} create`);
-          expect(prompt).toContain("--assignee 'tester'");
+          expect(prompt).toContain("--assignee tester");
           expect(prompt).not.toMatch(new RegExp(`\\b${DELIVERY[name].other}\\b`));
           // Branch naming and readiness asked this forge alone.
           expect(yield* other.calls()).toEqual([]);
@@ -9867,7 +9871,7 @@ scenario(
                 const now = yield* forge.model();
                 yield* forge.set({
                   ...now,
-                  mrs: Arr.map(now.mrs, ({ pipelineAt: _, ...one }) => one),
+                  mrs: Arr.map(now.mrs, (one) => Struct.omit(one, ["pipelineAt"])),
                 });
                 yield* goAsked(run.asked, "go-1");
                 yield* run.answer("go-1", "Finish");

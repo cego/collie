@@ -555,7 +555,7 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const rel = Str.split(pipe(target, Str.slice(stateDir.length + 1)), "/");
-      const [top = "", name = "", file] = rel;
+      const [top, name = "", file] = rel;
       if (rel.length === 1) {
         if (
           KEPT_KINDS.has(top) ||
@@ -1781,7 +1781,6 @@ export const desktopSweeper = (root: string, state: string, installedPath: strin
     remove: (item) =>
       Effect.gen(function* () {
         const found = yield* verdicts;
-        const fs = yield* FileSystem.FileSystem;
         if (found.usage !== null && found.usage.target === item.target) {
           const before = yield* sizeOf(item.target);
           yield* trimUsage(found.usage);

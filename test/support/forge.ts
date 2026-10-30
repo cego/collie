@@ -1403,7 +1403,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   const pulls = /^repos\/([^/]+\/[^/]+)\/pulls\?(.*)$/.exec(route);
   if (pulls) {
     const query = new URLSearchParams(pulls[2]);
-    const [owner = "", branch = ""] = Str.split(query.get("head") ?? "", /:(.*)/);
+    const [owner, branch = ""] = Str.split(query.get("head") ?? "", /:(.*)/);
     return json(
       pageOf(
         route,

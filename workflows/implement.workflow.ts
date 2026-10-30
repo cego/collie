@@ -265,6 +265,7 @@ export default defineWorkflow({
       description:
         "Where the work is written down: a plan, a review, an issue, a follow-up, or words",
     }),
+    // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
       Schema.Literals(["", "finish", "release"]).annotate({
         description:
@@ -829,6 +830,7 @@ export default defineWorkflow({
         ),
       });
       if (delivered.nothing !== undefined) return delivered.nothing;
+      // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
       return yield* releasing({ mr: delivered.mr, cwd, then: asked.then ?? "" });
     }),
 });

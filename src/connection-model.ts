@@ -1,5 +1,5 @@
 import * as Str from "effect/String";
-import { pipe as pipe } from "effect/Function";
+import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Schema } from "effect";
 

@@ -741,7 +741,7 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
   recordedBy?: RecordedBy | undefined;
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
 }) {
-  const { run, branch, first } = opts;
+  const { run, branch } = opts;
   // Again, under the lock: a Run that waited here reuses what the one before it cut.
   const listing = yield* gitWorktrees(run, opts.repo);
   if (!listing) return { refused: `${opts.repo} is not a git checkout` };
@@ -1646,7 +1646,7 @@ const settled = Effect.fn("worktree.settled")(function* (
     project: string;
   },
 ) {
-  const { run, repo, settling } = opts;
+  const { run, settling } = opts;
   const dirty = yield* run("git", ["status", "--porcelain"], worktree.path);
   if (dirty.code !== 0) return keepIt("could not read the working tree");
   if (Str.trim(dirty.stdout) !== "") return keepIt("uncommitted changes");

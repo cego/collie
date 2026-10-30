@@ -315,7 +315,7 @@ effectTest(
       Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "tab create"))?.argv ?? [];
     expect(tab[tab.indexOf("--workspace") + 1]).toBe("w7");
     const ran = Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "pane run"));
-    expect(Arr.join(ran?.argv ?? [], " ")).toContain("'run' 'checks' 'r-check' '--follow'");
+    expect(Arr.join(ran?.argv ?? [], " ")).toContain("run checks r-check --follow");
     expect(Arr.join(ran?.argv ?? [], " ")).toContain(
       `HERDR_PLUGIN_STATE_DIR=${rig.pluginEnv().stateDir}`,
     );

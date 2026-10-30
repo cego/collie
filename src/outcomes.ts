@@ -14,7 +14,6 @@ import { launchDir, readLaunches, stemOf } from "./launches";
 import { deliveriesOf } from "./steering";
 import { readVerifications } from "./verify";
 import type { Metric } from "./metrics";
-import type { FrontDoor } from "./board-model";
 
 const STEERING = ["steer", "followup", "deliver", "correction"] as const;
 type SteeringKind = (typeof STEERING)[number];
@@ -96,7 +95,7 @@ export const ORIGINS = ["human", "chat", "agent", "host"] as const;
 export type Origin = (typeof ORIGINS)[number];
 
 /** Which kind of asker a front door is: a person at it, chat, an agent's CLI, or Collie. */
-export const originOf = (door: FrontDoor | string): Origin => {
+export const originOf = (door: string): Origin => {
   switch (door) {
     case "cli-tty":
     case "board":

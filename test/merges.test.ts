@@ -1,3 +1,4 @@
+import * as Order from "effect/Order";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -552,7 +553,12 @@ test("a merge stops what in its Task is still going: the parked builder and the 
           line.ref,
         ]),
       ).toEqual([["gitlab", "merged", "mk/collie!65"]]);
-      expect([...stops].sort()).toEqual([
+      expect(
+        Arr.sort(
+          stops,
+          Order.mapInput(Order.String, ([run]: readonly [string, string]) => run),
+        ),
+      ).toEqual([
         ["r-plan", "mk/collie!65 merged"],
         ["r-plan.implement", "mk/collie!65 merged"],
       ]);

@@ -46,7 +46,9 @@ test("an image's size is read from its header, and null where the header says no
   const le16 = (n: number) => [n & 255, n >>> 8];
   const le24 = (n: number) => [n & 255, (n >>> 8) & 255, n >>> 16];
   const ascii = (text: string) =>
-    Arr.map([...text], (c) => Option.getOrElse(Str.charCodeAt(c, 0), () => Number.NaN));
+    Arr.map(Arr.fromIterable(text), (c) =>
+      Option.getOrElse(Str.charCodeAt(c, 0), () => Number.NaN),
+    );
   const png = [
     0x89,
     ...ascii("PNG\r\n\x1a\n"),

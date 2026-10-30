@@ -30,7 +30,13 @@ import { CommandLine } from "effect/process";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as RpcServer from "effect/rpc/RpcServer";
-import Electrobun, { BrowserView, BrowserWindow, type RPCSchema, Utils } from "electrobun/bun";
+import Electrobun, {
+  BrowserView,
+  BrowserWindow,
+  type RPCSchema,
+  Utils,
+  Updater,
+} from "electrobun/bun";
 import {
   type Channel,
   type FrameSchema,
@@ -253,7 +259,7 @@ const StateDir = Config.String("XDG_STATE_HOME").pipe(
 const main = Effect.gen(function* () {
   // Before anything is spawned, so every child starts with the shell's PATH and variables.
   const tookLoginEnv = yield* takeLoginEnv;
-  const updater = yield* electrobunUpdater;
+  const updater = yield* electrobunUpdater(Updater);
   yield* applyAtLaunch(updater).pipe(
     Effect.catch((reason) => Effect.logWarning(`Desktop update not installed: ${reason}`)),
   );

@@ -714,9 +714,6 @@ const runChecks = Command.make(
   ),
 );
 
-const capped = (lines: ReadonlyArray<string>, cap = 20): string[] =>
-  lines.length > cap ? [...lines.slice(0, cap), `  …and ${lines.length - cap} more`] : [...lines];
-
 const runReport = Command.make(
   "report",
   {

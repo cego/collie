@@ -138,7 +138,9 @@ export const applyChange = (
 };
 
 /** Extra models per harness, from the Flock's `models.<harness>`. */
-export const extraModels = (flock: FlockSettings) =>
+export const extraModels = (
+  flock: FlockSettings,
+): Readonly<Record<string, ReadonlyArray<string>>> =>
   Rec.fromEntries(
     Arr.flatMap(Rec.toEntries(flock.settings), ([key, { value }]) =>
       pipe_(key, Str.startsWith("models.")) && Arr.isArray(value) && Arr.every(value, isString)

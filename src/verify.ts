@@ -82,7 +82,7 @@ const statusParts = (stdout: string) => {
   let rest = stdout;
   while (pipe(rest, Str.startsWith("# "))) {
     const end = Option.getOrElse(pipe(rest, Str.indexOf("\0")), () => -1);
-    const [key = "", ...value] = Str.split(pipe(rest, Str.slice(2, end)), " ");
+    const [key, ...value] = Str.split(pipe(rest, Str.slice(2, end)), " ");
     headers.set(key, Arr.join(value, " "));
     rest = pipe(rest, Str.slice(end + 1));
   }

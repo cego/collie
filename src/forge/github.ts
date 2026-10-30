@@ -234,7 +234,7 @@ const APPROVALS = new Map([
 
 /** One page of `ref`'s panel, its checks from `after`. */
 const panelPage = (ref: MrRef, cwd: string, after: string | null) => {
-  const [owner = "", name = ""] = Str.split(mrPath(ref), "/");
+  const [owner, name = ""] = Str.split(mrPath(ref), "/");
   return graphqlAs(PanelData, LOGIN, cwd, PANEL, { owner, name, number: Number(ref.iid), after });
 };
 
@@ -397,7 +397,7 @@ function protects(
     );
     if (!active.ok) return null;
     if (active.value.length > 0) return true;
-    const [owner = "", name = ""] = Str.split(repo, "/");
+    const [owner, name = ""] = Str.split(repo, "/");
     const classic = yield* graphqlAs(ClassicRules, LOGIN, cwd, CLASSIC_RULES, { owner, name });
     if (!classic.ok) return null;
     const nodes = classic.value.repository.branchProtectionRules.nodes;
@@ -690,7 +690,7 @@ const BranchRule = Schema.Struct({
 /** The approving reviews `base` requires, or why that cannot be counted. */
 const requiredReviews = (repo: string, base: string, cwd: string) =>
   Effect.gen(function* () {
-    const [owner = "", name = ""] = Str.split(repo, "/");
+    const [owner, name = ""] = Str.split(repo, "/");
     const protection = yield* graphqlAs(Protection, LOGIN, cwd, PROTECTION, {
       owner,
       name,
@@ -751,7 +751,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
     if (!reviewComments.ok) return reviewComments;
     const reviews = yield* pagesAs(Review, LOGIN, cwd, `repos/${repo}/pulls/${ref.iid}/reviews`);
     if (!reviews.ok) return reviews;
-    const [owner = "", name = ""] = Str.split(repo, "/");
+    const [owner, name = ""] = Str.split(repo, "/");
     const resolved = new Set<string>();
     let endCursor: string | null = null;
     for (;;) {
@@ -929,7 +929,7 @@ function merge(
   return Effect.gen(function* () {
     const where = mrWords(ref).label;
     const repo = mrPath(ref);
-    const [owner = "", name = ""] = Str.split(repo, "/");
+    const [owner, name = ""] = Str.split(repo, "/");
     const method = yield* graphqlAs(MergeMethod, LOGIN, cwd, MERGE_METHOD, { owner, name });
     if (!method.ok || method.value.repository === null)
       return {

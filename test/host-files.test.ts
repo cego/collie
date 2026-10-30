@@ -18,7 +18,7 @@ import { proves } from "./support/world";
 
 /** Why the host refused, where it did; anything else fails the test. */
 const reasonOf = (error: { readonly _tag: string }) =>
-  Schema.is(HostRefused)(error) ? error.reason : `not a refusal: ${String(error)}`;
+  Schema.is(HostRefused)(error) ? error.reason : `not a refusal: ${JSON.stringify(error)}`;
 
 test(
   "a chat channel reads, finds, writes and edits its Machine's files, and is refused the host's state",

@@ -11,6 +11,7 @@ import { parseSetting, SETTINGS } from "../settings";
 import { err } from "../operations";
 import { mutation } from "../envelope";
 import { nowIso } from "../time";
+import { isString } from "../schema";
 import { answering, cliDoor, requestIdFlag } from "./shared";
 
 const list = Command.make("list", {}, () =>
@@ -30,7 +31,14 @@ const list = Command.make("list", {}, () =>
         human: Arr.join(
           Arr.map(settings, ({ key, value, fallback }) =>
             Arr.join(
-              [key, value === null ? `(default ${fallback || "unset"})` : String(value)],
+              [
+                key,
+                value === null
+                  ? `(default ${fallback || "unset"})`
+                  : isString(value)
+                    ? value
+                    : JSON.stringify(value),
+              ],
               "\t",
             ),
           ),

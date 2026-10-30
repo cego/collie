@@ -58,10 +58,7 @@ test(
           ]),
         );
         yield* until(() => fs.exists(pids).pipe(Effect.orDie), Boolean);
-        const [parent = 0, child = 0] = Arr.map(
-          Str.split(yield* fs.readFileString(pids), " "),
-          Number,
-        );
+        const [parent, child = 0] = Arr.map(Str.split(yield* fs.readFileString(pids), " "), Number);
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
             try {

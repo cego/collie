@@ -1,5 +1,5 @@
 // Slack's documented Web API envelopes; requests are recorded without their authorization header.
-import { pipe as pipe } from "effect/Function";
+import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";

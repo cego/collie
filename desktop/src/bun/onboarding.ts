@@ -28,7 +28,7 @@ const ARCH = new Map([
 
 /** The release asset's platform for what `uname -sm` printed, or null where there is none. */
 export const platformOf = (uname: string) => {
-  const [os = "", arch = ""] = Str.split(Str.trim(uname), /\s+/);
+  const [os, arch = ""] = Str.split(Str.trim(uname), /\s+/);
   const [named, cpu] = [OS.get(os), ARCH.get(arch)];
   return named !== undefined && cpu !== undefined ? `${named}-${cpu}` : null;
 };

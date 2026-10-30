@@ -6,8 +6,6 @@ import { nowIso } from "./time";
 import type { ChildProcessSpawner } from "effect/process";
 import { shell, type Runner } from "./mr";
 
-// ponytail: the one branch releases are cut from; read origin/HEAD if that ever varies.
-const RELEASE_BRANCH = "master";
 export const RELEASE_TAG = /^\d+\.\d+\.\d+$/;
 
 export type Installation =

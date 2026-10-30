@@ -1350,7 +1350,10 @@ export const definitionsIn = (doors: ReadonlyMap<string, Reached>, installation:
       over(door, door.desktop.definitions()).pipe(
         Effect.mapError(
           (failed) =>
-            new ActionFailed({ ...failed, reason: `${door.machine.name}: ${failed.reason}` }),
+            new ActionFailed({
+              reason: `${door.machine.name}: ${failed.reason}`,
+              request: failed.request,
+            }),
         ),
       ),
     ),

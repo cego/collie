@@ -23,8 +23,10 @@ const colour256 = (n: number) => {
   return `rgb(${CUBE[Math.floor(at / 36)]}, ${CUBE[Math.floor(at / 6) % 6]}, ${CUBE[at % 6]})`;
 };
 
+// oxlint-disable-next-line no-control-regex -- Terminal CSI sequences begin with the ESC control byte.
 const ESCAPE = /\x1b\[([\d;?]*)([A-Za-z])/g;
 /** Operating-system commands, such as a link's, and character-set choices. */
+// oxlint-disable-next-line no-control-regex -- Terminal OSC sequences use ESC and BEL as protocol delimiters.
 const OTHER = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][\w]/g;
 
 /** What each plain SGR code sets, or which keys it clears. */

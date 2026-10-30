@@ -34,6 +34,7 @@ const storeOf = (dir: string) => `${dir}/attachments`;
 
 /** A name that stays one entry of the directory it is put in, and one line of a listing. */
 const plainName = (name: string) =>
+  // oxlint-disable-next-line no-control-regex -- File names must reject ASCII control bytes and DEL.
   !["", ".", "..", ".scaled"].includes(name) && !/[/\\\u0000-\u001f\u007f]/.test(name);
 
 /** `<sha256>/<name>`, which is where a copy is kept under the store. */

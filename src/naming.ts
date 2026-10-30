@@ -135,7 +135,7 @@ export const COLLIE_TAB = `${COLLIE_GLYPH} Collie`;
  * a branch is not a branch any more once it has been prettied up.
  */
 export function displayName(name: string): string {
-  const [head = "", ...rest] = Str.split(name, " · ");
+  const [head, ...rest] = Str.split(name, " · ");
   const word = /^[a-z][a-z-]*$/.test(head)
     ? `${Str.toUpperCase(head[0]!)}${pipe(head, Str.slice(1))}`
     : head;
@@ -164,7 +164,7 @@ export function targetLabel(workflow: string, slug: string, target: string): str
   const mr = parseMrTarget(target);
   if (mr) return `${mrWords(mr).sign}${mr.iid}`;
   if (pipe(target, Str.startsWith("branch:"))) {
-    const [base = "", head = ""] = Str.split(pipe(target, Str.slice(7)), "...");
+    const [base, head = ""] = Str.split(pipe(target, Str.slice(7)), "...");
     if (!opaque(head)) return head;
     if (!opaque(base)) return base;
     return "diff";

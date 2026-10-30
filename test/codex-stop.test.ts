@@ -11,7 +11,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Duration, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Duration, Effect, FileSystem, Path, Schema, flow, Result, Struct } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig } from "./support/recorder";
@@ -543,7 +543,7 @@ for (const [what, over, edit, why] of [
   [
     "a pid whose start time does not match the record",
     () => ({}),
-    (record: JsonObject) => ({ ...record, started: "1" }),
+    (record: JsonObject) => Struct.assign(record, { started: "1" }),
     /started at .*, not 1/,
   ],
 ] as const) {
@@ -929,18 +929,19 @@ test("a sweep stops again a record whose earlier stop failed before it signalled
       yield* working();
       const pid = yield* serverPid();
       const started = (yield* processOf(pid))!.started;
-      yield* editControl((record) => ({
-        ...record,
-        stop: {
-          state: "failed",
-          at: 0,
-          turns: null,
-          reason: "the connection was lost",
-          signalled: [],
-          left: [{ pid, started }],
-          noted: [],
-        },
-      }));
+      yield* editControl((record) =>
+        Struct.assign(record, {
+          stop: {
+            state: "failed",
+            at: 0,
+            turns: null,
+            reason: "the connection was lost",
+            signalled: [],
+            left: [{ pid, started }],
+            noted: [],
+          },
+        }),
+      );
       yield* closedByHand;
       const sweeper = compactionSweeper(
         `${rig.root}/state`,

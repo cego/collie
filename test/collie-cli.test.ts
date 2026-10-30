@@ -377,7 +377,6 @@ test(
             },
           },
         });
-        const fs = yield* FileSystem.FileSystem;
       }),
     ),
   60_000,

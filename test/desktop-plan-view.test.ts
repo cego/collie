@@ -108,9 +108,12 @@ describe("the spec's headings", () => {
 
   test("are read from the spec trimmed, as it is drawn", () =>
     Promise.all([
-      expect(texts("\n---\ntitle: x\n---\n\n# A\n")).resolves.toEqual(["A"]),
-      expect(texts("    # Indented first\n\n## B")).resolves.toEqual(["Indented first", "B"]),
-    ]));
+      texts("\n---\ntitle: x\n---\n\n# A\n"),
+      texts("    # Indented first\n\n## B"),
+    ]).then(([first, second]) => {
+      expect(first).toEqual(["A"]);
+      expect(second).toEqual(["Indented first", "B"]);
+    }));
 
   test("are counted inside quotes, raw HTML and components, as they are drawn", () =>
     expect(

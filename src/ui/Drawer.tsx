@@ -528,7 +528,14 @@ function Markdown(props: { text: string }) {
   createEffect(() => {
     if (node) node.content = (styled.state === "ready" && styled()) || text();
   });
-  return <text ref={node} fg={C.text} />;
+  return (
+    <text
+      ref={(renderable) => {
+        node = renderable;
+      }}
+      fg={C.text}
+    />
+  );
 }
 
 /**

@@ -27,7 +27,6 @@ import {
   type CardAction,
   cardActions,
   dispositionActions,
-  mrRefOf,
   primaryAction,
   type RunDetail,
   type TaskView,
@@ -1284,12 +1283,6 @@ export function olderFinished(
 /** Where this Task's work is. Which tab that is stays for the handler to resolve. */
 export function goToTab(view: TaskView): Command {
   return { _tag: "Jump", jump: { kind: "run", runId: view.run, label: view.name } };
-}
-
-/** However the Task names its merge request: the URL one opened, or the target one was
-    pointed at. */
-function mrOf(view: TaskView) {
-  return mrRefOf(view.mr);
 }
 
 /**

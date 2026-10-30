@@ -1763,7 +1763,8 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
     for (const id of Struct.keys(connections)) {
       const text = connections[id];
       if (text === undefined) continue;
-      if (!Schema.is(ConnectionId)(id)) problems.push(`${entry.id}: unknown Connection "${id}"`);
+      if (!Schema.is(ConnectionId)(id))
+        problems.push(`${entry.id}: unknown Connection "${String(id)}"`);
       for (const [column, value] of Rec.toEntries(text))
         if (Str.trim(value) === "")
           problems.push(`${entry.id}: ${kind}.${id}.${column} must have text`);

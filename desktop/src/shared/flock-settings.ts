@@ -1,7 +1,7 @@
 // The Flock's settings, as Desktop keeps them: each key is decided by its latest edit,
 // made in Desktop or on any Machine, and every Machine is given what it lacks.
 
-import { pipe as pipe } from "effect/Function";
+import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";

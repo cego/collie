@@ -70,7 +70,7 @@ export const imageSize = (bytes: Uint8Array) => {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const tag = (at: number, text: string) =>
     Arr.every(
-      [...text],
+      Arr.fromIterable(text),
       (c, i) => bytes[at + i] === Option.getOrElse(Str.charCodeAt(c, 0), () => Number.NaN),
     );
   const le24 = (at: number) => view.getUint16(at, true) + (view.getUint8(at + 2) << 16);

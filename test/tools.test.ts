@@ -1,3 +1,4 @@
+import * as Order from "effect/Order";
 import * as Cause from "effect/Cause";
 // What native chat may ask Collie. Two things must hold however the board is being
 // looked at: the reads cover the whole Herd, and they say when they could not carry all
@@ -116,7 +117,12 @@ const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>
 test("the tools are the whole of the model's reach, and only one of them asks for anything", () => {
   // Said out loud, because it is the boundary. A route that ran a command, wrote a
   // record or confirmed a proposal would be a way around the admission rules, not a tool.
-  expect(Arr.map(TOOLS, (tool) => tool.name).sort()).toEqual([
+  expect(
+    Arr.sort(
+      Arr.map(TOOLS, (tool) => tool.name),
+      Order.String,
+    ),
+  ).toEqual([
     "collie_connections",
     "collie_definitions",
     "collie_do",
@@ -149,7 +155,12 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
 
 test("the tools are one Toolkit, each saying how it fails and that it needs no approval", () => {
   // Every chat given this Toolkit is held to these, so they are decided here once.
-  expect(Arr.map(TOOLS, (tool) => tool.name).sort()).toEqual([
+  expect(
+    Arr.sort(
+      Arr.map(TOOLS, (tool) => tool.name),
+      Order.String,
+    ),
+  ).toEqual([
     "collie_connections",
     "collie_definitions",
     "collie_do",
@@ -179,7 +190,7 @@ test("a tool that writes does not tell a client it only reads", () => {
     Arr.filter(TOOLS, (tool) => !tool.readOnly),
     (tool) => tool.name,
   );
-  expect(writes.sort()).toEqual([
+  expect(Arr.sort(writes, Order.String)).toEqual([
     "collie_do",
     "collie_hold",
     "collie_installation",

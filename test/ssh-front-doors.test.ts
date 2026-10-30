@@ -106,7 +106,7 @@ test(
             expect(yield* logged(first, 0, "master", "login")).toEqual(["master mk@second"]);
             const rides = yield* logged(first, 0, "ride");
             expect(rides).toHaveLength(1);
-            expect(rides[0]).toContain("'invite'");
+            expect(rides[0]).toContain(" machine invite --for ");
 
             // The network starts refusing the port: the link comes up over the open connection.
             const advertised = Number(yield* listenerPort(first, second));

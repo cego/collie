@@ -6,7 +6,7 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
-import { DateTime, Effect, Schema, Stream, Struct } from "effect";
+import { DateTime, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";

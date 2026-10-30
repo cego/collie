@@ -36,6 +36,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if (!/^[0-9a-f]{64}$/.test(part.sha256)) return yield* refused(`${part.sha256} is not a sha256`);
+  // oxlint-disable-next-line no-control-regex -- File names must reject ASCII control bytes and DEL.
   if (["", ".", "..", ".partial"].includes(part.name) || /[/\\\u0000-\u001f\u007f]/.test(part.name))
     return yield* refused(`${part.name} is not a file's name`);
   if (part.size > ATTACHMENT_BYTES)

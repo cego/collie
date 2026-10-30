@@ -1,7 +1,7 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "effect";
 import type { PluginEnv } from "./env";
-import { platformLayer, type PlatformServices } from "./platform";
+import type { PlatformServices } from "./platform";
 import type { Herdr } from "./herdr";
 
 /**
@@ -98,7 +98,7 @@ const compactionProgram = Effect.gen(function* () {
   );
   const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.orElseSucceed(() => ""));
   if (line !== "") yield* Console.log(line);
-}).pipe(Effect.provide(platformLayer));
+});
 
 const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
   Effect.catch((cause) =>
@@ -108,7 +108,6 @@ const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
       process.exitCode = 1;
     }),
   ),
-  Effect.provide(platformLayer),
 );
 
 const started = Config.String("COLLIE_TEST_STARTS").pipe(
@@ -121,24 +120,21 @@ const started = Config.String("COLLIE_TEST_STARTS").pipe(
         ),
   ),
   Effect.ignore,
-  Effect.provide(platformLayer),
 );
 
 // `program`, not `app`: the handler around it is what turns a parse failure into one
 // JSON envelope and exit 2, and running `app` bare bypassed it entirely.
 const cliProgram = Effect.promise(() => import("./collie")).pipe(
   Effect.flatMap(({ program }) => program),
-  Effect.provide(platformLayer),
 );
 
+const chosen =
+  args[0] === "herdr" ? (args[1] === "compaction" ? compactionProgram : herdrProgram) : cliProgram;
+
 BunRuntime.runMain(
-  started.pipe(
-    Effect.andThen(
-      args[0] === "herdr"
-        ? args[1] === "compaction"
-          ? compactionProgram
-          : herdrProgram
-        : cliProgram,
+  Effect.promise(() => import("./platform")).pipe(
+    Effect.flatMap(({ platformLayer }) =>
+      started.pipe(Effect.andThen(chosen), Effect.provide(platformLayer)),
     ),
   ),
   { disableErrorReporting: true },

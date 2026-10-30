@@ -244,7 +244,7 @@ test("a Run keeps the set it started with, whatever the file says later", () =>
 
 test("a check is named by the script it runs, else the tool and its subcommand, else the tool", () => {
   const named = (command: string) => {
-    const [executable = "", ...argv] = Str.split(command, " ");
+    const [executable, ...argv] = Str.split(command, " ");
     return checkNameOf(executable, argv);
   };
   expect(named("bun run typecheck")).toBe("typecheck");

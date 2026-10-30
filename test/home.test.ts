@@ -509,7 +509,12 @@ test("while the Home is proven the host restates its tokens every few hours, so 
       const clock = yield* Clock.Clock;
       const sleeps = yield* Queue.unbounded<Duration.Duration>();
       const observed: Clock.Clock = {
-        ...clock,
+        currentTimeMillis: clock.currentTimeMillis,
+        currentTimeNanos: clock.currentTimeNanos,
+        monotonicTimeNanos: clock.monotonicTimeNanos,
+        currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+        currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+        monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
         sleep: (duration) =>
           Effect.gen(function* () {
             // Lock removal can finish before the job registers its next timer. Start

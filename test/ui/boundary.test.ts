@@ -24,21 +24,23 @@ function code(source: string): string {
   );
 }
 
-/**
- * Every value import of `effect` in a file, by whole statement rather than by line: the
- * formatter wraps a long import over several lines, and a per-line grep called such a
- * file compliant while the component had acquired a direct Effect dependency.
- */
-function effectValueImports(source: string): string[] {
+const scanner = new Bun.Transpiler({ loader: "tsx" });
+const PURE_EFFECT_HELPERS = new Set([
+  "effect/Array",
+  "effect/String",
+  "effect/Function",
+  "effect/Option",
+]);
+
+/** Pure helpers belong in views; runtime modules stay at the bridge. Type imports erase. */
+function effectRuntimeImports(source: string): string[] {
   return Arr.filter(
-    Arr.filter(
-      Arr.map(
-        [...pipe(code(source), Str.matchAll(/^import\b[\s\S]*?from\s*"[^"]*";/gm))],
-        (match) => match[0],
-      ),
-      (statement) => /from\s*"effect/.test(statement),
-    ),
-    (statement) => !/^import\s+type\b/.test(statement),
+    Arr.map(scanner.scanImports(source), ({ path }) => path),
+    (path) =>
+      (path === "effect" ||
+        pipe(path, Str.startsWith("effect/")) ||
+        pipe(path, Str.startsWith("@effect/"))) &&
+      !PURE_EFFECT_HELPERS.has(path),
   );
 }
 
@@ -47,27 +49,49 @@ test("a wrapped value import counts as one", () => {
   Effect,
   Queue,
 } from "effect";\n`;
-  expect(effectValueImports(wrapped)).toHaveLength(1);
-  expect(effectValueImports(`import { Effect } from "effect";\n`)).toHaveLength(1);
+  expect(effectRuntimeImports(wrapped)).toEqual(["effect"]);
+  expect(effectRuntimeImports(`import { Effect } from "effect";\n`)).toEqual(["effect"]);
   // Types are erased, so they are not the concern.
-  expect(effectValueImports(`import type {\n  Effect,\n} from "effect";\n`)).toEqual([]);
-  expect(effectValueImports(`import { Effect } from "./effect-helpers";\n`)).toEqual([]);
+  expect(effectRuntimeImports(`import type {\n  Effect,\n} from "effect";\n`)).toEqual([]);
+  expect(effectRuntimeImports(`import { type Effect } from "effect";\n`)).toEqual([]);
+  expect(effectRuntimeImports(`import { Effect } from "./effect-helpers";\n`)).toEqual([]);
+});
+
+test("views may import pure Effect helpers directly", () => {
+  for (const path of PURE_EFFECT_HELPERS)
+    expect(effectRuntimeImports(`import * as Helpers from "${path}";`)).toEqual([]);
+  // A barrel import also loads the runtime, even when the named export is a pure helper.
+  expect(effectRuntimeImports('import { Array } from "effect";')).toEqual(["effect"]);
+});
+
+test("runtime imports stay forbidden under aliases, deep paths and dynamic loading", () => {
+  for (const path of [
+    "effect",
+    "effect/Effect",
+    "effect/Queue",
+    "effect/ManagedRuntime",
+    "effect/internal/effect",
+    "@effect/platform-bun/BunRuntime",
+  ]) {
+    expect(effectRuntimeImports(`import * as Runtime from "${path}";`)).toEqual([path]);
+    expect(effectRuntimeImports(`import "${path}";`)).toEqual([path]);
+    expect(effectRuntimeImports(`const Runtime = import("${path}");`)).toEqual([path]);
+  }
 });
 
 /**
  * The rule that keeps the app testable: a component reaching for the Effect runtime is
  * the first step back to a screen nobody can test, and it is what puts a second runtime
- * inside the render tree. Type-only imports are erased, so they are not the concern —
- * a value import is.
+ * inside the render tree. Pure helpers manipulate the data the view already has.
  */
-test("no component imports effect", () =>
+test("components import only pure Effect helpers", () =>
   runEffect(
     Effect.gen(function* () {
       const components = yield* uiFiles((n) => pipe(n, Str.endsWith(".tsx")) && n !== "bridge.tsx");
       expect(Arr.map(components, (c) => c.name)).toContain("App.tsx");
 
       for (const { name, source } of components) {
-        expect([name, effectValueImports(source)]).toEqual([name, []]);
+        expect([name, effectRuntimeImports(source)]).toEqual([name, []]);
       }
     }),
   ));
@@ -83,7 +107,7 @@ test("the state layer holds no Effect", () =>
     Effect.gen(function* () {
       const [state] = yield* uiFiles((n) => n === "state.ts");
       const source = code(state!.source);
-      expect(source).not.toContain('from "effect"');
+      expect(effectRuntimeImports(state!.source)).toEqual([]);
       expect(source).not.toContain("Effect.");
     }),
   ));

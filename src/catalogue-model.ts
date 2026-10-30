@@ -3,7 +3,7 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { pipe as pipe } from "effect/Function";
+import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { Schema } from "effect";
 import { DEFAULT_MODEL, HARNESS_MODELS } from "./harness-choice";

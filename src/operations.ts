@@ -766,10 +766,6 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
     /** What a fresh Task's workspace is to be called, where this start opens one. */
     label,
   });
-  const refuse = (message: string, cause: string) => ({
-    _tag: "Rejected" as const,
-    result: err("operation_failed", message, { cause }),
-  });
   if (choice.mode === "here") return yield* taskHere(env, about);
   if (
     env.workspaceId === null &&

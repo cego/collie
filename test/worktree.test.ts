@@ -60,7 +60,7 @@ const readLines = Effect.fn("worktreeTest.readLines")(function* (file: string) {
 const askedIn = Effect.fn("worktreeTest.askedIn")(function* () {
   const lines = yield* readLines(gitLog());
   return Arr.map(lines, (line) => {
-    const [cwd = "", command = ""] = Str.split(line, "\t");
+    const [cwd, command = ""] = Str.split(line, "\t");
     return { cwd, command };
   });
 });
@@ -1385,8 +1385,8 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
 test("a run still going keeps its checkout, whether or not an agent is in it", () =>
   runOnPath(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt");
       // Nothing is working in it that herdr can see, and the Run is still going.
+      yield* collieWorktree("wt");
       recorded = Arr.map(recorded, (run) => ({ ...run, state: "running" as const }));
       yield* settledGit();
       yield* mergedMr();
@@ -1872,7 +1872,7 @@ test("a clone made before Collie kept its credentials gets the helper on its nex
         "config --local --unset-all credential.https://gitlab.example.com.helper",
         "config --local --add credential.https://gitlab.example.com.helper ",
         expect.stringMatching(
-          /^config --local --add credential\.https:\/\/gitlab\.example\.com\.helper !.*glab config get token --host 'gitlab\.example\.com'/,
+          /^config --local --add credential\.https:\/\/gitlab\.example\.com\.helper !.*glab config get token --host gitlab\.example\.com/,
         ),
       ]);
       expect(Arr.some(yield* asked(), (command) => pipe_(command, Str.startsWith("clone")))).toBe(

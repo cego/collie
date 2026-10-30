@@ -224,6 +224,7 @@ export default defineWorkflow({
     "Turns a goal into a spec and tickets, using the repository for context and asking only for missing decisions.",
   input: Schema.Struct({
     goal: Schema.String,
+    // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
       Schema.Literals(["", "implement"]).annotate({
         description:

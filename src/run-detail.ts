@@ -101,7 +101,7 @@ export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
   const files: DiffFile[] = Arr.map(
     fields((yield* git(root, ["diff", "-z", "--no-renames", "--numstat", ...range])).stdout),
     (field) => {
-      const [added = "-", removed = "-", ...rest] = Str.split(field, "\t");
+      const [added, removed = "-", ...rest] = Str.split(field, "\t");
       const path = Arr.join(rest, "\t");
       return {
         path,

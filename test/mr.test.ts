@@ -1,6 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
-import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -32,12 +30,6 @@ import { Rig } from "./support/recorder";
 import { epochMs } from "../src/time";
 
 let rig: Rig;
-
-const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
-const mkdir = (path: string) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(path, { recursive: true }));
-const writeFile = (path: string, text: string) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFileString(path, text));
 
 beforeEach(() =>
   runEffect(

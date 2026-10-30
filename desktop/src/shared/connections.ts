@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { pipe as pipe } from "effect/Function";
+import { pipe } from "effect/Function";
 import type { Connection, ConnectionId, ConnectionReading } from "../../../src/connection-model";
 import { Option, Schema } from "effect";
 import {

@@ -10,7 +10,7 @@ import { Effect, FileSystem } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { CAPABILITIES, gate, interruptKeys, needed } from "../src/steering-caps";
 import { transaction } from "../src/dispatcher";
-import { ledgerPath, readLedger, type Delivery } from "../src/steering";
+import { ledgerPath, readLedger } from "../src/steering";
 import type { AgentEntry } from "../src/registry";
 import type { AgentInfo } from "../src/herdr";
 import { runEffect } from "./support/effect";
@@ -82,23 +82,6 @@ function fake() {
     },
   };
 }
-
-const delivery = (over: Partial<Delivery> = {}): Delivery => ({
-  id: "d1",
-  at: "2026-09-09T10:00:00Z",
-  run: "r1",
-  incarnation: "term-1",
-  agent: "impl-1",
-  causal_key: "k1",
-  request_id: "req-1",
-  cause: { kind: "steer", ref: "s1" },
-  mode: "boundary",
-  text_hash: "h",
-  intent_version: 2,
-  attempt: 1,
-  state: "submitted",
-  ...over,
-});
 
 test("proven is a recorded date, attribution and the other harnesses are not, and a boundary needs nothing proven", () =>
   runEffect(

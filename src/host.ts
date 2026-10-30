@@ -1340,7 +1340,6 @@ const frontDoorHandlers = (
 ) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const registry = yield* Registry;
       const hosted = yield* Effect.context<HostServices>();
       const reliance = yield* Reliance;

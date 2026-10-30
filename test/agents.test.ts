@@ -5269,10 +5269,12 @@ test("two goals started with one workflow are two Tasks named for their goals, n
       // `then` written first, as a chat writes it: the goal is still what the Task is about.
       const tuneUp = yield* labelOf({
         workflow: "plan",
+        // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
         inputs: { then: "", goal: "Design Tune-up performance workflow" },
       });
       const lookup = yield* labelOf({
         workflow: "plan",
+        // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
         inputs: { then: "", goal: "Migrate pending-payment lookup to promotion-service" },
       });
       expect(tuneUp).toContain("Design Tune-up performance workflow");
@@ -5280,6 +5282,7 @@ test("two goals started with one workflow are two Tasks named for their goals, n
       const plan = `${rig.root}/runs/run-1/plan`;
       yield* fs.makeDirectory(plan, { recursive: true });
       yield* fs.writeFileString(`${plan}/SPEC.md`, "# Spec: Stop the stale offer banner\n");
+      // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
       expect(yield* labelOf({ workflow: "implement", inputs: { plan, then: "" } })).toContain(
         "Stop the stale offer banner",
       );
@@ -5330,6 +5333,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
       yield* kept("task-g", "wGone", "Collie | Implement plan");
       yield* kept("task-n", "wN", "Collie | Passkey bridge race");
       yield* kept("task-c", "wGone", "Collie | Implement plan");
+      // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
       const goal = { then: "", goal: "Design Tune-up performance workflow" };
       const runs = [
         runFacts({ id: "r-p", workflow: "plan", task: "task-p", settled: { inputs: goal } }),
@@ -5341,6 +5345,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
           settled: { inputs: { plan } },
         }),
         runFacts({ id: "r-h", workflow: "plan", task: "task-h", settled: { inputs: goal } }),
+        // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
         runFacts({ id: "r-g", task: "task-g", settled: { inputs: { plan, then: "" } } }),
         runFacts({ id: "r-n", workflow: "plan", task: "task-n", settled: { inputs: goal } }),
         // Started with a Task of its own, the founding Run of task-c is still a child.

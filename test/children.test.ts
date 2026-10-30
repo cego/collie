@@ -16,7 +16,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { connect } from "../src/host";
 import { readTask } from "../src/task";
 import { events, root, stopHost, until } from "./support/host";
@@ -580,7 +580,9 @@ test.each([
             (one) => one?.status.status === "complete" || one?.status.status === "failed",
           );
           expect(view?.status).toMatchObject({ status: "complete" });
-          const child = view?.status.status === "complete" ? String(view.status.value) : "";
+          const child = yield* Schema.decodeUnknownEffect(Schema.String)(
+            view?.status.status === "complete" ? view.status.value : undefined,
+          );
           expect(yield* client.run({ runId: child }).pipe(Effect.orDie)).not.toBeNull();
           yield* stopHost(world.state);
         }),
