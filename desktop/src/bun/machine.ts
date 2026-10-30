@@ -287,7 +287,6 @@ export interface BoardSource {
 /** What Electrobun's `showNotification` takes. */
 export interface Notification {
   readonly title: string;
-  readonly subtitle: string;
   readonly body: string;
   readonly silent: boolean;
 }
@@ -894,8 +893,7 @@ export const flockStream = <D extends BoardSource>(
                 Effect.sync(() =>
                   show({
                     title: toast.title,
-                    subtitle: `${route.machine.name} · ${toast.runId}`,
-                    body: toast.body,
+                    body: `${route.machine.name} · ${toast.runId}\n${toast.body}`,
                     silent: toast.sound === "none",
                   }),
                 ),

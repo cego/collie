@@ -2911,7 +2911,7 @@ Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
 its host restarts Its title is the repository and what the task is called —
 `collie · Offer banner fix finished` — or the run's id where it belongs to no task.
 The host sends each toast to every Desktop connected to it, over a paired link too, and
-Desktop shows it as an OS notification whose second line names the Machine and the Run
+Desktop shows it as an OS notification whose body starts with the Machine and the Run
 (`vm-mk · run-1a2b3c4d`). Clicking it does nothing: Electrobun reports no click. With no
 Desktop connected the toast is dropped, not kept for one that connects later; Slack, where
 it is set up, still gets it.

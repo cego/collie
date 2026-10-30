@@ -960,8 +960,7 @@ test("a toast a Machine's host sends is shown once as an OS notification that na
       expect(shown).toEqual([
         {
           title: "collie · Fix the login finished",
-          subtitle: "vm · run-7",
-          body: "merged",
+          body: "vm · run-7\nmerged",
           silent: false,
         },
       ]);
