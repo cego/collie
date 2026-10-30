@@ -47,10 +47,43 @@ SQL profiling instrumentation left in shared dependencies by the original tune-u
 Its samples are retained in the Run record and excluded from conclusions. Only the
 replacement study with verified pristine dependencies can support a verdict.
 
+## Final-tree comparison
+
+The [final-tree evidence](results/read-final-2026-10-29.json) compares `dc39763f`
+against merge base `cb8edab0`, including the merged runtime and child-order fix.
+**Verdict: not proved improved; leave unmerged.** Peak host RSS exceeds the 10%
+allowance. Correctness and all other declared guardrails held in this study.
+
+| Metric                        | Baseline mean | Candidate mean | Paired ratio, 95% CI | Guardrail |
+| ----------------------------- | ------------: | -------------: | -------------------- | --------- |
+| Warm read, ms                 |       1,775.2 |        1,017.7 | 0.568 [0.485, 0.665] | Held      |
+| Warm read p95, ms             |       3,573.2 |        1,968.8 | 0.567 [0.480, 0.671] | Held      |
+| Cold read, ms                 |       9,788.8 |        7,125.9 | 0.728 [0.672, 0.789] | Held      |
+| Shown, ms                     |         861.6 |          757.8 | 0.886 [0.814, 0.964] | Held      |
+| Listing, ms                   |         798.3 |          701.5 | 0.868 [0.732, 1.030] | Held      |
+| Idle host CPU, ms/s           |         792.7 |          498.2 | 0.627 [0.594, 0.663] | Held      |
+| Peak RSS, KiB                 |     324,227.2 |      521,775.6 | 1.610 [1.579, 1.641] | Failed    |
+| Concurrent control + read, ms |       5,981.5 |        3,524.4 | 0.595 [0.534, 0.664] | Held      |
+| Read during mutation load, ms |       5,881.9 |        2,636.2 | 0.451 [0.411, 0.494] | Held      |
+
+Peak RSS rises 61.0% (95% CI: 57.9–64.1%), so the favorable latency and CPU
+endpoints cannot establish an acceptable overall result. The historical shown and
+listing uncertainty remains recorded below; these final-tree observations are independent.
+
+All ten interleaved pairs completed without interruption, retries, or discarded
+observations, ending October 29, 2026, at 14:31:20.906 UTC. All 240 settled answers
+were identical, and every candidate warm p95 was within five seconds. Surrounding
+one-minute load ranged from 5.94 to 20.65 on 24 logical CPUs. Dependency hashes and
+single-link provenance were checked before and after every process.
+
+The completion did not resume the implementer. The lock-release notice and evidence
+handoff were completed during recovery on October 30; no timing observations were repeated.
+The raw logs, dependency checks, and contention snapshots are embedded in the evidence.
+
 ## Historical candidate
 
 The following study predates the merge of `origin/master` and the child-order fix.
-It does not establish performance for the current tree. The final-tree comparison
+It does not establish performance for the current tree. The final-tree comparison above
 uses the same ten-pair protocol, endpoints, intervals, and guardrails against merge
 base `cb8edab0`. No historical observation is reused in that comparison.
 
