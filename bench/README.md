@@ -53,7 +53,7 @@ replacement study with verified pristine dependencies can support a verdict.
 The [memory-fix evidence](results/read-fix-2026-10-30.json) compares `efeb81b5` against
 merge base `e8d02a5d` (release 0.109.0, which already has the read optimization).
 **Verdict: not proved improved; do not release.** Peak RSS, the primary endpoint, falls
-36.3% (95% CI: 34.9–37.7%). Five latency guardrails were inconclusive, and one candidate
+36.3% (95% CI: 34.9–37.7%). Six latency guardrails were inconclusive, and one candidate
 warm p95 exceeded five seconds.
 
 | Metric                        | Baseline mean | Candidate mean | Paired ratio, 95% CI | Verdict      |
