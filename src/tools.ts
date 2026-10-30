@@ -543,7 +543,7 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   const run =
     runs === undefined
       ? yield* findRun(env, id)
-      : Option.getOrNull(Arr.findFirst(yield* runs, (one) => one.id === id));
+      : (Option.getOrUndefined(Arr.findFirst(yield* runs, (one) => one.id === id)) ?? null);
   if (run === null)
     return on === null
       ? `No Run "${id}". collie_herd lists the ones there are.`

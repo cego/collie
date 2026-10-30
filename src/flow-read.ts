@@ -220,7 +220,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
   const rows = [...task.rows].sort((one, other) =>
     pipe_(one.created, Str.localeCompare(other.created)),
   );
-  const byId = new Map(Arr.map(rows, (run) => [run.id, run] as const));
+  const byId = new Map(Arr.map(rows, (run) => [run.id, run]));
   const inTask = new Set(Arr.map(rows, (run) => run.id));
   const machine = machineOf(env);
   const lane = (run: RunFacts, context: LaneContext = ALONE) =>

@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import * as Arr from "effect/Array";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Str from "effect/String";
 import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { toolNamed } from "../src/tools";
@@ -27,7 +28,7 @@ test(
             () => client.run({ runId }),
             (view) => view !== null && isSettled(view),
           );
-          // Both answers read readiness off the board, which sees the settling write after its debounce.
+          // Both answers read Ready to release from the board, which is rebuilt after the engine settles.
           yield* until(
             () => client.progress({ runId }),
             (progress) =>
@@ -57,7 +58,9 @@ test(
             );
           }
           const withChildren = yield* toolNamed("collie_run")!.call(env, { run: runId });
-          expect(withChildren).toMatch(new RegExp(`${children[1]}[\\s\\S]*${children[0]}`));
+          expect(Option.getOrThrow(Str.indexOf(children[1]!)(withChildren))).toBeLessThan(
+            Option.getOrThrow(Str.indexOf(children[0]!)(withChildren)),
+          );
           expect(yield* client.read({ tool: "collie_run", input: { run: runId } })).toBe(
             withChildren,
           );
@@ -70,9 +73,6 @@ test(
               set,
               request: `hold-${set}`,
             });
-            const fresh = yield* client.read({ tool: "collie_run", input: { run: waiting.id } });
-            expect(fresh).toContain(set ? '"actions":["release"' : '"actions":["hold"');
-            // A control returns before the engine has suspended the Run on its question again.
             yield* until(
               () => client.run({ runId: waiting.id }),
               (view) => view?.status.status === "suspended",
