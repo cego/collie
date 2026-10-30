@@ -333,7 +333,7 @@ const drawnLine = computed(() =>
         {{ pill.said }}
       </p>
     </PageHeader>
-    <div class="min-h-0 flex-1 overflow-y-auto p-4 [scrollbar-gutter:stable]">
+    <div class="relative min-h-0 flex-1 overflow-y-auto p-4 [scrollbar-gutter:stable]">
       <div class="flex flex-col gap-4" :class="columnClass('settings')">
         <div class="flex flex-wrap items-center gap-3" role="search">
           <UInput
