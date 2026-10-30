@@ -2103,6 +2103,41 @@ in `handoffs/measure/fix2b-*`; no completed observation was retried or discarded
 Both original acceptance targets remain unmet or unproved. The CI correctness
 gate remains the `test` job; no local `check` gate was run.
 
+Fix round 3 revalidated prerequisites #246 and #253 against freshly fetched
+`d410ba3ec60f6f39c35f237317d85da17705dab9`. Qualification used merged revision
+`efeb6a54ff6e4df7d1188993c4130abfdd98be26`, the existing isolated checkout,
+and the Machine Measurement lock. Private copyfile installations of the new
+Effect 4.1 filesystem and SQLite dependencies matched integrity-verified published
+tarballs before and after each process. Earlier dependency manifests remain unchanged.
+
+The 300 idle probes had no whole suite held or waiting; their p95 was 8.433 ms.
+The complete suite took 888.56 seconds including builds, with 5,280 passes,
+11 skips, and one failure across 5,292 tests. The failed stage claim give-back
+scenario expected suspension but observed completion. A focused diagnostic also
+failed one of its two variants; its cause remains unresolved. Neither observation
+is counted as a green suite result or repaired by a retry.
+
+The suite's 887 owned samples contained no whole-suite waiter. Overall probe p95
+was 16.005 ms, which cannot prove the required four-suite condition. Mean Machine
+and suite use were 21.49 and 8.79 cores; median load was 50.35. CPU, I/O, and memory
+stalls averaged 56.92%, 0.423%, and 0.064%. These observations do not isolate an
+exclusive external cause or prove a benefit from the worker priority change.
+The final cgroup CPU total was unavailable after the scope disappeared;
+`/usr/bin/time` retained 4,744.26 user CPU-s and 1,767.01 system CPU-s.
+Raw data, context, protocol, and dependency checks remain under `handoffs/measure/fix3-*`.
+
+A separate shutdown experiment removed process-table scans when a host had no
+checks to signal. Its failing-first regression observed three scans, then zero;
+all 32 shutdown safety tests passed. Three fixed AB/BA pairs compared `efeb6a54`
+with `20a6a0e9`, using separate compiled binaries and the same three engine cases.
+All six processes passed. Median CPU time fell from 12.24 to 11.97 seconds,
+but the ranges overlapped: 12.02–13.51 versus 11.82–12.18 seconds. Median wall
+time fell from 7.884 to 7.544 seconds. The recorded retention rule required
+a CPU gain beyond observed variation, so the experiment and its regression were
+reverted in `207c823d`. Every observation remains under
+`handoffs/measure/fix3-shutdown-pairs/`; no replacement pair or candidate suite was run.
+Both original performance blockers remain accepted and unresolved.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
