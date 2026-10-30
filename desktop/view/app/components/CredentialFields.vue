@@ -6,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Str from "effect/String";
 const props = defineProps<{ which: "gitlab" | "helle"; label: string }>();
 const emit = defineEmits<{ saved: [] }>();
-const { saveGitlab, saveHelle, checkHelle, openSlack, copyText } = useActions();
+const { saveGitlab, pasteGitlab, saveHelle, checkHelle, openSlack, copyText } = useActions();
 const { credentials } = useCredentials();
 
 const HELLE_COMMAND = "/helle token";
@@ -53,10 +53,26 @@ const keep = () => {
     }),
   );
 };
+const paste = () => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (yield* Effect.promise(() => Promise.resolve(pasteGitlab()))) emit("saved");
+    }),
+  );
+};
 </script>
 
 <template>
   <div class="flex flex-col gap-2">
+    <UButton
+      v-if="which === 'gitlab'"
+      label="Paste from clipboard"
+      size="sm"
+      variant="outline"
+      class="self-start"
+      icon="i-lucide-clipboard-paste"
+      @click="paste"
+    />
     <ol v-if="which === 'helle'" class="flex flex-col gap-1 text-sm" data-testid="helle-guide">
       <li class="flex items-center gap-2">
         1.

@@ -87,10 +87,24 @@ describe("Collie's settings", () => {
       fallback: "false",
     });
     expect(settingOf("release.approval_channel")).toMatchObject({ kind: "text", fallback: "" });
-    expect(settingOf("release.approval_channel")!.description).toContain("#frontend");
+    expect(settingOf("slack.notification_channel")).toMatchObject({
+      kind: "text",
+      fallback: "",
+      group: "Notifications",
+    });
     expect(parseSetting("release.share_for_approval", "true")).toEqual({ value: true });
     expect(parseSetting("release.approval_channel", " #frontend ")).toEqual({
       value: "#frontend",
+    });
+  });
+
+  test("take the Flock chat's Machine rule and whether it speaks first, as the Flock's", () => {
+    expect(parseSetting("machine_rule", " Frontend work is on the laptop ")).toEqual({
+      value: "Frontend work is on the laptop",
+    });
+    expect(parseSetting("flock_chat.proactive", "false")).toEqual({ value: false });
+    expect(parseSetting("flock_chat.proactive", "sometimes")).toEqual({
+      refused: 'flock_chat.proactive has to be true or false, not "sometimes"',
     });
   });
 
@@ -167,8 +181,12 @@ describe("Each setting explains itself", () => {
       "release.approval_channel",
     ],
     Board: ["scope", "density", "board_quiet_ms"],
-    Chat: ["proactive"],
-    Notifications: ["questions", ...Arr.map(NOTIFICATION_KINDS, (kind) => `notifications.${kind}`)],
+    Chat: ["flock_chat.proactive", "machine_rule", "proactive"],
+    Notifications: [
+      "questions",
+      "slack.notification_channel",
+      ...Arr.map(NOTIFICATION_KINDS, (kind) => `notifications.${kind}`),
+    ],
     "GitLab and credentials": ["gitlab_host"],
   };
 

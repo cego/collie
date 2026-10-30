@@ -244,7 +244,7 @@ test("a waiting harness switch offers Stay with this window's last matching choi
         models: [{ ...CLAUDE[1]!, efforts: ["low"] }],
       },
     }),
-  ).toEqual({ refused: '"high" is not an effort Sonnet 5.5 takes (low)' });
+  ).toEqual({ refused: '"high" is not an effort this computer\'s claude/sonnet takes (low)' });
   expect(stayOn(ACCOUNT, rememberChoice(null, switched, ACCOUNT))).toEqual({
     chatHarness: "claude",
   });

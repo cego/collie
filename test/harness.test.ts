@@ -50,7 +50,7 @@ test("model checks accept the alias list, the harness pattern and user extras", 
     expect(knownModel(HARNESSES.codex!, model)).toBe(false);
 });
 
-test("effort is a flag only where the harness has one", () => {
+test("effort flags follow the harness's launch interface", () => {
   expect(startArgs(HARNESSES.claude!, "opus", "/p/reviewer.md", "xhigh", "harness")).toEqual([
     "--model",
     "opus",
@@ -60,12 +60,22 @@ test("effort is a flag only where the harness has one", () => {
     "/p/reviewer.md",
   ]);
 
-  // codex and opencode have none, so asking for one is a validation error, not a flag.
   expect("effortArgs" in HARNESSES.codex!).toBe(false);
   expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/reviewer.md", "xhigh", "harness")).toEqual([
     "-m",
     "gpt-5",
   ]);
+});
+
+test("Codex's accepted effort reaches both its App Server and TUI configuration", () => {
+  const wired = HARNESSES.codex!.mcp({
+    command: ["/bin/collie"],
+    env: {},
+    config: "/mcp.json",
+    extension: "/tools.ts",
+    effort: "high",
+  });
+  expect(wired.args).toEqual(expect.arrayContaining(["-c", 'model_reasoning_effort="high"']));
 });
 
 test("`default` pins Claude to Opus while other harnesses keep their native default", () => {
@@ -262,6 +272,43 @@ test("switching harness keeps nothing chosen for the one below, and falls back t
   expect(resolveChoice([configured, { harness: "claude" }])).toEqual({
     ok: true,
     choice: { harness: "claude", model: "opus", effort: "high" },
+  });
+});
+
+test("a native default takes an effort reported by any model until the harness identifies its default", () => {
+  const catalogue = {
+    machine: "vm-gpu",
+    harnesses: [
+      {
+        harness: "codex",
+        table: null,
+        entries: [
+          { model: "new-fast", efforts: ["low"] },
+          { model: "new-deep", efforts: ["high"] },
+        ],
+      },
+    ],
+  };
+  expect(resolveChoice([{ harness: "codex", effort: "high" }], {}, catalogue)).toMatchObject({
+    ok: true,
+    choice: { model: "default", effort: "high" },
+  });
+  expect(resolveChoice([{ harness: "codex", effort: "ultra" }], {}, catalogue).ok).toBe(false);
+  const identified = {
+    ...catalogue,
+    harnesses: [
+      {
+        ...catalogue.harnesses[0]!,
+        entries: [
+          { model: "new-fast", efforts: ["low"], isDefault: true },
+          { model: "new-deep", efforts: ["high"] },
+        ],
+      },
+    ],
+  };
+  expect(resolveChoice([{ harness: "codex", effort: "high" }], {}, identified).ok).toBe(false);
+  expect(resolveChoice([{ harness: "codex", effort: "low" }], {}, identified)).toMatchObject({
+    ok: true,
   });
 });
 

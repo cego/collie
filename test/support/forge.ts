@@ -825,6 +825,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       : ok();
   }
   if (verb === "config" && sub === "get") {
+    if (args[2] === "host") return ok(`${model.loggedIn[0] ?? ""}\n`);
     const host = flag(args, "--host") ?? "";
     const signedIn = model.loggedIn.includes(host);
     if (args[2] === "token") {
@@ -834,7 +835,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
     if (args[2] === "oauth2_expiry_date")
       return ok(signedIn && model.oauth !== undefined ? `${model.oauth.expiry}\n` : "");
   }
-  if (verb === "api" && sub === "user")
+  if (verb === "api" && (sub === "user" || args.at(-1) === "user"))
     return model.login === null ? no() : json({ username: model.login });
   const mrAt = (iid: string | undefined) => {
     const repo = flag(args, "--repo");
@@ -1658,7 +1659,9 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>): Answer {
   const [verb, sub] = args;
   if (verb === "--version") return ok("gh version 2.0.0");
   if (verb === "auth" && sub === "status")
-    return model.loggedIn.includes(flag(args, "--hostname") ?? FORGE_HOST.github) ? ok() : no();
+    return model.loggedIn.includes(flag(args, "--hostname") ?? FORGE_HOST.github)
+      ? ok(`Logged in to github.com account ${model.login ?? "tester"}\n`)
+      : { ran: { code: 1, stdout: "You are not logged into any GitHub hosts\n" } };
   if (!model.loggedIn.includes(FORGE_HOST.github)) return no(4);
   if (verb === "auth" && sub === "token") return ok(`${tokenOf("github", model)}\n`);
   if (verb === "auth" && sub === "git-credential" && args[2] === "get")

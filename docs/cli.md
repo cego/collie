@@ -27,7 +27,7 @@ collie --json --workspace wT run start plan --input goal="ship it" --input then=
 ```
 
 `--machine` is for a command that names no Run: `board`, `run start`, `run list`,
-`schedule` and `cleanup`. A
+`schedule`, `cleanup`, `models` and `connections`. A
 command that names a Run needs none (see [Another Machine's Runs](#another-machines-runs)).
 A start on another Machine opens its own Task there, so `--task`, `--continue-task` and
 `--here` are refused with it, and the module is the one that Machine has saved.
@@ -1050,6 +1050,7 @@ through a generated extension; this is the third way in.
 | `collie_receipts`     | What one run waits on the human for — its Choice and proposals — and what state each message to its agents actually reached                                                                                                                  |
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                        |
 | `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults                                                                                                                                                     |
+| `collie_connections`  | Each Machine's service logins, accounts, absent or broken states, and fixes; `machine` keeps one Machine                                                                                                                                     |
 | `collie_news`         | What this conversation has not been told; reading it settles those items for it                                                                                                                                                              |
 | `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it                                                                                                                                                                |
 | `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for                                                                                                                                                            |
@@ -2120,6 +2121,123 @@ never its email. `source` is `claude-usage`, `claude-status-line` or `codex-app-
 endpoint refusing — with the last good windows kept where there were any.
 [Usage](using.md#usage) says where the numbers come from and how fresh they are.
 
+## Models
+
+```sh
+collie models [--harness claude|codex|opencode|pi]
+```
+
+Which models and efforts each harness installed on this Machine offers, as its host last
+read them from the harness itself: the **Harness catalogue**
+([ADR-draft-settings-read-what-harnesses-report](adr/draft-settings-read-what-harnesses-report.md)).
+`--machine <name>` reads a paired Machine's. `--harness` keeps one harness. One line per
+model, with its efforts, its default effort, and whether the harness hides it:
+
+```text
+claude    opus (Opus 5.5) · efforts low, medium, high, xhigh, max
+claude    claude-haiku-4-5-20251001 (Haiku 4.5)
+codex     gpt-6.1-sol (GPT-6.1-Sol) · efforts low, medium, high, xhigh, max, ultra · default medium
+codex     gpt-reserve (GPT-Reserve) · efforts low, medium, high, xhigh, max · default medium · hidden
+pi        from Collie's table: pi --list-models did not answer within 20s
+```
+
+Each harness answers from its own source: Claude Code the list the Agent SDK's
+`supportedModels()` reads, Codex its app server's `model/list`, Pi `pi --list-models`, and
+OpenCode `opencode models`. A harness that is not installed is left out. One that is
+installed but cannot be read, because it fails, answers in a shape Collie does not read, or
+takes longer than 20 seconds, gets a `from Collie's table: <why>` line, and its models are
+then Collie's own table. The host reads each harness at most once every 30 minutes. After a
+failure it waits a minute before the next read, and the wait doubles with each failure
+after that, up to the 30 minutes. A model in the `models.<harness>` setting that the harness
+does not list is added after the harness's own.
+
+Under `--json`, `data` is `{ "machine": null, "catalogues": [...] }`. `machine` is the
+Machine that answered, null for this one. Each catalogue is one harness:
+
+```json
+{
+  "harness": "codex",
+  "at": "2026-10-29T09:00:00.000Z",
+  "table": null,
+  "entries": [
+    {
+      "model": "gpt-6.1-sol",
+      "label": "GPT-6.1-Sol",
+      "description": "Latest workhorse model for coding and everyday work.",
+      "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "defaultEffort": "medium",
+      "hidden": false,
+      "from": "harness"
+    }
+  ]
+}
+```
+
+`at` is when the harness was last read. `table` says why it could not be read, and is null
+when it was. `efforts` is empty for a model that takes none: a Pi model that does not think,
+and every OpenCode model. `defaultEffort` is the harness's own default, where it names one.
+`from` is `harness`, `table`, or `added` for a model the `models.<harness>` setting adds.
+Chat reads the same catalogue with `collie_models`.
+
+## Connections
+
+```sh
+collie connections [--json]
+collie --machine vm-mk connections --json
+```
+
+Read the services this Machine is logged in to: GitLab, GitHub, Linear, Helle and Slack.
+`--machine <name>` asks that paired Machine's host. The same registry serves
+`collie_connections` in chat and the optional Connection lines in `collie doctor`.
+See [Connection](../CONTEXT.md) and
+[ADR-draft-a-connection-is-declared-and-read](adr/draft-a-connection-is-declared-and-read.md).
+
+Each service reports `ok`, `absent` (not set up), or `broken` (set up but not working).
+An `ok` reading names the account. Other readings give a fix. A failed probe affects only
+its own reading; a probe that takes longer than six seconds becomes `broken`.
+An absent or broken Connection does not fail this command. Failure to reach its Machine does.
+
+- **GitLab:** the `GITLAB_HOST` override or `gitlab_host` setting, otherwise glab's global
+  host. Its login is checked with `glab api user`, which identifies the token's current user.
+  Environment tokens take precedence over glab's stored token. No token is printed.
+- **GitHub:** `gh auth status --active --hostname github.com`, naming gh's active account.
+- **Linear:** MCP configurations in Claude Code, Codex and OpenCode, including project
+  configurations. Disabled servers are ignored. The account is the configured server's
+  name, not an authenticated user; this check does not verify the MCP's OAuth login.
+  Claude uses `.claude.json` and `.mcp.json`, Codex uses `config.toml`, and OpenCode uses
+  `opencode.json` or `opencode.jsonc`. Their config-directory environment overrides apply.
+- **Helle:** the existing credentials and `/me` check, with the token owner's user id.
+
+Under `--json`, the envelope is:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "machine": null,
+    "connections": [
+      {
+        "id": "gitlab",
+        "reading": { "state": "ok", "account": "mk", "detail": "gitlab.example as mk" }
+      },
+      {
+        "id": "github",
+        "reading": {
+          "state": "absent",
+          "detail": "no GitHub login on this Machine",
+          "fix": "gh auth login --hostname github.com --web"
+        }
+      }
+    ]
+  }
+}
+```
+
+`machine` names the Machine that answered, or is null for this one.
+Desktop's merged view retains each Machine's reading. A missing login gets
+`reusable: { "from": "<machine>" }` when another Machine has a working login.
+This is an offer of a source; reading Connections never copies credentials.
+
 ## Schedules
 
 ```sh
@@ -2409,7 +2527,7 @@ Projects root is on GitHub — its `origin`, else `upstream`, is on github.com �
 follows: `gh` on PATH, else a failure fixed by installing it from https://cli.github.com,
 and `gh auth status --hostname github.com`, whose failure's fix is `gh auth login
 --hostname github.com`. Its detail says how many checkouts use GitHub. A Machine with no
-GitHub checkout is not asked about `gh`.
+GitHub checkout has no `gh` prerequisite check; its optional GitHub Connection is still read.
 
 **herdr** names what upgrading does to the running panes. From a herdr before 0.9.0, the
 running server must stop once, which ends every program in its panes: `herdr update`, then
@@ -2443,13 +2561,17 @@ the fix; it never fails the run, since a laptop just woken is in that state.
 **Host herd**, where a host is running: the Herd it works for, or a `!` warning that
 [it has none](#the-local-workflow-host) and its judgements will be skipped. It never fails the run.
 
-Two more are optional, and reported rather than required. **Helle**, where a loaded
+The [Connection registry](#connections) adds optional `gitlab connection` and
+`github connection` lines. An absent login is a note and a broken login is a warning;
+neither line fails doctor. The separate forge prerequisite checks above still apply.
+
+Two other Connection lines keep their names. **Helle**, where a loaded
 workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,
 `~/.config/helle/env` (or `HELLE_ENV_FILE`), whose token is tried against
 `https://helle.cego.dk`'s `/me`; a `HELLE_API_URL` line in it is ignored. **A
-Linear MCP server in Claude Code**, where a workflow routes a step to Claude: user and
-local scope in `.claude.json`, project scope in the project's `.mcp.json`, matched by name
-or URL. Each has three states, and the glyph says which: `✓` there and working, a note
+Linear MCP server**, where a workflow routes a step to Claude: Claude's user, local and
+project settings, plus Codex and OpenCode configurations, matched by name or URL.
+Each has three states, and the glyph says which: `✓` there and working, a note
 with the setup command when it is not set up at all, and `!` — set up and not working, a
 file without a token, a token Helle refuses, a settings file that is not JSON —
 with the file to look in. Neither ever fails the run: the bundled `implement` and `review`
@@ -2569,7 +2691,8 @@ shipped and user Layers in full: each module as `workflow show` reads it, with i
 and the Markdown beside it named `<stem>.md` or `<stem>.<anything>.md`, the modules that
 would not load, each Persona as `persona show` gives it, and the Persona files that would
 not load. It typechecks nothing. `start` then takes what a human typed in `text`, and the host settles it
-against the workflow's own schema. `usage` reads this Machine's [Usage readings](#usage).
+against the workflow's own schema. `usage` reads this Machine's [Usage readings](#usage),
+`models` its [Harness catalogue](#models), and `connections` its [Connections](#connections).
 `schedules` reads this Machine's [Schedules](#schedules), and `changeSchedule` adds one,
 paused or not, or pauses, resumes or removes one, under a request id and the asker's Actor.
 `cleanup` reads what a sweep would remove and keep, and

@@ -46,6 +46,7 @@ import {
 import { judgeComments, type ForgeComment, type MergeAnswer, type ReviewRead } from "./review";
 
 export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
+export const GLAB_RELOGIN = "glab auth login";
 
 /** The glab arguments that point a command at a project rather than at the cwd. */
 export function repoArgs(project: string | null): string[] {
@@ -663,7 +664,7 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
 /** glab's login to `host`, which ForgeHttp asks GitLab with. */
 export function glabLoginTo(host: string, stored = false): ForgeLogin {
   // glab answers a token in its environment for any host; a stored login is the host's own.
-  const glab = (args: ReadonlyArray<string>, run: Runner, cwd: string) =>
+  const glab = <R>(args: ReadonlyArray<string>, run: Runner<R>, cwd: string) =>
     stored
       ? run(
           "env",
@@ -671,7 +672,7 @@ export function glabLoginTo(host: string, stored = false): ForgeLogin {
           cwd,
         )
       : run("glab", [...args], cwd);
-  const value = (key: string, run: Runner, cwd: string) =>
+  const value = <R>(key: string, run: Runner<R>, cwd: string) =>
     Effect.map(glab(["config", "get", key, "--host", host], run, cwd), (ran) =>
       ran.code === 0 ? Str.trim(ran.stdout) : "",
     );
@@ -682,7 +683,7 @@ export function glabLoginTo(host: string, stored = false): ForgeLogin {
     display: "GitLab",
     cli: "glab",
     notReady: `glab is not logged in to ${host}`,
-    relogin: `glab auth login --hostname ${host}`,
+    relogin: `${GLAB_RELOGIN} --hostname ${host}`,
     // Empty for a personal access token, which does not expire.
     expiry: (run, cwd) =>
       Effect.map(value("oauth2_expiry_date", run, cwd), (said) =>

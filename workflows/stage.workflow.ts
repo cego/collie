@@ -186,6 +186,12 @@ const rollBack = step({
 });
 
 export default defineWorkflow({
+  connections: {
+    needs: {
+      helle: { with: "Holds the stage environment" },
+      gitlab: { with: "Reads the merge request and runs its stage and rollback jobs" },
+    },
+  },
   id: "stage",
   title: "stage — put an open merge request on stage for testing, unmerged",
   description:

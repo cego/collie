@@ -17,11 +17,13 @@ import { onPath } from "./doctor-check";
 import { glabHosts, pushCheck } from "./forge/gitlab-checks";
 import { gitlabHostOf } from "./config";
 import { tokenPage } from "./gitlab-token";
+import { writeSlackToken } from "./slack-credentials";
 import type { PluginEnv } from "./env";
 import { err, prepareSteps, upgrade, type OpResult } from "./operations";
 import { whatItSaid } from "./mr";
 import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
-import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX, probeLinearMcp } from "./optional";
+import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX } from "./connection-probes";
+import { connectionOnMachine } from "./connections";
 import { installation, manifestField, RELEASE_TAG, type Carried } from "./release";
 import manifest from "../herdr-plugin.toml";
 
@@ -56,7 +58,7 @@ export interface OnboardOptions {
   /** The release this runner carries; the compiled runner's own unless a test says. */
   readonly carried?: Carried | null;
   readonly skip?: ReadonlyArray<Skippable>;
-  /** `GITLAB_TOKEN` and `HELLE_API_TOKEN`, from stdin: never an argument. */
+  /** Credentials from stdin, never an argument. */
   readonly secrets?: Readonly<Record<string, string>>;
   /** stdin is a terminal the human can paste into. */
   readonly terminal?: boolean;
@@ -546,6 +548,15 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     }),
   );
 
+  if (secrets.SLACK_BOT_TOKEN !== undefined)
+    yield* step(
+      "slack",
+      "Slack's credentials",
+      writeSlackToken(here, secrets.SLACK_BOT_TOKEN || null).pipe(
+        Effect.as(done("Slack credential saved")),
+      ),
+    );
+
   /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */
   const linearLogin = (claude: string) =>
     Effect.gen(function* () {
@@ -611,7 +622,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         return failed("Claude Code is not installed, so it has no MCP servers", CLAUDE_INSTALL);
       }
       let changed = false;
-      if ((yield* probeLinearMcp(here)).state !== "ok") {
+      if ((yield* connectionOnMachine(here, "linear")).state !== "ok") {
         const added = yield* exec("claude", LINEAR_MCP_ADD, env.home);
         if (added.code !== 0) {
           return failed(

@@ -1,14 +1,46 @@
 import { expect, test } from "bun:test";
-import { Effect, Fiber, Stream } from "effect";
+import { Effect, Fiber, Result, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { offerOf, opensOn } from "../desktop/src/bun/chat-choices";
-import { harnessLists, type HarnessList } from "../desktop/src/bun/harness-lists";
+import { harnessLists, listedIn, type HarnessList } from "../desktop/src/bun/harness-lists";
 import { changeSettings } from "../desktop/src/bun/settings";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 
 const MODELS = [
   { id: "opus", label: "Opus 5", description: "Complex work", efforts: ["low", "medium", "high"] },
 ];
+
+test("the Flock chat accepts its own harness's new model and refuses a table alias it no longer reports", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const lists = yield* harnessLists({
+        claude: Effect.succeed([
+          ...MODELS,
+          { id: "new-model", label: "New model", efforts: ["ultra"] },
+        ]),
+      });
+      expect(
+        yield* opensOn(
+          { chatModel: "new-model", chatEffort: "ultra" },
+          NO_FLOCK_SETTINGS,
+          Effect.succeed({}),
+          lists,
+        ),
+      ).toEqual({
+        ok: true,
+        choice: { harness: "claude", model: "new-model", effort: "ultra" },
+      });
+      const missing = yield* opensOn(
+        { chatModel: "sonnet" },
+        NO_FLOCK_SETTINGS,
+        Effect.succeed({}),
+        lists,
+      );
+      expect(missing.ok).toBe(false);
+      expect(!missing.ok && missing.problem).toContain("this computer");
+      expect(!missing.ok && missing.problem).toContain("new-model");
+    }).pipe(Effect.scoped),
+  ));
 
 test("opening rechecks a saved explicit effort after the harness finishes listing its model's levels", () =>
   Effect.runPromise(
@@ -23,14 +55,15 @@ test("opening rechecks a saved explicit effort after the harness finishes listin
             label: "GPT-5.5",
             efforts: ["off", "minimal", "low", "medium", "high", "xhigh"],
           },
-          problem: '"max" is not an effort GPT-5.5 takes (off, minimal, low, medium, high, xhigh)',
+          problem:
+            '"max" is not an effort this computer\'s pi/openai-codex/gpt-5.5 takes (off, minimal, low, medium, high, xhigh)',
         },
         {
           harness: "claude",
           model: "claude-haiku-4-5",
           effort: "high",
           listed: { id: "claude-haiku-4-5", label: "Haiku 4.5", efforts: [] },
-          problem: 'Haiku 4.5 takes no effort, so "high" cannot be asked of it',
+          problem: '"high" is not an effort this computer\'s claude/claude-haiku-4-5 takes (none)',
         },
       ]) {
         const lists = yield* harnessLists({
@@ -189,3 +222,44 @@ test("the first open waits for the harness list and uses its model's effort leve
       });
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   ));
+
+test("on a computer with a Machine, a harness's list is what its host read, and why not where it read none", () => {
+  const at = "2026-10-29T09:00:00.000Z";
+  const entry = {
+    description: null,
+    efforts: [],
+    defaultEffort: null,
+    hidden: false,
+    from: "harness" as const,
+  };
+  const catalogues = [
+    {
+      harness: "claude",
+      at,
+      table: null,
+      entries: [
+        {
+          ...entry,
+          model: "opus",
+          label: "Opus 5.5",
+          description: "Complex work",
+          efforts: ["low"],
+        },
+        { ...entry, model: "claude-mythos-5-1", label: "Mythos 5.1" },
+        { ...entry, model: "gpt-reserve", label: "Hidden", hidden: true },
+      ],
+    },
+    { harness: "pi", at, table: "pi --list-models said: No models available.", entries: [] },
+  ];
+  expect(listedIn(catalogues, "claude", (model) => model !== "claude-mythos-5-1")).toEqual(
+    Result.succeed([
+      { id: "opus", label: "Opus 5.5", description: "Complex work", efforts: ["low"] },
+    ]),
+  );
+  expect(listedIn(catalogues, "pi")).toEqual(
+    Result.fail("pi --list-models said: No models available."),
+  );
+  expect(listedIn(catalogues, "codex")).toEqual(
+    Result.fail("codex is not installed on this computer"),
+  );
+});

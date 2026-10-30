@@ -26,11 +26,16 @@ const saveGitlabAtom = FlockClient.mutation("saveGitlab");
 const saveGitlabHostAtom = FlockClient.mutation("saveGitlabHost");
 const saveHelleAtom = FlockClient.mutation("saveHelle");
 const setFlockSettingAtom = FlockClient.mutation("setFlockSetting");
+const setFlockSettingsAtom = FlockClient.mutation("setFlockSettings");
 const checkHelleAtom = FlockClient.mutation("checkHelle");
 const openSlackAtom = FlockClient.mutation("openSlack");
 const copyTextAtom = FlockClient.mutation("copyText");
 const claudeLoginAtom = FlockClient.mutation("claudeLogin");
 const pasteCodeAtom = FlockClient.mutation("pasteCode");
+const reuseConnectionAtom = FlockClient.mutation("reuseConnection");
+const githubLoginAtom = FlockClient.mutation("githubLogin");
+const linearSetupAtom = FlockClient.mutation("linearSetup");
+const pasteGitlabAtom = FlockClient.mutation("pasteGitlab");
 
 export interface ReadOptions {
   /** Bounds how many reads run at once. */
@@ -71,11 +76,16 @@ export const useActions = () => {
   const saveGitlabHost = useAtomSet(() => saveGitlabHostAtom, { mode: "promiseExit" });
   const saveHelle = useAtomSet(() => saveHelleAtom, { mode: "promiseExit" });
   const setFlockSetting = useAtomSet(() => setFlockSettingAtom, { mode: "promiseExit" });
+  const setFlockSettings = useAtomSet(() => setFlockSettingsAtom, { mode: "promiseExit" });
   const checkHelle = useAtomSet(() => checkHelleAtom, { mode: "promiseExit" });
   const openSlack = useAtomSet(() => openSlackAtom, { mode: "promiseExit" });
   const copyText = useAtomSet(() => copyTextAtom, { mode: "promiseExit" });
   const claudeLogin = useAtomSet(() => claudeLoginAtom, { mode: "promiseExit" });
   const pasteCode = useAtomSet(() => pasteCodeAtom, { mode: "promiseExit" });
+  const reuseConnection = useAtomSet(() => reuseConnectionAtom, { mode: "promiseExit" });
+  const githubLogin = useAtomSet(() => githubLoginAtom, { mode: "promiseExit" });
+  const linearSetup = useAtomSet(() => linearSetupAtom, { mode: "promiseExit" });
+  const pasteGitlab = useAtomSet(() => pasteGitlabAtom, { mode: "promiseExit" });
   const registry = injectRegistry();
   /** One part of a Run's item: its own call, since several are read at once. */
   const runFile = (payload: { installation: string; runId: string; ref: string; offset: number }) =>
@@ -184,10 +194,22 @@ export const useActions = () => {
     answerHerdr: (job: string, yes: boolean) => answerHerdr({ payload: { job, yes } }),
     /** Whether it was kept; what came of giving it to each Machine is said. */
     saveGitlab: (token: string) => saveGitlab({ payload: { token } }).then(kept),
+    pasteGitlab: () => pasteGitlab({ payload: undefined }).then(kept),
+    reuseConnection: (id: "gitlab" | "github", from: string, to: ReadonlyArray<string>) =>
+      reuseConnection({ payload: { id, from, to } }).then(read),
+    githubLogin: (profile: string) => githubLogin({ payload: { profile } }).then(read),
+    linearSetup: (profile: string) => linearSetup({ payload: { profile } }).then(read),
     saveGitlabHost: (host: string) => saveGitlabHost({ payload: { host } }).then(kept),
     saveHelle: (token: string) => saveHelle({ payload: { token } }).then(kept),
+    /** Why the edit was refused, or null where it was kept; Settings says either on its row. */
     setFlockSetting: (key: string, value: string) =>
-      setFlockSetting({ payload: { key, value } }).then(kept),
+      setFlockSetting({ payload: { key, value } }).then((exit) =>
+        Exit.isFailure(exit) ? failureOf(exit.cause).reason : null,
+      ),
+    setFlockSettings: (changes: ReadonlyArray<{ readonly key: string; readonly value: string }>) =>
+      setFlockSettings({ payload: { changes } }).then((exit) =>
+        Exit.isFailure(exit) ? failureOf(exit.cause).reason : null,
+      ),
     /** Who the token belongs to, or why Helle would not say. */
     checkHelle: (token: string) =>
       checkHelle({ payload: { token } }).then((exit) =>

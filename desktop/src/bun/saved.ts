@@ -12,10 +12,12 @@ import {
   type FlockMachine,
   MachineOnboarding,
   MachineSaved,
+  MachineOwnRead,
 } from "../shared/flock";
 
 const SavedFile = Schema.fromJsonString(MachineSaved);
 const OnboardingFile = Schema.fromJsonString(MachineOnboarding);
+const OwnFile = Schema.fromJsonString(MachineOwnRead);
 const fileOf = (dir: string, key: string) => `${dir}/${encodeURIComponent(key)}.json`;
 
 /** Every file in `dir` that `file` decodes; one that cannot be read is left out. */
@@ -34,6 +36,20 @@ const savedIn = <A>(dir: string, file: Schema.Codec<A, string>) =>
   });
 
 export const savedBoards = (dir: string) => savedIn(dir, SavedFile);
+
+export const savedOwn = (dir: string) => savedIn(dir, OwnFile);
+
+export const saveOwn = (dir: string, read: MachineOwnRead) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(dir, { recursive: true });
+    const file = fileOf(dir, read.machine.profile);
+    yield* fs.writeFileString(
+      `${file}.new`,
+      yield* Schema.encodeEffect(OwnFile)(read).pipe(Effect.orDie),
+    );
+    yield* fs.rename(`${file}.new`, file);
+  }).pipe(Effect.ignore);
 
 /** The latest onboarding of each route saved in `dir`. */
 export const savedOnboardings = (dir: string) => savedIn(dir, OnboardingFile);
@@ -55,6 +71,7 @@ const dropSaved = (dir: string, key: string) =>
   );
 
 export const dropOnboarding = dropSaved;
+export const dropOwn = dropSaved;
 
 /** Drops every board in `dir` saved through `profile`. */
 export const dropBoardsOf = (dir: string, profile: string) =>

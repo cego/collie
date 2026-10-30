@@ -35,6 +35,7 @@ export const useUsage = () => {
     ),
   );
   return {
+    machines: readonly(machines),
     /** Of Machines live now, so one that left the Flock leaves the header at once. */
     entries: computed(() => usageEntries(machines.value, live.value, now.value)),
     page: computed(() => usagePage(machines.value, live.value, now.value)),

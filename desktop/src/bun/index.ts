@@ -52,6 +52,7 @@ import {
   machineRows,
   type MachineLinked,
   type MachineSynced,
+  type MachineOwnRead,
   type OnboardRun,
   type OnboardStep,
   Skippable,
@@ -72,9 +73,10 @@ import { loopbackTools } from "./chat-endpoint";
 import { piDriver } from "./pi-driver";
 import { CHILD_CWD, childEnv, localShell, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
-import { heldSettings, type Offers } from "./settings";
+import { carryIntoFlock, heldSettings, type Offers } from "./settings";
 import { offerOf, offersOf, opensOn, readPiConfig, retelling } from "./chat-choices";
-import { harnessLists } from "./harness-lists";
+import { harnessLists, listedIn } from "./harness-lists";
+import type { ListedModel } from "./claude-models";
 import { readPiModels } from "./pi-models";
 import { followWindow, zoomWindow } from "./scale";
 import type { Drawn } from "../shared/scale";
@@ -82,15 +84,20 @@ import {
   definitionsSync,
   flockSync,
   readFlockDefinitions,
-  readFlockSettings,
   writeFlockDefinitions,
   writeFlockSettings,
 } from "./flock-settings";
-import { DEFAULT_CHAT_HARNESS, editSetting, type FlockSettings } from "../shared/flock-settings";
+import {
+  DEFAULT_CHAT_HARNESS,
+  editSetting,
+  NO_FLOCK_SETTINGS,
+  type FlockSettings,
+} from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { changedLine } from "../../../src/schedule-model";
 import { SettingValue, settingText } from "../../../src/settings";
 import { isString } from "../../../src/schema";
+import { keepOwn } from "../shared/machine-own";
 import {
   actOn,
   DoorMap,
@@ -100,6 +107,8 @@ import {
   offersOn,
   runDetailOn,
   usageOn,
+  cataloguesOn,
+  machineOwnOn,
   schedulesOn,
   cleanupOn,
   sweepOn,
@@ -121,14 +130,27 @@ import {
   syncNow,
 } from "./machine";
 import { givenCredentials } from "./given";
+import { saveSlackConnection, disconnectSlackConnection } from "./slack";
+import { slackApi } from "../../../src/slack";
+import { connectionsOn, githubLogin, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, openTerminal } from "./terminal";
-import { addToHerdr, doctorOn, NOT_STARTED, onboardThrough, RELEASES, tracked } from "./onboarding";
+import {
+  addToHerdr,
+  doctorOn,
+  NOT_STARTED,
+  onboardThrough,
+  onboardingSkips,
+  RELEASES,
+  tracked,
+} from "./onboarding";
 import {
   claudeLoginThrough,
   GITLAB,
   giveHelle,
   giveToken,
+  giveGithub,
+  giveSlack,
   gitlabToken,
   helleOwner,
   oneLine,
@@ -144,9 +166,12 @@ import { electrobunUpdater } from "./electrobun-updater";
 import {
   dropBoardsOf,
   dropOnboarding,
+  dropOwn,
   saveOnboarding,
   savedBoards,
   savedOnboardings,
+  saveOwn,
+  savedOwn,
   saving,
 } from "./saved";
 import { applyAtLaunch, restartToUpdate, updatesOf } from "./updates";
@@ -258,10 +283,44 @@ const main = Effect.gen(function* () {
     version: manifest.version,
   }).pipe(Effect.ignore({ log: "Warn" }));
   const logged = yield* actionsLog(own);
+  const doors = new DoorMap<Doors>();
+  /** A harness's list from this computer's Machine; its own reader's where it has none or an older one. */
+  const fromMachine = (harness: string, own: Effect.Effect<ReadonlyArray<ListedModel>, string>) =>
+    Effect.suspend(() => {
+      const local = Option.getOrUndefined(
+        Arr.findFirst([...doors.values()], (door) => door.machine.profile === "local"),
+      );
+      if (local === undefined) return own;
+      return local.desktop.models().pipe(
+        Effect.map((catalogues) => listedIn(catalogues, harness)),
+        Effect.catchCause(() => Effect.succeed(null)),
+        Effect.flatMap((read) =>
+          read === null
+            ? own
+            : Result.match(read, {
+                onSuccess: (models) => Effect.succeed(models),
+                onFailure: (why) => Effect.fail(why),
+              }),
+        ),
+      );
+    });
   const lists = yield* harnessLists({
-    claude: Effect.suspend(() => claudeModels(SubscriptionRef.getUnsafe(flockSettings), own)),
-    pi: Effect.suspend(() => readPiModels(SubscriptionRef.getUnsafe(flockSettings), own)),
+    claude: fromMachine(
+      "claude",
+      Effect.suspend(() => claudeModels(SubscriptionRef.getUnsafe(flockSettings), own)),
+    ),
+    pi: fromMachine(
+      "pi",
+      Effect.suspend(() => readPiModels(SubscriptionRef.getUnsafe(flockSettings), own)),
+    ),
   });
+  // Before Desktop's own settings are held, so a save does not write back what was carried.
+  const loadedFlock = yield* carryIntoFlock(own, yield* nowIso).pipe(Effect.result);
+  const flockReadable = Result.isSuccess(loadedFlock);
+  const unreadableFlock = new ActionFailed({
+    reason: "Not set: the Flock's settings could not be read",
+  });
+  const saved = Result.isSuccess(loadedFlock) ? loadedFlock.success : NO_FLOCK_SETTINGS;
   const desktop = yield* heldSettings(
     own,
     (): FlockSettings => SubscriptionRef.getUnsafe(flockSettings),
@@ -269,7 +328,6 @@ const main = Effect.gen(function* () {
       offersOf(now, SubscriptionRef.getUnsafe(flockSettings), readPiConfig(own), lists),
   );
   const settings = desktop.now;
-  const saved = yield* readFlockSettings(own);
   // The GitLab host an earlier Desktop kept as its own becomes the Flock's.
   const ownGitlabHost = settings().gitlabHost;
   const seeded =
@@ -404,25 +462,35 @@ const main = Effect.gen(function* () {
     Effect.repeat(Schedule.spaced("15 seconds")),
     Effect.forkScoped,
   );
-  const doors = new DoorMap<Doors>();
+  const flockValue = (key: string) => SubscriptionRef.getUnsafe(flockSettings).settings[key]?.value;
   /** Keeps an edit made here, then gives it to every connected Machine. */
-  const editFlock = (key: string, typed: string) =>
+  const editFlockSettings = (
+    changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
+  ) =>
     Effect.gen(function* () {
-      const edited = editSetting(
-        yield* SubscriptionRef.get(flockSettings),
-        key,
-        typed,
-        yield* nowIso,
-      );
-      if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
-      yield* writeFlockSettings(own, edited).pipe(
-        Effect.mapError((error) => new ActionFailed({ reason: error.message })),
-      );
-      yield* SubscriptionRef.set(flockSettings, edited);
-      yield* syncEvery().pipe(Effect.forkIn(scope));
-      return edited;
+      if (!flockReadable) return yield* unreadableFlock;
+      return yield* settingsSync.edit(changes, yield* nowIso);
     });
+  const editFlock = (key: string, typed: string) => editFlockSettings([{ key, value: typed }]);
   const boards = `${Utils.paths.userData}/machines`;
+  const ownDirectory = `${Utils.paths.userData}/machine-own`;
+  const ownReadings = new Map(
+    Arr.map(yield* savedOwn(ownDirectory), (read) => [read.machine.profile, read]),
+  );
+  const readOwn = (door: Doors) =>
+    machineOwnOn(door.machine, door.desktop).pipe(
+      Effect.flatMap((read) =>
+        Effect.gen(function* () {
+          const kept: MachineOwnRead = {
+            ...read,
+            reading: keepOwn(read.reading, ownReadings.get(read.machine.profile)?.reading),
+          };
+          ownReadings.set(read.machine.profile, kept);
+          yield* saveOwn(ownDirectory, kept).pipe(Effect.provide(BunServices.layer));
+          yield* PubSub.publish(news, kept);
+        }),
+      ),
+    );
   const onboardings = `${Utils.paths.userData}/onboarding`;
   const runners = `${Utils.paths.userData}/runners`;
   const scope = yield* Effect.scope;
@@ -472,13 +540,16 @@ const main = Effect.gen(function* () {
         synced.set(`${part}:${machine.profile}`, item);
         return PubSub.publish(news, item);
       }).pipe(Effect.asVoid);
-  const { syncOn, syncEvery } = yield* flockSync({
+  const settingsSync = yield* flockSync({
     flock: flockSettings,
     machines: () => Arr.map([...doors.values()], settingsOf),
     save: (flock) => writeFlockSettings(own, flock).pipe(Effect.provide(BunServices.layer)),
     request: uuid,
     told: toldSynced("settings"),
   });
+  const syncOn = (machine: ReturnType<typeof settingsOf>) =>
+    flockReadable ? settingsSync.syncOn(machine) : Effect.succeed(unreadableFlock.reason);
+  const syncEvery = () => (flockReadable ? settingsSync.syncEvery() : Effect.void);
   const definitions = yield* definitionsSync({
     flock: flockDefinitions,
     machines: () => Arr.map([...doors.values()], settingsOf),
@@ -494,6 +565,7 @@ const main = Effect.gen(function* () {
     give: {
       gitlab: (route, text) => Effect.map(giveToken([route], gitlabHost(), text), firstFailure),
       helle: (route, text) => Effect.map(giveHelle([route], helle, text), firstFailure),
+      slack: (route, text) => Effect.map(giveSlack([route], text), firstFailure),
     },
     tell: (item) => PubSub.publish(news, item).pipe(Effect.asVoid),
     skipped: (profile) =>
@@ -551,6 +623,7 @@ const main = Effect.gen(function* () {
     route: ShellRoute,
     start: OnboardRun = NOT_STARTED,
     skipping: ReadonlyArray<Skippable> = [],
+    restoring?: Skippable,
   ) => {
     const { machine } = route;
     onboarding.set(machine.profile, { job });
@@ -564,14 +637,7 @@ const main = Effect.gen(function* () {
           (saved) => saved.machine.profile === machine.profile,
         ),
       );
-      const skip = Arr.filter(
-        Skippable.literals,
-        (step) =>
-          skipping.includes(step) ||
-          Option.exists(Option.fromNullishOr(before), (present_) =>
-            Arr.some(present_.run.steps, (one) => one.step === step && one.status === "skipped"),
-          ),
-      );
+      const skip = onboardingSkips(before?.run.steps ?? [], skipping, restoring);
       const run = yield* onboardThrough(
         route,
         {
@@ -709,7 +775,7 @@ const main = Effect.gen(function* () {
   const routedAt = new Map<string, number>();
   const holds = Effect.map(given.held, (texts) => ({
     version: manifest.version,
-    credentials: Arr.filter(CREDENTIALS, (one) => texts[one] !== undefined),
+    credentials: Arr.filter(CREDENTIALS, (one) => texts[one] !== undefined && texts[one] !== ""),
   }));
   /** Sync now: what connecting would do for the Machine on `profile`. */
   const syncMachine = (profile: string) =>
@@ -752,10 +818,13 @@ const main = Effect.gen(function* () {
       ),
     dir: own,
     conversation: `flock@${local}`,
-    proactive: () => settings().proactive,
-    machineRule: () => settings().machineRule,
+    proactive: () => flockValue("flock_chat.proactive") !== false,
+    machineRule: () => {
+      const rule = flockValue("machine_rule");
+      return isString(rule) ? rule : undefined;
+    },
     setMachineRule: (machineRule) =>
-      saveSettings({ machineRule }).pipe(
+      editFlock("machine_rule", machineRule).pipe(
         Effect.asVoid,
         Effect.orDie,
         Effect.provide(BunServices.layer),
@@ -831,6 +900,15 @@ const main = Effect.gen(function* () {
     | { readonly window: BrowserWindow; readonly closed: Deferred.Deferred<void> }
     | undefined;
 
+  const keepGitlabToken = (token: string) =>
+    Effect.gen(function* () {
+      const said = Str.trim(token);
+      if (!oneLine(said)) return yield* Effect.fail("a token is one line");
+      const { expires } = yield* gitlabToken(gitlab(), said);
+      yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost()}`, said);
+      yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
+      return gave("GitLab token", yield* given.giveEvery(everyRoute(), "gitlab", said));
+    }).pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
   const handlers = DesktopRpcs.toLayer({
     // Every board change may have left News, so each one nudges the chat to look.
     flock: () =>
@@ -862,6 +940,7 @@ const main = Effect.gen(function* () {
             return Effect.all(
               [
                 door === undefined ? Effect.void : syncOn(settingsOf(door)),
+                door === undefined ? Effect.void : readOwn(door),
                 door === undefined ? Effect.void : definitions.syncOn(settingsOf(door)),
                 route === undefined ? Effect.void : given.giveLacking(route),
                 route?.pair === undefined
@@ -883,6 +962,7 @@ const main = Effect.gen(function* () {
             { _tag: "Routes", profiles: [...routes.keys()] },
             ...Arr.map(reachable, ({ machine }): FlockItem => ({ _tag: "Routed", machine })),
             ...Arr.filter(yield* savedBoards(boards), listed),
+            ...Arr.filter([...ownReadings.values()], listed),
             ...Arr.filter(yield* savedOnboardings(onboardings), listed),
             ...(yield* given.states(Arr.map(reachable, ({ machine }) => machine))),
             ...Arr.filter([...synced.values()], listed),
@@ -946,9 +1026,20 @@ const main = Effect.gen(function* () {
       }),
     credentials: () => SubscriptionRef.changes(credentials),
     flockSettings: () =>
-      Stream.unwrap(
-        syncEvery().pipe(Effect.forkIn(scope), Effect.as(SubscriptionRef.changes(flockSettings))),
-      ),
+      !flockReadable
+        ? Stream.fail(unreadableFlock)
+        : Stream.unwrap(
+            syncEvery().pipe(
+              Effect.andThen(
+                Effect.forEach(doors.values(), readOwn, {
+                  concurrency: "unbounded",
+                  discard: true,
+                }),
+              ),
+              Effect.forkIn(scope),
+              Effect.as(SubscriptionRef.changes(flockSettings)),
+            ),
+          ),
     setFlockSetting: ({ key, value }) =>
       editFlock(key, value).pipe(
         Effect.map((edited) => {
@@ -960,21 +1051,19 @@ const main = Effect.gen(function* () {
           return `${key} is ${now === "" ? "unset" : `now ${now}`}; connected Machines are given it now, the rest when they connect`;
         }),
       ),
-    saveGitlab: ({ token }) =>
-      Effect.gen(function* () {
-        const said = Str.trim(token);
-        if (!oneLine(said)) return yield* Effect.fail("a token is one line");
-        const { expires } = yield* gitlabToken(gitlab(), said);
-        yield* keyring.store("gitlab-token", `Collie's GitLab token for ${gitlabHost()}`, said);
-        yield* SubscriptionRef.update(credentials, (now) => ({ ...now, gitlab: { expires } }));
-        return gave("GitLab token", yield* given.giveEvery(everyRoute(), "gitlab", said));
-      }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    setFlockSettings: ({ changes }) =>
+      editFlockSettings(changes).pipe(
+        Effect.as("Agent choice saved; connected Machines are given it together"),
+      ),
+    saveGitlab: ({ token }) => keepGitlabToken(token),
+    pasteGitlab: () => keepGitlabToken(Utils.clipboardReadText() ?? ""),
     saveGitlabHost: ({ host }) =>
       Effect.gen(function* () {
         const named = Str.trim(host);
         if (!isHostName(named))
           return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
         if (named === gitlabHost()) return `GitLab is ${named} already`;
+        if (!flockReadable) return yield* Effect.fail(unreadableFlock.reason);
         // A token is made for one GitLab, so the old host's goes before the host changes.
         // Without a keyring there is none to go.
         const token = yield* keyring.lookup("gitlab-token").pipe(Effect.orElseSucceed(() => null));
@@ -1003,6 +1092,55 @@ const main = Effect.gen(function* () {
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
         return gave("Helle's token", yield* given.giveEvery(everyRoute(), "helle", said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    saveSlack: ({ token }) =>
+      saveSlackConnection(token, keyring, (text) =>
+        given.giveEvery(everyRoute(), "slack", text),
+      ).pipe(
+        Effect.map(
+          ({ identity, given }) =>
+            `Posts as ${identity.user} in ${identity.team}. ${gave("Slack's token", given)}`,
+        ),
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+      ),
+    disconnectSlack: () =>
+      disconnectSlackConnection(keyring, (text) =>
+        given.giveEvery(everyRoute(), "slack", text),
+      ).pipe(
+        Effect.map((all) => gave("Slack disconnect", all)),
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+      ),
+    slackChoices: () =>
+      Effect.gen(function* () {
+        const token = yield* keyring.lookup("slack-token");
+        if (token) {
+          const api = slackApi(token);
+          return {
+            identity: yield* api.auth(),
+            channels: yield* api.channels(),
+            people: yield* api.people(),
+          };
+        }
+        for (const source of doors.values()) {
+          const reading = Option.getOrUndefined(
+            Arr.findFirst(yield* source.desktop.connections(), (one) => one.id === "slack"),
+          );
+          if (reading?.reading.state === "ok") return yield* source.desktop.slackChoices();
+        }
+        return yield* Effect.fail(
+          "Connect Slack, under Connections below, to pick from the channels your Collie is in.",
+        );
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new ActionFailed({
+              reason: isString(error)
+                ? error
+                : "reason" in error && isString(error.reason)
+                  ? error.reason
+                  : "The Machine's Slack choices could not be read",
+            }),
+        ),
+      ),
     claudeLogin: ({ profile }) =>
       Effect.gen(function* () {
         const route = routes.get(profile)?.route;
@@ -1047,11 +1185,13 @@ const main = Effect.gen(function* () {
         // Without a board open there is no stream to end.
         yield* Deferred.await(done).pipe(Effect.timeoutOption("5 seconds"));
         routes.delete(profile);
+        ownReadings.delete(profile);
         const running = onboarding.get(profile)?.fiber;
         if (running !== undefined) yield* Fiber.interrupt(running);
         yield* Scope.close(known.scope, Exit.void);
         yield* Effect.all([
           dropOnboarding(onboardings, profile),
+          dropOwn(ownDirectory, profile),
           dropBoardsOf(boards, profile),
           given.drop(profile),
         ]).pipe(Effect.provide(BunServices.layer));
@@ -1136,6 +1276,92 @@ const main = Effect.gen(function* () {
         ([installation, door]) => schedulesOn({ ...door.machine, installation }, door.desktop),
         { concurrency: "unbounded" },
       ),
+    catalogues: () =>
+      Effect.forEach(doors.values(), (door) => cataloguesOn(door.machine, door.desktop), {
+        concurrency: "unbounded",
+      }),
+    connectionReadings: () =>
+      Effect.forEach(doors.values(), (door) => connectionsOn(door.machine, door.desktop), {
+        concurrency: "unbounded",
+      }),
+    reuseConnection: ({ id, from, to }) =>
+      Effect.gen(function* () {
+        const source = Option.getOrUndefined(
+          Arr.findFirst([...doors.values()], (door) => door.machine.profile === from),
+        );
+        if (source === undefined)
+          return yield* Effect.fail("The Machine with the login is not connected");
+        const ready = Option.getOrUndefined(
+          Arr.findFirst(yield* source.desktop.connections(), (read) => read.id === id),
+        )?.reading;
+        if (ready?.state !== "ok")
+          return yield* Effect.fail(
+            `The source no longer has a working ${id} login; refresh Connections`,
+          );
+        const targets = Arr.filter(
+          everyRoute(),
+          (route) => to.includes(route.machine.profile) && route.machine.profile !== from,
+        );
+        if (targets.length !== new Set(Arr.filter(to, (profile) => profile !== from)).size)
+          return yield* Effect.fail("A target Machine was removed; refresh Connections");
+        const read = source.desktop.connectionLogin({ id });
+        if (id === "github") {
+          const login = yield* read;
+          return gave("GitHub login", yield* giveGithub(targets, login.token));
+        }
+        const each = yield* reuseGitlab(
+          read,
+          (login) =>
+            Effect.gen(function* () {
+              if (!isHostName(login.host))
+                return yield* Effect.fail("The source returned an invalid GitLab host");
+              if (login.host !== gitlabHost()) {
+                if (!flockReadable) return yield* Effect.fail(unreadableFlock.reason);
+                yield* keyring.clear("gitlab-token");
+                yield* editFlock("gitlab_host", login.host).pipe(
+                  Effect.mapError((failed) => failed.reason),
+                );
+              }
+            }),
+          keyring,
+          (token) => given.giveEvery(targets, "gitlab", token),
+        );
+        yield* SubscriptionRef.update(credentials, (now) => ({
+          ...now,
+          ...gitlabPages(),
+          gitlab: { expires: null },
+        }));
+        return `Using glab's login from ${source.machine.name}; ${gave("GitLab login", each)}`;
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new ActionFailed({
+              reason: isString(error)
+                ? error
+                : "The login's Machine could not be read; refresh Connections and try again",
+            }),
+        ),
+      ),
+    githubLogin: ({ profile }) =>
+      Effect.gen(function* () {
+        const route = routes.get(profile)?.route;
+        if (route === undefined) return yield* Effect.fail("That Machine is not in the Flock");
+        return yield* githubLogin(route, (command) => {
+          const terminal = inTerminal(command, process.platform, which);
+          return terminal === null ? Effect.succeed(false) : launched(terminal);
+        });
+      }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
+    linearSetup: ({ profile }) =>
+      Effect.gen(function* () {
+        const route = routes.get(profile)?.route;
+        if (route === undefined)
+          return yield* new ActionFailed({ reason: "That Machine is not in the Flock" });
+        const busy = onboarding.get(profile);
+        if (busy !== undefined) return busy.job;
+        const job = yield* uuid;
+        yield* onboardAs(job, route, NOT_STARTED, [], "linear");
+        return job;
+      }),
     cleanup: ({ profile }) => cleanupOn(doors, profile),
     sweep: ({ installation, machine, request }) =>
       sweepOn(doors, { installation, machine }, request, logged),

@@ -1,12 +1,24 @@
 // The taxonomy is the contract: what is sent, how it is titled, and how often.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, type Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { NOTIFICATION_KINDS, notificationTitle, openedSubject, wanted } from "../src/notify";
+import {
+  NOTIFICATION_KINDS,
+  Notifier,
+  notificationTitle,
+  openedSubject,
+  wanted,
+} from "../src/notify";
+import { slackApi } from "../src/slack";
+import { writeSlackToken } from "../src/slack-credentials";
+import { writeConfigValue } from "../src/config";
+import { fakeSlack } from "./support/slack";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { Agents, agentsLayer } from "../src/agents";
 import { runEffect } from "./support/effect";
@@ -54,6 +66,22 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 
 const nothing = () => Effect.die("no children here");
+const ownRun = Effect.flatMap(Store, (store) =>
+  store.admit({
+    request: "req-own",
+    run: "r-own",
+    workflow: "plan",
+    project: "/work/collie",
+    input: {},
+    provenance: {},
+    options: {},
+    generation: "g",
+    execution: "exec-own",
+    task: null,
+    parent: null,
+    placing: '{"from":"/work/collie","taskLabel":null}',
+  }),
+);
 
 /** One host's lifetime, whose toasts land in `toasts` as `sound|title|body`. */
 const session = <A, E>(
@@ -64,11 +92,17 @@ const session = <A, E>(
     | Agents
     | Children
     | Host
+    | Notifier
     | Store
     | FileSystem.FileSystem
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner
   >,
+  options: {
+    readonly dir?: string;
+    readonly slack?: typeof slackApi;
+    readonly toast?: import("../src/engine").Toast;
+  } = {},
 ) =>
   run.pipe(
     Effect.provide(
@@ -93,8 +127,10 @@ const session = <A, E>(
           foundationLayer({
             dir,
             userDir: rig.pluginEnv().userDir,
+            placing: { env: rig.pluginEnv(), herdr: new FakeHerdr(rig.pluginEnv()) },
             toast: (title, body, sound) =>
               Effect.sync(() => toasts.push(`${sound}|${title}|${body}`)),
+            ...options,
           }),
         ),
       ),
@@ -226,3 +262,95 @@ test("an opened merge request's notification names it as its forge does", () => 
   expect(openedSubject("https://gitlab.cego.dk/cego/collie/-/merge_requests/42")).toBe("!42");
   expect(openedSubject("https://example.com/nothing")).toBeUndefined();
 });
+
+test("two hosts send a needs-you event once from its owning host without Desktop, and skip disabled kinds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const other = `${rig.root}/other-host`;
+      yield* fs.makeDirectory(other);
+      yield* writeSlackToken(rig.pluginEnv(), "xoxb-fixture");
+      yield* writeConfigValue(rig.userDir, "slack.notification_channel", "C123");
+      yield* writeConfigValue(rig.userDir, "notifications.run-done", false);
+      const owner = fakeSlack();
+      const peer = fakeSlack();
+      const notify = Effect.gen(function* () {
+        const notifier = yield* Notifier;
+        yield* Effect.all(
+          [
+            notifier.notify("r-own", "needs-you", "Choose the approach", { key: "approach" }),
+            notifier.notify("r-own", "needs-you", "Choose the approach", { key: "approach" }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        yield* notifier.notify("r-own", "run-done", "Finished");
+      });
+      const own = { slack: (token: string) => slackApi(token, owner.client), toast: undefined };
+      yield* session(
+        Effect.gen(function* () {
+          yield* ownRun;
+          yield* notify;
+        }),
+        own,
+      );
+      yield* session(notify, own);
+      yield* session(notify, {
+        dir: other,
+        slack: (token) => slackApi(token, peer.client),
+        toast: undefined,
+      });
+      expect(Arr.filter(owner.calls, (call) => call.method === "chat.postMessage")).toEqual([
+        {
+          method: "chat.postMessage",
+          parameters: { channel: "C123", text: "collie · r-own needs you\nChoose the approach" },
+        },
+      ]);
+      expect(peer.calls).toEqual([]);
+      expect(toasts).toEqual([]);
+    }),
+  ));
+
+test("a notification for a person opens the DM and posts only in the returned channel", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeSlackToken(rig.pluginEnv(), "xoxb-fixture");
+      yield* writeConfigValue(rig.userDir, "slack.notification_channel", "U789");
+      const slack = fakeSlack();
+      yield* session(
+        Effect.gen(function* () {
+          yield* ownRun;
+          yield* (yield* Notifier).notify("r-own", "needs-you", "Choose the approach");
+        }),
+        { slack: (token) => slackApi(token, slack.client), toast: undefined },
+      );
+      expect(Arr.filter(slack.calls, (call) => call.method !== "auth.test")).toEqual([
+        { method: "conversations.open", parameters: { users: "U789" } },
+        {
+          method: "chat.postMessage",
+          parameters: { channel: "D123", text: "collie · r-own needs you\nChoose the approach" },
+        },
+      ]);
+    }),
+  ));
+
+test("notification text cannot turn a Run's words into Slack mentions", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeSlackToken(rig.pluginEnv(), "xoxb-fixture");
+      yield* writeConfigValue(rig.userDir, "slack.notification_channel", "C123");
+      const slack = fakeSlack();
+      yield* session(
+        Effect.gen(function* () {
+          yield* ownRun;
+          yield* (yield* Notifier).notify("r-own", "needs-you", "Choose <@U789> & <!channel>");
+        }),
+        { slack: (token) => slackApi(token, slack.client) },
+      );
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(slack.calls, (call) => call.method === "chat.postMessage"),
+        )?.parameters.text,
+      ).toBe("collie · r-own needs you\nChoose &lt;@U789&gt; &amp; &lt;!channel&gt;");
+      expect(toasts).toEqual(["request|collie · r-own needs you|Choose <@U789> & <!channel>"]);
+    }),
+  ));

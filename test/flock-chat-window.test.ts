@@ -94,7 +94,7 @@ test("Earlier conversations ends by saying that opening another harness's conver
   );
   expect(earlierNote([entry("claude")], "claude")).toBeNull();
   expect(earlierNote([...listed, entry("codex")], "claude")).toBe(
-    "Opening a Pi or codex conversation moves the chat to its harness.",
+    "Opening a Pi or Codex conversation moves the chat to its harness.",
   );
 });
 

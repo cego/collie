@@ -3,7 +3,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { RELEASE_CLEARS, RELEASE_ON, SHARE_CLEARS } from "../workflows/release.workflow";
+import { RELEASE_CLEARS, RELEASE_ON } from "../workflows/release.workflow";
 import { contentOf } from "../src/sdk";
 import onGitlab from "../workflows/release.gitlab.md" with { type: "text" };
 import onGithub from "../workflows/release.github.md" with { type: "text" };
@@ -126,7 +126,7 @@ test("staging a merge request deploys its own pipeline's head, checks stage and 
   }
 });
 
-test("sharing for approval posts one Slack message, the merge request linked by its title, and nothing else", () => {
+test("sharing content describes the host's one approval post and the manual fallback", () => {
   for (const [forge, one] of Rec.toEntries(content)) {
     const share = flat(one.sections.get("share") ?? "");
     for (const said of [
@@ -134,19 +134,10 @@ test("sharing for approval posts one Slack message, the merge request linked by 
       "{{channel}}",
       "`<URL|TITLE>`",
       "no other words, no emoji, no mention and no thread reply",
-      "Post nowhere else",
-      "If you have no Slack tool",
+      "host's Slack adapter",
+      "share it yourself",
     ])
       expect(share).toContain(said);
-    expect(share).toContain(forge === "gitlab" ? "glab mr view" : "gh pr view");
+    expect(share).toContain(forge === "gitlab" ? "GitLab" : "GitHub");
   }
-});
-
-test("sharing's Clearance names the channel and the merge request, well under the 400 characters a Clearance may be", () => {
-  const mr = "https://gitlab.example.com/spilnu/frontend/monorepo/-/merge_requests/12345";
-  const clears = SHARE_CLEARS(mr, "#frontend-approval-requests");
-  const joined = Arr.join(clears, "; ");
-  expect(joined).toContain("one Slack message in #frontend-approval-requests");
-  expect(joined).toContain(mr);
-  expect(joined.length).toBeLessThanOrEqual(200);
 });

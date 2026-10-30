@@ -8,7 +8,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
-import { Effect, FileSystem, Option, Path, Stream } from "effect";
+import { Effect, FileSystem, Option, Path, Stream, Struct } from "effect";
 import { attachmentsDir, listAttachments } from "./attachments";
 import { handoffsIn } from "./handoffs";
 import { readReplies } from "./replies";
@@ -49,6 +49,10 @@ import { readMeasurements } from "./measurement";
 import { finalMeasurementLine, type Measurement } from "./measurement-model";
 import { readLogTail } from "./run-log";
 import { readAudit, startedBy } from "./audit";
+import { onPath } from "./doctor-check";
+import { HARNESSES } from "./harness";
+import type { MachineOwn } from "./board-model";
+import type { Mutable } from "effect/Types";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
 const HISTORY = 200;
@@ -655,4 +659,29 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
     trust: { cwd: env.cwd, state },
     flock: (yield* readSettingsSet(env.userDir)).flock?.by ?? null,
   } satisfies SettingsView;
+});
+
+export const buildMachineOwn = Effect.fn("Views.buildMachineOwn")(function* (env: PluginEnv) {
+  const raw = yield* readConfig(env.userDir);
+  const root = configValue(raw, "projects.root");
+  const chat = configValue(raw, "chat_harness");
+  const found = yield* Effect.filter(Struct.keys(HARNESSES), (harness) =>
+    Effect.map(onPath(env.raw["PATH"] ?? "", harness), (dir) => dir !== null),
+  );
+  const own: Mutable<MachineOwn> = {
+    harnesses: found,
+    remembered: Arr.filter(
+      flatten(raw),
+      ({ key }) =>
+        key !== "projects.root" &&
+        key !== "chat_harness" &&
+        !Arr.some(
+          SETTINGS,
+          (setting) => key === setting.key || pipe(key, Str.startsWith(`${setting.key}.`)),
+        ),
+    ),
+  };
+  if (isString(root)) own.projectsRoot = root;
+  if (isString(chat)) own.chatHarness = chat;
+  return own;
 });

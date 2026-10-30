@@ -361,7 +361,13 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     group: "Runs",
     label: "Slack channel for approval requests",
     description:
-      "The Slack channel a release Run posts its merge request in for approval, e.g. #frontend. Empty shares nothing.",
+      "The Slack channel a release Run posts its merge request in for approval. Empty shares nothing. Earlier #names work until picked again.",
+  }),
+  of("slack.notification_channel", "text", "", {
+    group: "Notifications",
+    label: "Post notifications to",
+    description:
+      "The toasts you keep on also go to this Slack channel or person. Empty keeps toasts only.",
   }),
   choice("scope", SCOPES, D.scope, {
     group: "Board",
@@ -380,6 +386,18 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     label: "Quiet Run",
     description: "How long a running Run may write nothing before its card calls it quiet.",
     unit: "minutes",
+  }),
+  of("flock_chat.proactive", "boolean", "true", {
+    group: "Chat",
+    label: "Flock chat speaks first",
+    description:
+      "Whether the Flock chat starts a turn about News that matters, as the bell in its header does.",
+  }),
+  of("machine_rule", "text", "", {
+    group: "Chat",
+    label: "Machine rule",
+    description:
+      "Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say.",
   }),
   of("proactive", "boolean", String(D.proactive), {
     group: "Chat",

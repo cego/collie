@@ -10,7 +10,13 @@ import { DEFAULT_MODEL, HARNESS_MODELS, resolveChoice } from "../../../src/harne
 import { isString } from "../../../src/schema";
 import { effortsOf, type Offer } from "../shared/chat-choices";
 import { ActionFailed, DesktopSettings, type DesktopSettingsChange } from "../shared/flock";
-import { CHAT_HARNESSES, DEFAULT_CHAT_HARNESS, type FlockSettings } from "../shared/flock-settings";
+import {
+  CHAT_HARNESSES,
+  DEFAULT_CHAT_HARNESS,
+  editSetting,
+  type FlockSettings,
+} from "../shared/flock-settings";
+import { readFlockSettings, writeFlockSettings } from "./flock-settings";
 
 const SettingsFile = Schema.fromJsonString(DesktopSettings);
 const FILE = "settings.json";
@@ -34,6 +40,34 @@ export const writeSettings = Effect.fn("Settings.write")(function* (
     (yield* Path.Path).join(dir, FILE),
     yield* Schema.encodeEffect(SettingsFile)(settings).pipe(Effect.orDie),
   );
+});
+
+/**
+ * Carries the Machine rule and a quiet Flock chat an earlier Desktop kept as its own into the
+ * Flock's settings, as Desktop's edits at `now`, then drops Desktop's copy so it happens once.
+ */
+export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
+  dir: string,
+  now: string,
+) {
+  const { proactive, machineRule, ...own } = yield* readSettings(dir);
+  const flock = yield* readFlockSettings(dir);
+  if (proactive === undefined && machineRule === undefined) return flock;
+  const carried = Arr.reduce(
+    [
+      ["machine_rule", machineRule ?? ""],
+      ["flock_chat.proactive", proactive === false ? "false" : ""],
+    ] as const,
+    flock,
+    (held, [key, typed]) => {
+      if (typed === "" || held.settings[key] !== undefined) return held;
+      const edited = editSetting(held, key, typed, now);
+      return "refused" in edited ? held : edited;
+    },
+  );
+  yield* writeFlockSettings(dir, carried);
+  yield* writeSettings(dir, own);
+  return carried;
 });
 
 /** What each harness offers, by harness. */
@@ -126,8 +160,27 @@ export const chatChoice = (
       problem: `the Flock chat has no harness called "${harness}" (${Arr.join(CHAT_HARNESSES, ", ")})`,
     };
   const resolved = resolveChoice(
-    [{ harness, model: settings.chatModel, effort: settings.chatEffort }],
+    [
+      {
+        harness,
+        model:
+          settings.chatModel === undefined || settings.chatModel === DEFAULT_MODEL
+            ? offers[harness]?.unset.model
+            : settings.chatModel,
+        effort: settings.chatEffort,
+      },
+    ],
     extraModels(flock),
+    offers[harness] === undefined
+      ? undefined
+      : {
+          machine: "this computer",
+          harnesses: Arr.map(Rec.toEntries(offers), ([harness, offer]) => ({
+            harness,
+            table: offer.from === "harness" ? null : (offer.why ?? "the harness has not been read"),
+            entries: Arr.map(offer.models, ({ id, efforts }) => ({ model: id, efforts })),
+          })),
+        },
   );
   if (
     !resolved.ok &&
@@ -139,20 +192,7 @@ export const chatChoice = (
       ok: false as const,
       problem: `${resolved.problem}. Write provider/model, for example openai-codex/gpt-6.1-sol.`,
     };
-  if (!resolved.ok || settings.chatEffort === undefined) return resolved;
-  const { label, efforts } = modelOf(settings, offers);
-  const effort = settings.chatEffort;
-  if (efforts.length === 0)
-    return {
-      ok: false as const,
-      problem: `${label} takes no effort, so "${effort}" cannot be asked of it`,
-    };
-  return efforts.includes(effort)
-    ? resolved
-    : {
-        ok: false as const,
-        problem: `"${effort}" is not an effort ${label} takes (${Arr.join(efforts, ", ")})`,
-      };
+  return resolved;
 };
 
 /**

@@ -2,6 +2,7 @@
 // carried tree on disk; every installer and system tool that would reach the network or need
 // root is a stub on PATH.
 
+import { pipe as pipe_ } from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -506,6 +507,28 @@ test("a Machine that can already push gets no key", () =>
 
       expect(statusOf(events, "push")).toBe("in_place");
       expect(yield* read(`${home}/glab-calls`)).not.toContain("ssh-key add");
+    }),
+  ));
+
+test("Slack handed on stdin is written owner-only without appearing in onboarding events", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { events } = yield* onboarded(
+        {},
+        { secrets: { SLACK_BOT_TOKEN: "xoxb-fixture-secret" } },
+      );
+      expect(statusOf(events, "slack")).toBe("done");
+      expect(yield* read(`${home}/.config/collie/slack.env`)).toBe(
+        "SLACK_BOT_TOKEN=xoxb-fixture-secret\n",
+      );
+      expect((yield* fs.stat(`${home}/.config/collie/slack.env`)).mode & 0o777).toBe(0o600);
+      expect(
+        Arr.some(
+          events,
+          (event) => "detail" in event && pipe_(event.detail, Str.includes("xoxb-fixture-secret")),
+        ),
+      ).toBe(false);
     }),
   ));
 

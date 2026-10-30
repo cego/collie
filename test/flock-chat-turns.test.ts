@@ -816,7 +816,7 @@ test("a model the harness does not take is said in the chat, and nothing is star
         expect(said).toEqual([
           expect.objectContaining({
             type: "RUN_ERROR",
-            message: expect.stringContaining('"gpt-6.1-sol" is not a model claude takes'),
+            message: expect.stringContaining('this computer\'s claude has no model "gpt-6.1-sol"'),
           }),
         ]);
         expect(seen.sessions).toEqual([]);

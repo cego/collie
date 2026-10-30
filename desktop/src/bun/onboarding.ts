@@ -133,6 +133,19 @@ const lineOf = Schema.decodeUnknownOption(Line);
 
 export const NOT_STARTED: OnboardRun = { steps: [], asked: null, ready: null, reason: null, at: 0 };
 
+export const onboardingSkips = (
+  before: ReadonlyArray<OnboardStep>,
+  skipping: ReadonlyArray<Skippable>,
+  restoring?: Skippable,
+) =>
+  Arr.filter(
+    ["helle", "linear"] as const,
+    (step) =>
+      step !== restoring &&
+      (skipping.includes(step) ||
+        Arr.some(before, (one) => one.step === step && one.status === "skipped")),
+  );
+
 /** Each change to a run, told as it is made; the run as it stands is the last one told. */
 export const tracked = (told: (run: OnboardRun) => Effect.Effect<void>, start = NOT_STARTED) => {
   let run = start;

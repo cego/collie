@@ -21,6 +21,7 @@ import {
   type PlacedTask,
 } from "../../../src/shared/flock";
 import { flockAtom } from "../flock";
+import { machineOwnRows } from "../../../src/shared/machine-own";
 
 /** Now, again every minute: a week's fold and the header's count of it age with it. */
 const clockAtom = Atom.make(
@@ -54,6 +55,7 @@ export const useFlock = () => {
     /** Now, as of the last minute. */
     now,
     rows: computed(() => machineRows(told.value)),
+    own: computed(() => machineOwnRows(machineRows(told.value), told.value.own, now.value)),
     onboarding: computed(() => told.value.onboarding),
     tasks,
     everyTask: computed(() => placed(tasks.value)),

@@ -8,6 +8,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import {
   Agents,
+  ConnectionReading,
   FindingSchema,
   FixOutputSchema,
   Host,
@@ -789,6 +790,19 @@ const bodyOf = (got: {
 
 export default defineWorkflow({
   id: "tune-up",
+  connections: {
+    uses: {
+      linear: { with: "Files what it finds as issues", without: "Reports in the Run only" },
+      gitlab: {
+        with: "Opens the merge request for a proved improvement",
+        without: "Keeps the improvement on its branch and says why",
+      },
+      github: {
+        with: "Opens the pull request for a proved improvement",
+        without: "Keeps the improvement on its branch and says why",
+      },
+    },
+  },
   title: "tune-up — make a repository measurably faster",
   description:
     "Reads a repository and its telemetry, commits a benchmark harness, and keeps only the changes the host measures as a gain with no guardrail regression. It ends in a merge request only where the final tree proves the gain against its merge base, and otherwise with its findings.",
@@ -1189,10 +1203,10 @@ export default defineWorkflow({
                 return yield* recorded("external.unasked", `${file}: written, nothing asked`);
               const linear = yield* Activity.make({
                 name: "external.linear",
-                success: Schema.Struct({ reachable: Schema.Boolean, detail: text }),
-                execute: host.linear(cwd),
+                success: ConnectionReading,
+                execute: host.connection("linear"),
               });
-              if (!linear.reachable)
+              if (linear.state !== "ok")
                 return yield* recorded("external.unasked", `${file} not asked: ${linear.detail}`);
               for (const { key, one } of keyed) yield* settle(key, one);
             }),

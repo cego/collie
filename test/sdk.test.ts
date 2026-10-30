@@ -47,6 +47,27 @@ const entry = (over: Partial<WorkflowEntry>): WorkflowEntry => ({
   metadata: { hints: { text: "goal" }, ...over.metadata },
 });
 
+test("an offer can list only Connections its workflow declares", () => {
+  const problems = checkEntry(
+    entry({
+      metadata: {
+        actions: [
+          {
+            id: "file",
+            title: "File issue",
+            workflow: "echo",
+            arguments: {},
+            eligible: () => true,
+            connections: ["linear"],
+          },
+        ],
+      },
+    }),
+  );
+  expect(Arr.join(problems, "\n")).toContain('offer "file"');
+  expect(Arr.join(problems, "\n")).toContain('Connection "linear"');
+});
+
 test("the identity is an identity, and a title is there for a human to read", () => {
   expect(checkEntry(entry({ id: "Echo" }))[0]).toContain("is not an identity");
   expect(checkEntry(entry({ id: "2fast" }))[0]).toContain("is not an identity");
@@ -302,7 +323,9 @@ test("what a card is given is ids, titles and projections — never the closures
   const described = describeMetadata({
     hints: { text: "work-source" },
     outcome: { selectable: ["feature"] },
-    followUps: [{ id: "again", title: "Run again", workflow: "echo", when: "succeeded" }],
+    followUps: [
+      { id: "again", title: "Run again", workflow: "echo", when: "succeeded", connections: [] },
+    ],
     actions: [action({})],
   });
   expect(described).toEqual({
@@ -312,12 +335,15 @@ test("what a card is given is ids, titles and projections — never the closures
     checkout: null,
     closes: null,
     path: [],
-    followUps: [{ id: "again", title: "Run again", workflow: "echo", when: "succeeded" }],
+    followUps: [
+      { id: "again", title: "Run again", workflow: "echo", when: "succeeded", connections: [] },
+    ],
     actions: [
       {
         id: "fix-open",
         title: "Fix what is open",
         workflow: "implement",
+        connections: [],
         arguments: {
           type: "object",
           properties: { plan: { type: "string" } },

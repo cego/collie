@@ -99,6 +99,7 @@ export interface McpLaunch {
   readonly config: string;
   readonly extension: string;
   readonly settings?: JsonObject;
+  readonly effort?: string | null;
 }
 
 export interface HarnessAdapter extends HarnessModels {
@@ -179,8 +180,9 @@ export const HARNESSES: Harnesses = {
   codex: {
     id: "codex",
     kind: "codex",
-    mcp: ({ command, env }) => ({
+    mcp: ({ command, env, effort }) => ({
       args: [
+        ...(effort == null ? [] : ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`]),
         "-c",
         `mcp_servers.collie.command=${JSON.stringify(command[0])}`,
         "-c",

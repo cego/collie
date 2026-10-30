@@ -28,7 +28,7 @@ export interface ForgeLogin {
   readonly relogin: string;
   /** When the stored token expires, in epoch ms, null where it does not. */
   readonly expiry: (run: Runner, cwd: string) => Effect.Effect<number | null>;
-  readonly token: (run: Runner, cwd: string) => Effect.Effect<string | null>;
+  readonly token: <R>(run: Runner<R>, cwd: string) => Effect.Effect<string | null, never, R>;
   /** Has the CLI refresh an expired token; false where it could not. */
   readonly refresh: (run: Runner, cwd: string) => Effect.Effect<boolean>;
 }

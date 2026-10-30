@@ -167,7 +167,8 @@ test(
               options: { model: "gpt-5" },
             })
             .pipe(Effect.flip);
-          expect(String(refused.reason)).toContain('"gpt-5" is not a model claude takes');
+          expect(String(refused.reason)).toContain('claude has no model "gpt-5"');
+          expect(String(refused.reason)).toContain("from Collie's table");
           yield* stopHost(world.state);
         }),
       MODULES,
@@ -198,7 +199,8 @@ test(
 
           const refused = yield* collie(world, ["run", "start", "quiet", "--model", "gpt-5"]);
           expect(refused.exit).toBe(2);
-          expect(refused.envelope.error?.message).toContain('"gpt-5" is not a model claude takes');
+          expect(refused.envelope.error?.message).toContain('claude has no model "gpt-5"');
+          expect(refused.envelope.error?.message).toContain("from Collie's table");
           yield* stopHost(world.state);
         }),
       MODULES,

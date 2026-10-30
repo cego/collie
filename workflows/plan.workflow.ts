@@ -36,6 +36,7 @@ import {
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./plan.md" with { type: "text" };
+import { connection } from "./connections.ts";
 
 const content = contentOf(markdown);
 const text = Schema.String;
@@ -210,6 +211,14 @@ const refine = step({
 
 export default defineWorkflow({
   id: "plan",
+  connections: {
+    uses: {
+      linear: {
+        with: "Offers to hand the plan to Linear",
+        without: "No Linear offer",
+      },
+    },
+  },
   title: "plan — turn a goal into a spec and tickets",
   description:
     "Turns a goal into a spec and tickets, using the repository for context and asking only for missing decisions.",
@@ -323,6 +332,9 @@ export default defineWorkflow({
       }
 
       let opinions = 0;
+      const linear = yield* connection("linear");
+      const choices =
+        linear.state === "ok" ? CHOICES : Arr.filter(CHOICES, (one) => one !== OFFLOAD);
       for (let round = 1; round <= ROUNDS; round++) {
         // What is left to offer: an opinion already had twice is not offered a third time.
         const chosen = nobodyAsked
@@ -332,7 +344,7 @@ export default defineWorkflow({
                 name: `next-${round}`,
                 prompt: "What next?",
                 options:
-                  opinions < OPINIONS ? CHOICES : Arr.filter(CHOICES, (one) => one !== OPINION),
+                  opinions < OPINIONS ? choices : Arr.filter(choices, (one) => one !== OPINION),
               }),
               { round },
             );

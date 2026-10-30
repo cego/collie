@@ -61,6 +61,8 @@ export type HeldConversation = typeof HeldConversation.Type;
 
 /** Each harness the chat runs on, by the name its maker gives it. */
 const HARNESS_NAMES = new Map([
+  ["codex", "Codex"],
+  ["opencode", "OpenCode"],
   ["claude", "Claude Code"],
   ["pi", "Pi"],
 ]);

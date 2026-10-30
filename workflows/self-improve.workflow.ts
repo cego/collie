@@ -126,6 +126,18 @@ const improvementsStep = step({
 
 export default defineWorkflow({
   id: "self-improve",
+  connections: {
+    uses: {
+      gitlab: {
+        with: "Files findings and plans improvements from issues",
+        without: "Records the retrospective in the Run only",
+      },
+      github: {
+        with: "Files findings and plans improvements from issues",
+        without: "Records the retrospective in the Run only",
+      },
+    },
+  },
   title: "self-improve — file and fix what a day of Runs shows is wrong with a project",
   description:
     "Reads the last 24 hours of Runs, this project's or the whole Machine's, with the installed retro skill, files or comments on this project's issues, and starts up to `improvements` plans that build themselves.",
@@ -258,18 +270,18 @@ export default defineWorkflow({
       );
       if (!quiet) yield* retro;
 
-      const open = yield* Activity.make({
+      const issues = yield* Activity.make({
         name: "issues",
-        success: Opened,
+        success: Schema.Union([Opened, Schema.Struct({ refused: Schema.String })]),
         error: WorkflowError,
-        execute: host
-          .issues(run.id)
-          .pipe(
-            Effect.map((issues) =>
-              Arr.map(issues, (issue) => ({ ...issue, keys: keysIn(issue.body) })),
-            ),
+        execute: host.issues(run.id).pipe(
+          Effect.map((issues) =>
+            Arr.map(issues, (issue) => ({ ...issue, keys: keysIn(issue.body) })),
           ),
+          Effect.catch((failure) => Effect.succeed({ refused: failure.reason })),
+        ),
       });
+      const open = "refused" in issues ? [] : issues;
 
       const triaging = triageStep(
         agentWork({
@@ -284,16 +296,18 @@ export default defineWorkflow({
             runs: Arr.join(window.runs, "\n"),
             report: asJson(window.report),
             issues:
-              open.length === 0
-                ? "None."
-                : Arr.join(
-                    Arr.map(
-                      open,
-                      ({ number, title, url, body }) =>
-                        `### #${number} ${title}\n\n${url}\n\n${body}`,
+              "refused" in issues
+                ? `Unavailable: ${issues.refused}. Keep the retrospective locally; no issues or Improvements will be started.`
+                : open.length === 0
+                  ? "None."
+                  : Arr.join(
+                      Arr.map(
+                        open,
+                        ({ number, title, url, body }) =>
+                          `### #${number} ${title}\n\n${url}\n\n${body}`,
+                      ),
+                      "\n\n",
                     ),
-                    "\n\n",
-                  ),
             bound: String(bound),
             scope: content.sections.get(input.runs) ?? "",
           },
@@ -303,6 +317,28 @@ export default defineWorkflow({
       const triaged: Triage = quiet
         ? { findings: [], improvements: [], left_out: [] }
         : yield* triaging;
+      const file = `${place.dir}/summary.md`;
+      if ("refused" in issues) {
+        yield* Activity.make({
+          name: "summary",
+          success: Schema.Void,
+          error: WorkflowError,
+          execute: FileSystem.FileSystem.pipe(
+            Effect.flatMap((fs) =>
+              fs.writeFileString(
+                file,
+                `# Retrospective ${run.id}\n\nNo issues filed: ${issues.refused}\n\n\`\`\`json\n${asJson(triaged)}\n\`\`\`\n`,
+              ),
+            ),
+            Effect.mapError((cause) => new WorkflowError({ reason: cause.message })),
+          ),
+        });
+        yield* host.record(
+          run.id,
+          `Retrospective kept in ${file}; no issues filed: ${issues.refused}`,
+        );
+        return `Retrospective kept in ${file}; no issues filed: ${issues.refused}`;
+      }
 
       const sorted = sortOut(
         triaged.findings,
@@ -443,7 +479,6 @@ export default defineWorkflow({
         { concurrency: "unbounded" },
       );
 
-      const file = `${place.dir}/summary.md`;
       yield* Activity.make({
         name: "summary",
         success: Schema.Void,

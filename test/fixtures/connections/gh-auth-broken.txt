@@ -1,0 +1,5 @@
+github.com
+  X Failed to log in to github.com account mk (keyring)
+  - Active account: true
+  - The token in keyring is invalid.
+  - To re-authenticate, run: gh auth login -h github.com

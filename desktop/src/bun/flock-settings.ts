@@ -18,17 +18,24 @@ import {
 import type { SharedSetting, SharedSettings } from "../../../src/board-model";
 import type { SharedDefinition } from "../../../src/definitions-model";
 import { latestEdits } from "../../../src/flock-settings";
-import { FlockSettings, NO_FLOCK_SETTINGS, takeFrom } from "../shared/flock-settings";
+import { editSettings, FlockSettings, NO_FLOCK_SETTINGS, takeFrom } from "../shared/flock-settings";
+import { ActionFailed } from "../shared/flock";
 
 const FlockSettingsFile = Schema.fromJsonString(FlockSettings);
 const FILE = "flock-settings.json";
 
-/** The Flock's settings, or none where nothing is saved or it cannot be read. */
+/** The Flock's settings, empty only where no file exists. */
 export const readFlockSettings = Effect.fn("FlockSettings.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString((yield* Path.Path).join(dir, FILE)).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(FlockSettingsFile)),
-    Effect.orElseSucceed(() => NO_FLOCK_SETTINGS),
+    Effect.catchTag("PlatformError", (error) =>
+      error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
+    ),
+    Effect.flatMap((text) =>
+      text === null
+        ? Effect.succeed(NO_FLOCK_SETTINGS)
+        : Schema.decodeEffect(FlockSettingsFile)(text),
+    ),
   );
 });
 
@@ -37,6 +44,7 @@ export const writeFlockSettings = Effect.fn("FlockSettings.write")(function* (
   flock: FlockSettings,
 ) {
   const fs = yield* FileSystem.FileSystem;
+  yield* readFlockSettings(dir);
   yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(
     (yield* Path.Path).join(dir, FILE),
@@ -229,12 +237,45 @@ const latestSync = <T, Has, M extends { readonly name: string }, SaveError, Exch
 export const flockSync = <E, M extends SettingsMachine<E>, SaveError>(
   options: Synced<FlockSettings, M, SaveError>,
 ) =>
-  latestSync({
-    ...options,
-    what: "Settings",
-    exchange: (flock, { name, door }, request) => syncSettings(flock, name, door, request),
-    take: (now, name, has: ReadonlyArray<SharedSetting>) => takeFrom(now, name, has).flock,
-    edits: (flock) => flock.settings,
+  Effect.gen(function* () {
+    const sync = yield* latestSync({
+      ...options,
+      what: "Settings",
+      exchange: (flock, { name, door }, request) => syncSettings(flock, name, door, request),
+      take: (now, name, has: ReadonlyArray<SharedSetting>) => takeFrom(now, name, has).flock,
+      edits: (flock) => flock.settings,
+    });
+    return {
+      ...sync,
+      edit: (
+        changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
+        now: string,
+      ) =>
+        SubscriptionRef.modifyEffect(options.flock, (current) =>
+          Effect.gen(function* () {
+            const edited = editSettings(current, changes, now);
+            if ("refused" in edited) return yield* new ActionFailed({ reason: edited.refused });
+            yield* options.save(edited).pipe(
+              Effect.mapError(
+                () =>
+                  new ActionFailed({
+                    reason: "Not set: the Flock's settings could not be read or saved",
+                  }),
+              ),
+            );
+            return [edited, edited] as const;
+          }),
+        ).pipe(
+          Effect.tap(() =>
+            Effect.forEach(
+              options.machines(),
+              (machine) => options.told(machine, "Delivery pending"),
+              { discard: true },
+            ),
+          ),
+          Effect.tap(() => sync.syncEvery()),
+        ),
+    };
   });
 
 /** Syncs connected Machines with the Flock's shared definitions, giving only what one lacks. */
