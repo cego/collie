@@ -60,9 +60,9 @@ type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildPro
 const git = (args: string[], cwd: string) => shell("git", args, cwd);
 
 /**
- * What this working tree is, right now: the commit it is on, plus a digest over
- * everything that is not in it — the porcelain status, the diff against HEAD, and the
- * content of every untracked file git is not ignoring.
+ * What this working tree is, right now: the commit it is on, and the Git tree it would
+ * commit as, untracked files git is not ignoring included. The same bytes are the same
+ * tree at any commit, staged or not.
  *
  * Untracked content is included deliberately. A test run that passed because of a file
  * nobody committed passed on a tree that is not the one anybody will get.
@@ -96,11 +96,10 @@ const statusParts = (stdout: string) => {
 export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const [status, diff, others] = yield* Effect.all(
+  const [status, changed] = yield* Effect.all(
     [
       git(["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "-z"], cwd),
-      git(["diff", "HEAD", "--binary"], cwd),
-      git(["ls-files", "--others", "--exclude-standard", "-z"], cwd),
+      git(["ls-files", "--modified", "--others", "--exclude-standard", "-z"], cwd),
     ],
     { concurrency: "unbounded" },
   );
@@ -112,22 +111,47 @@ export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
   const branch = !born || named === undefined ? null : named === "(detached)" ? "HEAD" : named;
   const dirty = entries !== "";
 
-  const parts = [entries, Bun.hash(diff.stdout).toString(16)];
-  let bytes = entries.length + diff.stdout.length;
-  for (const relative of Str.split(others.stdout, "\0")) {
+  let bytes = 0;
+  for (const relative of Str.split(changed.stdout, "\0")) {
     if (relative === "") continue;
-    const file = path.join(cwd, relative);
-    const size = yield* fs.stat(file).pipe(
+    bytes += yield* fs.stat(path.join(cwd, relative)).pipe(
       Effect.map((info) => Number(info.size)),
       Effect.orElseSucceed(() => 0),
     );
-    bytes += size;
     if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
-    const content = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-    parts.push(`${relative}:${Bun.hash(content).toString(16)}`);
   }
-  return { head_sha, fingerprint: Bun.hash(Arr.join(parts, "\n")).toString(16), branch, dirty };
+  return { head_sha, fingerprint: yield* workingTree(cwd), branch, dirty };
 });
+
+/** The tree `git add -A` would stage, written through a scratch copy so the checkout's own index is left as it was. */
+const workingTree = Effect.fn("Verify.workingTree")(
+  function* (cwd: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const own = yield* git(["rev-parse", "--git-path", "index"], cwd);
+    return yield* Effect.acquireUseRelease(
+      fs.makeTempDirectory({ prefix: "collie-index-" }),
+      (scratch) =>
+        Effect.gen(function* () {
+          const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
+          yield* fs
+            .copyFile(path.resolve(cwd, Str.trim(own.stdout)), env.GIT_INDEX_FILE)
+            .pipe(Effect.ignore);
+          yield* shell("git", ["add", "-A"], cwd, env);
+          const tree = yield* shell("git", ["write-tree"], cwd, env);
+          return tree.code === 0 ? Str.trim(tree.stdout) : "";
+        }),
+      (scratch) => fs.remove(scratch, { recursive: true }).pipe(Effect.ignore),
+    );
+  },
+  Effect.orElseSucceed(() => ""),
+);
+
+/** Whether two snapshots are the same bytes, whatever commit each was on. A tree too large to look at is never the same as another. */
+export const sameTree = (
+  one: Pick<Snapshot, "fingerprint">,
+  other: Pick<Snapshot, "fingerprint">,
+) => one.fingerprint !== TOO_LARGE && one.fingerprint === other.fingerprint;
 
 /**
  * Whether the tree was the same at both ends, and so whether the exit code says anything
@@ -140,10 +164,9 @@ export function resultOf(
   exit: number,
   expect: Verification["expect"] = "pass",
 ): Verification["result"] {
-  if (start.fingerprint === TOO_LARGE || end.fingerprint === TOO_LARGE) return "unstable";
-  if (start.head_sha !== end.head_sha || start.fingerprint !== end.fingerprint) return "unstable";
+  if (!sameTree(start, end)) return "unstable";
   // Never `(exit === 0) === wanted` on its own: an unstable tree says nothing about
-  // either expectation, and the rules above have to come first for both.
+  // either expectation, and the rule above has to come first for both.
   return (exit === 0) === (expect === "pass") ? "pass" : "fail";
 }
 
@@ -193,12 +216,11 @@ export const environmentOf = Effect.fn("Verify.environmentOf")(
 
 /**
  * Whether this verification still says anything about the tree in front of us. A result
- * is bound to the tree it ran on, so a commit or an edit since makes it history — no time
+ * is bound to the tree it ran on, so any byte changed since makes it history — no time
  * component, because a verification does not go off, it is superseded.
  */
 export function staleAgainst(record: Verification, now: Snapshot): boolean {
-  if (record.end.fingerprint === TOO_LARGE || now.fingerprint === TOO_LARGE) return true;
-  return record.end.head_sha !== now.head_sha || record.end.fingerprint !== now.fingerprint;
+  return !sameTree(record.end, now);
 }
 
 export const verificationsPath = Effect.fn("Verify.verificationsPath")(function* (runDir: string) {

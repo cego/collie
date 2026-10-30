@@ -1326,9 +1326,10 @@ goes in `disputed`. With nothing left unresolved its verdict is `clean`. The fix
 
 `host.evidence(runId, cwd)` is what has been verified for your Run and what the tree is
 now. `settleFinalFix` reads it: a check an Output names is a claim until the journal has a
-passing record of it, collected on this exact revision. A commit or an edit since makes an
-earlier pass history — it is not that the result went off, it is that it is about another
-tree.
+passing record of it, collected on these exact bytes. A commit of the same bytes keeps it;
+an edit since makes an earlier pass history — it is not that the result went off, it is that
+it is about another tree. `sameTree(one, other)` is that test for two snapshots, or two
+`{ fingerprint }`s: the same bytes at any commit, and never a tree too large to look at.
 
 `host.verify({ runId, name, cwd })` runs one of your Run's checks, in the directory the
 check names, resolved from `cwd` — which has to be the Run's own checkout — and records
@@ -1692,7 +1693,7 @@ answer a criterion has: one to its whole wording, where a copy that dropped the 
 formatting still counts, so an answer to earlier wording does not answer an amended criterion. Shipped
 `implement` hands what is unmet back to the builder before any reviewer is launched, and
 asks about any still unmet after two hand-backs (`<ticket>.criteria-unmet-<n>`), so no
-reviewer starts on it. A hand-back that leaves the head and fingerprint unchanged and
+reviewer starts on it. A hand-back that leaves the tree's content unchanged and
 reports a blocking finding is asked about sooner (`<ticket>.criteria-stalled-<n>`). To
 either, `Hand back` reads the ticket again and, if any criterion is still unmet, hands it
 back with two tries fresh; `Stop` stops the work. A text work

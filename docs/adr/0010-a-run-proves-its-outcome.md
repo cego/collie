@@ -7,6 +7,7 @@ evidence rather than design — see Consequences. D3's halt is amended 2026-09-2
 no longer stops the Run before the merge request. D2's permission, and the gate asking
 before it collects, are superseded by
 [ADR-0055](0055-a-run-never-asks-to-run-its-checks.md): nobody approves a Run's checks.
+D2's tree is its content since the 2026-10-30 amendment.
 
 A Run has an **outcome** it must prove, and the proof is a collected **Verification**
 bound to the tree it ran on. An agent writing `"verdict": "clean"` is a claim, and Collie
@@ -151,3 +152,18 @@ What is not proved here: the wall-clock and token effect of all of it on a repre
 mix of real Runs. The baseline in this ADR is measured; the improvement is not, and a
 smaller step count is not a result. `plans/productive-execution/REPORT.md` records what was
 measured and what was not.
+
+## Amended 2026-10-30: a verification is bound to the bytes it ran on
+
+D2 fingerprinted a tree as the commit it was on plus a digest of what was not committed.
+Committing exactly the bytes a check ran on gave a new commit and an empty diff, so the pass
+read as being about another tree. `implement` tells its agent to verify and then commit, so
+every Run that did as it was told lost its proof, and two Runs ended unproved with every
+check they named passed (#275).
+
+A tree is now the Git tree its working tree would commit as, untracked files git does not
+ignore included, built in a scratch copy of the index. The same bytes are the same tree, at
+any commit and staged or not. Any changed byte is another tree. The commit is still recorded
+beside it, for a human and for what is about a commit as such: a CI job, a pushed head, a
+Measurement's base. A tree too large to look at is still never equal to another. Records
+made before this read as being on an earlier tree, and their checks run again.

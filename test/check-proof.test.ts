@@ -58,14 +58,13 @@ test("a run on a tree that moved under it is unstable", () => {
   expect(proofOf([record({ result: "unstable", start: moved })]).state).toBe("unstable");
 });
 
-test("a pass on an earlier head or an earlier fingerprint passed only on an earlier tree", () => {
-  for (const end of [
-    { head_sha: "abc000", fingerprint: "tree-1" },
-    { head_sha: "abc123", fingerprint: "tree-0" },
-  ]) {
-    const earlier = record({ start: end, end });
-    expect(proofOf([earlier])).toEqual({ state: "earlier", runs: [earlier], last: undefined });
-  }
+test("a pass on an earlier fingerprint passed only on an earlier tree, and one on an earlier head of the same bytes passed here", () => {
+  const end = { head_sha: "abc123", fingerprint: "tree-0" };
+  const earlier = record({ start: end, end });
+  expect(proofOf([earlier])).toEqual({ state: "earlier", runs: [earlier], last: undefined });
+  const committed = { head_sha: "abc000", fingerprint: "tree-1" };
+  const same = record({ start: committed, end: committed });
+  expect(proofOf([same])).toEqual({ state: "passed", runs: [same], last: same });
 });
 
 test("on a tree too large to fingerprint, every record is unstable, and its sentences are as they were", () => {

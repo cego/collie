@@ -68,12 +68,13 @@ test("readiness never says more than the evidence does", () => {
   expect(readiness({ claimed: false, changed: true, verifiedHere: false })).toBe("claimed");
 });
 
-test("a verification from another revision is stale, not a pass for this one", () => {
+test("a verification on other bytes is stale, and one on the same bytes at another commit is a pass for this one", () => {
   expect(verificationOn(verification(), revision).result).toBe("pass");
-  // The same run, a moved tree: it says nothing about what this card describes.
+  // The same bytes committed since are the same tree.
   expect(
     verificationOn(verification({ end: { head_sha: "def", fingerprint: "f1" } }), revision).result,
-  ).toBe("stale");
+  ).toBe("pass");
+  // A moved tree says nothing about what this card describes.
   expect(
     verificationOn(verification({ end: { head_sha: "abc", fingerprint: "f2" } }), revision).result,
   ).toBe("stale");
