@@ -87,21 +87,38 @@ export const rememberStepDurations = (
       yield* write(dir, [...((yield* read(dir)) ?? []), ...samples(run, workflow, lines)]);
     }),
   );
-export const usualStepTimes = (dir: string, workflow: string) =>
-  Effect.gen(function* () {
-    const all = Arr.filter((yield* read(dir)) ?? [], (one) => one.workflow === workflow);
-    const usual = new Map<string, number>();
-    for (const step of new Set(Arr.map(all, (one) => one.step))) {
-      const values = Arr.map(
-        Arr.filter(all, (one) => one.step === step),
-        (one) => one.ms,
-      ).sort((a, b) => a - b);
-      if (values.length < 3) continue;
-      const middle = Math.floor(values.length / 2);
-      usual.set(
-        step,
-        values.length % 2 === 0 ? (values[middle - 1]! + values[middle]!) / 2 : values[middle]!,
+const usualOf = (samples: ReadonlyArray<Sample>, workflow: string) => {
+  const all = Arr.filter(samples, (one) => one.workflow === workflow);
+  const usual = new Map<string, number>();
+  for (const step of new Set(Arr.map(all, (one) => one.step))) {
+    const values = Arr.map(
+      Arr.filter(all, (one) => one.step === step),
+      (one) => one.ms,
+    ).sort((a, b) => a - b);
+    if (values.length < 3) continue;
+    const middle = Math.floor(values.length / 2);
+    usual.set(
+      step,
+      values.length % 2 === 0 ? (values[middle - 1]! + values[middle]!) / 2 : values[middle]!,
+    );
+  }
+  return usual;
+};
+
+export const stepTimesByWorkflow = (dir: string) =>
+  read(dir).pipe(
+    Effect.map((samples) => {
+      const all = samples ?? [];
+      return new Map(
+        Arr.map([...new Set(Arr.map(all, (one) => one.workflow))], (workflow) => [
+          workflow,
+          usualOf(all, workflow),
+        ]),
       );
-    }
-    return usual;
-  });
+    }),
+  );
+
+export const usualStepTimes = (dir: string, workflow: string) =>
+  stepTimesByWorkflow(dir).pipe(
+    Effect.map((all) => all.get(workflow) ?? new Map<string, number>()),
+  );
