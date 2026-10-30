@@ -1965,14 +1965,23 @@ a candidate waiting behind another branch cannot prove its own scheduling policy
 Both guards have failing-first self-checks. The raw sampler retains this ownership
 as an additive field; older observations are unchanged.
 
+A separate whole-suite timing on the latest runtime, committed as
+`d5710ea2e9d0de4704682a1e30ed6495479cfbfa`, started at 08:06:23 UTC. The host upgrade
+to Collie 0.107.1 stopped its check at 08:14:41, before a suite summary or the driver's
+final result. Its log ends with exit 130. Raw samples and the host interruption record
+are retained under `handoffs/measure/fix1-final-head-suite/` and
+`fix1-final-head-suite-interrupted.json`. It ran beyond 360 seconds, but it is an
+interrupted observation, not a completed timing or correctness result. No replacement
+measurement was started.
+
 The latest source has targeted cost and preservation proofs, but no qualifying
-whole-suite measurement. The 360-second target remains unproved on that revision;
-the last completed pristine candidate measurement was 663.71 seconds on `0716a737`.
-No required four-suite responsiveness window has been observed. Both remain blocking
-findings, with no claimed performance gain or issue closure. A permitted quiet window
-and naturally queued suites are still needed. The supplied plan forbids starting load
-solely to create contention; a controlled-load exception or different infrastructure
-requires the human's decision. The CI correctness gate remains the `test` job.
+whole-suite measurement. The last completed pristine candidate measurement remains
+663.71 seconds on `0716a737`. No required four-suite responsiveness window has been
+observed. Both remain blocking findings, with no claimed performance gain or issue
+closure. Further per-test cost reduction and a qualifying natural queue observation
+are still required. The supplied plan forbids starting load solely to create
+contention; a controlled-load exception or different infrastructure requires the
+human's decision. The CI correctness gate remains the `test` job.
 
 ### Test-suite measurements, 12 October 2026
 
