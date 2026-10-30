@@ -117,11 +117,17 @@ const study = Effect.gen(function* () {
         const info = yield* fs.stat(file);
         assert.equal(sha256, expected, `${file} differs from the pristine locked 4.1.0 package`);
         assert.equal(
-          Option.getOrThrow(info.nlink),
+          Number(Option.getOrThrow(info.nlink)),
           1,
           `${file} is shared; install with --backend copyfile`,
         );
-        return { file: name, sha256, dev: info.dev, inode: Option.getOrThrow(info.ino), links: 1 };
+        return {
+          file: name,
+          sha256,
+          dev: Number(info.dev),
+          inode: Number(Option.getOrThrow(info.ino)),
+          links: 1,
+        };
       }),
     );
   const dependencies = { baseline: yield* integrity(base), candidate: yield* integrity(candidate) };
