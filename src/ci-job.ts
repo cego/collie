@@ -9,6 +9,7 @@ import { forgeOf, type JobState } from "./forge/forge";
 import { noteVerification } from "./metrics";
 import { shell, type Runner } from "./mr";
 import { appendLog } from "./oversight";
+import { conflictsWithTarget } from "./review-wait";
 import { epochMs, nowIso } from "./time";
 import {
   appendVerification,
@@ -42,6 +43,8 @@ export type CiJob =
       readonly log: string | null;
       /** It failed where the branch leaves its target too: not this Run's to fix. */
       readonly before?: { readonly at: string; readonly url: string | null };
+      /** Missing because the merge request conflicts with its target branch. */
+      readonly conflicts?: true;
     };
 
 export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
@@ -107,7 +110,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
       const read = yield* forge.job(ref, job, cwd, asked.run);
       if (!read.ok) return unproved(`could not be read: ${read.reason}`);
       // The forge has not seen the push or the retry yet, or the merge request moved on without this checkout.
-      const state =
+      let state =
         read.head !== head ||
         (retried !== null && read.state === "missing") ||
         (read.id === retried && read.state === "failed")
@@ -167,6 +170,24 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
           `ci: ${spec.name} proved by job ${job} on ${head}${read.merge === null ? "" : ` (merged-results pipeline at ${read.merge})`}: ${read.url ?? "no URL"}`,
         ).pipe(Effect.ignore);
         return retried === null ? { proved: proof } : { proved: proof, retried: true as const };
+      }
+      // A forge with no pipeline for the head says pending, without a job.
+      const absent =
+        state === "missing" ||
+        (state === "pending" && read.head === head && read.id === null && read.url === null);
+      if (absent && retried === null) {
+        const review = yield* forge.readReview(ref, cwd, asked.run);
+        const mergeable = review.ok ? review.mergeable : null;
+        if (conflictsWithTarget(mergeable))
+          return {
+            unproved: `${spec.name} is left to CI and unproved: the merge request conflicts with its target branch at ${pipe_(head, Str.slice(0, 12))}, and its branch must take the target`,
+            state,
+            url: read.url,
+            log,
+            conflicts: true,
+          } satisfies CiJob;
+        // The forge runs no pipeline until it has said whether it can merge.
+        if (mergeable?.state === "unknown") state = "pending";
       }
       if (state !== "pending" && state !== "running")
         return unproved(

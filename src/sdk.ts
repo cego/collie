@@ -885,7 +885,9 @@ export interface HostApi {
    * once per tree as the check's `ci` Verification, with the job's URL. With `wait`, a job
    * pending or running is read again every 30 s for up to 2 hours, and the Run's log and
    * checks say which check, job and commit it waits on. Anything else is why it is unproved,
-   * naming all three.
+   * naming all three. A job missing from the pipeline of a merge request that conflicts with
+   * its target branch is unproved with `conflicts: true`, saying so instead of naming the job;
+   * with `wait`, a job missing while the forge has not said whether it can merge is read again.
    */
   readonly ciJob: (options: {
     readonly runId: string;
@@ -1038,6 +1040,12 @@ export interface HostApi {
      * merge the forge refuses) rather than wait for it.
      */
     readonly untilBlocked?: boolean;
+    /**
+     * Wait only while the forge says the merge request conflicts with its target branch,
+     * parked with the line that says its branch must take the target, and return the standing
+     * at `proved` once it no longer does, or it is merged or closed, or a Hold or Stop ends it.
+     */
+    readonly whileConflicting?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
    * Replies to the comment with id `comment` on the merge request this Run recorded, posting

@@ -40,6 +40,13 @@ They tell a human what the job runs. Collie never runs them.
 - After the gate's round limit, the Run parks as an unproved gate does.
 - The Run parks unproved, with the reason, in three cases: the pipeline on the head has no
   such job, the job was skipped or cancelled, or the checkout has no forge.
+- A job missing because the merge request conflicts with its target branch is not a
+  missing job: the forge runs no pipeline for a merge request it cannot merge. When the
+  job is missing, Collie reads the merge request's mergeability through the same
+  adapter. Where the forge says it conflicts, the check is unproved with that, marked
+  as a conflict and naming no job, and gets no CI fix round: only the branch taking
+  its target repairs it. Where the forge has not yet said whether it can merge, a
+  caller that waits reads the job again, as pending.
 
 **D5. The reviewer is told, not asked to run it.** A reviewer sees the check as "left to
 CI: proved by `<job>` on the merge request's head". Where a merge request already exists, it

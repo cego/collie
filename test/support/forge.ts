@@ -265,6 +265,8 @@ export const ForgeModel = Schema.Struct({
   approved: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The forge refuses an approval, as it does one by the author. */
   refusesApproval: Schema.optionalKey(Schema.Boolean),
+  /** The forge refuses a merge, whatever it says of the merge request. */
+  refusesMerge: Schema.optionalKey(Schema.Boolean),
   /** `main` where unsaid. */
   defaultBranch: Schema.optionalKey(Schema.String),
   /** GitLab's protected branches, or GitHub's classic protection rules, by pattern. */
@@ -1128,7 +1130,10 @@ function glabOnMr(
       replied: { mr, thread: thread ?? null, body: field(args, "body") ?? "" },
     };
   }
-  if (rest === "merge" && method === "PUT") return mergeAnswer("gitlab", mr, args);
+  if (rest === "merge" && method === "PUT")
+    return model.refusesMerge === true
+      ? refused(NOT_MERGEABLE.gitlab)
+      : mergeAnswer("gitlab", mr, args);
   return no();
 }
 
@@ -1459,6 +1464,8 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       return model.refusesApproval
         ? refused("403 Forbidden")
         : { ...json({ id: 1, state: "APPROVED" }), approved: keyOf("github", pull) };
+    if (pull !== undefined && kind === "pulls" && rest === "merge" && model.refusesMerge === true)
+      return refused(NOT_MERGEABLE.github);
     if (
       pull !== undefined &&
       kind === "issues" &&

@@ -136,7 +136,13 @@ import {
   type RollbackRead,
   type StageRead,
 } from "./releasing";
-import { blockedLine, reviewWaitOf, standingOf, type ReviewStanding } from "./review-wait";
+import {
+  blockedLine,
+  conflictsWithTarget,
+  reviewWaitOf,
+  standingOf,
+  type ReviewStanding,
+} from "./review-wait";
 import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
@@ -709,6 +715,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly log: string | null;
         /** It failed where the branch leaves its target too: not this Run's to fix. */
         readonly before?: { readonly at: string; readonly url: string | null };
+        /** Missing because the merge request conflicts with its target branch. */
+        readonly conflicts?: true;
       };
 
   /** One of this Run's checks, named by a human, chat or the Run's agent. */
@@ -965,6 +973,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly seen: ReadonlyArray<string>;
       /** Also return a \`Waiting\` review that needs a repair, rather than wait for it. */
       readonly untilBlocked?: boolean;
+      /**
+       * Wait only while the forge says the merge request conflicts with its target branch,
+       * parked with the line that says its branch must take the target, and return the
+       * standing at \`proved\` once it no longer does, or it is merged or closed, or a Hold or
+       * Stop ends it.
+       */
+      readonly whileConflicting?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
@@ -4587,9 +4602,16 @@ export const hostLayer = (options: {
             const polled = Effect.gen(function* () {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
-                if (standing._tag !== "Waiting" && standing._tag !== "Unreadable") return standing;
                 const wait = reviewWaitOf(mr, read);
-                if (wait._tag === "Blocked" && asked.untilBlocked === true) return standing;
+                if (asked.whileConflicting === true) {
+                  const conflicting =
+                    read.ok && read.state === "open" && conflictsWithTarget(read.mergeable);
+                  if (!conflicting && standing._tag !== "Unreadable") return standing;
+                } else {
+                  if (standing._tag !== "Waiting" && standing._tag !== "Unreadable")
+                    return standing;
+                  if (wait._tag === "Blocked" && asked.untilBlocked === true) return standing;
+                }
                 yield* waitOn(
                   asked.runId,
                   wait._tag === "Awaiting" ? wait : { repair: blockedLine(mr, wait.why) },

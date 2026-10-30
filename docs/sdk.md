@@ -873,7 +873,12 @@ notification ("Waiting for CI and a teammate's approval on `<mr>`."), until it h
 hours (2 days for a person) and parks; a red pipeline, changes requested or a merge the
 forge refuses parks it as Needs you while it keeps reading. Both are cleared when it returns.
 With `untilBlocked: true` it returns that `Waiting` standing instead of waiting for the
-repair, as the release's re-reading of a go does. Take either inside an Activity, and suspend on `Held`
+repair, as the release's re-reading of a go does. With `whileConflicting: true` it waits
+only while the forge says the merge request conflicts with its target branch, parked as Needs
+you with the line that says its branch must take the target, and returns the standing at
+`proved` as soon as the forge no longer says so, the merge request is merged or closed, or a
+Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting. The
+release takes it before it proves a head and when a check left to CI finds the conflict. Take either inside an Activity, and suspend on `Held`
 there, so a resume waits again.
 
 `host.shareForApproval({ runId, cwd, channel })` posts the Run's recorded merge request through its host's Slack Connection.
@@ -1479,7 +1484,12 @@ every check run on the head has completed; GitLab creates every job up front. A 
 check's `ci` pass, with `job` (`{ name, url, merge? }`, `merge` being the merged-results
 commit) beside its command, start and end tree. That Verification answers `{ proved }`; anything
 else answers `{ unproved, state, url }`, the sentence naming the check, the job and the
-commit. With `wait: true` a pending or running job is read again every 30 s for up to 2
+commit. A job `missing` from the pipeline of a merge request the forge says conflicts with its
+target branch answers `{ unproved, state: "missing", url, conflicts: true }` instead, the
+sentence saying the merge request conflicts with its target branch and its branch must take
+the target, and naming no job: the forge runs no pipeline for a merge request it cannot
+merge. With `wait: true`, a missing job while the forge has not yet said whether it can merge
+is read again, as pending. With `wait: true` a pending or running job is read again every 30 s for up to 2
 hours, the Run's log and `collie run checks` saying which check, job and commit it waits
 on, and a stop ends the wait. `renderRecordedChecks(evidence, leftToCi)` tells a reviewer
 each such check as `left to CI: proved by <job> on the merge request's head`, with the

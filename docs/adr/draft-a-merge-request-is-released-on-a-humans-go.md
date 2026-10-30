@@ -96,7 +96,13 @@ Run's needs-you notification. A go holds for that head only. If the head has mov
 comment is unanswered or the approval is gone, the Run goes back to D3 and asks again once
 the merge request is ready. A head somebody else pushed is proved like any other: the Run
 fast-forwards its checkout to it and runs its Checks there before it can be asked about.
-A head that does not fast-forward parks the Run, and nothing is reset. Whoever answers is
+A head that does not fast-forward parks the Run, and nothing is reset. A merge request that
+conflicts with its target branch, because another merge landed there first, is not proved
+while it does: the forge runs no pipeline for it. Collie reads the review before it
+fast-forwards or runs a Check, and whenever a Check left to CI finds the conflict, and while
+the forge says it conflicts the Run waits, parked with a line saying its branch must take the
+target. It spends no fix round on it and never takes the target into the branch itself. It
+goes on by itself once the forge no longer says so, proving the head it then has. Whoever answers is
 recorded, and who it was is never a reason to refuse ([AGENTS.md](../../AGENTS.md), Invariant 1). `Finish` ends the Run where it
 stands, with the merge request open.
 
@@ -175,7 +181,12 @@ success, and then the claim is given back.
 **D7. Collie merges, and the agent tags.** Collie merges through the forge's adapter, at
 the head the go was given for and by the forge's own rules, with the merge method the
 repository uses. It never merges as an admin, never skips a check, and never sets the
-merge request to merge itself later. It reads the merged state back. The tag follows the repository's own conventions:
+merge request to merge itself later. It reads the merged state back. It merges only once the
+go's own check has read the merge request ready, which includes the forge saying it can
+merge. A merge the forge refuses anyway is read once more at that head: no longer ready, as
+when another merge left it in conflict with its target branch, the go no longer holds, the
+claim is given back and the Run goes back to D3's wait. Only a refusal while the forge still
+says it is ready fails the Run. The tag follows the repository's own conventions:
 
 - the next version, chosen from the change since the previous tag;
 - a release commit, where the repository makes one;

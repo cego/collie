@@ -58,6 +58,7 @@ import { shell } from "../../src/mr";
 import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
 import { mrLabel, mrTarget, type FlowLane, type MrForge } from "../../src/board-model";
+import { CONFLICTS } from "../../src/review-wait";
 import { laneFor } from "../../src/flow-read";
 import type { RunState } from "../../src/runs";
 import { runFacts } from "./records";
@@ -9520,6 +9521,24 @@ const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
     return { bin, forge, head, base, merged, reviewed, changed };
   });
 
+/** A host whose merge happens just after `before` changes the forge, as a merge landing elsewhere first. */
+const mergingAfter = <E>(before: Effect.Effect<void, E, FileSystem.FileSystem>): HostOverride =>
+  Layer.effect(Host)(
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const services = yield* Effect.context<PlatformServices>();
+      return Host.of({
+        ...host,
+        merge: (asked) =>
+          before.pipe(
+            Effect.orDie,
+            Effect.provideContext(services),
+            Effect.andThen(host.merge(asked)),
+          ),
+      });
+    }),
+  );
+
 /** How each Run a takeover may weigh ended, as this test says; null still runs. */
 type Ends = Readonly<Record<string, { succeeded: boolean; failure: string } | null>>;
 
@@ -10313,6 +10332,220 @@ for (const name of ["gitlab", "github"] as const) {
             `${mr} was merged outside this Run by alice, so nothing was tagged`,
           );
           expect(model.merges ?? []).toEqual([]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a merge request another merge leaves in conflicts with its target between the go and Collie's merge gives the claim back, parks on it, and is asked go 2 once its branch takes the target`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, reviewed, changed } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-overtaken-${name}`;
+          yield* checkedBy(runId, "check");
+          yield* rig.queueOutputs([PACKAGED]);
+          const { taken, status } = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(mergingAfter(changed({ mergeable: "conflict" })), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Release");
+                expect(
+                  yield* until(
+                    () => parkedWhy(runId),
+                    (why) => why !== "",
+                  ),
+                ).toBe(
+                  `${mrLabel(mr)} cannot be released: ${CONFLICTS}. The Run goes on once that is repaired.`,
+                );
+                expect(yield* runLog(runId)).toContain(
+                  `go 1 no longer holds for ${pipe(head, Str.slice(0, 8))}: ${CONFLICTS}`,
+                );
+                expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+                const taken = yield* pushedBySomebody(head);
+                yield* changed({ head: taken, mergeable: "yes" });
+                const go = yield* goAsked(run.asked, "go-2");
+                expect(go.prompt).toContain(pipe(taken, Str.slice(0, 8)));
+                yield* run.answer("go-2", "Finish");
+                return { taken, status: yield* ended(run.status) };
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(yield* revParse("HEAD", reviewed)).toBe(taken);
+          expect(
+            Arr.map(yield* readVerifications(evidenceDir(dir, runId)), (one) => one.end.head_sha),
+          ).toContain(taken);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a merge request that already conflicts with its target parks before any check or fix round, and goes on once its branch takes the target`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, changed } = yield* releasable(name, {
+            mergeable: "conflict",
+            jobs: [{ name: "static", state: "passed" }],
+          });
+          const runId = `r-conflicting-${name}`;
+          yield* ownCheck(runId);
+          yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
+          const taken = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                expect(
+                  yield* until(
+                    () => parkedWhy(runId),
+                    (why) => why !== "",
+                  ),
+                ).toBe(
+                  `${mrLabel(mr)} cannot be released: ${CONFLICTS}. The Run goes on once that is repaired.`,
+                );
+                expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+                const taken = yield* pushedBySomebody(head);
+                yield* changed({
+                  head: taken,
+                  mergeable: "yes",
+                  jobs: [
+                    { name: "static", state: "passed" },
+                    { name: "test", state: "passed" },
+                  ],
+                });
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                yield* ended(run.status);
+                return taken;
+              }),
+          );
+          yield* bin.restore();
+          expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+          const [proof, ...more] = yield* ciRecords(runId);
+          expect(more).toEqual([]);
+          expect(proof).toMatchObject({ name: "check", result: "pass", end: { head_sha: taken } });
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a checkout with changes its merge request does not carry parks before its checks pass on them`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { bin, head, reviewed } = yield* releasable(name);
+          const runId = `r-dirty-start-${name}`;
+          yield* checkedBy(runId, "check", "test", ["-f", "only-local"]);
+          yield* fs.writeFileString(`${reviewed}/only-local`, "never committed\n");
+          yield* rig.queueOutputs([PACKAGED]);
+          const why = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                const [why] = yield* until(
+                  () => Effect.all([parkedWhy(runId), run.asked]),
+                  ([why, asked]) => why !== "" || Arr.some(asked, (row) => row.decision === "go-1"),
+                );
+                return why;
+              }),
+          );
+          yield* bin.restore();
+          expect(why).toStartWith(
+            `the checkout at ${reviewed} has uncommitted changes, so it is not taken as ${pipe(head, Str.slice(0, 8))}.`,
+          );
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a head pushed during the review that still conflicts with its target is not taken or checked until its branch takes the target`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, reviewed, changed } = yield* releasable(name);
+          const runId = `r-pushed-conflicting-${name}`;
+          yield* checkedBy(runId, "check");
+          yield* rig.queueOutputs([PACKAGED]);
+          const checkedAt = readVerifications(evidenceDir(dir, runId)).pipe(
+            Effect.map(Arr.map((one) => one.end.head_sha)),
+            Effect.provide(Path.layer),
+          );
+          const { pushed, taken } = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                const pushed = yield* pushedBySomebody(head);
+                yield* changed({ head: pushed, mergeable: "conflict" });
+                yield* run.answer("go-1", "Release");
+                expect(
+                  yield* until(
+                    () => parkedWhy(runId),
+                    (why) => why !== "",
+                  ),
+                ).toBe(
+                  `${mrLabel(mr)} cannot be released: ${CONFLICTS}. The Run goes on once that is repaired.`,
+                );
+                expect(yield* checkedAt).not.toContain(pushed);
+                expect(yield* revParse("HEAD", reviewed)).toBe(head);
+                const taken = yield* pushedBySomebody(pushed);
+                yield* changed({ head: taken, mergeable: "yes" });
+                const go = yield* goAsked(run.asked, "go-2");
+                expect(go.prompt).toContain(pipe(taken, Str.slice(0, 8)));
+                yield* run.answer("go-2", "Finish");
+                yield* ended(run.status);
+                return { pushed, taken };
+              }),
+          );
+          yield* bin.restore();
+          expect(yield* revParse("HEAD", reviewed)).toBe(taken);
+          const heads = yield* checkedAt;
+          expect(heads).toContain(taken);
+          expect(heads).not.toContain(pushed);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a merge the forge refuses while the merge request still reads ready, and no conflicts with its target, fails the Run and asks no further go`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* releasable(name);
+          const refusing = yield* forge.model();
+          yield* forge.set({ ...refusing, refusesMerge: true });
+          claimed.length = 0;
+          const runId = `r-refused-${name}`;
+          yield* rig.queueOutputs([PACKAGED]);
+          const { status, asked } = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Release");
+                return { status: yield* ended(run.status), asked: yield* run.asked };
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toStartWith(`the forge refused to merge ${mr}: `);
+          expect(
+            Arr.filter(asked, (row) => pipe(row.decision, Str.startsWith("go-"))),
+          ).toHaveLength(1);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
         }),
       ),
