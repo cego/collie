@@ -10449,8 +10449,9 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = `r-pushed-conflicting-${name}`;
           yield* checkedBy(runId, "check");
           yield* rig.queueOutputs([PACKAGED]);
-          const checkedAt = Effect.map(readVerifications(evidenceDir(dir, runId)), (all) =>
-            Arr.map(all, (one) => one.end.head_sha),
+          const checkedAt = readVerifications(evidenceDir(dir, runId)).pipe(
+            Effect.map(Arr.map((one) => one.end.head_sha)),
+            Effect.provide(Path.layer),
           );
           const { pushed, taken } = yield* driven(
             { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
