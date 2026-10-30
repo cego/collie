@@ -7,7 +7,7 @@ import { Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 import { readConfig, configValue } from "../config";
 import { setSharedSetting } from "../lifecycle";
-import { parseSetting, SETTINGS } from "../settings";
+import { parseSetting, settingOf, SETTINGS } from "../settings";
 import { err } from "../operations";
 import { mutation } from "../envelope";
 import { nowIso } from "../time";
@@ -76,7 +76,7 @@ const set = Command.make(
             return {
               ok: true,
               data: done.value,
-              human: `${key} is now ${Str.trim(value) || "unset"}; paired hosts share it with their peers`,
+              human: `${key} is now ${Str.trim(value) || "unset"}; ${settingOf(key)?.machine === true ? "this Machine's alone" : "paired hosts share it with their peers"}`,
             };
           }),
         );

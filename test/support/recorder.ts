@@ -673,13 +673,14 @@ export class Rig {
   startCore() {
     const socketPath = this.path.join(this.root, "hc.sock");
     const logPath = this.logPath;
+    const queuePath = this.path.join(this.root, "outputs.json");
     const setScope = (scope: Scope.Closeable) => {
       this.coreScope = scope;
     };
     return Effect.gen(function* () {
       const scope = yield* Scope.make();
       setScope(scope);
-      return yield* serveFakeHc(socketPath, logPath, scope);
+      return yield* serveFakeHc(socketPath, logPath, scope, queuePath);
     });
   }
 

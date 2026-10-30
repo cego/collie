@@ -17,6 +17,8 @@ export interface Incarnation {
   terminalId: string;
   /** The harness session herdr says it is driving, where it knows one. */
   agentSession: { kind: string; value: string } | null;
+  /** Absent for an agent in herdr. */
+  backend?: "core";
 }
 
 export interface AgentEntry {
@@ -40,6 +42,7 @@ export interface RegistryScope {
 export const IncarnationSchema = Schema.Struct({
   terminalId: Schema.String,
   agentSession: Schema.NullOr(Schema.Struct({ kind: Schema.String, value: Schema.String })),
+  backend: Schema.optionalKey(Schema.Literal("core")),
 });
 
 const AgentEntrySchema = Schema.Struct({

@@ -54,9 +54,10 @@ restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-
 
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text. Collie waits for it against the agent's idle time only: while herdr reports the agent working or blocked, a question it asked is open on the Run, or a `collie verify` it asked for waits while its Machine is **Short of memory**, the budget does not run (ADR-0062). When the budget runs out, the Run is parked and keeps waiting: an Output written later is collected without a resume (ADR-0062, amended 2026-10-19).
 
-**Herd** — One herdr session: every workspace in it. The scope of the Collie tab, the
-conversation, proposals, the budget and elections. Keyed by the canonical path of the
-session's socket, never by a directory. A Task records the Herd its workspace is in, and a
+**Herd** — One herdr session: every workspace in it. On a Machine whose
+`terminal_backend` is `core`, one herdr-core session instead: every terminal in it. The
+scope of the Collie tab, the conversation, proposals, the budget and elections. Keyed by
+the canonical path of the session's socket, herdr's or core's, never by a directory. A Task records the Herd its workspace is in, and a
 Machine's host reads every Herd on it. **Session** keeps its own meaning below — one
 workspace — and is not the Herd.
 
@@ -69,6 +70,9 @@ A computer Desktop reaches that has no Collie yet is known by its herdr profile 
 host there reports an installation id. Not the plugin installation a host serves, which
 `identity` calls `root`. herdr's machine list (`herdr machine list`) is the list of
 Machines, for the CLI as for Desktop: adding a Machine there is all it takes to reach it.
+Its `terminal_backend` setting, its own and never the Flock's, says where the agents its
+Runs launch next run: in herdr panes (`herdr`, the default) or in herdr-core terminals
+(`core`). An agent already running on herdr stays there.
 
 **Short of memory** — A Machine whose available memory is under `memory_hold` percent of
 its total (10 by default; 0 never), or, on Linux, whose memory pressure (`full avg10` in
@@ -280,7 +284,8 @@ that review. Not **Authority**, which is what Collie may do to a Run.
 across the compaction decision, the composition and the send.
 
 **Incarnation** — An agent as one live process, identified by herdr's own `terminal_id` and
-`agent_session`. A name and a pane are inherited by whatever takes the role next; neither
+`agent_session`, or, for an agent launched on core, by its core terminal's address and
+marked as core's: it is reached on core while its Machine stays set to core. A name and a pane are inherited by whatever takes the role next; neither
 names a process. A registry entry without one is never a delivery target. Where a Harness's
 work runs outside its pane — Codex's, in the App Server Collie starts for that one agent —
 the incarnation is the pane's process and that server, with every thread loaded on it,
@@ -461,7 +466,8 @@ and lifted by a human.
 
 **Session** — One herdr session and one workspace, taken together. It is the
 scope of a Control Plane tab and of a register file of live agents, which holds one entry
-per agent for every Run started there. One workspace, always: a mutating Run's checkout
+per agent for every Run started there. An agent on core is in no herdr workspace, but
+its entry is kept in the same register, its Incarnation marked as core's. One workspace, always: a mutating Run's checkout
 does not take it out of the Session it was started in.
 
 **Lineage** — A Run, the Run it was started from, that Run's own, and so on: a child's

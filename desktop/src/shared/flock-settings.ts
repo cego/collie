@@ -264,7 +264,7 @@ export const settingSections = (
       };
     }),
     ...Arr.map(
-      Arr.filter(SETTINGS, ({ key }) => key !== GIVEN_ONLY),
+      Arr.filter(SETTINGS, ({ key, machine }) => key !== GIVEN_ONLY && machine !== true),
       (setting) => flockRow(flock, setting, now, timeZone),
     ),
   ];

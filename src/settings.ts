@@ -27,6 +27,10 @@ export function isDensity(value: string): value is Density {
   return Arr.some(DENSITIES, (density) => density === value);
 }
 export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
+
+/** What runs a Machine's agents: Herdr 1, or herdr-core. */
+export type TerminalBackend = "herdr" | "core";
+export const TERMINAL_BACKENDS: ReadonlyArray<TerminalBackend> = ["herdr", "core"];
 export function isScope(value: string): value is Scope {
   return Arr.some(SCOPES, (scope) => scope === value);
 }
@@ -196,6 +200,8 @@ export interface Setting {
   /** What it changes, in a sentence or two. */
   readonly description: string;
   readonly unit?: SettingUnit;
+  /** This Machine's alone: never shared with the Flock. */
+  readonly machine?: true;
 }
 
 export const SettingValue = Schema.Union([
@@ -206,7 +212,7 @@ export const SettingValue = Schema.Union([
 ]);
 export type SettingValue = typeof SettingValue.Type;
 
-type Explained = Pick<Setting, "group" | "label" | "description" | "unit">;
+type Explained = Pick<Setting, "group" | "label" | "description" | "unit" | "machine">;
 
 const choice = (
   key: string,
@@ -306,6 +312,13 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     label: "Claude Code's auto-compact window",
     description: `Where Claude Code compacts by itself: a whole number of tokens from ${AUTO_COMPACT_LEAST} to ${AUTO_COMPACT_MOST}, or auto for the model's own window. Claude Code agents only, from the next one started.`,
     unit: "tokens",
+  }),
+  choice("terminal_backend", TERMINAL_BACKENDS, "herdr", {
+    group: "Agents",
+    label: "Terminal backend",
+    description:
+      "Where this Machine starts its next agents: herdr, or herdr-core. Agents already running finish where they started. This Machine only.",
+    machine: true,
   }),
   of("quiet_ms", "number", String(D.quietMs), {
     group: "Agents",

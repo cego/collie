@@ -348,18 +348,18 @@ export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
     env.paneId === null
       ? []
       : yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => null));
-  const agent = Option.getOrUndefined(
-    Option.map(Option.fromNullishOr(agents), (present) =>
-      Option.getOrUndefined(Arr.findFirst(present, (one) => one.paneId === env.paneId)),
-    ),
-  );
-  if (agent !== undefined) {
-    const run = yield* Effect.scoped(
-      connect(env.stateDir).pipe(
-        Effect.flatMap((client) => client.agentRun({ agent: agent.name })),
+  // A core terminal has no herdr pane: its agent is the one Collie launched it as.
+  const named =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(agents), (present) =>
+        Option.getOrUndefined(Arr.findFirst(present, (one) => one.paneId === env.paneId)),
       ),
+    )?.name ?? env.raw.COLLIE_AGENT;
+  if (named !== undefined && named !== "") {
+    const run = yield* Effect.scoped(
+      connect(env.stateDir).pipe(Effect.flatMap((client) => client.agentRun({ agent: named }))),
     ).pipe(Effect.orElseSucceed(() => null));
-    if (run !== null) return { origin: "agent" as const, from: { run, agent: agent.name } };
+    if (run !== null) return { origin: "agent" as const, from: { run, agent: named } };
   }
   return cliOrigin({
     terminal,

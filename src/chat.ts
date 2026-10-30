@@ -34,7 +34,7 @@ import { reason } from "./naming";
 import { isString, type JsonObject } from "./schema";
 import type { AutoCompactWindow } from "./settings";
 import type { YamlMap } from "./yaml";
-import { herdDir, herdOf } from "./steering";
+import { herdDir, machineHerd } from "./steering";
 import { nowIso } from "./time";
 import { TOOLS } from "./tools";
 
@@ -495,7 +495,7 @@ const heardPath = Effect.fn("Chat.heardPath")(function* (stateDir: string, key: 
  * turn ends. Input that is not a hook's is ignored.
  */
 export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: string) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const given = Schema.decodeOption(HookInput)(input);
   if (key === null || given._tag === "None") return;
   const fs = yield* FileSystem.FileSystem;
@@ -526,7 +526,7 @@ export const hear = Effect.fn("Chat.hear")(function* (env: PluginEnv, input: str
  * the running chat's own session last said something, those words.
  */
 export const heardVoice = Effect.fn("Chat.heardVoice")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return {};
   const fs = yield* FileSystem.FileSystem;
   const raw = yield* fs

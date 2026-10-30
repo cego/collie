@@ -79,7 +79,7 @@ import { findRun, listRuns, type RunFacts } from "./runs";
 import { readyLines } from "./following";
 import { donePasses, markersOf, runningCheck } from "./checks";
 import { memoryWaitOf, waitLine } from "./memory-wait";
-import { deliveriesOf, herdOf } from "./steering";
+import { deliveriesOf, machineHerd } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { closable, decide, homePath, readHome, UNREADABLE } from "./home";
@@ -195,7 +195,7 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     collie_propose: (input) =>
       answer(
         Effect.gen(function* () {
-          const herd = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+          const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
           const requestId = input.request_id ?? (yield* newRequestId());
           const done = yield* proposeActions(env, {
             door: yield* toolDoor(env),
@@ -291,7 +291,7 @@ export const TOOLS = Arr.map(Rec.values(CollieTools.tools), (tool) => {
  * Every caller treats those three the same way: nothing is selected.
  */
 const selectionOf = Effect.fn("Tools.selection")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return null;
   return yield* readSelection(yield* selectionPath(env.stateDir, key)).pipe(
     Effect.orElseSucceed(() => null),
@@ -672,7 +672,7 @@ const reportFacts = Effect.fn("Tools.reportFacts")(function* (
  * the moment it demonstrably reached the model — it is in the answer.
  */
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "Collie cannot reach herdr, so it has nothing to report.";
   const read = yield* settleNewsFor(env, {
     door: yield* toolDoor(env),
@@ -688,7 +688,7 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
 const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
   const found = yield* findRun(env, run);
   if (found === null) return `No Run "${run}".`;
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const now = yield* Clock.currentTimeMillis;
   const proposals =
     key === null
@@ -829,7 +829,7 @@ const shortened = (text: string, most: number) => {
 /** What `collie_installation` answers with: everything that is not about a Run. */
 const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {
   const herdr = new Herdr(env);
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
   const workspaces = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
   const health = yield* doctor(env).pipe(Effect.orElseSucceed(() => null));

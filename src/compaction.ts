@@ -957,7 +957,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
   ).pipe(Effect.result);
   const failure = Result.isFailure(submitted) ? submitted.failure : null;
   // Written but unconfirmed: what tells a request that never arrived from one ignored.
-  if (Result.isSuccess(submitted) && submitted.success === "unobserved") {
+  if (Result.isSuccess(submitted) && submitted.success !== "observed") {
     yield* deps.log(`${at.agent}: compaction request written, no turn observed`);
   }
   if (failure instanceof Unsubmitted) {

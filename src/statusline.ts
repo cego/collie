@@ -14,7 +14,7 @@ import { CommandLine } from "effect/process";
 import { selfCommand, type PluginEnv } from "./env";
 import { isString } from "./schema";
 import { promptLine, readSelection, selectionLine, selectionPath } from "./selection";
-import { herdOf } from "./steering";
+import { machineHerd } from "./steering";
 import { YamlMapSchema, isYamlMap } from "./yaml";
 
 /** What the configured command ends in, which is also how Collie recognises its own. */
@@ -45,7 +45,7 @@ export function statusLineCommand(self: ReadonlyArray<string> = selfCommand()): 
  * carry a line about one.
  */
 export const statusLineFor = Effect.fn("StatusLine.for")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "";
   return selectionLine(yield* readSelection(yield* selectionPath(env.stateDir, key)));
 });
@@ -59,7 +59,7 @@ export const statusLineFor = Effect.fn("StatusLine.for")(function* (env: PluginE
  * said once and never again.
  */
 export const promptLineFor = Effect.fn("StatusLine.prompt")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "";
   const fs = yield* FileSystem.FileSystem;
   const file = yield* selectionPath(env.stateDir, key);

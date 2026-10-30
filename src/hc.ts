@@ -6,7 +6,7 @@
 import * as Arr from "effect/Array";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Socket from "effect/socket/Socket";
-import { Data, Deferred, Effect, Option, Queue, Schema, Struct } from "effect";
+import { Data, Deferred, Effect, FileSystem, Option, Queue, Schema, Struct } from "effect";
 
 const opt = Schema.optionalKey;
 const NullOr = Schema.NullOr;
@@ -48,6 +48,7 @@ export const replies = {
     machines: opt(Schema.Array(Machine)),
   }),
   "terminal.get": HcTerminal,
+  "terminal.kill": HcTerminal,
   "terminal.read": Schema.Struct({ text: Schema.String, complete: Schema.Boolean }),
   "terminal.send": Schema.Struct({
     turn: Schema.Finite,
@@ -65,6 +66,24 @@ export const replies = {
 type Replies = typeof replies;
 export type HcMethod = keyof Replies;
 export type HcReply<M extends HcMethod> = Replies[M]["Type"];
+
+/**
+ * Where this Machine's core listens, found as core finds it: `HC_SOCKET`, else the
+ * session's socket under the runtime directory, else under the session's state directory.
+ */
+export const coreSocket = Effect.fn("Hc.coreSocket")(function* (
+  raw: Readonly<Record<string, string | undefined>>,
+) {
+  if (raw.HC_SOCKET) return raw.HC_SOCKET;
+  const session = raw.HC_SESSION || "default";
+  if (raw.XDG_RUNTIME_DIR) return `${raw.XDG_RUNTIME_DIR}/herdr-core/${session}.sock`;
+  const runtime = `/run/user/${process.getuid?.() ?? 0}`;
+  const fs = yield* FileSystem.FileSystem;
+  if (yield* fs.exists(runtime).pipe(Effect.orElseSucceed(() => false)))
+    return `${runtime}/herdr-core/${session}.sock`;
+  const state = raw.XDG_STATE_HOME || `${raw.HOME ?? ""}/.local/state`;
+  return `${state}/herdr-core/${session}/${session}.sock`;
+});
 
 export class HcError extends Data.TaggedError("HcError")<{
   readonly method: string;

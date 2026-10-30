@@ -22,7 +22,7 @@ import {
   UNREADABLE,
   writeHome,
 } from "../home";
-import { herdOf } from "../steering";
+import { machineHerd } from "../steering";
 import { nowIso } from "../time";
 import { mutation } from "../envelope";
 import { answering, requestIdFlag } from "./shared";
@@ -31,7 +31,7 @@ const show = Command.make("show", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
       const herdr = new Herdr(env);
-      const key = yield* herdOf(env.socketPath);
+      const key = yield* machineHerd(env);
       const record = yield* readHome(yield* homePath(env.stateDir, key));
       const workspaces = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
       const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
@@ -92,7 +92,7 @@ const reconcile = Command.make(
           return err("invalid_input", "Pass --adopt <workspace-id> or --forget.");
         return yield* mutation(env, "home-reconcile", requestId, () =>
           Effect.gen(function* () {
-            const key = yield* herdOf(env.socketPath);
+            const key = yield* machineHerd(env);
             const file = yield* homePath(env.stateDir, key);
             const record = yield* readHome(file);
             const at = yield* nowIso;

@@ -54,9 +54,9 @@ import {
   ledgerPath,
   overrideActive,
   readLedger,
-  herdOf,
   reserve,
   settle as settleBudget,
+  machineHerd,
 } from "./steering";
 import { append, conversationPath, tail, type NewTurn } from "./conversation";
 import {
@@ -799,7 +799,7 @@ const taskHere = Effect.fn("operations.taskHere")(function* (env: PluginEnv, abo
     .workspaceList()
     .pipe(Effect.orElseSucceed((): WorkspaceInfo[] => []));
   const task = yield* newTask({
-    herd: yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null)),
+    herd: yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null)),
     workspace: env.workspaceId,
     label:
       Option.getOrUndefined(Arr.findFirst(open, (one) => one.workspaceId === env.workspaceId))

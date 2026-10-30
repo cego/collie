@@ -7,7 +7,7 @@ import { Effect, Schedule, Stream } from "effect";
 import type { PaneAt } from "./board-model";
 import type { PluginEnv } from "./env";
 import type { AgentInfo, Herdr, PaneInfo } from "./herdr";
-import { herdOf } from "./steering";
+import { herdOf, machineHerd } from "./steering";
 
 /** One Herd the host reads: its herdr session, under the key its Tasks record. */
 export interface LiveHerd {
@@ -34,7 +34,7 @@ export const PANE_EVENTS = [
 export const liveHerds = Effect.fn("Herds.live")(function* (herdr: Herdr, env: PluginEnv) {
   const listed = yield* herdr.sessionList().pipe(Effect.orElseSucceed(() => []));
   if (listed.length === 0) {
-    const herd = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+    const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
     return [{ herd, herdr }];
   }
   const sessions: LiveHerd[] = [];

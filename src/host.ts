@@ -234,9 +234,9 @@ import {
   deliveriesOf,
   DeliverySchema,
   herdDir,
-  herdOf,
   readLedger,
   reconcile as reconcileDelivery,
+  machineHerd,
 } from "./steering";
 import {
   actorName,
@@ -263,7 +263,14 @@ import { VERIFYING_FILE, verifyingIn } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
-import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
+import {
+  loadDefaults,
+  SettingRefused,
+  sharedSettings,
+  takeShared,
+  terminalBackend,
+} from "./config";
+import { coreSocket } from "./hc";
 import {
   decodeAnswer,
   machineName,
@@ -1452,7 +1459,7 @@ const frontDoorHandlers = (
       const trail = (runId: string) => runDir(env.stateDir, runId);
       /** The Herd of the session the asker runs in, where it names none. */
       const askersHerd = (client: { readonly id: number }) =>
-        herdOf(askerEnv(client).socketPath).pipe(Effect.orElseSucceed(() => null));
+        machineHerd(askerEnv(client)).pipe(Effect.orElseSucceed(() => null));
       /** An operation that is idempotent by itself, recorded the first time it does anything. */
       // ponytail: a host that dies between acting and recording leaves that one unrecorded.
       const fresh = <A extends { readonly fresh: boolean }, I extends Schema.Json, E>(
@@ -2957,7 +2964,10 @@ const frontDoorHandlers = (
               },
               Effect.gen(function* () {
                 const asker = askerEnv(client);
-                const deps = yield* evaluationDeps({ ...asker, herdKey: task?.herd ?? undefined });
+                const deps = yield* evaluationDeps({
+                  pluginRoot: asker.pluginRoot,
+                  herdKey: task?.herd ?? (yield* machineHerd(asker)),
+                });
                 const said = yield* steer(asker, deps, {
                   text,
                   target: runId,
@@ -3408,7 +3418,10 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
         recordOf(dir),
         encodeRecord({ pid, build: BUILD, root: env.pluginRoot, herd }),
       );
-    const herdSocket = env.socketPath ?? (yield* serverSocket(herdr));
+    const herdSocket =
+      (yield* terminalBackend(env.userDir)) === "core"
+        ? yield* coreSocket(env.raw)
+        : (env.socketPath ?? (yield* serverSocket(herdr)));
     yield* record(herdSocket).pipe(Effect.orDie);
     if (herdSocket === null) yield* Effect.logWarning(HERDLESS);
     const locate = serverSocket(herdr).pipe(

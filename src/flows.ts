@@ -29,7 +29,7 @@ import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
 import { offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
 import { gitlabHostOf, loadDefaults, setSetting } from "./config";
 import { parseSetting, settingText } from "./settings";
-import { herdOf } from "./steering";
+import { machineHerd } from "./steering";
 import { chatHarnessOf, ensureChatFor } from "./chat";
 import {
   ensureHomeFor,
@@ -213,7 +213,7 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
   // came from. Pressed inside the Home it means the opposite — show me everything — so
   // that is what it records.
   const inHome = env.workspaceId !== null && env.workspaceId === home.workspaceId;
-  yield* writeOrigin(yield* originPath(env.stateDir, yield* herdOf(env.socketPath)), {
+  yield* writeOrigin(yield* originPath(env.stateDir, yield* machineHerd(env)), {
     workspaceId: inHome ? null : env.workspaceId,
     cwd: env.cwd,
     filter: inHome ? "all" : null,
@@ -223,7 +223,7 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
   const chat = yield* ensureChatFor(
     herdr,
     env,
-    yield* herdOf(env.socketPath),
+    yield* machineHerd(env),
     home,
     yield* chatHarnessOf(env.userDir),
     (line) => Console.error(line),
@@ -248,7 +248,7 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
  * directory, which is no checkout, so a Run started there is placed rather than asked.
  */
 const fromHome = Effect.fn("Flows.fromHome")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
   return home !== null && home !== UNREADABLE && env.workspaceId === home.workspaceId;
 });
@@ -863,7 +863,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
 ) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
   // A board outside the Home is a board this Herd no longer has: one Home per Herd, so
   // two of them would be two boards disagreeing about the same Runs (ADR-0009). It is

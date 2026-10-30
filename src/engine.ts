@@ -175,7 +175,7 @@ import {
   type Watched,
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
-import { budgetPath, herdOf } from "./steering";
+import { budgetPath, herdOf, machineHerd } from "./steering";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
@@ -6640,7 +6640,7 @@ const makeRegistry: (
         label,
         cwd: placed.cwd,
         rootPane,
-        herd: yield* herdOf(placing.env.socketPath).pipe(Effect.orElseSucceed(() => null)),
+        herd: yield* machineHerd(placing.env).pipe(Effect.orElseSucceed(() => null)),
       }).pipe(
         Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
         Effect.orDie,
@@ -6866,10 +6866,7 @@ const makeRegistry: (
               inputs: launch === undefined ? {} : { [launch]: settled.input[launch] ?? null },
             },
             options?.namesTasks === true,
-          ).pipe(
-            Effect.provideContext(bun),
-            Effect.mapError((cause) => refused(`no Task could be named: ${cause.message}`)),
-          )
+          ).pipe(Effect.provideContext(bun))
         : null;
     const claimed = yield* claimAndPlace({
       // The invocation is the claim, so replaying the parent admits nothing new and

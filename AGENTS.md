@@ -24,7 +24,9 @@ here are in [`src/README.md`](src/README.md).
   `herdr-pin.json`, `test/herdr-contract.test.ts`.
 - **herdr-core (`hc`) client, red `probe:hc`** → [`docs/internals.md`](docs/internals.md#checking-core-against-its-schema-and-live),
   [ADR-draft-collie-runs-its-agents-in-herdr-core](docs/adr/draft-collie-runs-its-agents-in-herdr-core.md),
-  `src/hc.ts`, `hc-pin.json`, `test/hc-contract.test.ts`, `tools/hc-probe.ts`, `test/support/fake-hc.ts`.
+  `src/hc.ts`, `hc-pin.json`, `test/hc-contract.test.ts`, `tools/hc-probe.ts`, `test/support/fake-hc.ts`;
+  a Run's agents on core ([`docs/internals.md`](docs/internals.md#agents-on-core)): `terminal_backend`,
+  `src/herdr.ts`, `machineHerd` in `src/steering.ts`, `test/core-agents.test.ts`, `test/core-cli.test.ts`.
 - **Compaction** → [`docs/using.md`](docs/using.md#compaction-between-pieces-of-work),
   [`docs/internals.md`](docs/internals.md#compaction-at-a-work-boundary),
   [ADR-0007](docs/adr/0007-compact-a-reused-agent-at-a-work-boundary.md), `src/compaction.ts`, `src/compactors.ts`.

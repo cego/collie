@@ -320,6 +320,57 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
   };
 }
 
+/** The harness taking a prompt: the Output its contract names, from the queue. */
+const answerFrom = Effect.fn("fake.answer")(function* (
+  state: State,
+  line: string,
+  queuePath: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const ref = /is in (\S+\.md) /.exec(line);
+  const text =
+    ref && (yield* fs.exists(ref[1]!)) ? yield* fs.readFileString(ref[1]!, "utf8") : line;
+  const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
+  if (match && queuePath !== "" && (yield* fs.exists(queuePath))) {
+    const queue = yield* readQueue(queuePath);
+    const next = queue[state.outputs];
+    state.outputs += 1;
+    // An agent that acts before it answers: what it writes, then its Output.
+    const scripted = Option.getOrNull(Schema.decodeUnknownOption(Scripted)(next));
+    for (const one of scripted?.writes ?? []) {
+      yield* fs.makeDirectory(path.dirname(one.path), { recursive: true });
+      yield* fs.writeFileString(one.path, one.text);
+    }
+    if (scripted?.sh !== undefined) {
+      const ran = yield* exec(["sh", "-c", scripted.sh], {
+        cwd: path.dirname(queuePath),
+        env: { ...process.env, OUTPUT_PATH: Str.trim(match[1]!), PROMPT_PATH: ref?.[1] ?? "" },
+      });
+      if (ran.exitCode !== 0) return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
+    }
+    const output = scripted === null ? next : scripted.output;
+    if (output !== undefined && output !== null) {
+      const outputPath = Str.trim(match[1]!);
+      yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
+      const plain = Schema.decodeUnknownOption(Schema.String)(output);
+      yield* fs.writeFileString(
+        outputPath,
+        Option.isSome(plain) ? plain.value : encodeJson(output),
+      );
+    }
+  }
+});
+
+const readQueue = (file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* fs.readFileString(file, "utf8").pipe(
+      Effect.map((text) => Option.getOrElse(Schema.decodeOption(QueueJson)(text), () => [])),
+      Effect.orElseSucceed(() => []),
+    );
+  });
+
 /**
  * One call at a time. The fake keeps its state in a JSON file it reads, edits and writes
  * back; Collie now sends to several agents at once, and two concurrent calls would both
@@ -364,6 +415,41 @@ export function fakeHerdr(
   );
 }
 
+/**
+ * A prompt a fake core's terminal took, answered from the same Output queue as herdr's
+ * agents, under the same lock, so agents on both take the queue in turn.
+ */
+export const answerPrompt = (text: string, log: string, queuePath: string) =>
+  turn.withPermits(1)(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const lock = `${log}.lock`;
+      const statePath = `${log}.state.json`;
+      return yield* Effect.acquireUseRelease(
+        fs
+          .makeDirectory(lock)
+          .pipe(
+            Effect.retry({ times: 1_000, schedule: Schedule.spaced("2 millis") }),
+            Effect.ignore,
+          ),
+        () =>
+          Effect.gen(function* () {
+            const state = mutableState(
+              Option.getOrElse(
+                Schema.decodeOption(StateJson)(
+                  yield* fs.readFileString(statePath).pipe(Effect.orElseSucceed(() => "")),
+                ),
+                emptyState,
+              ),
+            );
+            yield* answerFrom(state, text, queuePath);
+            yield* fs.writeFileString(statePath, `${encodeJson(state)}\n`);
+          }),
+        () => fs.remove(lock, { recursive: true }).pipe(Effect.ignore),
+      );
+    }),
+  );
+
 function handle(
   argv: string[],
   environment: Readonly<Record<string, string | undefined>>,
@@ -399,11 +485,6 @@ function handle(
           mutableState(Option.getOrElse(Schema.decodeOption(StateJson)(text), emptyState)),
         ),
         Effect.orElseSucceed(() => emptyState()),
-      );
-    const readQueue = (file: string) =>
-      fs.readFileString(file, "utf8").pipe(
-        Effect.map((text) => Option.getOrElse(Schema.decodeOption(QueueJson)(text), () => [])),
-        Effect.orElseSucceed(() => []),
       );
     const writeJson = (file: string, value: State | FakeRecord | FakeEnvelope) =>
       fs.writeFileString(file, `${encodeJson(value)}\n`);
@@ -489,42 +570,8 @@ function handle(
       return pane;
     }
 
-    /** The harness taking a prompt: the Output its contract names, from the queue. */
-    const answer = Effect.fn("fake.answer")(function* (line: string) {
-      const ref = /is in (\S+\.md) /.exec(line);
-      const text =
-        ref && (yield* fs.exists(ref[1]!)) ? yield* fs.readFileString(ref[1]!, "utf8") : line;
-      const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
-      const queuePath = yield* envString("FAKE_HERDR_OUTPUTS");
-      if (match && queuePath !== "" && (yield* fs.exists(queuePath))) {
-        const queue = yield* readQueue(queuePath);
-        const next = queue[state.outputs];
-        state.outputs += 1;
-        // An agent that acts before it answers: what it writes, then its Output.
-        const scripted = Option.getOrNull(Schema.decodeUnknownOption(Scripted)(next));
-        for (const one of scripted?.writes ?? []) {
-          yield* fs.makeDirectory(path.dirname(one.path), { recursive: true });
-          yield* fs.writeFileString(one.path, one.text);
-        }
-        if (scripted?.sh !== undefined) {
-          const ran = yield* exec(["sh", "-c", scripted.sh], {
-            cwd: path.dirname(queuePath),
-            env: { ...process.env, OUTPUT_PATH: Str.trim(match[1]!), PROMPT_PATH: ref?.[1] ?? "" },
-          });
-          if (ran.exitCode !== 0) return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
-        }
-        const output = scripted === null ? next : scripted.output;
-        if (output !== undefined && output !== null) {
-          const outputPath = Str.trim(match[1]!);
-          yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
-          const plain = Schema.decodeUnknownOption(Schema.String)(output);
-          yield* fs.writeFileString(
-            outputPath,
-            Option.isSome(plain) ? plain.value : encodeJson(output),
-          );
-        }
-      }
-    });
+    const answer = (line: string) =>
+      Effect.flatMap(envString("FAKE_HERDR_OUTPUTS"), (queue) => answerFrom(state, line, queue));
 
     const tabOf = (paneId: string) =>
       Option.getOrUndefined(Arr.findFirst(state.paneList, (p) => p.pane_id === paneId))?.tab_id ??

@@ -220,6 +220,10 @@ const environmentKeys = [
   // Where Desktop keeps its own on this computer, which cleanup reads.
   "XDG_DATA_HOME",
   "XDG_STATE_HOME",
+  // Which core this Machine's agents run on, as `hc` itself finds it.
+  "HC_SOCKET",
+  "HC_SESSION",
+  "XDG_RUNTIME_DIR",
 ] as const;
 
 export const currentEnv = Effect.gen(function* () {

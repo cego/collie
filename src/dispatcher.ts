@@ -21,8 +21,15 @@ import {
   Result,
 } from "effect";
 import { ensureLockDir } from "./lock";
-import { HerdrError, herdrFailureReason, isSettled, type Herdr, type Submission } from "./herdr";
-import { verifyIncarnation, type AgentEntry } from "./registry";
+import {
+  HerdrError,
+  herdrFailureReason,
+  isSettled,
+  type Backend,
+  type Herdr,
+  type Submission,
+} from "./herdr";
+import { verifyIncarnation, type AgentEntry, type Incarnation } from "./registry";
 import {
   appendLine,
   blocked,
@@ -381,6 +388,9 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   ).pipe(Effect.ensuring(Effect.sync(() => open.delete(terminalId))));
 });
 
+/** Where an entry's incarnation runs: a record without a backend is Herdr 1's. */
+const backendOf = (entry: AgentEntry): Backend => entry.incarnation?.backend ?? "herdr";
+
 function refuse(id: string | null, reason: Refusal, detail: string): SubmitOutcome {
   return { ok: false, id, reason, detail };
 }
@@ -482,7 +492,9 @@ const send = Effect.fn("Dispatcher.send")(function* (
   // Refused as herdr refuses a pane in a dialog, so it is waited out the same way.
   const sent =
     asking === null
-      ? yield* deps.herdr.agentPrompt(entry.agent, marked(text, id)).pipe(Effect.result)
+      ? yield* deps.herdr
+          .agentPrompt(entry.agent, marked(text, id), backendOf(entry))
+          .pipe(Effect.result)
       : Result.fail(
           new HerdrError({ message: asking, detail: "", code: AGENT_BLOCKED, answered: true }),
         );
@@ -491,7 +503,12 @@ const send = Effect.fn("Dispatcher.send")(function* (
     // `submitted` either way: the text and the Enter were written. What herdr could not
     // vouch for is kept as the note, never rounded up to a delivery it saw taken.
     const line = { ...reserved, at: settledAt, state: "submitted" as const };
-    yield* appendLine(file, sent.success === "unobserved" ? { ...line, note: UNOBSERVED } : line);
+    yield* appendLine(
+      file,
+      sent.success === "observed"
+        ? line
+        : { ...line, note: sent.success === "pressed" ? ENTER_PRESSED : UNOBSERVED },
+    );
     if (sent.success === "observed")
       yield* appendLine(file, { ...line, state: "acknowledged", note: TURN_STARTED });
     return { ok: true as const, id, submission: sent.success };
@@ -603,6 +620,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
 ) {
   const terminalId = entry.incarnation?.terminalId;
   if (terminalId === undefined) return null;
+  const backend = backendOf(entry);
   const file = yield* ledgerPath(deps.stateDir, terminalId);
   const pending = Effect.map(readLedger(file), (lines) =>
     Arr.filter(
@@ -633,7 +651,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
     const open = yield* pending;
     if (open === undefined) return null;
     const status = yield* deps.herdr
-      .agentStatus(entry.agent)
+      .agentStatus(entry.agent, backend)
       .pipe(Effect.orElseSucceed(() => "unknown" as const));
     const turn = sawSettled && (status === "working" || status === "blocked");
     const found = turn ? TURN_STARTED : yield* deps.taken(open);
@@ -647,7 +665,9 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
       quietSince = null;
     } else {
       sawSettled = true;
-      const box = yield* deps.herdr.promptBox(entry.agent).pipe(Effect.orElseSucceed(() => null));
+      const box = yield* deps.herdr
+        .promptBox(entry.agent, backend)
+        .pipe(Effect.orElseSucceed(() => null));
       const waiting =
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(box), (present) =>
@@ -655,7 +675,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
           ),
         ) === true;
       if (waiting && open.note === UNOBSERVED) {
-        const press = deps.herdr.agentPressEnter(entry.agent).pipe(Effect.ignore);
+        const press = deps.herdr.agentPressEnter(entry.agent, backend).pipe(Effect.ignore);
         yield* settle(open.id, press, ENTER_PRESSED);
         yield* deps.log(`${entry.agent}: ${open.id} was still in its prompt box; pressed Enter`);
         pressed = true;
@@ -748,6 +768,11 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
       reason: `${about.agent} cannot be addressed: herdr does not name its process`,
       gone: false,
     };
+  const incarnation: Incarnation = {
+    terminalId: live.terminalId,
+    agentSession: live.agentSession,
+  };
+  if (live.backend !== undefined) incarnation.backend = live.backend;
   const entry: AgentEntry = {
     role: about.role,
     agent: about.agent,
@@ -756,7 +781,7 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
     runId: about.runId,
     workflow: about.workflow,
     at: yield* nowIso,
-    incarnation: { terminalId: live.terminalId, agentSession: live.agentSession },
+    incarnation,
   };
   return { entry, reason: null, gone: false };
 });
@@ -808,7 +833,7 @@ export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   const keys = interruptKeys(draft.harness ?? "");
   if (keys === null)
     return refuse(null, "failed", `capability_unproven:${draft.harness ?? ""}:interrupt`);
-  const sent = yield* deps.herdr.agentSendKeys(entry.agent, keys).pipe(
+  const sent = yield* deps.herdr.agentSendKeys(entry.agent, keys, backendOf(entry)).pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(herdrFailureReason(cause))),
   );

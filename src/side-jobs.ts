@@ -20,7 +20,7 @@ import { disputesIn, eventsIn, holding, idleAgain, readSaid, remember } from "./
 import { latest, readDispositions } from "./disposition";
 import { readSeen } from "./seen";
 import { settled, type RunFacts } from "./runs";
-import { herdDir, herdOf } from "./steering";
+import { herdDir, machineHerd } from "./steering";
 import { listTasks } from "./task";
 import { nowIso } from "./time";
 import { sweep, sweeping, type Sweeper } from "./cleanup";
@@ -102,7 +102,7 @@ const news = Effect.fn("SideJobs.news")(function* (
   const herdOfTask = new Map(
     Arr.map(yield* listTasks(env.stateDir), (task) => [task.id, task.herd ?? null]),
   );
-  const own = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const own = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   for (const { herd } of sessions) {
     if (herd === null) continue;
     const mine = Arr.filter(

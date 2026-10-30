@@ -19,6 +19,7 @@ import {
   parseShared,
   SETTINGS,
   type SettingValue,
+  type TerminalBackend,
 } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
@@ -159,7 +160,8 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
     Effect.map((info) => Option.getOrUndefined(info.mtime)?.toISOString()),
     Effect.orElseSucceed(() => undefined),
   );
-  const settings = Arr.flatMap(SETTINGS, ({ key }): ReadonlyArray<SharedSetting> => {
+  const shared = Arr.filter(SETTINGS, (setting) => setting.machine !== true);
+  const settings = Arr.flatMap(shared, ({ key }): ReadonlyArray<SharedSetting> => {
     const value = configValue(raw, key) ?? null;
     const at = stamps.set[key] ?? (value === null ? undefined : written);
     return at === undefined ? [] : [{ key, value, at }];
@@ -218,6 +220,13 @@ export const takeShared = (
         });
       return yield* readShared(userDir);
     }),
+  );
+
+/** What runs this Machine's next agents, `herdr` where the setting is unset or unreadable. */
+export const terminalBackend = (userDir: string) =>
+  readConfig(userDir).pipe(
+    Effect.map((raw): TerminalBackend => (raw.terminal_backend === "core" ? "core" : "herdr")),
+    Effect.orElseSucceed((): TerminalBackend => "herdr"),
   );
 
 /** The GitLab this run works against: `GITLAB_HOST` where it names a host, else the setting. */

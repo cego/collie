@@ -797,8 +797,9 @@ falls all the way through to the current directory.
 Collie is moving its agents to herdr-core (`hc`,
 [ADR-draft-collie-runs-its-agents-in-herdr-core](adr/draft-collie-runs-its-agents-in-herdr-core.md)).
 `src/hc.ts` is its client: plain JSON-RPC on the session socket, frames after
-`hello {framed: true}`, and one decoder per method it calls, in `replies`. Nothing runs on
-core yet. `hc-pin.json` names the `hc` release and its archive checksums, and the
+`hello {framed: true}`, and one decoder per method it calls, in `replies`. A Machine whose
+`terminal_backend` is `core` runs its Runs' agents there ([Agents on core](#agents-on-core)).
+`hc-pin.json` names the `hc` release and its archive checksums, and the
 `released.openrpc.json` of that release, committed as `hc.openrpc.json`.
 
 The wire is checked twice, because each check misses what the other catches:
@@ -819,6 +820,31 @@ the rig's log beside the fake herdr's, and checks each of its own replies agains
 `hc.openrpc.json`: one the schema forbids is answered as an error naming it, so the test
 that caused it fails. Bumping the pin is editing `hc-pin.json`, copying that release's
 `released.openrpc.json` over `hc.openrpc.json`, and passing both checks.
+
+### Agents on core
+
+`terminal_backend` is read when an agent is launched, so switching it mid-Run moves the
+next agent and leaves the running ones where they are. The core socket is `HC_SOCKET`,
+else `<session>.sock` under core's runtime directory, `HC_SESSION` naming the session
+(`default` when unset). All of it goes through `src/herdr.ts`, as herdr's calls do:
+
+- **Launch** is one `terminal.run` with the agent's name, the labels `run`, `operation`
+  and `task`, its cwd and `no_parent`: it is the Run's agent, not a child of whatever
+  started core. Its env is the launch env herdr's agents get, with the profile's file-held
+  values read in, and `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` blanked, so `collie` in that
+  terminal knows itself by `COLLIE_AGENT`, which the host confirms against its Runs.
+- **Delivery** is `terminal.send`. One that answers `started: false` gets one Enter
+  (`terminal.keys`), and the Run's log says so. Core's `blocked` refusal is herdr's
+  `agent_blocked`, so the Dispatcher holds the send as it does on herdr.
+- **Status** is read from one `events.subscribe` per socket, kept for the host's life.
+- **Stop** at the Run's end is `terminal.kill`.
+
+The incarnation of an agent launched on core is its terminal's address, marked `core`, and
+what is sent to it goes to core. A Machine set to core also lists herdr's agents while
+`HERDR_SOCKET_PATH` is set, so an agent launched on herdr before the switch is still
+reached there; one set back to herdr lists only herdr's, and its agents on core are gone
+to it. OpenCode is
+refused on core and parks its Run, until core can drive its server.
 
 ## The forge boundary
 
@@ -1168,7 +1194,8 @@ result to a live agent of the Run it came from rather than starting a second one
 never to an unrelated Run's agent in the same role.
 
 Each entry also records an **incarnation**: herdr's own `terminal_id` for the process in
-the pane, and the harness session it is driving where herdr knows one. An agent name is
+the pane, and the harness session it is driving where herdr knows one; for an agent on
+core, its terminal's address and `backend: "core"`. An agent name is
 reused by whatever takes that role next and a pane outlives what ran in it, so neither
 names a process — which is why a delivery is checked against the incarnation and not
 against the name. `verifyIncarnation` requires name, pane and workspace to match as
@@ -1229,7 +1256,8 @@ on another Run's behalf.
 ## The Herd and its Home
 
 A **Herd** is one herdr session — every workspace in it — keyed by the canonical path of
-its socket. Never by a directory: a cwd would key two sessions in one repository to the
+its socket. On a Machine set to core, it is that Machine's core session, keyed by core's
+socket. Never by a directory: a cwd would key two sessions in one repository to the
 same Herd, and one session across two repositories to different ones. Everything shared
 across a session's workspaces lives under `<state>/herd/<herdKey>/`: the conversation, the
 proposals, the budget, the elections, and `home.json`.

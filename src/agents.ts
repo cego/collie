@@ -83,6 +83,7 @@ import {
   gitlabHostOf,
   loadDefaults,
   readConfig,
+  terminalBackend,
   type Defaults,
 } from "./config";
 import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
@@ -117,7 +118,14 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr, herdrFailureReason, isSettled, type AgentInfo, type HerdrError } from "./herdr";
+import {
+  Herdr,
+  herdrFailureReason,
+  isSettled,
+  RUN_LABEL,
+  type AgentInfo,
+  type HerdrError,
+} from "./herdr";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
@@ -157,6 +165,7 @@ import {
 import {
   envFileProblems,
   envLines,
+  envValues,
   mergeClaudeSettings,
   parseProfile,
   roleProfile,
@@ -1570,6 +1579,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     ).pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
     const pane = entry.paneId;
     if (outcome.ok) {
+      if (outcome.submission === "pressed")
+        yield* log(
+          about.runId,
+          `${about.agent}: its ${delivery.kind} ${outcome.id} did not start a turn on core, so Enter was pressed once`,
+        );
       if (outcome.submission === "observed")
         return { sent: true, why: "", observed: dispatch.TURN_STARTED, pane, kept: fitted.kept };
       if (delivery.kind !== "steer" && delivery.kind !== "correction")
@@ -1990,6 +2004,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       settings,
       effort: ask.effort,
     });
+    const backend = yield* terminalBackend(host.env.userDir);
+    if (backend === "core" && adapter.id === "opencode")
+      return yield* new AgentParked({
+        operation: ask.operation,
+        reason: `OpenCode is not yet supported on core. Set terminal_backend to herdr on ${machineName()}, or choose another harness, then resume this Run`,
+      });
     return yield* withControlLock(
       host.env.stateDir,
       agent,
@@ -2041,6 +2061,54 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 ask.claudeSubagents,
               )
             : controls;
+        const args = [
+          ...startArgs(
+            adapter,
+            ask.model ?? host.model,
+            persona,
+            ask.effort ?? undefined,
+            permissions,
+            window.passed ?? undefined,
+          ),
+          ...(adapter.dirArgs?.(`${host.dir}/runs/${ask.runId}`) ?? []),
+          ...hookTrustArgs,
+          ...settingsArgs,
+          ...mcp.args,
+        ];
+        const started = `permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}`;
+        if (backend === "core") {
+          const named = { [RUN_LABEL]: ask.runId, operation: ask.operation };
+          const labels = ask.task === null ? named : { ...named, task: ask.task };
+          const terminal = yield* host.herdr
+            .agentLaunch({
+              name: agent,
+              argv: [adapter.kind, ...args],
+              cwd: ask.cwd,
+              env: {
+                ...serverEnv,
+                // Who it is comes from these, never from a herdr pane core was started in.
+                HERDR_SOCKET_PATH: "",
+                HERDR_PANE_ID: "",
+                ...mcp.env,
+                ...(yield* envValues(profile.env ?? {}, host.env.home)),
+              },
+              labels,
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                unsettled(ask, `${agent} did not start on core: ${herdrFailureReason(cause)}`),
+              ),
+            );
+          yield* log(ask.runId, `${agent}: ${adapter.id} in core terminal ${terminal}, ${started}`);
+          const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
+          if (found.entry === null) return undefined;
+          yield* registerAgent(
+            yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
+            found.entry,
+            alive,
+          );
+          return found.entry.incarnation;
+        }
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
         const reused = ask.workspace ? null : yield* rootPane(ask);
         const label = agentTabLabel(ask);
@@ -2063,20 +2131,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             kind: adapter.kind,
             paneId: tab.paneId,
             timeoutMs: START_TIMEOUT_MS,
-            args: [
-              ...startArgs(
-                adapter,
-                ask.model ?? host.model,
-                persona,
-                ask.effort ?? undefined,
-                permissions,
-                window.passed ?? undefined,
-              ),
-              ...(adapter.dirArgs?.(`${host.dir}/runs/${ask.runId}`) ?? []),
-              ...hookTrustArgs,
-              ...settingsArgs,
-              ...mcp.args,
-            ],
+            args,
           })
           .pipe(
             Effect.retry({
@@ -2094,10 +2149,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ),
             ),
           );
-        yield* log(
-          ask.runId,
-          `${agent}: ${adapter.id} in ${tab.paneId}, permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}`,
-        );
+        yield* log(ask.runId, `${agent}: ${adapter.id} in ${tab.paneId}, ${started}`);
         const found = yield* entryFor(ask, agent, {
           paneId: tab.paneId,
           workspaceId: workspace,
@@ -2163,7 +2215,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (alive) yield* stepGoneOut(agent);
         // herdr keeps a name while it lists it, so a new agent cannot take it until then.
         if (fresh && live !== undefined)
-          yield* host.herdr.paneClose(live.paneId).pipe(
+          yield* host.herdr.paneClose(live.paneId, live.backend).pipe(
             Effect.mapError(
               (cause) =>
                 new AgentUncertain({

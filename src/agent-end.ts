@@ -118,10 +118,13 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
     } satisfies Ended;
 
   if (paneId !== undefined && closes === "close") {
-    const panes = yield* deps.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-    yield* keepWorkspace(deps, paneId, panes);
+    // Core has no workspace to keep.
+    if (one?.backend === undefined) {
+      const panes = yield* deps.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+      yield* keepWorkspace(deps, paneId, panes);
+    }
     yield* deps.herdr
-      .paneClose(paneId)
+      .paneClose(paneId, restored === undefined ? one?.backend : undefined)
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId, cause })));
   }
   const ended = paneId !== undefined || reached.success !== null;

@@ -1687,6 +1687,12 @@ scope's rule once:
 - **Each Machine's own** is a read-only table: the Machine and where it is, its settings
   sync state, `projects.root`, `chat_harness`, harnesses found, and remembered answers such
   as `linear.team` and `gitlab.assignee`. Change these in that Machine's TUI Settings.
+  `terminal_backend` is each Machine's own too, with no row in Desktop: `collie settings set
+  terminal_backend core` on a Machine runs the agents its Runs launch next in herdr-core
+  terminals instead of herdr panes. An agent already running on herdr stays there. Set it
+  back to `herdr` only once no agent runs on core: a Machine set to herdr no longer lists
+  core's. OpenCode does not run on core yet: a Run that would launch
+  it there parks and says so.
   A value never configured says **Not set**. A Machine out of reach keeps its last values
   and says when they were read, including after Desktop reopens. A host without this read
   says **Not known** and names its Collie version; its paired link and board keep working.

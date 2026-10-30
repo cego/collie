@@ -108,6 +108,17 @@ export const envLines = (env: Env, home: string): ReadonlyArray<string> =>
       : `IFS= read -r ${name} < ${Result.getOrThrow(CommandLine.quote(expand(value.file, home)))}; export ${name}`,
   );
 
+/** `env` as the values a terminal is started with: a file's first line, as `envLines` reads it. */
+export const envValues = Effect.fn("Profile.envValues")(function* (env: Env, home: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const values: Record<string, string> = {};
+  for (const [name, value] of Rec.toEntries(env))
+    values[name] = isLiteral(value)
+      ? value
+      : (Str.split(yield* fs.readFileString(expand(value.file, home)), "\n")[0] ?? "");
+  return values;
+});
+
 /** Each file-held value that cannot be read safely, by path and problem; never its value. */
 export const envFileProblems = Effect.fn("Profile.envFileProblems")(function* (
   env: Env,
