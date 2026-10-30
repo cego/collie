@@ -2033,6 +2033,16 @@ effectively unchanged, 11.00 versus 10.96 seconds. The experiment was reverted.
 Every observation is retained under `handoffs/measure/fix2-view-pairs/`; fewer
 file reads alone did not justify the added complexity.
 
+The placement tests now poll the existing status API while waiting for completion,
+then read the full Run once for their assertions. Three fixed AB/BA pairs on
+`943649c5` and `973a35c2` passed all three selected cases in each process. Median
+CPU time fell from 11.11 to 10.45 seconds; the candidate range, 10.27–10.54 seconds,
+was below the control range, 10.81–11.33 seconds. Median wall time fell from 7.416
+to 7.309 seconds. The complete placement and finished-poll files retained all 75
+tests and 305 assertions. Wait schedules, limits and final assertions are unchanged.
+Raw observations remain under `handoffs/measure/fix2-status-pairs/`; this focused
+CPU reduction does not establish either whole-suite acceptance target.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
