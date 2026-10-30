@@ -106,7 +106,9 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
       if (!read.ok) return unproved(`could not be read: ${read.reason}`);
       // The forge has not seen the push or the retry yet, or the merge request moved on without this checkout.
       const state =
-        read.head !== head || (read.id === retried && read.state === "failed")
+        read.head !== head ||
+        (retried !== null && read.state === "missing") ||
+        (read.id === retried && read.state === "failed")
           ? "pending"
           : read.state;
       const log = read.id === null ? null : forge.jobLog(ref, read.id);

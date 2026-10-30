@@ -322,12 +322,12 @@ test("a failed job that fails its retry, or with no base to compare, is the Run'
 const PULL = `https://${PROJECT.github}/pull/31`;
 const GATE: VerifySpec = { ...NUXI, ci: "test" };
 
-/** `now`'s forge for the first read of the job, `later`'s from the next. */
-const thenLater = (now: { readonly fetch: FetchLike }, later: { readonly fetch: FetchLike }) => {
+/** The nth forge from the nth read of the pull request, the last one from then on. */
+const thenLater = (...stages: ReadonlyArray<{ readonly fetch: FetchLike }>) => {
   let reads = 0;
   const fetch: FetchLike = (input, init) => {
     if (input.endsWith("/pulls/31")) reads++;
-    return (reads > 1 ? later : now).fetch(input, init);
+    return stages[Math.min(Math.max(reads, 1), stages.length) - 1]!.fetch(input, init);
   };
   return { fetch };
 };
@@ -414,4 +414,45 @@ test("a GitHub job absent from a head whose first hundred check runs completed w
         state: "pending",
       });
     }),
+  ));
+
+test("a GitHub job missing right after its retry is waited on, and its pass is a Flake proving the check", () =>
+  runEffect(
+    fastForward(
+      Effect.gen(function* () {
+        const { asked, at, forge } = yield* waiting(
+          "failed",
+          PULL,
+          undefined,
+          {
+            jobs: [
+              { name: "static", state: "passed" },
+              { name: "test", state: "failed" },
+            ],
+            base: { at: BASE, jobs: [{ name: "test", state: "passed" }] },
+          },
+          "github",
+        );
+        // Re-running the failed jobs holds `test` back until its needs finish.
+        const rerunning = forgeOn("github", at, { jobs: [{ name: "static", state: "passed" }] });
+        const rerun = forgeOn("github", at, {
+          jobs: [
+            { name: "static", state: "passed" },
+            { name: "test", state: "passed" },
+          ],
+        });
+        // The job's read and `baseJob` each read the pull request before the retry.
+        const stages = thenLater(forge, forge, rerunning, rerun);
+        expect(yield* read({ ...asked, spec: GATE, settle: true }, stages)).toMatchObject({
+          proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
+          retried: true,
+        });
+        expect(
+          [forge, rerunning, rerun].flatMap((one) =>
+            one.requests.filter((request) => request.url.endsWith("/rerun-failed-jobs")),
+          ),
+        ).toHaveLength(1);
+      }),
+      1_000,
+    ),
   ));

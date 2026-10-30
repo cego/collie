@@ -133,7 +133,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `forge/github.ts`      | The GitHub adapter: everything Collie asks GitHub, through `gh` or over HTTP with its token                                 |
 | `forge/http.ts`        | ForgeHttp: a `forges` provider per host, its token from the CLI's login; the library loaded here                            |
 | `forge/threads.ts`     | Modelled issue, review-posting, menu and login operations shared by the forge adapters                                      |
-| `forge/*-checks.ts`    | Each forge's doctor checks: glab, its token and push; gh where a checkout uses GitHub                                       |
+| `forge/*-checks.ts`    | Each forge's doctor checks; GitLab's configured Connection probe and reusable login selection                               |
 | `template.ts`          | `{{a.b}}` prompt substitution                                                                                               |
 | `config.ts`            | User defaults and remembered values in `config.json`                                                                        |
 | `profile.ts`           | The operator's `agent_profile`: per role, an agent's env and the Claude settings merged into Collie's                       |
@@ -147,6 +147,14 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `check-processes.ts`   | A check's processes from spawn to gone: marked, recorded, and ended with the host that runs them                            |
 | `usage-model.ts`       | A Subscription's Usage reading: Schemas, parsing, Exhausted; pure, so Desktop and a module share it                         |
 | `usage.ts`             | This Machine's Usage readings: Claude's endpoint, Codex's app server, status lines                                          |
+| `catalogue-model.ts`   | A Harness catalogue: its Schemas, one decoder per harness's output, Collie's table (pure)                                   |
+| `catalogue.ts`         | This Machine's Harness catalogue: each harness read on an interval, with its timeout and back-off                           |
+| `connection-model.ts`  | Connection reading Schemas and the text the CLI and chat print (pure)                                                       |
+| `connection-probes.ts` | Linear MCP and Helle probes; reexports the forge adapters' probes                                                           |
+| `connection-login.ts`  | Reads a reusable login through its forge adapter for host-to-Desktop hand-over, without recording the token                 |
+| `slack.ts`             | Slack Web API adapter: identity, member channels, people, direct messages, posts and permalinks                             |
+| `slack-credentials.ts` | Reads and writes each Machine's Slack token and supplies its registry reading and channel choices                           |
+| `connections.ts`       | The Connection registry: each probe isolated and bounded, shared by the host, doctor and workflow reads                     |
 | `schedule-model.ts`    | A Schedule as every door reads it, and when an occurrence starts and which comes next (pure)                                |
 | `schedules.ts`         | This Machine's Schedules: their records, the one write, and the `Schedule` workflow that fires them                         |
 | `run-record.ts`        | Run records served by their owning host, including Outputs confined to the Run directory                                    |

@@ -352,6 +352,14 @@ const productionStep = step({
 export const renovation = (landing: Landing = shippedLanding) =>
   defineWorkflow({
     id: "renovate",
+    connections: {
+      needs: {
+        linear: { with: "Checks each repository off its Renovate issue" },
+        gitlab: {
+          with: "Assesses, merges and releases dependency updates",
+        },
+      },
+    },
     title: "renovate — merge the month's dependency updates, tag, release and record it",
     description:
       "Lands a repository's Renovate updates: it assesses every Renovate Bot merge request or pull request, gathers an application's into one batch branch proven on stage under the shared claim and approved by a teammate, merges, tags and watches the release, then checks the repository off the team's shared Renovate issue in Linear.",

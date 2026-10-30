@@ -15,7 +15,7 @@ export const SCOPES = ["api", "write_repository"];
 
 /** GitLab's page for a new token, with its name and the scopes Collie needs filled in. */
 export const tokenPage = (host: string) =>
-  `https://${host}/-/user_settings/personal_access_tokens?name=collie&scopes=${SCOPES.join(",")}`;
+  `https://${host}/-/user_settings/personal_access_tokens?name=Collie&scopes=${SCOPES.join(",")}`;
 
 export const RENEW_WITHIN_DAYS = 14;
 const DAY_MS = 86_400_000;

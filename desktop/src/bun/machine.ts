@@ -56,10 +56,13 @@ import {
   type Machine,
   type MachineMerged,
   type MachineMessage,
+  type MachineOwnRead,
   type NotLive,
 } from "../shared/flock";
 import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
 import { type MachineUsage, UPGRADE_SAID } from "../shared/usage";
+import type { MachineCatalogue } from "../shared/settings-agents";
+import type { OwnReading } from "../shared/machine-own";
 import { type MachineSchedules, SCHEDULES_UPGRADE_SAID } from "../shared/schedules";
 import { CLEANUP_UPGRADE_SAID, type CleanupListing } from "../shared/machine-cleanup";
 import type { ScheduleChange } from "../../../src/schedule-model";
@@ -1436,6 +1439,59 @@ export const usageOn = (
       return Effect.succeed({ profile, name, readings: [], problem });
     }),
   );
+
+export const cataloguesOn = (
+  { profile, name }: Pick<KnownMachine, "profile" | "name">,
+  door: Pick<Door, "models">,
+): Effect.Effect<MachineCatalogue> =>
+  door.models().pipe(
+    Effect.map((catalogues) => ({ profile, name, catalogues, problem: null })),
+    Effect.timeoutOrElse({
+      duration: "15 seconds",
+      orElse: () => Effect.die("its host did not answer in time"),
+    }),
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      const detail = Cause.pretty(cause).split("\n")[0]!;
+      return Effect.succeed({
+        profile,
+        name,
+        catalogues: [],
+        problem: detail.includes("Unknown request tag")
+          ? "Can't read its catalogues; upgrade this Machine."
+          : detail,
+      });
+    }),
+  );
+
+export const machineOwnOn = (
+  machine: KnownMachine,
+  door: Pick<Door, "machineOwn">,
+): Effect.Effect<MachineOwnRead> =>
+  Effect.gen(function* () {
+    const at = yield* Clock.currentTimeMillis;
+    const reading = yield* door.machineOwn().pipe(
+      Effect.map((values): OwnReading => ({ values, at, problem: null, unsupported: false })),
+      Effect.timeoutOrElse({
+        duration: "15 seconds",
+        orElse: () => Effect.die("its host did not answer in time"),
+      }),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+        const failed = Cause.findErrorOption(cause);
+        const problem = Option.isSome(failed)
+          ? reasonOf(failed.value)
+          : Cause.pretty(cause).split("\n")[0]!;
+        return Effect.succeed({
+          values: null,
+          at,
+          problem,
+          unsupported: problem.includes("Unknown request tag"),
+        });
+      }),
+    );
+    return { _tag: "OwnRead", machine, reading };
+  });
 
 /**
  * What a Machine's host listed of its Schedules. A host too old to have the call asks for an

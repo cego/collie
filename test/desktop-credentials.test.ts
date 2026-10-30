@@ -414,7 +414,7 @@ const givenIn = (
     const given = yield* givenCredentials({
       dir,
       keyring,
-      give: { gitlab: giver("gitlab"), helle: giver("helle") },
+      give: { gitlab: giver("gitlab"), helle: giver("helle"), slack: giver("slack") },
       tell: (item) => Effect.sync(() => void told.push(item)),
       skipped: () => Effect.succeed(skipped),
     });

@@ -2,7 +2,6 @@ import { Effect, Fiber, Option, Queue, Schema, Stream } from "effect";
 import type { Offered } from "../shared/chat-choices";
 import type { FlockSettings } from "../shared/flock-settings";
 import { childEnv, which } from "./login-env";
-import { chatChoice } from "./settings";
 
 const Response = Schema.Struct({
   type: Schema.Literal("response"),
@@ -29,7 +28,7 @@ const encodeCommand = Schema.encodeSync(
 );
 
 export const readPiModels = (
-  flock: FlockSettings,
+  _flock: FlockSettings,
   dir: string,
   command: ReadonlyArray<string> | null = which("pi") === null ? null : [which("pi")!],
 ): Effect.Effect<ReadonlyArray<Omit<Offered, "unsetEffort">>, string> =>
@@ -106,9 +105,8 @@ export const readPiModels = (
         );
         return yield* Effect.forEach(models, (model) =>
           Effect.gen(function* () {
+            if (model.provider === "" || model.id === "") return [];
             const id = `${model.provider}/${model.id}`;
-            if (!chatChoice({ proactive: true, chatHarness: "pi", chatModel: id }, flock).ok)
-              return [];
             let efforts: ReadonlyArray<string> = [];
             if (model.reasoning) {
               yield* request("set_model", { provider: model.provider, modelId: model.id });

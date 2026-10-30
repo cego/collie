@@ -8,6 +8,7 @@ const COLUMNS = new Map<string, Column>([
   ["flow", "full"],
   ["evidence", "wide"],
   ["log", "wide"],
+  ["settings", "wide"],
   ["workflows", "full"],
   ["diff", "full"],
   ["terminal", "full"],

@@ -60,7 +60,7 @@ export const collie = Effect.fn("World.collie")(function* (
   const child = Bun.spawn([...command, "--json", ...args], {
     cwd: world.project,
     env: {
-      PATH: "/usr/bin:/bin",
+      PATH: yield* Config.String("PATH").pipe(Config.withDefault("/usr/bin:/bin")),
       HOME: world.home,
       HERDR_PLUGIN_ROOT: world.install,
       HERDR_PLUGIN_STATE_DIR: world.state,
@@ -117,7 +117,7 @@ export const save = (into: string, names: ReadonlyArray<string>) =>
   }).pipe(Effect.orDie);
 
 /**
- * The fake herdr on `HERDR_BIN_PATH`, and a stand-in claude on `PATH`, set in the process
+ * The fake herdr on `HERDR_BIN_PATH` and harnesses on `PATH`, set in the process
  * environment too while the world lasts: a host is a child that inherits them, not a reader
  * of this world's Config.
  */
@@ -136,7 +136,13 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
       { mode: 0o755 },
     )
     .pipe(Effect.orDie);
-  const set = { HERDR_BIN_PATH: bin, FAKE_HERDR_LOG: `${dir}/herdr-calls.jsonl` };
+  for (const harness of ["codex", "pi", "opencode"])
+    yield* fs.writeFileString(`${harnesses}/${harness}`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const set = {
+    HERDR_BIN_PATH: bin,
+    FAKE_HERDR_LOG: `${dir}/herdr-calls.jsonl`,
+    PATH: `${harnesses}:/usr/bin:/bin`,
+  };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       const before = {

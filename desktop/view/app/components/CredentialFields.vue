@@ -2,7 +2,7 @@
 /** Takes the GitLab token or Helle's token, kept once for every Machine. */
 const props = defineProps<{ which: "gitlab" | "helle"; label: string }>();
 const emit = defineEmits<{ saved: [] }>();
-const { saveGitlab, saveHelle, checkHelle, openSlack, copyText } = useActions();
+const { saveGitlab, pasteGitlab, saveHelle, checkHelle, openSlack, copyText } = useActions();
 const { credentials } = useCredentials();
 
 const HELLE_COMMAND = "/helle token";
@@ -32,10 +32,22 @@ const keep = async () => {
   token.value = "";
   emit("saved");
 };
+const paste = async () => {
+  if (await pasteGitlab()) emit("saved");
+};
 </script>
 
 <template>
   <div class="flex flex-col gap-2">
+    <UButton
+      v-if="which === 'gitlab'"
+      label="Paste from clipboard"
+      size="sm"
+      variant="outline"
+      class="self-start"
+      icon="i-lucide-clipboard-paste"
+      @click="paste"
+    />
     <ol v-if="which === 'helle'" class="flex flex-col gap-1 text-sm" data-testid="helle-guide">
       <li class="flex items-center gap-2">
         1.

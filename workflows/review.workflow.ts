@@ -20,6 +20,7 @@ import {
   ask,
   defineWorkflow,
   formatFindings,
+  forgeOfRef,
   handOffWork,
   mrForgeFacts,
   parseMrTarget,
@@ -35,6 +36,7 @@ import {
   type Finding,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
+import { connection } from "./connections.ts";
 import * as Activity from "effect/workflow/Activity";
 import {
   DEFAULT_BASE,
@@ -81,6 +83,18 @@ const ReviewedBranch = Schema.Union([
 
 export default defineWorkflow({
   id: "review",
+  connections: {
+    uses: {
+      gitlab: {
+        with: "Reads and answers the merge request",
+        without: "Reviews the local diff only",
+      },
+      github: {
+        with: "Reads and answers the pull request",
+        without: "Reviews the local diff only",
+      },
+    },
+  },
   title: "review — an MR, a branch diff, or the working tree",
   description:
     "Reviews a change — an MR, a branch diff or the working tree — in one complete review, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request.",
@@ -125,13 +139,24 @@ export default defineWorkflow({
       eligible: (facts) => facts.diffTarget !== null,
     },
   ],
-  run: ({ input: asked }) =>
+  run: ({ input: requested }) =>
     Effect.gen(function* () {
       const host = yield* Host;
       const children = yield* Children;
       const fs = yield* FileSystem.FileSystem;
       const run = yield* Run;
       const place = yield* host.place(run.id);
+      const ref = parseMrTarget(requested.target);
+      const reading = ref === null ? null : yield* connection(forgeOfRef(ref));
+      const asked =
+        reading === null || reading.state === "ok"
+          ? requested
+          : { ...requested, target: "worktree" };
+      if (reading !== null && reading.state !== "ok")
+        yield* host.record(
+          run.id,
+          `Reviews the local diff only: ${reading.detail}. Fix: ${reading.fix}`,
+        );
       if ((yield* panelOf("reviewer")).length > 1)
         yield* forecast([reviewRound, synthesisStep, menu]);
       const kind = targetKind(asked.target);
@@ -214,15 +239,16 @@ export default defineWorkflow({
       const fixable = yield* Activity.make({
         name: "fixable",
         success: ReviewedBranch,
-        execute: host
-          .reviewedBranch(run.id)
-          .pipe(
-            Effect.tap((answer) =>
-              "refused" in answer
-                ? host.record(run.id, `no fix can run here: ${answer.refused}`)
-                : Effect.void,
-            ),
+        execute: (reading !== null && reading.state !== "ok"
+          ? Effect.succeed({ refused: `the forge is unavailable: ${reading.detail}` })
+          : host.reviewedBranch(run.id)
+        ).pipe(
+          Effect.tap((answer) =>
+            "refused" in answer
+              ? host.record(run.id, `no fix can run here: ${answer.refused}`)
+              : Effect.void,
           ),
+        ),
       });
       let unfixable = "refused" in fixable ? fixable.refused : "";
       // A hand-off needs no checkout, so a live implementer in the lineage may still take one.

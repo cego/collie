@@ -2,6 +2,7 @@
 // Pure, so Desktop reads the same shapes the CLI and chat are given.
 
 import { Schema } from "effect";
+import { ConnectionUse } from "./connection-model";
 
 export const LAYERS = ["project", "user", "shipped"] as const;
 export type EntryLayer = (typeof LAYERS)[number];
@@ -72,6 +73,7 @@ export const ModuleFile = Schema.Struct({ path: Schema.String, text: Schema.Stri
 
 /** Every Workflow and Persona in a host's shipped and user Layers. */
 export const HostDefinitions = Schema.Struct({
+  connectionUses: Schema.optionalKey(Schema.Array(ConnectionUse)),
   workflows: Schema.Array(Schema.Struct({ ...Described.fields, files: Schema.Array(ModuleFile) })),
   problems: Schema.Array(Fault),
   personas: Schema.Array(PersonaView),

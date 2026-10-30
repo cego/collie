@@ -154,6 +154,42 @@ const machine = (
         note("read", payload);
         return `${payload.tool} answered by ${name}`;
       }),
+    models: () =>
+      Effect.sync(() => {
+        note("models", {});
+        const opus = {
+          model: "opus",
+          label: "Opus 5.5",
+          description: null,
+          efforts: ["low", "high"],
+          defaultEffort: null,
+          hidden: false,
+          from: "harness" as const,
+        };
+        const qwen = { ...opus, model: "ollama/qwen3-coder:30b", label: "qwen3-coder:30b" };
+        const at = "2026-10-29T09:00:00.000Z";
+        return [
+          { harness: "claude", at, table: null, entries: [opus] },
+          ...(name === "vm-mk" ? [{ harness: "pi", at, table: null, entries: [qwen] }] : []),
+        ];
+      }),
+    connections: () =>
+      Effect.sync(() => {
+        note("connections", {});
+        return [
+          {
+            id: "gitlab" as const,
+            reading:
+              name === "mk-pc"
+                ? { state: "ok" as const, account: "mk", detail: "gitlab.example as mk" }
+                : {
+                    state: "absent" as const,
+                    detail: "no token",
+                    fix: "glab auth login --hostname gitlab.example",
+                  },
+          },
+        ];
+      }),
     schedules: () =>
       Effect.sync(() => {
         note("schedules", {});
@@ -495,6 +531,52 @@ test("a cleanup goes to the Machine it names, and naming none of several changes
         expect(yield* proposing({ kind, machine: "unknown" })).toContain('No Machine "unknown"');
         expect(asked).toEqual([]);
       }
+    }),
+  ));
+
+test("Connections are read per Machine through the Flock chat, and an explicit Machine limits the read", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const every = yield* call(asked, "collie_connections", {});
+      expect(every).toContain("## mk-pc");
+      expect(every).toContain("gitlab    ok · mk");
+      expect(every).toContain("## vm-mk");
+      expect(every).toContain("Fix: glab auth login --hostname gitlab.example");
+      asked.length = 0;
+      const one = yield* call(asked, "collie_connections", { machine: "vm-mk" });
+      expect(one).not.toContain("## mk-pc");
+      expect(asked.filter(({ op }) => op === "connections").map(({ machine }) => machine)).toEqual([
+        "vm-mk",
+      ]);
+      expect(yield* call([], "collie_connections", { machine: "missing" })).toContain(
+        'No Machine "missing"',
+      );
+    }),
+  ));
+
+test("which models a Machine can run is asked of that Machine alone", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const every = yield* call(asked, "collie_models", {});
+      const [, pc, vm] = every.split(/^## /m);
+      expect(pc).toStartWith("mk-pc");
+      expect(pc).toContain("claude    opus (Opus 5.5)");
+      expect(pc).not.toContain("qwen3-coder");
+      expect(vm).toStartWith("vm-mk");
+      expect(vm).toContain("pi        ollama/qwen3-coder:30b");
+
+      asked.length = 0;
+      const one = yield* call(asked, "collie_models", { machine: "vm-mk", harness: "pi" });
+      expect(one).toContain("ollama/qwen3-coder:30b");
+      expect(one).not.toContain("opus");
+      expect(asked.filter(({ op }) => op === "models").map(({ machine }) => machine)).toEqual([
+        "vm-mk",
+      ]);
+      expect(yield* call([], "collie_models", { machine: "mk-pc", harness: "pi" })).toContain(
+        "pi is not installed",
+      );
     }),
   ));
 
