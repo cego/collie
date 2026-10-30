@@ -1,0 +1,9 @@
+{
+  "extends": "../../desktop/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "electrobun": ["./electrobun-bun.ts"],
+      "electrobun/bun": ["./electrobun-bun.ts"]
+    }
+  }
+}

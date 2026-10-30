@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "include": [".", "../src/markdown.d.ts"],
+  "exclude": ["record-open/view"]
+}
