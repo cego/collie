@@ -873,7 +873,12 @@ notification ("Waiting for CI and a teammate's approval on `<mr>`."), until it h
 hours (2 days for a person) and parks; a red pipeline, changes requested or a merge the
 forge refuses parks it as Needs you while it keeps reading. Both are cleared when it returns.
 With `untilBlocked: true` it returns that `Waiting` standing instead of waiting for the
-repair, as the release's re-reading of a go does. Take either inside an Activity, and suspend on `Held`
+repair, as the release's re-reading of a go does. With `whileConflicting: true` it waits
+only while the forge says the merge request conflicts with its target branch, parked as Needs
+you with the line that says its branch must take the target, and returns the standing at
+`proved` as soon as the forge no longer says so, the merge request is merged or closed, or a
+Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting. The
+release takes it before it proves a head and when a check left to CI finds the conflict. Take either inside an Activity, and suspend on `Held`
 there, so a resume waits again.
 
 `host.shareForApproval({ runId, cwd, channel })` posts the Run's recorded merge request through its host's Slack Connection.

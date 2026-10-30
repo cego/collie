@@ -1040,6 +1040,12 @@ export interface HostApi {
      * merge the forge refuses) rather than wait for it.
      */
     readonly untilBlocked?: boolean;
+    /**
+     * Wait only while the forge says the merge request conflicts with its target branch,
+     * parked with the line that says its branch must take the target, and return the standing
+     * at `proved` once it no longer does, or it is merged or closed, or a Hold or Stop ends it.
+     */
+    readonly whileConflicting?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
    * Replies to the comment with id `comment` on the merge request this Run recorded, posting

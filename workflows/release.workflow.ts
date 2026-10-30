@@ -602,9 +602,9 @@ export default defineWorkflow({
           production: null,
         };
       } else {
-        const moveTo = (at: number, head: string) =>
+        const moveTo = (name: string, head: string) =>
           Activity.make({
-            name: `fast-forward.${at}`,
+            name,
             success: Schema.String,
             execute: Effect.gen(function* () {
               const moved = yield* host.fastForward({ runId, cwd, head });
@@ -622,10 +622,15 @@ export default defineWorkflow({
         ) =>
           Activity.make({
             name,
-            success: Schema.Struct({ head: Schema.String, failed: Schema.Array(Schema.String) }),
+            success: Schema.Struct({
+              head: Schema.String,
+              failed: Schema.Array(Schema.String),
+              conflicting: Schema.Boolean,
+            }),
             execute: Effect.gen(function* () {
               const checks = yield* host.approved(runId);
               const failed: string[] = [];
+              let conflicting = false;
               for (const spec of Arr.filter(checks, (one) => one.ci === undefined)) {
                 const ran = yield* host
                   .verify({ runId, name: spec.name, cwd, ...pass })
@@ -641,14 +646,16 @@ export default defineWorkflow({
                   wait: true,
                   settle: true,
                 });
-                if (!("proved" in read) && read.before === undefined) failed.push(read.unproved);
+                if ("proved" in read || read.before !== undefined) continue;
+                if (read.conflicts === true) conflicting = true;
+                else failed.push(read.unproved);
               }
               const head = (yield* host.evidence(runId, cwd)).final.head_sha;
-              if (failed.length > 0 && parkWith !== null)
+              if (failed.length > 0 && parkWith !== null && !conflicting)
                 return yield* park(
                   `The checks failed at ${short(head)} ${parkWith}: ${Arr.join(failed, "; ")}`,
                 );
-              return { head, failed };
+              return { head, failed, conflicting };
             }),
           });
         const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
@@ -705,6 +712,41 @@ export default defineWorkflow({
                 : null;
             return { n, stalled };
           });
+        const gone = (standing: ReviewStanding) =>
+          standing._tag === "Merged"
+            ? fail(
+                `${mr} was merged outside this Run by ${standing.by || "someone"}, so nothing was tagged`,
+              )
+            : standing._tag === "Closed"
+              ? fail(`${mr} was closed, so nothing was released`)
+              : Effect.void;
+        let conflicts = 0;
+        /** Waits while the merge request conflicts with its target at `proved`, then moves to the head it has. */
+        const unconflicted = (proved: string) =>
+          Effect.gen(function* () {
+            const n = conflicts++;
+            const standing = yield* Activity.make({
+              name: `conflict-${n}`,
+              success: ReviewStandingSchema,
+              error: WorkflowError,
+              execute: Effect.gen(function* () {
+                const standing = yield* host.awaitReview({
+                  runId,
+                  cwd,
+                  proved,
+                  seen: [],
+                  whileConflicting: true,
+                });
+                if (standing._tag === "Held")
+                  return yield* Workflow.suspend(yield* WorkflowInstance);
+                return standing;
+              }),
+            });
+            yield* gone(standing);
+            if (standing._tag === "Moved")
+              yield* moveTo(`conflict-${n}.fast-forward`, standing.head);
+            return n;
+          });
         /** The head proved by the checks, after as many fix rounds as it takes, up to ROUNDS. */
         const proving = (
           name: string,
@@ -712,7 +754,12 @@ export default defineWorkflow({
         ) =>
           Effect.gen(function* () {
             let at = yield* checksAt(name, pass, null);
-            for (let rounds = 1; at.failed.length > 0; rounds++) {
+            for (let rounds = 1; at.failed.length > 0 || at.conflicting;) {
+              if (at.conflicting) {
+                const n = yield* unconflicted(at.head);
+                at = yield* checksAt(`conflict-${n}.checks`, null, null);
+                continue;
+              }
               const findings = Arr.map(at.failed, (title) => ({
                 severity: "blocker",
                 title,
@@ -724,6 +771,7 @@ export default defineWorkflow({
                 { pass: "fix", round: n },
                 stalled ?? (rounds >= ROUNDS ? `after ${ROUNDS} fix rounds` : null),
               );
+              rounds++;
             }
             return at.head;
           });
@@ -747,12 +795,8 @@ export default defineWorkflow({
             execute: reviewAt(proved),
           });
 
-        let proved = yield* proveHead(
-          Effect.andThen(
-            moveTo(0, start._tag === "Moved" ? start.head : ""),
-            proving("checks.0", null),
-          ),
-        );
+        // A conflicting merge request has no pipeline to prove, so nothing moves or runs while it conflicts.
+        let proved = yield* proveHead(Effect.andThen(unconflicted(""), proving("checks.0", null)));
         let waits = 0;
         let rounds = 0;
         let gos = 0;
@@ -841,15 +885,13 @@ export default defineWorkflow({
           waits += 1;
           if (!shared && askedAt !== proved) yield* offerShare(waits);
           const standing = yield* reviewWait(awaited(waits, proved));
-          if (standing._tag === "Merged")
-            return yield* fail(
-              `${mr} was merged outside this Run by ${standing.by || "someone"}, so nothing was tagged`,
-            );
-          if (standing._tag === "Closed")
-            return yield* fail(`${mr} was closed, so nothing was released`);
+          yield* gone(standing);
           if (standing._tag === "Moved") {
             proved = yield* proveHead(
-              Effect.andThen(moveTo(waits, standing.head), proving(`checks.${waits}`, null)),
+              Effect.andThen(
+                moveTo(`fast-forward.${waits}`, standing.head),
+                proving(`checks.${waits}`, null),
+              ),
             );
             continue;
           }
@@ -1116,6 +1158,20 @@ export default defineWorkflow({
             return yield* fail(
               `${mr} was merged outside this Run by ${outcome.by}, so nothing was tagged`,
             );
+          // Another merge may have landed since the go's check, leaving it in conflict.
+          const refused = yield* Activity.make({
+            name: `merge.${gos}.check`,
+            success: ReviewStandingSchema,
+            error: WorkflowError,
+            execute: host.review({ runId, cwd, proved: head, seen: [] }),
+          });
+          if (refused._tag !== "Ready") {
+            yield* host.record(
+              runId,
+              `go ${gos} no longer holds for ${short(head)}: ${notReady(refused)}`,
+            );
+            continue;
+          }
           return yield* fail(`the forge refused to merge ${mr}: ${outcome.reason}`);
         }
         landed = { ...merged, recovery: "" };
