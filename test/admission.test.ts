@@ -350,7 +350,7 @@ const stranded = (
         () => events(state, name),
         (log) => log.at(-1) === "wait",
       );
-    return { state, host, client, idOf, waiting };
+    return { state, gate, host, client, idOf, waiting };
   });
 
 test(
@@ -410,6 +410,33 @@ test(
         expect(replies.map((reply) => reply.applied)).toEqual([true, true]);
         yield* waiting("one");
         yield* waiting("two");
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
+  "a resume of a Run another resume held at its start returns once that Run has asked",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { gate, host, client, idOf, waiting } = yield* stranded(
+          "collie-admission-released-",
+          ["first", "held"],
+          [],
+        );
+        yield* client.resume({ runId: yield* idOf("first"), request: "resume-first" });
+        yield* waiting("first");
+        // Shut while the resume is asked, so it has to wait for the Run to go on to its question.
+        yield* fs.writeFileString(gate, "").pipe(Effect.orDie);
+        yield* Effect.forkScoped(fs.remove(gate).pipe(Effect.orDie, Effect.delay("500 millis")));
+        const runId = yield* idOf("held");
+        const resumed = yield* client.resume({ runId, request: "resume-held" }).pipe(Effect.orDie);
+        expect(resumed.applied).toBe(true);
+        const view = yield* client.run({ runId }).pipe(Effect.orDie);
+        expect(view?.waiting.map((asked) => asked.name)).toEqual(["decision"]);
         yield* host.stop;
       }).pipe(Effect.scoped),
     ),

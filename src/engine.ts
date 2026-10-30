@@ -7051,7 +7051,12 @@ const makeRegistry: (
         return yield* new HostRefused({ reason: `${runId} did not take up its suspended work` });
       }
     }
-    yield* engine.poll(workflow, found.execution).pipe(
+    yield* settle(found);
+    return status === "suspended";
+  }, waking.withPermits(1));
+
+  const settle = (found: { readonly generation: Generation; readonly execution: string }) =>
+    engine.poll(found.generation.registration.workflow, found.execution).pipe(
       Effect.map((result) => pollStatus(result, found.generation.entry).status),
       Effect.flatMap((status) =>
         status === "pending" ? Effect.fail(new Error("still running")) : Effect.void,
@@ -7059,8 +7064,6 @@ const makeRegistry: (
       Effect.retry({ times: WAKE_TRIES, schedule: Schedule.spaced(WAKE_INTERVAL) }),
       Effect.ignore,
     );
-    return status === "suspended";
-  }, waking.withPermits(1));
 
   /** Every question this run has been asked, with the answers its options allow. */
   const asked = Effect.fn("Engine.asked")(function* (runId: string) {
@@ -7571,6 +7574,7 @@ const makeRegistry: (
   const recover = (reach?: ReadonlySet<string>) =>
     Effect.gen(function* () {
       const recovered = new Set<string>();
+      const released: string[] = [];
       const reached = (run: string) => reach === undefined || reach.has(run);
       const rows = yield* store.runs;
       const used =
@@ -7595,9 +7599,12 @@ const makeRegistry: (
             if (!reached(run) || !(yield* releaseEntry(run))) continue;
             yield* clearParked(run);
             recovered.add(run);
+            released.push(run);
           }
         }),
       );
+      // Taken up, so a control does not wake them again, and settled as a wake would be.
+      for (const run of released) yield* routed(run).pipe(Effect.flatMap(settle), Effect.ignore);
       for (const row of yield* store.pending) {
         if (reached(row.run) && (yield* recoverAdmission(row))) recovered.add(row.run);
       }
