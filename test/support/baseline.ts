@@ -202,8 +202,8 @@ const once = (name: string, body: () => Promise<void>, timeout?: number) => {
 /** The installation is this checkout, so the shipped personas are the ones found. */
 const hostOf = (): AgentHost => ({
   dir,
-  env: rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT }),
-  herdr: new FakeHerdr(rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT })),
+  env: rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab }),
+  herdr: new FakeHerdr(rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab })),
   harness: "claude",
   model: "opus",
   permissions: "auto",
