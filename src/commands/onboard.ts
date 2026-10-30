@@ -1,4 +1,7 @@
-import { Effect, Option, Schema } from "effect";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import { Effect, Option, Schema, flow, Result } from "effect";
 import { Command, Flag } from "effect/cli";
 import manifest from "../../herdr-plugin.toml";
 import { attempt, say } from "../envelope";
@@ -19,8 +22,8 @@ const MARK = {
 
 /** `KEY=value` lines; anything else is ignored. */
 const secretLines = (text: string) =>
-  Object.fromEntries(
-    text.split("\n").flatMap((line) => {
+  Rec.fromEntries(
+    Arr.flatMap(Str.split(text, "\n"), (line) => {
       const entry = /^\s*([A-Z_][A-Z0-9_]*)=(.*?)\s*$/.exec(line);
       return entry ? [[entry[1]!, entry[2]!] as const] : [];
     }),
@@ -30,11 +33,14 @@ const secretLines = (text: string) =>
 export function eventText(event: OnboardEvent): string {
   if (event.event === "start") return `→ ${event.title}`;
   if (event.event === "human") return `  … ${event.detail}\n    open: ${event.url}`;
-  return [
-    `  ${MARK[event.status]} ${event.detail}`,
-    ...(event.url ? [`    open: ${event.url}`] : []),
-    ...(event.command ? [`    run: ${event.command}`] : []),
-  ].join("\n");
+  return Arr.join(
+    [
+      `  ${MARK[event.status]} ${event.detail}`,
+      ...(event.url ? [`    open: ${event.url}`] : []),
+      ...(event.command ? [`    run: ${event.command}`] : []),
+    ],
+    "\n",
+  );
 }
 
 export const onboard = Command.make(
@@ -75,9 +81,11 @@ export const onboard = Command.make(
               terminal: !global.json && !secretsStdin && process.stdin.isTTY,
             },
             (event) =>
-              say(global.json ? Schema.encodeSync(EventJson)(event) : eventText(event)).pipe(
-                Effect.orDie,
-              ),
+              say(
+                global.json
+                  ? flow(Schema.encodeResult(EventJson), Result.getOrThrow)(event)
+                  : eventText(event),
+              ).pipe(Effect.orDie),
           );
         }),
         global.json,

@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import type { TreeItem } from "@nuxt/ui";
 import { Semaphore } from "effect";
 import type { Ref } from "vue";
@@ -51,11 +55,15 @@ const wrap = ref(false);
 const opened = ref(new Map<string, boolean>());
 
 const sections = ref<HTMLElement | null>(null);
-const scrollToFile = async (path: string) => {
-  await nextTick();
-  sections.value
-    ?.querySelector(`[data-testid="diff-${CSS.escape(path)}"]`)
-    ?.scrollIntoView({ block: "start" });
+const scrollToFile = (path: string) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Effect.promise(() => Promise.resolve(nextTick()));
+      sections.value?.querySelector(`[data-testid="diff-${CSS.escape(path)}"]`)?.scrollIntoView({
+        block: "start",
+      });
+    }),
+  );
 };
 const scrollIntoDiff = (path: string) => {
   opened.value.set(path, true);
@@ -88,7 +96,7 @@ watch(
     if (target === null) return;
     const landing = landingOf(
       target,
-      props.diff.files.map(({ path }) => path),
+      Arr.map(props.diff.files, ({ path }) => path),
     );
     source.value = landing.at === "source" ? target : null;
     if (landing.at === "source") return;
@@ -101,14 +109,18 @@ watch(
 );
 
 const drawn = computed(() => diffTree(props.diff.files));
-const openEvery = async (open: boolean) => {
-  opened.value = new Map(choiceForEvery(drawn.value.files, open));
-  held.value = null;
-  await nextTick();
-  measure();
+const openEvery = (open: boolean) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      opened.value = new Map(choiceForEvery(drawn.value.files, open));
+      held.value = null;
+      yield* Effect.promise(() => Promise.resolve(nextTick()));
+      measure();
+    }),
+  );
 };
 const filter = ref("");
-const filtering = computed(() => filter.value.trim() !== "");
+const filtering = computed(() => Str.trim(filter.value) !== "");
 const listed = computed(() => filterTree(drawn.value.tree, filter.value));
 
 const { drafts } = useReviewDrafts(() => props);
@@ -125,10 +137,10 @@ const markViewed = (file: DiffFile, now: boolean) => {
   if (now) opened.value.set(file.path, false);
 };
 const facts = computed(() => {
-  const onDiff = drafts.value.flatMap(({ anchor }) =>
+  const onDiff = Arr.flatMap(drafts.value, ({ anchor }) =>
     anchor._tag === "Diff" ? [anchor.path] : [],
   );
-  return new Map(drawn.value.files.map((file) => [file.path, rowFacts(file, onDiff)]));
+  return new Map(Arr.map(drawn.value.files, (file) => [file.path, rowFacts(file, onDiff)]));
 });
 
 type Row = TreeItem & { path: string; hover: string };
@@ -210,7 +222,7 @@ const items = computed(() => {
             path: node.key,
             hover: rowHover(node),
             ui,
-            children: node.children.map((child) => toItem(child, depth + 1)),
+            children: Arr.map(node.children, (child) => toItem(child, depth + 1)),
           }
         : {
             label: node.label,
@@ -222,7 +234,7 @@ const items = computed(() => {
     byKey.set(node.key, item);
     return item;
   };
-  return { tree: listed.value.map((node) => toItem(node, 0)), byKey };
+  return { tree: Arr.map(listed.value, (node) => toItem(node, 0)), byKey };
 });
 const selected = computed(() =>
   active.value === null ? undefined : items.value.byKey.get(active.value),
@@ -234,7 +246,7 @@ const selectRow = (event: Event, row: Row) => {
 
 const closed = ref(new Set<string>());
 const listedFolders = computed(() =>
-  [...items.value.byKey.keys()].filter((key) => key.endsWith("/")),
+  Arr.filter([...items.value.byKey.keys()], (key) => pipe(key, Str.endsWith("/"))),
 );
 const folderFacts = computed(() => ({
   all: drawn.value.folders,
@@ -255,16 +267,22 @@ const measure = () => {
   const box = scroller.value;
   const column = sections.value;
   if (!props.shown || box === null || column === null) return;
-  if (held.value !== null && !drawn.value.files.some(({ path }) => path === held.value)) {
+  if (held.value !== null && !Arr.some(drawn.value.files, ({ path }) => path === held.value)) {
     held.value = null;
   }
   visibleHeight.value = box.clientHeight;
   const visibleTop = box.getBoundingClientRect().top;
-  const measured = [...column.children].flatMap((section) => {
+  const measured = Arr.flatMap([...column.children], (section) => {
     const path = section.getAttribute("data-path");
     if (path === null) return [];
     const { top, bottom } = section.getBoundingClientRect();
-    return [{ path, top: top - visibleTop, bottom: bottom - visibleTop }];
+    return [
+      {
+        path,
+        top: top - visibleTop,
+        bottom: bottom - visibleTop,
+      },
+    ];
   });
   active.value = activeFile({
     sections: measured,
@@ -310,18 +328,26 @@ watch(() => drawn.value.files, measure, { flush: "post" });
 
 watch(
   [active, () => props.shown, listed],
-  async ([path, shown], [was]) => {
-    if (path === null) return;
-    const hiding = foldersOn(path).filter((folder) => closed.value.has(folder));
-    if (path !== was && hiding.length > 0) {
-      closed.value = new Set([...closed.value].filter((folder) => !hiding.includes(folder)));
-    }
-    if (!shown) return;
-    await nextTick();
-    const box = treeBox.value;
-    const row = box?.querySelector("[data-selected]");
-    if (!box || !row) return;
-    box.scrollTop += reachBy(box.getBoundingClientRect(), row.getBoundingClientRect());
+  (input, input_) => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const [path, shown] = input;
+        const [was] = input_;
+        if (path === null) return;
+        const hiding = Arr.filter(foldersOn(path), (folder) => closed.value.has(folder));
+        if (path !== was && hiding.length > 0) {
+          closed.value = new Set(
+            Arr.filter([...closed.value], (folder) => !hiding.includes(folder)),
+          );
+        }
+        if (!shown) return;
+        yield* Effect.promise(() => Promise.resolve(nextTick()));
+        const box = treeBox.value;
+        const row = box?.querySelector("[data-selected]");
+        if (!box || !row) return;
+        box.scrollTop += reachBy(box.getBoundingClientRect(), row.getBoundingClientRect());
+      }),
+    );
   },
   { flush: "post" },
 );
@@ -342,7 +368,7 @@ watch(
       />
       <span class="text-muted">
         {{ diff.files.length }} {{ diff.files.length === 1 ? "file" : "files" }} against
-        <code>{{ diff.base.slice(0, 7) }}</code>
+        <code>{{ Str.slice(0, 7)(diff.base) }}</code>
       </span>
       <span v-if="diff.files.length > 0" class="text-muted" data-testid="diff-viewed-count">
         {{ viewedSoFar }}

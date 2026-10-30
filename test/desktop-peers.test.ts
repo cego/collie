@@ -1,3 +1,8 @@
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import {
@@ -37,17 +42,20 @@ const loggedCollie = (side: Side) =>
     const log = `${command}.log`;
     const real = [
       "env",
-      ...Object.entries(side.env).map(([key, value]) => `${key}=${value}`),
+      ...Arr.map(Rec.toEntries(side.env), ([key, value]) => `${key}=${value}`),
       ...(yield* collieCommand),
     ];
     yield* fs.writeFileString(
       command,
-      `#!/bin/sh\necho "control=\${COLLIE_SSH_CONTROL-} $*" >> '${log}'\nexec ${real.map((word) => `'${word}'`).join(" ")} "$@"\n`,
+      `#!/bin/sh\necho "control=\${COLLIE_SSH_CONTROL-} $*" >> '${log}'\nexec ${Arr.join(
+        Arr.map(real, (word) => `'${word}'`),
+        " ",
+      )} "$@"\n`,
       { mode: 0o755 },
     );
     const asked = fs.readFileString(log).pipe(
       Effect.orElseSucceed(() => ""),
-      Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+      Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
     );
     return { command: [command], asked };
   });
@@ -62,10 +70,12 @@ test(
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
             yield* exec(["git", "init", "-q", "-b", "development"], { cwd: first.world.install });
-            const newer = (yield* collieCommand)[0]!;
+            const current = yield* collieCommand;
+            const newer = current.length === 1 ? current[0]! : `${second.world.home}/newer-collie`;
+            if (current.length !== 1) yield* releaseBinary(newer, BUILD);
             const older = `${second.world.home}/older-collie`;
             yield* releaseBinary(older, "0.0.1");
-            const bin = second.env.PATH!.split(":")[0]!;
+            const bin = Str.split(second.env.PATH!, ":")[0]!;
             yield* fs.writeFileString(
               `${bin}/collie`,
               `#!/bin/sh\nif [ "$1 $2 $3" = "--json upgrade --to" ]; then cp '${newer}' '${older}.new' && chmod +x '${older}.new' && mv '${older}.new' '${older}'; exit $?; fi\nexec env COLLIE_HOST='["${older}"]' '${older}' "$@"\n`,
@@ -93,9 +103,9 @@ test(
               (yield* (yield* connect(first.world.state)).identity()).development,
             ).toBeDefined();
             const before = yield* ownerOf(second.world.state);
-            expect(
-              (yield* initial.board().pipe(Stream.take(1), Stream.runCollect))[0],
-            ).toMatchObject({ build: "0.0.1" });
+            expect((yield* initial.board.pipe(Stream.take(1), Stream.runCollect))[0]).toMatchObject(
+              { build: "0.0.1" },
+            );
             expect((yield* route.collie(["--json", "upgrade", "--to", BUILD])).code).toBe(0);
             yield* until(
               () => ownerOf(second.world.state),
@@ -106,9 +116,9 @@ test(
               (answer) => answer.envelope.ok,
             );
             const after = yield* route.open(() => Effect.void);
-            expect((yield* after.board().pipe(Stream.take(1), Stream.runCollect))[0]).toMatchObject(
-              { build: BUILD },
-            );
+            expect((yield* after.board.pipe(Stream.take(1), Stream.runCollect))[0]).toMatchObject({
+              build: BUILD,
+            });
           }),
         [],
       ),
@@ -135,7 +145,7 @@ test(
             );
             yield* removeFromHerdr(remove, "second", [
               "env",
-              ...Object.entries(first.env).map(([key, value]) => `${key}=${value}`),
+              ...Arr.map(Rec.toEntries(first.env), ([key, value]) => `${key}=${value}`),
               ...(yield* collieCommand),
             ]);
             expect(yield* peersOf(first.world.state)).toEqual([]);
@@ -161,7 +171,7 @@ test(
             const fs = yield* FileSystem.FileSystem;
             yield* first.lists([second]);
             yield* first.cli(["machine", "list"]);
-            const bin = second.env.PATH!.split(":")[0]!;
+            const bin = Str.split(second.env.PATH!, ":")[0]!;
             const ready = `${second.world.home}/upgraded`;
             yield* fs.rename(`${bin}/collie`, `${bin}/collie-real`);
             yield* fs.writeFileString(
@@ -171,7 +181,7 @@ test(
             );
             const local = yield* loggedCollie(first);
             const ssh = yield* remoteRoute(
-              `${first.env.PATH!.split(":")[0]}/ssh`,
+              `${Str.split(first.env.PATH!, ":")[0]}/ssh`,
               local.command,
               SECOND,
               "desktop-test",
@@ -195,21 +205,29 @@ test(
             expect((yield* route.open(() => Effect.void)).machine.route).toBe("link");
             expect(yield* peersOf(first.world.state)).toHaveLength(1);
             const calls = yield* fs.readFileString(first.sshLog);
-            expect(calls.split("\n").filter((line) => line.startsWith("master"))).toHaveLength(1);
             expect(
-              calls
-                .split("\n")
-                .filter((line) => line.startsWith("ride") && line.includes("invite")),
+              Arr.filter(Str.split(calls, "\n"), (line) => pipe_(line, Str.startsWith("master"))),
+            ).toHaveLength(1);
+            expect(
+              Arr.filter(
+                Str.split(calls, "\n"),
+                (line) =>
+                  pipe_(line, Str.startsWith("ride")) && pipe_(line, Str.includes("invite")),
+              ),
             ).toHaveLength(2);
-            expect(calls.split("\n").filter((line) => line.startsWith("login"))).toEqual([]);
+            expect(
+              Arr.filter(Str.split(calls, "\n"), (line) => pipe_(line, Str.startsWith("login"))),
+            ).toEqual([]);
             const locally = yield* local.asked;
-            expect(locally.filter((line) => line.endsWith("machine connect second"))).toHaveLength(
-              1,
+            expect(
+              Arr.filter(locally, (line) => pipe_(line, Str.endsWith("machine connect second"))),
+            ).toHaveLength(1);
+            expect(
+              Arr.filter(locally, (line) => pipe_(line, Str.endsWith("--machine second board"))),
+            ).toHaveLength(2);
+            expect(Arr.every(locally, (line) => pipe_(line, Str.startsWith("control= ")))).toBe(
+              true,
             );
-            expect(locally.filter((line) => line.endsWith("--machine second board"))).toHaveLength(
-              2,
-            );
-            expect(locally.every((line) => line.startsWith("control= "))).toBe(true);
           }),
         [],
       ),
@@ -229,26 +247,28 @@ test(
             const outputs = `${second.world.home}/outputs.json`;
             yield* fs.writeFileString(
               outputs,
-              Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))([{ verdict: "done" }]),
+              yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
+                { verdict: "done" },
+              ]).pipe(Effect.orDie),
             );
             const started = yield* second.cli(
               ["run", "start", "attended", "--input", "work=Desktop link"],
               { FAKE_HERDR_OUTPUTS: outputs },
             );
-            const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
-              started.envelope.data,
-            );
+            const { runId } = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ runId: Schema.String }),
+            )(started.envelope.data).pipe(Effect.orDie);
             const host = yield* connect(second.world.state);
             yield* until(
               () => host.run({ runId }),
-              (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+              (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
             );
             yield* first.lists([second]);
             yield* first.cli(["--machine", "second", "board"]);
             const [peer] = yield* peersOf(first.world.state);
             const local = yield* loggedCollie(first);
             const ssh = yield* remoteRoute(
-              `${first.env.PATH!.split(":")[0]}/ssh`,
+              `${Str.split(first.env.PATH!, ":")[0]}/ssh`,
               local.command,
               SECOND,
               "desktop-test",
@@ -267,7 +287,7 @@ test(
               first.env,
             );
             const doors = yield* route.open(() => Effect.void);
-            const board = yield* doors.board().pipe(Stream.take(1), Stream.runCollect);
+            const board = yield* doors.board.pipe(Stream.take(1), Stream.runCollect);
             expect(board[0]?._tag).toBe("Snapshot");
             const delivered = yield* doors.chat.act({
               request: "desktop-chat-delivery",
@@ -283,12 +303,14 @@ test(
             });
             expect(delivered[0]).toMatchObject({ state: "applied" });
             expect(
-              (yield* readAudit(runDir(second.world.state, runId))).find((line) =>
-                line.request.startsWith("desktop-chat-delivery"),
+              Option.getOrUndefined(
+                Arr.findFirst(yield* readAudit(runDir(second.world.state, runId)), (line) =>
+                  pipe_(line.request, Str.startsWith("desktop-chat-delivery")),
+                ),
               )?.actor,
             ).toMatchObject({ origin: "chat", from: { client: "desktop-test" } });
             expect((yield* route.collie(["--version"])).out).toContain("collie");
-            const bin = second.env.PATH!.split(":")[0]!;
+            const bin = Str.split(second.env.PATH!, ":")[0]!;
             yield* fs.rename(`${bin}/collie`, `${bin}/collie-real`);
             yield* fs.writeFileString(
               `${bin}/collie`,
@@ -361,7 +383,7 @@ test(
             const doors = yield* route.open(() => Effect.void);
             expect(opened).toBe(1);
             expect(doors.machine.route).toBe("ssh");
-            expect((yield* doors.board().pipe(Stream.take(1), Stream.runCollect))[0]?._tag).toBe(
+            expect((yield* doors.board.pipe(Stream.take(1), Stream.runCollect))[0]?._tag).toBe(
               "Snapshot",
             );
           }),

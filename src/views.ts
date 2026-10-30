@@ -4,7 +4,11 @@
 // View is first shown, because loading every run's outputs at startup is what would make
 // the tab slow the day it became useful.
 
-import { Effect, FileSystem, Option, Path, Stream } from "effect";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
+import { Effect, FileSystem, Option, Path, Stream, Struct } from "effect";
 import { attachmentsDir, listAttachments } from "./attachments";
 import { handoffsIn } from "./handoffs";
 import { readReplies } from "./replies";
@@ -70,7 +74,7 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
   cwd: string;
   runs: ReadonlyArray<RunFacts>;
 }) {
-  const runs = opts.runs.filter((r) => r.project === opts.cwd && settled(r)).slice(0, HISTORY);
+  const runs = Arr.filter(opts.runs, (r) => r.project === opts.cwd && settled(r)).slice(0, HISTORY);
 
   const rows: RunRow[] = [];
   for (const run of runs) {
@@ -85,7 +89,7 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
       dir: run.dir,
       glyph: glyphOf(run.state),
       title: runTitle(run),
-      detail: parts.join(" · "),
+      detail: Arr.join(parts, " · "),
       at: run.finished ? epochMs(run.finished) : 0,
       target: diffTargetOf(run.settled)?.value ?? null,
       // History never nests: each Run is a row of its own in the record of everything
@@ -133,22 +137,20 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
   const checked = yield* Effect.forEach(saved.entries, (one) =>
     checkModule({ layer: one.layer, path: one.path }),
   );
-  const problemsOf = new Map(checked.map((one) => [one.path, one.problems]));
-  const workflows: DefinitionRow[] = described
-    .map((one) => ({
-      name: one.id,
-      title: one.title,
-      layer: one.layer,
-      path: one.path,
-      inputs: one.inputs.map((input) => input.name),
-      problems: [...(problemsOf.get(one.path) ?? []), ...(one.broken === null ? [] : [one.broken])],
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const problemsOf = new Map(Arr.map(checked, (one) => [one.path, one.problems]));
+  const workflows: DefinitionRow[] = Arr.map(described, (one) => ({
+    name: one.id,
+    title: one.title,
+    layer: one.layer,
+    path: one.path,
+    inputs: Arr.map(one.inputs, (input) => input.name),
+    problems: [...(problemsOf.get(one.path) ?? []), ...(one.broken === null ? [] : [one.broken])],
+  })).sort((a, b) => pipe(a.name, Str.localeCompare(b.name)));
 
   // A module that will not load at all is the view's problem too, not a silent gap.
   return {
     workflows,
-    errors: saved.problems.map((one) => `${one.path}: ${one.message}`),
+    errors: Arr.map(saved.problems, (one) => `${one.path}: ${one.message}`),
   };
 });
 
@@ -173,7 +175,7 @@ const TAIL_CAP = 8 * 1024;
 
 const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
-  const info = yield* fs.stat(file).pipe(Effect.catch(() => Effect.succeed(null)));
+  const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
   if (info === null) return null;
   // Read the cap, rather than read the file and then slice it to the cap: an agent
   // writes these, so a review or an Output can be any size at all, and every selection
@@ -181,7 +183,7 @@ const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
   const text = yield* fs.stream(file, { bytesToRead: cap }).pipe(
     Stream.decodeText(),
     Stream.mkString,
-    Effect.catch(() => Effect.succeed(null)),
+    Effect.orElseSucceed(() => null),
   );
   if (text === null) return null;
   return { _tag: "Text" as const, text, truncated: Number(info.size) > cap };
@@ -194,18 +196,22 @@ const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
  */
 export const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
-  const info = yield* fs.stat(file).pipe(Effect.catch(() => Effect.succeed(null)));
+  const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
   if (info === null) return null;
   const from = Math.max(0, Number(info.size) - cap);
   const text = yield* fs.stream(file, { offset: from }).pipe(
     Stream.decodeText(),
     Stream.mkString,
-    Effect.catch(() => Effect.succeed("")),
+    Effect.orElseSucceed(() => ""),
   );
   // Starting mid-line reads as corruption, so the partial first line goes.
   return from === 0
     ? { _tag: "Text" as const, text, truncated: false }
-    : { _tag: "Text" as const, text: text.slice(text.indexOf("\n") + 1), truncated: true };
+    : {
+        _tag: "Text" as const,
+        text: pipe(text, Str.slice(Option.getOrElse(pipe(text, Str.indexOf("\n")), () => -1) + 1)),
+        truncated: true,
+      };
 });
 
 const CHECKBOX = /^\s*[-*]\s*\[( |x|X)\]/;
@@ -216,16 +222,21 @@ const CHECKBOX = /^\s*[-*]\s*\[( |x|X)\]/;
  * with none is named by its file rather than by a guess at its first sentence.
  */
 export function planTicket(file: string, text: string): PlanTicket {
-  const lines = text.split("\n");
-  const heading = (lines.find((line) => line.startsWith("#")) ?? "").replace(/^#+\s*/, "").trim();
+  const lines = Str.split(text, "\n");
+  const heading = Str.trim(
+    pipe(
+      Option.getOrUndefined(Arr.findFirst(lines, (line) => pipe(line, Str.startsWith("#")))) ?? "",
+      Str.replace(/^#+\s*/, ""),
+    ),
+  );
   // The mark inside each checkbox, in one pass: a line that is not one contributes none.
-  const marks = lines.flatMap((line) => CHECKBOX.exec(line)?.[1] ?? []);
+  const marks = Arr.flatMap(lines, (line) => Arr.ensure(CHECKBOX.exec(line)?.[1] ?? []));
   return {
     file,
     title: heading === "" ? file : heading,
     // A ticket nobody has marked up is open, not finished: `every` over nothing is true,
     // which would have called every prose-only ticket done.
-    done: marks.length > 0 && marks.every((mark) => mark !== " "),
+    done: marks.length > 0 && Arr.every(marks, (mark) => mark !== " "),
   };
 }
 
@@ -250,9 +261,10 @@ const buildPlan = Effect.fn("Views.buildPlan")(function* (
     ({ _tag: "None", reason: "this plan has no SPEC.md" } satisfies Panel);
 
   const issues = path.join(dir, "issues");
-  const files = (yield* fs.readDirectory(issues).pipe(Effect.catch(() => Effect.succeed([]))))
-    .filter((name) => name.endsWith(".md"))
-    .sort();
+  const files = Arr.filter(
+    yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])),
+    (name) => pipe(name, Str.endsWith(".md")),
+  ).sort();
   const tickets: PlanTicket[] = [];
   for (const file of files) {
     // Capped like everything else the panel reads: a ticket is prose an agent wrote.
@@ -299,11 +311,14 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
     const launches = yield* readLaunches(stateDir, one.id);
     if (launches.length === 0) continue;
     tickets ??= yield* ticketRepoLines(issues);
-    const known = one.repo ? tickets.filter((t) => t.text !== null) : tickets;
-    const mine = orderedTickets(
-      known.map((t) => ({ file: t.file, text: t.text ?? "" })),
-      one.repo ?? undefined,
-    ).map((t) => t.file);
+    const known = one.repo ? Arr.filter(tickets, (t) => t.text !== null) : tickets;
+    const mine = Arr.map(
+      orderedTickets(
+        Arr.map(known, (t) => ({ file: t.file, text: t.text ?? "" })),
+        one.repo ?? undefined,
+      ),
+      (t) => t.file,
+    );
     for (const launch of launches) {
       const output = yield* writtenAt(launch.output);
       if (output === undefined) continue;
@@ -329,7 +344,9 @@ const REPO_SCAN_CAP = 1024 * 1024;
  * an empty value can still run on to a later line.
  */
 function repoLineIn(text: string, truncated: boolean): string | null {
-  const whole = truncated ? text.slice(0, text.lastIndexOf("\n") + 1) : text;
+  const whole = truncated
+    ? pipe(text, Str.slice(0, Option.getOrElse(pipe(text, Str.lastIndexOf("\n")), () => -1) + 1))
+    : text;
   const found = REPO_LINE.exec(whole);
   if (!truncated) return found?.[0] ?? "";
   return found && found[1] !== "" ? found[0] : null;
@@ -339,9 +356,10 @@ function repoLineIn(text: string, truncated: boolean): string | null {
 const ticketRepoLines = Effect.fn("Views.ticketRepoLines")(function* (issues: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const files = (yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])))
-    .filter((name) => name.endsWith(".md"))
-    .sort();
+  const files = Arr.filter(
+    yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])),
+    (name) => pipe(name, Str.endsWith(".md")),
+  ).sort();
   const tickets: Array<{ file: string; text: string | null }> = [];
   for (const file of files) {
     const at = path.join(issues, file);
@@ -370,12 +388,13 @@ const planStamps = Effect.fn("Views.planStamps")(function* (run: RunFacts) {
   const dir = yield* planDirOf(run);
   if (dir === null) return "";
   const issues = path.join(dir, "issues");
-  const files = (yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])))
-    .filter((name) => name.endsWith(".md"))
-    .sort();
+  const files = Arr.filter(
+    yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])),
+    (name) => pipe(name, Str.endsWith(".md")),
+  ).sort();
   const stamps = [`SPEC.md=${yield* stampOf(path.join(dir, "SPEC.md"))}`];
   for (const file of files) stamps.push(`${file}=${yield* stampOf(path.join(issues, file))}`);
-  return stamps.join("\n");
+  return Arr.join(stamps, "\n");
 });
 
 /** A finished Run's plan, by Run and cap, with the stamps it was read at. */
@@ -396,7 +415,7 @@ const plannedFor = Effect.fn("Views.plannedFor")(function* (
   const finished = yield* finishedTickets(run, runs, stateDir);
   if (!plans || !settled(run)) return yield* buildPlan(run, cap, finished);
   const key = `${run.id}:${cap}`;
-  const stamps = `${yield* planStamps(run)}\nfinished=${[...finished].sort().join(",")}`;
+  const stamps = `${yield* planStamps(run)}\nfinished=${Arr.join([...finished].sort(), ",")}`;
   const kept = plans.get(key);
   if (kept?.stamps === stamps) return kept.plan;
   const plan = yield* buildPlan(run, cap, finished);
@@ -435,9 +454,9 @@ const evidenceIn = Effect.fn("Views.evidenceIn")(function* (dir: string) {
   const path = yield* Path.Path;
   const kept = [];
   for (const name of (yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))).sort(
-    (a, b) => a.localeCompare(b),
+    (a, b) => pipe(a, Str.localeCompare(b)),
   )) {
-    if (name.endsWith(".jsonl")) continue;
+    if (pipe(name, Str.endsWith(".jsonl"))) continue;
     const info = yield* fs.stat(path.join(dir, name)).pipe(Effect.option);
     if (info._tag === "Some" && info.value.type === "File")
       kept.push({ name, bytes: Number(info.value.size) });
@@ -467,7 +486,11 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
 }) {
   const path = yield* Path.Path;
   const run =
-    opts.runs?.find((one) => one.id === opts.runId) ?? (yield* findRun(opts.env, opts.runId));
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(opts.runs), (present) =>
+        Option.getOrUndefined(Arr.findFirst(present, (one) => one.id === opts.runId)),
+      ),
+    ) ?? (yield* findRun(opts.env, opts.runId));
   // Gone, or never there: the panel shows the row's own facts instead.
   if (!run) return null;
 
@@ -488,7 +511,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     dir: run.dir,
     title: runTitle(run),
     status: run.state,
-    inputs: Object.entries(run.settled.inputs).map(([name, value]) => ({
+    inputs: Arr.map(Rec.toEntries(run.settled.inputs), ([name, value]) => ({
       name,
       value,
       source: run.settled.sources?.[name] ?? "",
@@ -499,9 +522,9 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       Effect.map((held) =>
         held === null
           ? null
-          : { goal: held.goal, constraints: held.constraints.map((c) => c.text) },
+          : { goal: held.goal, constraints: Arr.map(held.constraints, (c) => c.text) },
       ),
-      Effect.catch(() => Effect.succeed(null)),
+      Effect.orElseSucceed(() => null),
     ),
     review,
     plan: yield* plannedFor(run, cap, opts.plans, opts.runs ?? [run], opts.env.stateDir),
@@ -531,27 +554,29 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     logStart: log?.firstLine,
     finishedAt: run.finished ? epochMs(run.finished) : 0,
     mr: opts.mr,
-    findings: (yield* findingsIn(run.dir)).map((finding) => ({
+    findings: Arr.map(yield* findingsIn(run.dir), (finding) => ({
       severity: finding.severity,
       title: finding.title,
       file: finding.file ?? null,
       line: finding.line ?? null,
       detail: finding.detail ?? null,
     })),
-    verifications: (yield* readVerifications(run.evidence).pipe(
-      Effect.orElseSucceed(() => []),
-    )).map(({ id, name, result, expect, exit, at, by, step, place }) => ({
-      id,
-      name,
-      result,
-      expect,
-      exit,
-      at,
-      by,
-      step,
-      place,
-    })),
-    steering: newest(yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []))).map(
+    verifications: Arr.map(
+      yield* readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => [])),
+      ({ id, name, result, expect, exit, at, by, step, place }) => ({
+        id,
+        name,
+        result,
+        expect,
+        exit,
+        at,
+        by,
+        step,
+        place,
+      }),
+    ),
+    steering: Arr.map(
+      newest(yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []))),
       (card) => ({
         id: card.id,
         kind: card.kind,
@@ -565,7 +590,8 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     evidence: yield* evidenceIn(run.evidence),
     handoffFiles: yield* handoffsIn(run.dir),
     replies: yield* readReplies(run.dir).pipe(Effect.orElseSucceed(() => [])),
-    attachments: (yield* listAttachments(attachmentsDir(run.dir))).map(
+    attachments: Arr.map(
+      yield* listAttachments(attachmentsDir(run.dir)),
       ({ name, size, mediaType }) => ({ name, size, mediaType }),
     ),
     agents: yield* runAgents(opts.env.stateDir, run.id),
@@ -590,7 +616,7 @@ export interface SettingsView {
 /** Every leaf of the config file as a dotted key, so a nested value still has a name. */
 function flatten(raw: YamlMap, prefix = ""): Array<{ key: string; value: string }> {
   const out: Array<{ key: string; value: string }> = [];
-  for (const [key, value] of Object.entries(raw)) {
+  for (const [key, value] of Rec.toEntries(raw)) {
     const dotted = prefix === "" ? key : `${prefix}.${key}`;
     if (isYamlMap(value)) out.push(...flatten(value, dotted));
     else out.push({ key: dotted, value: scalar(value) });
@@ -601,7 +627,7 @@ function flatten(raw: YamlMap, prefix = ""): Array<{ key: string; value: string 
 /** One config value as a line of text. A nested map has no one line, so it has none. */
 function scalar(value: YamlValue | undefined): string {
   if (value === null || value === undefined) return "";
-  if (Array.isArray(value)) return value.map(scalar).join(", ");
+  if (Arr.isArray<typeof value>(value)) return Arr.join(Arr.map(value, scalar), ", ");
   if (isYamlMap(value)) return "";
   // Serialised rather than stringified: a value the checker still reads as map-like
   // would otherwise reach Settings as "[object Object]".
@@ -613,13 +639,13 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
   const raw = yield* readConfig(env.userDir);
   const state = yield* claudeTrust(env.home, env.stateDir)
     .state(env.cwd)
-    .pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
+    .pipe(Effect.orElseSucceed(() => "unknown" as const));
 
   return {
     configPath: path.join(env.userDir, "config.json"),
     // As written where it is set, so a hand-edited value that loadDefaults would
     // coerce is shown here, where it is put right.
-    defaults: SETTINGS.map(({ key, kind, fallback }) => {
+    defaults: Arr.map(SETTINGS, ({ key, kind, fallback }) => {
       const written = configValue(raw, key);
       return {
         key,
@@ -629,7 +655,7 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
     }),
     // Everything else the file holds: remembered answers, per-harness model lists, the
     // notification kinds someone turned off. Shown as written rather than interpreted.
-    remembered: flatten(raw).filter((entry) => settingOf(entry.key) === undefined),
+    remembered: Arr.filter(flatten(raw), (entry) => settingOf(entry.key) === undefined),
     trust: { cwd: env.cwd, state },
     flock: (yield* readSettingsSet(env.userDir)).flock?.by ?? null,
   } satisfies SettingsView;
@@ -639,16 +665,20 @@ export const buildMachineOwn = Effect.fn("Views.buildMachineOwn")(function* (env
   const raw = yield* readConfig(env.userDir);
   const root = configValue(raw, "projects.root");
   const chat = configValue(raw, "chat_harness");
-  const found = yield* Effect.filter(Object.keys(HARNESSES), (harness) =>
+  const found = yield* Effect.filter(Struct.keys(HARNESSES), (harness) =>
     Effect.map(onPath(env.raw["PATH"] ?? "", harness), (dir) => dir !== null),
   );
   const own: Mutable<MachineOwn> = {
     harnesses: found,
-    remembered: flatten(raw).filter(
+    remembered: Arr.filter(
+      flatten(raw),
       ({ key }) =>
         key !== "projects.root" &&
         key !== "chat_harness" &&
-        !SETTINGS.some((setting) => key === setting.key || key.startsWith(`${setting.key}.`)),
+        !Arr.some(
+          SETTINGS,
+          (setting) => key === setting.key || pipe(key, Str.startsWith(`${setting.key}.`)),
+        ),
     ),
   };
   if (isString(root)) own.projectsRoot = root;

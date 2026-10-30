@@ -2,6 +2,10 @@
 // drives it — a click on a card, Esc to close it — with the real bridge behind the real
 // board, because the promise is that chat can read what is on screen and nothing less.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { testRender } from "@opentui/solid";
@@ -104,10 +108,12 @@ const mount = Effect.fn("selection.mount")(function* (state: AppState) {
     selectedWhen: (wanted: (record: Effect.Success<ReturnType<typeof readSelection>>) => boolean) =>
       until(() => readSelection(file), wanted),
     lineOf(text: string) {
-      const y = t
-        .captureCharFrame()
-        .split("\n")
-        .findIndex((l) => l.includes(text));
+      const y = Option.getOrElse(
+        Arr.findFirstIndex(Str.split(t.captureCharFrame(), "\n"), (l) =>
+          pipe(l, Str.includes(text)),
+        ),
+        () => -1,
+      );
       if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
       return y;
     },

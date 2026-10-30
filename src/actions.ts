@@ -1,6 +1,9 @@
 // Everything a model may propose, as one closed schema. No effects and nothing Bun-only:
 // Desktop's main process decodes chat's actions with it too.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, Predicate, Result, Schema, Struct } from "effect";
 import { VerifySpecSchema } from "./verify-spec";
 import { SavedStart } from "./schedule-model";
@@ -177,7 +180,7 @@ export const ActionSchema = Schema.Union([
       verify: Schema.optionalKey(fields.verify),
     })),
   }),
-  ...(["schedule_pause", "schedule_resume", "schedule_remove"] as const).map((kind) =>
+  ...Arr.map(["schedule_pause", "schedule_resume", "schedule_remove"] as const, (kind) =>
     Schema.Struct({
       kind: Schema.Literal(kind),
       machine: Schema.optionalKey(Schema.String),
@@ -197,7 +200,7 @@ export type Action = Schema.Schema.Type<typeof ActionSchema>;
 export type ActionKind = Action["kind"];
 
 const KINDS: ReadonlySet<unknown> = new Set(
-  ActionSchema.members.map(({ fields }) => fields.kind.literal),
+  Arr.map(ActionSchema.members, ({ fields }) => fields.kind.literal),
 );
 
 /** Why the first of `actions` that is not Collie's is refused, by its place and kind; null where all are. */
@@ -207,7 +210,7 @@ export const refusedAction = (actions: ReadonlyArray<unknown>): string | null =>
     if (Result.isSuccess(decoded)) continue;
     const kind = Predicate.hasProperty(action, "kind") ? action.kind : null;
     return KINDS.has(kind)
-      ? `actions[${at}] (kind "${String(kind)}"): ${decoded.failure.message.replace(/\s+/g, " ")}`
+      ? `actions[${at}] (kind "${String(kind)}"): ${pipe_(decoded.failure.message, Str.replace(/\s+/g, " "))}`
       : `actions[${at}] has kind ${JSON.stringify(kind)}, which is not a kind Collie takes`;
   }
   return null;

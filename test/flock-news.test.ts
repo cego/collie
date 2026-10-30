@@ -1,6 +1,10 @@
 // The Flock chat hears every Herd's News on every Machine as one batch: what matters most
 // first, then by time, a screen's worth, and what it left out said per Machine.
 
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { NEWS_BATCH } from "../src/board-model";
 import { flockBatch, flockNewsText, newsKey, worthSpeaking } from "../desktop/src/bun/flock-tools";
@@ -11,7 +15,7 @@ const item = (
   at: string,
 ) => ({
   key,
-  run: key.split(":")[0]!,
+  run: Str.split(key, ":")[0]!,
   text: `${key} happened.`,
   at,
   significance,
@@ -38,7 +42,7 @@ test("every Herd on every Machine is one batch, what matters most first and then
       items: [item("r4:ended", "consequential", "2026-10-05T08:00:00Z")],
     },
   ]);
-  expect(batch.items.map(({ machine, item }) => `${machine}:${item.key}`)).toEqual([
+  expect(Arr.map(batch.items, ({ machine, item }) => `${machine}:${item.key}`)).toEqual([
     "vm-mk:r3:asking",
     "vm-mk:r4:ended",
     "mk-pc:r1:ended",
@@ -49,7 +53,7 @@ test("every Herd on every Machine is one batch, what matters most first and then
 
 test("a batch is a screen's worth, and says per Machine what it left out", () => {
   const many = Array.from({ length: NEWS_BATCH + 7 }, (_, n) =>
-    item(`r${n}:ended`, "routine", `2026-10-05T10:${String(n).padStart(2, "0")}:00Z`),
+    item(`r${n}:ended`, "routine", `2026-10-05T10:${pipe(String(n), Str.padStart(2, "0"))}:00Z`),
   );
   const batch = flockBatch([
     {
@@ -79,9 +83,24 @@ test("a turn nobody asked for is about the decisions and consequential items not
     },
   ]);
   const about = worthSpeaking(batch, new Set());
-  expect(about?.items.map(({ item }) => item.key)).toEqual(["d", "c"]);
+  expect(
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(about), (present) =>
+        Arr.map(present.items, ({ item }) => item.key),
+      ),
+    ),
+  ).toEqual(["d", "c"]);
   expect(about?.omitted.size).toBe(0);
-  expect(worthSpeaking(batch, new Set(about?.items.map(newsKey)))).toBeNull();
+  expect(
+    worthSpeaking(
+      batch,
+      new Set(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(about), (present_) => Arr.map(present_.items, newsKey)),
+        ),
+      ),
+    ),
+  ).toBeNull();
   expect(
     worthSpeaking(
       flockBatch([

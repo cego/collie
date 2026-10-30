@@ -1,3 +1,7 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { RELEASE_CLEARS, RELEASE_ON } from "../workflows/release.workflow";
 import { contentOf } from "../src/sdk";
@@ -10,10 +14,10 @@ import renovateOnGithub from "../workflows/renovate.github.md" with { type: "tex
 // differs, so each says it its forge's way.
 
 const content = { gitlab: contentOf(onGitlab), github: contentOf(onGithub) };
-const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+const flat = (text: string) => Str.trim(pipe(text, Str.replace(/\s+/g, " ")));
 
 test("both forges' release content has the steps the module asks for, and every step fills from what it gives", () => {
-  for (const one of Object.values(content))
+  for (const one of Rec.values(content))
     expect([...one.sections.keys()]).toEqual([
       "assess",
       "answer",
@@ -28,7 +32,7 @@ test("both forges' release content has the steps the module asks for, and every 
       "share",
     ]);
   // A template naming anything ReleaseInput does not give is refused as it is made.
-  expect(Object.keys(RELEASE_ON.github)).toEqual(Object.keys(RELEASE_ON.gitlab));
+  expect(Rec.keys(RELEASE_ON.github)).toEqual(Rec.keys(RELEASE_ON.gitlab));
 });
 
 test("release decides package or application by renovate's own rule, word for word", () => {
@@ -47,14 +51,14 @@ test("release decides package or application by renovate's own rule, word for wo
 
 test("each Clearance names the repository's URL", () => {
   const url = "https://gitlab.example.com/group/app";
-  for (const [step, clears] of Object.entries(RELEASE_CLEARS)) {
+  for (const [step, clears] of Rec.toEntries(RELEASE_CLEARS)) {
     const lines = clears(url, [{ name: "deploy-production", url: `${url}/-/jobs/4` }]);
-    expect([step, lines.some((line) => line.includes(url))]).toEqual([step, true]);
+    expect([step, Arr.some(lines, (line) => pipe(line, Str.includes(url)))]).toEqual([step, true]);
   }
 });
 
 test("the tag step tags by the repository's conventions, watches its pipeline and plays no production job", () => {
-  for (const one of Object.values(content)) {
+  for (const one of Rec.values(content)) {
     const tag = flat(one.sections.get("tag") ?? "");
     expect(tag).toContain("the repository's own tag and notes conventions");
     expect(tag).toContain("`## <version> - <YYYY-MM-DD>`");
@@ -66,7 +70,7 @@ test("the tag step tags by the repository's conventions, watches its pipeline an
 });
 
 test("a comment round fixes test first and pushes plainly, and leaves every reply to Collie", () => {
-  for (const one of Object.values(content)) {
+  for (const one of Rec.values(content)) {
     const answer = flat(one.sections.get("answer") ?? "");
     expect(answer).toContain("{{comments}}");
     expect(answer).toContain("never a force push");
@@ -77,7 +81,7 @@ test("a comment round fixes test first and pushes plainly, and leaves every repl
 });
 
 test("an application's tag step stages the tag, rolls a failed stage back and leaves production waiting", () => {
-  for (const one of Object.values(content)) {
+  for (const one of Rec.values(content)) {
     const stage = flat(one.sections.get("stage") ?? "");
     for (const said of [
       "{{recovery}}",
@@ -97,7 +101,7 @@ test("an application's tag step stages the tag, rolls a failed stage back and le
 });
 
 test("staging a merge request deploys its own pipeline's head, checks stage and rolls it back, unmerged and never to production", () => {
-  for (const one of Object.values(content)) {
+  for (const one of Rec.values(content)) {
     const staging = flat(one.sections.get("stage-merge-request") ?? "");
     for (const said of [
       "{{head}}",
@@ -123,7 +127,7 @@ test("staging a merge request deploys its own pipeline's head, checks stage and 
 });
 
 test("sharing content describes the host's one approval post and the manual fallback", () => {
-  for (const [forge, one] of Object.entries(content)) {
+  for (const [forge, one] of Rec.toEntries(content)) {
     const share = flat(one.sections.get("share") ?? "");
     for (const said of [
       "{{inputs.mr}}",
@@ -138,42 +142,41 @@ test("sharing content describes the host's one approval post and the manual fall
   }
 });
 
-const gated = (clears: ReadonlyArray<string>) => Array.from(clears.join("; ")).length;
-const times = (said: string, url: string) => said.split(url).length - 1;
+const gated = (clears: ReadonlyArray<string>) => Arr.fromIterable(Arr.join(clears, "; ")).length;
+const times = (said: string, url: string) => Str.split(said, url).length - 1;
 
 test("every Clearance fits a 120-character repository URL, and names it exactly once", () => {
-  const url = `https://gitlab.example.com/spilnu/frontend/platform/web-applications/${"a".repeat(51)}`;
+  const url = `https://gitlab.example.com/spilnu/frontend/platform/web-applications/${Str.repeat(51)("a")}`;
   expect(url.length).toBe(120);
-  const jobs = [
-    "deploy-production",
-    "deploy-production:spilnu",
-    "deploy-production:happytiger",
-  ].map((name, n) => ({ name, url: `${url}/-/jobs/${987654321 + n}` }));
-  const measured = Object.entries(RELEASE_CLEARS).map(([step, clears]) => {
+  const jobs = Arr.map(
+    ["deploy-production", "deploy-production:spilnu", "deploy-production:happytiger"],
+    (name, n) => ({ name, url: `${url}/-/jobs/${987654321 + n}` }),
+  );
+  const measured = Arr.map(Rec.toEntries(RELEASE_CLEARS), ([step, clears]) => {
     const lines = clears(url, jobs);
-    return [step, gated(lines) <= 400, times(lines.join("; "), url)];
+    return [step, gated(lines) <= 400, times(Arr.join(lines, "; "), url)];
   });
-  expect(measured).toEqual(Object.keys(RELEASE_CLEARS).map((step) => [step, true, 1]));
+  expect(measured).toEqual(Arr.map(Rec.keys(RELEASE_CLEARS), (step) => [step, true, 1]));
 });
 
 test("production names its jobs with their URLs, then by name, then by count, whichever first fits", () => {
   const url = "https://gitlab.example.com/group/app";
   const job = (name: string, n: number) => ({ name, url: `${url}/-/jobs/${1000000 + n}` });
 
-  const one = RELEASE_CLEARS.production(url, [job("deploy-production", 4)]).join("; ");
+  const one = Arr.join(RELEASE_CLEARS.production(url, [job("deploy-production", 4)]), "; ");
   expect(one).toContain("`deploy-production` at /-/jobs/1000004");
 
-  const several = Array.from({ length: 12 }, (_, n) => job(`production:app${n}`, 9876540000 + n));
-  const byName = RELEASE_CLEARS.production(url, several).join("; ");
+  const several = Arr.makeBy(12, (n) => job(`production:app${n}`, 9876540000 + n));
+  const byName = Arr.join(RELEASE_CLEARS.production(url, several), "; ");
   for (const one of several) expect(byName).toContain(`\`${one.name}\``);
   expect(byName).not.toContain("/-/jobs/");
 
-  const many = Array.from({ length: 30 }, (_, n) => job(`deploy-production:application-${n}`, n));
+  const many = Arr.makeBy(30, (n) => job(`deploy-production:application-${n}`, n));
   const counted = RELEASE_CLEARS.production(url, many);
-  expect(counted.join("; ")).toContain("the 30 production jobs its task names");
+  expect(Arr.join(counted, "; ")).toContain("the 30 production jobs its task names");
   expect(gated(counted)).toBeLessThanOrEqual(400);
 
-  for (const said of [one, byName, counted.join("; ")]) {
+  for (const said of [one, byName, Arr.join(counted, "; ")]) {
     expect(said).toContain(` on ${url}, and no other job`);
     expect(times(said, url)).toBe(1);
   }

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import type {
   Flow,
   FlowAction,
@@ -53,11 +57,13 @@ const shown = (
 ): FlowActionView => ({ label, icon, effect, color, caption });
 
 export const retryCaption = (lane: FlowLane, node: FlowRun): string => {
-  const kept = lane.nodes
-    .filter((one) => one.state === "done" && one.id !== node.id)
-    .map((one) => one.title);
+  const kept = Arr.map(
+    Arr.filter(lane.nodes, (one) => one.state === "done" && one.id !== node.id),
+    (one) => one.title,
+  );
   if (kept.length === 0) return `Runs ${node.title} again.`;
-  const names = kept.length > 3 ? `${kept[0]} and ${kept.length - 1} more` : kept.join(" and ");
+  const names =
+    kept.length > 3 ? `${kept[0]} and ${kept.length - 1} more` : Arr.join(kept, " and ");
   return `Keeps ${names} and runs ${node.title} again.`;
 };
 
@@ -71,16 +77,23 @@ export const desktopFlowAction = (
   if (!live || (node.primary !== kind && !node.actions?.includes(kind))) return null;
   const runId = lane.run;
   const stepId =
-    lane.nodes.find((one) => one.id === node.id || one.runs.some((run) => run.id === node.id))
-      ?.id ?? node.id;
+    Option.getOrUndefined(
+      Arr.findFirst(
+        lane.nodes,
+        (one) => one.id === node.id || Arr.some(one.runs, (run) => run.id === node.id),
+      ),
+    )?.id ?? node.id;
   const role = node.role ?? "agent";
   switch (kind) {
     case "pause": {
       const target =
-        lane.nodes.find(
-          (one) =>
-            one.id === (node.pauseTarget ?? stepId) ||
-            one.runs.some((run) => run.id === node.pauseTarget),
+        Option.getOrUndefined(
+          Arr.findFirst(
+            lane.nodes,
+            (one) =>
+              one.id === (node.pauseTarget ?? stepId) ||
+              Arr.some(one.runs, (run) => run.id === node.pauseTarget),
+          ),
         ) ?? node;
       return shown(
         target.pause == null ? `Pause before ${target.title}` : "Don't pause",
@@ -150,8 +163,11 @@ export const desktopFlowAction = (
             agent: node.agent,
           });
     case "answer": {
-      const asked = node.questions.find(
-        (one) => one.id !== undefined && (one.open ?? one.answered === null),
+      const asked = Option.getOrUndefined(
+        Arr.findFirst(
+          node.questions,
+          (one) => one.id !== undefined && (one.open ?? one.answered === null),
+        ),
       );
       if (asked?.id === undefined) return null;
       const question: Question = {
@@ -210,7 +226,7 @@ export const desktopFlowAction = (
       return shown(node.title, "i-lucide-play", {
         kind: "offer",
         run: runId,
-        offer: node.id.replace(/^offer:/, ""),
+        offer: pipe(node.id, Str.replace(/^offer:/, "")),
       });
   }
 };
@@ -259,8 +275,14 @@ export const desktopLaneAction = (
 
 export const nextMove = (flow: Flow) => {
   if (flow.current === null) return null;
-  const lane = flow.lanes.find((one) => one.run === flow.current!.run);
-  const node = lane?.nodes.find((one) => one.id === flow.current!.node);
+  const lane = Option.getOrUndefined(
+    Arr.findFirst(flow.lanes, (one) => one.run === flow.current!.run),
+  );
+  const node = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(lane), (present) =>
+      Option.getOrUndefined(Arr.findFirst(present.nodes, (one) => one.id === flow.current!.node)),
+    ),
+  );
   return node?.primary == null || lane === undefined
     ? null
     : { run: lane.run, lane, node, action: node.primary, notice: flow.notice ?? null };

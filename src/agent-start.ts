@@ -2,7 +2,11 @@
 // names its checkout and every Input, and a gap is refused with what would fill it
 // (ADR-0033). The Launch flow is the human's front door and does not come through here.
 
-import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import { Effect, FileSystem, Option, Path, Schema, flow, Result } from "effect";
 import { gitlabHostOf } from "./config";
 import type { Found } from "./discovery";
 import type { Given } from "./engine";
@@ -24,14 +28,15 @@ import { repositoryName } from "./worktree";
 export function hostOptions(given: Given) {
   return {
     input: {
-      json: Object.fromEntries(Object.entries(given.json).filter(([name]) => !isOption(name))),
-      text: Object.fromEntries(Object.entries(given.text).filter(([name]) => !isOption(name))),
+      json: Rec.fromEntries(Arr.filter(Rec.toEntries(given.json), ([name]) => !isOption(name))),
+      text: Rec.fromEntries(Arr.filter(Rec.toEntries(given.text), ([name]) => !isOption(name))),
     },
-    options: Object.fromEntries([
-      ...Object.entries(given.text).filter(([name]) => isOption(name)),
-      ...Object.entries(given.json)
-        .filter(([name]) => isOption(name))
-        .map(([name, value]) => [name, asOptionText(value)]),
+    options: Rec.fromEntries([
+      ...Arr.filter(Rec.toEntries(given.text), ([name]) => isOption(name)),
+      ...Arr.map(
+        Arr.filter(Rec.toEntries(given.json), ([name]) => isOption(name)),
+        ([name, value]) => [name, asOptionText(value)] as const,
+      ),
     ]),
   };
 }
@@ -41,7 +46,7 @@ const isOption = (name: string) => name in RESERVED_INPUTS;
 /** A host option is text; one that arrived as typed JSON is written back down as it came. */
 export const asOptionText = (value: Schema.Json) => (isText(value) ? value : asJsonText(value));
 const isText = Schema.is(Schema.String);
-const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
 /** How many plan directories a refusal offers for a work source. */
 const PLANS_OFFERED = 5;
@@ -117,23 +122,32 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
     missing.push({ name: field.name, meaning: meaningOf(field), facts });
   }
   if (missing.length === 0) return null;
-  const names = missing.map((one) => `"${one.name}"`).join(", ");
+  const names = Arr.join(
+    Arr.map(missing, (one) => `"${one.name}"`),
+    ", ",
+  );
   const checkoutFix = checkoutNamed ? "" : ` ${checkout.fix}`;
-  const listed = missing.map(
+  const listed = Arr.map(
+    missing,
     (one) =>
-      `- ${one.name}: ${one.meaning || "no description"}${one.facts.length === 0 ? "" : `; could be ${one.facts.join(", ")}`}`,
+      `- ${one.name}: ${one.meaning || "no description"}${one.facts.length === 0 ? "" : `; could be ${Arr.join(one.facts, ", ")}`}`,
   );
   return err(
     "needs_input",
-    [
-      `${entry.id} needs ${names}. Nothing is inferred for an agent's start: give every Input, an optional one you leave empty as "".${checkoutFix}`,
-      ...listed,
-    ].join("\n"),
+    Arr.join(
+      [
+        `${entry.id} needs ${names}. Nothing is inferred for an agent's start: give every Input, an optional one you leave empty as "".${checkoutFix}`,
+        ...listed,
+      ],
+      "\n",
+    ),
     {
       workflow: entry.id,
       path: entry.path,
-      inputs: missing.map((one) => {
-        const field = entry.inputs.find((input) => input.name === one.name);
+      inputs: Arr.map(missing, (one) => {
+        const field = Option.getOrUndefined(
+          Arr.findFirst(entry.inputs, (input) => input.name === one.name),
+        );
         return {
           ...one,
           question: `${entry.title} — ${one.name}?`,
@@ -173,8 +187,8 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
   ) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const namedPath = options.workspace.startsWith("~/")
-      ? path.join(env.home, options.workspace.slice(2))
+    const namedPath = pipe(options.workspace, Str.startsWith("~/"))
+      ? path.join(env.home, pipe(options.workspace, Str.slice(2)))
       : options.workspace;
     const at = path.resolve(env.cwd, namedPath);
     const found = yield* fs.stat(at).pipe(Effect.option);
@@ -205,11 +219,11 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
     );
     if (fetched.code !== 0)
       return {
-        error: `Could not fetch branch "${launch.branch}" from ${from} in ${cwd}: ${(fetched.stderr ?? "").trim()}`,
+        error: `Could not fetch branch "${launch.branch}" from ${from} in ${cwd}: ${Str.trim(fetched.stderr ?? "")}`,
       };
     const head = yield* shell("git", ["rev-parse", "--verify", `${ref}^{commit}`], cwd);
     if (head.code !== 0) return { error: `Could not read the fetched branch in ${cwd}.` };
-    branchBase = head.stdout.trim();
+    branchBase = Str.trim(head.stdout);
   }
   const root =
     remote && options?.workspace === PROJECTS_ROOT_OPTION

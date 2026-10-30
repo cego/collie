@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Effect, Option, Schema } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -53,10 +56,15 @@ export const SlackChoices = Schema.Struct({
 export type SlackChoices = typeof SlackChoices.Type;
 
 export const slackText = (text: string) =>
-  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  pipe_(
+    text,
+    Str.replaceAll("&", "&amp;"),
+    Str.replaceAll("<", "&lt;"),
+    Str.replaceAll(">", "&gt;"),
+  );
 
 export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
-  const safe = (message: string) => redact(message.split(token).join("<redacted>"));
+  const safe = (message: string) => redact(Arr.join(Str.split(message, token), "<redacted>"));
   const call = <S extends Schema.Decoder<unknown>>(
     method: string,
     schema: S,
@@ -86,7 +94,7 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
         return yield* Effect.fail(`Slack ${method} returned an unreadable answer`);
       if (!status.value.ok)
         return yield* Effect.fail(safe(`Slack ${method}: ${status.value.error ?? "refused"}`));
-      const decoded = Schema.decodeUnknownOption(schema)(json);
+      const decoded = Schema.decodeOption(schema)(json);
       return Option.isSome(decoded)
         ? decoded.value
         : yield* Effect.fail(`Slack ${method} returned an unreadable answer`);
@@ -121,20 +129,29 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
           const parameters = { limit: "200", cursor };
           const page = yield* call("users.list", People, parameters);
           people.push(
-            ...page.members
-              .filter(
+            ...Arr.map(
+              Arr.filter(
+                page.members,
                 (person) =>
                   !person.deleted &&
                   !person.is_bot &&
                   !person.is_app_user &&
                   person.id !== "USLACKBOT",
-              )
-              .map((person) => ({
+              ),
+              (person) => ({
                 id: person.id,
                 name: person.profile.display_name || person.profile.real_name || person.name,
-              })),
+              }),
+            ),
           );
-          cursor = page.response_metadata?.next_cursor?.trim() ?? "";
+          cursor =
+            Option.getOrUndefined(
+              Option.flatMap(Option.fromNullishOr(page.response_metadata), (present) =>
+                Option.map(Option.fromNullishOr(present.next_cursor), (present_) =>
+                  Str.trim(present_),
+                ),
+              ),
+            ) ?? "";
           if (cursor && seen.has(cursor))
             return yield* Effect.fail("Slack users.list repeated its cursor; try again");
           seen.add(cursor);
@@ -155,11 +172,19 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
           };
           const page = yield* call("conversations.list", Channels, parameters);
           channels.push(
-            ...page.channels
-              .filter((channel) => channel.is_member)
-              .map(({ id, name, is_private }) => ({ id, name, is_private })),
+            ...Arr.map(
+              Arr.filter(page.channels, (channel) => channel.is_member === true),
+              ({ id, name, is_private }) => ({ id, name, is_private }),
+            ),
           );
-          cursor = page.response_metadata?.next_cursor?.trim() ?? "";
+          cursor =
+            Option.getOrUndefined(
+              Option.flatMap(Option.fromNullishOr(page.response_metadata), (present__) =>
+                Option.map(Option.fromNullishOr(present__.next_cursor), (present___) =>
+                  Str.trim(present___),
+                ),
+              ),
+            ) ?? "";
           if (cursor && seen.has(cursor))
             return yield* Effect.fail("Slack conversations.list repeated its cursor; try again");
           seen.add(cursor);

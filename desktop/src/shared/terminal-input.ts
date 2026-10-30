@@ -1,6 +1,9 @@
 // What the human does in a pane's terminal in Desktop, as herdr's controller is told it,
 // and the little the view reads off a line it draws: where its links are.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import type { PaneAt } from "../../../src/board-model";
 import type { TerminalCommand } from "./flock";
 
@@ -92,7 +95,7 @@ export interface Key {
 
 /** Ctrl or Cmd with Shift and F: Focus on the terminal, or Restore, from anywhere in the Flow. */
 export const isFocusKey = (key: Key) =>
-  key.key.toLowerCase() === "f" && key.shiftKey && (key.ctrlKey || key.metaKey);
+  Str.toLowerCase(key.key) === "f" && key.shiftKey && (key.ctrlKey || key.metaKey);
 
 /**
  * What a key pressed in the terminal does: reaches the pane; copies the selection, as
@@ -101,7 +104,7 @@ export const isFocusKey = (key: Key) =>
  */
 export const keyAction = (key: Key, hasSelection: boolean): "pane" | "copy" | "paste" | "focus" => {
   if (isFocusKey(key)) return "focus";
-  const letter = key.key.toLowerCase();
+  const letter = Str.toLowerCase(key.key);
   if (letter === "c" && (key.metaKey || (key.ctrlKey && (key.shiftKey || hasSelection))))
     return "copy";
   if (letter === "v" && (key.metaKey || (key.ctrlKey && key.shiftKey))) return "paste";
@@ -110,16 +113,22 @@ export const keyAction = (key: Key, hasSelection: boolean): "pane" | "copy" | "p
 
 /** The web links in a drawn line, by the one-based columns they span. */
 export const linksIn = (line: string) =>
-  [...line.matchAll(/https?:\/\/[^\s"'<>]+/g)].map((found) => ({
+  Arr.map([...pipe(line, Str.matchAll(/https?:\/\/[^\s"'<>]+/g))], (found) => ({
     url: found[0],
-    start: found.index + 1,
-    end: found.index + found[0].length,
+    start: (found.index ?? 0) + 1,
+    end: (found.index ?? 0) + found[0].length,
   }));
 
 /** Where a pane is, as its card says it: Machine › workspace › tab. */
 export const paneWhere = (machine: string, at: PaneAt) =>
-  [machine, at.workspace, at.tab].filter((part) => part !== null).join(" › ");
+  Arr.join(
+    Arr.filter([machine, at.workspace, at.tab], (part) => part !== null),
+    " › ",
+  );
 
 /** A pane on its card's one line, whose footer names the Machine: tab · workspace. */
 export const paneLine = (at: PaneAt) =>
-  [at.tab, at.workspace].filter((part) => part !== null).join(" · ");
+  Arr.join(
+    Arr.filter([at.tab, at.workspace], (part) => part !== null),
+    " · ",
+  );

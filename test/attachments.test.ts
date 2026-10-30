@@ -3,9 +3,13 @@
 // them, and a Run started from it gets copies. Driven through the CLI and host an
 // installation runs, with herdr faked.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, Schema, type Scope } from "effect";
+import type { PlatformServices } from "../src/platform";
+import { Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
 import { runDir, type RunView } from "../src/engine";
 import { connect } from "../src/host";
@@ -13,13 +17,13 @@ import { isSettled } from "../src/lifecycle";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Payload = Schema.Struct({
   runId: Schema.optional(Schema.String),
   run: Schema.optional(Schema.String),
 });
 const payloadOf = (envelope: { readonly data?: unknown }) =>
-  Schema.decodeUnknownSync(Payload)(envelope.data);
+  flow(Schema.decodeUnknownResult(Payload), Result.getOrThrow)(envelope.data);
 const CallLine = Schema.fromJsonString(
   Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) }),
 );
@@ -30,7 +34,7 @@ const attending = <A, E>(
   body: (
     world: World,
     cli: (args: ReadonlyArray<string>) => ReturnType<typeof collie>,
-  ) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  ) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
   proves(
     prefix,
@@ -64,7 +68,8 @@ const viewOf = (world: World, runId: string, wanted: (view: RunView | null) => b
     return yield* until(() => client.run({ runId }).pipe(Effect.orDie), wanted);
   });
 
-const asking = (view: RunView | null) => (view?.waiting ?? []).some((one) => one.answer === null);
+const asking = (view: RunView | null) =>
+  Arr.some(view?.waiting ?? [], (one) => one.answer === null);
 
 const answer = (world: World, runId: string) =>
   Effect.gen(function* () {
@@ -101,8 +106,11 @@ test(
         expect(prompt).toContain(`- shot.png (image/png, 12 bytes): ${dir}/shot.png`);
         expect(prompt).toContain(`: ${dir}/notes.txt`);
 
-        const line = (yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie)).find(
-          (one) => one.operation === "start",
+        const line = Option.getOrUndefined(
+          Arr.findFirst(
+            yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie),
+            (one) => one.operation === "start",
+          ),
         );
         expect(line?.asked).toEqual({
           attachments: [
@@ -231,17 +239,31 @@ test(
         expect(steered.envelope.error).toBeUndefined();
         const copy = `${runDir(world.state, runId)}/attachments/late.png`;
         expect(yield* read(copy)).toBe("arrived later");
-        const told = (yield* read(Bun.env.FAKE_HERDR_LOG!))
-          .split("\n")
-          .filter((line) => line !== "")
-          .map((line) => Schema.decodeUnknownSync(CallLine)(line))
-          .filter((call) => call.cmd === "agent prompt")
-          .map((call) => call.argv.join(" "))
-          .findLast((text) => text.includes("Their message is in"));
+        const told = Option.getOrUndefined(
+          Arr.findLast(
+            Arr.map(
+              Arr.filter(
+                Arr.map(
+                  Arr.filter(
+                    Str.split(yield* read(Bun.env.FAKE_HERDR_LOG!), "\n"),
+                    (line) => line !== "",
+                  ),
+                  (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
+                ),
+                (call) => call.cmd === "agent prompt",
+              ),
+              (call) => Arr.join(call.argv, " "),
+            ),
+            (text) => pipe(text, Str.includes("Their message is in")),
+          ),
+        );
         const kept = /Their message is in (\S+)\./.exec(told ?? "")?.[1] ?? "";
         expect(yield* read(kept)).toBe(`look at this\nAttached: ${copy}`);
-        const delivered = (yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie)).find(
-          (one) => one.operation === "deliver",
+        const delivered = Option.getOrUndefined(
+          Arr.findFirst(
+            yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie),
+            (one) => one.operation === "deliver",
+          ),
         );
         expect(delivered?.asked).toMatchObject({
           attachments: [{ name: "late.png", from: `${world.project}/late.png` }],
@@ -270,29 +292,36 @@ test(
         yield* viewOf(world, runId, asking);
         const dir = `${runDir(world.state, runId)}/attachments`;
         const told = Effect.map(read(Bun.env.FAKE_HERDR_LOG!), (log) =>
-          log
-            .split("\n")
-            .filter((line) => line !== "")
-            .map((line) => Schema.decodeUnknownSync(CallLine)(line))
-            .filter((call) => call.cmd === "agent prompt")
-            .flatMap((call) => call.argv),
+          pipe(
+            Arr.map(
+              Arr.filter(Str.split(log, "\n"), (line) => line !== ""),
+              (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
+            ),
+            Arr.filter((call) => call.cmd === "agent prompt"),
+            Arr.flatMap((call) => call.argv),
+          ),
         );
         const fileFor = (words: string) =>
-          `${dir}/message-${new Bun.CryptoHasher("sha256").update(words).digest("hex").slice(0, 8)}.md`;
+          `${dir}/message-${pipe(new Bun.CryptoHasher("sha256").update(words).digest("hex"), Str.slice(0, 8))}.md`;
         const steer = (words: string, ...more: ReadonlyArray<string>) =>
           cli(["run", "steer", runId, words, "--operation", "build", ...more]);
 
-        const long = `Review:\n${"é line of the review\n".repeat(460)}`;
+        const long = `Review:\n${pipe("é line of the review\n", Str.repeat(460))}`;
         expect(Buffer.byteLength(long)).toBeGreaterThan(9 * 1024);
         const first = yield* steer(long, "--request-id", "req-long");
         expect(first.envelope.error).toBeUndefined();
         expect(yield* read(fileFor(long))).toBe(long);
-        const said = (yield* told).find((text) => text.includes(fileFor(long)));
+        const said = Option.getOrUndefined(
+          Arr.findFirst(yield* told, (text) => pipe(text, Str.includes(fileFor(long)))),
+        );
         expect(said).toBeDefined();
         expect(said).toContain(`Their message is in ${fileFor(long)}. Read it whole`);
         expect(said).not.toContain("line of the review");
-        const delivered = (yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie)).find(
-          (one) => one.request === "req-long",
+        const delivered = Option.getOrUndefined(
+          Arr.findFirst(
+            yield* readAudit(runDir(world.state, runId)).pipe(Effect.orDie),
+            (one) => one.request === "req-long",
+          ),
         );
         expect(delivered?.asked).toMatchObject({ text: long });
 
@@ -301,20 +330,22 @@ test(
         const kept = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
           fs.readDirectory(dir),
         ).pipe(Effect.orDie);
-        expect(kept.filter((name) => name.startsWith("message-"))).toHaveLength(1);
+        expect(Arr.filter(kept, (name) => pipe(name, Str.startsWith("message-")))).toHaveLength(1);
 
-        const atCap = "x".repeat(8 * 1024);
+        const atCap = Str.repeat(8 * 1024)("x");
         expect((yield* steer(atCap)).envelope.error).toBeUndefined();
-        expect((yield* told).some((text) => text.includes(atCap))).toBe(false);
+        expect(Arr.some(yield* told, (text) => pipe(text, Str.includes(atCap)))).toBe(false);
         expect(yield* read(fileFor(atCap))).toBe(atCap);
 
-        const withFile = `Also:\n${"another line of it\n".repeat(460)}`;
+        const withFile = `Also:\n${pipe("another line of it\n", Str.repeat(460))}`;
         expect((yield* steer(withFile, "--attach", "late.png")).envelope.error).toBeUndefined();
         const withLines = `${withFile}\nAttached: ${dir}/late.png`;
         expect(yield* read(fileFor(withLines))).toBe(withLines);
-        expect((yield* told).some((text) => text.includes(fileFor(withLines)))).toBe(true);
+        expect(Arr.some(yield* told, (text) => pipe(text, Str.includes(fileFor(withLines))))).toBe(
+          true,
+        );
 
-        const viaAct = `From chat:\n${"a line chat wrote\n".repeat(500)}`;
+        const viaAct = `From chat:\n${pipe("a line chat wrote\n", Str.repeat(500))}`;
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const acted = yield* client
           .act({

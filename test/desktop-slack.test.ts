@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import {
   SLACK_MANIFEST_URL,
@@ -34,9 +36,12 @@ test("channel rows disable until connected, retain old names, and store channel 
   runEffect(
     Effect.gen(function* () {
       expect(
-        settingSections(NO_FLOCK_SETTINGS, {}, 0)
-          .flatMap((section) => section.rows)
-          .find((row) => row.key === "slack.notification_channel")!.defaultSaid,
+        Option.getOrUndefined(
+          Arr.findFirst(
+            Arr.flatMap(settingSections(NO_FLOCK_SETTINGS, {}, 0), (section) => section.rows),
+            (row) => row.key === "slack.notification_channel",
+          ),
+        )!.defaultSaid,
       ).toBe("Unset: toasts only");
       const off = slackDestinationRow("release.approval_channel", "#old-releases", null);
       expect(off.disabled).toBe(true);

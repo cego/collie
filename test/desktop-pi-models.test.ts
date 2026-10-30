@@ -38,15 +38,15 @@ test("Pi's reader isolates setup and pairs delayed, out-of-order answers with ea
         { id: "local/only-off", label: "Off only", efforts: [] },
         { id: "local/plain", label: "Plain", efforts: [] },
       ]);
-      const started = Schema.decodeUnknownSync(
+      const started = yield* Schema.decodeEffect(
         Schema.fromJsonString(
           Schema.Struct({
             args: Schema.Array(Schema.String),
             agent: Schema.String,
-            pid: Schema.Number,
+            pid: Schema.Finite,
           }),
         ),
-      )(yield* fs.readFileString(`${dir}/reader-start.json`));
+      )(yield* fs.readFileString(`${dir}/reader-start.json`)).pipe(Effect.orDie);
       expect(started.args).toEqual([
         "--mode",
         "rpc",

@@ -1,7 +1,7 @@
 // The four harnesses as fakes: each answers what it answered on vm-mk on 29 Oct 2026.
 
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema, flow, Result } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { FrontDoorRpcs } from "../../src/board-model";
@@ -21,8 +21,10 @@ const recorded = (name: string) =>
   Effect.promise(() => Bun.file(`${import.meta.dir}/../fixtures/catalogue/${name}`).text());
 
 export const fakeAdapters: HarnessAdapters = {
-  claude: Effect.succeed(Schema.decodeUnknownSync(ClaudeModels)(claudeModels)),
-  codex: Effect.succeed(Schema.decodeUnknownSync(CodexModelList)(codexModelList)),
+  claude: Effect.succeed(flow(Schema.decodeResult(ClaudeModels), Result.getOrThrow)(claudeModels)),
+  codex: Effect.succeed(
+    flow(Schema.decodeResult(CodexModelList), Result.getOrThrow)(codexModelList),
+  ),
   pi: recorded("pi-list-models.txt"),
   opencode: recorded("opencode-models.txt"),
 };

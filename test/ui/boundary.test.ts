@@ -1,10 +1,13 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "../support/effect";
 
 const uiFiles = Effect.fn("boundary.uiFiles")(function* (predicate: (name: string) => boolean) {
   const fs = yield* FileSystem.FileSystem;
-  const names = (yield* fs.readDirectory("src/ui")).filter(predicate);
+  const names = Arr.filter(yield* fs.readDirectory("src/ui"), predicate);
   return yield* Effect.forEach(names, (name) =>
     Effect.map(fs.readFileString(`src/ui/${name}`), (source) => ({ name, source })),
   );
@@ -12,23 +15,33 @@ const uiFiles = Effect.fn("boundary.uiFiles")(function* (predicate: (name: strin
 
 /** The code, without the prose: a comment naming `Effect` is not a use of it. */
 function code(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("//"))
-    .join("\n");
+  return Arr.join(
+    Arr.filter(
+      Str.split(pipe(source, Str.replace(/\/\*[\s\S]*?\*\//g, "")), "\n"),
+      (line) => !pipe(Str.trimStart(line), Str.startsWith("//")),
+    ),
+    "\n",
+  );
 }
 
-/**
- * Every value import of `effect` in a file, by whole statement rather than by line: the
- * formatter wraps a long import over several lines, and a per-line grep called such a
- * file compliant while the component had acquired a direct Effect dependency.
- */
-function effectValueImports(source: string): string[] {
-  return [...code(source).matchAll(/^import\b[\s\S]*?from\s*"[^"]*";/gm)]
-    .map((match) => match[0])
-    .filter((statement) => /from\s*"effect/.test(statement))
-    .filter((statement) => !/^import\s+type\b/.test(statement));
+const scanner = new Bun.Transpiler({ loader: "tsx" });
+const PURE_EFFECT_HELPERS = new Set([
+  "effect/Array",
+  "effect/String",
+  "effect/Function",
+  "effect/Option",
+]);
+
+/** Pure helpers belong in views; runtime modules stay at the bridge. Type imports erase. */
+function effectRuntimeImports(source: string): string[] {
+  return Arr.filter(
+    Arr.map(scanner.scanImports(source), ({ path }) => path),
+    (path) =>
+      (path === "effect" ||
+        pipe(path, Str.startsWith("effect/")) ||
+        pipe(path, Str.startsWith("@effect/"))) &&
+      !PURE_EFFECT_HELPERS.has(path),
+  );
 }
 
 test("a wrapped value import counts as one", () => {
@@ -36,27 +49,49 @@ test("a wrapped value import counts as one", () => {
   Effect,
   Queue,
 } from "effect";\n`;
-  expect(effectValueImports(wrapped)).toHaveLength(1);
-  expect(effectValueImports(`import { Effect } from "effect";\n`)).toHaveLength(1);
+  expect(effectRuntimeImports(wrapped)).toEqual(["effect"]);
+  expect(effectRuntimeImports(`import { Effect } from "effect";\n`)).toEqual(["effect"]);
   // Types are erased, so they are not the concern.
-  expect(effectValueImports(`import type {\n  Effect,\n} from "effect";\n`)).toEqual([]);
-  expect(effectValueImports(`import { Effect } from "./effect-helpers";\n`)).toEqual([]);
+  expect(effectRuntimeImports(`import type {\n  Effect,\n} from "effect";\n`)).toEqual([]);
+  expect(effectRuntimeImports(`import { type Effect } from "effect";\n`)).toEqual([]);
+  expect(effectRuntimeImports(`import { Effect } from "./effect-helpers";\n`)).toEqual([]);
+});
+
+test("views may import pure Effect helpers directly", () => {
+  for (const path of PURE_EFFECT_HELPERS)
+    expect(effectRuntimeImports(`import * as Helpers from "${path}";`)).toEqual([]);
+  // A barrel import also loads the runtime, even when the named export is a pure helper.
+  expect(effectRuntimeImports('import { Array } from "effect";')).toEqual(["effect"]);
+});
+
+test("runtime imports stay forbidden under aliases, deep paths and dynamic loading", () => {
+  for (const path of [
+    "effect",
+    "effect/Effect",
+    "effect/Queue",
+    "effect/ManagedRuntime",
+    "effect/internal/effect",
+    "@effect/platform-bun/BunRuntime",
+  ]) {
+    expect(effectRuntimeImports(`import * as Runtime from "${path}";`)).toEqual([path]);
+    expect(effectRuntimeImports(`import "${path}";`)).toEqual([path]);
+    expect(effectRuntimeImports(`const Runtime = import("${path}");`)).toEqual([path]);
+  }
 });
 
 /**
  * The rule that keeps the app testable: a component reaching for the Effect runtime is
  * the first step back to a screen nobody can test, and it is what puts a second runtime
- * inside the render tree. Type-only imports are erased, so they are not the concern —
- * a value import is.
+ * inside the render tree. Pure helpers manipulate the data the view already has.
  */
-test("no component imports effect", () =>
+test("components import only pure Effect helpers", () =>
   runEffect(
     Effect.gen(function* () {
-      const components = yield* uiFiles((n) => n.endsWith(".tsx") && n !== "bridge.tsx");
-      expect(components.map((c) => c.name)).toContain("App.tsx");
+      const components = yield* uiFiles((n) => pipe(n, Str.endsWith(".tsx")) && n !== "bridge.tsx");
+      expect(Arr.map(components, (c) => c.name)).toContain("App.tsx");
 
       for (const { name, source } of components) {
-        expect([name, effectValueImports(source)]).toEqual([name, []]);
+        expect([name, effectRuntimeImports(source)]).toEqual([name, []]);
       }
     }),
   ));
@@ -72,7 +107,7 @@ test("the state layer holds no Effect", () =>
     Effect.gen(function* () {
       const [state] = yield* uiFiles((n) => n === "state.ts");
       const source = code(state!.source);
-      expect(source).not.toContain('from "effect"');
+      expect(effectRuntimeImports(state!.source)).toEqual([]);
       expect(source).not.toContain("Effect.");
     }),
   ));

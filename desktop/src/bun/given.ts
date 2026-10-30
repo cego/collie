@@ -1,7 +1,10 @@
 // Which credentials Desktop gave each Machine, kept as fingerprints of what it gave and
 // never the secrets, so a Machine that lacks the current one is given it when it connects.
 
-import { Effect, FileSystem, Path, Schema, Semaphore } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import { Effect, FileSystem, Path, Schema, Semaphore, flow, Result } from "effect";
 import {
   CREDENTIALS,
   type Credential,
@@ -25,7 +28,7 @@ const GivenFile = Schema.fromJsonString(
 );
 const FILE = "given.json";
 
-export const fingerprint = (text: string) => sha256Hex(text).slice(0, 16);
+export const fingerprint = (text: string) => pipe_(sha256Hex(text), Str.slice(0, 16));
 
 /** Gives one Machine a credential's text, and answers why it failed, or null. */
 export type Give = (route: ShellRoute, text: string) => Effect.Effect<string | null>;
@@ -49,7 +52,12 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
   const lock = yield* Semaphore.make(1);
   const save = fs.makeDirectory(options.dir, { recursive: true }).pipe(
     Effect.andThen(
-      Effect.suspend(() => fs.writeFileString(`${file}.new`, Schema.encodeSync(GivenFile)(record))),
+      Effect.suspend(() =>
+        fs.writeFileString(
+          `${file}.new`,
+          flow(Schema.encodeResult(GivenFile), Result.getOrThrow)(record),
+        ),
+      ),
     ),
     Effect.andThen(fs.rename(`${file}.new`, file)),
     Effect.catch((error) => Effect.logWarning(`Could not save ${file}`, error)),
@@ -69,7 +77,7 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
   /** What Desktop holds that is its to give `machine`. */
   const heldFor = (machine: KnownMachine) =>
     Effect.zipWith(held, options.skipped(machine.profile), (texts, skipped) =>
-      CREDENTIALS.flatMap((credential) => {
+      Arr.flatMap(CREDENTIALS, (credential) => {
         const text = texts[credential];
         return text === undefined || skipped.includes(credential)
           ? []
@@ -138,7 +146,10 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
     giveLacking: (route: ShellRoute) =>
       Effect.flatMap(heldFor(route.machine), (texts) =>
         Effect.forEach(
-          texts.filter(([credential, text]) => !stateOf(route.machine, credential, text).given),
+          Arr.filter(
+            texts,
+            ([credential, text]) => !stateOf(route.machine, credential, text).given,
+          ),
           ([credential, text]) =>
             giveOne(route, credential, text).pipe(Effect.map((failed) => ({ credential, failed }))),
         ),
@@ -150,9 +161,10 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
       steps: ReadonlyArray<OnboardStep>,
     ) =>
       Effect.forEach(
-        CREDENTIALS.flatMap((credential) => {
+        Arr.flatMap(CREDENTIALS, (credential) => {
           const text = texts[credential];
-          const set = steps.some(
+          const set = Arr.some(
+            steps,
             ({ step, status }) =>
               step === credential && (status === "done" || status === "in_place"),
           );
@@ -166,7 +178,7 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
       Effect.map(
         Effect.forEach(machines, (machine) =>
           Effect.map(heldFor(machine), (texts) =>
-            texts.map(([credential, text]) => stateOf(machine, credential, text)),
+            Arr.map(texts, ([credential, text]) => stateOf(machine, credential, text)),
           ),
         ),
         (each) => each.flat(),

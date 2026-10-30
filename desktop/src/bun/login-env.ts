@@ -1,3 +1,5 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { homedir } from "node:os";
 import { Config, type Duration, Effect, Option, Path } from "effect";
 import { withoutLauncher } from "../../../src/env";
@@ -17,13 +19,19 @@ const LIMIT = "5 seconds";
 
 /** The variables between the markers, `env -0` output; whatever the rc files printed around them is ignored. */
 export const parseLoginEnv = (output: string) => {
-  const start = output.indexOf(BEGIN);
-  const end = output.indexOf(END, start + BEGIN.length);
+  const start = Option.getOrElse(pipe_(output, Str.indexOf(BEGIN)), () => -1);
   const found = new Map<string, string>();
-  if (start < 0 || end < 0) return found;
-  for (const entry of output.slice(start + BEGIN.length, end).split("\0")) {
-    const eq = entry.indexOf("=");
-    if (eq > 0) found.set(entry.slice(0, eq).replace(/^\n/, ""), entry.slice(eq + 1));
+  if (start < 0) return found;
+  const remaining = pipe_(output, Str.slice(start + BEGIN.length));
+  const end = Option.getOrElse(pipe_(remaining, Str.indexOf(END)), () => -1);
+  if (end < 0) return found;
+  for (const entry of Str.split(pipe_(remaining, Str.slice(0, end)), "\0")) {
+    const eq = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
+    if (eq > 0)
+      found.set(
+        pipe_(entry, Str.slice(0, eq), Str.replace(/^\n/, "")),
+        pipe_(entry, Str.slice(eq + 1)),
+      );
   }
   return found;
 };

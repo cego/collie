@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { useAtomSet } from "@effect/atom-vue";
 import { Cause, Exit } from "effect";
 import { connectionCards, type MachineConnections } from "../../../src/shared/connections";
@@ -27,7 +29,11 @@ export const useConnections = () => {
     });
   };
   watch(
-    () => rows.value.map((row) => `${row.profile}:${row.state}`).join(","),
+    () =>
+      Arr.join(
+        Arr.map(rows.value, (row) => `${row.profile}:${row.state}`),
+        ",",
+      ),
     () => void refresh(),
     { immediate: true },
   );
@@ -35,8 +41,10 @@ export const useConnections = () => {
     if (!reading.value && at - readAt >= 60_000) void refresh();
   });
   const machines = computed(() =>
-    rows.value.map((row) => {
-      const held = readings.value.find((read) => read.profile === row.profile);
+    Arr.map(rows.value, (row) => {
+      const held = Option.getOrUndefined(
+        Arr.findFirst(readings.value, (read) => read.profile === row.profile),
+      );
       return {
         profile: row.profile,
         name: row.name,
@@ -51,9 +59,10 @@ export const useConnections = () => {
   );
   const workflows = computed(() => [
     ...new Map(
-      machines.value
-        .flatMap((machine) => machine.workflows)
-        .map((workflow) => [workflow.id, workflow]),
+      Arr.map(
+        Arr.flatMap(machines.value, (machine) => machine.workflows),
+        (workflow) => [workflow.id, workflow],
+      ),
     ).values(),
   ]);
   return {

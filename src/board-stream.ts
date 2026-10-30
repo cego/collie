@@ -2,6 +2,7 @@
 // then told to each client as every Task once and each Task that changed, numbered so a
 // client can tell it missed nothing.
 
+import * as Arr from "effect/Array";
 import { Cause, Clock, Effect, Option, type Scope, Stream, SubscriptionRef } from "effect";
 import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
 
@@ -97,7 +98,7 @@ export const boardMessages = <R>(options: {
       let seq = 0;
       let told: Map<string, string> | null = null;
       const changesTo = (views: ReadonlyArray<TaskView>): BoardMessage[] => {
-        const now = new Map(views.map((view) => [view.id, JSON.stringify(view)]));
+        const now = new Map(Arr.map(views, (view) => [view.id, JSON.stringify(view)]));
         const out: BoardMessage[] = [];
         for (const view of views) {
           if (told?.get(view.id) !== now.get(view.id))

@@ -1,7 +1,10 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { createServer } from "node:net";
 import { fakeHerdr } from "./support/fake-herdr-core";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { writeConfigValue } from "../src/config";
 import { connect, frontDoor, socketOf, ownerOf } from "../src/host";
 import { runDir } from "../src/engine";
@@ -16,7 +19,7 @@ import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
 import { twoMachines } from "./support/peers";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const result = {
   summary: "The Machines page uses the last peer build.",
   findings: [{ what: "The cached build is stale", evidence: "desktop/src/shared/in-sync.ts" }],
@@ -67,7 +70,7 @@ const story = (mode: Case, harness = "claude") =>
               { cwd: side.world.project },
             );
             yield* fs.writeFileString(
-              `${side.env.PATH!.split(":")[0]}/claude`,
+              `${Str.split(side.env.PATH!, ":")[0]}/claude`,
               "#!/bin/sh\necho 2.1.300\n",
               { mode: 0o755 },
             );
@@ -103,19 +106,25 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             let pending = "";
             connection.on("data", (chunk) => {
               pending += chunk.toString();
-              for (let newline; (newline = pending.indexOf("\n")) !== -1;) {
-                const line = pending.slice(0, newline);
-                pending = pending.slice(newline + 1);
-                const request = Schema.decodeUnknownSync(
-                  Schema.fromJsonString(
-                    Schema.Struct({
-                      id: Schema.Unknown,
-                      method: Schema.String,
-                      params: Schema.optionalKey(
-                        Schema.Struct({ workspace_id: Schema.optionalKey(Schema.String) }),
-                      ),
-                    }),
+              for (
+                let newline;
+                (newline = Option.getOrElse(pipe_(pending, Str.indexOf("\n")), () => -1)) !== -1;
+              ) {
+                const line = pipe_(pending, Str.slice(0, newline));
+                pending = pipe_(pending, Str.slice(newline + 1));
+                const request = flow(
+                  Schema.decodeResult(
+                    Schema.fromJsonString(
+                      Schema.Struct({
+                        id: Schema.Unknown,
+                        method: Schema.String,
+                        params: Schema.optionalKey(
+                          Schema.Struct({ workspace_id: Schema.optionalKey(Schema.String) }),
+                        ),
+                      }),
+                    ),
                   ),
+                  Result.getOrThrow,
                 )(line);
                 const answer =
                   request.method === "workspace.close"
@@ -180,16 +189,19 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             ],
             { FAKE_HERDR_OUTPUTS: farOutputs },
           );
-          const { runId: requesterRun } = Schema.decodeUnknownSync(
+          const { runId: requesterRun } = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
-          )(requesterStart.envelope.data);
+          )(requesterStart.envelope.data).pipe(Effect.orDie);
           const secondHost = yield* connect(second.world.state);
           yield* until(
             () => secondHost.run({ runId: requesterRun }),
-            (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
           );
-          const requester = (yield* everyRegistered(second.world.state)).find(
-            (one) => one.runId === requesterRun,
+          const requester = Option.getOrUndefined(
+            Arr.findFirst(
+              yield* everyRegistered(second.world.state),
+              (one) => one.runId === requesterRun,
+            ),
           )!;
           yield* first.lists([second]);
           expect((yield* first.cli(["--machine", "second", "board"])).envelope).toMatchObject({
@@ -247,11 +259,11 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const text =
             mode === "cli-path"
               ? asked.envelope.ok
-                ? `start: applied; started ${Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(asked.envelope.data).runId}`
+                ? `start: applied; started ${(yield* Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(asked.envelope.data).pipe(Effect.orDie)).runId}`
                 : encode(asked.envelope)
-              : Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(
+              : (yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
                   asked.envelope.data,
-                ).text;
+                ).pipe(Effect.orDie)).text;
           if (mode === "stale") {
             expect(text).toContain("differs from the fetched revision");
             expect(
@@ -280,21 +292,27 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           });
           expect(view!.cwd).not.toBe(first.world.project);
           expect(
-            (yield* exec(["git", "rev-parse", "HEAD"], { cwd: view!.cwd })).stdout.trim(),
+            Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: view!.cwd })).stdout),
           ).toBe(
-            (yield* exec(["git", "rev-parse", "HEAD"], {
-              cwd: second.world.project,
-            })).stdout.trim(),
+            Str.trim(
+              (yield* exec(["git", "rev-parse", "HEAD"], {
+                cwd: second.world.project,
+              })).stdout,
+            ),
           );
           expect(
-            (yield* exec(
-              ["git", "rev-parse", `${mode === "upstream" ? "upstream" : "origin"}/shared-topic`],
-              { cwd: first.world.project },
-            )).stdout.trim(),
+            Str.trim(
+              (yield* exec(
+                ["git", "rev-parse", `${mode === "upstream" ? "upstream" : "origin"}/shared-topic`],
+                { cwd: first.world.project },
+              )).stdout,
+            ),
           ).toBe(
-            (yield* exec(["git", "rev-parse", "HEAD"], {
-              cwd: second.world.project,
-            })).stdout.trim(),
+            Str.trim(
+              (yield* exec(["git", "rev-parse", "HEAD"], {
+                cwd: second.world.project,
+              })).stdout,
+            ),
           );
           const ready = yield* until(
             () =>
@@ -303,19 +321,23 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                 view: firstHost.run({ runId }),
               }),
             (read) =>
-              read.rows.some((one) => one.runId === runId) ||
+              Arr.some(read.rows, (one) => one.runId === runId) ||
               read.view?.status.status === "failed" ||
               read.view?.parked != null,
           );
-          const entry = ready.rows.find((one) => one.runId === runId);
+          const entry = Option.getOrUndefined(
+            Arr.findFirst(ready.rows, (one) => one.runId === runId),
+          );
           if (entry === undefined && mode !== "failed")
-            throw new Error(
-              encode({
-                view: ready.view,
-                log: yield* fs
-                  .readFileString(`${first.world.state}/agents/${runId}/agents.log`)
-                  .pipe(Effect.orElseSucceed(() => "")),
-              }),
+            return yield* Effect.die(
+              new Error(
+                encode({
+                  view: ready.view,
+                  log: yield* fs
+                    .readFileString(`${first.world.state}/agents/${runId}/agents.log`)
+                    .pipe(Effect.orElseSucceed(() => "")),
+                }),
+              ),
             );
           const task = yield* readTask(first.world.state, view!.task!);
           let human: string | undefined;
@@ -335,15 +357,18 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               { ...boot, FAKE_HERDR_OUTPUTS: localOutputs },
             );
             expect(started.envelope.ok).toBe(true);
-            const other = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
-              started.envelope.data,
-            ).runId;
+            const other = (yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ runId: Schema.String }),
+            )(started.envelope.data).pipe(Effect.orDie)).runId;
             yield* until(
               () => firstHost.run({ runId: other }),
               (row) => row?.status.status === "complete",
             );
-            sibling = (yield* everyRegistered(first.world.state)).find(
-              (one) => one.runId === other,
+            sibling = Option.getOrUndefined(
+              Arr.findFirst(
+                yield* everyRegistered(first.world.state),
+                (one) => one.runId === other,
+              ),
             )?.paneId;
             expect(sibling).toBeDefined();
           }
@@ -364,7 +389,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           if (mode === "restart") {
             yield* until(
               () => fs.readFileString(second.herdrLog),
-              (log) => log.includes(` of ${runId} on `),
+              (log) => pipe_(log, Str.includes(` of ${runId} on `)),
             );
             yield* until(
               () => (before === null ? Effect.succeed(false) : holderLives(before)),
@@ -378,14 +403,17 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const readReport = () =>
             fs.readFileString(`${runDir(first.world.state, runId)}/report.json`).pipe(
               Effect.map((text) =>
-                Schema.decodeUnknownSync(
-                  Schema.fromJsonString(
-                    Schema.Struct({
-                      state: Schema.String,
-                      closed: Schema.Boolean,
-                      note: Schema.String,
-                    }),
+                flow(
+                  Schema.decodeResult(
+                    Schema.fromJsonString(
+                      Schema.Struct({
+                        state: Schema.String,
+                        closed: Schema.Boolean,
+                        note: Schema.String,
+                      }),
+                    ),
                   ),
+                  Result.getOrThrow,
                 )(text),
               ),
               Effect.orElseSucceed(() => null),
@@ -403,7 +431,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                     host: yield* fs
                       .readFileString(`${first.world.state}/host.log`)
                       .pipe(Effect.orElseSucceed(() => "")),
-                    calls: (yield* fs.readFileString(first.herdrLog)).split("\n").slice(-15),
+                    calls: Str.split(yield* fs.readFileString(first.herdrLog), "\n").slice(-15),
                   }),
                 );
               }),
@@ -415,18 +443,20 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           );
           if (report!.state === "undelivered") expect(report!.note.length).toBeGreaterThan(0);
           const panes = yield* new Herdr(readEnv(first.env)).paneList();
-          expect(panes.some((pane) => pane.paneId === entry?.paneId)).toBe(false);
+          expect(Arr.some(panes, (pane) => pane.paneId === entry?.paneId)).toBe(false);
           const workspaces = yield* new Herdr(readEnv(first.env)).workspaceList();
-          expect(workspaces.some((workspace) => workspace.workspaceId === task!.workspace)).toBe(
-            mode === "human-pane" || mode === "sibling",
-          );
+          expect(
+            Arr.some(workspaces, (workspace) => workspace.workspaceId === task!.workspace),
+          ).toBe(mode === "human-pane" || mode === "sibling");
           if (sibling !== undefined)
-            expect(panes.some((pane) => pane.paneId === sibling)).toBe(true);
-          if (human !== undefined) expect(panes.some((pane) => pane.paneId === human)).toBe(true);
+            expect(Arr.some(panes, (pane) => pane.paneId === sibling)).toBe(true);
+          if (human !== undefined)
+            expect(Arr.some(panes, (pane) => pane.paneId === human)).toBe(true);
           // Three lines and a sender line are over the paste budget, so a report is kept as a file.
-          const reports = (yield* fs.readFileString(second.herdrLog))
-            .split("\n")
-            .filter((line) => line.includes(`From ${entry?.agent ?? "host"} of ${runId} on `));
+          const reports = Arr.filter(
+            Str.split(yield* fs.readFileString(second.herdrLog), "\n"),
+            (line) => pipe_(line, Str.includes(`From ${entry?.agent ?? "host"} of ${runId} on `)),
+          );
           expect(reports).toHaveLength(mode === "gone" || mode === "away" ? 0 : 1);
           if (reports[0] !== undefined) {
             const kept = /Their message is in (\S+)\. Read it whole/.exec(reports[0])?.[1] ?? "";

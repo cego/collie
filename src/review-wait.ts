@@ -1,6 +1,10 @@
 // A merge request's review as a Release Run waits on it: one read of the forge, judged
 // against the head the Run's Checks were proved on.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Schema } from "effect";
 import { mrLabel } from "./board-model";
 import type { ReviewRead } from "./forge/review";
@@ -14,7 +18,7 @@ export const OpenCommentSchema = Schema.Struct({
   body: Schema.String,
   thread: Schema.NullOr(Schema.String),
   file: Schema.NullOr(Schema.String),
-  line: Schema.NullOr(Schema.Number),
+  line: Schema.NullOr(Schema.Finite),
 });
 export type OpenComment = typeof OpenCommentSchema.Type;
 
@@ -43,7 +47,8 @@ const UNAPPROVED = "the approval";
 
 /** Whether a standing is still waiting on a teammate's approval, among whatever else. */
 export const waitsOnApproval = (standing: ReviewStanding) =>
-  standing._tag === "Waiting" && standing.why.some((one) => one.startsWith(`${UNAPPROVED} (`));
+  standing._tag === "Waiting" &&
+  Arr.some(standing.why, (one) => pipe(one, Str.startsWith(`${UNAPPROVED} (`)));
 
 /**
  * Ready means approved, nothing external unanswered, the pipeline passed, mergeable, all at
@@ -64,13 +69,13 @@ export function standingOf(
     };
   if (read.state === "closed") return { _tag: "Closed" };
   if (read.head !== against.proved) return { _tag: "Moved", head: read.head };
-  const open = read.comments.filter((one) => one.external && !one.answered);
-  const fresh = open.filter((one) => !against.seen.includes(one.id));
+  const open = Arr.filter(read.comments, (one) => one.external && !one.answered);
+  const fresh = Arr.filter(open, (one) => !against.seen.includes(one.id));
   if (fresh.length > 0)
     return {
       _tag: "Unanswered",
       head: read.head,
-      comments: fresh.map(({ id, url, author, at, body, thread, file, line }) => ({
+      comments: Arr.map(fresh, ({ id, url, author, at, body, thread, file, line }) => ({
         id,
         url,
         author,
@@ -81,7 +86,7 @@ export function standingOf(
         line,
       })),
     };
-  const short = read.head.slice(0, 8);
+  const short = pipe(read.head, Str.slice(0, 8));
   const why = [
     ...(read.approved ? [] : [`${UNAPPROVED} (${read.unapproved || "none yet"})`]),
     ...(read.changesRequested ? ["changes requested"] : []),
@@ -148,13 +153,15 @@ export function settleAnswers(round: {
 }): SettledAnswers {
   const replies: Array<SettledAnswers["replies"][number]> = [];
   const carried: OpenComment[] = [];
-  for (const comment of round.given.filter((one) => round.open.includes(one.id))) {
-    const answer = round.answers.find((one) => one.id === comment.id);
+  for (const comment of Arr.filter(round.given, (one) => round.open.includes(one.id))) {
+    const answer = Option.getOrUndefined(
+      Arr.findFirst(round.answers, (one) => one.id === comment.id),
+    );
     const says =
       answer?.answer === "disputed"
         ? `Not changed: ${answer.note}`
         : answer?.commit !== undefined && round.onHead.includes(answer.commit)
-          ? `Fixed in \`${answer.commit.slice(0, 8)}\`: ${answer.note}`
+          ? `Fixed in \`${pipe(answer.commit, Str.slice(0, 8))}\`: ${answer.note}`
           : null;
     if (says === null) carried.push(comment);
     else
@@ -198,14 +205,14 @@ export function reviewWaitOf(mr: string, read: ReviewRead): ReviewWait {
   const held = mergeable?.state === "blocked" ? HELD_FOR.get(mergeable.said) : undefined;
   const blocked = [
     ...(read.pipeline.state === "failed"
-      ? [`the pipeline at ${read.head.slice(0, 8)} failed (${read.pipeline.name})`]
+      ? [`the pipeline at ${pipe(read.head, Str.slice(0, 8))} failed (${read.pipeline.name})`]
       : []),
     ...(read.changesRequested ? ["changes are requested"] : []),
     ...(mergeable?.state === "blocked" && held === undefined
       ? [`the forge will not merge it: ${mergeable.said}`]
       : []),
   ];
-  const open = read.comments.filter((one) => one.external && !one.answered).length;
+  const open = Arr.filter(read.comments, (one) => one.external && !one.answered).length;
   const on = [
     ...new Set([
       ...(read.pipeline.state === "running" || read.pipeline.state === "unknown" ? [CI] : []),
@@ -224,11 +231,11 @@ export function reviewWaitOf(mr: string, read: ReviewRead): ReviewWait {
     };
   return {
     _tag: "Awaiting",
-    on: `${on.join(" and ")} on ${label}`,
-    who: on.some((one) => one === APPROVAL || one === THREADS) ? TEAMMATE : null,
+    on: `${Arr.join(on, " and ")} on ${label}`,
+    who: Arr.some(on, (one) => one === APPROVAL || one === THREADS) ? TEAMMATE : null,
   };
 }
 
 /** The card's line while a person has to repair what holds the release back. */
 export const blockedLine = (mr: string, why: ReadonlyArray<string>) =>
-  `${mrLabel(mr)} cannot be released: ${why.join("; ")}. The Run goes on once that is repaired.`;
+  `${mrLabel(mr)} cannot be released: ${Arr.join(why, "; ")}. The Run goes on once that is repaired.`;

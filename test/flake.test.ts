@@ -1,8 +1,10 @@
 // A check's failed tests, read from its own output, and each run again alone (ADR-0034,
 // amended 2026-10-15). Driven through the shipped host, as the gate asks for them.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { Host, type WorkflowError } from "../src/sdk";
 import { evidenceDir, foundationLayer } from "../src/engine";
@@ -17,7 +19,10 @@ let rig: Rig;
 let dir: string;
 const runId = "r-flake";
 
-const asApproved = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
+const asApproved = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
+  Result.getOrThrow,
+);
 
 beforeEach(() =>
   runEffect(
@@ -44,31 +49,34 @@ afterEach(() => runEffect(rig.close()));
 
 /** bun's output for a run with two files, a nested describe, and `fail` failing tests. */
 const bunPrinted = (options: { fail?: number; error?: boolean; extra?: number } = {}) =>
-  [
-    "bun test v1.3.0",
-    "",
-    "test/one.test.ts:",
-    "(pass) one passes [1.00ms]",
-    "error: expect(received).toBe(expected)",
-    "      at <anonymous> (test/one.test.ts:9:3)",
-    "(fail) the quick one breaks [2.00ms]",
-    "",
-    "test/two.test.ts:",
-    "(fail) outer > inner > the nested one breaks [3.00ms]",
-    ...Array.from({ length: options.extra ?? 0 }, (_, at) => `(fail) extra ${at} [1.00ms]`),
-    "",
-    "test/one.test.ts:",
-    "(pass) one passes again [1.00ms]",
-    "",
-    `${2 + (options.extra ?? 0)} tests failed:`,
-    "(fail) the quick one breaks [2.00ms]",
-    "(fail) outer > inner > the nested one breaks [3.00ms]",
-    "",
-    " 2 pass",
-    ` ${options.fail ?? 2 + (options.extra ?? 0)} fail`,
-    ...(options.error === true ? [" 1 error"] : []),
-    "Ran 4 tests across 2 files. [10.00ms]",
-  ].join("\n");
+  Arr.join(
+    [
+      "bun test v1.3.0",
+      "",
+      "test/one.test.ts:",
+      "(pass) one passes [1.00ms]",
+      "error: expect(received).toBe(expected)",
+      "      at <anonymous> (test/one.test.ts:9:3)",
+      "(fail) the quick one breaks [2.00ms]",
+      "",
+      "test/two.test.ts:",
+      "(fail) outer > inner > the nested one breaks [3.00ms]",
+      ...Array.from({ length: options.extra ?? 0 }, (_, at) => `(fail) extra ${at} [1.00ms]`),
+      "",
+      "test/one.test.ts:",
+      "(pass) one passes again [1.00ms]",
+      "",
+      `${2 + (options.extra ?? 0)} tests failed:`,
+      "(fail) the quick one breaks [2.00ms]",
+      "(fail) outer > inner > the nested one breaks [3.00ms]",
+      "",
+      " 2 pass",
+      ` ${options.fail ?? 2 + (options.extra ?? 0)} fail`,
+      ...(options.error === true ? [" 1 error"] : []),
+      "Ran 4 tests across 2 files. [10.00ms]",
+    ],
+    "\n",
+  );
 
 /** Approves `unit`, a check that prints whatever `printed` holds and exits 1. */
 const approveUnit = FileSystem.FileSystem.pipe(
@@ -159,28 +167,31 @@ test("output whose fail count does not match, that reports an error, or has over
 
 /** bun's output where a file's hook failed after `named` of its tests did; bun calls the hook `(unnamed)`. */
 const hookFailed = (named: ReadonlyArray<string>) =>
-  [
-    "bun test v1.4.3",
-    "",
-    "test/one.test.ts:",
-    ...named.map((name) => `(fail) ${name} [30001.75ms]`),
-    "(pass) one passes [1.00ms]",
-    "",
-    "test/two.test.ts:",
-    "(pass) two passes [1.00ms]",
-    "",
-    "test/one.test.ts:",
-    "error: The file left 1 thing(s) behind: directory /tmp/x",
-    "(fail) (unnamed) [2527.44ms]",
-    "",
-    `${named.length + 1} tests failed:`,
-    ...named.map((name) => `(fail) ${name} [30001.75ms]`),
-    "(fail) (unnamed) [2527.44ms]",
-    "",
-    " 2 pass",
-    ` ${named.length + 1} fail`,
-    "Ran 4 tests across 2 files. [10.00ms]",
-  ].join("\n");
+  Arr.join(
+    [
+      "bun test v1.4.3",
+      "",
+      "test/one.test.ts:",
+      ...Arr.map(named, (name) => `(fail) ${name} [30001.75ms]`),
+      "(pass) one passes [1.00ms]",
+      "",
+      "test/two.test.ts:",
+      "(pass) two passes [1.00ms]",
+      "",
+      "test/one.test.ts:",
+      "error: The file left 1 thing(s) behind: directory /tmp/x",
+      "(fail) (unnamed) [2527.44ms]",
+      "",
+      `${named.length + 1} tests failed:`,
+      ...Arr.map(named, (name) => `(fail) ${name} [30001.75ms]`),
+      "(fail) (unnamed) [2527.44ms]",
+      "",
+      " 2 pass",
+      ` ${named.length + 1} fail`,
+      "Ran 4 tests across 2 files. [10.00ms]",
+    ],
+    "\n",
+  );
 
 test("a check where a hook failed names no tests, even beside a named failure in its file", () =>
   runEffect(
@@ -217,10 +228,12 @@ test("a rerun runs bun test on the one test's file, matching its whole name, in 
       ).pipe(Effect.ensuring(bin.restore()));
       const fs = yield* FileSystem.FileSystem;
       const argv = ["test", `./${NESTED.file}`, "-t", "^outer inner the nested one breaks$"];
-      expect((yield* fs.readFileString(`${rig.root}/bun-argv`)).trimEnd().split("\n")).toEqual(
-        argv,
-      );
-      expect((yield* fs.readFileString(`${rig.root}/bun-cwd`)).trim()).toBe(
+      expect(
+        Arr.fromIterable(
+          Str.split(Str.trimEnd(yield* fs.readFileString(`${rig.root}/bun-argv`)), "\n"),
+        ),
+      ).toEqual(argv);
+      expect(Str.trim(yield* fs.readFileString(`${rig.root}/bun-cwd`))).toBe(
         yield* fs.realPath(rig.projectDir),
       );
       expect(ran).toMatchObject({ name: "unit", pass: "rerun", test: NESTED, argv, by: "collie" });
@@ -328,9 +341,11 @@ test("a test run at the base fails there only where bun reported that test faili
           ] as const;
         }),
       ).pipe(Effect.ensuring(bin.restore()));
-      const head = (yield* exec(["git", "rev-parse", "HEAD"], {
-        cwd: rig.projectDir,
-      })).stdout.trim();
+      const head = Str.trim(
+        (yield* exec(["git", "rev-parse", "HEAD"], {
+          cwd: rig.projectDir,
+        })).stdout,
+      );
       expect(failed).toMatchObject({
         name: "unit",
         pass: "baseline",
@@ -343,7 +358,9 @@ test("a test run at the base fails there only where bun reported that test faili
       expect(missing).toMatchObject({ pass: "baseline", test: QUICK, result: "pass" });
       // Another test's failure is not this one's.
       expect(another.result).toBe("pass");
-      expect((yield* fs.readFileString(`${rig.root}/bun-runs`)).trim().split("\n")).toHaveLength(3);
+      expect(
+        Str.split(Str.trim(yield* fs.readFileString(`${rig.root}/bun-runs`)), "\n"),
+      ).toHaveLength(3);
     }),
   ));
 

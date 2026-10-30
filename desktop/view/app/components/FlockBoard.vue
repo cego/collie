@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
 import { SECTIONS } from "../../../../src/board-model";
 import { NOT_LIVE } from "../../../src/shared/flock";
 import {
@@ -51,12 +52,17 @@ const pageShown = computed(
 // A page opened takes focus to its back button, but Go to pane leaves it in the pane; back
 // returns it to where it was.
 let focusedBefore: Element | null = null;
-watch(page, async (now, before) => {
-  if (before === null) focusedBefore = document.activeElement;
-  if (now !== null && asked.value === "terminal") return;
-  await nextTick();
-  const target = now === null ? focusedBefore : document.querySelector('[data-testid="page-back"]');
-  if (target instanceof HTMLElement && target.isConnected) target.focus();
+watch(page, (now, before) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (before === null) focusedBefore = document.activeElement;
+      if (now !== null && asked.value === "terminal") return;
+      yield* Effect.promise(() => Promise.resolve(nextTick()));
+      const target =
+        now === null ? focusedBefore : document.querySelector('[data-testid="page-back"]');
+      if (target instanceof HTMLElement && target.isConnected) target.focus();
+    }),
+  );
 });
 
 const { chip, choose } = useChip();
@@ -119,10 +125,14 @@ onUnmounted(() => window.removeEventListener("keydown", escape, { capture: true 
 const chatShown = ref(true);
 const popped = ref(false);
 const { popOut } = usePopOut();
-const popChatOut = async () => {
-  popped.value = true;
-  await popOut();
-  popped.value = false;
+const popChatOut = () => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      popped.value = true;
+      yield* Effect.promise(() => Promise.resolve(popOut()));
+      popped.value = false;
+    }),
+  );
 };
 
 const root = ref<HTMLElement | null>(null);

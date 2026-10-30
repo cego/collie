@@ -4,7 +4,11 @@
 // could: a record written *before* herdr is called, and one answer to "is something
 // already in the air about this work".
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import type { PlatformServices } from "./platform";
 import {
   Clock,
   Data,
@@ -17,13 +21,7 @@ import {
   Result,
 } from "effect";
 import { ensureLockDir } from "./lock";
-import {
-  herdrFailureReason,
-  isSettled,
-  type AgentInfo,
-  type Herdr,
-  type Submission,
-} from "./herdr";
+import { herdrFailureReason, isSettled, type Herdr, type Submission } from "./herdr";
 import { verifyIncarnation, type AgentEntry } from "./registry";
 import {
   appendLine,
@@ -69,7 +67,7 @@ const localMinute = (at: number): string => {
   const iso = DateTime.formatIsoOffset(
     DateTime.makeZonedUnsafe(at, { timeZone: DateTime.zoneMakeLocal() }),
   );
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} ${iso.slice(-6)}`;
+  return `${pipe_(iso, Str.slice(0, 10))} ${pipe_(iso, Str.slice(11, 16))} ${pipe_(iso, Str.slice(-6))}`;
 };
 
 /**
@@ -107,7 +105,8 @@ export const deliveryText = (words: string, actor: Asker | undefined, at: number
 export const PASTE_BUDGET = { lines: 3, chars: 700 } as const;
 
 const fits = (typed: string) =>
-  typed.split("\n").length <= PASTE_BUDGET.lines && Array.from(typed).length <= PASTE_BUDGET.chars;
+  Str.split(typed, "\n").length <= PASTE_BUDGET.lines &&
+  Array.from(typed).length <= PASTE_BUDGET.chars;
 
 export const KEPT =
   "Kept as a file in the Run. Auto mode reads only what is typed: ask for an action it must clear in a message of at most 3 lines and 700 characters.";
@@ -211,7 +210,7 @@ export interface Channel {
   submit(
     text: string,
     draft: DeliveryDraft,
-  ): Effect.Effect<SubmitOutcome, never, FileSystem.FileSystem | Path.Path | BunServices>;
+  ): Effect.Effect<SubmitOutcome, never, FileSystem.FileSystem | Path.Path | PlatformServices>;
 }
 
 export interface DispatcherDeps {
@@ -221,7 +220,7 @@ export interface DispatcherDeps {
   /** The Run's audit trail, so a refusal is explained where the Run is read. */
   readonly log: (
     line: string,
-  ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path | BunServices>;
+  ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path | PlatformServices>;
 }
 
 /** Nothing was sent, and the caller is told which of its own rules stopped it. */
@@ -385,13 +384,12 @@ const agentsNow = Effect.fn("Dispatcher.agentsNow")(function* (
   deps: DispatcherDeps,
   entry?: AgentEntry,
 ) {
-  const read = () =>
-    deps.herdr.agentList().pipe(Effect.catch(() => Effect.succeed<AgentInfo[]>([])));
+  const read = () => deps.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
   let listing = yield* read();
   if (
     entry?.incarnation &&
-    !listing.some((agent) => agent.name === entry.agent) &&
-    (yield* deps.herdr.restoreAgentName(entry).pipe(Effect.catch(() => Effect.succeed(false))))
+    !Arr.some(listing, (agent) => agent.name === entry.agent) &&
+    (yield* deps.herdr.restoreAgentName(entry).pipe(Effect.orElseSucceed(() => false)))
   ) {
     listing = yield* read();
   }
@@ -440,7 +438,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
   text: string,
   draft: DeliveryDraft,
 ) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   const lines = yield* readLedger(file);
   const now = yield* Clock.currentTimeMillis;
   for (const stale of settleStaleReservations(lines, now, SUBMIT_TIMEOUT_MS, at))
@@ -472,7 +470,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
   yield* appendLine(file, reserved);
 
   const sent = yield* deps.herdr.agentPrompt(entry.agent, marked(text, id)).pipe(Effect.result);
-  const settledAt = yield* nowIso();
+  const settledAt = yield* nowIso;
   if (Result.isSuccess(sent)) {
     // `submitted` either way: the text and the Enter were written. What herdr could not
     // vouch for is kept as the note, never rounded up to a delivery it saw taken.
@@ -591,14 +589,15 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
   if (terminalId === undefined) return null;
   const file = yield* ledgerPath(deps.stateDir, terminalId);
   const pending = Effect.map(readLedger(file), (lines) =>
-    [...newestById(lines).values()]
-      .filter((one) => keys.includes(one.causal_key) && isUnobserved(one))
-      .at(-1),
+    Arr.filter(
+      [...newestById(lines).values()],
+      (one) => keys.includes(one.causal_key) && isUnobserved(one),
+    ).at(-1),
   );
   /** Re-read under the lock, so a settlement never lands on a delivery another writer moved. */
   const settle = (
     id: string,
-    act: Effect.Effect<void, never, BunServices>,
+    act: Effect.Effect<void, never, PlatformServices>,
     note: string,
     state?: "acknowledged",
   ) =>
@@ -608,7 +607,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
         const now = newestById(yield* readLedger(file)).get(id);
         if (now === undefined || !isUnobserved(now)) return;
         yield* act;
-        yield* appendLine(file, { ...now, at: yield* nowIso(), state: state ?? now.state, note });
+        yield* appendLine(file, { ...now, at: yield* nowIso, state: state ?? now.state, note });
       }),
     );
   let sawSettled = false;
@@ -633,7 +632,12 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
     } else {
       sawSettled = true;
       const box = yield* deps.herdr.promptBox(entry.agent).pipe(Effect.orElseSucceed(() => null));
-      const waiting = box?.includes(`${DELIVERY_TOKEN}${open.id}`) === true;
+      const waiting =
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(box), (present) =>
+            pipe_(present, Str.includes(`${DELIVERY_TOKEN}${open.id}`)),
+          ),
+        ) === true;
       if (waiting && open.note === UNOBSERVED) {
         const press = deps.herdr.agentPressEnter(entry.agent).pipe(Effect.ignore);
         yield* settle(open.id, press, ENTER_PRESSED);
@@ -667,7 +671,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
  * will be: the process they were reserved against is gone.
  */
 const settlePending = Effect.fn("Dispatcher.settlePending")(function* (file: string, why: string) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   for (const delivery of newestById(yield* readLedger(file)).values()) {
     if (delivery.state !== "reserved" && delivery.state !== "deferred") continue;
     yield* appendLine(file, { ...delivery, at, state: "failed", note: why });
@@ -684,10 +688,10 @@ export const DELIVERY_TOKEN = "collie-delivery:";
  */
 export function marked(text: string, id: string): string {
   const token = `${DELIVERY_TOKEN}${id}`;
-  if (text.split("\n").includes(token)) return text;
-  if (!text.startsWith("/")) return `${token}\n${text}`;
-  const [command, ...rest] = text.split("\n");
-  return [command, token, ...rest].join("\n");
+  if (Str.split(text, "\n").includes(token)) return text;
+  if (!pipe_(text, Str.startsWith("/"))) return `${token}\n${text}`;
+  const [command, ...rest] = Str.split(text, "\n");
+  return Arr.join([command, token, ...rest], "\n");
 }
 
 /** The delivery a submitted prompt carried: its first token, which is the one `marked` adds. */
@@ -717,7 +721,9 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
     readonly workflow: string;
   },
 ) {
-  const live = (yield* agentsNow(deps)).find((a) => a.name === about.agent);
+  const live = Option.getOrUndefined(
+    Arr.findFirst(yield* agentsNow(deps), (a) => a.name === about.agent),
+  );
   if (!live)
     return { entry: null, reason: `${about.agent} is gone — herdr no longer has it`, gone: true };
   if (!live.terminalId)
@@ -733,7 +739,7 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
     workspaceId: about.workspaceId ?? live.workspaceId,
     runId: about.runId,
     workflow: about.workflow,
-    at: yield* nowIso(),
+    at: yield* nowIso,
     incarnation: { terminalId: live.terminalId, agentSession: live.agentSession },
   };
   return { entry, reason: null, gone: false };
@@ -752,7 +758,7 @@ const recordUngated = Effect.fn("Dispatcher.recordUngated")(function* (
   draft: DeliveryDraft,
   why: string,
 ) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   yield* appendLine(file, {
     ...deliveryOf(entry, terminalId, text, draft, at, "failed"),
     note: why,
@@ -768,7 +774,7 @@ const recordUngated = Effect.fn("Dispatcher.recordUngated")(function* (
  */
 export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   deps: DispatcherDeps & {
-    readonly status: (agent: string) => Effect.Effect<string, never, BunServices>;
+    readonly status: (agent: string) => Effect.Effect<string, never, PlatformServices>;
   },
   channel: Channel,
   entry: AgentEntry,

@@ -1,5 +1,8 @@
 // Chat defaults and the account each window renders beside its message box.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import type { QueuedMessage } from "@tanstack/ai-client";
 import { Option, Schema } from "effect";
 import { DEFAULT_MODEL, HARNESS_MODELS } from "../../../src/harness-choice";
@@ -79,7 +82,9 @@ export const effortsOf = (
   model: string,
   offered: ReadonlyArray<Pick<Offered, "id" | "efforts">>,
 ): ReadonlyArray<string> =>
-  offered.find(({ id }) => id === model)?.efforts ?? HARNESS_MODELS[harness]?.efforts ?? [];
+  Option.getOrUndefined(Arr.findFirst(offered, ({ id }) => id === model))?.efforts ??
+  HARNESS_MODELS[harness]?.efforts ??
+  [];
 
 const unsetModel = (harness: string, pi: PiConfig) =>
   harness === "pi"
@@ -94,8 +99,8 @@ const piLevel = (configured: string, available: ReadonlyArray<string>): string |
   const at = order.indexOf(configured);
   if (at < 0) return available[0] ?? null;
   return (
-    order.slice(at).find((level) => available.includes(level)) ??
-    order.slice(0, at).findLast((level) => available.includes(level)) ??
+    Option.getOrUndefined(Arr.findFirst(order.slice(at), (level) => available.includes(level))) ??
+    Option.getOrUndefined(Arr.findLast(order.slice(0, at), (level) => available.includes(level))) ??
     available[0] ??
     null
   );
@@ -137,7 +142,8 @@ export const runsAsOffered = (set: SetChoice, offer: Offer): Resolved => {
       effortsOf(set.harness, model, offer.models).length === 0
         ? null
         : (set.effort ??
-          offer.models.find(({ id }) => id === model)?.unsetEffort ??
+          Option.getOrUndefined(Arr.findFirst(offer.models, ({ id }) => id === model))
+            ?.unsetEffort ??
           (offer.typed?.model === model ? offer.typed.effort : undefined) ??
           offer.unset.effort ??
           "medium"),
@@ -169,7 +175,9 @@ export interface ChoiceSelect {
 }
 
 export const effortLabel = (effort: string) =>
-  effort === "xhigh" ? "Extra high" : `${effort.charAt(0).toUpperCase()}${effort.slice(1)}`;
+  effort === "xhigh"
+    ? "Extra high"
+    : `${Str.toUpperCase(Option.getOrElse(Str.charAt(effort, 0), () => ""))}${pipe(effort, Str.slice(1))}`;
 
 const select = (
   name: string,
@@ -182,12 +190,16 @@ const select = (
 /** The harness, model and effort selects, as the settings and the chat's account have them. */
 export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | null) => {
   const harness = settings.chatHarness ?? DEFAULT_CHAT_HARNESS;
-  const entry = choices?.harnesses.find((one) => one.harness === harness);
+  const entry = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(choices), (present) =>
+      Option.getOrUndefined(Arr.findFirst(present.harnesses, (one) => one.harness === harness)),
+    ),
+  );
   const harnessSelect = select(
     "Harness",
     harness,
     entry?.label ?? harnessName(harness),
-    (choices?.harnesses ?? []).map(({ harness, label, installed }) =>
+    Arr.map(choices?.harnesses ?? [], ({ harness, label, installed }) =>
       installed
         ? { value: harness, label }
         : {
@@ -229,7 +241,7 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
     };
   const offer = entry.offered;
   const modelLabel = (id: string) =>
-    offer.models.find((model) => model.id === id)?.label ??
+    Option.getOrUndefined(Arr.findFirst(offer.models, (model) => model.id === id))?.label ??
     (id === DEFAULT_MODEL ? `${entry.label}'s own` : id);
   const unsetModel = `Default · ${modelLabel(offer.unset.model)}`;
   const model: ChoiceSelect = {
@@ -239,10 +251,10 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
       set === undefined ? unsetModel : modelLabel(set),
       [
         { value: "", label: unsetModel, description: "What the chat runs with no model set" },
-        ...offer.models.map(({ id, label, description }) =>
+        ...Arr.map(offer.models, ({ id, label, description }) =>
           description === undefined ? { value: id, label } : { value: id, label, description },
         ),
-        ...(set === undefined || offer.models.some(({ id }) => id === set)
+        ...(set === undefined || Arr.some(offer.models, ({ id }) => id === set)
           ? []
           : [{ value: set, label: set }]),
       ],
@@ -252,7 +264,7 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
     ),
     ...(offer.from === "table" &&
       offer.why !== undefined && {
-        warning: `${entry.label}'s list could not be read: ${offer.why.replace(/\.$/, "")}. Showing Collie's table, so models are named by id.`,
+        warning: `${entry.label}'s list could not be read: ${pipe(offer.why, Str.replace(/\.$/, ""))}. Showing Collie's table, so models are named by id.`,
       }),
   };
   const runs = runsAsOffered({ harness, model: set }, offer);
@@ -281,7 +293,7 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
       effortSet === undefined ? unsetEffort : effortLabel(effortSet),
       [
         { value: "", label: unsetEffort, description: "What the chat runs with no effort set" },
-        ...effortsOf(harness, runs.model, offer.models).map((effort) => ({
+        ...Arr.map(effortsOf(harness, runs.model, offer.models), (effort) => ({
           value: effort,
           label: effortLabel(effort),
         })),
@@ -293,14 +305,14 @@ export const chatSelects = (settings: DesktopSettings, choices: ChatChoices | nu
 
 /** A typed id offered to save, where it is not already an option. */
 export const typedEntry = (search: string, model: ChoiceSelect): ChoiceOption | null => {
-  const id = search.trim();
-  return id === "" || model.options.some(({ value }) => value === id)
+  const id = Str.trim(search);
+  return id === "" || Arr.some(model.options, ({ value }) => value === id)
     ? null
     : { value: id, label: `Use ${id}` };
 };
 
 export const modelMenu = (search: string, model: ChoiceSelect) => {
-  const query = search.trim();
+  const query = Str.trim(search);
   const [first, ...rest] = model.options;
   const typed = typedEntry(query, model);
   const groups: Array<Array<ChoiceOption & { readonly typed?: string }>> = [
@@ -315,7 +327,8 @@ export const modelMenu = (search: string, model: ChoiceSelect) => {
 };
 
 /** A refused choice, as the alert above the message box says it. */
-export const refusalSaid = (reason: string) => `${reason.replace(/\.$/, "")}. Nothing was saved.`;
+export const refusalSaid = (reason: string) =>
+  `${pipe(reason, Str.replace(/\.$/, ""))}. Nothing was saved.`;
 
 const setChoice = (settings: DesktopSettings): SetChoice => ({
   harness: settings.chatHarness ?? DEFAULT_CHAT_HARNESS,
@@ -351,7 +364,9 @@ export const stayOn = (
 });
 
 const resolvedLabel = (runs: Resolved, choices: ChatChoices) => {
-  const entry = choices.harnesses.find(({ harness }) => harness === runs.harness);
+  const entry = Option.getOrUndefined(
+    Arr.findFirst(choices.harnesses, ({ harness }) => harness === runs.harness),
+  );
   const offer = entry?.offered;
   const fallback =
     runs.model === DEFAULT_MODEL
@@ -360,7 +375,8 @@ const resolvedLabel = (runs: Resolved, choices: ChatChoices) => {
   const model =
     offer === undefined || offer.from === "reading"
       ? fallback
-      : (offer.models.find(({ id }) => id === runs.model)?.label ?? fallback);
+      : (Option.getOrUndefined(Arr.findFirst(offer.models, ({ id }) => id === runs.model))?.label ??
+        fallback);
   return runs.effort === null ? model : `${model} · ${effortLabel(runs.effort)}`;
 };
 
@@ -374,7 +390,18 @@ export const choiceNotices = (settings: DesktopSettings, choices: ChatChoices | 
           text: `Your next message starts a new conversation on ${harnessName(set.harness)}.`,
           stayLabel: `Stay on ${harnessName(choices.heldOn)}`,
         };
-  const offer = choices?.harnesses.find(({ harness }) => harness === set.harness)?.offered;
+  const offer = Option.getOrUndefined(
+    Option.flatMap(Option.fromNullishOr(choices), (present_) =>
+      Option.map(
+        Option.fromNullishOr(
+          Option.getOrUndefined(
+            Arr.findFirst(present_.harnesses, ({ harness }) => harness === set.harness),
+          ),
+        ),
+        (present__) => present__.offered,
+      ),
+    ),
+  );
   if (
     !choices?.turning ||
     choices.runsOn === null ||
@@ -411,10 +438,13 @@ export interface ChatStatus {
 
 /** A status change spoken once, without a completion message over the finished reply. */
 export const chatAnnouncement = (before: ChatStatus | null, after: ChatStatus, stopped = false) =>
-  [
-    ...(stopped ? ["Reply stopped"] : after.replying && !before?.replying ? ["Replying…"] : []),
-    ...after.notices.filter((notice) => !before?.notices.includes(notice)),
-  ].join(" ");
+  Arr.join(
+    [
+      ...(stopped ? ["Reply stopped"] : after.replying && !before?.replying ? ["Replying…"] : []),
+      ...Arr.filter(after.notices, (notice) => !before?.notices.includes(notice)),
+    ],
+    " ",
+  );
 
 export interface ChatDraft {
   readonly text: string;
@@ -436,17 +466,21 @@ export const stopDraft = (
     const said = isString(content) ? content : content.content;
     const text = isString(said)
       ? said
-      : said.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("\n");
+      : Arr.join(
+          Arr.flatMap(said, (part) => (part.type === "text" ? [part.content] : [])),
+          "\n",
+        );
     if (text !== "") words.push(text);
-    if (!isString(said)) files.push(...said.flatMap((part) => Option.toArray(attachedIn(part))));
+    if (!isString(said))
+      files.push(...Arr.flatMap(said, (part) => Option.toArray(attachedIn(part))));
     if (about === null && !isString(content))
       about = Option.getOrNull(decodeAbout(content.metadata?.about));
   }
   if (draft.text !== "") words.push(draft.text);
   const seen = new Set<string>();
   return {
-    text: words.join("\n\n"),
-    files: [...files, ...draft.files].filter(({ id }) => {
+    text: Arr.join(words, "\n\n"),
+    files: Arr.filter([...files, ...draft.files], ({ id }) => {
       if (seen.has(id)) return false;
       seen.add(id);
       return true;

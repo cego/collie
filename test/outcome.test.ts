@@ -2,6 +2,10 @@
 // outcome nobody can close with a claim, and one that is not asked for evidence it never
 // promised.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   checkGaps,
@@ -81,7 +85,7 @@ const JUDGEMENTS = new Set([
 const withOutput = (fields: Record<string, YamlValue>, over: Partial<Collected> = {}) => {
   const build: Record<string, YamlValue> = {};
   const review: Record<string, YamlValue> = {};
-  for (const [key, value] of Object.entries(fields)) {
+  for (const [key, value] of Rec.toEntries(fields)) {
     if (JUDGEMENTS.has(key)) review[key] = value;
     else build[key] = value;
   }
@@ -115,7 +119,7 @@ test("every kind is a kind, and nothing else is", () => {
 test("an unclassified Run proves the approved set and is asked for nothing else", () => {
   expect(evidenceGaps("unspecified", collected())).toEqual([]);
   // Not a feature by default: no tickets are demanded of work nobody called a feature.
-  expect(evidenceGaps("unspecified", collected()).join(" ")).not.toContain("ticket");
+  expect(Arr.join(evidenceGaps("unspecified", collected()), " ")).not.toContain("ticket");
 });
 
 test("a Run with no check named is a gap its implementer closes by naming the checks", () => {
@@ -368,6 +372,17 @@ test("a bug reproduced by one command and fixed by another is a gap naming both"
   ]);
 });
 
+test("a bug reproduced and fixed by commands whose words differ names them differently", () => {
+  const [gap] = checkGaps(
+    "bug",
+    reproducedThenFixed(["/bin/echo", "a b"], ["/bin/echo", "a", "b"]),
+  );
+  const [, reproducedBy, provenBy] = /reproduced by (.*) but the fix is proven by (.*): one/.exec(
+    gap ?? "",
+  )!;
+  expect(reproducedBy).not.toBe(provenBy);
+});
+
 test("a bug whose one command failed before the fix and passes after it has no reproduction gap", () => {
   const command = ["/usr/bin/bun", "test", "test/x.test.ts"];
   expect(checkGaps("bug", reproducedThenFixed(command, command))).toEqual([]);
@@ -445,7 +460,7 @@ test("an investigation is a conclusion with references that hold it up, and may 
   expect(
     evidenceGaps(
       "investigation",
-      withOutput(full, { insideRun: (ref) => ref.startsWith("plan/") }),
+      withOutput(full, { insideRun: (ref) => pipe(ref, Str.startsWith("plan/")) }),
     ),
   ).toEqual(['evidence reference "steps/build/build.json" is outside this Run']);
 
@@ -583,7 +598,7 @@ test("a reviewer is handed the recorded checks: result, who, tree, when, and the
       ],
     }),
   );
-  expect(rendered.split("\n")).toEqual([
+  expect(Str.split(rendered, "\n")).toEqual([
     "- tests: pass (by collie), on this tree, at 2026-09-11T10:00:00.000Z; never seen failing on an earlier tree",
     "- lint: pass (by collie), on an earlier tree, at 2026-09-11T08:00:00.000Z; never seen failing on an earlier tree",
     "- typecheck: pass (by agent), on this tree, at 2026-09-11T10:00:00.000Z; never seen failing on an earlier tree",
@@ -655,7 +670,7 @@ test("a reviewer is told a check left to CI is proved by its job, and the job's 
   const rendered = renderRecordedChecks(collected({ verifications: [record({ name: "tests" })] }), [
     { ...nuxi, state: "running" },
   ]);
-  expect(rendered.split("\n")).toEqual([
+  expect(Str.split(rendered, "\n")).toEqual([
     "- tests: pass (by collie), on this tree, at 2026-09-11T10:00:00.000Z; never seen failing on an earlier tree",
     "- nuxi: left to CI (job nuxi-typecheck), do not run it. left to CI: proved by nuxi-typecheck on the merge request's head; its job is running now",
   ]);
@@ -815,7 +830,7 @@ const gateThenReruns = (
   reran: ReadonlyArray<readonly [typeof QUICK, "pass" | "fail"]>,
 ) => [
   record({ name: "tests", pass: "gate", result: "fail", exit: 1, failed: [...failed] }),
-  ...reran.map(([test, result], at) =>
+  ...Arr.map(reran, ([test, result], at) =>
     record({
       name: "tests",
       id: `rerun-${at}`,
@@ -867,7 +882,7 @@ test("a check with a test still failing after its rerun is a gap naming that tes
   // A Flake is named whether or not its check is left failing on another test.
   expect(flakesOf(got)).toEqual([{ check: "tests", ...QUICK }]);
   // A rerun on another tree says nothing about this one.
-  const moved = gateThenReruns([QUICK], [[QUICK, "pass"]]).map((one, at) =>
+  const moved = Arr.map(gateThenReruns([QUICK], [[QUICK, "pass"]]), (one, at) =>
     at === 0 ? one : { ...one, end: EARLIER },
   );
   expect(evidenceGaps("unspecified", collected({ verifications: moved }))).toEqual([

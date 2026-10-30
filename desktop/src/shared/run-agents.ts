@@ -1,5 +1,6 @@
 // The Facts tab's Agents section: one row per agent a Run started, in launch order.
 
+import * as Arr from "effect/Array";
 import { ranOn, type RunAgent } from "../../../src/board-model";
 
 export interface AgentRow {
@@ -11,7 +12,7 @@ export interface AgentRow {
 }
 
 export const agentRows = (agents: ReadonlyArray<RunAgent>): ReadonlyArray<AgentRow> =>
-  agents.map((agent, at) => ({
+  Arr.map(agents, (agent, at) => ({
     key: `${at}:${agent.agent}`,
     operation: agent.operation,
     ranOn: ranOn(agent),

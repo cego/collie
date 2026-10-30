@@ -1,5 +1,8 @@
 // Whether each Machine is In sync with Desktop (CONTEXT.md), and the Flock's line about it.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import {
   CREDENTIALS,
   type Credential,
@@ -43,8 +46,11 @@ export const NOT_LIVE_SAID = {
 const RELEASE = /^\d+\.\d+\.\d+$/;
 
 const older = (build: string, than: string) => {
-  const [a, b] = [build, than].map((version) => version.split(".").map(Number));
-  const at = a!.findIndex((part, i) => part !== b![i]);
+  const [a, b] = Arr.map([build, than], (version) => Arr.map(Str.split(version, "."), Number));
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(a!, (part, i) => part !== b![i]),
+    () => -1,
+  );
   return at !== -1 && a![at]! < b![at]!;
 };
 
@@ -64,13 +70,24 @@ const lags = (row: MachineRow, desktop: DesktopHolds): ReadonlyArray<Lag> => {
           },
         ]
       : [];
-  const missing = onboarded?.steps.filter(({ status }) => !SETTLED.includes(status)) ?? [];
+  const missing =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(onboarded), (present) =>
+        Arr.filter(present.steps, ({ status }) => !SETTLED.includes(status)),
+      ),
+    ) ?? [];
   const onboarding: ReadonlyArray<Lag> =
     onboarded?.ready === false
       ? [
           {
             part: "onboarding",
-            said: `Not onboarded: ${missing.map(({ title }) => title).join(", ") || (onboarded.reason ?? "doctor says it isn't ready")}`,
+            said: `Not onboarded: ${
+              Arr.join(
+                Arr.map(missing, ({ title }) => title),
+                ", ",
+              ) ||
+              (onboarded.reason ?? "doctor says it isn't ready")
+            }`,
             steps: missing,
           },
         ]
@@ -91,7 +108,7 @@ const lags = (row: MachineRow, desktop: DesktopHolds): ReadonlyArray<Lag> => {
             steps: [],
           },
         ];
-  const credentials = desktop.credentials.flatMap((credential): ReadonlyArray<Lag> => {
+  const credentials = Arr.flatMap(desktop.credentials, (credential): ReadonlyArray<Lag> => {
     const held = row.credentials[credential];
     if (held === undefined || held.given) return [];
     const lacks = `Lacks ${CREDENTIAL_SAID[credential].lacks}`;
@@ -115,7 +132,7 @@ export const inSync = (row: MachineRow, desktop: DesktopHolds): InSync => {
 
 /** Whether Sync now is offered: onboarding has its own steps. */
 export const syncable = (verdict: InSync) =>
-  verdict.behind.some(({ part }) => part !== "onboarding");
+  Arr.some(verdict.behind, ({ part }) => part !== "onboarding");
 
 /** The Collie a Machine's row says it runs. */
 export const buildOf = ({ build, development }: Pick<MachineRow, "build" | "development">) =>
@@ -127,35 +144,50 @@ export const buildOf = ({ build, development }: Pick<MachineRow, "build" | "deve
 
 /** The Machines page's top line, then why each Machine is behind, as the Flock chat reads it. */
 export const flockInSyncSaid = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHolds) =>
-  [
-    flockInSync(rows, desktop).said,
-    ...rows.flatMap((row) => {
-      const { behind } = inSync(row, desktop);
-      return behind.length === 0
-        ? []
-        : [`${row.name}: ${behind.map(({ said }) => said).join("; ")}`];
-    }),
-  ].join(". ");
+  Arr.join(
+    [
+      flockInSync(rows, desktop).said,
+      ...Arr.flatMap(rows, (row) => {
+        const { behind } = inSync(row, desktop);
+        return behind.length === 0
+          ? []
+          : [
+              `${row.name}: ${Arr.join(
+                Arr.map(behind, ({ said }) => said),
+                "; ",
+              )}`,
+            ];
+      }),
+    ],
+    ". ",
+  );
 
 /** The Machines page's top line, and how many Machines aren't in sync, connecting ones aside. */
 export const flockInSync = (rows: ReadonlyArray<MachineRow>, desktop: DesktopHolds) => {
-  const lagging = rows.flatMap((row) => {
+  const lagging = Arr.flatMap(rows, (row) => {
     const { state, behind } = inSync(row, desktop);
     if (state === "in-sync" || state === "connecting") return [];
     return [
-      `${row.name}: ${state === "behind" ? `behind on ${[...new Set(behind.map(({ part }) => part))].join(" and ")}` : NOT_LIVE_SAID[state]}`,
+      `${row.name}: ${state === "behind" ? `behind on ${Arr.join([...new Set(Arr.map(behind, ({ part }) => part))], " and ")}` : NOT_LIVE_SAID[state]}`,
     ];
   });
-  const none = CREDENTIALS.filter(
-    (credential) => credential !== "slack" && !desktop.credentials.includes(credential),
-  ).map((credential) => `Desktop has no ${CREDENTIAL_SAID[credential].none} to give`);
+  const none = Arr.map(
+    Arr.filter(
+      CREDENTIALS,
+      (credential) => credential !== "slack" && !desktop.credentials.includes(credential),
+    ),
+    (credential) => `Desktop has no ${CREDENTIAL_SAID[credential].none} to give`,
+  );
   return {
-    said: [
-      lagging.length === 0
-        ? `Every Machine is in sync with Desktop ${desktop.version}`
-        : `Not in sync with Desktop ${desktop.version}: ${lagging.join("; ")}`,
-      ...none,
-    ].join(". "),
+    said: Arr.join(
+      [
+        lagging.length === 0
+          ? `Every Machine is in sync with Desktop ${desktop.version}`
+          : `Not in sync with Desktop ${desktop.version}: ${Arr.join(lagging, "; ")}`,
+        ...none,
+      ],
+      ". ",
+    ),
     count: lagging.length,
   };
 };

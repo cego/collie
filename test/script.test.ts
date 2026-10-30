@@ -1,6 +1,7 @@
 // The one way Collie gives a login a pseudo-terminal: util-linux `script` on Linux and BSD
 // `script` on macOS, which takes neither `-e`, `-f` nor `-c`.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { scriptCommand, scriptLine } from "../src/script";
@@ -36,7 +37,7 @@ test.each([
       const ran = yield* exec(["/bin/sh", "-c", scriptLine(LOGIN)], {
         env: { PATH: `${bin}:/usr/bin:/bin` },
       });
-      expect(ran.stdout).toBe(`${scriptCommand(LOGIN, platform).slice(1).join("\n")}\n`);
+      expect(ran.stdout).toBe(`${Arr.join(scriptCommand(LOGIN, platform).slice(1), "\n")}\n`);
     }).pipe(Effect.scoped),
   ),
 );

@@ -1,6 +1,9 @@
 // What a Run was given beside its words: files the host copies into the Run's own
 // directory, and every prompt of the Run lists (ADR-0046).
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path } from "effect";
 
 /** The most a host takes of one file. */
@@ -66,7 +69,9 @@ export const namesIn = Effect.fn("attachments.namesIn")(function* (
     const own = path.basename(from);
     const there = yield* held(own);
     const name =
-      there === null || sameBytes(there, bytes) ? own : `${sha256Hex(bytes).slice(0, 8)}-${own}`;
+      there === null || sameBytes(there, bytes)
+        ? own
+        : `${pipe_(sha256Hex(bytes), Str.slice(0, 8))}-${own}`;
     planned.set(name, bytes);
     named.push({ name, from, bytes });
   }
@@ -84,7 +89,7 @@ export const copyInto = Effect.fn("attachments.copyInto")(function* (
   const named = yield* namesIn(dir, sources);
   yield* fs.makeDirectory(dir, { recursive: true });
   for (const { name, bytes } of named) yield* fs.writeFile(path.join(dir, name), bytes);
-  return named.map(({ name, from }): Attached => ({ name, from }));
+  return Arr.map(named, ({ name, from }): Attached => ({ name, from }));
 });
 
 /** Keeps words too long to type as a file in `dir`, named by digest so a retry keeps one. */
@@ -94,7 +99,7 @@ export const keepMessage = Effect.fn("attachments.keepMessage")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const stem = `message-${sha256Hex(words).slice(0, 8)}`;
+  const stem = `message-${pipe_(sha256Hex(words), Str.slice(0, 8))}`;
   const bytes = new TextEncoder().encode(words);
   yield* fs.makeDirectory(dir, { recursive: true });
   for (let nth = 0; ; nth++) {
@@ -116,7 +121,11 @@ export const listAttachments = Effect.fn("attachments.list")(function* (dir: str
   const path = yield* Path.Path;
   const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
   const found: Attachment[] = [];
-  for (const name of names.toSorted()) {
+  for (const name of Arr.sortWith(
+    names,
+    (value) => value,
+    (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+  )) {
     const file = path.join(dir, name);
     const info = yield* fs.stat(file).pipe(Effect.option);
     if (info._tag === "None" || info.value.type !== "File") continue;
@@ -126,7 +135,7 @@ export const listAttachments = Effect.fn("attachments.list")(function* (dir: str
 });
 
 export const mediaTypeOf = (file: string) =>
-  Bun.file(file).type.split(";")[0] || "application/octet-stream";
+  Str.split(Bun.file(file).type, ";")[0] || "application/octet-stream";
 
 /** The line a steer's text gains for each file it brought. */
 export const attachedLine = (path: string) => `Attached: ${path}`;

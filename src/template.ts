@@ -1,6 +1,9 @@
 // {{a.b}} substitution for prompt bodies. Unknown keys render empty and are reported, and
 // the caller refuses a body that reported any.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Schema } from "effect";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
 
@@ -30,7 +33,7 @@ export function skillMention(skills: ReadonlyMap<string, string>): (name: string
 
 /** Every skill a text rendered with `skillMention` mentions, in the order it mentions them. */
 export function mentionedSkills(text: string): string[] {
-  return [...new Set(Array.from(text.matchAll(MENTION), ([, name]) => name!))];
+  return Arr.dedupe(Arr.map(Arr.fromIterable(Str.matchAll(MENTION)(text)), ([, name]) => name!));
 }
 
 const MENTION = /the `([A-Za-z0-9_-]+)` skill \((?:read|not installed)/g;
@@ -38,7 +41,8 @@ const MENTION = /the `([A-Za-z0-9_-]+)` skill \((?:read|not installed)/g;
 /** Every skill a body asks for, in the order it asks. */
 export function skillsIn(text: string): string[] {
   const names: string[] = [];
-  for (const [, name] of text.matchAll(SKILL)) if (name && !names.includes(name)) names.push(name);
+  for (const [, name] of pipe(text, Str.matchAll(SKILL)))
+    if (name && !names.includes(name)) names.push(name);
   return names;
 }
 
@@ -49,14 +53,17 @@ const BRACES = /\{\{[^}]*\}\}/g;
 /** Every name a body looks up, skills aside, in the order it first names them. */
 export function expressionsIn(text: string): string[] {
   const names: string[] = [];
-  for (const [, name] of text.replace(SKILL, "").matchAll(EXPRESSION))
+  for (const [, name] of pipe(text, Str.replace(SKILL, ""), Str.matchAll(EXPRESSION)))
     if (name && !names.includes(name)) names.push(name);
   return names;
 }
 
 /** Every `{{…}}` that is neither a skill nor a name to look up: nothing would fill it. */
 export function malformedIn(text: string): string[] {
-  return [...text.replace(SKILL, "").replace(EXPRESSION, "").matchAll(BRACES)].map(([all]) => all);
+  return Arr.map(
+    [...pipe(text, Str.replace(SKILL, ""), Str.replace(EXPRESSION, ""), Str.matchAll(BRACES))],
+    ([all]) => all,
+  );
 }
 
 /** An Input the Run was not given, said rather than left blank. */
@@ -65,16 +72,18 @@ const NOT_GIVEN = "not given";
 export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}): Rendered {
   const missing: string[] = [];
   // Skills first, so `{{skill:x}}` is never mistaken for missing input.
+  // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   const withSkills = text.replace(SKILL, (all, name: string) =>
     opts.skill ? opts.skill(name) : all,
   );
+  // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   const out = withSkills.replace(EXPRESSION, (_all, path: string) => {
-    const value = lookup(input, path.split("."));
+    const value = lookup(input, Str.split(path, "."));
     if (value === undefined || value === null) {
       if (!missing.includes(path)) missing.push(path);
       return "";
     }
-    if (value === "" && path.startsWith("inputs.")) return NOT_GIVEN;
+    if (value === "" && pipe(path, Str.startsWith("inputs."))) return NOT_GIVEN;
     return isText(value) ? value : JSON.stringify(value, null, 2);
   });
   return { text: out, missing };
@@ -103,11 +112,12 @@ export function slugify(text: string, max = 40): string {
  * `tasks/` path — clip to the same slug, and anything keyed by it then collides.
  */
 export function slug(text: string, max = 40) {
-  const full = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const cut = full.slice(0, max).replace(/-+$/g, "");
+  const full = pipe(
+    Str.toLowerCase(text),
+    Str.replace(/[^a-z0-9]+/g, "-"),
+    Str.replace(/^-+|-+$/g, ""),
+  );
+  const cut = pipe(full, Str.slice(0, max), Str.replace(/-+$/g, ""));
   // The fallback name counts as clipped: it stands for the text rather than coming out
   // of it, so two texts with nothing alphanumeric between them would share it.
   return { slug: cut || "run", clipped: cut !== full || cut === "" };

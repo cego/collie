@@ -4,6 +4,7 @@
 // name: an offer exists because the work earned it, so a fork that renames every shipped
 // workflow keeps what its Runs offer, and a workflow nobody shipped gets the same.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { SELF, inputsFor, offersFrom, type Declared } from "../src/offers";
 import type { ActionFacts } from "../src/sdk";
@@ -37,7 +38,7 @@ test("an offer whose facts are met is offered, with the first eligible one as th
     [offer({ id: "one" }), offer({ id: "two" }), offer({ id: "three", eligible: () => false })],
     facts(),
   );
-  expect(offers.map((one) => [one.id, one.primary])).toEqual([
+  expect(Arr.map(offers, (one) => [one.id, one.primary])).toEqual([
     ["one", true],
     ["two", false],
   ]);
@@ -57,7 +58,7 @@ test("a disposition hides the follow-ups, and leaves the actions to their own fa
     ],
     facts({ disposed: true }),
   );
-  expect(offers.map((one) => one.id)).toEqual(["look"]);
+  expect(Arr.map(offers, (one) => one.id)).toEqual(["look"]);
 });
 
 test("an offer whose eligibility throws is not offered, and says why", () => {
@@ -68,7 +69,7 @@ test("an offer whose eligibility throws is not offered, and says why", () => {
     },
   });
   const offers = offersFrom([broken, offer({ id: "fine" })], facts());
-  expect(offers.map((one) => one.id)).toEqual(["fine"]);
+  expect(Arr.map(offers, (one) => one.id)).toEqual(["fine"]);
   expect(offersFrom([broken], facts(), { keepUnavailable: true })[0]).toMatchObject({
     id: "broken",
     unavailable: "no facts here",

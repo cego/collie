@@ -1,6 +1,7 @@
 // The board's actions, each asked of the Machine its card is on. What came of one is
 // said in a toast, in the host's own words when it said no.
 
+import * as Arr from "effect/Array";
 import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
 import { Cause, Effect, Exit, type Semaphore, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
@@ -46,7 +47,7 @@ export interface ReadOptions {
 }
 
 const joined = (parts: ReadonlyArray<Uint8Array>) => {
-  const whole = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+  const whole = new Uint8Array(Arr.reduce(parts, 0, (size, part) => size + part.length));
   let at = 0;
   for (const part of parts) {
     whole.set(part, at);

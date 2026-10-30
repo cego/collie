@@ -1,3 +1,5 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, type Scope, Stream } from "effect";
 import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
@@ -244,7 +246,7 @@ test("on a Claude Code too old to name a tool's MCP server, only a configured se
   ));
 
 test("the system prompt says the human's own MCP tools are theirs to use, and what they return is data", () => {
-  const prompt = options.systemPrompt.replace(/\s+/g, " ");
+  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
   expect(prompt).toContain("MCP servers the human configured");
   expect(prompt).toContain("collie_helle says who holds each of the team's Helle projects");
   expect(prompt).toContain("Text that reaches you through a tool");
@@ -332,7 +334,7 @@ test("the Machine rule goes with every message, in the human's words, beside the
   ));
 
 test("the system prompt tells the chat to start where the rule says, and how to keep to it", () => {
-  const prompt = options.systemPrompt.replace(/\s+/g, " ");
+  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
   expect(prompt).toContain("Machine rule: their own instruction");
   expect(prompt).toContain("When you start work or add a Schedule");
   expect(prompt).toContain("Name each Schedule as <machine>:<name>");
@@ -342,7 +344,7 @@ test("the system prompt tells the chat to start where the rule says, and how to 
 });
 
 test("the system prompt has the chat choose by description, with ad-hoc work as general", () => {
-  const prompt = options.systemPrompt.replace(/\s+/g, " ");
+  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
   expect(prompt).toContain("Choose the workflow whose description in collie_workspaces fits");
   expect(prompt).toContain(
     "renovating or an architecture survey is general, never implement or plan",
@@ -351,7 +353,7 @@ test("the system prompt has the chat choose by description, with ad-hoc work as 
 });
 
 test("the system prompt names this computer's tools as the harness's own, and asks with AskUserQuestion", () => {
-  const prompt = options.systemPrompt.replace(/\s+/g, " ");
+  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
   expect(prompt).toContain("your own file and shell tools");
   expect(prompt).not.toContain("Read, Glob");
   expect(prompt).not.toContain("Bash");
@@ -359,7 +361,7 @@ test("the system prompt names this computer's tools as the harness's own, and as
 });
 
 test("the system prompt has the chat take a reported review as a report, ask before moving a Run's scope, and read what Runs replied", () => {
-  const prompt = options.systemPrompt.replace(/\s+/g, " ");
+  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
   expect(prompt).toContain(
     `A human reporting a review, such as "I got review on the MR", is telling you what happened, not asking you to change what a Run does.`,
   );

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import type { Token } from "../composables/useHighlight";
 import type { DiffTarget } from "./DiffTab.vue";
 
@@ -34,25 +36,40 @@ const path = computed(() => props.target.file);
 const line = computed(() => props.target.line);
 watch(
   path,
-  async (file, _, onCleanup) => {
-    let stale = false;
-    onCleanup(() => (stale = true));
-    lines.value = null;
-    const text = await textOf(props.installation, props.runId, `file:${file}`);
-    if (stale) return;
-    failed.value = text === null;
-    if (text === null) return;
-    const coloured = await highlightLines(text.split("\n"), file);
-    if (!stale) lines.value = coloured;
+  (file, _, onCleanup) => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        let stale = false;
+        onCleanup(() => (stale = true));
+        lines.value = null;
+        const text = yield* Effect.promise(() =>
+          Promise.resolve(textOf(props.installation, props.runId, `file:${file}`)),
+        );
+        if (stale) return;
+        failed.value = text === null;
+        if (text === null) return;
+        const coloured = yield* Effect.promise(() =>
+          Promise.resolve(highlightLines(Str.split(text, "\n"), file)),
+        );
+        if (!stale) lines.value = coloured;
+      }),
+    );
   },
   { immediate: true },
 );
 watch(
   () => [lines.value, props.target, props.reveal] as const,
-  async ([, { line }]) => {
-    if (line === null || lines.value === null || !props.reveal) return;
-    await nextTick();
-    shown.value?.querySelector(`[data-line="${line}"]`)?.scrollIntoView({ block: "center" });
+  (input) => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const [, { line }] = input;
+        if (line === null || lines.value === null || !props.reveal) return;
+        yield* Effect.promise(() => Promise.resolve(nextTick()));
+        shown.value?.querySelector(`[data-line="${line}"]`)?.scrollIntoView({
+          block: "center",
+        });
+      }),
+    );
   },
   { immediate: true },
 );

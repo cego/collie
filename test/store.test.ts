@@ -5,6 +5,8 @@
 // again still hold what was admitted, and does a subscriber hear about a committed change.
 // None of those is answerable in a map.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import { Effect, Fiber, FileSystem, Layer, Stream } from "effect";
@@ -31,7 +33,7 @@ const admission = (
   workflow: "proof",
   project: "/work/thing",
   input,
-  provenance: Object.fromEntries(Object.keys(input).map((name) => [name, "typed"])),
+  provenance: Rec.fromEntries(Arr.map(Rec.keys(input), (name) => [name, "typed"] as const)),
   options: {},
   generation: "proof@1",
   execution: `execution-${run}`,
@@ -63,7 +65,7 @@ test("a request claims one run, and claiming it again is that same run", () =>
       expect(again.fresh).toBe(false);
       expect(again.row.run).toBe("run-a");
       expect(again.row.execution).toBe("execution-run-a");
-      expect((yield* store.runs).map((row) => row.run)).toEqual(["run-a"]);
+      expect(Arr.map(yield* store.runs, (row) => row.run)).toEqual(["run-a"]);
     }),
   ));
 
@@ -73,13 +75,13 @@ test("claims of one request that arrive together settle on one run", () =>
     Effect.gen(function* () {
       const store = yield* Store;
       const claimed = yield* Effect.all(
-        ["a", "b", "c", "d"].map((suffix) =>
+        Arr.map(["a", "b", "c", "d"], (suffix) =>
           store.admit(admission("req-1", `run-${suffix}`, { note: "once" })),
         ),
         { concurrency: "unbounded" },
       );
-      expect(new Set(claimed.map((one) => one.row.run)).size).toBe(1);
-      expect(claimed.filter((one) => one.fresh)).toHaveLength(1);
+      expect(new Set(Arr.map(claimed, (one) => one.row.run)).size).toBe(1);
+      expect(Arr.filter(claimed, (one) => one.fresh)).toHaveLength(1);
       expect(yield* store.runs).toHaveLength(1);
     }),
   ));
@@ -150,7 +152,7 @@ test("two requests with the same input are two runs", () =>
       const store = yield* Store;
       yield* store.admit(admission("req-1", "run-a", { note: "same" }));
       yield* store.admit(admission("req-2", "run-b", { note: "same" }));
-      expect((yield* store.runs).map((row) => row.run).sort()).toEqual(["run-a", "run-b"]);
+      expect(Arr.map(yield* store.runs, (row) => row.run).sort()).toEqual(["run-a", "run-b"]);
     }),
   ));
 
@@ -177,7 +179,7 @@ test("what a host admitted is there when the database is opened again", () =>
         expect(found?.request).toBe("req-1");
         expect(found?.execution).toBe("execution-run-a");
         // Admitted and never accepted: work for the new host to pick up.
-        expect((yield* store.pending).map((row) => row.run)).toEqual(["run-a"]);
+        expect(Arr.map(yield* store.pending, (row) => row.run)).toEqual(["run-a"]);
       }).pipe(Effect.provide(opens(file)), Effect.scoped);
     }).pipe(Effect.scoped),
   ));
@@ -224,7 +226,7 @@ test("a subscriber is told once the change is committed", () =>
       yield* store.admit(admission("req-2", "run-b", { note: "after" }));
 
       const updates = yield* Fiber.join(seen);
-      expect(updates.map((rows) => rows.map((row) => row.run))).toEqual([
+      expect(Arr.map(updates, (rows) => Arr.map(rows, (row) => row.run))).toEqual([
         ["run-a"],
         ["run-a", "run-b"],
       ]);

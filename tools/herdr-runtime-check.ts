@@ -8,17 +8,18 @@
 // release older than the pin runs this code too, and the only honest answer then is to
 // refuse rather than fall back to owning a workspace by its label.
 
-import { BunServices } from "@effect/platform-bun";
+import * as Arr from "effect/Array";
+import { platformLayer } from "../src/platform";
 import { Effect, ManagedRuntime } from "effect";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { REQUIRED_FIELDS, REQUIRED_RUNTIME, missingRuntime } from "../src/home";
 
-const runtime = ManagedRuntime.make(BunServices.layer);
+const runtime = ManagedRuntime.make(platformLayer);
 
 const check = Effect.fn("runtimeCheck")(function* () {
   const herdr = new Herdr(yield* currentEnv);
-  const schema = yield* herdr.apiSchema().pipe(Effect.catch(() => Effect.succeed("")));
+  const schema = yield* herdr.apiSchema().pipe(Effect.orElseSucceed(() => ""));
   if (schema === "") {
     yield* Effect.logError("herdr could not be asked for its schema");
     return 1;
@@ -27,15 +28,18 @@ const check = Effect.fn("runtimeCheck")(function* () {
   // its own `includes`, which is neither what `missingRuntime` asks nor as strict — and a
   // table that disagrees with the gate is worse than no table.
   const missing = missingRuntime(schema);
-  const rows = [
-    ...REQUIRED_RUNTIME,
-    ...REQUIRED_FIELDS.map(([type, field]) => `${type}.${field}`),
-  ].map((name) => `| ${name} | ${missing.includes(name) ? "MISSING" : "present"} |`);
+  const rows = Arr.map(
+    [...REQUIRED_RUNTIME, ...Arr.map(REQUIRED_FIELDS, ([type, field]) => `${type}.${field}`)],
+    (name) => `| ${name} | ${missing.includes(name) ? "MISSING" : "present"} |`,
+  );
   yield* Effect.log(
-    ["", "| what the Home needs | in the installed herdr |", "|---|---|", ...rows, ""].join("\n"),
+    Arr.join(
+      ["", "| what the Home needs | in the installed herdr |", "|---|---|", ...rows, ""],
+      "\n",
+    ),
   );
   if (missing.length > 0) {
-    yield* Effect.logError(`herdr_capability_missing:${missing.join(",")}`);
+    yield* Effect.logError(`herdr_capability_missing:${Arr.join(missing, ",")}`);
     return 1;
   }
   return 0;

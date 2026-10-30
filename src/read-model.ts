@@ -1,4 +1,6 @@
 import { Context, Effect, FileSystem, Layer, PlatformError } from "effect";
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
 
 /** Disk inputs only: clocks, engine status and rendered views are never memoized here. */
 export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string) {
@@ -6,8 +8,8 @@ export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string)
   let revision = 0;
   let enabled = true;
   const groupOf = (path: string) => {
-    if (!path.startsWith(`${dir}/`)) return null;
-    const [top, run] = path.slice(dir.length + 1).split("/");
+    if (!pipe(path, Str.startsWith(`${dir}/`))) return null;
+    const [top, run] = Str.split(pipe(path, Str.slice(dir.length + 1)), "/");
     if (top === "runs" || top === "agents" || top === "evidence")
       return run === undefined ? "shared" : `run/${run}`;
     return top === "tasks" ||
@@ -91,7 +93,7 @@ export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string)
     return made;
   };
   const invalidate = (path: string) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const group = path === dir ? "shared" : groupOf(path);
       if (group === null) return;
       revision++;
@@ -107,7 +109,7 @@ export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string)
         if (group !== "shared") groups.delete("shared");
       }
     });
-  const disable = Effect.gen(function* () {
+  const disable = Effect.sync(() => {
     enabled = false;
     revision++;
     groups.clear();

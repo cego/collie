@@ -1,8 +1,11 @@
 // A Finished Task's workspace closes an hour on, unless it is in focus or holds a pane
 // Collie did not open; nothing else of a Task's is closed (ADR-0045 D3).
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Schema } from "effect";
+import { Clock, Effect, FileSystem, Schema, flow, Result } from "effect";
 import type { TaskView } from "../src/board-model";
 import { sweep, taskWorkspacesSweeper } from "../src/cleanup";
 import { Herdr } from "../src/herdr";
@@ -62,7 +65,7 @@ const sweeper = (seen: Map<string, number>, views: ReadonlyArray<TaskView> = [fi
 
 const closes = Effect.map(
   Effect.suspend(() => rig.cmds()),
-  (cmds) => cmds.filter((cmd) => cmd === "workspace.close").length,
+  (cmds) => Arr.filter(cmds, (cmd) => cmd === "workspace.close").length,
 );
 
 /** Seen Finished `ms` ago. */
@@ -83,11 +86,14 @@ test("a Finished Task's workspace is kept for its hour, then closed", () =>
 
       seen.set("task-1", seen.get("task-1")! - HOUR_MS);
       const later = yield* sweep([sweeper(seen)], rig.stateDir, "host");
-      expect(later.remove.map((item) => item.target)).toEqual(["wT"]);
+      expect(Arr.map(later.remove, (item) => item.target)).toEqual(["wT"]);
       const calls = yield* rig.calls();
-      expect(calls.filter((call) => call.cmd === "workspace.close").map((c) => c.params)).toEqual([
-        { workspace_id: "wT" },
-      ]);
+      expect(
+        Arr.map(
+          Arr.filter(calls, (call) => call.cmd === "workspace.close"),
+          (c) => c.params,
+        ),
+      ).toEqual([{ workspace_id: "wT" }]);
     }),
   ));
 
@@ -123,7 +129,7 @@ const restoredFixer = (session: typeof SESSION) =>
     yield* rig.addRestored({ paneId: "wT-p9", workspaceId: "wT", terminalId: "t-new", session });
     yield* fs.writeFileString(
       `${rig.stateDir}/agents/r1/fix.launch.json`,
-      Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+      yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
         agent: "fixer",
         output: "out.json",
         reused: false,
@@ -134,7 +140,7 @@ const restoredFixer = (session: typeof SESSION) =>
         harness: "pi",
         terminalId: "t-old",
         agentSession: SESSION,
-      }),
+      }).pipe(Effect.orDie),
     );
   });
 
@@ -144,7 +150,7 @@ test("a pane herdr restored resuming its agent's recorded session is Collie's, a
       yield* arranged();
       yield* restoredFixer(SESSION);
       const judged = yield* sweep([sweeper(yield* seenAgo(2 * HOUR_MS))], rig.stateDir, "host");
-      expect(judged.remove.map((item) => item.target)).toEqual(["wT"]);
+      expect(Arr.map(judged.remove, (item) => item.target)).toEqual(["wT"]);
       expect(yield* closes).toBe(1);
       const fs = yield* FileSystem.FileSystem;
       expect(yield* fs.readFileString(`${rig.stateDir}/agents/r1/agents.log`)).toContain(
@@ -216,7 +222,7 @@ test("a herdr that will not list workspaces keeps every Task's", () =>
     }),
   ));
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 /** The agent's server, as its control record names it, stopped by a port that says `state`. */
 const servedBy = (state: Stopped["state"]) =>
@@ -255,7 +261,7 @@ const servedBy = (state: Stopped["state"]) =>
     const stops: string[] = [];
     const ports: CompactionPorts = {
       served: {
-        gate: () => Effect.void,
+        gate: Effect.void,
         install: () => Effect.succeed({ args: [] }),
         request: () => Effect.die("unused"),
         poll: () => Effect.die("unused"),
@@ -293,7 +299,7 @@ test("a Finished Task's workspace closes only once its agents are stopped where 
       });
       const judged = yield* sweep([swept], rig.stateDir, "host");
       expect(stops).toEqual(["impl"]);
-      expect(judged.remove.map((item) => item.target)).toEqual(["wT"]);
+      expect(Arr.map(judged.remove, (item) => item.target)).toEqual(["wT"]);
       expect(yield* closes).toBe(1);
     }),
   ));
@@ -314,14 +320,20 @@ test("a Finished Task's workspace whose agent's turn has not stopped is kept, wi
       });
       const judged = yield* sweep([swept], rig.stateDir, "host");
       expect(judged.remove).toEqual([]);
-      expect(judged.keep.map((one) => one.reason).join("\n")).toContain(
-        "its Codex turn has not stopped: impl is not stopped: acknowledged",
-      );
+      expect(
+        Arr.join(
+          Arr.map(judged.keep, (one) => one.reason),
+          "\n",
+        ),
+      ).toContain("its Codex turn has not stopped: impl is not stopped: acknowledged");
       expect(yield* closes).toBe(0);
       // The listing says the same, now that the stop is on its record.
-      expect((yield* swept.judge).keep.map((one) => one.reason).join("\n")).toContain(
-        "thread th-1 turn tu-1",
-      );
+      expect(
+        Arr.join(
+          Arr.map((yield* swept.judge).keep, (one) => one.reason),
+          "\n",
+        ),
+      ).toContain("thread th-1 turn tu-1");
       // A later sweep stops it again rather than repeating the old reason.
       yield* sweep([swept], rig.stateDir, "host");
       expect(stops).toEqual(["impl", "impl"]);
@@ -388,11 +400,11 @@ test("an agent moved to another workspace is logged ended only once its pane the
           rig.stateDir,
           "host",
         );
-        expect(judged.remove.map((item) => item.target)).toEqual(["wT"]);
+        expect(Arr.map(judged.remove, (item) => item.target)).toEqual(["wT"]);
         const log = yield* fs
           .readFileString(`${rig.stateDir}/agents/r1/agents.log`)
           .pipe(Effect.orElseSucceed(() => ""));
-        expect(log.includes("impl ended: its Task's workspace closed")).toBe(!fail);
+        expect(pipe_(log, Str.includes("impl ended: its Task's workspace closed"))).toBe(!fail);
       }
     }),
   ));

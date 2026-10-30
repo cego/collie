@@ -1,7 +1,7 @@
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 
 export const isString = Schema.is(Schema.String);
-export const isNumber = Schema.is(Schema.Number);
+export const isNumber = Predicate.isNumber;
 
 export const isArray = Schema.is(Schema.Array(Schema.Unknown));
 export const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));

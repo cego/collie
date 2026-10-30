@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
 const props = defineProps<{ title: string; initial?: string; sendLabel?: string }>();
 const emit = defineEmits<{ send: [text: string] }>();
 const open = defineModel<boolean>("open", { required: true });
@@ -8,7 +9,7 @@ watch(open, () => {
   text.value = props.initial ?? "";
 });
 const send = () => {
-  const said = text.value.trim();
+  const said = Str.trim(text.value);
   if (said === "") return;
   emit("send", said);
   open.value = false;
@@ -25,7 +26,7 @@ const send = () => {
           class="self-end"
           :label="sendLabel ?? 'Send'"
           data-testid="send"
-          :disabled="text.trim() === ''"
+          :disabled="Str.trim(text) === ''"
         />
       </form>
     </template>

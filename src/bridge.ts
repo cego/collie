@@ -2,6 +2,9 @@
 // command's stdio. The bridge is the Machine's own binary, so starting the host is done
 // here, never by the client at the other end of the stream.
 
+import * as Str from "effect/String";
+import * as Struct from "effect/Struct";
+
 import { Config, Effect, Option } from "effect";
 import { BRIDGE_READY, type Declaration, type FrontDoor, type Where } from "./board-model";
 import { channelInto } from "./channel";
@@ -15,11 +18,16 @@ const whereFrom = Effect.fn("Bridge.whereFrom")(function* (client: string | null
   const connection = yield* Config.option(Config.String("SSH_CONNECTION")).pipe(
     Effect.orElseSucceed(() => Option.none<string>()),
   );
-  const ssh = Option.getOrUndefined(connection)?.split(" ")[0];
+  const ssh = Option.getOrUndefined(
+    Option.map(
+      Option.fromNullishOr(Option.getOrUndefined(connection)),
+      (present) => Str.split(present, " ")[0],
+    ),
+  );
   let where: Where = {};
   if (client !== null) where = { ...where, client };
   if (ssh !== undefined && ssh !== "") where = { ...where, ssh };
-  return Object.keys(where).length === 0 ? undefined : where;
+  return Struct.keys(where).length === 0 ? undefined : where;
 });
 
 export const bridge = Effect.fn("Bridge")(function* (

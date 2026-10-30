@@ -3,6 +3,7 @@
 // `dispatch` puts plain data on a queue an Effect fiber drains. Nothing crosses in any
 // other direction — components never hold an Effect, and the handlers never render.
 
+import * as Str from "effect/String";
 import { Deferred, Effect, Fiber, FileSystem, Queue, Scope, Stream, SubscriptionRef } from "effect";
 import { createCliRenderer } from "@opentui/core";
 import { render, useKeyboard, useRenderer } from "@opentui/solid";
@@ -226,7 +227,7 @@ export function driveBridge<E, R>(
         Effect.map((value) => ({ ok: true as const, value })),
         Effect.catchCause((cause) =>
           Effect.sync(() => {
-            setState((previous) => ({ ...previous, note: reason(cause).split("\n")[0]! }));
+            setState((previous) => ({ ...previous, note: Str.split(reason(cause), "\n")[0]! }));
             return { ok: false as const };
           }),
         ),

@@ -1,7 +1,8 @@
 // Each harness's catalogue decoded from what it answered on vm-mk on 29 Oct 2026.
 
+import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
-import { Option, Schema } from "effect";
+import { Option, Schema, flow, Result } from "effect";
 import {
   ClaudeModels,
   claudeEntries,
@@ -23,23 +24,34 @@ test("explicitly adding a hidden model exposes it without losing its reported ca
     harness: "codex",
     at: "2026-10-29T12:00:00Z",
     table: null,
-    entries: codexEntries(Schema.decodeUnknownSync(CodexModelList)(codexModelList)),
+    entries: codexEntries(
+      flow(Schema.decodeResult(CodexModelList), Result.getOrThrow)(codexModelList),
+    ),
   };
-  const hidden = catalogue.entries.find(({ model }) => model === "gpt-reserve")!;
+  const hidden = Option.getOrUndefined(
+    Arr.findFirst(catalogue.entries, ({ model }) => model === "gpt-reserve"),
+  )!;
   const added = withAdded(catalogue, ["gpt-reserve"]);
-  expect(added.entries.find(({ model }) => model === "gpt-reserve")).toEqual({
+  expect(
+    Option.getOrUndefined(Arr.findFirst(added.entries, ({ model }) => model === "gpt-reserve")),
+  ).toEqual({
     ...hidden,
     hidden: false,
     from: "added",
   });
   expect(added.entries).toHaveLength(catalogue.entries.length);
-  expect(catalogue.entries.find(({ model }) => model === "gpt-reserve")?.hidden).toBe(true);
+  expect(
+    Option.getOrUndefined(Arr.findFirst(catalogue.entries, ({ model }) => model === "gpt-reserve"))
+      ?.hidden,
+  ).toBe(true);
 });
 
 describe("decoding each harness's own list", () => {
   test("Claude Code's supportedModels(), without its `default`", () => {
-    const entries = claudeEntries(Schema.decodeUnknownSync(ClaudeModels)(claudeModels));
-    expect(entries.map((entry) => entry.model)).toEqual([
+    const entries = claudeEntries(
+      flow(Schema.decodeResult(ClaudeModels), Result.getOrThrow)(claudeModels),
+    );
+    expect(Arr.map(entries, (entry) => entry.model)).toEqual([
       "opus",
       "fable",
       "sonnet",
@@ -63,22 +75,29 @@ describe("decoding each harness's own list", () => {
       hidden: false,
       from: "harness",
     });
-    expect(entries.find((entry) => entry.model === "claude-opus-4-6")?.efforts).toEqual([
-      "low",
-      "medium",
-      "high",
-      "max",
-    ]);
-    expect(entries.find((entry) => entry.model === "claude-haiku-4-5-20251001")).toMatchObject({
+    expect(
+      Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry.model === "claude-opus-4-6"))
+        ?.efforts,
+    ).toEqual(["low", "medium", "high", "max"]);
+    expect(
+      Option.getOrUndefined(
+        Arr.findFirst(entries, (entry) => entry.model === "claude-haiku-4-5-20251001"),
+      ),
+    ).toMatchObject({
       label: "Haiku 4.5",
       efforts: [],
     });
-    expect(entries.find((entry) => entry.model === "claude-mythos-5-1")?.description).toBeNull();
+    expect(
+      Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry.model === "claude-mythos-5-1"))
+        ?.description,
+    ).toBeNull();
   });
 
   test("Codex's model/list, hidden models marked hidden", () => {
-    const entries = codexEntries(Schema.decodeUnknownSync(CodexModelList)(codexModelList));
-    expect(entries.map(({ model, hidden }) => [model, hidden])).toEqual([
+    const entries = codexEntries(
+      flow(Schema.decodeResult(CodexModelList), Result.getOrThrow)(codexModelList),
+    );
+    expect(Arr.map(entries, ({ model, hidden }) => [model, hidden])).toEqual([
       ["gpt-6.1-sol", false],
       ["gpt-6.1-terra", false],
       ["gpt-6-astra", false],
@@ -100,19 +119,19 @@ describe("decoding each harness's own list", () => {
       hidden: false,
       from: "harness",
     });
-    expect(entries.find((entry) => entry.model === "gpt-6.1-terra")?.defaultEffort).toBe("low");
-    expect(entries.find((entry) => entry.model === "gpt-6-luna")?.efforts).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ]);
+    expect(
+      Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry.model === "gpt-6.1-terra"))
+        ?.defaultEffort,
+    ).toBe("low");
+    expect(
+      Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry.model === "gpt-6-luna"))
+        ?.efforts,
+    ).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   test("Pi's --list-models, a model that does not think offering no effort", () => {
     const entries = piEntries(piList) ?? [];
-    expect(entries.map((entry) => entry.model)).toEqual([
+    expect(Arr.map(entries, (entry) => entry.model)).toEqual([
       "ollama/gpt-oss:20b",
       "ollama/qwen3-coder:30b",
       "openai-codex/gpt-5.6-luna",
@@ -123,7 +142,11 @@ describe("decoding each harness's own list", () => {
       "openai-codex/gpt-6-sol",
       "openai-codex/gpt-6.1-sol",
     ]);
-    expect(entries.find((entry) => entry.model === "ollama/qwen3-coder:30b")).toEqual({
+    expect(
+      Option.getOrUndefined(
+        Arr.findFirst(entries, (entry) => entry.model === "ollama/qwen3-coder:30b"),
+      ),
+    ).toEqual({
       model: "ollama/qwen3-coder:30b",
       label: "qwen3-coder:30b",
       description: null,
@@ -132,21 +155,21 @@ describe("decoding each harness's own list", () => {
       hidden: false,
       from: "harness",
     });
-    expect(entries.find((entry) => entry.model === "openai-codex/gpt-6.1-sol")?.efforts).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ]);
+    expect(
+      Option.getOrUndefined(
+        Arr.findFirst(entries, (entry) => entry.model === "openai-codex/gpt-6.1-sol"),
+      )?.efforts,
+    ).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
   });
 
   test("OpenCode's models, every one with no effort", () => {
     const entries = opencodeEntries(opencodeList) ?? [];
     expect(entries).toHaveLength(106);
-    expect(entries.find((entry) => entry.model === "opencode/claude-fable-5")).toEqual({
+    expect(
+      Option.getOrUndefined(
+        Arr.findFirst(entries, (entry) => entry.model === "opencode/claude-fable-5"),
+      ),
+    ).toEqual({
       model: "opencode/claude-fable-5",
       label: "claude-fable-5",
       description: null,
@@ -155,8 +178,8 @@ describe("decoding each harness's own list", () => {
       hidden: false,
       from: "harness",
     });
-    expect(entries.some((entry) => entry.model === "openai/gpt-5.4-mini-flex")).toBe(true);
-    expect(entries.filter((entry) => entry.efforts.length > 0)).toEqual([]);
+    expect(Arr.some(entries, (entry) => entry.model === "openai/gpt-5.4-mini-flex")).toBe(true);
+    expect(Arr.filter(entries, (entry) => entry.efforts.length > 0)).toEqual([]);
   });
 
   test("an answer in a shape Collie does not read decodes to nothing", () => {

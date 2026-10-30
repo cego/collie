@@ -1,6 +1,11 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
-import { Crypto, Effect, FileSystem, Path, Schema, Scope, Stream } from "effect";
+import { platformLayer } from "../src/platform";
+import { Effect, FileSystem, Path, Schema, Scope, Stream, flow, Result } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { piDriver } from "../desktop/src/bun/pi-driver";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
 import type { DriverContext } from "../desktop/src/bun/driver";
@@ -25,7 +30,11 @@ const withPi = <A, E>(
   body: (
     driver: ReturnType<typeof piDriver>,
     context: DriverContext,
-  ) => Effect.Effect<A, E, Scope.Scope | Crypto.Crypto | FileSystem.FileSystem | Path.Path>,
+  ) => Effect.Effect<
+    A,
+    E,
+    Scope.Scope | SecureRandom.SecureRandom | FileSystem.FileSystem | Path.Path
+  >,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -42,10 +51,10 @@ const withPi = <A, E>(
       env.PI_CODING_AGENT_DIR = `${dir}/agent`;
       yield* fs.makeDirectory(env.PI_CODING_AGENT_DIR);
       expect(childEnv().PI_CODING_AGENT_DIR).toBe(`${dir}/agent`);
-      const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem>();
+      const services = yield* Effect.context<SecureRandom.SecureRandom | FileSystem.FileSystem>();
       const context: DriverContext = {
         dir,
-        run: (effect) => Effect.runPromise(effect.pipe(Effect.provideContext(services))),
+        run: Effect.runPromiseWith(services),
         flock: {
           machines: () => [],
           conversation: "flock@test",
@@ -66,7 +75,7 @@ const withPi = <A, E>(
       const endpoint = yield* loopbackTools(context);
       const driver = piDriver(context, endpoint, ["bun", `${import.meta.dir}/fixtures/pi-chat.ts`]);
       return yield* body(driver, context);
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   );
 
 test("Pi streams text including Unicode separators, thinking and one row per tool, ending at agent_settled", () =>
@@ -78,17 +87,17 @@ test("Pi streams text including Unicode separators, thinking and one row per too
       const events = yield* Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)));
       expect(events[0]).toMatchObject({ type: "RUN_STARTED", threadId: "pi-conversation" });
       expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
-      expect(events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT")).toMatchObject([
+      expect(Arr.filter(events, (event) => event.type === "TEXT_MESSAGE_CONTENT")).toMatchObject([
         { delta: "Hello\u2028world\u2029!" },
         { delta: "After agent_end" },
       ]);
-      expect(events.filter((event) => event.type === "REASONING_MESSAGE_CONTENT")).toMatchObject([
-        { delta: "Considering" },
-      ]);
-      expect(events.filter((event) => event.type === "TOOL_CALL_START")).toMatchObject([
+      expect(
+        Arr.filter(events, (event) => event.type === "REASONING_MESSAGE_CONTENT"),
+      ).toMatchObject([{ delta: "Considering" }]);
+      expect(Arr.filter(events, (event) => event.type === "TOOL_CALL_START")).toMatchObject([
         { toolCallId: "herd", toolCallName: "mcp__collie__collie_herd" },
       ]);
-      expect(events.filter((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject([
+      expect(Arr.filter(events, (event) => event.type === "TOOL_CALL_RESULT")).toMatchObject([
         { toolCallId: "herd", content: "No Herds" },
       ]);
       expect(session.lastTurn()?.usage).toEqual({
@@ -122,9 +131,11 @@ test("Pi's start isolates resources, keeps the token in its environment and send
         },
       ]);
       const events = yield* Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)));
-      const text = events.find((event) => event.type === "TEXT_MESSAGE_CONTENT");
-      if (text?.type !== "TEXT_MESSAGE_CONTENT") throw new Error("No reply");
-      const details = Schema.decodeUnknownSync(
+      const text = Option.getOrUndefined(
+        Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
+      );
+      if (text?.type !== "TEXT_MESSAGE_CONTENT") return yield* Effect.die(new Error("No reply"));
+      const details = yield* Schema.decodeEffect(
         Schema.fromJsonString(
           Schema.Struct({
             args: Schema.Array(Schema.String),
@@ -135,7 +146,7 @@ test("Pi's start isolates resources, keeps the token in its environment and send
             prompt: Schema.Struct({ message: Schema.String, images: Schema.Array(Schema.Json) }),
           }),
         ),
-      )(text.delta);
+      )(text.delta).pipe(Effect.orDie);
       expect(details.cwd).toBe(context.dir);
       expect(details.args).toEqual([
         "--mode",
@@ -168,10 +179,12 @@ test("Pi's start isolates resources, keeps the token in its environment and send
       expect(details.systemPrompt).not.toContain("Personal");
       expect(details.extension).toContain("process.env.COLLIE_CHAT_MCP_TOKEN");
       expect(details.extension).toContain("timeout: 86400");
-      const prefix = details.args[details.args.indexOf("--tools") + 1]!.split(",")
-        .at(-1)!
-        .slice(0, -1);
-      for (const name of [...FLOCK_TOOLS, ...FILE_TOOLS, { name: "AskUserQuestion" }].map(
+      const prefix = pipe_(
+        Str.split(details.args[details.args.indexOf("--tools") + 1]!, ",").at(-1)!,
+        Str.slice(0, -1),
+      );
+      for (const name of Arr.map(
+        [...FLOCK_TOOLS, ...FILE_TOOLS, { name: "AskUserQuestion" }],
         (tool) => tool.name,
       ))
         expect(`${prefix}${name}`.length).toBeLessThanOrEqual(64);
@@ -187,16 +200,21 @@ test("Pi's start isolates resources, keeps the token in its environment and send
   ));
 
 const inspected = (events: ReadonlyArray<AguiEvent>) => {
-  const text = events.find((event) => event.type === "TEXT_MESSAGE_CONTENT");
+  const text = Option.getOrUndefined(
+    Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
+  );
   if (text?.type !== "TEXT_MESSAGE_CONTENT") throw new Error("No reply");
-  return Schema.decodeUnknownSync(
-    Schema.fromJsonString(
-      Schema.Struct({
-        args: Schema.Array(Schema.String),
-        model: Schema.String,
-        thinking: Schema.String,
-      }),
+  return flow(
+    Schema.decodeResult(
+      Schema.fromJsonString(
+        Schema.Struct({
+          args: Schema.Array(Schema.String),
+          model: Schema.String,
+          thinking: Schema.String,
+        }),
+      ),
     ),
+    Result.getOrThrow,
   )(text.delta);
 };
 
@@ -204,7 +222,7 @@ const writePiConfig = (config: PiConfig) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     fs.writeFileString(
       `${childEnv().PI_CODING_AGENT_DIR}/settings.json`,
-      Schema.encodeSync(Schema.fromJsonString(PiConfig))(config),
+      flow(Schema.encodeResult(Schema.fromJsonString(PiConfig)), Result.getOrThrow)(config),
     ),
   );
 
@@ -339,7 +357,7 @@ test("Pi's own per-model levels constrain settings, selects, the tool and the se
         const selects = chatSelects(settings, account);
         expect(selects.effort.options[0]?.label).toBe(label);
         expect(selects.model.note).toBe("Listed by Pi on this computer");
-        expect(selects.model.options.map(({ label }) => label)).toContain("GPT-5.5");
+        expect(Arr.map(selects.model.options, ({ label }) => label)).toContain("GPT-5.5");
         const said = yield* callFlockTool(
           {
             ...context.flock,
@@ -590,7 +608,10 @@ test("Pi reads its own session tree, preserves the card pill and files, and hide
       const path = `${context.dir}/pi-sessions/date_pi-history.jsonl`;
       yield* fs.writeFileString(
         path,
-        entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+        Arr.join(
+          Arr.map(entries, (entry) => JSON.stringify(entry)),
+          "\n",
+        ) + "\n",
       );
       const transcript = yield* driver.transcript("pi-history");
       expect(transcript).toMatchObject([
@@ -645,11 +666,15 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
         ),
         Stream.runCollect,
       );
-      expect(events.find((event) => event.type === "TOOL_CALL_START")).toMatchObject({
+      expect(
+        Option.getOrUndefined(Arr.findFirst(events, (event) => event.type === "TOOL_CALL_START")),
+      ).toMatchObject({
         toolCallName: "AskUserQuestion",
       });
-      expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
+      expect(
+        Option.getOrUndefined(Arr.findFirst(events, (event) => event.type === "TOOL_CALL_RESULT")),
+      ).toMatchObject({
         content: expect.stringContaining("Here"),
       });
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));

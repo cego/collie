@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { Deferred, Effect, Option, Result, SubscriptionRef, type Types } from "effect";
 import type { HarnessCatalogue } from "../../../src/catalogue-model";
 import type { ListedModel } from "./claude-models";
@@ -67,16 +68,19 @@ export const listedIn = (
   harness: string,
   keep: (model: string) => boolean = () => true,
 ): Result.Result<ReadonlyArray<ListedModel>, string> => {
-  const catalogue = catalogues.find((one) => one.harness === harness);
+  const catalogue = Option.getOrUndefined(
+    Arr.findFirst(catalogues, (one) => one.harness === harness),
+  );
   if (catalogue === undefined) return Result.fail(`${harness} is not installed on this computer`);
   if (catalogue.table !== null) return Result.fail(catalogue.table);
   return Result.succeed(
-    catalogue.entries
-      .filter((entry) => !entry.hidden && keep(entry.model))
-      .map(({ model, label, description, efforts }) => {
+    Arr.map(
+      Arr.filter(catalogue.entries, (entry) => !entry.hidden && keep(entry.model)),
+      ({ model, label, description, efforts }) => {
         const offered: Types.Mutable<ListedModel> = { id: model, label, efforts };
         if (description !== null) offered.description = description;
         return offered;
-      }),
+      },
+    ),
   );
 };

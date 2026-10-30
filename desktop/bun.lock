@@ -8,7 +8,7 @@
         "@anthropic-ai/claude-agent-sdk": "0.3.292",
         "@comark/nuxt": "0.7.0",
         "@comark/vue": "0.7.0",
-        "@effect/atom-vue": "4.0.1",
+        "@effect/atom-vue": "4.1.0",
         "@fontsource-variable/public-sans": "5.3.0",
         "@iconify-json/lucide": "1.2.140",
         "@modelcontextprotocol/sdk": "1.32.1",
@@ -136,7 +136,7 @@
 
     "@dxup/unimport": ["@dxup/unimport@0.1.2", "", {}, "sha512-/B8YJGPzaYq1NbsQmwgP8EZqg40NpTw4ZB3suuI0TplbxKHeK94jeaawLmVhCv+YwUnOpiWEz9U6SeThku/8JQ=="],
 
-    "@effect/atom-vue": ["@effect/atom-vue@4.0.1", "", { "peerDependencies": { "effect": "^4.0.1", "vue": ">=3.5.39 <4.0.0" } }, "sha512-pYSTQv0/W/UkZasvV51B5MmNfYmkWJALUBsbVAHd0tNqALRAE3K5M6wGks7N29gnl6swQz3UkMYX9XWqHiMcCg=="],
+    "@effect/atom-vue": ["@effect/atom-vue@4.1.0", "", { "peerDependencies": { "effect": "^4.1.0", "vue": ">=3.5.39 <4.0.0" } }, "sha512-LLIG17qywv8MtxWhj6DgtdKHsfg+23/G6WWViXb50ve1PMGVlmFN7fHZFIkZy3MYudaqh1bY1MwbQ+Rr6IqXsg=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.27.7", "", { "os": "aix", "cpu": "ppc64" }, "sha512-EKX3Qwmhz1eMdEJokhALr0YiD0lhQNwDqkPYyPhiSwKrh7/4KRjQc04sZ8db+5DVVnZ1LmbNDI1uAMPEUBnQPg=="],
 
@@ -930,7 +930,7 @@
 
     "ee-first": ["ee-first@1.1.1", "", {}, "sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow=="],
 
-    "effect": ["effect@4.0.1", "", {}, "sha512-b1VlQG9g8fwxE5QnIZuPoOP/0MsqHJSRKxUijjoM80E5q95FXrX5yWtY5XI8G+GJsBQAVSDbLS458z9a++uVvw=="],
+    "effect": ["effect@4.1.0", "", {}, "sha512-lGx2MJJyrXA8RZb2UpQ/0Nkb5Utaimby7oD92+18noBxLPE85IFOvptdzau8dvcxAOwfwHo9iqapbKeFzqQM/Q=="],
 
     "electrobun": ["electrobun@2.0.2", "", { "bin": { "electrobun": "bin/electrobun.cjs" } }, "sha512-UDs2iTNs6qYCzdWiFch/0DtxrsijNDr1WFDQfRmSA3Iouv0iEzyCF5mh4uDxkwNnAbuwFyow36EiVTYP4DRzig=="],
 

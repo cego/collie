@@ -1,6 +1,7 @@
 // What the operator's agent profile may say, and what it becomes at a launch: a pane's
 // environment lines and the Claude settings Collie merges into its own.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import {
@@ -13,7 +14,7 @@ import {
 import { parseSetting } from "../src/settings";
 import { runEffect } from "./support/effect";
 
-const GITLAB = ["glpat", "synthetic0000000000test"].join("-");
+const GITLAB = Arr.join(["glpat", "synthetic0000000000test"], "-");
 
 test("an empty profile is no overlay", () => {
   expect(parseProfile("")).toEqual({ profile: {} });
@@ -60,8 +61,8 @@ test("a literal is exported and a file is read by the shell, so its value is nev
   expect(
     envLines({ PONYTAIL_DEFAULT_MODE: "off", TOKEN: { file: "~/.secrets/token" } }, "/home/me"),
   ).toEqual([
-    "export PONYTAIL_DEFAULT_MODE='off'",
-    "IFS= read -r TOKEN < '/home/me/.secrets/token'; export TOKEN",
+    "export PONYTAIL_DEFAULT_MODE=off",
+    "IFS= read -r TOKEN < /home/me/.secrets/token; export TOKEN",
   ]);
 });
 

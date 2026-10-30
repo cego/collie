@@ -3,7 +3,11 @@
 // prints, as its last line, what its reads and its idle board cost.
 
 import { tmpdir } from "node:os";
-import { Clock, Console, Crypto, Effect, FileSystem, Schema } from "effect";
+import { Clock, Console, Effect, FileSystem, Option, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
 import { Flow } from "../src/board-model";
 import { connect, ownerOf } from "../src/host";
 import { runEffect } from "../test/support/effect";
@@ -21,7 +25,8 @@ const IDLE_SECONDS = 20;
 const kept = Bun.env.COLLIE_BENCH_FIXTURE ?? `${process.cwd()}/.scratch/bench-read`;
 // The host's socket is in its state directory, so the copy a sample runs needs a short path.
 const live =
-  Bun.env.COLLIE_BENCH_LIVE ?? `${tmpdir()}/cb-${Bun.hash(process.cwd()).toString(16).slice(0, 8)}`;
+  Bun.env.COLLIE_BENCH_LIVE ??
+  `${tmpdir()}/cb-${pipe(Bun.hash(process.cwd()).toString(16), Str.slice(0, 8))}`;
 const world = {
   install: `${live}/install`,
   user: `${live}/install/user/workflows`,
@@ -49,12 +54,13 @@ Object.assign(Bun.env, {
 
 const Fixture = Schema.fromJsonString(Schema.Struct({ runId: Schema.String }));
 const Readings = Schema.fromJsonString(Schema.Json);
-const decodeFlow = Schema.decodeUnknownSync(Schema.fromJsonString(Flow));
-const encodeActions = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const decodeFlow = Schema.decodeEffect(Schema.fromJsonString(Flow));
+const encodeActions = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 const flowOf = (answer: string) => {
   const json = /```json\n([\s\S]*?)\n```/.exec(answer)?.[1];
-  if (json === undefined) throw new Error("the answer omitted its Flow");
-  return decodeFlow(json);
+  return json === undefined
+    ? Effect.die(new Error("the answer omitted its Flow"))
+    : Effect.orDie(decodeFlow(json));
 };
 
 /** `cp -a`, which keeps the sockets a stopped host and the fake herdr leave. */
@@ -72,7 +78,8 @@ const usageOf = (pid: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const read = (name: string) => Effect.orDie(fs.readFileString(`/proc/${pid}/${name}`));
-    const stat = (yield* read("stat")).split(") ")[1]?.split(" ") ?? [];
+    const after = Str.split(yield* read("stat"), ") ")[1];
+    const stat = after === undefined ? [] : Str.split(after, " ");
     const io = yield* read("io");
     const status = yield* read("status");
     const field = (text: string, name: string) =>
@@ -86,7 +93,7 @@ const usageOf = (pid: number) =>
     };
   });
 
-const mean = (xs: ReadonlyArray<number>) => xs.reduce((sum, x) => sum + x, 0) / xs.length;
+const mean = (xs: ReadonlyArray<number>) => Arr.reduce(xs, 0, (sum, x) => sum + x) / xs.length;
 const rank = (xs: ReadonlyArray<number>, q: number) =>
   [...xs].sort((a, b) => a - b)[Math.ceil(q * xs.length) - 1] ?? Number.NaN;
 
@@ -120,13 +127,13 @@ const prepare = Effect.gen(function* () {
   );
   yield* writeFakeHerdrShim(`${live}/herdr`);
   const client = yield* connect(world.state);
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const runIds = yield* Effect.forEach(
     Array.from({ length: RUNS }, (_, at) => at),
     (at) =>
       Effect.gen(function* () {
         const own = yield* connect(world.state);
-        const request = yield* crypto.randomUUIDv4;
+        const request = yield* random.uuidV4();
         const started = yield* own.start({
           project: world.project,
           id: "hello",
@@ -139,7 +146,7 @@ const prepare = Effect.gen(function* () {
   );
   for (;;) {
     const views = yield* client.runs({ task: null });
-    if (views.filter((view) => view.status.status === "complete").length >= RUNS) break;
+    if (Arr.filter(views, (view) => view.status.status === "complete").length >= RUNS) break;
     yield* Effect.sleep("1 second");
   }
   yield* stopHost(world.state);
@@ -147,13 +154,13 @@ const prepare = Effect.gen(function* () {
   yield* copy(live, `${kept}/world`);
   yield* fs.writeFileString(
     `${kept}/fixture.json`,
-    Schema.encodeSync(Fixture)({ runId: runIds.at(-1) ?? "" }),
+    yield* Schema.encodeEffect(Fixture)({ runId: runIds.at(-1) ?? "" }),
   );
 }).pipe(Effect.orDie, Effect.ensuring(stopHost(world.state)));
 
 const sample = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const { runId } = yield* Schema.decodeUnknownEffect(Fixture)(
+  const { runId } = yield* Schema.decodeEffect(Fixture)(
     yield* fs.readFileString(`${kept}/fixture.json`),
   );
   yield* copy(`${kept}/world`, live);
@@ -186,8 +193,8 @@ const sample = Effect.gen(function* () {
     const began = yield* Clock.currentTimeMillis;
     const answer = yield* client.read({ tool: "collie_run", input: { run: runId } });
     took.read.push((yield* Clock.currentTimeMillis) - began);
-    if (!answer.includes("Status: succeeded")) throw new Error(answer);
-    flowOf(answer);
+    if (!pipe(answer, Str.includes("Status: succeeded"))) throw new Error(answer);
+    yield* flowOf(answer);
     answers.push(new Bun.CryptoHasher("sha256").update(answer).digest("hex"));
     sampleAnswer = answer;
     readSyscr.push((yield* usageOf(owner.pid)).syscr - before.syscr);
@@ -203,7 +210,12 @@ const sample = Effect.gen(function* () {
   });
   const mutationRun = mutation.runId;
   for (;;) {
-    if ((yield* client.run({ runId: mutationRun }))?.waiting.some((one) => one.answer === null))
+    if (
+      Arr.some(
+        (yield* client.run({ runId: mutationRun }))?.waiting ?? [],
+        (one) => one.answer === null,
+      )
+    )
       break;
     yield* Effect.yieldNow;
   }
@@ -237,9 +249,18 @@ const sample = Effect.gen(function* () {
           const shown = yield* client.shown({ runId: mutationRun });
           if (shown === null || shown.view.controls.includes("hold") !== set)
             throw new Error("the mutation read did not see its control write");
-          const local = flowOf(answer).lanes.find((lane) => lane.run === mutationRun);
-          const record = shown.flow?.lanes.find((lane) => lane.run === mutationRun);
-          if (encodeActions(local?.actions ?? []) !== encodeActions(record?.actions ?? []))
+          const local = Arr.findFirst(
+            (yield* flowOf(answer)).lanes,
+            (lane) => lane.run === mutationRun,
+          );
+          const record = Arr.findFirst(shown.flow?.lanes ?? [], (lane) => lane.run === mutationRun);
+          const actionsOf = (lane: typeof local) =>
+            Effect.orDie(
+              encodeActions(
+                Option.match(lane, { onNone: () => [], onSome: (one) => one.actions ?? [] }),
+              ),
+            );
+          if ((yield* actionsOf(local)) !== (yield* actionsOf(record)))
             throw new Error("the answer's Flow did not see its control write");
         }
       }),
@@ -253,7 +274,7 @@ const sample = Effect.gen(function* () {
     request: "mutation-answer",
   });
   const answered = yield* client.read({ tool: "collie_run", input: { run: mutationRun } });
-  if (!answered.includes('"decision": bench-value'))
+  if (!pipe(answered, Str.includes('"decision": bench-value')))
     throw new Error("the answer lost its answered Choice");
   const after = yield* usageOf(owner.pid);
   return {
@@ -295,7 +316,9 @@ await runEffect(
     yield* clear;
     if (process.argv[2] === "prepare") yield* prepare.pipe(Effect.ensuring(clear));
     else
-      yield* Console.log(Schema.encodeSync(Readings)(yield* sample.pipe(Effect.ensuring(clear))));
+      yield* Console.log(
+        yield* Schema.encodeEffect(Readings)(yield* sample.pipe(Effect.ensuring(clear))),
+      );
   }),
 );
 process.exit(0);

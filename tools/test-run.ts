@@ -5,8 +5,13 @@
 // as a targeted run, but takes its workers and the suite lock as a whole suite does. Anything
 // else is the whole suite.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Num from "effect/Number";
+import * as Rec from "effect/Record";
 import { loadavg } from "node:os";
-import { type Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { type Duration, Effect, FileSystem, Option, Path, Schema, flow, Result } from "effect";
 import { admitted, type Budget, type Kind, shareOf } from "./budget";
 import { inTurn } from "./suite-lock";
 
@@ -36,20 +41,20 @@ const TAKES_VALUE = new Set([
   "--preload",
 ]);
 
-const isChanged = (arg: string) => arg === "--changed" || arg.startsWith("--changed=");
+const isChanged = (arg: string) => arg === "--changed" || pipe(arg, Str.startsWith("--changed="));
 
 /** The existing files and directories a run names, and whether it passes `--changed`. */
 const namedBy = (args: ReadonlyArray<string>) => {
   const operands = args.indexOf("--");
   const option = (arg: string, at: number) =>
     (operands === -1 || at < operands) &&
-    (arg.startsWith("-") || TAKES_VALUE.has(args[at - 1] ?? ""));
+    (pipe(arg, Str.startsWith("-")) || TAKES_VALUE.has(args[at - 1] ?? ""));
   return Effect.forEach(args, (arg, at) =>
     option(arg, at) ? Effect.succeed(false) : exists(arg),
   ).pipe(
     Effect.map((named) => ({
-      paths: args.filter((_, at) => named[at]),
-      changed: args.some((arg, at) => option(arg, at) && isChanged(arg)),
+      paths: Arr.filter(args, (_, at) => Boolean(named[at])),
+      changed: Arr.some(args, (arg, at) => option(arg, at) && isChanged(arg)),
     })),
   );
 };
@@ -83,8 +88,8 @@ export const requestOf = (
   const isWorkers = (arg: string, at: number) =>
     (operands === -1 || at < operands) &&
     !TAKES_VALUE.has(args[at - 1] ?? "") &&
-    (arg === "--parallel" || arg.startsWith("--parallel="));
-  const given = args.findLast(isWorkers);
+    (arg === "--parallel" || pipe(arg, Str.startsWith("--parallel=")));
+  const given = Option.getOrUndefined(Arr.findLast(args, isWorkers));
   const asked =
     given === undefined
       ? targeted
@@ -92,8 +97,8 @@ export const requestOf = (
         : shareOf(budget, kind)
       : given === "--parallel"
         ? shareOf(budget, kind)
-        : Number(given.slice("--parallel=".length));
-  return { kind, asked, args: args.filter((arg, at) => !isWorkers(arg, at)) };
+        : Number(pipe(given, Str.slice("--parallel=".length)));
+  return { kind, asked, args: Arr.filter(args, (arg, at) => !isWorkers(arg, at)) };
 };
 
 /**
@@ -128,11 +133,11 @@ export const timingFlags = (targeted: boolean, timings: string, seed: string) =>
     : Effect.succeed([`--timings=${timings}`, "--update-timings"]);
 
 const TimingsJson = Schema.fromJsonString(
-  Schema.Struct({ version: Schema.Number, files: Schema.Record(Schema.String, Schema.Number) }),
+  Schema.Struct({ version: Schema.Finite, files: Schema.Record(Schema.String, Schema.Finite) }),
   { space: 2 },
 );
 const decodeTimings = Schema.decodeUnknownOption(TimingsJson);
-const encodeTimings = Schema.encodeSync(TimingsJson);
+const encodeTimings = flow(Schema.encodeResult(TimingsJson), Result.getOrThrow);
 
 /**
  * Seeds a whole suite's timings and drops files that no longer exist, which Bun's own merge
@@ -151,28 +156,33 @@ export const prepareTimings = Effect.fn("prepareTimings")(function* (
   const recorded = decodeTimings(text);
   if (Option.isNone(recorded)) return;
   const files: Record<string, number> = {};
-  for (const [file, duration] of Object.entries(recorded.value.files))
+  for (const [file, duration] of Rec.toEntries(recorded.value.files))
     if (yield* exists(file)) files[file] = duration;
   yield* fs.makeDirectory(path.dirname(timings), { recursive: true });
   yield* fs.writeFileString(timings, `${encodeTimings({ ...recorded.value, files })}\n`);
 });
 
+const byDurationDescending = ([, a]: readonly [string, number], [, b]: readonly [string, number]) =>
+  Num.Order(b, a);
+
 /** Each file's mean duration over the timings records that name it, longest first. */
 export const averageTimings = (records: ReadonlyArray<Readonly<Record<string, number>>>) => {
   const seen = new Map<string, number[]>();
   for (const files of records)
-    for (const [file, duration] of Object.entries(files))
+    for (const [file, duration] of Rec.toEntries(files))
       seen.set(file, [...(seen.get(file) ?? []), duration]);
-  return Object.fromEntries(
-    [...seen]
-      .map(
+  return Rec.fromEntries(
+    Arr.sort(
+      Arr.map(
+        [...seen],
         ([file, durations]) =>
           [
             file,
-            Math.round(durations.reduce((sum, one) => sum + one, 0) / durations.length),
+            Math.round(Arr.reduce(durations, 0, (sum, one) => sum + one) / durations.length),
           ] as const,
-      )
-      .toSorted(([, a], [, b]) => b - a),
+      ),
+      byDurationDescending,
+    ),
   );
 };
 
@@ -185,48 +195,60 @@ export const seedFrom = Effect.fn("seedFrom")(function* (
   const read = yield* Effect.forEach(records, (record) =>
     fs.readFileString(record).pipe(Effect.flatMap(Schema.decodeUnknownEffect(TimingsJson))),
   );
-  const files = averageTimings(read.map((one) => one.files));
+  const files = averageTimings(Arr.map(read, (one) => one.files));
   yield* fs.writeFileString(seed, `${encodeTimings({ version: 1, files })}\n`);
 });
 
 const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
   const counts = new Map<string, number>();
   for (const line of lines) counts.set(line, (counts.get(line) ?? 0) + 1);
-  return [...counts]
-    .toSorted(([a, x], [b, y]) => y - x || a.localeCompare(b))
-    .slice(0, top)
-    .map(([line, count]) => ({
+  return Arr.map(
+    Arr.take(
+      Arr.sort([...counts], ([a, x], [b, y]) => Num.Order(y, x) || Str.localeCompare(b)(a)),
+      top,
+    ),
+    ([line, count]) => ({
       line,
-      text: `${" ".repeat(indent)}${String(count).padStart(7)}  ${line}`,
-    }));
+      text: `${Str.repeat(indent)(" ")}${pipe(String(count), Str.padStart(7))}  ${line}`,
+    }),
+  );
 };
 
 export const startsSummary = (starts: string) => {
-  const lines = starts
-    .split("\n")
-    .filter((line) => line !== "")
-    .map((line): [string, string?] => {
-      const [source = "", file] = line.split("\t");
+  const lines = Arr.map(
+    Arr.filter(Str.split(starts, "\n"), (line) => line !== ""),
+    (line): [string, string?] => {
+      const [source, file] = Str.split(line, "\t");
       return [source, file];
-    });
+    },
+  );
   const byFile = Map.groupBy(lines, ([, file]) => file);
-  const files = ranked(
-    lines.flatMap(([, file]) => file ?? []),
-    10,
-  ).flatMap(({ line, text }) => [
-    text,
-    ...ranked(
-      byFile.get(line)!.map(([source]) => source),
-      3,
-      5,
-    ).map(({ text }) => text),
-  ]);
+  const files = Arr.flatMap(
+    ranked(
+      Arr.flatMap(lines, ([, file]) => Arr.ensure(file ?? [])),
+      10,
+    ),
+    ({ line, text }) => [
+      text,
+      ...Arr.map(
+        ranked(
+          Arr.map(byFile.get(line)!, ([source]) => source),
+          3,
+          5,
+        ),
+        ({ text }) => text,
+      ),
+    ],
+  );
   return [
     `test: ${lines.length} processes started`,
-    ...ranked(
-      lines.map(([source]) => source),
-      10,
-    ).map(({ text }) => text),
+    ...Arr.map(
+      ranked(
+        Arr.map(lines, ([source]) => source),
+        10,
+      ),
+      ({ text }) => text,
+    ),
     ...(files.length === 0 ? [] : ["test: processes started by file", ...files]),
   ];
 };
@@ -240,7 +262,7 @@ export interface Pressure {
 export const pressureAt = (path = "/proc/pressure/cpu") =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(path)).pipe(
     Effect.map((text) => {
-      const avg60 = text.match(/^some .*avg60=([0-9.]+)/m)?.[1];
+      const avg60 = Option.getOrNull(pipe(text, Str.match(/^some .*avg60=([0-9.]+)/m)))?.[1];
       return avg60 === undefined ? null : Number(avg60);
     }),
     Effect.orElseSucceed(() => null),
@@ -264,9 +286,9 @@ export const report = (run: {
   readonly ended: Pressure;
 }) => {
   const { budget } = run;
-  const files = Object.entries(run.timings ?? {}).toSorted(([, a], [, b]) => b - a);
+  const files = Arr.sort(Rec.toEntries(run.timings ?? {}), byDurationDescending);
   const longest = files[0];
-  const summed = files.reduce((sum, [, ms]) => sum + ms, 0) / 1_000;
+  const summed = Arr.reduce(files, 0, (sum, [, ms]) => sum + ms) / 1_000;
   const kept =
     shareOf(budget, "small") === budget.total
       ? "shared by every run"

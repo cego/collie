@@ -1,5 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { describe, expect, test } from "bun:test";
-import { Config, Effect, Option, Schema } from "effect";
+import { Config, Effect, Option, Schema, flow, Result } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -89,7 +92,7 @@ test("a paused Schedule offers resume, remove and move; an active one pause, rem
   const view = machineSchedules(
     on({ schedules: [entry({ name: "off", paused: true, next: null }), entry()] }),
   );
-  expect(view.rows.map(({ name, next, actions }) => [name, next, actions])).toEqual([
+  expect(Arr.map(view.rows, ({ name, next, actions }) => [name, next, actions])).toEqual([
     ["off", "paused", ["resume", "remove", "move"]],
     ["daily", "next 2026-10-15T05:00:00.000Z", ["pause", "remove", "move"]],
   ]);
@@ -104,7 +107,9 @@ test("a row's pause, resume and remove ask its Machine's host for that change; m
       payload: { installation: "i-vm", name: "daily", change },
     });
     if (asked.kind === "change")
-      expect(Schema.decodeUnknownSync(payload)(asked.payload)).toEqual(asked.payload);
+      expect(flow(Schema.decodeResult(payload), Result.getOrThrow)(asked.payload)).toEqual(
+        asked.payload,
+      );
   }
   expect(scheduleAsk("i-vm", "daily", "move")).toEqual({
     kind: "move",
@@ -138,7 +143,10 @@ test("a Machine with none says so, and that the Flock chat adds them", () => {
 });
 
 const mkPc = { installation: "i-mk-pc", profile: "local", name: "mk-pc" };
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
 
 describe("the main process reaches each Machine's host", () => {
   test(
@@ -190,9 +198,10 @@ describe("the main process reaches each Machine's host", () => {
             expect((yield* schedulesOn(mkPc, desktop)).schedules).toEqual([]);
             const trail = yield* readAudit(`${world.state}/schedules/daily`);
             expect(
-              trail
-                .filter((line) => line.request.startsWith("desktop-"))
-                .map((line) => [line.operation, line.actor.origin]),
+              Arr.map(
+                Arr.filter(trail, (line) => pipe_(line.request, Str.startsWith("desktop-"))),
+                (line) => [line.operation, line.actor.origin],
+              ),
             ).toEqual([
               ["pause", "desktop"],
               ["resume", "desktop"],

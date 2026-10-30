@@ -3,9 +3,14 @@
 // there records who asked and from where. Two real hosts, each with its own state
 // directory and fake herdr, paired on 127.0.0.1.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { createConnection, createServer, type Server } from "node:net";
-import { Clock, Deferred, Effect, Exit, Fiber, FileSystem, Schema } from "effect";
+import { Clock, Deferred, Effect, Exit, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import { readEnv } from "../src/env";
@@ -16,7 +21,7 @@ import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { listenerPort, twoMachines, type Side } from "./support/peers";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Started = Schema.Struct({ runId: Schema.String });
 const Shown = Schema.Record(Schema.String, Schema.Json);
 const CallLine = Schema.fromJsonString(
@@ -47,11 +52,13 @@ const waitingRun = (side: Side) =>
       extra,
     );
     expect(started.envelope.error).toBeUndefined();
-    const { runId } = Schema.decodeUnknownSync(Started)(started.envelope.data);
+    const { runId } = yield* Schema.decodeUnknownEffect(Started)(started.envelope.data).pipe(
+      Effect.orDie,
+    );
     const client = yield* connect(side.world.state).pipe(Effect.orDie);
     yield* until(
       () => client.run({ runId }).pipe(Effect.orDie),
-      (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+      (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
     );
     return { runId, extra };
   });
@@ -59,12 +66,16 @@ const waitingRun = (side: Side) =>
 const prompts = (side: Side) =>
   read(side.herdrLog).pipe(
     Effect.map((text) =>
-      text
-        .split("\n")
-        .filter((line) => line !== "")
-        .map((line) => Schema.decodeUnknownSync(CallLine)(line))
-        .filter((call) => call.cmd === "agent prompt")
-        .map((call) => call.argv.join(" ")),
+      Arr.map(
+        Arr.filter(
+          Arr.map(
+            Arr.filter(Str.split(text, "\n"), (line) => line !== ""),
+            (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
+          ),
+          (call) => call.cmd === "agent prompt",
+        ),
+        (call) => Arr.join(call.argv, " "),
+      ),
     ),
   );
 
@@ -86,7 +97,7 @@ test("Bun's WebSocket trusts the certificate Collie makes, pinned as the only CA
           server.upgrade(request) ? undefined : new Response("", { status: 400 }),
         websocket: { message: (ws, message) => void ws.send(message) },
       });
-      yield* Effect.addFinalizer(() => Effect.sync(() => server.stop(true)));
+      yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)));
       const dial = (ca: string) =>
         Effect.callback<string>((resume) => {
           const ws = new WebSocket(`wss://127.0.0.1:${server.port}/`, { tls: { ca } });
@@ -117,22 +128,30 @@ test(
             expect(steered.envelope.error).toBeUndefined();
             expect(steered.envelope.ok).toBe(true);
             expect(
-              (yield* prompts(second)).some((text) => text.includes("hello from the laptop")),
+              Arr.some(yield* prompts(second), (text) =>
+                pipe_(text, Str.includes("hello from the laptop")),
+              ),
             ).toBe(true);
 
             // The one connection was the pairing's, and its invite rode it.
-            const calls = (yield* read(first.sshLog)).split("\n");
-            expect(calls.filter((line) => line.startsWith("master"))).toHaveLength(1);
-            expect(calls.filter((line) => line.startsWith("login"))).toEqual([]);
-            expect(calls.some((line) => line.startsWith("ride") && line.includes("'invite'"))).toBe(
-              true,
+            const calls = Str.split(yield* read(first.sshLog), "\n");
+            expect(Arr.filter(calls, (line) => pipe_(line, Str.startsWith("master")))).toHaveLength(
+              1,
             );
+            expect(Arr.filter(calls, (line) => pipe_(line, Str.startsWith("login")))).toEqual([]);
+            expect(
+              Arr.some(
+                calls,
+                (line) =>
+                  pipe_(line, Str.startsWith("ride")) && pipe_(line, Str.includes(" invite ")),
+              ),
+            ).toBe(true);
 
             const fs = yield* FileSystem.FileSystem;
             const firstPeers = yield* peersOf(first.world.state);
             const secondPeers = yield* peersOf(second.world.state);
-            const firstId = (yield* read(`${first.world.state}/installation`)).trim();
-            const secondId = (yield* read(`${second.world.state}/installation`)).trim();
+            const firstId = Str.trim(yield* read(`${first.world.state}/installation`));
+            const secondId = Str.trim(yield* read(`${second.world.state}/installation`));
             expect(firstPeers).toMatchObject([
               { installation: secondId, name: "second", dials: "out" },
             ]);
@@ -140,9 +159,12 @@ test(
             for (const side of [first, second])
               expect((yield* fs.stat(`${side.world.state}/peers.json`)).mode & 0o777).toBe(0o600);
 
-            const delivered = (yield* readAudit(runDir(second.world.state, runId)).pipe(
-              Effect.orDie,
-            )).find((line) => line.operation === "deliver");
+            const delivered = Option.getOrUndefined(
+              Arr.findFirst(
+                yield* readAudit(runDir(second.world.state, runId)).pipe(Effect.orDie),
+                (line) => line.operation === "deliver",
+              ),
+            );
             expect(delivered?.actor.origin).toBe("cli");
             expect(delivered?.actor.from?.machine).toEqual({
               installation: firstId,
@@ -154,13 +176,15 @@ test(
             expect(shown.envelope.error).toBeUndefined();
             const local = yield* second.cli(["run", "show", runId]);
             expect(shown.envelope.data).toEqual({
-              ...Schema.decodeUnknownSync(Shown)(local.envelope.data),
+              ...(yield* Schema.decodeUnknownEffect(Shown)(local.envelope.data).pipe(Effect.orDie)),
               machine: "second",
             });
             expect(
-              (yield* read(first.sshLog))
-                .split("\n")
-                .filter((line) => line.startsWith("login") || line.startsWith("master")),
+              Arr.filter(
+                Str.split(yield* read(first.sshLog), "\n"),
+                (line) =>
+                  pipe_(line, Str.startsWith("login")) || pipe_(line, Str.startsWith("master")),
+              ),
             ).toEqual(["master mk@second"]);
           }),
         ["attended.workflow.ts"],
@@ -214,7 +238,7 @@ test(
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
           }),
         [],
-        { before: (ports) => Effect.forEach(Object.values(ports), occupy, { discard: true }) },
+        { before: (ports) => Effect.forEach(Rec.values(ports), occupy, { discard: true }) },
       ),
     ),
   180_000,
@@ -273,7 +297,7 @@ test(
 /** A /proc table's rows, under its header line; none where the kernel has no such table (no IPv6). */
 const procTable = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(path)).pipe(
-    Effect.map((text) => text.split("\n").slice(1)),
+    Effect.map((text) => Str.split(text, "\n").slice(1)),
     Effect.catchTag("PlatformError", (error) =>
       error.reason._tag === "NotFound" ? Effect.succeed([]) : Effect.fail(error),
     ),
@@ -307,9 +331,9 @@ const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
     for (const table of tables) {
       for (const row of yield* procTable(table)) {
         // local_address, rem_address, st, …, inode; st 0A is LISTEN.
-        const [, local, , state, , , , , , inode] = row.trim().split(/\s+/);
+        const [, local, , state, , , , , , inode] = Str.split(Str.trim(row), /\s+/);
         if (state === "0A" && inode !== undefined && sockets.has(inode))
-          ports.push(Number.parseInt(local!.split(":")[1]!, 16));
+          ports.push(Number.parseInt(Str.split(local!, ":")[1]!, 16));
       }
     }
     return ports;
@@ -320,9 +344,9 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
+        const { port } = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Finite }))(
           (yield* occupy("0")).address(),
-        );
+        ).pipe(Effect.orDie);
         const ports = yield* listensOn(process.pid, ["/proc/net/tcp", "/proc/net/no-such-table"]);
         expect(ports).toContain(port);
       }),
@@ -377,7 +401,7 @@ test(
             ]);
             const Other = Schema.Struct({ secret: Schema.String });
             const otherHeaders = {
-              Authorization: `Bearer ${Schema.decodeUnknownSync(Other)(other.envelope.data).secret}`,
+              Authorization: `Bearer ${(yield* Schema.decodeUnknownEffect(Other)(other.envelope.data).pipe(Effect.orDie)).secret}`,
             };
             const minted = yield* Deferred.make<string>();
             const control = yield* Effect.acquireRelease(
@@ -441,9 +465,9 @@ const relayAnswer = (path: string, header: string) =>
     conn.once("connect", () => conn.write(`${header}\n`));
     conn.on("data", (chunk) => {
       said += chunk.toString("utf8");
-      if (said.includes("\n")) conn.destroy();
+      if (pipe_(said, Str.includes("\n"))) conn.destroy();
     });
-    conn.once("close", () => resume(Effect.succeed(said.trim())));
+    conn.once("close", () => resume(Effect.succeed(Str.trim(said))));
   });
 
 const Board = Schema.Struct({ tasks: Schema.Array(Schema.Struct({ id: Schema.String })) });
@@ -459,7 +483,7 @@ test(
             const fs = yield* FileSystem.FileSystem;
             const kept = `${second.world.state}/outside.sock`;
             yield* fs.writeFileString(kept, "kept");
-            for (const name of ["../outside", "x".repeat(105)]) {
+            for (const name of ["../outside", pipe_("x", Str.repeat(105))]) {
               const refused = yield* second.cli([
                 "machine",
                 "invite",
@@ -501,8 +525,14 @@ test(
                 .pipe(
                   Effect.map(
                     (read) =>
-                      Schema.decodeUnknownSync(Machines)(read.envelope.data).machines.find(
-                        (one) => one.name === name,
+                      Option.getOrUndefined(
+                        Arr.findFirst(
+                          flow(
+                            Schema.decodeUnknownResult(Machines),
+                            Result.getOrThrow,
+                          )(read.envelope.data).machines,
+                          (one) => one.name === name,
+                        ),
                       )?.state,
                   ),
                 );
@@ -517,11 +547,14 @@ test(
               (yield* second.cli(["run", "steer", runId, "hello by dial-back"])).envelope.ok,
             ).toBe(true);
             expect(
-              (yield* prompts(first)).some((text) => text.includes("hello by dial-back")),
+              Arr.some(yield* prompts(first), (text) =>
+                pipe_(text, Str.includes("hello by dial-back")),
+              ),
             ).toBe(true);
             const audit = yield* readAudit(runDir(first.world.state, runId)).pipe(Effect.orDie);
             expect(
-              audit.find((line) => line.operation === "deliver")?.actor.from?.machine?.name,
+              Option.getOrUndefined(Arr.findFirst(audit, (line) => line.operation === "deliver"))
+                ?.actor.from?.machine?.name,
             ).toBe("second");
             const started = yield* second.cli(
               ["--machine", laptop!.name, "run", "start", "attended", "--input", "work=reverse"],
@@ -579,9 +612,11 @@ test(
               true,
             );
             expect(
-              (yield* read(first.sshLog))
-                .split("\n")
-                .filter((line) => line.startsWith("login") || line.startsWith("master")),
+              Arr.filter(
+                Str.split(yield* read(first.sshLog), "\n"),
+                (line) =>
+                  pipe_(line, Str.startsWith("login")) || pipe_(line, Str.startsWith("master")),
+              ),
             ).toEqual(["master mk@second"]);
           }),
         ["attended.workflow.ts"],
@@ -603,7 +638,7 @@ test(
 
             const answered = yield* first.cli(["run", "answer", runId, "yes", "--decision", "go"]);
             expect(answered.envelope.error).toBeUndefined();
-            const firstId = (yield* read(`${first.world.state}/installation`)).trim();
+            const firstId = Str.trim(yield* read(`${first.world.state}/installation`));
             expect(answered.envelope.data).toMatchObject({
               run: runId,
               decision: "go",
@@ -614,7 +649,10 @@ test(
             const home = yield* second.cli(["board"]);
             expect(board.envelope.ok).toBe(true);
             const ids = (envelope: { readonly data?: unknown }) =>
-              Schema.decodeUnknownSync(Board)(envelope.data).tasks.map((task) => task.id);
+              Arr.map(
+                flow(Schema.decodeUnknownResult(Board), Result.getOrThrow)(envelope.data).tasks,
+                (task) => task.id,
+              );
             expect(ids(board.envelope)).toEqual(ids(home.envelope));
 
             const started = yield* first.cli(
@@ -623,20 +661,29 @@ test(
             );
             expect(started.envelope.error).toBeUndefined();
             expect(
-              Object.keys(Schema.decodeUnknownSync(Shown)(started.envelope.data)).sort(),
+              Rec.keys(
+                yield* Schema.decodeUnknownEffect(Shown)(started.envelope.data).pipe(Effect.orDie),
+              ).sort(),
             ).toEqual(["fresh", "registration", "requestId", "runId", "workflow"].sort());
-            const other = Schema.decodeUnknownSync(Started)(started.envelope.data).runId;
+            const other = (yield* Schema.decodeUnknownEffect(Started)(started.envelope.data).pipe(
+              Effect.orDie,
+            )).runId;
             const listed = yield* second.cli(["run", "list"]);
             expect(encode(listed.envelope.data)).toContain(other);
 
             const stopped = yield* first.cli(["run", "stop", other]);
             expect(stopped.envelope.error).toBeUndefined();
             const trail = yield* readAudit(runDir(second.world.state, other)).pipe(Effect.orDie);
-            for (const line of trail.filter((one) => ["start", "stop"].includes(one.operation)))
+            for (const line of Arr.filter(trail, (one) =>
+              ["start", "stop"].includes(one.operation),
+            ))
               expect(line.actor.from?.machine?.installation).toBe(firstId);
-            const answerLine = (yield* readAudit(runDir(second.world.state, runId)).pipe(
-              Effect.orDie,
-            )).find((line) => line.operation === "answer");
+            const answerLine = Option.getOrUndefined(
+              Arr.findFirst(
+                yield* readAudit(runDir(second.world.state, runId)).pipe(Effect.orDie),
+                (line) => line.operation === "answer",
+              ),
+            );
             expect(answerLine?.actor).toMatchObject({
               origin: "cli",
               from: { machine: { installation: firstId } },
@@ -646,6 +693,49 @@ test(
       ),
     ),
   180_000,
+);
+
+test(
+  "a dial-back refused because its ticket expired is in the dialling host's log",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-dialfail-",
+        (first, second) =>
+          Effect.gen(function* () {
+            yield* first.lists([second]);
+            expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+            const [laptop] = yield* peersOf(second.world.state);
+            const relay = relayOf(second.world.state, laptop!.name);
+            // A dial-back that works first, so the link was heard just before it is frozen.
+            yield* until(
+              () => relayAnswer(relay, '{"as":"cli","client":"probe"}'),
+              (said) => pipe_(said, Str.includes('"ok":true')),
+            );
+            const owner = yield* ownerOf(first.world.state);
+            process.kill(owner!.pid, "SIGSTOP");
+            const resumed = Effect.sync(() => process.kill(owner!.pid, "SIGCONT"));
+            yield* Effect.gen(function* () {
+              yield* relayAnswer(relay, '{"as":"cli","client":"late"}');
+              // Past the ticket's life, so the dial-back the frozen host makes is refused.
+              yield* Effect.sleep("6 seconds");
+            }).pipe(Effect.ensuring(resumed));
+            const logged = yield* until(
+              () => read(`${first.world.state}/host.log`),
+              (log) => pipe_(log, Str.includes("dial-back to second failed")),
+            );
+            expect(
+              Option.getOrUndefined(
+                Arr.findFirst(Str.split(logged, "\n"), (line) =>
+                  pipe_(line, Str.includes("dial-back to second failed")),
+                ),
+              ),
+            ).toContain("level=WARN");
+          }),
+        [],
+      ),
+    ),
+  120_000,
 );
 
 test(
@@ -716,9 +806,9 @@ test(
 
             const nowhere = yield* first.cli(["run", "show", "run-nowhere"]);
             expect(nowhere.envelope.error?.code).toBe("run_not_found");
-            const asked = Schema.decodeUnknownSync(NotFound)(
+            const asked = (yield* Schema.decodeUnknownEffect(NotFound)(
               nowhere.envelope.error?.details,
-            ).machines;
+            ).pipe(Effect.orDie)).machines;
             expect(asked).toHaveLength(2);
             expect(asked).toContain("second");
           }),

@@ -3,6 +3,8 @@
 // scrolls and clicks goes back to herdr, and nothing the pane shows decides anything here.
 // The pane is held while this tab is mounted and given back when it is not.
 
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { FitAddon } from "@xterm/addon-fit";
 import { type IDisposable, type ILink, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -91,11 +93,31 @@ const sendIf = (command: TerminalCommand | null) => command !== null && send(com
 
 /** A line's links, opened only in the human's browser. */
 const linksOn = (line: number): ILink[] =>
-  linksIn(term?.buffer.active.getLine(line - 1)?.translateToString(true) ?? "").map((link) => ({
-    text: link.url,
-    range: { start: { x: link.start, y: line }, end: { x: link.end, y: line } },
-    activate: () => void openLink(link.url),
-  }));
+  Arr.map(
+    linksIn(
+      Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(term), (present) =>
+          Option.map(Option.fromNullishOr(present.buffer.active.getLine(line - 1)), (present_) =>
+            present_.translateToString(true),
+          ),
+        ),
+      ) ?? "",
+    ),
+    (link) => ({
+      text: link.url,
+      range: {
+        start: {
+          x: link.start,
+          y: line,
+        },
+        end: {
+          x: link.end,
+          y: line,
+        },
+      },
+      activate: () => void openLink(link.url),
+    }),
+  );
 
 const shown = (event: TerminalEvent) => {
   switch (event._tag) {

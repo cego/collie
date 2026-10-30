@@ -1,8 +1,11 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import type { Flow, FlowNode } from "../../src/board-model";
 
 export const flowNode = (id: string, over: Partial<FlowNode> = {}): FlowNode => ({
   id,
-  title: id[0]!.toUpperCase() + id.slice(1),
+  title: Str.toUpperCase(id[0]!) + pipe(id, Str.slice(1)),
   kind: "agent",
   description: "Work on the current Slice.",
   role: "builder",
@@ -52,7 +55,7 @@ export const mainFlow = (extra: ReadonlyArray<FlowNode> = []): Flow => ({
           ranOn: "claude/opus",
           started: "2026-10-23T09:00:00.000Z",
           runs: [
-            ...["01", "02", "03"].map((id) =>
+            ...Arr.map(["01", "02", "03"], (id) =>
               flowNode(`build@${id}`, { title: id, state: "done" }),
             ),
             flowNode("build@04", {

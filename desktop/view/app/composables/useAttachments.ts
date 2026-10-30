@@ -2,6 +2,9 @@
 // the chip, so popping the chat out or back in keeps them. Each is staged with Desktop's
 // main process in parts as it is added, scaled first where it is a large image.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { useAtomSet } from "@effect/atom-vue";
 import { DateTime, Effect, Exit, Option, Random, Schema, Semaphore } from "effect";
 import * as Base64 from "effect/encoding/Base64";
@@ -33,7 +36,7 @@ const share = (next: ReadonlyArray<Attached>) => {
   windows.postMessage(next);
 };
 const holding = (file: Staged) => {
-  if (!pending.value.some(({ id }) => id === file.id)) share([...pending.value, file]);
+  if (!Arr.some(pending.value, ({ id }) => id === file.id)) share([...pending.value, file]);
 };
 
 /** One add at a time, so each is held to the cap with those before it. */
@@ -133,11 +136,11 @@ export const useAttachments = () => {
         said.push(why);
         continue;
       }
-      const bytes = one.mediaType.startsWith("image/") ? yield* bytesOf(one) : null;
+      const bytes = pipe_(one.mediaType, Str.startsWith("image/")) ? yield* bytesOf(one) : null;
       if (bytes !== null) yield* scaled(bytes, one).pipe(Effect.ignore);
       holding(one);
     }
-    refused.value = said.length === 0 ? null : said.join(" ");
+    refused.value = said.length === 0 ? null : Arr.join(said, " ");
   });
 
   /** Runs one of these for the view, a failure said in the composer. */
@@ -171,7 +174,7 @@ export const useAttachments = () => {
           Effect.flatMap((exit) => adding.withPermit(took(exit))),
         ),
       ),
-    remove: (id: string) => share(pending.value.filter((one) => one.id !== id)),
+    remove: (id: string) => share(Arr.filter(pending.value, (one) => one.id !== id)),
     restore: share,
     clear: () => {
       refused.value = null;

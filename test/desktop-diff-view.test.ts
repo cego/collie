@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import type { DiffFile } from "../src/board-model";
 import {
@@ -31,28 +32,28 @@ import {
 const file = (path: string): DiffFile => ({ path, status: "modified", added: 1, removed: 0 });
 
 const depthFirst = (nodes: ReadonlyArray<DiffTreeNode>): ReadonlyArray<string> =>
-  nodes.flatMap((node) => (node.kind === "file" ? [node.key] : depthFirst(node.children)));
+  Arr.flatMap(nodes, (node) => (node.kind === "file" ? [node.key] : depthFirst(node.children)));
 
 describe("the diff's tree", () => {
   test("lists its files in the order the tree reads, around a folder sharing their prefix", () => {
     const { tree, files } = diffTree(
-      ["a/b.ts", "a/b/c.ts", "a/b-c.ts", "a/b/d.ts", "a/b0.ts"].map(file),
+      Arr.map(["a/b.ts", "a/b/c.ts", "a/b-c.ts", "a/b/d.ts", "a/b0.ts"], file),
     );
-    expect(files.map(({ path }) => path)).toEqual([
+    expect(Arr.map(files, ({ path }) => path)).toEqual([
       "a/b.ts",
       "a/b/c.ts",
       "a/b/d.ts",
       "a/b-c.ts",
       "a/b0.ts",
     ]);
-    expect(depthFirst(tree)).toEqual(files.map(({ path }) => path));
-    expect(tree.map(({ key }) => key)).toEqual(["a/"]);
+    expect(depthFirst(tree)).toEqual(Arr.map(files, ({ path }) => path));
+    expect(Arr.map(tree, ({ key }) => key)).toEqual(["a/"]);
   });
 });
 
 describe("the diff's tree, merging folder chains", () => {
   const labelled = (nodes: ReadonlyArray<DiffTreeNode>): ReadonlyArray<unknown> =>
-    nodes.map((node) =>
+    Arr.map(nodes, (node) =>
       node.kind === "file"
         ? node.label
         : { [`${node.label} (${node.key})`]: labelled(node.children) },
@@ -60,10 +61,10 @@ describe("the diff's tree, merging folder chains", () => {
 
   test("draws a chain of single-folder folders as one row, keyed by its deepest folder", () => {
     const { tree, folders } = diffTree(
-      [
-        "packages/core/modules/nimbus/runtime/a.ts",
-        "packages/core/modules/nimbus/runtime/b.ts",
-      ].map(file),
+      Arr.map(
+        ["packages/core/modules/nimbus/runtime/a.ts", "packages/core/modules/nimbus/runtime/b.ts"],
+        file,
+      ),
     );
     expect(labelled(tree)).toEqual([
       {
@@ -77,9 +78,9 @@ describe("the diff's tree, merging folder chains", () => {
   });
 
   test("ends a chain at a folder with two children, and splits it when a file arrives part-way", () => {
-    const before = diffTree(["a/b/c/x.ts", "a/b/c/y.ts"].map(file));
+    const before = diffTree(Arr.map(["a/b/c/x.ts", "a/b/c/y.ts"], file));
     expect(labelled(before.tree)).toEqual([{ "a/b/c (a/b/c/)": ["x.ts", "y.ts"] }]);
-    const after = diffTree(["a/b/c/x.ts", "a/b/c/y.ts", "a/b/z.ts"].map(file));
+    const after = diffTree(Arr.map(["a/b/c/x.ts", "a/b/c/y.ts", "a/b/z.ts"], file));
     expect(labelled(after.tree)).toEqual([
       { "a/b (a/b/)": [{ "c (a/b/c/)": ["x.ts", "y.ts"] }, "z.ts"] },
     ]);
@@ -87,22 +88,22 @@ describe("the diff's tree, merging folder chains", () => {
   });
 
   test("leaves a folder holding only a file, and a file at the root, as they are", () => {
-    const { tree, folders } = diffTree(["src/only/one.ts", "README.md"].map(file));
+    const { tree, folders } = diffTree(Arr.map(["src/only/one.ts", "README.md"], file));
     expect(labelled(tree)).toEqual([{ "src/only (src/only/)": ["one.ts"] }, "README.md"]);
     expect(folders).toEqual(["src/only/"]);
   });
 
   test("keeps the files' depth-first order", () => {
     const paths = ["p/c/m/n/r/a.ts", "p/c/s/r/b.ts", "p/c/m/n/r/c.ts", "p/c/s/x.ts", "top.md"];
-    const { tree, files } = diffTree(paths.map(file));
-    expect(files.map(({ path }) => path)).toEqual([
+    const { tree, files } = diffTree(Arr.map(paths, file));
+    expect(Arr.map(files, ({ path }) => path)).toEqual([
       "p/c/m/n/r/a.ts",
       "p/c/m/n/r/c.ts",
       "p/c/s/r/b.ts",
       "p/c/s/x.ts",
       "top.md",
     ]);
-    expect(depthFirst(tree)).toEqual(files.map(({ path }) => path));
+    expect(depthFirst(tree)).toEqual(Arr.map(files, ({ path }) => path));
     expect(labelled(tree)).toEqual([
       {
         "p/c (p/c/)": [
@@ -116,11 +117,14 @@ describe("the diff's tree, merging folder chains", () => {
 
   test("merges the chain a filter leaves the same way", () => {
     const { tree } = diffTree(
-      [
-        "packages/core/configs/clients/a.ts",
-        "packages/core/configs/clients/b.ts",
-        "packages/core/src/runtime/c.ts",
-      ].map(file),
+      Arr.map(
+        [
+          "packages/core/configs/clients/a.ts",
+          "packages/core/configs/clients/b.ts",
+          "packages/core/src/runtime/c.ts",
+        ],
+        file,
+      ),
     );
     expect(labelled(filterTree(tree, "packages/core/configs/clients/"))).toEqual([
       { "packages/core/configs/clients (packages/core/configs/clients/)": ["a.ts", "b.ts"] },
@@ -152,9 +156,9 @@ describe("a row's hover text", () => {
   });
 
   test("is a folder's full path, merged or not", () => {
-    const [merged] = diffTree(["packages/core/modules/nimbus/runtime/a.ts"].map(file)).tree;
+    const [merged] = diffTree(Arr.map(["packages/core/modules/nimbus/runtime/a.ts"], file)).tree;
     expect(rowHover(merged!)).toBe("packages/core/modules/nimbus/runtime/");
-    const [split] = diffTree(["src/a.ts", "src/b.ts"].map(file)).tree;
+    const [split] = diffTree(Arr.map(["src/a.ts", "src/b.ts"], file)).tree;
     expect(rowHover(split!)).toBe("src/");
   });
 });
@@ -197,7 +201,7 @@ describe("the active file", () => {
   test("is the first file while the reading line is above it", () => {
     expect(
       at({
-        sections: drawn.map((section) => ({
+        sections: Arr.map(drawn, (section) => ({
           ...section,
           top: section.top + 400,
           bottom: section.bottom + 400,
@@ -301,14 +305,14 @@ describe("a file row's facts", () => {
 
 describe("the tree filtered by a path", () => {
   const { tree } = diffTree(
-    ["src/ui/Board.tsx", "src/ui/Drawer.tsx", "src/host.ts", "docs/using.md"].map(file),
+    Arr.map(["src/ui/Board.tsx", "src/ui/Drawer.tsx", "src/host.ts", "docs/using.md"], file),
   );
   const kept = (text: string) => depthFirst(filterTree(tree, text));
 
   test("keeps every file under a matching folder, and their folders", () => {
     const narrowed = filterTree(tree, "ui/");
     expect(depthFirst(narrowed)).toEqual(["src/ui/Board.tsx", "src/ui/Drawer.tsx"]);
-    expect(narrowed.map(({ key, label }) => [key, label])).toEqual([["src/ui/", "src/ui"]]);
+    expect(Arr.map(narrowed, ({ key, label }) => [key, label])).toEqual([["src/ui/", "src/ui"]]);
   });
 
   test("keeps a matching file's folders", () => {
@@ -351,7 +355,7 @@ describe("the tree's open folders", () => {
 
   test("never count a folder merged into a chain as closed", () => {
     const { folders: all } = diffTree(
-      ["packages/core/modules/nimbus/runtime/a.ts", "packages/core/src/b.ts"].map(file),
+      Arr.map(["packages/core/modules/nimbus/runtime/a.ts", "packages/core/src/b.ts"], file),
     );
     const merged: Folders = { all, listed: all, closed: new Set(), filtering: false };
     expect(openFolders(merged)).toEqual([
@@ -418,7 +422,7 @@ describe("whether a file is open", () => {
 
   const files = [counted("small.ts", 1, 1), counted("big.ts", 600, 0), binary];
   const openAfter = (choices: ReadonlyMap<string, boolean>, shown = files) =>
-    shown.map((shownFile) => fileOpen(shownFile, choices));
+    Arr.map(shown, (shownFile) => fileOpen(shownFile, choices));
 
   test("is every file, big and binary ones too, after Expand all", () => {
     expect(openAfter(choiceForEvery(files, true))).toEqual([true, true, true]);
@@ -441,7 +445,7 @@ describe("whether a file is open", () => {
 });
 
 describe("the file beside the active one", () => {
-  const files = ["a.ts", "b.ts", "c.ts"].map(file);
+  const files = Arr.map(["a.ts", "b.ts", "c.ts"], file);
 
   test("steps in drawn order", () => {
     expect(fileBeside(files, "a.ts", 1)).toBe("b.ts");
@@ -640,7 +644,7 @@ interface Drawn {
   readonly node: DiffTreeNode;
 }
 const rows = (nodes: ReadonlyArray<DiffTreeNode>, depth = 0): ReadonlyArray<Drawn> =>
-  nodes.flatMap((node) => [
+  Arr.flatMap(nodes, (node) => [
     { depth, node },
     ...(node.kind === "folder" ? rows(node.children, depth + 1) : []),
   ]);
@@ -670,7 +674,7 @@ describe("the tree's layout over a monorepo change", () => {
   ]);
 
   test("is three folder rows deep once its chains are merged", () => {
-    expect(Math.max(...rows(tree).map(({ depth }) => depth))).toBe(3);
+    expect(Math.max(...Arr.map(rows(tree), ({ depth }) => depth))).toBe(3);
   });
 
   test("gives every row's name its least room, and every file its counts, at the starting width", () => {
@@ -705,11 +709,11 @@ describe("the tree's layout over a monorepo change", () => {
 describe("the tree's layout over a change branching at every level", () => {
   const levels = Array.from({ length: 12 }, (_, at) => `l${at}`);
   const { tree } = diffTree(
-    levels.map((_, at) => file(`${levels.slice(0, at + 1).join("/")}/side.ts`)),
+    Arr.map(levels, (_, at) => file(`${Arr.join(levels.slice(0, at + 1), "/")}/side.ts`)),
   );
 
   test("is twelve folder rows deep, as no chain merges", () => {
-    expect(Math.max(...rows(tree).map(({ depth }) => depth))).toBe(12);
+    expect(Math.max(...Arr.map(rows(tree), ({ depth }) => depth))).toBe(12);
   });
 
   test("fits every row's fixed parts at the least width, however deep", () => {

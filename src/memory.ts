@@ -2,6 +2,7 @@
 // (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D1). Each host reads
 // its own Machine.
 
+import * as Str from "effect/String";
 import { Effect, FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { loadDefaults } from "./config";
@@ -58,7 +59,7 @@ export const macMemory = Effect.fn("Memory.mac")(function* <R>(run: Runner<R>) {
   const value = (name: string) =>
     run("sysctl", ["-n", name], "/").pipe(
       Effect.map((ran) => {
-        const said = ran.stdout.trim();
+        const said = Str.trim(ran.stdout);
         return ran.code === 0 && /^\d+$/.test(said) ? Number(said) : null;
       }),
     );

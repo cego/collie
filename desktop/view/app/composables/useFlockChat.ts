@@ -3,6 +3,7 @@
 // human's newest message and the card it carries; the window is filled from the
 // session's transcript when it opens and when another conversation becomes current.
 
+import * as Arr from "effect/Array";
 import { AtomRegistry, injectRegistry, useAtomSet } from "@effect/atom-vue";
 import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 import { useChat } from "@tanstack/ai-vue";
@@ -34,20 +35,26 @@ export const aboutOf = (message: UIMessage | ModelMessage) =>
 
 /** The human's newest message: its words, its card, and the ids of Desktop's copies it carries. */
 const lastSaid = (messages: ReadonlyArray<UIMessage | ModelMessage>) => {
-  const last = messages.findLast((message) => message.role === "user");
+  const last = Option.getOrUndefined(Arr.findLast(messages, (message) => message.role === "user"));
   if (last === undefined) return { text: "", about: null, attachments: [] };
   const parts: ReadonlyArray<{ readonly type: string }> =
     "parts" in last ? last.parts : isString(last.content) ? [] : (last.content ?? []);
   const text =
     "parts" in last
-      ? last.parts.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("\n")
+      ? Arr.join(
+          Arr.flatMap(last.parts, (part) => (part.type === "text" ? [part.content] : [])),
+          "\n",
+        )
       : isString(last.content)
         ? last.content
         : "";
   return {
     text,
     about: aboutOf(last),
-    attachments: parts.flatMap((part) => Option.toArray(attachedIn(part))).map(({ id }) => id),
+    attachments: Arr.map(
+      Arr.flatMap(parts, (part) => Option.toArray(attachedIn(part))),
+      ({ id }) => id,
+    ),
   };
 };
 
@@ -89,7 +96,9 @@ export const useFlockChat = () => {
   const reload = () =>
     transcript({ payload: undefined }).then((exit) => {
       if (Exit.isSuccess(exit))
-        chat.setMessages(exit.value.map((message) => ({ ...message, parts: [...message.parts] })));
+        chat.setMessages(
+          Arr.map(exit.value, (message) => ({ ...message, parts: [...message.parts] })),
+        );
     });
 
   // A turn of Desktop's own is read back from the transcript once the human's own is not streaming.
@@ -127,7 +136,7 @@ export const useFlockChat = () => {
           ? text
           : [
               ...(text === "" ? [] : [{ type: "text" as const, content: text }]),
-              ...files.map(attachmentPart),
+              ...Arr.map(files, attachmentPart),
             ];
       return chat.sendMessage(about === null ? { content } : { content, metadata: { about } }, {
         body: { now },

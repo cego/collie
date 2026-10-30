@@ -1,33 +1,45 @@
-import { Effect, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import { Effect, Schema, flow, Result } from "effect";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { childEnv } from "../../desktop/src/bun/login-env";
 import type { JsonObject } from "../../src/schema";
 const emit = (record: JsonObject) =>
-  process.stdout.write(`${Schema.encodeSync(Schema.fromJsonString(Schema.Json))(record)}\n`);
+  process.stdout.write(
+    `${flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow)(record)}\n`,
+  );
 const update = (type: string, extra: JsonObject = {}) =>
   emit({ type: "message_update", assistantMessageEvent: { type, contentIndex: 0, ...extra } });
 const path = Bun.argv[Bun.argv.indexOf("builtin:mcp") + 2]!;
 const extension = await Bun.file(path).text();
 const server = /registerMcpServer\("([^"]+)"/.exec(extension)![1]!;
-const namespace = `mcp__${server.replaceAll("-", "_")}__`;
+const namespace = `mcp__${pipe(server, Str.replaceAll("-", "_"))}__`;
 const argument = (flag: string) =>
   Bun.argv.includes(flag) ? Bun.argv[Bun.argv.indexOf(flag) + 1] : undefined;
 const savedPath = `${argument("--session-dir")}/fixture-${argument("--session-id")}.json`;
 const selection = Schema.Struct({ model: Schema.String, thinking: Schema.String });
 const saved = (await Bun.file(savedPath).exists())
-  ? Schema.decodeUnknownSync(Schema.fromJsonString(selection))(await Bun.file(savedPath).text())
+  ? flow(
+      Schema.decodeResult(Schema.fromJsonString(selection)),
+      Result.getOrThrow,
+    )(await Bun.file(savedPath).text())
   : undefined;
 const settingsPath = `${childEnv().PI_CODING_AGENT_DIR ?? process.cwd()}/settings.json`;
 const settings = (await Bun.file(settingsPath).exists())
-  ? Schema.decodeUnknownSync(
-      Schema.fromJsonString(
-        Schema.Struct({
-          defaultProvider: Schema.optionalKey(Schema.String),
-          defaultModel: Schema.optionalKey(Schema.String),
-          defaultThinkingLevel: Schema.optionalKey(Schema.String),
-        }),
+  ? flow(
+      Schema.decodeResult(
+        Schema.fromJsonString(
+          Schema.Struct({
+            defaultProvider: Schema.optionalKey(Schema.String),
+            defaultModel: Schema.optionalKey(Schema.String),
+            defaultThinkingLevel: Schema.optionalKey(Schema.String),
+          }),
+        ),
       ),
+      Result.getOrThrow,
     )(await Bun.file(settingsPath).text())
   : {};
 const model =
@@ -40,23 +52,32 @@ let input = "";
 for await (const chunk of Bun.stdin.stream()) {
   input += new TextDecoder().decode(chunk);
   let at: number;
-  while ((at = input.indexOf("\n")) >= 0) {
-    const command = Schema.decodeUnknownSync(
-      Schema.fromJsonString(
-        Schema.Struct({
-          type: Schema.String,
-          message: Schema.optionalKey(Schema.String),
-          images: Schema.optionalKey(Schema.Array(Schema.Json)),
-        }),
+  while ((at = Option.getOrElse(pipe(input, Str.indexOf("\n")), () => -1)) >= 0) {
+    const command = flow(
+      Schema.decodeResult(
+        Schema.fromJsonString(
+          Schema.Struct({
+            type: Schema.String,
+            message: Schema.optionalKey(Schema.String),
+            images: Schema.optionalKey(Schema.Array(Schema.Json)),
+          }),
+        ),
       ),
-    )(input.slice(0, at));
-    input = input.slice(at + 1);
+      Result.getOrThrow,
+    )(pipe(input, Str.slice(0, at)));
+    input = pipe(input, Str.slice(at + 1));
     if (command.type === "abort") {
       emit({ type: "agent_settled", aborted: true });
       continue;
     }
     if (command.type !== "prompt") continue;
-    if (command.message?.startsWith("question")) {
+    if (
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(command.message), (present) =>
+          pipe(present, Str.startsWith("question")),
+        ),
+      )
+    ) {
       const questions = {
         questions: [
           { question: "Where?", header: "Place", options: [{ label: "Here" }], multiSelect: false },
@@ -94,14 +115,25 @@ for await (const chunk of Bun.stdin.stream()) {
           emit({
             type: "tool_execution_end",
             toolCallId: "question-click",
-            result: { content: Schema.decodeUnknownSync(Schema.Json)(result.content) },
+            result: {
+              content: flow(
+                Schema.decodeUnknownResult(Schema.Json),
+                Result.getOrThrow,
+              )(result.content),
+            },
           });
           emit({ type: "agent_settled", aborted: false });
         })
         .finally(() => client.close());
       continue;
     }
-    if (command.message?.startsWith("inspect")) {
+    if (
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(command.message), (present_) =>
+          pipe(present_, Str.startsWith("inspect")),
+        ),
+      )
+    ) {
       const promptFile = (name: string) =>
         Effect.runPromise(
           Effect.gen(function* () {
@@ -116,7 +148,10 @@ for await (const chunk of Bun.stdin.stream()) {
         );
       await Bun.write(
         savedPath,
-        Schema.encodeSync(Schema.fromJsonString(selection))({ model, thinking }),
+        flow(
+          Schema.encodeResult(Schema.fromJsonString(selection)),
+          Result.getOrThrow,
+        )({ model, thinking }),
       );
       const details = {
         args: Bun.argv.slice(2),
@@ -125,10 +160,13 @@ for await (const chunk of Bun.stdin.stream()) {
         extension,
         model,
         thinking,
-        systemPrompt: [
-          argument("--system-prompt") ?? (await promptFile("SYSTEM.md")),
-          argument("--append-system-prompt") ?? (await promptFile("APPEND_SYSTEM.md")),
-        ].join("\n"),
+        systemPrompt: Arr.join(
+          [
+            argument("--system-prompt") ?? (await promptFile("SYSTEM.md")),
+            argument("--append-system-prompt") ?? (await promptFile("APPEND_SYSTEM.md")),
+          ],
+          "\n",
+        ),
         prompt: command,
       };
       emit({ type: "agent_start" });
@@ -139,7 +177,13 @@ for await (const chunk of Bun.stdin.stream()) {
       emit({ type: "agent_settled", aborted: false });
       continue;
     }
-    if (command.message?.startsWith("error")) {
+    if (
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(command.message), (present__) =>
+          pipe(present__, Str.startsWith("error")),
+        ),
+      )
+    ) {
       emit({ type: "agent_start" });
       emit({
         type: "message_end",
@@ -153,7 +197,14 @@ for await (const chunk of Bun.stdin.stream()) {
       continue;
     }
     emit({ type: "agent_start" });
-    if (command.message?.startsWith("hold")) continue;
+    if (
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(command.message), (present___) =>
+          pipe(present___, Str.startsWith("hold")),
+        ),
+      )
+    )
+      continue;
     emit({ type: "message_start", message: { role: "assistant" } });
     update("thinking_start");
     update("thinking_delta", { delta: "Considering" });

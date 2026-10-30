@@ -2,7 +2,7 @@
 // board's own Schemas and folded into each Machine's Tasks.
 
 import { Atom, AtomRpc } from "@effect/atom-vue";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream, flow, Result } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import { Electroview, type RPCSchema } from "electrobun/view";
 import {
@@ -139,7 +139,9 @@ export const runDetailAtom = Atom.family((key: string) =>
     held(
       Stream.unwrap(
         FlockClient.use((client) =>
-          Effect.succeed(client("runDetail", Schema.decodeSync(RunOn)(key))),
+          Effect.succeed(
+            client("runDetail", flow(Schema.decodeResult(RunOn), Result.getOrThrow)(key)),
+          ),
         ),
       ),
     ),
@@ -149,4 +151,4 @@ export const runDetailAtom = Atom.family((key: string) =>
 const RunOn = Schema.fromJsonString(
   Schema.Struct({ installation: Schema.String, runId: Schema.String }),
 );
-export const runDetailKey = Schema.encodeSync(RunOn);
+export const runDetailKey = flow(Schema.encodeResult(RunOn), Result.getOrThrow);

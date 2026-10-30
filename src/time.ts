@@ -1,8 +1,8 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { DateTime, Effect, Option } from "effect";
 
-export function nowIso() {
-  return DateTime.now.pipe(Effect.map(DateTime.formatIso));
-}
+export const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
 /** A recorded timestamp in epoch milliseconds, and `NaN` for one that is not a time. */
 export function epochMs(iso: string): number {
@@ -41,7 +41,7 @@ export function took(ms: number): string {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
+  return `${Math.floor(minutes / 60)}h${pipe_(String(minutes % 60), Str.padStart(2, "0"))}m`;
 }
 
 /**
@@ -107,5 +107,5 @@ export function clockTime(ms: number): string {
   const iso = DateTime.formatIsoOffset(
     DateTime.makeZonedUnsafe(ms, { timeZone: DateTime.zoneMakeLocal() }),
   );
-  return iso.slice(11, 16);
+  return pipe_(iso, Str.slice(11, 16));
 }

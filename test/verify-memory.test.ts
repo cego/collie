@@ -2,8 +2,13 @@
 // an agent, says so first, and its result is the command's
 // (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D2, D4, D5 and D7).
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { resetExecutors } from "../src/executors";
 import { runDir } from "../src/engine";
@@ -17,12 +22,15 @@ import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Shown = Schema.Struct({ memory: Schema.NullOr(Schema.String) });
-const decodeLaunched = Schema.decodeUnknownSync(Schema.fromJsonString(Launched));
+const decodeLaunched = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Launched)),
+  Result.getOrThrow,
+);
 const Ran = Schema.Struct({
   ran: Schema.Boolean,
-  verification: Schema.Struct({ exit: Schema.Number }),
+  verification: Schema.Struct({ exit: Schema.Finite }),
 });
 
 test(
@@ -60,13 +68,15 @@ test(
           };
           yield* Effect.acquireRelease(
             Effect.sync(() => {
-              const before = Object.fromEntries(Object.keys(set).map((key) => [key, Bun.env[key]]));
+              const before = Rec.fromEntries(
+                Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const),
+              );
               Object.assign(Bun.env, set);
               return before;
             }),
             (before) =>
               Effect.sync(() => {
-                for (const [key, value] of Object.entries(before))
+                for (const [key, value] of Rec.toEntries(before))
                   if (value === undefined) delete Bun.env[key];
                   else Bun.env[key] = value;
               }),
@@ -90,8 +100,8 @@ test(
               (one) => one !== "",
             ),
           );
-          const pane = (yield* everyRegistered(world.state)).find(
-            (entry) => entry.runId === runId,
+          const pane = Option.getOrUndefined(
+            Arr.findFirst(yield* everyRegistered(world.state), (entry) => entry.runId === runId),
           )!.paneId;
           const verify = (name: string, paneId: string) =>
             collie(
@@ -118,22 +128,25 @@ test(
             );
             expect(yield* holdsBudgetOf(world.state, runId, launched.agent)).toBe(pauses);
             const shown = yield* collie(world, ["run", "show", runId]);
-            expect(Schema.decodeUnknownSync(Shown)(shown.envelope.data).memory).toBe(
-              waitLine(wait!),
-            );
+            expect(
+              (yield* Schema.decodeUnknownEffect(Shown)(shown.envelope.data).pipe(Effect.orDie))
+                .memory,
+            ).toBe(waitLine(wait!));
             const before = yield* ran();
             yield* memory(50);
             const done = yield* Fiber.join(asked);
             expect(done.exit).toBe(0);
             expect(done.stderr).toContain("waiting for memory on ");
-            expect(Schema.decodeUnknownSync(Ran)(done.envelope.data)).toEqual({
+            expect(
+              yield* Schema.decodeUnknownEffect(Ran)(done.envelope.data).pipe(Effect.orDie),
+            ).toEqual({
               ran: true,
               verification: expect.objectContaining({ exit: 0 }),
             });
             expect(yield* ran()).toBe(before + 1);
             expect(
-              (yield* deliveriesOf(world.state, runId)).filter((one) =>
-                one.delivery.cause.ref.startsWith("verify-"),
+              Arr.filter(yield* deliveriesOf(world.state, runId), (one) =>
+                pipe_(one.delivery.cause.ref, Str.startsWith("verify-")),
               ),
             ).toHaveLength(1);
             expect(yield* waiting()).toBeNull();
@@ -141,7 +154,7 @@ test(
           }
 
           // The agent that was running when the Machine became short is still there.
-          expect((yield* everyRegistered(world.state)).some((one) => one.runId === runId)).toBe(
+          expect(Arr.some(yield* everyRegistered(world.state), (one) => one.runId === runId)).toBe(
             true,
           );
 

@@ -1,7 +1,10 @@
 // What the Flock chat's window says of a tool call and of the card a message is about. No
 // Bun-only import: the view bundles this.
 
-import { Option, Schema } from "effect";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
+import { Option, Schema, flow, Result } from "effect";
 import { isString } from "../../../src/schema";
 import { AttachmentPart } from "./attachments";
 
@@ -22,11 +25,12 @@ const AboutJson = Schema.fromJsonString(About);
 const decodeAboutJson = Schema.decodeUnknownOption(AboutJson);
 
 /** The block the model is handed after the human's words: the card, as data. */
-export const aboutNote = (about: About) => `${ABOUT}\n${Schema.encodeSync(AboutJson)(about)}`;
+export const aboutNote = (about: About) =>
+  `${ABOUT}\n${flow(Schema.encodeResult(AboutJson), Result.getOrThrow)(about)}`;
 
 /** The card a block of Desktop's names, or null for any other text. */
 export const fromAboutNote = (text: string): About | null => {
-  const [first, json, ...rest] = text.split("\n");
+  const [first, json, ...rest] = Str.split(text, "\n");
   return first !== ABOUT || json === undefined || rest.length > 0
     ? null
     : Option.getOrNull(decodeAboutJson(json));
@@ -47,7 +51,7 @@ export type Answers = typeof Answers.Type;
 export const Earlier = Schema.Struct({
   session: Schema.String,
   title: Schema.String,
-  at: Schema.Number,
+  at: Schema.Finite,
 });
 export type Earlier = typeof Earlier.Type;
 
@@ -74,12 +78,14 @@ export type Conversations = typeof Conversations.Type;
 /** What opening a conversation held on another harness than `set` does, where one is listed. */
 export const earlierNote = (earlier: Conversations["earlier"], set: string) => {
   const others = [
-    ...new Set(earlier.flatMap(({ harness }) => (harness === set ? [] : [harnessName(harness)]))),
+    ...new Set(
+      Arr.flatMap(earlier, ({ harness }) => (harness === set ? [] : [harnessName(harness)])),
+    ),
   ];
   if (others.length === 0) return null;
   return others.length === 1
     ? `Opening a ${others[0]} conversation moves the chat to ${others[0]}.`
-    : `Opening a ${others.join(" or ")} conversation moves the chat to its harness.`;
+    : `Opening a ${Arr.join(others, " or ")} conversation moves the chat to its harness.`;
 };
 
 const Named = Schema.Struct({
@@ -96,25 +102,32 @@ const Asked = Schema.Struct({
 const decodeAsked = Schema.decodeUnknownOption(Schema.fromJsonString(Asked));
 
 const split = (id: string) => {
-  const at = id.indexOf(":");
-  return at < 0 ? { machine: null, id } : { machine: id.slice(0, at), id: id.slice(at + 1) };
+  const at = Option.getOrElse(pipe(id, Str.indexOf(":")), () => -1);
+  return at < 0
+    ? { machine: null, id }
+    : { machine: pipe(id, Str.slice(0, at)), id: pipe(id, Str.slice(at + 1)) };
 };
 
 /** A tool call as one row: the tool, the Machine its ids name, and a short summary of the rest. */
 export const toolRow = (name: string, args: string) => {
-  const tool = name.replace(/^mcp__collie__(collie_)?/, "");
+  const tool = pipe(name, Str.replace(/^mcp__collie__(collie_)?/, ""));
   const asked = Option.getOrElse(decodeAsked(args), (): typeof Asked.Type => ({}));
-  const ids = [asked, ...(asked.actions ?? [])].flatMap(({ run, workspace }) =>
-    [run, workspace].filter(isString).map(split),
+  const ids = Arr.flatMap([asked, ...(asked.actions ?? [])], ({ run, workspace }) =>
+    Arr.map(Arr.filter([run, workspace], isString), split),
   );
-  const machines = [...new Set(ids.flatMap(({ machine }) => (machine === null ? [] : [machine])))];
+  const machines = [
+    ...new Set(Arr.flatMap(ids, ({ machine }) => (machine === null ? [] : [machine]))),
+  ];
   const named = (thing: typeof Named.Type) =>
-    [thing.run, thing.workspace].filter(isString).map((id) => split(id).id);
+    Arr.map(Arr.filter([thing.run, thing.workspace], isString), (id) => split(id).id);
   const summary =
     asked.actions === undefined
-      ? [...named(asked), ...[asked.reason].filter(isString)].join(" · ")
-      : asked.actions.map((action) => [action.kind, ...named(action)].join(" ")).join(", ");
-  return { tool, machine: machines.length === 0 ? null : machines.join(", "), summary };
+      ? Arr.join([...named(asked), ...Arr.filter([asked.reason], isString)], " · ")
+      : Arr.join(
+          Arr.map(asked.actions, (action) => Arr.join([action.kind, ...named(action)], " ")),
+          ", ",
+        );
+  return { tool, machine: machines.length === 0 ? null : Arr.join(machines, ", "), summary };
 };
 
 const Part = Schema.Union([

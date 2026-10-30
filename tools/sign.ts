@@ -4,6 +4,9 @@
 // fails here rather than at every install. Desktop's update archive is also signed as the tar
 // it is applied as, which is what Desktop verifies.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Config, Data, Effect, FileSystem } from "effect";
 import {
@@ -37,7 +40,7 @@ const KEYS = [
 const refusalOf = (variable: string, privateKey: string, publicKey: string): string | null => {
   if (privateKey === "") return `${variable} is not set; a release is never published unsigned`;
   try {
-    return publicKeyOf(privateKey).trim() === publicKey.trim()
+    return Str.trim(publicKeyOf(privateKey)) === Str.trim(publicKey)
       ? null
       : `${variable} is not the key Collie verifies with`;
   } catch {
@@ -55,8 +58,10 @@ const program = Effect.gen(function* () {
     if (refusal === null) keys.push({ ...key, privateKey });
     else refusals.push(refusal);
   }
-  if (refusals.length > 0) return yield* new SigningRefused({ message: refusals.join("; ") });
-  const ed25519 = keys.find((key) => key.variable === "COLLIE_SIGNING_KEY")!;
+  if (refusals.length > 0) return yield* new SigningRefused({ message: Arr.join(refusals, "; ") });
+  const ed25519 = Option.getOrUndefined(
+    Arr.findFirst(keys, (key) => key.variable === "COLLIE_SIGNING_KEY"),
+  )!;
   for (const file of process.argv.slice(2)) {
     const bytes = yield* fs.readFile(file);
     for (const key of keys) {

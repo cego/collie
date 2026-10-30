@@ -1,5 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { beforeEach, afterEach, expect, test } from "bun:test";
-import { ConfigProvider, Duration, Effect, FileSystem, Result, Schema } from "effect";
+import { ConfigProvider, Duration, Effect, FileSystem, Result, Schema, flow } from "effect";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { exec } from "./support/command";
@@ -12,6 +15,7 @@ import { until } from "./support/host";
 import { nowIso } from "../src/time";
 import { agentsLayer } from "../src/agents";
 import { WorkflowError } from "../src/sdk";
+import * as Layer from "effect/Layer";
 
 let rig: Rig;
 let forgeApi = "";
@@ -25,7 +29,7 @@ beforeEach(() =>
 );
 afterEach(() => runEffect(rig.close()));
 
-const json = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const json = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 const fakeAgents = () =>
   agentsLayer({
     dir: rig.stateDir,
@@ -45,22 +49,34 @@ const withMachine = <A, E, R>(
     Effect.provide(
       registryLayer(rig.stateDir, {
         userDir: rig.userDir,
-        placing: { herdr: new FakeHerdr(rig.pluginEnv()), env: rig.pluginEnv() },
-      }),
-    ),
-    Effect.provide(fakeAgents()),
-    Effect.provide(
-      foundationLayer({
-        dir: rig.stateDir,
-        userDir: rig.userDir,
-        placing: { herdr: new FakeHerdr(rig.pluginEnv()), env: rig.pluginEnv() },
-        issuePrivacyBudget,
-      }),
-    ),
-    Effect.provide(
-      ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi }), {
-        asPrimary: true,
-      }),
+        placing: {
+          herdr: new FakeHerdr(rig.pluginEnv()),
+          env: rig.pluginEnv(),
+        },
+      }).pipe(
+        Layer.provideMerge(fakeAgents()),
+        Layer.provideMerge(
+          foundationLayer({
+            dir: rig.stateDir,
+            userDir: rig.userDir,
+            placing: {
+              herdr: new FakeHerdr(rig.pluginEnv()),
+              env: rig.pluginEnv(),
+            },
+            issuePrivacyBudget,
+          }),
+        ),
+        Layer.provideMerge(
+          ConfigProvider.layerAdd(
+            ConfigProvider.fromUnknown({
+              COLLIE_FORGE_API: forgeApi,
+            }),
+            {
+              asPrimary: true,
+            },
+          ),
+        ),
+      ),
     ),
     Effect.scoped,
   );
@@ -90,7 +106,7 @@ test(
         const before = yield* registry.view(old.runId);
         if (before === null) throw new Error("old Run is missing");
         yield* until(
-          () => nowIso(),
+          () => nowIso,
           (now) => now > before.created,
         );
         const child = yield* registry.start({
@@ -166,7 +182,7 @@ test(
         });
         yield* noteContext(
           evidenceDir(rig.stateDir, subject.runId),
-          yield* nowIso(),
+          yield* nowIso,
           "subject-build",
           123_456,
         );
@@ -233,15 +249,19 @@ test(
               });
               expect((yield* registry.view(run.runId))?.cwd).toBe(rig.projectDir);
               const answer = yield* registry.result(run.runId).pipe(Effect.result);
-              expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
-                [],
-              );
+              expect(
+                Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+              ).toEqual([]);
               expect(Result.isFailure(answer)).toBe(true);
               if (Result.isFailure(answer)) expect(answer.failure.reason).toContain(source);
             }
           }).pipe(withMachine);
-          expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
-          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+          expect(
+            Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
+          ).toEqual([]);
+          expect(Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+            [],
+          );
         } finally {
           yield* bin.restore();
         }
@@ -352,9 +372,9 @@ for (const state of ["bare", "unreadable"] as const) {
                 handsOver: true,
               });
               const answer = yield* registry.result(run.runId).pipe(Effect.result);
-              expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
-                [],
-              );
+              expect(
+                Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+              ).toEqual([]);
               expect(Result.isFailure(answer)).toBe(true);
               if (Result.isFailure(answer))
                 expect(answer.failure.reason).toBe(
@@ -363,8 +383,12 @@ for (const state of ["bare", "unreadable"] as const) {
                     : `issue privacy check could not read remotes: ${other}`,
                 );
             }).pipe(withMachine);
-            expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
-            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+            expect(
+              Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
+            ).toEqual([]);
+            expect(
+              Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+            ).toEqual([]);
           } finally {
             yield* bin.restore();
           }
@@ -413,15 +437,19 @@ for (const metadata of [" metadata", "metadata "]) {
                 handsOver: true,
               });
               const answer = yield* registry.result(run.runId).pipe(Effect.result);
-              expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
-                [],
-              );
+              expect(
+                Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+              ).toEqual([]);
               expect(Result.isFailure(answer)).toBe(true);
               if (Result.isFailure(answer))
                 expect(answer.failure.reason).toBe(`issue text names another checkout: ${other}`);
             }).pipe(withMachine);
-            expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
-            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+            expect(
+              Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
+            ).toEqual([]);
+            expect(
+              Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+            ).toEqual([]);
           } finally {
             yield* bin.restore();
           }
@@ -515,9 +543,9 @@ for (const failure of ["configuration", "inventory"] as const) {
                   : json({ projects: { root: `${rig.root}/absent` } }),
               );
               const answer = yield* registry.result(run.runId).pipe(Effect.result);
-              expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
-                [],
-              );
+              expect(
+                Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+              ).toEqual([]);
               expect(Result.isFailure(answer)).toBe(true);
               if (Result.isFailure(answer)) {
                 expect(Schema.is(WorkflowError)(answer.failure)).toBe(true);
@@ -526,8 +554,12 @@ for (const failure of ["configuration", "inventory"] as const) {
                 );
               }
             }).pipe(withMachine);
-            expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
-            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+            expect(
+              Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
+            ).toEqual([]);
+            expect(
+              Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+            ).toEqual([]);
           } finally {
             yield* bin.restore();
           }
@@ -635,7 +667,9 @@ test(
           }).pipe(withMachine);
           expect(Result.isFailure(answer)).toBe(true);
           if (Result.isFailure(answer)) expect(answer.failure.reason).toContain("stopped");
-          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+          expect(Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+            [],
+          );
           expect((yield* fake.model()).issues ?? []).toEqual([]);
         } finally {
           yield* bin.restore();
@@ -670,7 +704,7 @@ test(
         const deep = `${rig.root}/a/b/c/d/e/service`;
         yield* repository(deep, "https://internal:8443/private/deep.git");
         const samePath = `${rig.root}/same-path`;
-        const ownPath = PROJECT.github.split("/").slice(1).join("/");
+        const ownPath = Arr.join(Str.split(PROJECT.github, "/").slice(1), "/");
         yield* repository(samePath, `git@internal:${ownPath}.git`);
         const nested = `${rig.projectDir}/nested`;
         yield* repository(nested, "https://gitlab.example.com/private/nested.git");
@@ -730,7 +764,7 @@ test(
                     });
                     const answer = yield* registry.result(run.runId).pipe(Effect.result);
                     expect(
-                      fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url)),
+                      Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
                     ).toEqual([]);
                     expect(Result.isFailure(answer)).toBe(true);
                     if (Result.isFailure(answer)) expect(answer.failure.reason).toContain(checkout);
@@ -739,8 +773,12 @@ test(
               );
             }
           }).pipe(withMachine);
-          expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
-          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+          expect(
+            Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
+          ).toEqual([]);
+          expect(Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+            [],
+          );
           expect((yield* fake.model()).issues).toHaveLength(1);
           expect((yield* fake.model()).issueNotes).toBeUndefined();
         } finally {
@@ -794,13 +832,19 @@ test(
               handsOver: true,
             });
             const answer = yield* registry.result(run.runId).pipe(Effect.result);
-            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+            expect(
+              Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+            ).toEqual([]);
             expect(Result.isFailure(answer)).toBe(true);
             if (Result.isFailure(answer))
               expect(answer.failure.reason).toBe(`issue text names another checkout: ${sibling}`);
           }).pipe(withMachine);
-          expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
-          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+          expect(
+            Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
+          ).toEqual([]);
+          expect(Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+            [],
+          );
         } finally {
           yield* bin.restore();
         }
@@ -895,15 +939,21 @@ test(
               handsOver: true,
             });
             const answer = yield* registry.result(run.runId).pipe(Effect.result);
-            expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+            expect(
+              Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url)),
+            ).toEqual([]);
             expect(Result.isFailure(answer)).toBe(true);
             if (Result.isFailure(answer)) {
               expect(Schema.is(WorkflowError)(answer.failure)).toBe(true);
               expect(answer.failure.reason).toBe("issue privacy check did not finish within 200ms");
             }
           }).pipe((effect) => withMachine(effect, "200 millis"));
-          expect((yield* fake.calls()).filter((line) => line.startsWith("gh issue"))).toEqual([]);
-          expect(fake.requests().filter((one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual([]);
+          expect(
+            Arr.filter(yield* fake.calls(), (line) => pipe_(line, Str.startsWith("gh issue"))),
+          ).toEqual([]);
+          expect(Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+            [],
+          );
         } finally {
           yield* bin.restore();
         }

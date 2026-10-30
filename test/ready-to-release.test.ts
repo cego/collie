@@ -1,6 +1,8 @@
 // Ready to release as `run show` and `run wait` read it from a real host: the same fact the
 // board's column is, and a wait that knows when only a human can move it.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
 import { stopHost } from "./support/host";
@@ -55,7 +57,13 @@ test(
           const shown = yield* collie(world, ["run", "show", runId]);
           const ready = (yield* payloadOf(shown.envelope)).ready;
           expect(ready?.ready).toBe(false);
-          expect(ready?.missing.map((one) => one.fact)).toEqual(["succeeded", "mr-open"]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(ready), (present) =>
+                Arr.map(present.missing, (one) => one.fact),
+              ),
+            ),
+          ).toEqual(["succeeded", "mr-open"]);
           yield* stopHost(world.state);
         }),
       ["parked-pending.workflow.ts"],
@@ -82,7 +90,13 @@ test(
           const human = yield* collie(world, ["run", "wait", runId, "--until", "needs-human"]);
           expect(human.exit).toBe(0);
           const shown = (yield* payloadOf(human.envelope)).ready;
-          expect(shown?.missing.every((one) => !one.settling)).toBe(true);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(shown), (present_) =>
+                Arr.every(present_.missing, (one) => !one.settling),
+              ),
+            ),
+          ).toBe(true);
 
           const bad = yield* collie(world, ["run", "wait", runId, "--until", "someday"]);
           expect(bad.envelope.error?.message).toContain("terminal, attention, ready, needs-human");

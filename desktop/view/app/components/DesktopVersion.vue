@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
 import type { UpdateNews } from "../../../src/shared/flock";
 import { updatesAtom } from "../flock";
 
@@ -21,7 +24,7 @@ const said = (news: UpdateNews, version: string) => {
     case "Failed":
       return `Could not check for updates: ${news.reason}`;
     case "Never":
-      return `${news.reason.charAt(0).toUpperCase()}${news.reason.slice(1)}.`;
+      return `${Str.toUpperCase(Option.getOrElse(Str.charAt(news.reason, 0), () => ""))}${pipe(news.reason, Str.slice(1))}.`;
   }
 };
 </script>

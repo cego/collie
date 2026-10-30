@@ -1,8 +1,11 @@
 // The bridge: a front door on another computer reaches this Machine's host through one
 // command's stdio, started as the front door it is, and starts that host when none runs.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Config, Effect, Layer, Option, Schema } from "effect";
+import { Config, Effect, Layer, Option, Schema, flow, Result } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
@@ -16,7 +19,10 @@ import { root, stopHost } from "./support/host";
 import { proves, type World } from "./support/world";
 
 const READY = `${BRIDGE_READY}\n`;
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
 
 /** Everything after the ready marker, whatever a login shell printed before it. */
 const afterReady = (from: ReadableStream<Uint8Array>) => {
@@ -28,10 +34,10 @@ const afterReady = (from: ReadableStream<Uint8Array>) => {
       transform: (chunk, out) => {
         if (ready) return out.enqueue(chunk);
         seen += decoder.decode(chunk, { stream: true });
-        const at = seen.indexOf(READY);
+        const at = Option.getOrElse(pipe_(seen, Str.indexOf(READY)), () => -1);
         if (at === -1) return;
         ready = true;
-        const rest = seen.slice(at + READY.length);
+        const rest = pipe_(seen, Str.slice(at + READY.length));
         if (rest !== "") out.enqueue(rest);
       },
     }),
@@ -95,7 +101,7 @@ const bridged = Effect.fn("BridgeTest.bridged")(function* (
 /** The environment the process owning this directory was started with. */
 const environOf = (pid: number) =>
   Effect.promise(() => Bun.file(`/proc/${pid}/environ`).text()).pipe(
-    Effect.map((text) => text.split("\0")),
+    Effect.map((text) => Str.split(text, "\0")),
   );
 
 test(
@@ -136,7 +142,7 @@ test(
           yield* chat.door.control({ runId, control: "hold", set: false, request: "unhold-1" });
 
           const trail = yield* readAudit(runDir(world.state, runId));
-          expect(trail.map((line) => [line.operation, line.actor])).toEqual([
+          expect(Arr.map(trail, (line) => [line.operation, line.actor])).toEqual([
             [
               "start",
               {

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
+import * as Effect from "effect/Effect";
 import { useAtomSet } from "@effect/atom-vue";
 import { Exit } from "effect";
 import type { SlackChoices } from "../../../../src/slack";
@@ -20,28 +22,50 @@ const done = ref<string | null>(null);
 watch(token, () => {
   refused.value = null;
 });
-const keep = async () => {
-  busy.value = true;
-  refused.value = null;
-  const exit = await save({ payload: { token: token.value } });
-  busy.value = false;
-  if (Exit.isFailure(exit)) {
-    refused.value = failureOf(exit.cause).reason;
-    return;
-  }
-  token.value = "";
-  done.value = exit.value;
-  emit("refresh");
+const keep = () => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      busy.value = true;
+      refused.value = null;
+      const exit = yield* Effect.promise(() =>
+        Promise.resolve(
+          save({
+            payload: {
+              token: token.value,
+            },
+          }),
+        ),
+      );
+      busy.value = false;
+      if (Exit.isFailure(exit)) {
+        refused.value = failureOf(exit.cause).reason;
+        return;
+      }
+      token.value = "";
+      done.value = exit.value;
+      emit("refresh");
+    }),
+  );
 };
-const forget = async () => {
-  busy.value = true;
-  const exit = await disconnect({ payload: undefined });
-  busy.value = false;
-  if (Exit.isFailure(exit)) refused.value = failureOf(exit.cause).reason;
-  else {
-    done.value = exit.value;
-    emit("refresh");
-  }
+const forget = () => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      busy.value = true;
+      const exit = yield* Effect.promise(() =>
+        Promise.resolve(
+          disconnect({
+            payload: undefined,
+          }),
+        ),
+      );
+      busy.value = false;
+      if (Exit.isFailure(exit)) refused.value = failureOf(exit.cause).reason;
+      else {
+        done.value = exit.value;
+        emit("refresh");
+      }
+    }),
+  );
 };
 </script>
 
@@ -84,7 +108,7 @@ const forget = async () => {
           type="submit"
           label="Connect"
           :loading="busy"
-          :disabled="busy || token.trim() === ''"
+          :disabled="busy || Str.trim(token) === ''"
           data-testid="save-slack"
         />
       </div>

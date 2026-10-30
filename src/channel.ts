@@ -3,22 +3,26 @@
 // Machine's link its WebSocket (ADR-0057 D4). The declaration is made here, from what this
 // end knows, so nothing at the far end can change it.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { createConnection, type Socket } from "node:net";
-import { Data, Effect, Option, Schema } from "effect";
+import { Data, Effect, Option, Schema, flow, Result } from "effect";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import type { Declaration } from "./board-model";
 import { isString } from "./schema";
 
 const DECLARE_REQUEST = "bridge";
 
-const encodeFrame = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeFrame = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** The host's answer to the declaration, as much of it as says whether it was taken. */
 const decodeReply = Schema.decodeUnknownOption(
   Schema.fromJsonString(
-    Schema.Struct({
-      _tag: Schema.Literal("Exit"),
-      requestId: Schema.Union([Schema.String, Schema.Number]),
+    Schema.TaggedStruct("Exit", {
+      requestId: Schema.Union([Schema.String, Schema.Finite]),
       exit: Schema.Struct({ _tag: Schema.String }),
     }),
   ),
@@ -64,10 +68,10 @@ export const channelInto = (socket: string | Socket, declaration: Declaration, f
     let ready = false;
     const handshake = (chunk: Buffer) => {
       reply += chunk.toString("utf8");
-      const end = reply.indexOf("\n");
+      const end = Option.getOrElse(pipe(reply, Str.indexOf("\n")), () => -1);
       if (end === -1) return;
       conn.off("data", handshake);
-      const line = reply.slice(0, end);
+      const line = pipe(reply, Str.slice(0, end));
       const answer = decodeReply(line);
       if (Option.isNone(answer) || answer.value.requestId !== DECLARE_REQUEST) {
         return refuse(`the host answered the declaration with ${line}`);
@@ -77,7 +81,7 @@ export const channelInto = (socket: string | Socket, declaration: Declaration, f
       }
       ready = true;
       far.ready?.();
-      const rest = reply.slice(end + 1);
+      const rest = pipe(reply, Str.slice(end + 1));
       if (rest !== "") far.write(Buffer.from(rest, "utf8"));
       conn.on("data", (more: Buffer) => far.write(more));
       far.read(

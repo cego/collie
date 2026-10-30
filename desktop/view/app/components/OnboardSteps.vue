@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { type OnboardStep, SETTLED, Skippable } from "../../../src/shared/flock";
 
 /** `ended` once the onboarding has, when a step left unsettled offers to try again. */
@@ -8,7 +11,7 @@ const { openLink } = useActions();
 
 const code = ref("");
 const sendCode = () => {
-  emit("code", code.value.trim());
+  emit("code", Str.trim(code.value));
   code.value = "";
 };
 
@@ -22,7 +25,8 @@ const ICON: Record<OnboardStep["status"], string> = {
   failed: "i-lucide-circle-x",
 };
 const left = ({ status }: OnboardStep) => status !== "running" && !SETTLED.includes(status);
-const skippable = ({ step }: OnboardStep) => Skippable.literals.find((one) => one === step);
+const skippable = ({ step }: OnboardStep) =>
+  Option.getOrUndefined(Arr.findFirst(Skippable.literals, (one) => one === step));
 </script>
 
 <template>

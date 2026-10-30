@@ -11,6 +11,10 @@
 // The Markdown beside this file is the content: the interview, the two skills the spec
 // and the tickets are written with, and what each of the menu's rounds asks for.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import {
   FindingSchema,
   Children,
@@ -108,7 +112,7 @@ const Offloaded = Schema.Struct({
 /** The host's own options for a child, with the ones nobody settled left out: absent
  *  rather than empty, exactly as a front door passes them. */
 const launch = (options: Record<string, string>): Record<string, string> =>
-  Object.fromEntries(Object.entries(options).filter(([, value]) => value !== ""));
+  Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 
 /** What a planner rooted at the Projects root is told about it, and nothing elsewhere. */
 const rootingOf = (options: Readonly<Record<string, string>>) =>
@@ -220,6 +224,7 @@ export default defineWorkflow({
     "Turns a goal into a spec and tickets, using the repository for context and asking only for missing decisions.",
   input: Schema.Struct({
     goal: Schema.String,
+    // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
       Schema.Literals(["", "implement"]).annotate({
         description:
@@ -262,9 +267,10 @@ export default defineWorkflow({
         run: { dir: place.dir, id: run.id },
         rooting: rootingOf(place.options),
         // A section's text is sent as it is, so the one name it carries is filled here.
-        attendance: (
-          content.sections.get(nobodyAsked ? "unattended" : "attended") ?? ""
-        ).replaceAll("{{run.id}}", run.id),
+        attendance: pipe_(
+          content.sections.get(nobodyAsked ? "unattended" : "attended") ?? "",
+          Str.replaceAll("{{run.id}}", run.id),
+        ),
       };
       const planDir = `${place.dir}/plan`;
       // Why the plan's tickets cannot be built, recorded so a replay is handed the same answer.
@@ -328,7 +334,8 @@ export default defineWorkflow({
 
       let opinions = 0;
       const linear = yield* connection("linear");
-      const choices = linear.state === "ok" ? CHOICES : CHOICES.filter((one) => one !== OFFLOAD);
+      const choices =
+        linear.state === "ok" ? CHOICES : Arr.filter(CHOICES, (one) => one !== OFFLOAD);
       for (let round = 1; round <= ROUNDS; round++) {
         // What is left to offer: an opinion already had twice is not offered a third time.
         const chosen = nobodyAsked
@@ -337,7 +344,8 @@ export default defineWorkflow({
               ask({
                 name: `next-${round}`,
                 prompt: "What next?",
-                options: opinions < OPINIONS ? choices : choices.filter((one) => one !== OPINION),
+                options:
+                  opinions < OPINIONS ? choices : Arr.filter(choices, (one) => one !== OPINION),
               }),
               { round },
             );

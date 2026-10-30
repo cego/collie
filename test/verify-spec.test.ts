@@ -1,8 +1,11 @@
 // Which commands Collie may run itself is a permission, so where it comes from and what
 // happens to a Run when that file changes are the whole of what matters here.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path, flow, Result } from "effect";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import {
   approvedFor,
@@ -19,7 +22,10 @@ import { DEFAULT_AUTHORITY, readIntent, seedIntent, writeIntent } from "../src/i
 import { VerifySpecSchema, type VerifySpec } from "../src/verify-spec";
 import { Schema } from "effect";
 
-const encodeSpecs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
+const encodeSpecs = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
+  Result.getOrThrow,
+);
 
 let cwd: string;
 let userDir: string;
@@ -238,7 +244,7 @@ test("a Run keeps the set it started with, whatever the file says later", () =>
 
 test("a check is named by the script it runs, else the tool and its subcommand, else the tool", () => {
   const named = (command: string) => {
-    const [executable = "", ...argv] = command.split(" ");
+    const [executable, ...argv] = Str.split(command, " ");
     return checkNameOf(executable, argv);
   };
   expect(named("bun run typecheck")).toBe("typecheck");
@@ -252,3 +258,18 @@ test("a check is named by the script it runs, else the tool and its subcommand, 
   expect(named("npm run test -- --watch")).toBe("test");
   expect(named("npm --version")).toBe("npm");
 });
+
+test("an approved check renders as a line a shell runs with the same words", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const spec: VerifySpec = {
+        name: "echoes",
+        executable: "printf",
+        argv: ["%s\\0", "two words", "$HOME costs"],
+        cwd: "/",
+      };
+      const line = pipe_(renderApproved([spec]), Str.slice("- echoes: ".length, -" (in /)".length));
+      const ran = yield* exec(["/bin/sh", "-c", line]);
+      expect(Str.split(ran.stdout, "\0").slice(0, -1)).toEqual(spec.argv.slice(1));
+    }),
+  ));

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { type OfferView, offerFields, offerInput } from "../../../../src/board-model";
 
 const props = defineProps<{ installation: string; runId: string; chosen: string | null }>();
@@ -10,14 +13,22 @@ const picked = ref<OfferView | null>(null);
 const typed = ref<Record<string, string>>({});
 const fields = computed(() => offerFields(picked.value?.arguments ?? null));
 
-const make = async (offer: OfferView) => {
-  emit("close");
-  await run(props.installation, {
-    _tag: "Invoke",
-    runId: props.runId,
-    offer: offer.id,
-    input: offerInput(offer.arguments, typed.value),
-  });
+const make = (offer: OfferView) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      emit("close");
+      yield* Effect.promise(() =>
+        Promise.resolve(
+          run(props.installation, {
+            _tag: "Invoke",
+            runId: props.runId,
+            offer: offer.id,
+            input: offerInput(offer.arguments, typed.value),
+          }),
+        ),
+      );
+    }),
+  );
 };
 
 /** Picked, and made at once where it takes nothing; asked about otherwise. */
@@ -27,12 +38,20 @@ const pick = (offer: OfferView) => {
   if (offer.unavailable === null && offerFields(offer.arguments).length === 0) void make(offer);
 };
 
-onMounted(async () => {
-  // Asked again now: what a Run offers is its module's decision at this moment, not the card's.
-  offers.value = await offersOf(props.installation, props.runId);
-  if (offers.value === null) return emit("close");
-  const named = offers.value.find((offer) => offer.id === props.chosen);
-  if (named !== undefined) pick(named);
+onMounted(() => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      // Asked again now: what a Run offers is its module's decision at this moment, not the card's.
+      offers.value = yield* Effect.promise(() =>
+        Promise.resolve(offersOf(props.installation, props.runId)),
+      );
+      if (offers.value === null) return emit("close");
+      const named = Option.getOrUndefined(
+        Arr.findFirst(offers.value, (offer) => offer.id === props.chosen),
+      );
+      if (named !== undefined) pick(named);
+    }),
+  );
 });
 </script>
 

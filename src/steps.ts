@@ -2,7 +2,9 @@
 // it (ADR-draft-a-step-is-declared-where-its-work-is-written D1–D4). The SDK's `step` makes
 // one, and the Flow is built from these records.
 
-import { Context, Effect, FileSystem, Schema } from "effect";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { Context, Effect, FileSystem, Schema, flow, Result } from "effect";
 
 export const StepKind = Schema.Literals(["agent", "question", "workflow", "check"]);
 export type StepKind = typeof StepKind.Type;
@@ -81,7 +83,7 @@ export type StepNote = StepLine extends infer L
 export const STEPS_FILE = "steps.jsonl";
 
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(StepLine));
-const encodeLine = Schema.encodeSync(Schema.fromJsonString(StepLine));
+const encodeLine = flow(Schema.encodeResult(Schema.fromJsonString(StepLine)), Result.getOrThrow);
 
 export const encodeStepLine = (line: StepLine): string => encodeLine(line);
 
@@ -91,7 +93,7 @@ export const readStepLines = Effect.fn("Steps.read")(function* (runDir: string) 
   const text = yield* fs
     .readFileString(`${runDir}/${STEPS_FILE}`)
     .pipe(Effect.orElseSucceed(() => ""));
-  return text.split("\n").flatMap((line) => {
+  return Arr.flatMap(Str.split(text, "\n"), (line) => {
     const read = decodeLine(line);
     return read._tag === "Some" ? [read.value] : [];
   });

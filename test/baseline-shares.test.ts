@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -9,7 +13,19 @@ test("every baseline scenario is in exactly one share, and a pass's shares are a
   const names = scenarioNames();
   const shares = split(names, SHARES);
   expect(shares).toHaveLength(SHARES);
-  expect(shares.flat().toSorted()).toEqual(names.toSorted());
+  expect(
+    Arr.sortWith(
+      shares.flat(),
+      (value) => value,
+      (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+    ),
+  ).toEqual(
+    Arr.sortWith(
+      names,
+      (value) => value,
+      (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+    ),
+  );
 });
 
 test("a scenario added under a new name moves no other between shares", () => {
@@ -18,7 +34,7 @@ test("a scenario added under a new name moves no other between shares", () => {
   const before = split(names, SHARES);
   const after = split([added, ...names], SHARES);
   expect(after.flat()).toContain(added);
-  expect(after.map((share) => share.filter((name) => name !== added))).toEqual(before);
+  expect(Arr.map(after, (share) => Arr.filter(share, (name) => name !== added))).toEqual(before);
 });
 
 // crc32 puts alpha in share 10, beta in 7, gamma in 5.
@@ -66,8 +82,11 @@ test("every scenario resolves to the file whose register call runs it", () =>
       const shares = split(all, SHARES);
       let registered = 0;
       for (const file of new Bun.Glob("test/baseline-*.test.ts").scanSync()) {
-        const call = (yield* fs.readFileString(file)).match(
-          /register\("(shipped|unrelated)", (\d+)\)/,
+        const call = Option.getOrNull(
+          pipe(
+            yield* fs.readFileString(file),
+            Str.match(/register\("(shipped|unrelated)", (\d+)\)/),
+          ),
         );
         if (call === null) continue;
         registered++;

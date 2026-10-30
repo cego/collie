@@ -6,6 +6,7 @@
 // result to another. Two items that cannot be told apart are refused here, before any
 // of them is started, because one result answering for both is a lie nobody can see.
 
+import * as Arr from "effect/Array";
 import { unsafePathComponent } from "./naming";
 
 /** One item of work that finished, and what it left for the ones after it. */
@@ -21,18 +22,22 @@ export interface Handed {
 /** What the items before this one left behind: their work, their commits, their evidence. */
 export function renderProgress(done: ReadonlyArray<Handed>): string {
   if (done.length === 0) return "(this is the first ticket)";
-  return done
-    .map((entry) => {
+  return Arr.join(
+    Arr.map(done, (entry) => {
       const commits =
         entry.commits.length === 0
           ? "    (no commit)"
-          : entry.commits.map((subject) => `    ${subject}`).join("\n");
+          : Arr.join(
+              Arr.map(entry.commits, (subject) => `    ${subject}`),
+              "\n",
+            );
       const proved = entry.verifications ?? [];
       const verified =
-        proved.length === 0 ? "    verified: nothing" : `    verified: ${proved.join(", ")}`;
+        proved.length === 0 ? "    verified: nothing" : `    verified: ${Arr.join(proved, ", ")}`;
       return `- ${entry.item} — ${entry.title}\n${commits}\n${verified}`;
-    })
-    .join("\n");
+    }),
+    "\n",
+  );
 }
 
 /**

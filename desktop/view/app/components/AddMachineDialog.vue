@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
 import { machineToAdd } from "../../../src/shared/flock";
 
 const open = defineModel<boolean>("open", { required: true });
@@ -8,12 +9,18 @@ const { job } = useOnboarding();
 const typed = reactive({ target: "", label: "", session: "default" });
 watch(open, (now) => now && Object.assign(typed, { target: "", label: "", session: "default" }));
 const adding = computed(() => machineToAdd(typed));
-const add = async () => {
-  const machine = adding.value;
-  if (machine === null) return;
-  open.value = false;
-  const started = await addMachine(machine.target, machine.label, machine.session);
-  if (started !== null) job.value = started;
+const add = () => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const machine = adding.value;
+      if (machine === null) return;
+      open.value = false;
+      const started = yield* Effect.promise(() =>
+        Promise.resolve(addMachine(machine.target, machine.label, machine.session)),
+      );
+      if (started !== null) job.value = started;
+    }),
+  );
 };
 </script>
 

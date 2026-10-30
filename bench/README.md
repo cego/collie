@@ -18,7 +18,7 @@ Install candidate dependencies from a fresh private cache with `bun install
 that independent installation to the baseline checkout. Do not edit shared dependencies.
 
 The driver takes Collie's cooperative Machine Measurement lock. It checks the locked
-4.0.1 filesystem and SQL implementation hashes against pristine packages and requires
+4.1.0 filesystem and SQL implementation hashes against pristine packages and requires
 independent files with one hard link. It repeats those checks before and after every
 process, and installs baseline dependencies only through the private cache with
 `copyfile`. It copies the identical harness into that checkout. Both versions use

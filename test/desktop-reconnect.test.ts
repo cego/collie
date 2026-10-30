@@ -1,6 +1,7 @@
 // A Machine's connection is renewed under Desktop: a request it cut off fails naming the
 // Machine, and a Run's details carry on over the next door.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Exit, Fiber, Queue, Stream } from "effect";
 import {
@@ -24,7 +25,7 @@ const reached = (fake: Partial<Door>) => {
   return { machine, desktop };
 };
 const titles = (details: ReadonlyArray<{ readonly title: string } | null>) =>
-  details.map((detail) => detail?.title);
+  Arr.map(details, (detail) => detail?.title);
 
 test("an action cut off by its Machine's renewed connection fails naming the Machine, under its request", () =>
   Effect.runPromise(

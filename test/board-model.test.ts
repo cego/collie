@@ -1,9 +1,11 @@
 // The board's model is imported by a browser bundle as well as by the host, so it must
 // bundle for a browser and load in a context that has no runtime to reach.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { runInNewContext } from "node:vm";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, flow as Schemaflow, Result } from "effect";
 import {
   cardActions,
   flowActions,
@@ -155,7 +157,7 @@ test("a Flow lane offers controls for its own state, and follow-up only on its l
   );
   const done = {
     ...base,
-    lanes: base.lanes.map((lane) => ({ ...lane, execution: "completed" as const })),
+    lanes: Arr.map(base.lanes, (lane) => ({ ...lane, execution: "completed" as const })),
   };
   expect(flowActions(done, task({ run: "build-run", state: "done" })).lanes[1]!.actions).toEqual([
     "follow-up",
@@ -240,7 +242,7 @@ const bundled = Effect.gen(function* () {
       ],
     }),
   );
-  const errors = built.logs.filter((log) => log.level === "error");
+  const errors = Arr.filter(built.logs, (log) => log.level === "error");
   const code = built.success ? yield* Effect.promise(() => built.outputs[0]!.text()) : "";
   return { errors, reached, code };
 });
@@ -263,7 +265,7 @@ test("loading the board model does nothing but define it", () =>
       // load throws here. Bun's contexts carry a console of their own, so it is blanked.
       const sandbox = { TextEncoder, TextDecoder, console: undefined };
       expect(() => runInNewContext(code, sandbox)).not.toThrow();
-      expect(Object.keys(sandbox)).toEqual(["TextEncoder", "TextDecoder", "console"]);
+      expect(Rec.keys(sandbox)).toEqual(["TextEncoder", "TextDecoder", "console"]);
     }),
   ));
 
@@ -303,7 +305,10 @@ test("a TaskView carries its open questions, and one from an older host without 
     runs: ["run-1"],
     at: 1_700_000_000_000,
   };
-  const decode = Schema.decodeUnknownSync(Schema.toCodecJson(TaskView));
+  const decode = Schemaflow(
+    Schema.decodeUnknownResult(Schema.toCodecJson(TaskView)),
+    Result.getOrThrow,
+  );
 
   expect(decode(older).questions).toBeUndefined();
   const newer = { ...older, questions: [question, { ...question, id: "c-2" }] };
@@ -348,7 +353,12 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     at: 1_700_000_000_000,
   };
   const json = Schema.toCodecJson(TaskView);
-  expect(Schema.decodeUnknownSync(json)(JSON.parse(JSON.stringify(view)))).toEqual(view);
+  expect(
+    Schemaflow(
+      Schema.decodeUnknownResult(json),
+      Result.getOrThrow,
+    )(JSON.parse(JSON.stringify(view))),
+  ).toEqual(view);
 
   const detail: RunDetail = {
     id: "run-1",
@@ -398,7 +408,10 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     },
   };
   expect(
-    Schema.decodeUnknownSync(Schema.toCodecJson(RunDetail))(JSON.parse(JSON.stringify(detail))),
+    Schemaflow(
+      Schema.decodeUnknownResult(Schema.toCodecJson(RunDetail)),
+      Result.getOrThrow,
+    )(JSON.parse(JSON.stringify(detail))),
   ).toEqual(detail);
 });
 
@@ -492,7 +505,7 @@ test.each([
   if (action?.kind !== "open-mr") return;
   expect(mrUrlOf(action.mr)).toBe(url);
   expect([openMrLabel(action.mr, true), openMrLabel(action.mr, false)]).toEqual([...open]);
-  expect(cardActions(waiting).some((one) => one.kind === "open-mr")).toBe(true);
+  expect(Arr.some(cardActions(waiting), (one) => one.kind === "open-mr")).toBe(true);
   expect(primaryAction({ ...waiting, mrState: "closed" })).toEqual({
     kind: "dispose",
     disposition: "superseded",
@@ -521,7 +534,7 @@ test("ready to release is mergeable now, and nothing is missing", () => {
 
 test("each fact ready to release needs is named when it is missing, and whether it may yet come", () => {
   const missing = (over: Partial<Parameters<typeof readyToRelease>[0]>) =>
-    readyToRelease({ ...mergeableNow, ...over }).missing.map(({ fact, settling }) => [
+    Arr.map(readyToRelease({ ...mergeableNow, ...over }).missing, ({ fact, settling }) => [
       fact,
       settling,
     ]);
@@ -549,11 +562,14 @@ test("each fact ready to release needs is named when it is missing, and whether 
   ]);
   expect(missing({ mergeable: null })).toEqual([["mergeable", true]]);
 
-  const said = readyToRelease({
-    ...mergeableNow,
-    ci: { state: "failed", name: "lint" },
-    mergeable: { state: "blocked", said: "conflict" },
-  }).missing.map((one) => one.said);
+  const said = Arr.map(
+    readyToRelease({
+      ...mergeableNow,
+      ci: { state: "failed", name: "lint" },
+      mergeable: { state: "blocked", said: "conflict" },
+    }).missing,
+    (one) => one.said,
+  );
   expect(said).toEqual(["lint failed in CI", "the forge says it cannot merge: conflict"]);
 });
 
@@ -565,8 +581,12 @@ test("one Run is ready only where it leads its card, and a Run on no card says w
     ready: false,
     missing: [{ fact: "leads", said: "r2 leads its Task now", settling: false }],
   });
-  expect(readinessOfRun("r3", undefined, false).missing.map((one) => one.settling)).toEqual([true]);
-  expect(readinessOfRun("r3", undefined, true).missing.map((one) => one.settling)).toEqual([false]);
+  expect(Arr.map(readinessOfRun("r3", undefined, false).missing, (one) => one.settling)).toEqual([
+    true,
+  ]);
+  expect(Arr.map(readinessOfRun("r3", undefined, true).missing, (one) => one.settling)).toEqual([
+    false,
+  ]);
 });
 
 test("an offer's text arguments are read as it declares them, null included, and none is added", () => {

@@ -66,7 +66,11 @@ nor anything it starts preloads CEF. Without Desktop's `bin` to match, a host ke
 
 The host writes what it does to `host.log` in its state directory — its start, a stop and
 whether the grace ran out, every warning the engine and the registry log, and a board build
-or an RPC answer that took over 2 s, with which RPC and how long it took. A cleanup listing
+or an RPC answer that took over 2 s, with which RPC and how long it took. A write that
+fails and leaves part of a Run's record missing (its final card, frozen checks, intent seed
+or oversight audit), or that leaves the host's shutdown or pairing unfinished, is an Error
+line with its cause; the Run carries on as it would have. A failed dial-back from a paired
+Machine, or a failed line in a Run's own log, is a warning. A cleanup listing
 or sweep over 2 s in all, counting the time spent gathering what its sweepers judge, also
 says that time and how long each kind took to judge, slowest first:
 `the cleanup listing took 4000 ms; gathering took 500 ms; judging took task 3000 ms, worktree 500 ms`. A stream, such as
@@ -1444,6 +1448,35 @@ fake.
 `check` runs `check:static`, which is formatting, lint, and type checking in parallel, then
 tests after all three pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
+
+Lint enables Effect's correctness, effect-native, and strict presets. Effect findings
+fail the check, including native collection helpers, synchronous schema decoders,
+untyped error channels, and resources started outside their Effect context. `lint:ts`
+uses `effect-tsgo oxlint` directly so lint cannot silently lose Effect rules when a
+package installation skips the patch hook. Root typechecking also covers `tools/`.
+
+`lint:vue` prepares Nuxt's declarations and projects Vue scripts and template expressions
+through Vue's compiler before running the same rules. Diagnostics map back to the Vue
+source. Static attribute and slot names are excluded because their generated JavaScript
+bindings are not expressions written by the author. Both lint commands run in CI through
+`lint` and `check:static`.
+
+An exception names the missing equivalent or compatibility boundary where it applies.
+Examples include callback string replacements, synchronous process-exit cleanup,
+Ed25519 signing, erased errors from authored workflows, and the public `HostApi.usage()`
+method. Numeric schemas require finite values; measurement ratios and interval bounds
+retain infinity where the statistical model requires it. Electrobun's Cottontail config
+loader cannot parse Effect's modules, so its signing-config helper remains native.
+Pinned Hutch also starts build hooks in Cottontail. Their small native launchers run the
+Effect implementations under Bun, preserving environment, output, and exit status.
+
+Workflow and cluster modules remain architectural dependencies under ADR-0014, so their unstable-API rule is
+disabled. Vendored lint sources and author workflow fixtures keep their separate
+toolchains; first-party build scripts and process fixtures are linted.
+
+The suite builds its SSH and Codex protocol fixtures with the runner and forwarding
+fixture. A focused source test builds each needed protocol fixture once under its
+isolated home. This keeps repeated process starts within their existing test budgets.
 
 Root tests import Desktop modules and libraries, so install both sets of dependencies
 before running root checks. CI installs both with `--frozen-lockfile` before its root gate.

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem } from "effect";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -8,7 +12,7 @@ import { contentHash, isStale, layers, loadDefinitions } from "../src/definition
 import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 
-const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
 const readText = Effect.fn("test.readText")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString(path);
@@ -85,7 +89,7 @@ test("a full copy is the whole file, and records what it copied", () =>
         (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!.forkedFromHash,
       ).toBe(hash);
       // Everything else is the file, byte for byte, after that one line.
-      expect(text.replace(/^forked_from_hash: .*\n/m, "")).toBe(before);
+      expect(pipe(text, Str.replace(/^forked_from_hash: .*\n/m, ""))).toBe(before);
 
       const forked = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
       expect(forked.extends).toBeUndefined();
@@ -167,13 +171,20 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
       const target = join(targetDir, "personas", "helper.md");
       yield* exec(["mkfifo", source]);
       yield* mkdirp(join(targetDir, "personas"));
-      const forkModule = new URL("../src/fork.ts", import.meta.url).pathname.replaceAll("'", "\\'");
+      const forkModule = pipe(
+        new URL("../src/fork.ts", import.meta.url).pathname,
+        Str.replaceAll("'", "\\'"),
+      );
+      const platformModule = pipe(
+        new URL("../src/platform.ts", import.meta.url).pathname,
+        Str.replaceAll("'", "\\'"),
+      );
       const marker = join(root, "child-ready");
       const child = Bun.spawn(
         [
           "bun",
           "-e",
-          `import { BunServices } from "@effect/platform-bun"; import { ManagedRuntime } from "effect"; import { forkDefinition } from '${forkModule}'; const runtime = ManagedRuntime.make(BunServices.layer); await Bun.write(process.argv[3], ""); console.log((await runtime.runPromise(forkDefinition(process.argv[1], "personas", process.argv[2], { full: true }))).ok ? "ok=true" : "ok=false")`,
+          `import { platformLayer } from '${platformModule}'; import { ManagedRuntime } from "effect"; import { forkDefinition } from '${forkModule}'; const runtime = ManagedRuntime.make(platformLayer); await Bun.write(process.argv[3], ""); console.log((await runtime.runPromise(forkDefinition(process.argv[1], "personas", process.argv[2], { full: true }))).ok ? "ok=true" : "ok=false")`,
           source,
           targetDir,
           marker,
@@ -281,7 +292,7 @@ test("re-forking a full copy records the copy's own hash, not its grandparent's"
       );
 
       const text = yield* readText(second.path);
-      expect(text.match(/^forked_from_hash:/gm)).toHaveLength(1);
+      expect(Option.getOrNull(pipe(text, Str.match(/^forked_from_hash:/gm)))).toHaveLength(1);
       expect(parseDocument(text).data.forked_from_hash).toBe(yield* contentHash(parentText));
     }),
   ));

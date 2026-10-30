@@ -1,6 +1,7 @@
 // Each Machine's In sync verdict against this Desktop's version and credentials, and the
 // Flock's line.
 
+import * as Arr from "effect/Array";
 import type { Credential } from "../../../src/shared/flock";
 import { flockInSync, inSync } from "../../../src/shared/in-sync";
 import { updatesAtom } from "../flock";
@@ -21,7 +22,7 @@ export const useInSync = () => {
   return {
     /** Each route's row and its verdict, on the parts Desktop's own state is known for. */
     machines: computed(() =>
-      rows.value.map((row) => ({
+      Arr.map(rows.value, (row) => ({
         row,
         verdict: inSync(row, { version: version.value ?? "", credentials: held.value ?? [] }),
       })),

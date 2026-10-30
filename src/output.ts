@@ -1,7 +1,11 @@
 // Outputs are JSON files in the run dir. Gates and loops read these,
 // never terminal text (CONTEXT.md, Output).
 
-import { Effect, FileSystem, Schema, SchemaGetter } from "effect";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { Effect, FileSystem, Schema, SchemaGetter, flow, Result } from "effect";
 import { isNumber, isString } from "./schema";
 import { checkProof } from "./check-proof";
 import type { Measurement } from "./measurement-model";
@@ -10,7 +14,7 @@ import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 
 /** Present and not only whitespace: a required judgement nobody wrote is not one. */
 const said = (field: string) =>
-  Schema.refine<Schema.String, string>((value): value is string => value.trim() !== "", {
+  Schema.refine<Schema.String, string>((value): value is string => Str.trim(value) !== "", {
     title: `${field} is required`,
     message: `${field} is required, and must not be blank`,
   });
@@ -54,7 +58,7 @@ const listed = <
  */
 export const FindingSchema = Schema.Struct({
   file: Schema.optionalKey(Schema.String),
-  line: Schema.optionalKey(Schema.Number),
+  line: Schema.optionalKey(Schema.Finite),
   // Free text, because a fork's own word is a judgement and not an error — and named
   // here, because every Output that carries a finding is read by `isBlocking`.
   severity: Schema.String.annotate({
@@ -153,7 +157,7 @@ export const FixedSchema = Schema.Struct({
 /** A finding a synthesis dropped says why, or it is a finding lost rather than resolved. */
 const DroppedSchema = FindingSchema.pipe(
   Schema.refine<typeof FindingSchema, typeof FindingSchema.Type>(
-    (value): value is typeof FindingSchema.Type => (value.reason ?? "").trim() !== "",
+    (value): value is typeof FindingSchema.Type => Str.trim(value.reason ?? "") !== "",
     {
       title: "reason is required",
       message: "a dropped finding needs a reason saying why it was dropped",
@@ -190,19 +194,23 @@ export type Criterion = typeof CriterionSchema.Type;
 
 /** A criterion as compared: its words, without the formatting a copy may drop. */
 const criterionKey = (text: string) =>
-  text
-    .toLowerCase()
-    .replace(/[*_`]/g, "")
-    .replace(/\s+/g, " ")
-    .replace(/[.:;\s]+$/, "")
-    .trim();
+  Str.trim(
+    pipe(
+      Str.toLowerCase(text),
+      Str.replace(/[*_`]/g, ""),
+      Str.replace(/\s+/g, " "),
+      Str.replace(/[.:;\s]+$/, ""),
+    ),
+  );
 
 /** The newest answer to this criterion's whole wording; a copy without its formatting counts. */
 export const answerFor = (
   criterion: string,
   answers: ReadonlyArray<Criterion>,
 ): Criterion | undefined =>
-  answers.findLast((one) => criterionKey(one.criterion) === criterionKey(criterion));
+  Option.getOrUndefined(
+    Arr.findLast(answers, (one) => criterionKey(one.criterion) === criterionKey(criterion)),
+  );
 
 /**
  * Each criterion of the ticket the builder's answers leave unanswered or say is not met,
@@ -213,7 +221,7 @@ export function unmetCriteria(
   criteria: ReadonlyArray<string>,
   answers: ReadonlyArray<Criterion>,
 ): Finding[] {
-  return criteria.flatMap((criterion): Finding[] => {
+  return Arr.flatMap(criteria, (criterion): Finding[] => {
     const met = answerFor(criterion, answers)?.met;
     if (met === undefined)
       return [
@@ -224,7 +232,7 @@ export function unmetCriteria(
           detail: "The builder's Output says nothing of how this criterion is met.",
         },
       ];
-    if (/^not met\b/i.test(met.trim()))
+    if (/^not met\b/i.test(Str.trim(met)))
       return [
         {
           file: ticket,
@@ -242,9 +250,9 @@ export const afterMergeAnswers = (
   criteria: ReadonlyArray<string>,
   answers: ReadonlyArray<Criterion>,
 ): Criterion[] =>
-  criteria.flatMap((criterion) => {
+  Arr.flatMap(criteria, (criterion) => {
     const met = answerFor(criterion, answers)?.met;
-    return met !== undefined && /^after merge\b/i.test(met.trim()) ? [{ criterion, met }] : [];
+    return met !== undefined && /^after merge\b/i.test(Str.trim(met)) ? [{ criterion, met }] : [];
   });
 
 export const FixOutputSchema = Schema.Struct({
@@ -287,7 +295,7 @@ export const FINDINGS_FILE = "findings.json";
 
 const FindingsJson = Schema.fromJsonString(Schema.Array(FindingSchema));
 const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
-const encodeFindings = Schema.encodeSync(FindingsJson);
+const encodeFindings = flow(Schema.encodeResult(FindingsJson), Result.getOrThrow);
 
 /**
  * What a Run leaves behind about a review: the prose a human reads, and the findings
@@ -327,7 +335,7 @@ export const leaveOutstanding = (
 
 /** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
 export function riskLine(risks: string): string {
-  const asked = risks.trim();
+  const asked = Str.trim(risks);
   if (asked === "") return "";
   return (
     `Additional axes requested for this change: ${asked}. Apply the matching skill where ` +
@@ -359,14 +367,19 @@ export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function parseJson(text: string, where: string): Parsed<YamlValue> {
   try {
-    return { ok: true, value: Schema.decodeUnknownSync(YamlValueJsonSchema)(text) };
+    return {
+      ok: true,
+      value: flow(Schema.decodeResult(YamlValueJsonSchema), Result.getOrThrow)(text),
+    };
   } catch (cause) {
     return { ok: false, error: `${where}: not valid JSON (${String(cause)})` };
   }
 }
 
 function display(value: YamlValue | undefined): string {
-  return value === undefined ? "undefined" : Schema.encodeSync(YamlValueJsonSchema)(value);
+  return value === undefined
+    ? "undefined"
+    : flow(Schema.encodeResult(YamlValueJsonSchema), Result.getOrThrow)(value);
 }
 
 export function parseReviewOutput(text: string, where: string): Parsed<ReviewOutput> {
@@ -395,14 +408,14 @@ export function parseReviewOutput(text: string, where: string): Parsed<ReviewOut
 
 export function parseFindings(raw: YamlValue | undefined, where: string): Parsed<Finding[]> {
   if (raw === undefined || raw === null) return { ok: true, value: [] };
-  if (!Array.isArray(raw)) return { ok: false, error: `${where}: expected an array` };
+  if (!Arr.isArray<typeof raw>(raw)) return { ok: false, error: `${where}: expected an array` };
   const out: Finding[] = [];
   for (const [index, item] of raw.entries()) {
     if (!isYamlMap(item)) return { ok: false, error: `${where}[${index}]: expected an object` };
-    if (!isString(item.title) || item.title.trim() === "") {
+    if (!isString(item.title) || Str.trim(item.title) === "") {
       return { ok: false, error: `${where}[${index}]: title is required` };
     }
-    if (!isString(item.severity) || item.severity.trim() === "") {
+    if (!isString(item.severity) || Str.trim(item.severity) === "") {
       return { ok: false, error: `${where}[${index}]: severity is required` };
     }
     const finding: Finding = { severity: item.severity, title: item.title };
@@ -421,7 +434,7 @@ export function parseFindings(raw: YamlValue | undefined, where: string): Parsed
  * moves as the branch is fixed, and a dispute has to survive that to ever settle.
  */
 export function findingKey(f: Pick<Finding, "file" | "title">): string {
-  return `${f.file ?? ""}::${f.title.trim().toLowerCase()}`;
+  return `${f.file ?? ""}::${Str.toLowerCase(Str.trim(f.title))}`;
 }
 
 /**
@@ -435,14 +448,14 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
   if (!parsed.ok || !isYamlMap(parsed.value))
     return { ok: false, error: `${where}: expected a JSON object` };
   const obj = parsed.value;
-  if (!isString(obj.summary) || obj.summary.trim() === "") {
+  if (!isString(obj.summary) || Str.trim(obj.summary) === "") {
     return { ok: false, error: `${where}: summary is required` };
   }
   const dropped = parseFindings(obj.dropped, `${where}: dropped`);
   if (!dropped.ok) return dropped;
   for (const [i, finding] of dropped.value.entries()) {
     // A finding dropped without a reason is a finding lost, not one resolved.
-    if (!finding.reason || finding.reason.trim() === "") {
+    if (!finding.reason || Str.trim(finding.reason) === "") {
       return { ok: false, error: `${where}: dropped[${i}]: reason is required` };
     }
   }
@@ -452,7 +465,7 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
     ok: true,
     value: {
       ...base.value,
-      summary: obj.summary.trim(),
+      summary: Str.trim(obj.summary),
       dropped: dropped.value,
       fixed: fixed.value,
     },
@@ -462,14 +475,14 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
 /** What the last review raised and this one could not find any more. */
 export function parseFixed(value: YamlValue | undefined, where: string): Parsed<Fixed[]> {
   if (value === undefined || value === null) return { ok: true, value: [] };
-  if (!Array.isArray(value)) return { ok: false, error: `${where}: expected a list` };
+  if (!Arr.isArray<typeof value>(value)) return { ok: false, error: `${where}: expected a list` };
   const out: Fixed[] = [];
   for (const [i, item] of value.entries()) {
     if (!isYamlMap(item)) return { ok: false, error: `${where}[${i}]: expected an object` };
-    if (!isString(item.title) || item.title.trim() === "") {
+    if (!isString(item.title) || Str.trim(item.title) === "") {
       return { ok: false, error: `${where}[${i}]: title is required` };
     }
-    const entry: Fixed = { title: item.title.trim() };
+    const entry: Fixed = { title: Str.trim(item.title) };
     if (isString(item.file)) entry.file = item.file;
     if (isString(item.note)) entry.note = item.note;
     out.push(entry);
@@ -531,14 +544,14 @@ export function parseFixOutput(raw: YamlValue, where: string): Parsed<FixOutput>
 
 function parseChecks(value: YamlValue | undefined, where: string): Parsed<Check[]> {
   if (value === undefined || value === null) return { ok: true, value: [] };
-  if (!Array.isArray(value)) return { ok: false, error: `${where}: expected a list` };
+  if (!Arr.isArray<typeof value>(value)) return { ok: false, error: `${where}: expected a list` };
   const out: Check[] = [];
   for (const [i, item] of value.entries()) {
     if (!isYamlMap(item)) return { ok: false, error: `${where}[${i}]: expected an object` };
-    if (!isString(item.name) || item.name.trim() === "") {
+    if (!isString(item.name) || Str.trim(item.name) === "") {
       return { ok: false, error: `${where}[${i}]: name is required` };
     }
-    const check: Check = { name: item.name.trim() };
+    const check: Check = { name: Str.trim(item.name) };
     if (isString(item.note)) check.note = item.note;
     out.push(check);
   }
@@ -560,14 +573,17 @@ function parseChecks(value: YamlValue | undefined, where: string): Parsed<Check[
  */
 export function substantiated(finding: Finding): boolean {
   if (!isBlocking(finding)) return true;
-  return (finding.file ?? "").trim() !== "" && (finding.detail ?? "").trim() !== "";
+  return Str.trim(finding.file ?? "") !== "" && Str.trim(finding.detail ?? "") !== "";
 }
 
 /** What to tell a reviewer whose blocking findings cannot be acted on, naming them. */
 export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null {
-  const bad = findings.filter((f) => !substantiated(f));
+  const bad = Arr.filter(findings, (f) => !substantiated(f));
   if (bad.length === 0) return null;
-  const named = bad.map((f) => `"${f.title}"`).join(", ");
+  const named = Arr.join(
+    Arr.map(bad, (f) => `"${f.title}"`),
+    ", ",
+  );
   return (
     `${bad.length} blocking finding(s) say neither where nor why: ${named}. ` +
     `Every blocker and major needs a "file" it is about and a "detail" of one or two ` +
@@ -594,7 +610,14 @@ export type Halt =
  * standing, so it is not part of what "the same set again" means.
  */
 export function blockingKeys(findings: ReadonlyArray<Finding>): string[] {
-  return [...new Set(findings.filter((f) => isBlocking(f) && !f.rebuttal).map(findingKey))].sort();
+  return [
+    ...new Set(
+      Arr.map(
+        Arr.filter(findings, (f) => isBlocking(f) && !f.rebuttal),
+        findingKey,
+      ),
+    ),
+  ].sort();
 }
 
 /** Where a review/fix rally goes after one review, and what it is carrying there. */
@@ -640,11 +663,11 @@ export function settleRound(round: {
 }): Rally {
   const live = [...round.live];
   const reopened = [...(round.reopened ?? [])];
-  const blocking = [...live.filter(isBlocking), ...reopened];
+  const blocking = [...Arr.filter(live, isBlocking), ...reopened];
   if (blocking.length === 0) {
     // A dispute the reviewers did not answer settles nothing serious, whether they
     // raised it again or left it out.
-    const standing = round.disputed.filter(isBlocking);
+    const standing = Arr.filter(round.disputed, isBlocking);
     if (standing.length > 0) {
       return {
         go: "halt",
@@ -662,7 +685,7 @@ export function settleRound(round: {
     seen.at < round.at &&
     keys.length > 0 &&
     keys.length === seen.keys.length &&
-    keys.every((key, at) => key === seen.keys[at])
+    Arr.every(keys, (key, at) => key === seen.keys[at])
   ) {
     return {
       go: "halt",
@@ -722,7 +745,11 @@ function checkGap(name: string, evidence: CheckEvidence): string | null {
     case "proved":
       return null;
     case "never":
-      return evidence.commands?.some((command) => command.name === name)
+      return Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(evidence.commands), (present_) =>
+          Arr.some(present_, (command) => command.name === name),
+        ),
+      )
         ? `check "${name}" has no verification record on this tree — Collie's gate runs it itself, on the final tree`
         : `check "${name}" has no verification record — run it through collie verify`;
     case "failed":
@@ -747,8 +774,8 @@ export function settleFinalFix(
   fix: FixReport,
   evidence: CheckEvidence,
 ): FinalFix {
-  const fixed = new Set(fix.fixed.map(findingKey));
-  const disputed = new Map(fix.disputed.map((d) => [findingKey(d), d]));
+  const fixed = new Set(Arr.map(fix.fixed, findingKey));
+  const disputed = new Map(Arr.map(fix.disputed, (d) => [findingKey(d), d]));
   const disputeLine = (f: Finding) => {
     const reason = disputed.get(findingKey(f))?.reason;
     return `disputed blocking finding: ${oneLine(f)}${reason ? `: ${reason}` : ""}`;
@@ -758,7 +785,7 @@ export function settleFinalFix(
   if (fix.verdict !== "clean") unverified.push(`the fix reports verdict "findings"`);
   if (fix.findings.length > 0) {
     unverified.push(
-      `the fix reports ${fix.findings.length} finding(s) of its own: ${fix.findings.map(oneLine).join(", ")}`,
+      `the fix reports ${fix.findings.length} finding(s) of its own: ${Arr.join(Arr.map(fix.findings, oneLine), ", ")}`,
     );
   }
   const seen = new Set<string>();
@@ -769,7 +796,7 @@ export function settleFinalFix(
     }
     seen.add(key);
   }
-  for (const finding of live.filter(isBlocking)) {
+  for (const finding of Arr.filter(live, isBlocking)) {
     const key = findingKey(finding);
     if (fixed.has(key) && disputed.has(key)) {
       unverified.push(`both fixed and disputed: ${oneLine(finding)}`);
@@ -783,8 +810,8 @@ export function settleFinalFix(
   }
   // A blocking dispute the review did not raise again is still a dispute: the reviewers
   // were told to leave it to the human, and leaving it out is not the human deciding.
-  const raised = new Set(live.map(findingKey));
-  const standing = fix.disputed.filter((d) => isBlocking(d) && !raised.has(findingKey(d)));
+  const raised = new Set(Arr.map(live, findingKey));
+  const standing = Arr.filter(fix.disputed, (d) => isBlocking(d) && !raised.has(findingKey(d)));
   for (const d of standing) disputes.push(disputeLine(d));
   if (fix.checks.length === 0) unverified.push("no checks reported");
   for (const check of fix.checks) {
@@ -802,7 +829,7 @@ export function settleFinalFix(
       outstanding: unresolved,
     };
   }
-  const reportedFixed = live.filter((f) => isBlocking(f) && fixed.has(findingKey(f))).length;
+  const reportedFixed = Arr.filter(live, (f) => isBlocking(f) && fixed.has(findingKey(f))).length;
   const disputedToo = disputes.length > 0 ? `, ${disputes.length} disputed` : "";
   const attestation = `last fix: ${reportedFixed} blocking finding(s) reported fixed${disputedToo}, ${fix.checks.length} check(s) verified on this tree — implementer-reported, not re-reviewed`;
   if (disputes.length > 0) {
@@ -814,7 +841,7 @@ export function settleFinalFix(
       outstanding: unresolved,
     };
   }
-  return { ok: true, attestation, outstanding: live.filter((f) => !fixed.has(findingKey(f))) };
+  return { ok: true, attestation, outstanding: Arr.filter(live, (f) => !fixed.has(findingKey(f))) };
 }
 
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;
@@ -823,9 +850,9 @@ const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.fil
 const SEVERITIES = ["blocker", "major", "minor"];
 
 function severityOrder(findings: ReadonlyArray<Finding>): string[] {
-  const present = [...new Set(findings.map((f) => f.severity))];
-  const known = SEVERITIES.filter((s) => present.includes(s));
-  return [...known, ...present.filter((s) => !SEVERITIES.includes(s)).sort()];
+  const present = [...new Set(Arr.map(findings, (f) => f.severity))];
+  const known = Arr.filter(SEVERITIES, (s) => present.includes(s));
+  return [...known, ...Arr.filter(present, (s) => !SEVERITIES.includes(s)).sort()];
 }
 
 /**
@@ -834,39 +861,48 @@ function severityOrder(findings: ReadonlyArray<Finding>): string[] {
  * findings under their severity, and nothing about how it was produced.
  */
 export function renderReview(synthesis: typeof SynthesisSchema.Type): string {
-  const blocks = [synthesis.summary.trim()];
+  const blocks = [Str.trim(synthesis.summary)];
   // Read first: it is what says the rally is converging rather than repeating.
   if (synthesis.fixed.length > 0) {
     blocks.push("**Fixed since last review**");
     blocks.push(
-      synthesis.fixed
-        .map((f) => {
+      Arr.join(
+        Arr.map(synthesis.fixed, (f) => {
           const at = f.file ? `\`${f.file}\` — ` : "";
-          const note = f.note?.trim() ? `\n  ${f.note.trim().replace(/\s*\n\s*/g, " ")}` : "";
-          return `- ${at}${f.title.trim()}${note}`;
-        })
-        .join("\n"),
+          const text = Option.getOrElse(
+            Option.map(Option.fromNullishOr(f.note), Str.trim),
+            () => "",
+          );
+          const note = text ? `\n  ${pipe(text, Str.replace(/\s*\n\s*/g, " "))}` : "";
+          return `- ${at}${Str.trim(f.title)}${note}`;
+        }),
+        "\n",
+      ),
     );
   }
   if (synthesis.findings.length === 0) {
     blocks.push("Nothing to fix.");
   } else {
     for (const severity of severityOrder(synthesis.findings)) {
-      const group = synthesis.findings.filter((f) => f.severity === severity);
-      blocks.push(`**${severity.charAt(0).toUpperCase()}${severity.slice(1)}**`);
-      blocks.push(group.map(reviewBullet).join("\n"));
+      const group = Arr.filter(synthesis.findings, (f) => f.severity === severity);
+      blocks.push(
+        `**${Str.toUpperCase(Option.getOrElse(Str.charAt(severity, 0), () => ""))}${pipe(severity, Str.slice(1))}**`,
+      );
+      blocks.push(Arr.join(Arr.map(group, reviewBullet), "\n"));
     }
   }
-  return `${blocks.join("\n\n")}\n`;
+  return `${Arr.join(blocks, "\n\n")}\n`;
 }
 
 function reviewBullet(finding: Finding): string {
   const at = finding.file ? `\`${finding.file}${finding.line ? `:${finding.line}` : ""}\` — ` : "";
   // The detail is a sentence or two; a continuation line keeps it in the same bullet.
-  const detail = finding.detail?.trim()
-    ? `\n  ${finding.detail.trim().replace(/\s*\n\s*/g, " ")}`
-    : "";
-  return `- ${at}${finding.title.trim()}${detail}`;
+  const text = Option.getOrElse(
+    Option.map(Option.fromNullishOr(finding.detail), Str.trim),
+    () => "",
+  );
+  const detail = text ? `\n  ${pipe(text, Str.replace(/\s*\n\s*/g, " "))}` : "";
+  return `- ${at}${Str.trim(finding.title)}${detail}`;
 }
 
 export interface Split {
@@ -887,7 +923,7 @@ export function splitDisputed(
   findings: ReadonlyArray<Finding>,
   disputed: ReadonlyArray<Finding>,
 ): Split {
-  const known = new Set(disputed.map(findingKey));
+  const known = new Set(Arr.map(disputed, findingKey));
   const split: Split = { live: [], settled: [], rebutted: [] };
   for (const finding of findings) {
     if (!known.has(findingKey(finding))) {
@@ -904,14 +940,15 @@ export function splitDisputed(
 
 export function formatFindings(findings: ReadonlyArray<Finding>): string {
   if (findings.length === 0) return "(none)";
-  return findings
-    .map((f) => {
+  return Arr.join(
+    Arr.map(findings, (f) => {
       const at = f.file ? ` (${f.file}${f.line ? `:${f.line}` : ""})` : "";
-      const detail = f.detail ? `\n  ${f.detail.replace(/\n/g, "\n  ")}` : "";
+      const detail = f.detail ? `\n  ${pipe(f.detail, Str.replace(/\n/g, "\n  "))}` : "";
       const rebuttal = f.rebuttal
-        ? `\n  answers your dispute: ${f.rebuttal.replace(/\n/g, "\n  ")}`
+        ? `\n  answers your dispute: ${pipe(f.rebuttal, Str.replace(/\n/g, "\n  "))}`
         : "";
       return `- [${f.severity}] ${f.title}${at}${detail}${rebuttal}`;
-    })
-    .join("\n");
+    }),
+    "\n",
+  );
 }

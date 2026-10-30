@@ -1,6 +1,8 @@
 // The host's merge: the landing attempt written before the forge is asked, its outcome after,
 // and an attempt an earlier host left settled on the forge's word.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Result, Schema } from "effect";
 import { foundationLayer, Registry, registryLayer } from "../src/engine";
@@ -21,6 +23,7 @@ import {
   type ForgeModel,
 } from "./support/forge";
 import { FakeHerdr, Rig } from "./support/recorder";
+import * as Layer from "effect/Layer";
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
 const MERGED = "35ae2cea5e5848602729dbc0e8a87ed0d9049c46";
@@ -58,12 +61,12 @@ const landing = Effect.fn("landing.landing")(function* (
   const seen: Array<Landing | null> = [];
   const services = yield* Effect.context<FileSystem.FileSystem>();
   const http = forgeHttpTest(fake.run, (input, init = {}) =>
-    Effect.runPromise(
+    Effect.runPromiseWith(services)(
       Effect.gen(function* () {
-        if (init.method === "PUT" && input.endsWith("/merge"))
+        if (init.method === "PUT" && pipe_(input, Str.endsWith("/merge")))
           seen.push(yield* readLanding(runDir));
         return yield* Effect.promise(() => fake.fetch(input, init));
-      }).pipe(Effect.provideContext(services)),
+      }),
     ),
   );
   const merge = (head = HEAD, mr: string | null = URL_OF[forge]) =>
@@ -90,7 +93,7 @@ for (const forge of ["gitlab", "github"] as const) {
           { state: "attempt", mr: URL_OF[forge], head: HEAD, at: expect.any(String) },
         ]);
         expect(yield* readLanding(runDir)).toEqual({ ...seen[0]!, state: "landed", sha: MERGED });
-        expect((yield* fs.readFileString(`${runDir}/log.txt`)).split("\n")).toEqual([
+        expect(Str.split(yield* fs.readFileString(`${runDir}/log.txt`), "\n")).toEqual([
           `landing: attempting to merge ${URL_OF[forge]} at ${HEAD}`,
           `landing: merged ${URL_OF[forge]} at ${HEAD} as ${MERGED}`,
           "",
@@ -184,7 +187,7 @@ for (const forge of ["gitlab", "github"] as const) {
         expect(open.seen).toEqual([attempt(forge, { at: expect.any(String) })]);
         expect((yield* readLanding(open.runDir))?.state).toBe("landed");
         expect(
-          (yield* fs.readFileString(`${open.runDir}/log.txt`)).split("\n").slice(1, 3),
+          Str.split(yield* fs.readFileString(`${open.runDir}/log.txt`), "\n").slice(1, 3),
         ).toEqual([
           `landing: withdrew the merge of ${URL_OF[forge]} at ${HEAD}: left unanswered by an earlier host`,
           `landing: attempting to merge ${URL_OF[forge]} at ${HEAD}`,
@@ -318,20 +321,30 @@ afterEach(() => runEffect(rig.close()));
 
 const withMachine = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
-    Effect.provide(registryLayer(rig.stateDir, { userDir: rig.userDir })),
     Effect.provide(
-      agentsLayer({
-        dir: rig.stateDir,
-        env: rig.pluginEnv(),
-        herdr: new FakeHerdr(rig.pluginEnv()),
-        harness: "claude",
-        model: "opus",
-        permissions: "auto",
-        compactAtTokens: 0,
-        help: () => Effect.succeed("--autocompact"),
-      }),
+      registryLayer(rig.stateDir, {
+        userDir: rig.userDir,
+      }).pipe(
+        Layer.provideMerge(
+          agentsLayer({
+            dir: rig.stateDir,
+            env: rig.pluginEnv(),
+            herdr: new FakeHerdr(rig.pluginEnv()),
+            harness: "claude",
+            model: "opus",
+            permissions: "auto",
+            compactAtTokens: 0,
+            help: () => Effect.succeed("--autocompact"),
+          }),
+        ),
+        Layer.provideMerge(
+          foundationLayer({
+            dir: rig.stateDir,
+            userDir: rig.userDir,
+          }),
+        ),
+      ),
     ),
-    Effect.provide(foundationLayer({ dir: rig.stateDir, userDir: rig.userDir })),
     Effect.scoped,
   );
 

@@ -1,8 +1,13 @@
 // An agent that ends its turn on a background `collie verify` is told when it ends, by a
 // real host over a fake herdr, and nobody else is (ADR-draft-an-agent-is-told-when-its-verify-ends).
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { resetExecutors } from "../src/executors";
 import { Launched } from "../src/launches";
@@ -13,10 +18,16 @@ import { runEffect } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const decodeLaunched = Schema.decodeUnknownSync(Schema.fromJsonString(Launched));
-const decodeCall = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ argv: Schema.Array(Schema.String) })),
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const decodeLaunched = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Launched)),
+  Result.getOrThrow,
+);
+const decodeCall = flow(
+  Schema.decodeUnknownResult(
+    Schema.fromJsonString(Schema.Struct({ argv: Schema.Array(Schema.String) })),
+  ),
+  Result.getOrThrow,
 );
 const Ran = Schema.Struct({
   verification: Schema.Struct({ id: Schema.String, log: Schema.optionalKey(Schema.String) }),
@@ -48,13 +59,15 @@ test(
           };
           yield* Effect.acquireRelease(
             Effect.sync(() => {
-              const before = Object.fromEntries(Object.keys(set).map((key) => [key, Bun.env[key]]));
+              const before = Rec.fromEntries(
+                Arr.map(Rec.keys(set), (key) => [key, Bun.env[key]] as const),
+              );
               Object.assign(Bun.env, set);
               return before;
             }),
             (before) =>
               Effect.sync(() => {
-                for (const [key, value] of Object.entries(before))
+                for (const [key, value] of Rec.toEntries(before))
                   if (value === undefined) delete Bun.env[key];
                   else Bun.env[key] = value;
               }),
@@ -78,8 +91,8 @@ test(
               (one) => one !== "",
             ),
           );
-          const pane = (yield* everyRegistered(world.state)).find(
-            (entry) => entry.runId === runId,
+          const pane = Option.getOrUndefined(
+            Arr.findFirst(yield* everyRegistered(world.state), (entry) => entry.runId === runId),
           )!.paneId;
           const asked = (
             name: string,
@@ -105,7 +118,9 @@ test(
             );
           const verify = (name: string, executable: string, extra: Record<string, string>) =>
             asked(name, executable, extra).pipe(
-              Effect.map((ran) => Schema.decodeUnknownSync(Ran)(ran.envelope.data)),
+              Effect.map((ran) =>
+                flow(Schema.decodeUnknownResult(Ran), Result.getOrThrow)(ran.envelope.data),
+              ),
             );
           const grant = (name: string, executable: string) =>
             client
@@ -120,7 +135,7 @@ test(
           const told = () =>
             deliveriesOf(world.state, runId).pipe(
               Effect.map((all) =>
-                all.filter((one) => one.delivery.cause.ref.startsWith("verify-")),
+                Arr.filter(all, (one) => pipe_(one.delivery.cause.ref, Str.startsWith("verify-"))),
               ),
             );
 
@@ -142,12 +157,22 @@ test(
             cause: { kind: "steer", ref: `verify-${ran.verification.id}` },
           });
           const head = (yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout;
-          const said = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orDie))
-            .split("\n")
-            .filter((line) => line !== "")
-            .flatMap((line) => decodeCall(line).argv)
-            .find((words) => words.includes("Your collie verify"));
-          for (const part of ['"unit"', "pass (exit 0)", head.trim(), ran.verification.log!])
+          const said = Option.getOrUndefined(
+            Arr.findFirst(
+              Arr.flatMap(
+                Arr.filter(
+                  Str.split(
+                    yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orDie),
+                    "\n",
+                  ),
+                  (line) => line !== "",
+                ),
+                (line) => decodeCall(line).argv,
+              ),
+              (words) => pipe_(words, Str.includes("Your collie verify")),
+            ),
+          );
+          for (const part of ['"unit"', "pass (exit 0)", Str.trim(head), ran.verification.log!])
             expect(said).toContain(part);
 
           // Once it is one of the Run's Checks, it is answered from its record, never run,
@@ -162,9 +187,9 @@ test(
             [asHuman, ["--expect", "fail"]],
           ] as const)
             expect(
-              Schema.decodeUnknownSync(Ran)(
+              yield* Schema.decodeUnknownEffect(Ran)(
                 (yield* asked("unit", "/bin/true", extra, expecting)).envelope.data,
-              ),
+              ).pipe(Effect.orDie),
             ).toEqual(again);
           yield* grant("gate-only", "/bin/echo");
           for (const [extra, expecting] of [
@@ -184,7 +209,7 @@ test(
             .pipe(Effect.orDie);
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
-            (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
           );
           yield* verify("after-output", "/bin/false", asAgent);
           expect(yield* told()).toHaveLength(1);
@@ -200,15 +225,15 @@ test("the implementer, and every step prompt that has an agent use collie verify
       const fs = yield* FileSystem.FileSystem;
       const line =
         "A `collie verify` you started in the background is reported to you when it ends, so you may end your turn waiting on it. Never end a turn waiting on any other background job.";
-      const flat = (text: string) => text.replace(/\s+/g, " ");
+      const flat = (text: string) => pipe_(text, Str.replace(/\s+/g, " "));
       expect(flat(yield* fs.readFileString(`${root}personas/implementer.md`))).toContain(line);
       for (const workflow of ["implement", "review"]) {
         // A dotted section, such as `source.linear`, is spliced into a step's prompt, not one.
-        const steps = (yield* fs.readFileString(`${root}workflows/${workflow}.md`))
-          .split(/^## /m)
-          .slice(1)
-          .filter((step) => !/^\S+\./.test(step));
-        const verifying = steps.filter((step) => step.includes("collie verify"));
+        const steps = Arr.filter(
+          Str.split(yield* fs.readFileString(`${root}workflows/${workflow}.md`), /^## /m).slice(1),
+          (step) => !/^\S+\./.test(step),
+        );
+        const verifying = Arr.filter(steps, (step) => pipe_(step, Str.includes("collie verify")));
         expect(verifying.length).toBeGreaterThan(0);
         for (const step of verifying) expect(flat(step)).toContain(line);
       }

@@ -1,5 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow as Schemaflow, Result } from "effect";
 import { Flow } from "../src/board-model";
 import { readEnv } from "../src/env";
 import { asksRun } from "../src/lifecycle";
@@ -11,15 +13,24 @@ import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { type Side, twoMachines } from "./support/peers";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const runIdOf = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }));
+const encode = Schemaflow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
+const runIdOf = Schemaflow(
+  Schema.decodeUnknownResult(Schema.Struct({ runId: Schema.String })),
+  Result.getOrThrow,
+);
 const flowOf = (side: Side, run: string) =>
   side
     .cli(["run", "show", run])
     .pipe(
       Effect.map(
         (shown) =>
-          Schema.decodeUnknownSync(Schema.Struct({ flow: Flow }))(shown.envelope.data).flow,
+          Schemaflow(
+            Schema.decodeUnknownResult(Schema.Struct({ flow: Flow })),
+            Result.getOrThrow,
+          )(shown.envelope.data).flow,
       ),
     );
 
@@ -44,9 +55,16 @@ const requesterOn = (side: Side) =>
     const host = yield* connect(side.world.state);
     yield* until(
       () => host.run({ runId }),
-      (view) => view?.waiting.some((one) => one.answer === null) === true,
+      (view) =>
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(view), (present) =>
+            Arr.some(present.waiting, (one) => one.answer === null),
+          ),
+        ) === true,
     );
-    const agent = (yield* everyRegistered(side.world.state)).find((one) => one.runId === runId)!;
+    const agent = Option.getOrUndefined(
+      Arr.findFirst(yield* everyRegistered(side.world.state), (one) => one.runId === runId),
+    )!;
     return { runId, agent };
   });
 
@@ -117,9 +135,17 @@ test(
             );
             const { runId: b } = runIdOf(started.envelope.data);
             const flow = yield* flowOf(first, a);
-            const build = flow.lanes
-              .find((lane) => lane.run === a)
-              ?.nodes.find((node) => node.id === "build");
+            const build = Option.getOrUndefined(
+              Option.map(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(Arr.findFirst(flow.lanes, (lane) => lane.run === a)),
+                ),
+                (present_) =>
+                  Option.getOrUndefined(
+                    Arr.findFirst(present_.nodes, (node) => node.id === "build"),
+                  ),
+              ),
+            );
             const admittedAt = build?.links?.[0]?.link?.asOf;
             expect(admittedAt).toBeTypeOf("string");
             expect(build).toMatchObject({
@@ -136,7 +162,7 @@ test(
             expect(target.lanes[0]?.requestedBy).toMatchObject({ run: a, agent: agent.agent });
             yield* until(
               () => everyRegistered(second.world.state),
-              (rows) => rows.some((one) => one.runId === b),
+              (rows) => Arr.some(rows, (one) => one.runId === b),
             );
             yield* fs.writeFileString(
               `${second.world.state}/agents/${b}/build.json`,
@@ -147,20 +173,33 @@ test(
               () => host.run({ runId: b }),
               (view) => view?.status.status === "complete" && view.report !== undefined,
             );
-            const settled = (yield* flowOf(first, a)).lanes
-              .find((lane) => lane.run === a)
-              ?.nodes.find((node) => node.id === "build");
+            const settled = Option.getOrUndefined(
+              Option.map(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
+                  ),
+                ),
+                (present__) =>
+                  Option.getOrUndefined(
+                    Arr.findFirst(present__.nodes, (node) => node.id === "build"),
+                  ),
+              ),
+            );
             expect(settled?.links).toMatchObject([{ state: "done", said: "under a minute" }]);
             expect(settled?.links?.[0]?.link?.asOf).not.toBe(admittedAt);
             const who = target.lanes[0]!.requestedBy!;
             const identity = yield* host.identity();
-            const sourceAgent = (yield* everyRegistered(second.world.state)).find(
-              (one) => one.runId === b,
+            const sourceAgent = Option.getOrUndefined(
+              Arr.findFirst(yield* everyRegistered(second.world.state), (one) => one.runId === b),
             )!;
-            const peer = (yield* peersOf(second.world.state)).find(
-              (one) => one.installation === who.machine.installation,
+            const peer = Option.getOrUndefined(
+              Arr.findFirst(
+                yield* peersOf(second.world.state),
+                (one) => one.installation === who.machine.installation,
+              ),
             )!;
-            const notice = Schema.decodeUnknownSync(RunLinkNotice)({
+            const notice = yield* Schema.decodeEffect(RunLinkNotice)({
               requestedBy: who,
               run: b,
               workflow: "completed-agent",
@@ -169,7 +208,7 @@ test(
               state: "running" as const,
               said: build?.links?.[0]?.said ?? null,
               at: admittedAt!,
-            });
+            }).pipe(Effect.orDie);
             for (let attempt = 0; attempt < 2; attempt++) {
               const delivered = yield* asksRun(
                 { ...readEnv(second.env), machine: peer.name, pairs: false },
@@ -182,10 +221,36 @@ test(
               );
               expect(delivered).toMatchObject({ ok: true, value: true });
             }
-            const repeated = (yield* flowOf(first, a)).lanes
-              .find((lane) => lane.run === a)
-              ?.nodes.find((node) => node.id === "build")
-              ?.links?.filter((node) => node.link?.run === b);
+            const repeated = Option.getOrUndefined(
+              Option.flatMap(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
+                  ),
+                ),
+                (present___) =>
+                  Option.flatMap(
+                    Option.fromNullishOr(
+                      Option.getOrUndefined(
+                        Arr.findFirst(present___.nodes, (node) => node.id === "build"),
+                      ),
+                    ),
+                    (present____) =>
+                      Option.map(Option.fromNullishOr(present____.links), (present_____) =>
+                        Arr.filter(
+                          present_____,
+                          (node) =>
+                            Option.getOrUndefined(
+                              Option.map(
+                                Option.fromNullishOr(node.link),
+                                (present______) => present______.run,
+                              ),
+                            ) === b,
+                        ),
+                      ),
+                  ),
+              ),
+            );
             expect(repeated).toHaveLength(1);
             expect(repeated?.[0]?.state).toBe("done");
             const failing = yield* first.cli(
@@ -206,7 +271,7 @@ test(
             const { runId: c } = runIdOf(failing.envelope.data);
             yield* until(
               () => everyRegistered(second.world.state),
-              (rows) => rows.some((one) => one.runId === c),
+              (rows) => Arr.some(rows, (one) => one.runId === c),
             );
             yield* fs.writeFileString(
               `${second.world.state}/agents/${c}/build.json`,
@@ -216,10 +281,38 @@ test(
               () => host.run({ runId: c }),
               (view) => view?.status.status === "failed" && view.report !== undefined,
             );
-            const failed = (yield* flowOf(first, a)).lanes
-              .find((lane) => lane.run === a)
-              ?.nodes.find((node) => node.id === "build")
-              ?.links?.find((node) => node.link?.run === c);
+            const failed = Option.getOrUndefined(
+              Option.flatMap(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
+                  ),
+                ),
+                (present_______) =>
+                  Option.flatMap(
+                    Option.fromNullishOr(
+                      Option.getOrUndefined(
+                        Arr.findFirst(present_______.nodes, (node) => node.id === "build"),
+                      ),
+                    ),
+                    (present________) =>
+                      Option.map(Option.fromNullishOr(present________.links), (present_________) =>
+                        Option.getOrUndefined(
+                          Arr.findFirst(
+                            present_________,
+                            (node) =>
+                              Option.getOrUndefined(
+                                Option.map(
+                                  Option.fromNullishOr(node.link),
+                                  (present__________) => present__________.run,
+                                ),
+                              ) === c,
+                          ),
+                        ),
+                      ),
+                  ),
+              ),
+            );
             expect(failed).toMatchObject({ state: "failed", said: "Cannot reproduce this goal" });
             const waiting = yield* first.cli(
               [
@@ -236,13 +329,43 @@ test(
               { HERDR_PANE_ID: agent.paneId },
             );
             const { runId: d } = runIdOf(waiting.envelope.data);
-            const before = (yield* flowOf(first, a)).lanes
-              .find((lane) => lane.run === a)
-              ?.nodes.find((node) => node.id === "build")
-              ?.links?.find((node) => node.link?.run === d);
+            const before = Option.getOrUndefined(
+              Option.flatMap(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
+                  ),
+                ),
+                (present___________) =>
+                  Option.flatMap(
+                    Option.fromNullishOr(
+                      Option.getOrUndefined(
+                        Arr.findFirst(present___________.nodes, (node) => node.id === "build"),
+                      ),
+                    ),
+                    (present____________) =>
+                      Option.map(
+                        Option.fromNullishOr(present____________.links),
+                        (present_____________) =>
+                          Option.getOrUndefined(
+                            Arr.findFirst(
+                              present_____________,
+                              (node) =>
+                                Option.getOrUndefined(
+                                  Option.map(
+                                    Option.fromNullishOr(node.link),
+                                    (present______________) => present______________.run,
+                                  ),
+                                ) === d,
+                            ),
+                          ),
+                      ),
+                  ),
+              ),
+            );
             yield* until(
               () => everyRegistered(second.world.state),
-              (rows) => rows.some((one) => one.runId === d),
+              (rows) => Arr.some(rows, (one) => one.runId === d),
             );
             yield* stopHost(first.world.state);
             yield* fs.writeFileString(
@@ -264,10 +387,40 @@ test(
             });
             yield* first.cli(["board"]);
             yield* first.cli(["--machine", "second", "board"]);
-            const saved = (yield* flowOf(first, a)).lanes
-              .find((lane) => lane.run === a)
-              ?.nodes.find((node) => node.id === "build")
-              ?.links?.find((node) => node.link?.run === d);
+            const saved = Option.getOrUndefined(
+              Option.flatMap(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
+                  ),
+                ),
+                (present_______________) =>
+                  Option.flatMap(
+                    Option.fromNullishOr(
+                      Option.getOrUndefined(
+                        Arr.findFirst(present_______________.nodes, (node) => node.id === "build"),
+                      ),
+                    ),
+                    (present________________) =>
+                      Option.map(
+                        Option.fromNullishOr(present________________.links),
+                        (present_________________) =>
+                          Option.getOrUndefined(
+                            Arr.findFirst(
+                              present_________________,
+                              (node) =>
+                                Option.getOrUndefined(
+                                  Option.map(
+                                    Option.fromNullishOr(node.link),
+                                    (present__________________) => present__________________.run,
+                                  ),
+                                ) === d,
+                            ),
+                          ),
+                      ),
+                  ),
+              ),
+            );
             expect(saved).toMatchObject({ state: "running", link: { asOf: before?.link?.asOf } });
           }),
         ["stepped.workflow.ts", "completed-agent.workflow.ts", "failing-agent.workflow.ts"],
@@ -299,14 +452,32 @@ test(
               { HERDR_PANE_ID: agent.paneId },
             );
             const { runId: b } = runIdOf(started.envelope.data);
-            const linked = (yield* flowOf(first, a)).lanes
-              .find((lane) => lane.run === a)
-              ?.nodes.find((node) => node.id === "build")?.links;
+            const linked = Option.getOrUndefined(
+              Option.flatMap(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
+                  ),
+                ),
+                (present___________________) =>
+                  Option.map(
+                    Option.fromNullishOr(
+                      Option.getOrUndefined(
+                        Arr.findFirst(
+                          present___________________.nodes,
+                          (node) => node.id === "build",
+                        ),
+                      ),
+                    ),
+                    (present____________________) => present____________________.links,
+                  ),
+              ),
+            );
             expect(linked).toMatchObject([{ state: "running", link: { run: b, asOf: null } }]);
             expect(linked?.[0]?.link?.asOf).toBeNull();
             yield* until(
               () => everyRegistered(first.world.state),
-              (rows) => rows.some((one) => one.runId === b),
+              (rows) => Arr.some(rows, (one) => one.runId === b),
             );
             yield* fs.writeFileString(
               `${first.world.state}/agents/${b}/build.json`,
@@ -317,9 +488,27 @@ test(
               () => host.run({ runId: b }),
               (view) => view?.status.status === "complete",
             );
-            const finished = (yield* flowOf(first, a)).lanes
-              .find((lane) => lane.run === a)
-              ?.nodes.find((node) => node.id === "build")?.links;
+            const finished = Option.getOrUndefined(
+              Option.flatMap(
+                Option.fromNullishOr(
+                  Option.getOrUndefined(
+                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
+                  ),
+                ),
+                (present_____________________) =>
+                  Option.map(
+                    Option.fromNullishOr(
+                      Option.getOrUndefined(
+                        Arr.findFirst(
+                          present_____________________.nodes,
+                          (node) => node.id === "build",
+                        ),
+                      ),
+                    ),
+                    (present______________________) => present______________________.links,
+                  ),
+              ),
+            );
             expect(finished).toMatchObject([{ state: "done", link: { run: b, asOf: null } }]);
           }),
         ["stepped.workflow.ts", "completed-agent.workflow.ts"],

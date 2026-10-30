@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { DateTime, Schema } from "effect";
 import { MachineOwn } from "../../../src/board-model";
 import type { MachineRow } from "./flock";
@@ -6,7 +7,7 @@ import type { Said } from "./flock-settings";
 
 export const OwnReading = Schema.Struct({
   values: Schema.NullOr(MachineOwn),
-  at: Schema.Number,
+  at: Schema.Finite,
   problem: Schema.NullOr(Schema.String),
   unsupported: Schema.Boolean,
 });
@@ -23,7 +24,7 @@ export const machineOwnRows = (
   now: number,
   timeZone?: string,
 ) =>
-  machines.map((machine) => {
+  Arr.map(machines, (machine) => {
     const read = readings.get(machine.profile);
     const values = read?.values;
     const synced = machine.settings;

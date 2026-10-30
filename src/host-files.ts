@@ -2,6 +2,9 @@
 // Grep, Write and Edit on a Machine it does not run on (ADR-0011, the Flock chat reaches
 // files). Paths are absolute on this Machine; nothing is written inside the host's state.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -57,31 +60,29 @@ const expanded = (segment: string): ReadonlyArray<string> => {
   const braces = /\{([^{}]*)\}/.exec(segment);
   if (braces === null) return [segment];
   const [before, after] = [
-    segment.slice(0, braces.index),
-    segment.slice(braces.index + braces[0].length),
+    pipe_(segment, Str.slice(0, braces.index)),
+    pipe_(segment, Str.slice(braces.index + braces[0].length)),
   ];
-  return braces[1]!.split(",").flatMap((one) => expanded(before + one + after));
+  return Arr.flatMap(Str.split(braces[1]!, ","), (one) => expanded(before + one + after));
 };
 
 /** The dot names `pattern` asks for, `{.env,.envrc}` as two. */
 const dotNames = (pattern: string) =>
-  pattern
-    .split("/")
-    .flatMap(expanded)
-    .filter((name) => name.startsWith("."));
+  Arr.filter(Arr.flatMap(Str.split(pattern, "/"), expanded), (name) =>
+    pipe_(name, Str.startsWith(".")),
+  );
 
-/**
- * Whether `pattern` reaches `relative`: it matches, and each dot-named segment is one the
- * pattern names with a dot, as Glob leaves `.git` to a pattern that asks for it.
- */
+// Named dot segments remain allowed at any depth, unlike Effect Glob's `**`.
 const reaches = (pattern: string) => {
   const glob = new Bun.Glob(pattern);
-  const dotted = dotNames(pattern).map((segment) => new Bun.Glob(segment));
+  const dotted = Arr.map(dotNames(pattern), (segment) => new Bun.Glob(segment));
   return (relative: string) =>
     glob.match(relative) &&
-    relative
-      .split("/")
-      .every((segment) => !segment.startsWith(".") || dotted.some((one) => one.match(segment)));
+    Arr.every(
+      Str.split(relative, "/"),
+      (segment) =>
+        !pipe_(segment, Str.startsWith(".")) || Arr.some(dotted, (one) => one.match(segment)),
+    );
 };
 
 /** Files under `dir` matching `pattern`, newest first, and how many beyond the bound. */
@@ -115,7 +116,7 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
             "1",
             "-name",
             ".*",
-            ...dotted.flatMap((name) => ["!", "-name", name]),
+            ...Arr.flatMap(dotted, (name) => ["!", "-name", name]),
             "-prune",
             "-o",
             "-type",
@@ -139,9 +140,9 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
         at: Option.match(info.value.mtime, { onNone: () => 0, onSome: (at) => at.getTime() }),
       });
   }
-  matched.sort((a, b) => b.at - a.at || a.path.localeCompare(b.path));
+  matched.sort((a, b) => b.at - a.at || pipe_(a.path, Str.localeCompare(b.path)));
   return {
-    paths: matched.slice(0, FOUND_LIMIT).map(({ path }) => path),
+    paths: Arr.map(matched.slice(0, FOUND_LIMIT), ({ path }) => path),
     omitted: Math.max(0, matched.length - FOUND_LIMIT),
   };
 });
@@ -260,7 +261,10 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
   if (found.code > 1 && found.lines.length === 0)
     return yield* refused(`the search of ${root} failed (exit ${found.code})`);
   return {
-    text: found.lines.map((line) => line.slice(0, LINE_LIMIT)).join("\n"),
+    text: Arr.join(
+      Arr.map(found.lines, (line) => pipe_(line, Str.slice(0, LINE_LIMIT))),
+      "\n",
+    ),
     omitted: found.omitted,
   };
 });
@@ -301,7 +305,7 @@ const writable = Effect.fn("HostFiles.writable")(function* (asked: string, state
   const path = yield* absolute(asked);
   const real = yield* realOf(path);
   const top = yield* realOf(state);
-  if (real === top || real.startsWith(`${top}${paths.sep}`))
+  if (real === top || pipe_(real, Str.startsWith(`${top}${paths.sep}`)))
     return yield* refused(
       `${path} is inside the host's state directory ${state}, which only its operations change`,
     );
@@ -342,7 +346,7 @@ export const editString = Effect.fn("HostFiles.edit")(function* (
       }),
     ),
   );
-  const replaced = asked.oldString === "" ? 0 : text.split(asked.oldString).length - 1;
+  const replaced = asked.oldString === "" ? 0 : Str.split(text, asked.oldString).length - 1;
   if (replaced === 0) return yield* refused(`old_string is not in ${path}`);
   if (replaced > 1 && !asked.replaceAll)
     return yield* refused(
@@ -350,6 +354,7 @@ export const editString = Effect.fn("HostFiles.edit")(function* (
     );
   yield* fs.writeFileString(
     path,
+    // oxlint-disable-next-line effecttsgo/prefer-effect-string -- Replacement text is literal, including dollar sequences; Effect String only accepts replacement syntax.
     text.replaceAll(asked.oldString, () => asked.newString),
   );
   return { path, replaced };

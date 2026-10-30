@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
@@ -60,7 +62,11 @@ test("Helle's registry entry keeps the token owner's account and the existing ab
       const env = rig.pluginEnv({ COLLIE_HELLE_URL: `http://127.0.0.1:${server.port}` });
       const read = () =>
         connectionsOnMachine(env, () => Effect.succeed({ code: 127, stdout: "" })).pipe(
-          Effect.map((connections) => connections.find(({ id }) => id === "helle")?.reading),
+          Effect.map(
+            (connections) =>
+              Option.getOrUndefined(Arr.findFirst(connections, ({ id }) => id === "helle"))
+                ?.reading,
+          ),
         );
       const file = `${env.home}/.config/helle/env`;
       expect(yield* read()).toMatchObject({

@@ -2,6 +2,10 @@
 // Claude Code settings survive being configured, and a status line somebody else put there
 // is reported rather than replaced — it is their editor, and Collie is a guest in it.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -11,6 +15,7 @@ import {
   installStatusLine,
   readStatusLine,
   STATUS_LINE_ARGS,
+  statusLineCommand,
   statusLineFor,
 } from "../src/statusline";
 import { selectionPath, writeSelection } from "../src/selection";
@@ -55,7 +60,7 @@ test("configuring the status line keeps every other setting the human has", () =
       expect(said).toContain("status line");
       const after = yield* read(file);
       expect(after).toContain(`"theirs": "kept"`);
-      expect(after).toContain(STATUS_LINE_ARGS.join(" "));
+      expect(after).toContain(Arr.join(STATUS_LINE_ARGS, " "));
       expect(yield* readStatusLine(env)).toMatchObject({ kind: "ours" });
     }),
   ));
@@ -85,7 +90,7 @@ test("with no settings file at all, one is written that says only what Collie ne
 
       yield* installStatusLine(env);
 
-      expect(yield* read(file)).toContain(STATUS_LINE_ARGS.join(" "));
+      expect(yield* read(file)).toContain(Arr.join(STATUS_LINE_ARGS, " "));
       // Run again: the same machine, and nothing said twice.
       expect(yield* installStatusLine(env)).toContain("already");
     }),
@@ -135,5 +140,26 @@ test("settings Collie cannot read are refused rather than replaced", () =>
       expect(yield* read(file)).toBe(broken);
       expect(said).toContain("could not read");
       expect(said).toContain(file);
+    }),
+  ));
+
+test("the status line 0.104.0 wrote is Collie's, and is replaced rather than joined", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = yield* claudeSettingsPath(env);
+      // statusLineCommand(["/home/u/.collie/release/bin/collie"]) on 0.104.0.
+      const written = "'/home/u/.collie/release/bin/collie' chat status-line";
+      yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
+      yield* fs.writeFileString(
+        file,
+        `{\n  "statusLine": {\n    "type": "command",\n    "command": "${written}",\n    "padding": 0\n  }\n}\n`,
+      );
+      expect(yield* readStatusLine(env)).toEqual({ kind: "ours", command: written });
+
+      yield* installStatusLine(env);
+
+      expect(yield* readStatusLine(env)).toEqual({ kind: "ours", command: statusLineCommand() });
+      expect(Option.getOrNull(pipe(yield* read(file), Str.match(/"statusLine"/g)))).toHaveLength(1);
     }),
   ));

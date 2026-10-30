@@ -1,6 +1,10 @@
 // Desktop's own copies of what the human gives the Flock chat: a file named by its path is
 // copied in or refused with its reason, and a copy is pruned once it is a month old.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Clock, Effect, FileSystem } from "effect";
@@ -52,7 +56,13 @@ test("cleanup removes a copy unused for 30 days and a transfer abandoned for a d
       const now = yield* Clock.currentTimeMillis;
       // In seconds, as utimes takes a number.
       const daysAgo = (days: number) => (now - days * 24 * 60 * 60 * 1000) / 1000;
-      const copy = old.slice(0, old.lastIndexOf("/"));
+      const copy = pipe_(
+        old,
+        Str.slice(
+          0,
+          Option.getOrElse(pipe_(old, Str.lastIndexOf("/")), () => -1),
+        ),
+      );
       yield* fs.utimes(copy, daysAgo(31), daysAgo(31));
       yield* fs.utimes(`${dir}/attachments/.partial/1-5`, daysAgo(2), daysAgo(2));
 
@@ -62,7 +72,7 @@ test("cleanup removes a copy unused for 30 days and a transfer abandoned for a d
         hash: null,
         version: null,
       });
-      expect(verdicts.remove.map(({ target }) => target).sort()).toEqual(
+      expect(Arr.map(verdicts.remove, ({ target }) => target).sort()).toEqual(
         [copy, `${dir}/attachments/.partial/1-5`].sort(),
       );
     }),
