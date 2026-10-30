@@ -721,8 +721,7 @@ export default defineWorkflow({
               ? fail(`${mr} was closed, so nothing was released`)
               : Effect.void;
         let conflicts = 0;
-        /** Waits while the merge request conflicts with its target at `proved`, then moves to the head it has. */
-        const unconflicted = (proved: string) =>
+        const unconflicted = () =>
           Effect.gen(function* () {
             const n = conflicts++;
             const standing = yield* Activity.make({
@@ -733,7 +732,7 @@ export default defineWorkflow({
                 const standing = yield* host.awaitReview({
                   runId,
                   cwd,
-                  proved,
+                  proved: (yield* host.evidence(runId, cwd)).final.head_sha,
                   seen: [],
                   whileConflicting: true,
                 });
@@ -747,16 +746,21 @@ export default defineWorkflow({
               yield* moveTo(`conflict-${n}.fast-forward`, standing.head);
             return n;
           });
-        /** The head proved by the checks, after as many fix rounds as it takes, up to ROUNDS. */
+        /**
+         * The head proved by the checks, after as many fix rounds as it takes, up to ROUNDS.
+         * A merge request conflicting with its target has no pipeline to prove, so no head is
+         * taken or checked while it conflicts.
+         */
         const proving = (
           name: string,
           pass: { readonly pass: "fix"; readonly round: number } | null,
         ) =>
           Effect.gen(function* () {
+            yield* unconflicted();
             let at = yield* checksAt(name, pass, null);
             for (let rounds = 1; at.failed.length > 0 || at.conflicting;) {
               if (at.conflicting) {
-                const n = yield* unconflicted(at.head);
+                const n = yield* unconflicted();
                 at = yield* checksAt(`conflict-${n}.checks`, null, null);
                 continue;
               }
@@ -766,6 +770,7 @@ export default defineWorkflow({
                 detail: `Collie ran this Run's checks on ${short(at.head)}, the merge request's head, and this is what failed.`,
               }));
               const { n, stalled } = yield* fixRound(findings, rounds);
+              yield* unconflicted();
               at = yield* checksAt(
                 `fix-${n}.checks`,
                 { pass: "fix", round: n },
@@ -795,8 +800,7 @@ export default defineWorkflow({
             execute: reviewAt(proved),
           });
 
-        // A conflicting merge request has no pipeline to prove, so nothing moves or runs while it conflicts.
-        let proved = yield* proveHead(Effect.andThen(unconflicted(""), proving("checks.0", null)));
+        let proved = yield* proveHead(proving("checks.0", null));
         let waits = 0;
         let rounds = 0;
         let gos = 0;
@@ -887,12 +891,7 @@ export default defineWorkflow({
           const standing = yield* reviewWait(awaited(waits, proved));
           yield* gone(standing);
           if (standing._tag === "Moved") {
-            proved = yield* proveHead(
-              Effect.andThen(
-                moveTo(`fast-forward.${waits}`, standing.head),
-                proving(`checks.${waits}`, null),
-              ),
-            );
+            proved = yield* proveHead(proving(`checks.${waits}`, null));
             continue;
           }
           if (standing._tag === "Unanswered") {
