@@ -1400,8 +1400,8 @@ scenario(
           blocking("third"),
           fixed("third"),
           blocking("fourth"),
-          // Nothing was ever run under that name, so the last fix's word for it buys nothing.
-          fixed("fourth", [{ name: "unit" }]),
+          // Not one of the Run's Checks and never run, so the last fix's word for it buys nothing.
+          fixed("fourth", [{ name: "lint" }]),
         ]);
 
         const result = yield* ran({
@@ -1412,7 +1412,7 @@ scenario(
 
         expect(result._tag).toBe("Failure");
         expect(reasonOf(result)).toContain(
-          `fix_unverified: check "unit" has no verification record`,
+          `fix_unverified: check "lint" has no verification record — run it through collie verify`,
         );
         expect(reasonOf(result)).toContain("Continue with a follow-up Run to finish delivery.");
         expect(Arr.join(yield* prompts(), "\n")).not.toContain("r-impl-unverified/mr.prompt.md");

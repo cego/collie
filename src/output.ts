@@ -7,7 +7,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema, SchemaGetter, flow, Result } from "effect";
 import { isNumber, isString } from "./schema";
-import { checkProof } from "./check-proof";
+import { checkProof, owesNothingHere, type CheckProof } from "./check-proof";
 import type { Measurement } from "./measurement-model";
 import type { CheckCommand, Snapshot, Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
@@ -735,14 +735,16 @@ export interface CheckEvidence {
 }
 
 /**
- * Why a named check is not proof on this tree, or null where it is. A record by an agent
- * counts: what binds it is the collector, not who called it.
+ * Why a named check halts the last fix, or null where it does not: it is proof on this
+ * tree, or the gate decides it on the final tree. A record by an agent counts: what binds
+ * it is the collector, not who called it.
  */
-function checkGap(name: string, evidence: CheckEvidence): string | null {
-  switch (checkProof(evidence, name).state) {
+function checkGap(name: string, proof: CheckProof, evidence: CheckEvidence): string | null {
+  switch (proof.state) {
     case "passed":
     case "waiting":
     case "proved":
+    case "earlier":
       return null;
     case "never":
       return Option.getOrUndefined(
@@ -750,24 +752,23 @@ function checkGap(name: string, evidence: CheckEvidence): string | null {
           Arr.some(present_, (command) => command.name === name),
         ),
       )
-        ? `check "${name}" has no verification record on this tree — Collie's gate runs it itself, on the final tree`
+        ? null
         : `check "${name}" has no verification record — run it through collie verify`;
     case "failed":
       return `check failed: ${name}`;
     case "unstable":
       return `check "${name}" ran on a tree that moved under it`;
-    case "earlier":
-      return `check "${name}" last passed on an earlier tree`;
   }
 }
 
 /**
  * The last fix of a loop has no review after it, so its own report is what decides:
  * every blocking finding the review raised is fixed by key, nothing is disputed, and
- * every check it names has a passing verification on the tree as it stands. The review
- * before it is history, not evidence that the fixed code still has its findings — and
- * the fix's word is not a review either, which is what the attestation says. Nor is it
- * evidence that the checks passed: the journal is.
+ * every check it names passed on the tree as it stands or is left to the gate, which runs
+ * the Run's Checks on the final tree: one that passed only earlier, or one of the Run's
+ * Checks with no record. The review before it is history, not evidence that the fixed
+ * code still has its findings — and the fix's word is not a review either, which is what
+ * the attestation says. Nor is it evidence that the checks passed: the journal is.
  */
 export function settleFinalFix(
   live: ReadonlyArray<Finding>,
@@ -814,9 +815,14 @@ export function settleFinalFix(
   const standing = Arr.filter(fix.disputed, (d) => isBlocking(d) && !raised.has(findingKey(d)));
   for (const d of standing) disputes.push(disputeLine(d));
   if (fix.checks.length === 0) unverified.push("no checks reported");
+  const verifiedHere: string[] = [];
+  const leftToGate: string[] = [];
   for (const check of fix.checks) {
-    const gap = checkGap(check.name, evidence);
+    const proof = checkProof(evidence, check.name);
+    const gap = checkGap(check.name, proof, evidence);
     if (gap !== null) unverified.push(`${gap}${check.note ? ` (${check.note})` : ""}`);
+    else if (owesNothingHere(proof)) verifiedHere.push(check.name);
+    else leftToGate.push(check.name);
   }
   // A fix that does not hold up verifies nothing: everything the review raised stays open.
   const unresolved = [...live, ...fix.findings, ...standing];
@@ -831,7 +837,11 @@ export function settleFinalFix(
   }
   const reportedFixed = Arr.filter(live, (f) => isBlocking(f) && fixed.has(findingKey(f))).length;
   const disputedToo = disputes.length > 0 ? `, ${disputes.length} disputed` : "";
-  const attestation = `last fix: ${reportedFixed} blocking finding(s) reported fixed${disputedToo}, ${fix.checks.length} check(s) verified on this tree — implementer-reported, not re-reviewed`;
+  const gateToo =
+    leftToGate.length > 0
+      ? `, ${leftToGate.length} left to the gate on the final tree (${Arr.join(leftToGate, ", ")})`
+      : "";
+  const attestation = `last fix: ${reportedFixed} blocking finding(s) reported fixed${disputedToo}, ${verifiedHere.length} check(s) verified on this tree${gateToo} — implementer-reported, not re-reviewed`;
   if (disputes.length > 0) {
     return {
       ok: false,

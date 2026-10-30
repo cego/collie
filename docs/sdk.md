@@ -1305,7 +1305,8 @@ rally converges, stands on a dispute and runs out of rounds where these three de
   the previous round's `keys`; without it nothing can notice a rally going round.
 - **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
   fix's own account is what is left. Every blocking finding needs a disposition, and every
-  check it names needs a passing verification on the tree as it stands. A fix that holds up
+  check it names needs a passing verification on the tree as it stands, or is left to the
+  gate, which runs the Run's Checks on the final tree. A fix that holds up
   but disputes a blocking finding comes back `dispute_unresolved`, with the same
   `attestation` a fix that stands carries, since the human reads both.
 
@@ -1330,6 +1331,11 @@ passing record of it, collected on these exact bytes. A commit of the same bytes
 an edit since makes an earlier pass history — it is not that the result went off, it is that
 it is about another tree. `sameTree(one, other)` is that test for two snapshots, or two
 `{ fingerprint }`s: the same bytes at any commit, and never a tree too large to look at.
+A check the last fix names that passed only on an earlier tree, or one of the Run's Checks
+with no record yet, does not halt it: the attestation names it as left to the gate, and
+counts as verified on this tree only the checks that passed here or are left to CI. A
+check that failed or ran on a tree that moved under it still halts the fix, and so does a
+check that is not one of the Run's Checks and has no record, since the gate never runs it.
 
 `host.verify({ runId, name, cwd })` runs one of your Run's checks, in the directory the
 check names, resolved from `cwd` — which has to be the Run's own checkout — and records
