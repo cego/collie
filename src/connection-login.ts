@@ -11,7 +11,7 @@ export const readConnectionLogin = <R = never>(
   run: Runner<R | ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) =>
   Effect.gen(function* () {
-    const login = id === "gitlab" ? yield* glabLoginOn(env, run) : ghLogin;
+    const login = id === "gitlab" ? yield* glabLoginOn(env) : ghLogin;
     const fromEnvironment =
       id === "gitlab"
         ? env.raw.GITLAB_TOKEN || env.raw.GITLAB_ACCESS_TOKEN || env.raw.OAUTH_TOKEN

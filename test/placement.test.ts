@@ -19,7 +19,7 @@ import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
-import { forgeOnPath, serveForges } from "./support/forge";
+import { FORGE_HOST, forgeOnPath, serveForges } from "./support/forge";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
@@ -101,6 +101,7 @@ const env = () =>
   rig.pluginEnv({
     HERDR_PLUGIN_ROOT: ROOT,
     GITLAB_USER_LOGIN: LOGIN,
+    GITLAB_HOST: FORGE_HOST.gitlab,
     COLLIE_HELLE_URL: helleUrl,
     FAKE_HERDR_SESSIONS:
       sessions === null

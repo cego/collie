@@ -12,57 +12,66 @@ import { type Ran, type Runner } from "../src/mr";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 
-test("GitLab uses glab's configured host or Collie's explicit host, and identifies the token's user", () =>
+test("GitLab is read on the host Collie works against, never glab's default, and identifies the token's user", () =>
   runEffect(
     Effect.gen(function* () {
       const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => rig.close().pipe(Effect.orDie));
       const fs = yield* FileSystem.FileSystem;
-      const config = yield* Schema.decodeUnknownEffect(Schema.Struct({ host: Schema.String }))(
+      const glab = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({
+          host: Schema.String,
+          hosts: Schema.Record(Schema.String, Schema.Struct({ token: Schema.String })),
+        }),
+      )(
         parseYaml(yield* fs.readFileString(`${import.meta.dir}/fixtures/connections/glab.yml`)),
       ).pipe(Effect.orDie);
       const asked: string[] = [];
       const run: Runner = (cmd, args) =>
         Effect.sync((): Ran => {
-          asked.push(Arr.join(args, " "));
-          if (Arr.join(args, " ") === "config get host --global")
-            return { code: 0, stdout: config.host };
-          if (args[0] === "config") return { code: 0, stdout: "fixture-token" };
-          if (Arr.join(args, " ") === "api --hostname gitlab.example user")
+          const said = Arr.join(args, " ");
+          asked.push(said);
+          if (said === "config get host --global") return { code: 0, stdout: glab.host };
+          const token = /^config get token --host (\S+)$/.exec(said);
+          if (token !== null) return { code: 0, stdout: glab.hosts[token[1]!]?.token ?? "" };
+          if (said === "api --hostname gitlab.cego.dk user")
             return { code: 0, stdout: '{"username":"mk"}' };
           if (
             cmd === "env" &&
-            Arr.join(args, " ") ===
-              "GITLAB_HOST=other.example glab api --hostname other.example user"
+            said === "GITLAB_HOST=gitlab.com glab api --hostname gitlab.com user"
           )
-            return { code: 0, stdout: '{"username":"other-mk"}' };
-          throw new Error(`unexpected glab ${Arr.join(args, " ")}`);
+            return { code: 0, stdout: '{"username":"mk-on-gitlab-com"}' };
+          throw new Error(`unexpected glab ${said}`);
         });
       expect(yield* probeGitlab(rig.pluginEnv(), run)).toEqual({
         state: "ok",
         account: "mk",
-        detail: "gitlab.example as mk",
+        detail: "gitlab.cego.dk as mk",
       });
-      yield* writeConfigValue(rig.userDir, "gitlab_host", "other.example");
+      yield* writeConfigValue(rig.userDir, "gitlab_host", "gitlab.com");
       const configured = rig.pluginEnv({ GITLAB_TOKEN: "configured-fixture-token" });
       expect(yield* probeGitlab(configured, run)).toEqual({
         state: "ok",
-        account: "other-mk",
-        detail: "other.example as other-mk",
+        account: "mk-on-gitlab-com",
+        detail: "gitlab.com as mk-on-gitlab-com",
       });
-      expect(asked).toContain("GITLAB_HOST=other.example glab api --hostname other.example user");
+      expect(asked).toContain("GITLAB_HOST=gitlab.com glab api --hostname gitlab.com user");
       expect(
         yield* probeGitlab(configured, () =>
           Effect.succeed({ code: 1, stdout: "", stderr: "401 token refused" }),
         ),
       ).toEqual({
         state: "broken",
-        detail: "other.example did not accept its GitLab login",
-        fix: "glab auth login --hostname other.example",
+        detail: "gitlab.com did not accept its GitLab login",
+        fix: "glab auth login --hostname gitlab.com",
       });
       yield* writeConfigValue(rig.userDir, "gitlab_host", null);
       expect(
         yield* probeGitlab(rig.pluginEnv(), () => Effect.succeed({ code: 127, stdout: "" })),
-      ).toMatchObject({ state: "absent", fix: "glab auth login --hostname gitlab.com" });
+      ).toEqual({
+        state: "absent",
+        detail: "no GitLab login for gitlab.cego.dk",
+        fix: "glab auth login --hostname gitlab.cego.dk",
+      });
     }),
   ));
 
