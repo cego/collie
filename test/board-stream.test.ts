@@ -71,10 +71,11 @@ test(
       "collie-board-stream-",
       (world) =>
         Effect.gen(function* () {
+          // A specific title keeps startup's generic-task renamer out of this fixture.
           yield* writeTask(world.state, {
             id: "task-1",
             workspace: "w1",
-            label: "project | Plain",
+            label: "project | Stream changes",
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
           }).pipe(Effect.orDie);
@@ -109,7 +110,7 @@ test(
           expect(snapshot.protocol).toBe(PROTOCOL);
           expect(snapshot.build).toBe(BUILD);
           expect(snapshot.installation).not.toBe("");
-          expect(Arr.map(snapshot.tasks, (task) => task.name)).toEqual(["Plain"]);
+          expect(Arr.map(snapshot.tasks, (task) => task.name)).toEqual(["Stream changes"]);
           const runId = snapshot.tasks[0]!.run;
 
           yield* recordDisposition(`${world.state}/runs/${runId}`, {
