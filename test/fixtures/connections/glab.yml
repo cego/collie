@@ -1,5 +1,5 @@
-host: gitlab.example
+host: gitlab.com
 hosts:
-  gitlab.example:
+  gitlab.cego.dk:
     token: fixture-token
     user: old-cached-name

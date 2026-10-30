@@ -138,7 +138,7 @@ import {
 import { givenCredentials } from "./given";
 import { saveSlackConnection, disconnectSlackConnection } from "./slack";
 import { slackApi } from "../../../src/slack";
-import { connectionsOn, githubLogin, reuseGitlab } from "./connection-reuse";
+import { connectionsOn, githubLogin, readBack, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, openTerminal } from "./terminal";
 import {
@@ -1332,12 +1332,27 @@ const main = Effect.gen(function* () {
           keyring,
           (token) => given.giveEvery(targets, "gitlab", token),
         );
+        const reached = yield* readBack(each, (name) =>
+          Effect.fromNullishOr(
+            Arr.findFirst([...doors.values()], (door) => door.machine.name === name).pipe(
+              Option.getOrUndefined,
+            ),
+          ).pipe(
+            Effect.flatMap((door) => door.desktop.connections()),
+            Effect.flatMap((connections) =>
+              Effect.fromNullishOr(
+                Option.getOrUndefined(Arr.findFirst(connections, (one) => one.id === "gitlab"))
+                  ?.reading,
+              ),
+            ),
+          ),
+        );
         yield* SubscriptionRef.update(credentials, (now) => ({
           ...now,
           ...gitlabPages(),
           gitlab: { expires: null },
         }));
-        return `Using glab's login from ${source.machine.name}; ${gave("GitLab login", each)}`;
+        return `Using glab's login from ${source.machine.name}; ${gave("GitLab login", reached)}`;
       }).pipe(
         Effect.mapError(
           (error) =>

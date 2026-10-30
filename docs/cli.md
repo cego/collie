@@ -2203,8 +2203,9 @@ An `ok` reading names the account. Other readings give a fix. A failed probe aff
 its own reading; a probe that takes longer than six seconds becomes `broken`.
 An absent or broken Connection does not fail this command. Failure to reach its Machine does.
 
-- **GitLab:** the `GITLAB_HOST` override or `gitlab_host` setting, otherwise glab's global
-  host. Its login is checked with `glab api user`, which identifies the token's current user.
+- **GitLab:** the host Collie works against: the `GITLAB_HOST` override, else the `gitlab_host`
+  setting, else its default, never glab's own default host. Its login is checked with
+  `glab api user`, which identifies the token's current user.
   Environment tokens take precedence over glab's stored token. No token is printed.
 - **GitHub:** `gh auth status --active --hostname github.com`, naming gh's active account.
 - **Linear:** MCP configurations in Claude Code, Codex and OpenCode, including project
