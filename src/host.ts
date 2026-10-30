@@ -1410,6 +1410,17 @@ const frontDoorHandlers = (
         const running = carrying.get(carryingKey(proposal, request));
         return running === undefined ? null : Effect.flatten(Deferred.await(running));
       };
+      // A control runs in the host's scope, so a caller that stops waiting leaves it running.
+      const controls = yield* Effect.scope;
+      /** Each control still running, by its Run and request, so a repeat waits for it. */
+      const controlling = new Map<
+        string,
+        {
+          readonly operation: string;
+          readonly asked: string;
+          readonly joined: Effect.Effect<typeof Controlled.Type, HostRefused | RequestConflict>;
+        }
+      >();
       // ponytail: one entry per connection, never removed, as `declared`.
       const sessions = new Map<number, string>();
       /** The serving env in the herdr session the asking channel declared, where it named one. */
@@ -1470,8 +1481,10 @@ const frontDoorHandlers = (
           who: Asker & { readonly from?: Where | undefined },
           reason?: string,
         ) =>
-        <E>(act: Effect.Effect<typeof Controlled.Type, E, HostServices>) =>
-          Effect.andThen(
+        (
+          act: Effect.Effect<typeof Controlled.Type, HostRefused | RequestConflict, HostServices>,
+        ) => {
+          const work = Effect.andThen(
             known(runId),
             once(
               trail(runId),
@@ -1486,6 +1499,33 @@ const frontDoorHandlers = (
               act,
             ),
           ).pipe(Effect.provideContext(hosted));
+          const key = JSON.stringify([runId, request]);
+          const asked = JSON.stringify([operation, reason ?? null]);
+          return Effect.suspend(() => {
+            const running = controlling.get(key);
+            if (running !== undefined)
+              return running.asked === asked
+                ? running.joined
+                : Effect.fail(
+                    new RequestConflict({
+                      request,
+                      reason: `request "${request}" is already running ${running.operation} for something else`,
+                    }),
+                  );
+            const done = Deferred.makeUnsafe<
+              typeof Controlled.Type,
+              HostRefused | RequestConflict
+            >();
+            const joined = Deferred.await(done);
+            controlling.set(key, { operation, asked, joined });
+            return work.pipe(
+              Effect.ensuring(Effect.sync(() => controlling.delete(key))),
+              Deferred.into(done),
+              Effect.forkIn(controls),
+              Effect.andThen(joined),
+            );
+          });
+        };
       /** A file operation's failure as the host's refusal, in its own words. */
       const refusedPlainly = <A, E, R extends PlatformServices>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(

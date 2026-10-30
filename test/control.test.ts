@@ -12,9 +12,12 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, Fiber, FileSystem } from "effect";
+import { readAudit } from "../src/audit";
 import { mrLabel, type MrState } from "../src/board-model";
+import { connect } from "../src/host";
 import { writeMrStates } from "../src/merges";
 import { runEffect } from "./support/effect";
 import { HostReply, events, fixtures, openHost, runDirOf, until, workspace } from "./support/host";
@@ -455,6 +458,149 @@ test(
         expect(
           (yield* host.until({ op: "poll", id: "stops-on-mr", runId: "r1" }, complete)).value,
         ).toBe("release");
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+/** A Run waiting on its decision whose next entry is held, while `gate` exists, until it is gone. */
+const heldAtNextEntry = Effect.fn("test.heldAtNextEntry")(function* (prefix: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const { dir, wf, state } = yield* workspace(prefix);
+  yield* fs.copyFile(`${fixtures}/held-wake.workflow.ts`, `${wf}/held-wake.workflow.ts`);
+  const gate = `${dir}/gate`;
+  const host = yield* openHost(state);
+  yield* host.ask({
+    op: "start",
+    id: "held-wake",
+    runId: "r1",
+    input: { gate },
+  });
+  yield* host.until({ op: "waiting", runId: "r1" }, asking("decision"));
+  const trail = yield* runDirOf(state, "r1");
+  const runId = pipe_(
+    trail,
+    Str.slice(Option.getOrElse(pipe_(trail, Str.lastIndexOf("/")), () => -1) + 1),
+  );
+  const shut = fs.writeFileString(gate, "");
+  const open = fs.remove(gate);
+  const held = until(
+    () => events(state, "r1"),
+    (log) => log.at(-1) === "held",
+  );
+  return { host, state, trail, runId, shut, open, held };
+});
+
+const recorded = (trail: string, request: string) =>
+  until(
+    () => readAudit(trail),
+    (lines) => Arr.some(lines, (line) => line.request === request),
+  ).pipe(Effect.map((lines) => Arr.filter(lines, (line) => line.request === request)));
+
+test(
+  "a resume whose caller hangs up before the host answers still takes the Run up and is recorded",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { host, state, trail, runId, shut, open, held } = yield* heldAtNextEntry(
+          "collie-control-cut-resume-",
+        );
+        yield* host.ask({ op: "stop", id: "held-wake", runId: "r1" });
+        yield* until(
+          () => events(state, "r1"),
+          (log) => log.at(-1) === "stopped",
+        );
+        yield* shut;
+        const cut = yield* Effect.forkChild(
+          Effect.scoped(
+            Effect.flatMap(connect(state), (client) => client.resume({ runId, request: "cut" })),
+          ),
+        );
+        yield* held;
+        yield* Fiber.interrupt(cut);
+        yield* open;
+        const [line] = yield* recorded(trail, "cut");
+        expect(line).toMatchObject({
+          operation: "resume",
+          result: { applied: true },
+        });
+        yield* host.until({ op: "waiting", runId: "r1" }, asking("decision"));
+        expect((yield* events(state, "r1")).slice(-3)).toEqual(["stopped", "held", "wait"]);
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
+  "a stop whose caller hangs up before the host answers still stops the Run and is recorded",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { host, state, trail, runId, shut, open, held } = yield* heldAtNextEntry(
+          "collie-control-cut-stop-",
+        );
+        yield* shut;
+        const cut = yield* Effect.forkChild(
+          Effect.scoped(
+            Effect.flatMap(connect(state), (client) =>
+              client.control({
+                runId,
+                control: "stop",
+                set: true,
+                request: "cut",
+              }),
+            ),
+          ),
+        );
+        yield* held;
+        yield* Fiber.interrupt(cut);
+        yield* open;
+        const [line] = yield* recorded(trail, "cut");
+        expect(line).toMatchObject({
+          operation: "stop",
+          result: { applied: true },
+        });
+        yield* until(
+          () => events(state, "r1"),
+          (log) => log.at(-1) === "stopped",
+        );
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
+  "one resume asked twice at once is taken once, and both callers get its result",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { host, state, trail, runId, shut, open, held } =
+          yield* heldAtNextEntry("collie-control-twice-");
+        yield* host.ask({ op: "stop", id: "held-wake", runId: "r1" });
+        yield* until(
+          () => events(state, "r1"),
+          (log) => log.at(-1) === "stopped",
+        );
+        yield* shut;
+        const client = yield* connect(state);
+        const both = yield* Effect.forkChild(
+          Effect.all(
+            [
+              client.resume({ runId, request: "twice" }),
+              client.resume({ runId, request: "twice" }),
+            ],
+            { concurrency: "unbounded" },
+          ),
+        );
+        yield* held;
+        yield* open;
+        const [first, second] = yield* Fiber.join(both);
+        expect(first.applied).toBe(true);
+        expect(second).toEqual(first);
+        expect(yield* recorded(trail, "twice")).toHaveLength(1);
         yield* host.stop;
       }).pipe(Effect.scoped),
     ),
