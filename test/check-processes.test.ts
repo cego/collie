@@ -64,6 +64,30 @@ const world = worldWith();
 
 const check = { run: "run-1", name: "held", by: "collie" } as const;
 
+test.skipIf(process.platform !== "linux")(
+  "ending a host with no checks does not scan unrelated processes",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        let scans = 0;
+        const counted: FileSystem.FileSystem = {
+          ...fs,
+          readDirectory: (path, options) =>
+            Effect.sync(() => {
+              if (path === "/proc") scans++;
+            }).pipe(Effect.andThen(fs.readDirectory(path, options))),
+        };
+        const { checks, notes } = yield* worldWith({ sweep: false }, { fileSystem: counted });
+        expect(yield* checks.endAll).toEqual([]);
+        yield* checks.killEnded;
+        const refused = yield* checks.run(check, { executable: held, argv: [notes], cwd: notes });
+        expect(refused.pid).toBeNull();
+        expect(scans).toBe(0);
+      }),
+    ),
+);
+
 /** The check's leader and its `setsid` child once both have started, each with its start token. */
 const startedIn = (notes: string) =>
   Effect.gen(function* () {
