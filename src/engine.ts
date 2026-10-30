@@ -2550,7 +2550,8 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
   const fs = yield* FileSystem.FileSystem;
   const entries = yield* entriesRoot(file);
   const dir = directoryOf(file);
-  const name = `${Bun.hash(dir).toString(16)}-${revision ?? (yield* revisionOf(dir))}`;
+  const sources = revision === undefined ? yield* sourceTree(dir) : undefined;
+  const name = `${Bun.hash(dir).toString(16)}-${revision ?? sources!.revision}`;
   const root = `${entries}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
   if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) {
@@ -2560,7 +2561,7 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
     return staged;
   }
   const draft = `${name}.${yield* Random.nextInt}`;
-  yield* stageGeneration({ dir: entries, name: draft, entry: file }).pipe(
+  yield* stageFiles({ dir: entries, name: draft, entry: file }, sources).pipe(
     Effect.provide(Path.layer),
   );
   const drafted = `${entries}/generations/${draft}`;
