@@ -31,7 +31,9 @@ Its existing forge prerequisites remain separate; optional Connection lines neve
 Workflows read the same registry through `host.connection(id)`.
 
 **D3. Probes use the Machine's existing logins.**
-GitLab uses the configured host, otherwise glab's global host, and asks for the token's user.
+GitLab uses the host Collie works against — `GITLAB_HOST`, else the `gitlab_host` setting, else its default —
+and asks for the token's user. glab's own default host is not read: it is gitlab.com wherever glab
+was never told otherwise, so a Machine logged in to the Flock's GitLab would read as having no login.
 GitHub reads gh's active login on github.com.
 Helle keeps its existing credentials, health check, detail and fix, adding the user id as account.
 Linear reads Claude, Codex and OpenCode MCP configurations; it ignores disabled servers.

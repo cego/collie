@@ -6,6 +6,9 @@ import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem } from "effect";
 import { inspect } from "node:util";
 import { readConnectionLogin } from "../src/connection-login";
+import { probeGitlab } from "../src/connection-probes";
+import { writeConfigValue } from "../src/config";
+import { GITLAB_HOST } from "../src/gitlab-token";
 import { githubLogin, reuseGitlab } from "../desktop/src/bun/connection-reuse";
 import { onboardingSkips, ranWith } from "../desktop/src/bun/onboarding";
 import { credentialsFile, giveToken, giveGithub } from "../desktop/src/bun/credentials";
@@ -59,6 +62,7 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
           slack: () => Effect.succeed(null),
         },
       });
+      yield* writeConfigValue(rig.userDir, "gitlab_host", "gitlab.example.org");
       const hosts: string[] = [];
       const result = yield* reuseGitlab(
         readConnectionLogin(rig.pluginEnv(), "gitlab", run),
@@ -79,6 +83,94 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
       ]);
       expect(inspect({ commands, events, result })).not.toContain(secret);
       expect(yield* fs.readFileString(`${dir}/given.json`)).not.toContain(secret);
+    }),
+  ));
+
+/** A Machine's glab: the host it defaults to, and the token it holds for each host. */
+const glabOn =
+  (defaultHost: string, logins: Map<string, string>): Runner =>
+  (_, args) =>
+    Effect.sync(() => {
+      const said = Arr.join(args, " ");
+      if (said === "config get host --global") return { code: 0, stdout: defaultHost };
+      const token = /^config get token --host (\S+)$/.exec(said);
+      if (token !== null) return { code: 0, stdout: logins.get(token[1]!) ?? "" };
+      const user = /^api --hostname (\S+) user$/.exec(said);
+      if (user !== null)
+        return logins.has(user[1]!)
+          ? { code: 0, stdout: '{"username":"mk"}' }
+          : { code: 1, stdout: "", stderr: "401" };
+      throw new Error(`unexpected glab ${said}`);
+    });
+
+test("Use glab's login from the laptop reaches a VM whose glab defaults to gitlab.com, once it reconnects", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const laptop = yield* Effect.acquireRelease(Rig.make(), (rig) =>
+        rig.close().pipe(Effect.orDie),
+      );
+      const vm = yield* Effect.acquireRelease(Rig.make(), (rig) => rig.close().pipe(Effect.orDie));
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-reuse-" });
+      const keyring = credentialsFile(dir, `${dir}/no-secret-tool`);
+      const secret = "laptop-fixture-token";
+      const laptopRun = glabOn(GITLAB_HOST, new Map([[GITLAB_HOST, secret]]));
+      const vmLogins = new Map<string, string>();
+      const vmRun = glabOn("gitlab.com", vmLogins);
+      expect(yield* readConnectionLogin(vm.pluginEnv(), "gitlab", vmRun).pipe(Effect.flip)).toBe(
+        `No reusable gitlab login for ${GITLAB_HOST}; sign in on this Machine`,
+      );
+      let reachable = false;
+      const vmRoute: ShellRoute = {
+        ...localRoute([], "vm-mk"),
+        machine: { profile: "p-vm", name: "vm-mk" },
+        execute: (script, stdin) =>
+          Effect.sync(() => {
+            if (!reachable)
+              return { code: 255, out: "", err: "ssh: connect to host vm-mk: refused" };
+            const host = /glab auth login --hostname '?([^' ]+)'? --stdin/.exec(script)?.[1];
+            if (host === undefined) return { code: 1, out: "", err: "not a glab login" };
+            vmLogins.set(host, Str.trim(new TextDecoder().decode(stdin)));
+            return { code: 0, out: "", err: "" };
+          }),
+      };
+      // Desktop's own GitLab host while the Flock sets none.
+      const desktop = givenCredentials({
+        dir,
+        keyring,
+        skipped: () => Effect.succeed([]),
+        tell: () => Effect.void,
+        give: {
+          gitlab: (route, token) =>
+            giveToken([route], GITLAB_HOST, token).pipe(Effect.map((each) => each[0]!.failed)),
+          helle: () => Effect.succeed(null),
+          slack: () => Effect.succeed(null),
+        },
+      });
+      const before = yield* desktop;
+      const sources: string[] = [];
+      const first = yield* reuseGitlab(
+        readConnectionLogin(laptop.pluginEnv(), "gitlab", laptopRun),
+        (login) => Effect.sync(() => void sources.push(login.host)),
+        keyring,
+        (token) => before.giveEvery([vmRoute], "gitlab", token),
+      );
+      expect(sources).toEqual([GITLAB_HOST]);
+      expect(first[0]!.failed).not.toBeNull();
+      expect((yield* probeGitlab(vm.pluginEnv(), vmRun)).state).toBe("absent");
+
+      reachable = true;
+      const restarted = yield* desktop;
+      expect(yield* restarted.giveLacking(vmRoute)).toEqual([
+        { credential: "gitlab", failed: null },
+      ]);
+      expect(yield* restarted.giveLacking(vmRoute)).toEqual([]);
+      expect(yield* probeGitlab(vm.pluginEnv(), vmRun)).toEqual({
+        state: "ok",
+        account: "mk",
+        detail: `${GITLAB_HOST} as mk`,
+      });
+      expect(yield* probeGitlab(laptop.pluginEnv(), laptopRun)).toMatchObject({ state: "ok" });
     }),
   ));
 
