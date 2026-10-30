@@ -48,6 +48,42 @@ SQL profiling instrumentation left in shared dependencies by the original tune-u
 Its samples are retained in the Run record and excluded from conclusions. Only the
 replacement study with verified pristine dependencies can support a verdict.
 
+## Memory fix against 0.109.0
+
+The [memory-fix evidence](results/read-fix-2026-10-30.json) compares `efeb81b5` against
+merge base `e8d02a5d` (release 0.109.0, which already has the read optimization).
+**Verdict: not proved improved; do not release.** Peak RSS, the primary endpoint, falls
+36.3% (95% CI: 34.9–37.7%). Five latency guardrails were inconclusive, and one candidate
+warm p95 exceeded five seconds.
+
+| Metric                        | Baseline mean | Candidate mean | Paired ratio, 95% CI | Verdict      |
+| ----------------------------- | ------------: | -------------: | -------------------- | ------------ |
+| Peak RSS, KiB                 |     504,999.2 |      321,392.0 | 0.637 [0.623, 0.651] | Improved     |
+| Warm read, ms                 |       1,695.9 |        1,658.2 | 0.989 [0.834, 1.174] | Inconclusive |
+| Warm read p95, ms             |       3,176.1 |        3,089.9 | 0.983 [0.748, 1.293] | Inconclusive |
+| Cold read, ms                 |      10,758.0 |        9,056.8 | 0.863 [0.746, 0.997] | Held         |
+| Shown, ms                     |       1,527.2 |        1,540.7 | 1.023 [0.834, 1.255] | Inconclusive |
+| Listing, ms                   |         852.2 |          785.5 | 0.915 [0.723, 1.157] | Inconclusive |
+| Idle host CPU, ms/s           |         534.8 |          522.0 | 0.978 [0.907, 1.055] | Held         |
+| Concurrent control + read, ms |       4,507.3 |        4,641.1 | 1.027 [0.936, 1.127] | Inconclusive |
+| Read during mutation load, ms |       3,553.2 |        3,815.7 | 1.068 [0.960, 1.187] | Inconclusive |
+
+Pair six ran under one-minute load 27–33. Its warm p95 was 6,956 ms for the candidate
+and 6,798 ms for the base. Surrounding load over the study ranged from 10.42 to 32.95
+on 24 logical CPUs. That is higher than the October 29 studies saw, and it widened every
+latency interval. Apart from cold read, every latency's point estimate is within 9% of
+the base. The protocol, though, needs an upper bound below 1.10.
+
+All ten pairs completed, ending October 30, 2026, at 12:24:41.5 UTC. There were no
+retries and no discarded observations. All 240 settled answers were identical. Two
+earlier attempts ended before any observation:
+
+- The first stopped in the dependency check, on Effect 4.1's bigint link count. That
+  was fixed in `efeb81b5`, on both sides alike.
+- The second was ended by the production host's upgrade to 0.109.0.
+
+Both records are in the evidence.
+
 ## Final-tree comparison
 
 The [final-tree evidence](results/read-final-2026-10-29.json) compares `dc39763f`
