@@ -171,7 +171,11 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
         ).pipe(Effect.ignore);
         return retried === null ? { proved: proof } : { proved: proof, retried: true as const };
       }
-      if (state === "missing") {
+      // A forge with no pipeline for the head says pending, without a job.
+      const absent =
+        state === "missing" ||
+        (state === "pending" && read.head === head && read.id === null && read.url === null);
+      if (absent && retried === null) {
         const review = yield* forge.readReview(ref, cwd, asked.run);
         const mergeable = review.ok ? review.mergeable : null;
         if (conflictsWithTarget(mergeable))
