@@ -7782,8 +7782,8 @@ for (const name of ["gitlab", "github"] as const) {
           const prompt = yield* asked(runId, "mr");
           expect(prompt).toContain(
             name === "gitlab"
-              ? "glab api --hostname 'gitlab.example.com' --method POST 'projects/group%2Fapp/merge_requests/31/notes' -F body=@<file>"
-              : "gh pr comment '31'",
+              ? "glab api --hostname gitlab.example.com --method POST 'projects/group%2Fapp/merge_requests/31/notes' -F body=@<file>"
+              : "gh pr comment 31 --repo owner/repo --body-file <file>",
           );
           expect(prompt).toContain(
             name === "gitlab"
