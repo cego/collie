@@ -10441,6 +10441,55 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
+    `release on ${name}: a head pushed during the review that still conflicts with its target is not taken or checked until its branch takes the target`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, reviewed, changed } = yield* releasable(name);
+          const runId = `r-pushed-conflicting-${name}`;
+          yield* checkedBy(runId, "check");
+          yield* rig.queueOutputs([PACKAGED]);
+          const checkedAt = Effect.map(readVerifications(evidenceDir(dir, runId)), (all) =>
+            Arr.map(all, (one) => one.end.head_sha),
+          );
+          const { pushed, taken } = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                const pushed = yield* pushedBySomebody(head);
+                yield* changed({ head: pushed, mergeable: "conflict" });
+                yield* run.answer("go-1", "Release");
+                expect(
+                  yield* until(
+                    () => parkedWhy(runId),
+                    (why) => why !== "",
+                  ),
+                ).toBe(
+                  `${mrLabel(mr)} cannot be released: ${CONFLICTS}. The Run goes on once that is repaired.`,
+                );
+                expect(yield* checkedAt).not.toContain(pushed);
+                expect(yield* revParse("HEAD", reviewed)).toBe(head);
+                const taken = yield* pushedBySomebody(pushed);
+                yield* changed({ head: taken, mergeable: "yes" });
+                const go = yield* goAsked(run.asked, "go-2");
+                expect(go.prompt).toContain(pipe(taken, Str.slice(0, 8)));
+                yield* run.answer("go-2", "Finish");
+                yield* ended(run.status);
+                return { pushed, taken };
+              }),
+          );
+          yield* bin.restore();
+          expect(yield* revParse("HEAD", reviewed)).toBe(taken);
+          const heads = yield* checkedAt;
+          expect(heads).toContain(taken);
+          expect(heads).not.toContain(pushed);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     `release on ${name}: a merge the forge refuses while the merge request still reads ready, and no conflicts with its target, fails the Run and asks no further go`,
     () =>
       runEffect(
