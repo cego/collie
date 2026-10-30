@@ -1974,8 +1974,8 @@ are retained under `handoffs/measure/fix1-final-head-suite/` and
 interrupted observation, not a completed timing or correctness result. No replacement
 measurement was started.
 
-The latest source has targeted cost and preservation proofs, but no qualifying
-whole-suite measurement. The last completed pristine candidate measurement remains
+At the end of fix round 1, the source had targeted cost and preservation proofs, but
+no qualifying whole-suite measurement. Its last completed pristine candidate took
 663.71 seconds on `0716a737`. No required four-suite responsiveness window has been
 observed. Both remain blocking findings, with no claimed performance gain or issue
 closure. Further per-test cost reduction and a qualifying natural queue observation
@@ -2042,6 +2042,33 @@ to 7.309 seconds. The complete placement and finished-poll files retained all 75
 tests and 305 assertions. Wait schedules, limits and final assertions are unchanged.
 Raw observations remain under `handoffs/measure/fix2-status-pairs/`; this focused
 CPU reduction does not establish either whole-suite acceptance target.
+
+Qualification `fix2b` ran on `196d68609294168d215fd2c1cc8c48b325f39237`.
+Its 300 idle probes had no whole suite held or waiting and a p95 of 9.012 ms.
+The whole suite took 719.34 seconds including builds: 5,215 passed, 11 skipped
+and one failed, across all 5,227 tests. Its cgroup used 6,309.39 CPU-s. The 718
+owned samples had no whole-suite waiter and no qualifying four-suite sample.
+Mean Machine and suite use were 20.66 and 8.78 cores. CPU stalls averaged 51.60%;
+I/O and memory stalls averaged 0.214% and 0.079%. The scope's ancestors had no
+CPU quota, restricted CPU set or recorded throttling. These shared-Machine
+observations establish no causal suite speedup.
+
+The failure was Helle's resume test: it granted the fake claim after 30 ms before
+the client had necessarily read the pending state. The fixture now waits for the
+client's first status output before that same 30 ms wait and grant. Every assertion
+is retained. The case passed 20 repetitions; its full file passed all 54 tests and
+138 assertions. This repair does not turn the failed whole-suite observation green.
+
+The installed CLI changed from 0.108.0 to 0.108.2 five seconds before `fix2b` ended;
+the measured suite used its own executables built from the frozen candidate.
+The host stopped afterward, at 10:18:54 UTC, and restarted at 10:19:00 UTC.
+That stop interrupted the separate passive observer after 1,324 of its planned
+1,800 samples. None showed a whole-suite waiter. Every sample and the exit-130
+record remain in `handoffs/measure/fix2-natural-queue-interrupted.json` and its raw
+directory. The completed whole-suite result, context and integrity checks remain
+in `handoffs/measure/fix2b-*`; no completed observation was retried or discarded.
+Both original acceptance targets remain unmet or unproved. The CI correctness
+gate remains the `test` job; no local `check` gate was run.
 
 ### Test-suite measurements, 12 October 2026
 

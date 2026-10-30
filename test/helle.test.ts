@@ -1151,6 +1151,10 @@ test("a resumed Run does not ask again, and waits rather than assuming it holds 
           }),
         );
 
+        yield* until(
+          () => Effect.succeed(lines.length),
+          (count) => count > 0,
+        );
         yield* Effect.sleep(30);
         fake.projects[0]!.holder = { user_id: ME, display_name: "mk" };
         fake.projects[0]!.queue = [];
