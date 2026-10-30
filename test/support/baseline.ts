@@ -9790,7 +9790,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(model.merges?.map((one) => one.sha)).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* clearance(runId, "tag")).toBe(
-            `Cleared for this step: a release commit to ${url}'s default branch, where the repository makes one; pushing an annotated version tag of ${url} to origin; creating its release on ${url}, where the package publishes from its tags; watching the tag's pipeline on ${url}, never playing a production job.`,
+            `Cleared for this step: a release commit to ${url}'s default branch, where it makes one; pushing an annotated version tag to origin; creating its release there, where the package publishes from its tags; watching the tag's pipeline there, never playing a production job.`,
           );
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
           for (const step of ["assess", "tag"])
@@ -10372,7 +10372,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(answering).toContain("use a map here");
           for (const quiet of unopened) expect(answering).not.toContain(quiet.body);
           expect(yield* clearance(runId, "answer-1")).toBe(
-            `Cleared for this step: committing to the merge request's source branch on ${url} and pushing it with a plain push, never a force push; never posting on ${url} or resolving a thread there: Collie replies.`,
+            `Cleared for this step: committing to the merge request's source branch on ${url} and pushing it with a plain push, never a force push; never posting or resolving a thread there: Collie replies.`,
           );
           expect(yield* revParse("HEAD", reviewed)).toBe(fix);
           const proved = (yield* readVerifications(evidenceDir(dir, runId))).map(
@@ -11578,6 +11578,10 @@ const stageable = (
 /** The production job left waiting on the tag's pipeline, as the forge links it. */
 const waiting = (name: MrForge) => `\`deploy-production\` at ${tagJob(name, "deploy-production")}`;
 
+/** A Clearance names the job by its path under the repository it names once. */
+const clearedJob = (name: MrForge) =>
+  `\`deploy-production\` at ${name === "gitlab" ? "/-/jobs/4" : "/actions/runs/7/job/4"}`;
+
 const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytiger"] };
 
 {
@@ -11862,10 +11866,10 @@ for (const name of ["gitlab", "github"] as const) {
           expect(model.merges?.map((one) => one.sha)).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* clearance(runId, "tag")).toBe(
-            `Cleared for this step: a release commit to ${url}'s default branch, where it makes one; pushing an annotated version tag to origin, with no forge release; playing, retrying and watching the tag pipeline's stage deploy and check jobs until only production jobs waiting to be started are left; rolling stage back to the newest release production carries; never a production job.`,
+            `Cleared for this step: a release commit to ${url}'s default branch, where it makes one; pushing an annotated version tag to origin, with no forge release; playing, retrying and watching the tag's stage deploy and check jobs; rolling stage back to the newest release production carries; never a production job.`,
           );
           expect(yield* clearance(runId, "production")).toBe(
-            `Cleared for this step: playing ${waiting(name)} on ${url}, and no other job.`,
+            `Cleared for this step: playing ${clearedJob(name)} on ${url}, and no other job.`,
           );
           expect(yield* asked(runId, "tag")).toContain("`deploy-stage`");
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
@@ -12344,11 +12348,11 @@ for (const name of ["gitlab", "github"] as const) {
           expect(model.merges?.map((one) => one.sha)).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* clearance(runId, "stage")).toBe(
-            `Cleared for this step: playing, retrying and watching ${url}'s stage deploy job and stage check jobs (e2e-stage, smoke or the like) of the merge request's pipeline; rolling ${url}'s stage back to the newest release production carries; never a production job.`,
+            `Cleared for this step: playing, retrying and watching ${url}'s stage deploy job and stage check jobs (e2e-stage, smoke or the like) of the merge request's pipeline; rolling stage back to the newest release production carries; never a production job.`,
           );
           expect(yield* asked(runId, "stage")).toContain("`deploy-stage`");
           expect(yield* clearance(runId, "production")).toBe(
-            `Cleared for this step: playing ${waiting(name)} on ${url}, and no other job.`,
+            `Cleared for this step: playing ${clearedJob(name)} on ${url}, and no other job.`,
           );
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
           for (const step of ["stage", "tag"]) expect(yield* asked(runId, step)).not.toMatch(other);
