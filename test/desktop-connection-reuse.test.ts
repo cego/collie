@@ -9,7 +9,7 @@ import { readConnectionLogin } from "../src/connection-login";
 import { probeGitlab } from "../src/connection-probes";
 import { writeConfigValue } from "../src/config";
 import { GITLAB_HOST } from "../src/gitlab-token";
-import { githubLogin, reuseGitlab } from "../desktop/src/bun/connection-reuse";
+import { githubLogin, readBack, reuseGitlab } from "../desktop/src/bun/connection-reuse";
 import { onboardingSkips, ranWith } from "../desktop/src/bun/onboarding";
 import { credentialsFile, giveToken, giveGithub } from "../desktop/src/bun/credentials";
 import { connectionCards } from "../desktop/src/shared/connections";
@@ -171,6 +171,40 @@ test("Use glab's login from the laptop reaches a VM whose glab defaults to gitla
         detail: `${GITLAB_HOST} as mk`,
       });
       expect(yield* probeGitlab(laptop.pluginEnv(), laptopRun)).toMatchObject({ state: "ok" });
+    }),
+  ));
+
+test("A Machine given the login that still reads without it is said not to have it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const said = yield* readBack(
+        [
+          { name: "vm-mk", failed: null },
+          { name: "mini", failed: "glab refused the login; check the token and host" },
+          { name: "mac", failed: null },
+          { name: "gone", failed: null },
+        ],
+        (name) =>
+          name === "vm-mk"
+            ? Effect.succeed({
+                state: "absent" as const,
+                detail: "no GitLab login for gitlab.com",
+                fix: "glab auth login --hostname gitlab.com",
+              })
+            : name === "mac"
+              ? Effect.succeed({
+                  state: "ok" as const,
+                  account: "mk",
+                  detail: "gitlab.cego.dk as mk",
+                })
+              : Effect.fail("not connected"),
+      );
+      expect(said).toEqual([
+        { name: "vm-mk", failed: "given, but it reads no GitLab login for gitlab.com" },
+        { name: "mini", failed: "glab refused the login; check the token and host" },
+        { name: "mac", failed: null },
+        { name: "gone", failed: "given, but it could not be read back; refresh Connections" },
+      ]);
     }),
   ));
 

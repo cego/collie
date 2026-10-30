@@ -1575,6 +1575,7 @@ The **With it** and **Without it** text comes from those declarations; a **needs
 
 When a Machine already has a GitLab login, **Use glab's login** reads its host and token through that host's channel.
 Desktop keeps the token and gives it to the missing Machines on stdin.
+It then reads each of them again: one that still reads no working login is counted as not given, with what it reads.
 If no login is found, **Connect** opens the configured GitLab's token page with **Collie** and both scopes filled in.
 Then choose **Paste from clipboard**. **Use another GitLab…** reveals the host setting.
 
