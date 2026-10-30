@@ -9756,6 +9756,7 @@ const agentPush = (
       sha,
       writes: [
         { path: `${rig.projectDir}/.git/refs/heads/feature`, text: `${sha}\n` },
+        { path: `${rig.root}/reviewed/pushed.txt`, text: `${parent}\n` },
         forge.holding(moved),
       ],
     };
