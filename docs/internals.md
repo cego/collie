@@ -92,6 +92,8 @@ SQLite file. The registry in `engine.ts` loads a module into a generation of its
 value came from, its options, its decisions and its receipts. The request id is the claim:
 the same request twice is one Run, and a Run recorded and not yet handed to the engine is
 handed over when the host starts again ([ADR-0017](adr/0017-one-request-is-one-run.md)).
+A starting host registers every saved generation before a Run it recovers looks one up, so a
+parent resumed in the swap reads a child of any generation.
 
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one recorded under `running-checks/`, or a process marked with this
@@ -997,7 +999,8 @@ checkouts belong to the Run's own repository. Remote paths and host-qualified id
 are checked, including URLs with ports and SCP syntax. The registry lends each workflow
 its Machine report using the same Run views and `reportOf` reading as the CLI, including
 Run identity, parent and status.
-Recovered workflows read reports after every saved generation has been registered.
+Recovered workflows read reports after every saved generation has been registered, the same
+gate a Run's lookup of its own generation waits on.
 
 An adapter runs its commands through a `Runner` (`src/mr.ts`), the same seam the tests
 fake. `test/support/forge.ts` is a fake of each forge built on one model of a forge, with
