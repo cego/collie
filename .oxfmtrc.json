@@ -19,6 +19,8 @@
     "assets/brand/**",
     // herdr prints this; `bun run contract:regen` writes it verbatim and CI diffs it.
     "herdr-api-schema.json",
+    // herdr-core's released.openrpc.json, copied verbatim for the pin.
+    "hc.openrpc.json",
     "tools/oxlint/anti-slop/**"
   ]
 }

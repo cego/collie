@@ -1,0 +1,343 @@
+// The live probe: `src/hc.ts`'s decoders against the real `hc` that `hc-pin.json` names.
+// The contract test compares the decoders with the schema; only this catches a core that
+// sends less than its schema promises (hc 0.1.14's `terminal.list` without `machines`).
+//
+//   bun run probe:hc
+//
+// It downloads and checksums the pinned release, starts it on a session of its own with
+// scratch XDG directories, and drives run, list, get, read, send, keys, events and attach.
+// Then it stops that core, and fails if a process of the binary is still running or core's
+// default state, config or runtime directory changed.
+
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as BunRuntime from "@effect/platform-bun/BunRuntime";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import {
+  Cause,
+  Config,
+  Console,
+  Duration,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Queue,
+  Runtime,
+  Schema,
+  Stream,
+} from "effect";
+import * as Digest from "effect/crypto/Digest";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import {
+  applyNote,
+  connect,
+  Kind,
+  snapshotOf,
+  type HcConnection,
+  type HcNote,
+  type HcReply,
+} from "../src/hc";
+
+const ROOT = new URL("..", import.meta.url).pathname;
+const Pin = Schema.Struct({
+  version: Schema.String,
+  sha256: Schema.Record(Schema.String, Schema.String),
+});
+
+const fail = (message: string) => Effect.fail(new Cause.UnknownError(message, message));
+
+/** The release target names hc uses, for the platforms Collie ships. */
+const target = () => {
+  const os = process.platform === "darwin" ? "macos" : "linux";
+  const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+  return `${os}-${arch}`;
+};
+
+/** Downloads the pinned archive, checks it against the pin, and unpacks `herdr-core` into `dir`. */
+const fetchPinned = Effect.fn("HcProbe.fetchPinned")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const digest = yield* Digest.Digest;
+  const pin = yield* Schema.decodeEffect(Schema.fromJsonString(Pin))(
+    yield* fs.readFileString(`${ROOT}hc-pin.json`),
+  );
+  const on = target();
+  const want = pin.sha256[on];
+  if (want === undefined) return yield* fail(`hc-pin.json pins no hc for ${on}`);
+  const url = `https://releases.herdr.dev/core/${pin.version}/herdr-core-${on}.tar.gz`;
+  const response = yield* HttpClient.get(url);
+  if (response.status !== 200) return yield* fail(`${url} answered ${response.status}`);
+  const bytes = new Uint8Array(yield* response.arrayBuffer);
+  const got = yield* digest.digestHex(Digest.sha256, bytes);
+  if (got !== want) return yield* fail(`${url} hashed ${got}, but hc-pin.json says ${want}`);
+  yield* fs.writeFile(`${dir}/hc.tar.gz`, bytes);
+  yield* run("tar", ["-xzf", `${dir}/hc.tar.gz`, "-C", dir, "herdr-core"], {});
+  yield* Console.error(`hc ${pin.version} ${on} sha256 ${got}`);
+  return `${dir}/herdr-core`;
+});
+
+const run = Effect.fn("HcProbe.run")(function* (
+  command: string,
+  args: ReadonlyArray<string>,
+  env: Record<string, string>,
+) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const child = yield* spawner.spawn(
+    ChildProcess.make(command, args, {
+      env,
+      extendEnv: false,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    }),
+  );
+  const [stdout, stderr, code] = yield* Effect.all(
+    [
+      child.stdout.pipe(Stream.decodeText(), Stream.mkString),
+      child.stderr.pipe(Stream.decodeText(), Stream.mkString),
+      child.exitCode,
+    ],
+    { concurrency: "unbounded" },
+  );
+  if (code !== 0) return yield* fail(`${command} ${Arr.join(args, " ")} exited ${code}: ${stderr}`);
+  return stdout;
+}, Effect.scoped);
+
+/**
+ * Every entry under each of `dirs`, by name and type: what a probe leaking into them would
+ * add or remove. Not contents, which a live core on the same Machine changes by itself.
+ */
+const fingerprint = Effect.fn("HcProbe.fingerprint")(function* (dirs: ReadonlyArray<string>) {
+  const fs = yield* FileSystem.FileSystem;
+  const lines: string[] = [];
+  for (const dir of dirs) {
+    if (!(yield* fs.exists(dir))) {
+      lines.push(`${dir} absent`);
+      continue;
+    }
+    for (const name of (yield* fs.readDirectory(dir, { recursive: true })).sort()) {
+      const info = yield* fs.stat(`${dir}/${name}`);
+      lines.push(`${dir}/${name} ${info.type}`);
+    }
+  }
+  return lines;
+});
+
+/** Pids whose executable is `binary`, read from /proc where there is one. */
+const runningFrom = Effect.fn("HcProbe.runningFrom")(function* (binary: string) {
+  const fs = yield* FileSystem.FileSystem;
+  if (!(yield* fs.exists("/proc/self/exe"))) return [];
+  const pids = Arr.filter(yield* fs.readDirectory("/proc"), (name) => /^\d+$/.test(name));
+  const running: string[] = [];
+  for (const pid of pids) {
+    const exe = yield* fs.readLink(`/proc/${pid}/exe`).pipe(Effect.orElseSucceed(() => ""));
+    if (exe === binary || exe === `${binary} (deleted)`) running.push(pid);
+  }
+  return running;
+});
+
+const within = <A, E, R>(what: string, effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.timeoutOrElse({
+      duration: Duration.seconds(30),
+      orElse: () => fail(`timed out waiting for ${what}`),
+    }),
+  );
+
+const expect = (ok: boolean, what: string) => (ok ? Effect.void : fail(`expected ${what}`));
+
+const untilRead = (hc: HcConnection, terminal: string, line: string) =>
+  within(
+    `${terminal} to print ${line}`,
+    Effect.gen(function* () {
+      for (;;) {
+        const read = yield* hc.call("terminal.read", { terminal });
+        if (Arr.some(pipe(read.text, Str.split("\n")), (l) => Str.trimEnd(l) === line)) return read;
+        yield* Effect.sleep("100 millis");
+      }
+    }),
+  );
+
+const plain = Effect.fn("HcProbe.plain")(function* (socket: string, cwd: string) {
+  const events = yield* connect(socket);
+  yield* events.call("hello", { generation: 1 });
+  const subscribed: HcReply<"events.subscribe"> = yield* events.call("events.subscribe", {});
+
+  const api = yield* connect(socket);
+  const hello = yield* api.call("hello", { generation: 1 });
+  yield* expect(hello.generation === 1 && !hello.framed, "a plain hello at generation 1");
+
+  const echo = yield* api.call("terminal.run", {
+    argv: ["sh", "-c", 'echo ready; read line; echo "got: $line"'],
+    name: "probe-echo",
+    cwd,
+    no_parent: true,
+  });
+  const list = yield* api.call("terminal.list", {});
+  yield* expect(
+    Arr.some(list.terminals, (t) => t.address === echo.address),
+    "the new terminal in terminal.list",
+  );
+  yield* api.call("terminal.get", { terminal: echo.address });
+  yield* untilRead(api, echo.address, "ready");
+  yield* api.call("terminal.send", { terminal: echo.address, text: "hello" });
+
+  const notes: HcNote[] = [];
+  yield* within(
+    `${echo.address} to finish`,
+    Effect.gen(function* () {
+      for (;;) {
+        const note = yield* Queue.take(events.notes);
+        notes.push(note);
+        if (
+          note.method === "event" &&
+          note.params.type === "finished" &&
+          note.params.terminal === echo.address
+        )
+          return;
+      }
+    }),
+  );
+  yield* untilRead(api, echo.address, "got: hello");
+  const final = yield* api.call("terminal.get", { terminal: echo.address });
+  const seen = Arr.reduce(notes, snapshotOf(subscribed), applyNote).terminals.get(echo.address);
+  yield* expect(
+    seen?.state === "finished" &&
+      seen.exit_code === 0 &&
+      final.state === "finished" &&
+      final.exit_code === 0,
+    "the snapshot built from events to agree with terminal.get",
+  );
+
+  const keyed = yield* api.call("terminal.run", {
+    argv: ["sh", "-c", 'read line; echo "keys: $line"'],
+    name: "probe-keys",
+    cwd,
+    no_parent: true,
+  });
+  yield* api.call("terminal.keys", { terminal: keyed.address, keys: ["o", "k", "enter"] });
+  yield* untilRead(api, keyed.address, "keys: ok");
+});
+
+const framed = Effect.fn("HcProbe.framed")(function* (socket: string, cwd: string) {
+  const viewer = yield* connect(socket);
+  const hello = yield* viewer.call("hello", { generation: 1, framed: true });
+  yield* expect(hello.framed, "hello to switch to framed mode");
+  const target = yield* viewer.call("terminal.run", {
+    argv: ["sh", "-c", 'echo paint-marker; read keys; echo "keys: $keys"; stty size; exit 3'],
+    name: "probe-attach",
+    cwd,
+    no_parent: true,
+  });
+  yield* untilRead(viewer, target.address, "paint-marker");
+  const attach = yield* viewer.call("terminal.attach", {
+    terminal: target.address,
+    cols: 80,
+    rows: 24,
+  });
+  const frames = yield* viewer.channel(attach.channel);
+  const decoder = new TextDecoder();
+  let output = "";
+  let close: Uint8Array | undefined;
+  const until = (what: string, done: () => boolean) =>
+    within(
+      what,
+      Effect.gen(function* () {
+        while (!done()) {
+          const frame = yield* Queue.take(frames);
+          if (frame.kind === Kind.DATA) output += decoder.decode(frame.payload);
+          if (frame.kind === Kind.CLOSE) close = frame.payload;
+        }
+      }),
+    );
+  yield* until("the first paint", () => pipe(output, Str.includes("paint-marker")));
+  const size = new Uint8Array(4);
+  new DataView(size.buffer).setUint16(0, 100, true);
+  new DataView(size.buffer).setUint16(2, 30, true);
+  yield* viewer.send(attach.channel, Kind.RESIZE, size);
+  yield* viewer.send(attach.channel, Kind.DATA, new TextEncoder().encode("abc\r"));
+  yield* until("CLOSE", () => close !== undefined);
+  const reason = decoder.decode(close);
+  yield* expect(
+    pipe(output, Str.includes("keys: abc")),
+    `the keys sent to reach the program, in ${output}`,
+  );
+  yield* expect(pipe(output, Str.includes("30 100")), "the resize to reach the program's terminal");
+  yield* expect(
+    /"reason":"exited"/.test(reason) && /"exit_code":3/.test(reason),
+    `CLOSE exited 3, not ${reason}`,
+  );
+});
+
+const program = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const home = yield* Config.String("HOME");
+  const xdg = (name: string, fallback: string) =>
+    Config.String(name).pipe(Config.withDefault(fallback));
+  const uid = process.getuid?.() ?? 0;
+  const defaults = [
+    `${yield* xdg("XDG_STATE_HOME", `${home}/.local/state`)}/herdr-core`,
+    `${yield* xdg("XDG_CONFIG_HOME", `${home}/.config`)}/herdr-core`,
+    `${yield* xdg("XDG_RUNTIME_DIR", `/run/user/${uid}`)}/herdr-core`,
+  ];
+  const before = yield* fingerprint(defaults);
+
+  const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hc-probe-" });
+  for (const sub of ["state", "config", "run"])
+    yield* fs.makeDirectory(`${dir}/${sub}`, { mode: 0o700 });
+  const binary = yield* fetchPinned(dir);
+  const socket = `${dir}/run/hc.sock`;
+  // Only what hc and the probe's shells need: nothing that names a live core, herdr or agent.
+  const env = {
+    PATH: yield* Config.String("PATH"),
+    HOME: home,
+    HC_SESSION: "collie-probe",
+    HC_SOCKET: socket,
+    XDG_STATE_HOME: `${dir}/state`,
+    XDG_CONFIG_HOME: `${dir}/config`,
+    XDG_RUNTIME_DIR: `${dir}/run`,
+  };
+
+  const probed = yield* Effect.exit(
+    Effect.gen(function* () {
+      yield* run(binary, ["server", "start", "--json"], env);
+      yield* plain(socket, dir).pipe(Effect.scoped);
+      yield* framed(socket, dir).pipe(Effect.scoped);
+    }),
+  );
+  yield* run(binary, ["server", "stop", "--json"], env).pipe(Effect.ignore);
+  const left = yield* runningFrom(binary);
+  for (const pid of left) process.kill(Number(pid));
+  const after = yield* fingerprint(defaults);
+
+  const problems = [
+    ...(Exit.isFailure(probed) ? [`probe: ${Cause.pretty(probed.cause)}`] : []),
+    ...Arr.map(left, (pid) => `pid ${pid} still ran ${binary} after the core stopped`),
+    ...Arr.map(
+      Arr.difference(after, before),
+      (line) => `core's default directories gained ${line}`,
+    ),
+    ...Arr.map(Arr.difference(before, after), (line) => `core's default directories lost ${line}`),
+  ];
+  for (const problem of problems) yield* Console.error(problem);
+  yield* Console.error(problems.length === 0 ? "probe: every reply decoded" : "probe: FAILED");
+  return problems.length === 0 ? 0 : 1;
+});
+
+BunRuntime.runMain(
+  program.pipe(
+    Effect.scoped,
+    Effect.tapCause((cause) => Console.error(Cause.pretty(cause))),
+    Effect.provide(Layer.mergeAll(BunServices.layer, Digest.layerWebCrypto, FetchHttpClient.layer)),
+  ),
+  {
+    disableErrorReporting: true,
+    teardown: (exit, onExit) =>
+      Exit.isSuccess(exit)
+        ? onExit(exit.value === 0 ? 0 : 1)
+        : Runtime.defaultTeardown(exit, onExit),
+  },
+);

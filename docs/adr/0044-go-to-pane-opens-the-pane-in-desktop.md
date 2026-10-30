@@ -1,5 +1,7 @@
 # Go to pane opens the pane in Desktop, over the Machine's own connection
 
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): Go to pane attaches to a core terminal instead of running herdr's pane controller.
+
 **Status: accepted, built.** Amended by
 [ADR-draft-a-blocked-link-rides-the-machines-ssh-connection](draft-a-blocked-link-rides-the-machines-ssh-connection.md):
 Go to pane rides the Machine's shared SSH connection, which outlives Desktop. It replaces the sentence in

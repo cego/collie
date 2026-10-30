@@ -1,0 +1,9 @@
+{
+  "comment": "The hc Collie is verified against. To bump: set version and sha256 from https://releases.herdr.dev/core/<version>/manifest.json, copy that release's released.openrpc.json to hc.openrpc.json, then pass the contract test and `bun run probe:hc`.",
+  "version": "0.1.14",
+  "schema": "hc.openrpc.json",
+  "sha256": {
+    "linux-x86_64": "e9dbabdead0ce0ce3de51b6f54cc9549efedbb41b2f8448b6932ab0d1442343e",
+    "macos-aarch64": "ca524329d2e0630219550055dcc71f42aafd85fba356e0d543d6f51244487970"
+  }
+}

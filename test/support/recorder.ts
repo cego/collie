@@ -1,5 +1,6 @@
-// Test rig: a temp plugin sandbox, a fake `herdr` on HERDR_BIN_PATH and a fake
-// socket on HERDR_SOCKET_PATH, both recording into one ordered log.
+// Test rig: a temp plugin sandbox, a fake `herdr` on HERDR_BIN_PATH, a fake
+// socket on HERDR_SOCKET_PATH and, once started, a fake core, all recording into one
+// ordered log.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -7,6 +8,7 @@ import {
   Config,
   DateTime,
   Effect,
+  Exit,
   Fiber,
   FileSystem,
   Option,
@@ -21,6 +23,7 @@ import {
 import { readEnv, type PluginEnv } from "../../src/env";
 import { Herdr } from "../../src/herdr";
 import { fakeHerdr, writeFakeHerdrShim } from "./fake-herdr-core";
+import { serveFakeHc } from "./fake-hc";
 
 const JsonString = Schema.fromJsonString(Schema.Json);
 const JsonObjectString = Schema.fromJsonString(Schema.JsonObject);
@@ -36,7 +39,7 @@ const RpcRequest = Schema.Struct({
 const RpcRequestString = Schema.fromJsonString(RpcRequest);
 
 const CallSchema = Schema.Struct({
-  transport: Schema.Union([Schema.Literal("cli"), Schema.Literal("rpc")]),
+  transport: Schema.Literals(["cli", "rpc", "core"]),
   cmd: Schema.String,
   argv: Schema.optionalKey(Schema.Array(Schema.String)),
   method: Schema.optionalKey(Schema.String),
@@ -194,6 +197,7 @@ export class Rig {
   readonly projectDir: string;
   private listener: { stop(closeActiveConnections?: boolean): void } | null = null;
   private socketFiber: Fiber.Fiber<void> | null = null;
+  private coreScope: Scope.Closeable | null = null;
   private readonly gone: string[] = [];
 
   private constructor(
@@ -665,6 +669,20 @@ export class Rig {
     });
   }
 
+  /** A fake core on a socket of its own, serving until the rig closes. */
+  startCore() {
+    const socketPath = this.path.join(this.root, "hc.sock");
+    const logPath = this.logPath;
+    const setScope = (scope: Scope.Closeable) => {
+      this.coreScope = scope;
+    };
+    return Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      setScope(scope);
+      return yield* serveFakeHc(socketPath, logPath, scope);
+    });
+  }
+
   private requestsFrom(chunk: string): ReadonlyArray<Schema.Schema.Type<typeof RpcRequest>> {
     return Arr.flatMap(
       Arr.filter(Str.split(chunk, "\n"), (line) => Str.trim(line) !== ""),
@@ -755,10 +773,12 @@ export class Rig {
   close(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
     const listener = this.listener;
     const socketFiber = this.socketFiber;
+    const coreScope = this.coreScope;
     const root = this.root;
     return Effect.gen(function* () {
       listener?.stop(true);
       if (socketFiber) yield* Fiber.interrupt(socketFiber);
+      if (coreScope) yield* Scope.close(coreScope, Exit.void);
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(root, { recursive: true, force: true });
     });

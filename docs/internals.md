@@ -792,6 +792,34 @@ is the binary when bun runs it from `/$bunfs/`), so a `bin/collie` started from 
 directory still finds its workflows and the host it starts. Only `bun src/main.ts` in development
 falls all the way through to the current directory.
 
+### Checking core against its schema and live
+
+Collie is moving its agents to herdr-core (`hc`,
+[ADR-draft-collie-runs-its-agents-in-herdr-core](adr/draft-collie-runs-its-agents-in-herdr-core.md)).
+`src/hc.ts` is its client: plain JSON-RPC on the session socket, frames after
+`hello {framed: true}`, and one decoder per method it calls, in `replies`. Nothing runs on
+core yet. `hc-pin.json` names the `hc` release and its archive checksums, and the
+`released.openrpc.json` of that release, committed as `hc.openrpc.json`.
+
+The wire is checked twice, because each check misses what the other catches:
+
+- `test/hc-contract.test.ts` builds every reply `hc.openrpc.json` allows for each method in
+  `replies` — each object with only its required fields and with all of them, and each
+  alternative of each field — and every one has to decode.
+- `bun run probe:hc` (`tools/hc-probe.ts`, in the `ci` workflow's `static` job) downloads the
+  pinned `hc`, checks it against the pin, starts it on `HC_SESSION=collie-probe` with
+  scratch XDG directories, and drives run, list, get, read, send, keys, events and attach
+  through the decoders. It fails if a reply does not decode, if a process of that binary
+  outlives the core it stopped, or if an entry appeared in or left core's default state,
+  config or runtime directory. Only this caught hc 0.1.14's `terminal.list` without the
+  `machines` its schema requires, which `replies` therefore allows to be missing.
+
+The test rig's fake core (`rig.startCore()`, `test/support/fake-hc.ts`) records each call in
+the rig's log beside the fake herdr's, and checks each of its own replies against
+`hc.openrpc.json`: one the schema forbids is answered as an error naming it, so the test
+that caused it fails. Bumping the pin is editing `hc-pin.json`, copying that release's
+`released.openrpc.json` over `hc.openrpc.json`, and passing both checks.
+
 ## The forge boundary
 
 Collie reaches GitLab and GitHub through one interface, `Forge` in `src/forge/forge.ts`,

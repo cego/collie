@@ -27,6 +27,8 @@ jobs:
       - run: bun run smoke
       # Proves the committed snapshot is what the pinned herdr really prints.
       - run: bun run contract:check
+      # The decoders in src/hc.ts against the hc that hc-pin.json names, run live.
+      - run: bun run probe:hc
 
   # No timings cache: every shard balances on the committed seed, so they partition alike.
   suite:

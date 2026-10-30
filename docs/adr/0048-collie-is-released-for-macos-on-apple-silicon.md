@@ -1,5 +1,7 @@
 # Collie is released for macOS on Apple silicon
 
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): Collie's signed release carries the `hc` it is verified against.
+
 **Status: accepted, to be built.**
 
 A colleague's Mac (macOS, arm64) could not install Collie. `install-desktop.sh` stops

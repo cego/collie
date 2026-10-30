@@ -1,5 +1,7 @@
 # The board is cards of Tasks, not a table of Runs
 
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): there is no Home workspace; the board is Desktop's, and the Ink board is a core terminal.
+
 **Status: accepted.** Built with the Control Plane redesign: three sections of cards, a
 decision answered on its own card, the record drawer, the card menu, and the nav rail,
 the views, the marks column and the key footer gone.

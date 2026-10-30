@@ -16,6 +16,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `flows.ts`             | What each action and pane entrypoint does                                                                                   |
 | `env.ts`               | The plugin environment herdr provides                                                                                       |
 | `herdr.ts`             | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest, and its config                                     |
+| `hc.ts`                | The client for herdr-core: its JSON-RPC and frames, a decoder per method, and the events snapshot                           |
 | `definitions.ts`       | Layers, personas, and the `extends:` override a persona fork writes                                                         |
 | `yaml.ts`              | Frontmatter split and write-back over Effect's YAML parser                                                                  |
 | `schema.ts`            | Shared Schema predicates used across boundary decoders                                                                      |

@@ -1,5 +1,7 @@
 # The Collie tab is the Herd's
 
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): there is no Collie tab or Home workspace; the board is Desktop's, and the Ink board is a core terminal.
+
 **Status: accepted.** Built, and the board is the Home's: ownership, the shortcut, the
 filters, the new-run target question and the legacy redirect all land here. What remains
 outstanding is live evidence rather than design — see Consequences.

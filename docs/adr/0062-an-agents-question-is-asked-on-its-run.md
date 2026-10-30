@@ -1,5 +1,7 @@
 # An agent's question is asked on its Run
 
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): a Codex agent's question is asked on its Run, as a Claude agent's is.
+
 renovate run-8dc1f7bf parked at 13:58:51Z on "has written nothing to batch.json yet"
 (investigation run-556cba08). Its two-hour Output budget ran out while the agent was still
 working: it had committed at 13:55 and was running the repository's suite. Part of those two
