@@ -1,5 +1,8 @@
 // Where a board click landed and what an Escape found, read over fake elements.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { escapeOn, inField, landedOn } from "../src/shared/board-clicks";
 
@@ -7,7 +10,7 @@ import { escapeOn, inField, landedOn } from "../src/shared/board-clicks";
 const element = (matches: ReadonlyArray<string>, isContentEditable = false) => ({
   isContentEditable,
   closest: (selectors: string) =>
-    selectors.split(",").some((one) => matches.includes(one.trim()))
+    Arr.some(Str.split(selectors, ","), (one) => matches.includes(Str.trim(one)))
       ? {
           getAttribute: (name: string) => (name === "data-card" ? "pc:a" : null),
           hasAttribute: (name: string) => matches.includes(`[${name}]`),
@@ -18,7 +21,9 @@ const element = (matches: ReadonlyArray<string>, isContentEditable = false) => (
 /** A window with an overlay of this role open, or none. */
 const page = (open: string | null) => ({
   querySelector: (selectors: string) =>
-    open !== null && selectors.includes('[data-state="open"]') && selectors.includes(open)
+    open !== null &&
+    pipe(selectors, Str.includes('[data-state="open"]')) &&
+    pipe(selectors, Str.includes(open))
       ? {}
       : null,
 });

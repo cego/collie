@@ -1,6 +1,10 @@
 // A Run's Review comment drafts, what each is about, and the one message they are sent as
 // (ADR-0051). No Bun-only import: the view bundles this.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
 import type { FileDiffMetadata, SelectedLineRange, SelectionSide } from "@pierre/diffs";
 
 /** A span of a plan file, by its path in the plan directory, quoted as selected. */
@@ -31,28 +35,34 @@ export interface Draft {
 export const addDraft = (drafts: ReadonlyArray<Draft>, draft: Draft): Draft[] => [...drafts, draft];
 
 export const editDraft = (drafts: ReadonlyArray<Draft>, id: string, text: string): Draft[] =>
-  drafts.map((draft) => (draft.id === id ? { ...draft, text } : draft));
+  Arr.map(drafts, (draft) => (draft.id === id ? { ...draft, text } : draft));
 
 export const removeDraft = (drafts: ReadonlyArray<Draft>, id: string): Draft[] =>
-  drafts.filter((draft) => draft.id !== id);
+  Arr.filter(drafts, (draft) => draft.id !== id);
 
 /** What is left once the drafts `sent` carried have gone; one edited since is kept. */
 export const clearSent = (drafts: ReadonlyArray<Draft>, sent: ReadonlyArray<Draft>): Draft[] =>
-  drafts.filter((draft) => !sent.some((one) => one.id === draft.id && one.text === draft.text));
+  Arr.filter(
+    drafts,
+    (draft) => !Arr.some(sent, (one) => one.id === draft.id && one.text === draft.text),
+  );
 
 /** A selection in a plan file as an anchor; null for one with nothing but whitespace. */
 export const planAnchor = (file: string, selected: string): PlanAnchor | null =>
-  selected.trim() === "" ? null : { _tag: "Plan", file, quote: selected };
+  Str.trim(selected) === "" ? null : { _tag: "Plan", file, quote: selected };
 
 /** The hunk of `file` that shows `line` on `side`, and where its lines start. */
 const hunkAt = (file: FileDiffMetadata, line: number, side: SelectionSide) =>
-  file.hunks
-    .map((hunk) =>
-      side === "additions"
-        ? { start: hunk.additionStart, count: hunk.additionCount, index: hunk.additionLineIndex }
-        : { start: hunk.deletionStart, count: hunk.deletionCount, index: hunk.deletionLineIndex },
-    )
-    .find(({ start, count }) => line >= start && line < start + count);
+  Option.getOrUndefined(
+    Arr.findFirst(
+      Arr.map(file.hunks, (hunk) =>
+        side === "additions"
+          ? { start: hunk.additionStart, count: hunk.additionCount, index: hunk.additionLineIndex }
+          : { start: hunk.deletionStart, count: hunk.deletionCount, index: hunk.deletionLineIndex },
+      ),
+      ({ start, count }) => line >= start && line < start + count,
+    ),
+  );
 
 export const inHunks = (file: FileDiffMetadata, line: number, side: SelectionSide) =>
   hunkAt(file, line, side) !== undefined;
@@ -63,7 +73,7 @@ const textAt = (file: FileDiffMetadata, line: number, side: SelectionSide) => {
   const text = (side === "additions" ? file.additionLines : file.deletionLines)[
     hunk.index + line - hunk.start
   ];
-  return text === undefined ? [] : [text.replace(/\r?\n$/, "")];
+  return text === undefined ? [] : [pipe(text, Str.replace(/\r?\n$/, ""))];
 };
 
 /**
@@ -92,15 +102,15 @@ const quoted = (quote: string) => {
   const cut =
     quote.length <= QUOTE_MAX
       ? quote
-      : `${quote.slice(0, head)}…${quote.slice(quote.length - (QUOTE_MAX - 1 - head))}`;
-  return cut
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
+      : `${pipe(quote, Str.slice(0, head))}…${pipe(quote, Str.slice(quote.length - (QUOTE_MAX - 1 - head)))}`;
+  return Arr.join(
+    Arr.map(Str.split(cut, "\n"), (line) => `> ${line}`),
+    "\n",
+  );
 };
 
 export const quoteOf = (anchor: Anchor) =>
-  anchor._tag === "Plan" ? anchor.quote : anchor.lines.join("\n");
+  anchor._tag === "Plan" ? anchor.quote : Arr.join(anchor.lines, "\n");
 
 export const locationOf = (anchor: Anchor) => {
   if (anchor._tag === "Plan") return `the plan's \`${anchor.file}\``;
@@ -113,7 +123,8 @@ export const counted = (drafts: ReadonlyArray<Draft>) =>
 
 export const compose = (drafts: ReadonlyArray<Draft>) => {
   const count = counted(drafts);
-  const items = drafts.map(
+  const items = Arr.map(
+    drafts,
     (draft, at) =>
       `${at + 1}. ${locationOf(draft.anchor)}\n${quoted(quoteOf(draft.anchor))}\n\n${draft.text}`,
   );
@@ -121,9 +132,9 @@ export const compose = (drafts: ReadonlyArray<Draft>) => {
     `${count} from the human in Desktop. Each names where it is, quotes what it is about, then says what they want.`,
     ...items,
   ];
-  if (drafts.some((draft) => draft.anchor._tag === "Plan"))
+  if (Arr.some(drafts, (draft) => draft.anchor._tag === "Plan"))
     message.push(
       "Revise the plan and tickets where these comments call for changes. Preserve the Run's scope and constraints. Leave its next-choice menu unanswered.",
     );
-  return message.join("\n\n");
+  return Arr.join(message, "\n\n");
 };

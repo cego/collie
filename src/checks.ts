@@ -2,6 +2,10 @@
 // drawer, `collie_run`, `collie_herd` and `collie run checks` all come through here, so
 // none of them can say a different thing about the same check.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect } from "effect";
 import { Buffer } from "node:buffer";
 import type { RunFacts } from "./runs";
@@ -48,10 +52,7 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
         return file.slice(Math.max(0, file.size - TAIL_READ)).text();
       }).pipe(
         Effect.map((text) =>
-          text
-            .split("\n")
-            .filter((line) => line !== "")
-            .slice(-count),
+          Arr.filter(Str.split(text, "\n"), (line) => line !== "").slice(-count),
         ),
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
       );
@@ -79,7 +80,8 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
         name: record.name,
         executable: "",
         argv: [],
-        pass: PASSES.find((pass) => pass === record.pass) ?? "check",
+        pass:
+          Option.getOrUndefined(Arr.findFirst(PASSES, (pass) => pass === record.pass)) ?? "check",
         round: record.round ?? null,
         revision: "",
         base: null,
@@ -92,7 +94,7 @@ const readOrNone = (run: RunFacts) =>
   readVerifications(run.evidence).pipe(Effect.orElseSucceed((): ReadonlyArray<Verification> => []));
 
 /** A record keeps the executable as PATH resolved it, an approved spec as it was written. */
-const commandOf = (executable: string) => executable.split("/").at(-1) ?? executable;
+const commandOf = (executable: string) => Str.split(executable, "/").at(-1) ?? executable;
 
 /** The median time of the last few completed runs of this name and arguments in this repository. */
 const usualOf = Effect.fn("Checks.usualOf")(function* (
@@ -109,15 +111,14 @@ const usualOf = Effect.fn("Checks.usualOf")(function* (
         record.name === marker.name &&
         commandOf(record.executable) === commandOf(marker.executable) &&
         record.argv.length === marker.argv.length &&
-        record.argv.every((word, at) => word === marker.argv[at])
+        Arr.every(record.argv, (word, at) => word === marker.argv[at])
       )
         same.push(record);
   }
-  const last = same
-    .sort((a, b) => a.at.localeCompare(b.at))
-    .slice(-USUAL_OF)
-    .map((record) => record.seconds * 1000)
-    .sort((a, b) => a - b);
+  const last = Arr.map(
+    same.sort((a, b) => pipe_(a.at, Str.localeCompare(b.at))).slice(-USUAL_OF),
+    (record) => record.seconds * 1000,
+  ).sort((a, b) => a - b);
   if (last.length === 0) return null;
   const mid = Math.floor(last.length / 2);
   return last.length % 2 === 1 ? last[mid]! : (last[mid - 1]! + last[mid]!) / 2;
@@ -161,7 +162,7 @@ export const runningCheck = Effect.fn("Checks.running")(function* (
     base: marker.base,
     elapsedMs: Number.isFinite(started) ? Math.max(0, now - started) : null,
     usualMs: yield* usualRemembered(run, runs, marker),
-    others: [...markers.keys()].filter((id) => id !== run.id).length,
+    others: Arr.filter([...markers.keys()], (id) => id !== run.id).length,
   };
   const facts = marker.job === undefined ? read : { ...read, job: marker.job };
   const log = marker.log ?? null;
@@ -210,14 +211,17 @@ export const followLog = Effect.fn("Checks.followLog")(function* (
   }
   yield* drain;
   if (pending.length > 0) yield* say(`${pending.toString("utf8")}\n`);
-  return (yield* readOrNone(run)).findLast((record) => record.log === log) ?? null;
+  return (
+    Option.getOrUndefined(Arr.findLast(yield* readOrNone(run), (record) => record.log === log)) ??
+    null
+  );
 });
 
 /** Every pass Collie finished for this Run, oldest first. */
 export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
-  return (yield* readOrNone(run))
-    .filter((record) => record.by === "collie")
-    .map((record): DonePass => ({
+  return Arr.map(
+    Arr.filter(yield* readOrNone(run), (record) => record.by === "collie"),
+    (record): DonePass => ({
       name: record.name,
       pass: record.pass ?? "check",
       round: record.round ?? null,
@@ -226,7 +230,8 @@ export const donePasses = Effect.fn("Checks.done")(function* (run: RunFacts) {
       revision: record.end.head_sha,
       at: record.at,
       log: record.log ?? null,
-    }));
+    }),
+  );
 });
 
 /** What the pass is for, in words. */
@@ -251,7 +256,7 @@ function doing(
     case "finish":
       return `${running} as the Run finishes`;
     case "ci":
-      return `Waiting on ${check.name}'s CI job ${check.job ?? ""} at ${(check.revision ?? "").slice(0, 12)}`;
+      return `Waiting on ${check.name}'s CI job ${check.job ?? ""} at ${pipe_(check.revision ?? "", Str.slice(0, 12))}`;
     case "check":
       return running;
   }

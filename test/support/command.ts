@@ -2,6 +2,7 @@
 // child's exit and spin the worker forever (oven-sh/bun#34069), so every later test in that
 // worker times out.
 
+import * as Str from "effect/String";
 import { Effect } from "effect";
 
 const signal = (child: Bun.Subprocess, name: NodeJS.Signals) => {
@@ -81,4 +82,4 @@ export const startDetached = (argv: ReadonlyArray<string>) =>
     'setsid "$@" >/dev/null 2>&1 </dev/null & while [ "$(ps -o sid= -p $!)" -ne $! ] 2>/dev/null; do :; done; echo $!',
     "sh",
     ...argv,
-  ]).pipe(Effect.map((ran) => Number(ran.stdout.trim())));
+  ]).pipe(Effect.map((ran) => Number(Str.trim(ran.stdout))));

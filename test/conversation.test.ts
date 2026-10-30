@@ -3,6 +3,7 @@
 // happily open. Plus that it survives the board closing, which is the whole reason it
 // is on disk at all.
 
+import * as Arr from "effect/Array";
 import { DateTime, Effect, FileSystem } from "effect";
 import { redact } from "../src/redact";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -43,13 +44,16 @@ afterEach(() =>
 );
 
 test("a credential is replaced by what kind of credential it was", () => {
-  const said = [
-    "the deploy fails with glpat-abcdefghij1234567890",
-    "and ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-    "try Bearer eyJhbGciOiJIUzI1NiJ9aaaaaaaaaaaaaaaaaaaa",
-    "GITLAB_TOKEN=hunter2hunter2hunter2",
-    "AKIAIOSFODNN7EXAMPLE is in the env too",
-  ].join("\n");
+  const said = Arr.join(
+    [
+      "the deploy fails with glpat-abcdefghij1234567890",
+      "and ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+      "try Bearer eyJhbGciOiJIUzI1NiJ9aaaaaaaaaaaaaaaaaaaa",
+      "GITLAB_TOKEN=hunter2hunter2hunter2",
+      "AKIAIOSFODNN7EXAMPLE is in the env too",
+    ],
+    "\n",
+  );
   const clean = redact(said);
 
   // The type survives, because "a GitLab token was in here" is the useful half.
@@ -102,8 +106,8 @@ test("the journal is what the board reads back after it is closed", () =>
 
       // A second process reading the same file is what "survives a restart" means here.
       const back = yield* read(file);
-      expect(back.map((turn) => turn.role)).toEqual(["human", "collie", "human"]);
-      expect((yield* tail(file, 10, "r1")).map((turn) => turn.text)).toEqual([
+      expect(Arr.map(back, (turn) => turn.role)).toEqual(["human", "collie", "human"]);
+      expect(Arr.map(yield* tail(file, 10, "r1"), (turn) => turn.text)).toEqual([
         "why is it on main?",
         "the branch input was empty",
       ]);
@@ -123,7 +127,9 @@ test("what is kept is the recent and the not-too-old", () => {
   });
   const nowMs = epoch;
 
-  expect(keep([turn("old", 40), turn("recent", 1)], nowMs).map((t) => t.id)).toEqual(["recent"]);
+  expect(Arr.map(keep([turn("old", 40), turn("recent", 1)], nowMs), (t) => t.id)).toEqual([
+    "recent",
+  ]);
 
   const many = Array.from({ length: MAX_TURNS + 10 }, (_, i) => turn(`t${i}`, 0));
   const kept = keep(many, nowMs);

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { ScheduleChange, ScheduleChanged, ScheduleEntry } from "../src/schedule-model";
@@ -23,19 +24,20 @@ const fakeMachine = (
   initial: ReadonlyArray<ScheduleEntry>,
   fails: { readonly reach?: boolean; readonly change?: ScheduleChange["change"] } = {},
 ) => {
-  const schedules = new Map(initial.map((one) => [one.name, one]));
+  const schedules = new Map(Arr.map(initial, (one) => [one.name, one]));
   const seen = new Map<string, ScheduleChanged>();
   const applied: Array<{ change: string; request: string }> = [];
   const refused = (reason: string) => Effect.fail({ reason });
   const door: ScheduleDoor = {
     name,
-    schedules: () =>
+    schedules: Effect.suspend(() =>
       fails.reach === true
         ? refused(`${name} did not answer`)
         : Effect.succeed({
             machine: { installation: `i-${name}`, hostname: name },
             schedules: [...schedules.values()],
           }),
+    ),
     changeSchedule: ({ change, request }) =>
       Effect.suspend(() => {
         const replay = seen.get(request);
@@ -96,8 +98,8 @@ test("a moved Schedule ends on the target only, resumed, with the checkout named
         tz: "UTC",
         start: { workflow: "proof", inputs: { note: "x" }, workspace: "/home/me/collie" },
       });
-      expect(to.applied.map((one) => one.change)).toEqual(["add", "resume"]);
-      expect(from.applied.map((one) => one.change)).toEqual(["remove"]);
+      expect(Arr.map(to.applied, (one) => one.change)).toEqual(["add", "resume"]);
+      expect(Arr.map(from.applied, (one) => one.change)).toEqual(["remove"]);
     }),
   ));
 
@@ -145,8 +147,8 @@ test("a move retried under its request id adds nothing and removes nothing twice
       const asked = { from: from.door, to: to.door, name: "daily", request: "move-1" };
       expect(yield* moveSchedule(asked)).toMatchObject({ ok: true });
       expect(yield* moveSchedule(asked)).toMatchObject({ ok: true });
-      expect(to.applied.map((one) => one.change)).toEqual(["add", "resume"]);
-      expect(from.applied.map((one) => one.change)).toEqual(["remove"]);
+      expect(Arr.map(to.applied, (one) => one.change)).toEqual(["add", "resume"]);
+      expect(Arr.map(from.applied, (one) => one.change)).toEqual(["remove"]);
       expect(to.schedules.get("daily")?.paused).toBe(false);
     }),
   ));

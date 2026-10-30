@@ -2,8 +2,12 @@
 // the Run finished, unless something still needs it
 // (ADR-draft-a-finished-runs-idle-agent-is-closed).
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, DateTime, Effect, FileSystem, Schema } from "effect";
+import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result } from "effect";
 import {
   forgetGone,
   idleAgentsSweeper,
@@ -40,7 +44,7 @@ const MIN_MS = 60_000;
 const HOUR_MS = 60 * MIN_MS;
 const TERMINAL = "t-impl";
 const TARGET = "impl of r1";
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 /** The Task's workspace with its shell, and the agent `runId` launched in it. */
 const arranged = (opts: { focused?: boolean; harness?: string; runId?: string } = {}) =>
@@ -117,7 +121,7 @@ const sweeper = (
 
 const closes = Effect.map(
   Effect.suspend(() => rig.cmds()),
-  (cmds) => cmds.filter((cmd) => cmd === "pane close").length,
+  (cmds) => Arr.filter(cmds, (cmd) => cmd === "pane close").length,
 );
 
 test("idle cleanup keeps an agent with a durable delivery waiting for it", () =>
@@ -163,9 +167,12 @@ test("a finished Run's agent idle for an hour is closed, and the Run's log says 
         { kind: "idle-agent", target: TARGET, bytes: 0, reason: "idle for 61 min" },
       ]);
       const calls = yield* rig.calls();
-      expect(calls.filter((call) => call.cmd === "pane close").map((c) => c.argv?.at(2))).toEqual([
-        "wT-p2",
-      ]);
+      expect(
+        Arr.map(
+          Arr.filter(calls, (call) => call.cmd === "pane close"),
+          (c) => c.argv?.at(2),
+        ),
+      ).toEqual(["wT-p2"]);
       expect(yield* runLog).toContain(
         "impl ended: idle for 61 min; its harness reported no transcript",
       );
@@ -190,11 +197,14 @@ test("a closed agent's workspace is kept with a shell where its pane was the las
         "host",
       );
       const cmds = yield* rig.cmds();
-      expect(cmds.filter((cmd) => cmd === "pane close")).toHaveLength(1);
-      expect(cmds.some((cmd) => cmd.startsWith("tab"))).toBe(true);
-      expect(cmds.findIndex((cmd) => cmd.startsWith("tab"))).toBeLessThan(
-        cmds.indexOf("pane close"),
-      );
+      expect(Arr.filter(cmds, (cmd) => cmd === "pane close")).toHaveLength(1);
+      expect(Arr.some(cmds, (cmd) => pipe_(cmd, Str.startsWith("tab")))).toBe(true);
+      expect(
+        Option.getOrElse(
+          Arr.findFirstIndex(cmds, (cmd) => pipe_(cmd, Str.startsWith("tab"))),
+          () => -1,
+        ),
+      ).toBeLessThan(cmds.indexOf("pane close"));
     }),
   ));
 
@@ -208,11 +218,20 @@ test("the Run's log names the transcript the harness reported into its control r
       const at = yield* Clock.currentTimeMillis;
       yield* fs.writeFileString(
         `${dir}/events.jsonl`,
-        [
-          asJson({ at, session: "s1", kind: "session" }),
-          asJson({ at, session: "s1", kind: "usage", tokens: 10, transcript: "/home/t/s1.jsonl" }),
-          "",
-        ].join("\n"),
+        Arr.join(
+          [
+            asJson({ at, session: "s1", kind: "session" }),
+            asJson({
+              at,
+              session: "s1",
+              kind: "usage",
+              tokens: 10,
+              transcript: "/home/t/s1.jsonl",
+            }),
+            "",
+          ],
+          "\n",
+        ),
       );
       yield* sweep(
         [sweeper([yield* finished(2 * HOUR_MS)], yield* idleFor(90 * MIN_MS))],
@@ -250,7 +269,7 @@ test("a builder idle while its Run's review and gate ran has the whole hour afte
         rig.stateDir,
         "host",
       );
-      expect(hour.remove.map((item) => item.reason)).toEqual(["idle for 61 min"]);
+      expect(Arr.map(hour.remove, (item) => item.reason)).toEqual(["idle for 61 min"]);
       expect(yield* runLog).toContain("impl ended: idle for 61 min;");
     }),
   ));
@@ -275,7 +294,7 @@ test("a Run the host reads with no finish time counts from when the sweep first 
         rig.stateDir,
         "host",
       );
-      expect(hour.remove.map((item) => item.reason)).toEqual(["idle for 61 min"]);
+      expect(Arr.map(hour.remove, (item) => item.reason)).toEqual(["idle for 61 min"]);
     }),
   ));
 
@@ -458,7 +477,7 @@ test("an agent typed into since it went idle is kept; one typed into before is n
 
       yield* override(yield* isoAgo(3 * HOUR_MS));
       const before = yield* sweeper([run], yield* idleFor(2 * HOUR_MS)).judge;
-      expect(before.remove.map((item) => item.target)).toEqual([TARGET]);
+      expect(Arr.map(before.remove, (item) => item.target)).toEqual([TARGET]);
 
       yield* override(yield* isoAgo(MIN_MS));
       const since = yield* sweep(
@@ -574,7 +593,7 @@ test("each close is judged again when it is made: an agent working since the lis
       const idle = yield* idleFor(2 * HOUR_MS);
       const run = yield* finished(3 * HOUR_MS);
       const listing = yield* sweeper([run], idle).judge;
-      expect(listing.remove.map((item) => item.target)).toEqual([TARGET]);
+      expect(Arr.map(listing.remove, (item) => item.target)).toEqual([TARGET]);
 
       const outcome = yield* sweeper([run], idle, { status: "working" }).remove(listing.remove[0]!);
       expect(outcome).toEqual({ kept: "working" });
@@ -606,7 +625,7 @@ test("an agent whose turn does not stop is kept with the reason, and tried again
       const stops: string[] = [];
       const ports: CompactionPorts = {
         served: {
-          gate: () => Effect.void,
+          gate: Effect.void,
           install: () => Effect.succeed({ args: [] }),
           request: () => Effect.die("unused"),
           poll: () => Effect.die("unused"),
@@ -630,7 +649,12 @@ test("an agent whose turn does not stop is kept with the reason, and tried again
       for (const _ of [1, 2]) {
         const judged = yield* sweep([sweeper([run], idle, { ports })], rig.stateDir, "host");
         expect(judged.remove).toEqual([]);
-        expect(judged.keep.map((one) => one.reason).join("\n")).toContain("impl is not stopped");
+        expect(
+          Arr.join(
+            Arr.map(judged.keep, (one) => one.reason),
+            "\n",
+          ),
+        ).toContain("impl is not stopped");
       }
       expect(stops).toEqual(["impl", "impl"]);
       expect(yield* closes).toBe(0);
@@ -702,9 +726,12 @@ test("a pane herdr restored without its name is the agent whose session it resum
         { kind: "idle-agent", target: TARGET, bytes: 0, reason: "idle for 61 min" },
       ]);
       const calls = yield* rig.calls();
-      expect(calls.filter((call) => call.cmd === "pane close").map((c) => c.argv?.at(2))).toEqual([
-        "wT-p9",
-      ]);
+      expect(
+        Arr.map(
+          Arr.filter(calls, (call) => call.cmd === "pane close"),
+          (c) => c.argv?.at(2),
+        ),
+      ).toEqual(["wT-p9"]);
       expect(yield* runLog).toContain(
         "impl ended: idle for 61 min; its harness reported no transcript",
       );
@@ -720,7 +747,7 @@ test("a restored pane that kept its name, on a new terminal, closes as the agent
         rig.stateDir,
         "host",
       );
-      expect(judged.remove.map((item) => item.target)).toEqual([TARGET]);
+      expect(Arr.map(judged.remove, (item) => item.target)).toEqual([TARGET]);
       expect(yield* closes).toBe(1);
     }),
   ));
@@ -766,7 +793,7 @@ test("a restored pane is proved after the registry dropped its agent and the hos
         rig.stateDir,
         "host",
       );
-      expect(later.remove.map((item) => item.target)).toEqual([TARGET]);
+      expect(Arr.map(later.remove, (item) => item.target)).toEqual([TARGET]);
     }),
   ));
 
@@ -799,7 +826,8 @@ test("the sweep records the session of an agent still on its launch's terminal",
       const fs = yield* FileSystem.FileSystem;
       const record = yield* fs.readFileString(`${rig.stateDir}/agents/r1/build.launch.json`);
       expect(
-        Schema.decodeUnknownSync(Schema.fromJsonString(Launched))(record).agentSession,
+        (yield* Schema.decodeEffect(Schema.fromJsonString(Launched))(record).pipe(Effect.orDie))
+          .agentSession,
       ).toEqual(SESSION);
     }),
   ));
@@ -825,7 +853,8 @@ test("a live Run's agent has the session herdr reports recorded, and is not judg
       const fs = yield* FileSystem.FileSystem;
       const record = yield* fs.readFileString(`${rig.stateDir}/agents/r1/build.launch.json`);
       expect(
-        Schema.decodeUnknownSync(Schema.fromJsonString(Launched))(record).agentSession,
+        (yield* Schema.decodeEffect(Schema.fromJsonString(Launched))(record).pipe(Effect.orDie))
+          .agentSession,
       ).toEqual(SESSION);
     }),
   ));
@@ -850,7 +879,8 @@ test("with idle_close_ms at 0 the sweep still records the session herdr reports"
       const fs = yield* FileSystem.FileSystem;
       const record = yield* fs.readFileString(`${rig.stateDir}/agents/r1/build.launch.json`);
       expect(
-        Schema.decodeUnknownSync(Schema.fromJsonString(Launched))(record).agentSession,
+        (yield* Schema.decodeEffect(Schema.fromJsonString(Launched))(record).pipe(Effect.orDie))
+          .agentSession,
       ).toEqual(SESSION);
     }),
   ));

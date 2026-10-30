@@ -1,3 +1,5 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Logger } from "effect";
 import { hostLogger, rotateInPlace } from "../src/host-log";
@@ -14,7 +16,7 @@ test("the host log starts again past its bound and keeps the one before it", () 
         for (let n = 1; n <= 10; n++) {
           yield* Effect.scoped(
             Effect.flatMap(hostLogger(file, 250), (logger) =>
-              Effect.log(`line ${n} ${"x".repeat(40)}`).pipe(
+              Effect.log(`line ${n} ${pipe_("x", Str.repeat(40))}`).pipe(
                 Effect.provide(Logger.layer([logger])),
               ),
             ),
@@ -42,7 +44,7 @@ test("kept output past its bound moves to the one before it, and its writer carr
         yield* rotateInPlace(file, 100);
         expect(yield* fs.exists(`${file}.1`)).toBe(false);
 
-        yield* write(`${"x".repeat(120)}\n`);
+        yield* write(`${pipe_("x", Str.repeat(120))}\n`);
         yield* rotateInPlace(file, 100);
         expect(yield* fs.readFileString(`${file}.1`)).toContain("small");
         yield* write("after\n");

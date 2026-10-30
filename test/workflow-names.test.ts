@@ -4,6 +4,9 @@
 // Run is called `plan` or `renovate` is what this refuses. The renamed baselines prove the
 // behaviour; this reads the source, so a reintroduction fails before anything runs it.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path } from "effect";
 import { expect, test } from "bun:test";
 import { runEffect } from "./support/effect";
@@ -17,7 +20,7 @@ const ONLY_IDS = new Set(["implement", "architecture", "renovate", "release", "g
 const IDENTITY = /(workflow|definition|entry|module)\w*|\.(id|name)\b/i;
 
 const withoutComments = (text: string) =>
-  text.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+  pipe(text, Str.replaceAll(/\/\*[\s\S]*?\*\//g, ""), Str.replaceAll(/(^|[^:])\/\/.*$/gm, "$1"));
 
 /** Every place in one source file that decides by a shipped workflow's name. */
 function nameDispatch(source: string): string[] {
@@ -27,31 +30,32 @@ function nameDispatch(source: string): string[] {
     String.raw`([\w.?()\[\]]+)\s*[!=]==?\s*"(${SHIPPED})"|"(${SHIPPED})"\s*[!=]==?\s*([\w.?()\[\]]+)`,
     "g",
   );
-  for (const match of text.matchAll(compared)) {
+  for (const match of pipe(text, Str.matchAll(compared))) {
     if (IDENTITY.test(match[1] ?? match[4] ?? "")) found.push(match[0]);
   }
-  for (const match of text.matchAll(
-    new RegExp(String.raw`\.(startsWith|endsWith)\("(${SHIPPED})`, "g"),
+  for (const match of pipe(
+    text,
+    Str.matchAll(new RegExp(String.raw`\.(startsWith|endsWith)\("(${SHIPPED})`, "g")),
   ))
     found.push(match[0]);
   const listed = new RegExp(
     String.raw`\[\s*"(?:${SHIPPED})"(?:\s*,\s*"(?:${SHIPPED})")*\s*,?\s*\]`,
     "g",
   );
-  for (const match of text.matchAll(listed)) {
-    if ([...match[0].matchAll(/"(\w+)"/g)].some((name) => ONLY_IDS.has(name[1]!)))
+  for (const match of pipe(text, Str.matchAll(listed))) {
+    if (Arr.some([...pipe(match[0], Str.matchAll(/"(\w+)"/g))], (name) => ONLY_IDS.has(name[1]!)))
       found.push(match[0]);
   }
-  for (const match of text.matchAll(/switch\s*\(([^)]*)\)\s*\{/g)) {
+  for (const match of pipe(text, Str.matchAll(/switch\s*\(([^)]*)\)\s*\{/g))) {
     if (!IDENTITY.test(match[1]!)) continue;
     let depth = 0;
-    let end = match.index + match[0].length - 1;
+    let end = (match.index ?? 0) + match[0].length - 1;
     for (; end < text.length; end++) {
       if (text[end] === "{") depth += 1;
       if (text[end] === "}" && --depth === 0) break;
     }
-    const body = text.slice(match.index, end);
-    for (const one of body.matchAll(new RegExp(String.raw`case\s+"(${SHIPPED})"`, "g")))
+    const body = pipe(text, Str.slice(match.index, end));
+    for (const one of pipe(body, Str.matchAll(new RegExp(String.raw`case\s+"(${SHIPPED})"`, "g"))))
       found.push(`switch (${match[1]}) ${one[0]}`);
   }
   return found;
@@ -70,7 +74,7 @@ const sources = Effect.fn("test.sources")(function* () {
         stack.push(full);
         continue;
       }
-      if (!name.endsWith(".ts") && !name.endsWith(".tsx")) continue;
+      if (!pipe(name, Str.endsWith(".ts")) && !pipe(name, Str.endsWith(".tsx"))) continue;
       found.push({ name: path.relative(srcDir, full), text: yield* fs.readFileString(full) });
     }
   }
@@ -83,8 +87,8 @@ const read = (file: string) =>
 test("the generic runtime and the board decide nothing by a shipped workflow's name", () =>
   runEffect(
     Effect.gen(function* () {
-      const found = (yield* sources()).flatMap((file) =>
-        nameDispatch(file.text).map((hit) => `${file.name}: ${hit}`),
+      const found = Arr.flatMap(yield* sources(), (file) =>
+        Arr.map(nameDispatch(file.text), (hit) => `${file.name}: ${hit}`),
       );
       expect(found).toEqual([]);
     }),

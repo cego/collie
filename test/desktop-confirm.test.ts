@@ -1,6 +1,8 @@
 // Desktop counts a write done only on its host's reply: it waits 30 s an attempt, sends the
 // same request again up to 3 times, and keeps a line per attempt in `actions.log`.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem } from "effect";
@@ -52,7 +54,7 @@ test("an answer whose first send is not confirmed is sent again under its reques
       const said = yield* fastForward(act(door.reached, "ask-1", answer, log), 1_000);
       expect(said).toBe("Answered r-1");
       expect(door.requests).toEqual(["ask-1", "ask-1"]);
-      expect(lines.map(({ attempt, ended }) => [attempt, ended])).toEqual([
+      expect(Arr.map(lines, ({ attempt, ended }) => [attempt, ended])).toEqual([
         [1, "timed-out"],
         [2, "repeat"],
       ]);
@@ -70,7 +72,7 @@ test("a host that never confirms is tried 3 times, and the failure says so under
       );
       expect(failed).toEqual(new ActionFailed({ request: "ask-2", reason: UNCONFIRMED }));
       expect(door.requests).toEqual(["ask-2", "ask-2", "ask-2"]);
-      expect(lines.map(({ ended }) => ended)).toEqual(["timed-out", "timed-out", "timed-out"]);
+      expect(Arr.map(lines, ({ ended }) => ended)).toEqual(["timed-out", "timed-out", "timed-out"]);
     }),
   ));
 
@@ -120,7 +122,7 @@ test("a card action Desktop does not send says why, and is logged as not sent", 
       const gone = yield* actOn(doors, "i-other", "ask-5", answer, log).pipe(Effect.flip);
       expect(gone.reason).toStartWith("Not sent");
       expect(door.requests).toEqual([]);
-      expect(lines.map(({ ended, request }) => [request, ended])).toEqual([
+      expect(Arr.map(lines, ({ ended, request }) => [request, ended])).toEqual([
         ["ask-4", "not-sent"],
         ["ask-5", "not-sent"],
       ]);
@@ -155,10 +157,7 @@ test("actions.log keeps a JSON line per attempt with ids and kinds only, and sta
         log,
       );
       const kept = yield* fs.readFileString(`${dir}/actions.log`);
-      const [first, second] = kept
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      const [first, second] = Arr.map(Str.split(Str.trim(kept), "\n"), (line) => JSON.parse(line));
       expect(first).toMatchObject({
         door: "board",
         machine: "vm-mk",
@@ -202,7 +201,7 @@ test("a refusal that quotes the answer is logged without its value", () =>
       const failed = yield* act(door.reached, "ask-11", answer, log).pipe(Effect.flip);
       expect(failed.reason).toContain("The-Answer-Value");
       expect(lines[0]!.reason).toContain("is not one of A, B");
-      expect(lines[0]!.reason!.toLowerCase()).not.toContain("the-answer-value");
+      expect(Str.toLowerCase(lines[0]!.reason!)).not.toContain("the-answer-value");
     }),
   ));
 
@@ -226,10 +225,13 @@ test("board and chat writers ending at once at the rotation boundary keep every 
       yield* Effect.all([first(line("ask-c")), second(line("ask-d"))], {
         concurrency: "unbounded",
       });
-      const kept = [
-        yield* fs.readFileString(`${dir}/actions.log.1`),
-        yield* fs.readFileString(`${dir}/actions.log`),
-      ].join("");
+      const kept = Arr.join(
+        [
+          yield* fs.readFileString(`${dir}/actions.log.1`),
+          yield* fs.readFileString(`${dir}/actions.log`),
+        ],
+        "",
+      );
       for (const request of ["ask-a", "ask-b", "ask-c", "ask-d"])
         expect(kept).toContain(`"${request}"`);
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),

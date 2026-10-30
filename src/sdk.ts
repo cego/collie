@@ -15,6 +15,12 @@
 // `docs/sdk.md` is the guidance; `docs/adr/0014-native-workflows-run-on-effects-own-engine.md`
 // is why the engine underneath is Effect's.
 
+import * as Struct from "effect/Struct";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import {
   Cause,
   Context,
@@ -23,9 +29,11 @@ import {
   Layer,
   Path,
   Predicate,
+  Result,
   Schema,
   SchemaGetter,
   SchemaRepresentation,
+  flow,
 } from "effect";
 import type { CheckEvidence } from "./output";
 import type { FailedTest, Snapshot, Verification } from "./verify";
@@ -307,13 +315,14 @@ export function template<const Fields extends Schema.Struct.Fields>(
   text: string,
   fields: Fields,
 ): Template<Schema.Struct<Fields>["Type"]> {
-  const undeclared = expressionsIn(text).filter(
-    (name) => !(GIVEN.has(name) || declares(fields, name.split("."))),
+  const undeclared = Arr.filter(
+    expressionsIn(text),
+    (name) => !(GIVEN.has(name) || declares(fields, Str.split(name, "."))),
   );
-  const wrong = [...undeclared.map((name) => `{{${name}}}`), ...malformedIn(text)];
+  const wrong = [...Arr.map(undeclared, (name) => `{{${name}}}`), ...malformedIn(text)];
   if (wrong.length > 0) {
     throw new Error(
-      `this template names ${wrong.join(", ")}, which nothing fills: declare ${wrong.length === 1 ? "it" : "them"} among what it takes, or remove ${wrong.length === 1 ? "it" : "them"}`,
+      `this template names ${Arr.join(wrong, ", ")}, which nothing fills: declare ${wrong.length === 1 ? "it" : "them"} among what it takes, or remove ${wrong.length === 1 ? "it" : "them"}`,
     );
   }
   return new Template(text);
@@ -348,10 +357,13 @@ export function contentOf(markdown: string): Content {
     const body = sections.get(section);
     if (body === undefined) {
       throw new Error(
-        `there is no "## ${section}" section here; there is ${[...sections.keys()].join(", ") || "none"}`,
+        `there is no "## ${section}" section here; there is ${Arr.join([...sections.keys()], ", ") || "none"}`,
       );
     }
-    return [preamble, body].filter((part) => part !== "").join("\n\n");
+    return Arr.join(
+      Arr.filter([preamble, body], (part) => part !== ""),
+      "\n\n",
+    );
   };
   return {
     preamble,
@@ -428,9 +440,9 @@ const collectedOf = (options: EvidenceAsk) => ({
   final: options.evidence.final,
   approved: options.approved,
   commands: options.evidence.commands,
-  outputs: new Map(Object.entries(options.outputs)),
+  outputs: new Map(Rec.toEntries(options.outputs)),
   reviewed: new Set(options.reviewed),
-  reviewedOn: new Map(Object.entries(options.reviewedOn ?? {})),
+  reviewedOn: new Map(Rec.toEntries(options.reviewedOn ?? {})),
   measurements: options.evidence.measurements,
   mergeBase: options.evidence.mergeBase,
   content: options.evidence.content,
@@ -443,7 +455,10 @@ const collectedOf = (options: EvidenceAsk) => ({
  * author's own union, because what a host does with a failure is show it: a Run that
  * ended badly is a Run, not a value another workflow destructures.
  */
-export class WorkflowError extends Schema.TaggedError<WorkflowError>()("WorkflowError", {
+export class WorkflowError extends Schema.TaggedError<
+  WorkflowError,
+  { readonly brand: unique symbol }
+>()("WorkflowError", {
   reason: Schema.String,
 }) {
   /** A defect keeps only its message, so a died refusal still names its reason. */
@@ -515,7 +530,7 @@ export const WorkflowAgents = Context.Reference<WorkflowAgentPreferences | undef
 );
 
 const isPanel = (seats: Seat | ReadonlyArray<Seat>): seats is ReadonlyArray<Seat> =>
-  Array.isArray(seats);
+  Arr.isArray<typeof seats>(seats);
 
 /**
  * The panel this workflow's definition seats for a role: every seat it names, or one that
@@ -718,6 +733,7 @@ export interface HostApi {
    * Activity of the workflow's own where the workflow branches on it, so a replay takes
    * the same branch.
    */
+  // oxlint-disable-next-line effecttsgo/lazy-effect -- Published author workflows call usage(); retain that source contract.
   readonly usage: () => Effect.Effect<ReadonlyArray<UsageReading>>;
   /** The installed `SKILL.md` an agent's `{{skill:name}}` would name, or null. */
   readonly skill: (name: string) => Effect.Effect<string | null>;
@@ -1245,6 +1261,7 @@ export interface Posted {
   readonly message: string;
 }
 
+// oxlint-disable-next-line effecttsgo/lazy-effect -- Host serves the published HostApi.usage() method unchanged.
 export class Host extends Context.Service<Host, HostApi>()("collie/Host") {}
 
 /** A question as the host records it: its identity, what it asks, and what it takes. */
@@ -1478,16 +1495,19 @@ export const forecast = (path: ReadonlyArray<Step>): Effect.Effect<void, never, 
     forecasts.set(instance, n);
     yield* Activity.make({
       name: `forecast.${n}`,
-      execute: host.step(runId, { kind: "forecast", steps: path.map((one) => one.meta) }),
+      execute: host.step(runId, { kind: "forecast", steps: Arr.map(path, (one) => one.meta) }),
     });
   });
 
 /** The ids a path lists more than once: a Step is known by its id, so each is one Step. */
 export const repeatedIds = (
   path: ReadonlyArray<{ readonly id: string }>,
-): ReadonlyArray<string> => [
-  ...new Set(path.map((one) => one.id).filter((id, at, ids) => ids.indexOf(id) !== at)),
-];
+): ReadonlyArray<string> => {
+  const ids = Arr.map(path, (one) => one.id);
+  return Arr.dedupe(
+    Arr.filter(ids, (id, at) => Arr.some(Arr.take(ids, at), (before) => before === id)),
+  );
+};
 
 /**
  * A workflow as the host sees one: any input and any result, no service of the host's to
@@ -1721,9 +1741,9 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
   if (!IDENTITY.test(entry.id)) {
     problems.push(`workflow id "${entry.id}" is not an identity: lower case, digits and dashes`);
   }
-  if (entry.title.trim() === "") problems.push("title is required");
-  const fields = new Set(Object.keys(entry.input));
-  for (const [name, field] of Object.entries(entry.input)) {
+  if (Str.trim(entry.title) === "") problems.push("title is required");
+  const fields = new Set(Struct.keys(entry.input));
+  for (const [name, field] of Rec.toEntries(entry.input)) {
     if (!Schema.isSchema(field)) problems.push(`input "${name}" is not a schema`);
   }
   for (const name of fields) {
@@ -1739,10 +1759,14 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
     ];
   }
   for (const kind of ["needs", "uses"] as const) {
-    for (const [id, text] of Object.entries(entry.metadata?.connections?.[kind] ?? {})) {
-      if (!Schema.is(ConnectionId)(id)) problems.push(`${entry.id}: unknown Connection "${id}"`);
-      for (const [column, value] of Object.entries(text))
-        if (value.trim() === "")
+    const connections = entry.metadata?.connections?.[kind] ?? {};
+    for (const id of Struct.keys(connections)) {
+      const text = connections[id];
+      if (text === undefined) continue;
+      if (!Schema.is(ConnectionId)(id))
+        problems.push(`${entry.id}: unknown Connection "${String(id)}"`);
+      for (const [column, value] of Rec.toEntries(text))
+        if (Str.trim(value) === "")
           problems.push(`${entry.id}: ${kind}.${id}.${column} must have text`);
       if (kind === "uses" && id in (entry.metadata?.connections?.needs ?? {}))
         problems.push(`${entry.id}: Connection "${id}" is both needed and used`);
@@ -1765,7 +1789,7 @@ function hintProblems(
   fields: ReadonlySet<string>,
 ): ReadonlyArray<string> {
   const problems: string[] = [];
-  for (const [field, strategy] of Object.entries(hints)) {
+  for (const [field, strategy] of Rec.toEntries(hints)) {
     if (!fields.has(field)) problems.push(`hint for "${field}", which is not an input`);
     if (!KNOWN_STRATEGIES.has(strategy)) {
       problems.push(`input "${field}" has no strategy called "${strategy}"`);
@@ -1784,7 +1808,7 @@ function outcomeProblems(outcome: OutcomeContract | undefined): ReadonlyArray<st
     problems.push("an outcome is either fixed or selectable, not both");
   }
   if (outcome.fixed !== undefined && !isOutcome(outcome.fixed)) {
-    problems.push(`no outcome called "${String(outcome.fixed)}" (${KINDS.join(", ")})`);
+    problems.push(`no outcome called "${String(outcome.fixed)}" (${Arr.join(KINDS, ", ")})`);
   }
   if (outcome.selectable !== undefined) {
     if (outcome.selectable.length === 0) problems.push("a selectable outcome offers nothing");
@@ -1815,7 +1839,7 @@ function offerProblems(
     if (!IDENTITY.test(offer.id)) problems.push(`"${offer.id}" is not an identity for an offer`);
     if (seen.has(offer.id)) problems.push(`two offers are called "${offer.id}"`);
     seen.add(offer.id);
-    if (offer.title.trim() === "") problems.push(`offer "${offer.id}" has no title`);
+    if (Str.trim(offer.title) === "") problems.push(`offer "${offer.id}" has no title`);
     if (!IDENTITY.test(offer.workflow)) {
       problems.push(`offer "${offer.id}" starts "${offer.workflow}", which is not a workflow id`);
     }
@@ -1835,15 +1859,15 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema
     selectable: [...(metadata?.outcome?.selectable ?? [])],
     checkout: metadata?.checkout ?? null,
     closes: metadata?.closes ?? null,
-    path: (metadata?.path ?? []).map((one) => ({ id: one.id, title: one.title })),
-    followUps: (metadata?.followUps ?? []).map((offer) => ({
+    path: Arr.map(metadata?.path ?? [], (one) => ({ id: one.id, title: one.title })),
+    followUps: Arr.map(metadata?.followUps ?? [], (offer) => ({
       id: offer.id,
       title: offer.title,
       workflow: offer.workflow,
       when: offer.when,
       connections: [...(offer.connections ?? [])],
     })),
-    actions: (metadata?.actions ?? []).map((action) => {
+    actions: Arr.map(metadata?.actions ?? [], (action) => {
       const projected = jsonSchemaFor(Schema.Struct(action.arguments));
       return {
         id: action.id,
@@ -1866,7 +1890,7 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema
   };
 }
 
-const asJson = Schema.decodeUnknownSync(Schema.Json);
+const asJson = flow(Schema.decodeUnknownResult(Schema.Json), Result.getOrThrow);
 
 /**
  * The JSON Schema for a prompt or a discovery listing, and what it does not say.
@@ -1904,14 +1928,14 @@ export function jsonSchemaFor(schema: Schema.Constraint): Projection {
 function withPatterns<T>(node: T): T {
   if (isList(node)) {
     // SAFETY: the same list, each element copied with its own type.
-    return node.map(withPatterns) as T;
+    return Arr.map(node, withPatterns) as T;
   }
   if (!isNode(node)) return node;
-  const copied = Object.fromEntries(
-    Object.entries(node).map(([key, value]) => [
-      key,
-      key === "annotations" ? value : withPatterns(value),
-    ]),
+  const copied = Rec.fromEntries(
+    Arr.map(
+      Rec.toEntries(node),
+      ([key, value]) => [key, key === "annotations" ? value : withPatterns(value)] as const,
+    ),
   );
   const annotations = isPatternCheck(node) ? drawn(node) : null;
   // SAFETY: the same node, with at most a pattern check's annotations replaced.
@@ -1921,8 +1945,7 @@ function withPatterns<T>(node: T): T {
 const isList = Schema.is(Schema.Array(Schema.Unknown));
 const isNode = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
-const PatternCheck = Schema.Struct({
-  _tag: Schema.Literal("Filter"),
+const PatternCheck = Schema.TaggedStruct("Filter", {
   annotations: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
   representation: Schema.Struct({
     id: Schema.Literal("effect/schema/isPattern"),
@@ -1948,19 +1971,20 @@ function sameUnderUnicode(source: string) {
   } catch {
     return false;
   }
-  const atoms = source.match(/\\.|\[\^|./g) ?? [];
-  return atoms.every((atom) => !/^(?:\.|\[\^|\\[DPSWpu])$/.test(atom));
+  const atoms = Option.getOrNull(pipe(source, Str.match(/\\.|\[\^|./g))) ?? [];
+  return Arr.every(atoms, (atom) => !/^(?:\.|\[\^|\\[DPSWpu])$/.test(atom));
 }
 
 /** Where the drawn document says nothing at all, which the schema itself still does. */
 function unconstrained(node: Schema.Json, at: string): ReadonlyArray<string> {
-  if (Array.isArray(node)) {
-    return node.flatMap((item, index) => unconstrained(item, `${at}[${index}]`));
+  if (Arr.isArray<typeof node>(node)) {
+    return Arr.flatMap(node, (item, index) => unconstrained(item, `${at}[${index}]`));
   }
-  if (!isObject(node)) return [];
-  const entries = Object.entries(node);
+  const object = asObject(node);
+  if (Result.isFailure(object)) return [];
+  const entries = Rec.toEntries(object.success);
   if (entries.length === 0) return [`${at || "the schema"} projects to nothing`];
-  return entries.flatMap(([key, value]) => unconstrained(value, at ? `${at}.${key}` : key));
+  return Arr.flatMap(entries, ([key, value]) => unconstrained(value, at ? `${at}.${key}` : key));
 }
 
-const isObject = Schema.is(Schema.Record(Schema.String, Schema.Json));
+const asObject = Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Json));

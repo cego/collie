@@ -2,6 +2,9 @@
 // while unset and what is refused. The TUI's Settings and Desktop's both read this list,
 // so a setting added here is offered by both. Pure: Desktop's view bundles it.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Option, Schema } from "effect";
 import { GITLAB_HOST, isHostName } from "./gitlab-token";
 import { NOTIFICATION_KINDS } from "./notify";
@@ -21,11 +24,11 @@ export type Scope = "local" | "all";
 export type Density = "comfortable" | "compact";
 export const DENSITIES: ReadonlyArray<Density> = ["comfortable", "compact"];
 export function isDensity(value: string): value is Density {
-  return DENSITIES.some((density) => density === value);
+  return Arr.some(DENSITIES, (density) => density === value);
 }
 export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
 export function isScope(value: string): value is Scope {
-  return SCOPES.some((scope) => scope === value);
+  return Arr.some(SCOPES, (scope) => scope === value);
 }
 
 /**
@@ -37,7 +40,7 @@ export function isScope(value: string): value is Scope {
 export type Questions = "focus" | "notify";
 export const QUESTION_MODES: ReadonlyArray<Questions> = ["focus", "notify"];
 export function isQuestionMode(value: string): value is Questions {
-  return QUESTION_MODES.some((mode) => mode === value);
+  return Arr.some(QUESTION_MODES, (mode) => mode === value);
 }
 
 /**
@@ -197,7 +200,7 @@ export interface Setting {
 
 export const SettingValue = Schema.Union([
   Schema.String,
-  Schema.Number,
+  Schema.Finite,
   Schema.Boolean,
   Schema.Array(Schema.String),
 ]);
@@ -266,7 +269,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       "How hard every step's agent thinks, unless the step names its own. Unset leaves it to the harness.",
   }),
-  ...HARNESS_NAMES.map((harness) =>
+  ...Arr.map(HARNESS_NAMES, (harness) =>
     of(`models.${harness}`, "list", "", {
       group: "Agents",
       label: `More ${HARNESS_TITLES[harness]} models`,
@@ -408,7 +411,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       "Whether a Run's question brings the TUI's Collie tab to the front (focus) or only says so (notify).",
   }),
-  ...NOTIFICATION_KINDS.map((kind) =>
+  ...Arr.map(NOTIFICATION_KINDS, (kind) =>
     of(`notifications.${kind}`, "boolean", "true", {
       group: "Notifications",
       label: NOTIFICATION_WORDS[kind][0],
@@ -425,10 +428,10 @@ export const SETTINGS: ReadonlyArray<Setting> = [
 
 /** Why a `fallbacks` entry is refused: a harness Collie has, then optionally `/model`. */
 function fallbackProblem(entry: string): string | null {
-  const at = entry.indexOf("/");
-  const harness = at === -1 ? entry : entry.slice(0, at);
-  if (!HARNESS_NAMES.some((name) => name === harness))
-    return `"${entry}" names no harness Collie has (${HARNESS_NAMES.join(", ")})`;
+  const at = Option.getOrElse(pipe(entry, Str.indexOf("/")), () => -1);
+  const harness = at === -1 ? entry : pipe(entry, Str.slice(0, at));
+  if (!Arr.some(HARNESS_NAMES, (name) => name === harness))
+    return `"${entry}" names no harness Collie has (${Arr.join(HARNESS_NAMES, ", ")})`;
   return at === entry.length - 1 ? `"${entry}" names no model after its /` : null;
 }
 
@@ -436,7 +439,7 @@ function fallbackProblem(entry: string): string | null {
 export function autoCompactWindowOf(
   typed: string,
 ): { readonly window: AutoCompactWindow } | { readonly refused: string } {
-  const said = typed.trim();
+  const said = Str.trim(typed);
   if (said === "auto") return { window: "auto" };
   const tokens = /^\d+$/.test(said) ? Number(said) : NaN;
   return tokens >= AUTO_COMPACT_LEAST && tokens <= AUTO_COMPACT_MOST
@@ -446,7 +449,8 @@ export function autoCompactWindowOf(
       };
 }
 
-export const settingOf = (key: string) => SETTINGS.find((setting) => setting.key === key);
+export const settingOf = (key: string) =>
+  Option.getOrUndefined(Arr.findFirst(SETTINGS, (setting) => setting.key === key));
 
 /**
  * What was typed, as the value written; `null` unsets it. Trimmed, and empty is unset:
@@ -459,7 +463,7 @@ export function parseSetting(
 ): { readonly value: SettingValue | null } | { readonly refused: string } {
   const setting = settingOf(key);
   if (setting === undefined) return { refused: `${key} is not one of Collie's settings` };
-  const said = typed.trim();
+  const said = Str.trim(typed);
   if (said === "") return { value: null };
   switch (setting.kind) {
     case "number":
@@ -470,18 +474,22 @@ export function parseSetting(
     case "choice":
       return setting.choices.includes(said)
         ? { value: said }
-        : { refused: `${key} has to be one of ${setting.choices.join(", ")}, not "${typed}"` };
+        : { refused: `${key} has to be one of ${Arr.join(setting.choices, ", ")}, not "${typed}"` };
     case "boolean":
       return said === "true" || said === "false"
         ? { value: said === "true" }
         : { refused: `${key} has to be true or false, not "${typed}"` };
     case "list": {
-      const items = said
-        .split(",")
-        .map((item) => item.trim())
-        .filter((item) => item !== "");
+      const items = Arr.filter(
+        Arr.map(Str.split(said, ","), (item) => Str.trim(item)),
+        (item) => item !== "",
+      );
       const bad =
-        key === "fallbacks" ? items.map(fallbackProblem).find((one) => one !== null) : null;
+        key === "fallbacks"
+          ? Option.getOrUndefined(
+              Arr.findFirst(Arr.map(items, fallbackProblem), (one) => one !== null),
+            )
+          : null;
       if (bad !== undefined && bad !== null) return { refused: `fallbacks: ${bad}` };
       return { value: items.length === 0 ? null : items };
     }
@@ -508,7 +516,7 @@ const msPer = (key: string) => (settingOf(key)?.unit === "minutes" ? 60_000 : un
 /** A stored value as typed in its unit: a duration in minutes, decimals only where needed. */
 export function settingShown(key: string, stored: string): string {
   const per = msPer(key);
-  return per === undefined || stored.trim() === "" ? stored : String(Number(stored) / per);
+  return per === undefined || Str.trim(stored) === "" ? stored : String(Number(stored) / per);
 }
 
 /** A value typed in its unit as the text `parseSetting` takes: a duration in whole milliseconds. */
@@ -517,7 +525,7 @@ export function settingStored(
   typed: string,
 ): { readonly stored: string } | { readonly refused: string } {
   const per = msPer(key);
-  const said = typed.trim();
+  const said = Str.trim(typed);
   if (per === undefined || said === "") return { stored: said };
   const minutes = Number(said);
   return Number.isFinite(minutes) && minutes >= 0
@@ -529,7 +537,14 @@ export function settingStored(
 export function settingText(value: SettingValue | null): string {
   if (value === null) return "";
   if (isString(value)) return value;
-  return Array.isArray(value) ? value.join(", ") : String(value);
+  return Arr.isArray<typeof value>(value)
+    ? Arr.join(
+        Arr.map(value, (part) =>
+          part === null || part === undefined ? "" : globalThis.String(part),
+        ),
+        ", ",
+      )
+    : String(value);
 }
 
 /** A value one Machine shares for `key`, checked as an edit of it would be. */

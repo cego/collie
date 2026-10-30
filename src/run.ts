@@ -36,7 +36,7 @@ export const WorktreeRecordSchema = Schema.Struct({
    * on the same branch, and pruning must never touch a checkout it did not create. A
    * record without it — one written before this was kept — is never a candidate.
    */
-  made_at: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  made_at: Schema.NullOr(Schema.Finite).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /**
    * The shell tab and pane herdr's new workspace came with, which this Run's first
    * agent takes over rather than leaving behind. Both null for a checkout that was

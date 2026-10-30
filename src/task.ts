@@ -6,7 +6,12 @@
 // label: two Tasks may share a project prefix, a workspace may be renamed by hand, and
 // neither says anything about whose work a Run is.
 
-import { Crypto, Data, Effect, FileSystem, Path, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ensureLockDir, withLock } from "./lock";
 import { nowIso } from "./time";
 import { unsafePathComponent } from "./naming";
@@ -36,7 +41,7 @@ const TaskSchema = Schema.Struct({
 export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
 
 const TaskJson = Schema.fromJsonString(TaskSchema);
-const encodeTask = Schema.encodeSync(TaskJson);
+const encodeTask = flow(Schema.encodeResult(TaskJson), Result.getOrThrow);
 const decodeTask = Schema.decodeUnknownEffect(TaskJson);
 
 /**
@@ -69,7 +74,7 @@ export const readTask = Effect.fn("task.readTask")(function* (stateDir: string, 
   if (!(yield* fs.exists(file))) return null;
   return yield* fs.readFileString(file).pipe(
     Effect.flatMap(decodeTask),
-    Effect.catch(() => Effect.succeed(null)),
+    Effect.orElseSucceed(() => null),
   );
 });
 
@@ -80,14 +85,14 @@ export const listTasks = Effect.fn("task.listTasks")(function* (stateDir: string
   if (!(yield* fs.exists(dir))) return [];
   const tasks: TaskRecord[] = [];
   for (const name of yield* fs.readDirectory(dir)) {
-    if (!name.endsWith(".json")) continue;
+    if (!pipe_(name, Str.endsWith(".json"))) continue;
     const task = yield* fs.readFileString(path.join(dir, name)).pipe(
       Effect.flatMap(decodeTask),
-      Effect.catch(() => Effect.succeed(null)),
+      Effect.orElseSucceed(() => null),
     );
     if (task) tasks.push(task);
   }
-  return tasks.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return tasks.sort((a, b) => pipe_(b.created_at, Str.localeCompare(a.created_at)));
 });
 
 /** The Task whose workspace this is, which is what "the current Task" means. */
@@ -96,7 +101,11 @@ export const taskOfWorkspace = Effect.fn("task.taskOfWorkspace")(function* (
   workspaceId: string | null,
 ) {
   if (!workspaceId) return null;
-  return (yield* listTasks(stateDir)).find((task) => task.workspace === workspaceId) ?? null;
+  return (
+    Option.getOrUndefined(
+      Arr.findFirst(yield* listTasks(stateDir), (task) => task.workspace === workspaceId),
+    ) ?? null
+  );
 });
 
 let taskWrites = 0;
@@ -147,12 +156,12 @@ export const newTask = Effect.fn("task.newTask")(function* (opts: {
   readonly herd: string | null;
 }) {
   return {
-    id: `task-${(yield* (yield* Crypto.Crypto).randomUUIDv4).slice(0, 8)}`,
+    id: `task-${pipe_(yield* (yield* SecureRandom.SecureRandom).uuidV4(), Str.slice(0, 8))}`,
     workspace: opts.workspace,
     label: opts.label,
     cwd: opts.cwd,
     root_pane: opts.rootPane ?? null,
     herd: opts.herd,
-    created_at: yield* nowIso(),
+    created_at: yield* nowIso,
   } satisfies TaskRecord;
 });

@@ -1,6 +1,10 @@
 // The Flock's settings and shared definitions on this computer, and each Machine synced with
 // them through its host.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import {
   Cause,
   Effect,
@@ -30,7 +34,7 @@ export const readFlockSettings = Effect.fn("FlockSettings.read")(function* (dir:
     Effect.flatMap((text) =>
       text === null
         ? Effect.succeed(NO_FLOCK_SETTINGS)
-        : Schema.decodeUnknownEffect(FlockSettingsFile)(text),
+        : Schema.decodeEffect(FlockSettingsFile)(text),
     ),
   );
 });
@@ -44,7 +48,7 @@ export const writeFlockSettings = Effect.fn("FlockSettings.write")(function* (
   yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(
     (yield* Path.Path).join(dir, FILE),
-    Schema.encodeSync(FlockSettingsFile)(flock),
+    yield* Schema.encodeEffect(FlockSettingsFile)(flock).pipe(Effect.orDie),
   );
 });
 
@@ -81,12 +85,16 @@ export const writeFlockDefinitions = Effect.fn("FlockDefinitions.write")(functio
   yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(
     (yield* Path.Path).join(dir, DEFINITIONS_FILE),
-    Schema.encodeSync(FlockDefinitionsFile)(flock),
+    yield* Schema.encodeEffect(FlockDefinitionsFile)(flock).pipe(Effect.orDie),
   );
 });
 
 const heldDefinitions = (flock: FlockDefinitions) =>
-  Object.entries(flock).map(([path, { base64, at }]): SharedDefinition => ({ path, base64, at }));
+  Arr.map(Rec.toEntries(flock), ([path, { base64, at }]): SharedDefinition => ({
+    path,
+    base64,
+    at,
+  }));
 const byPath = (definition: { readonly path: string }) => definition.path;
 
 /** What a Machine has taken in where it is the later edit, and what it should then be given. */
@@ -103,7 +111,7 @@ export const takeDefinitions = (
 
 /** What a Machine's host answers about its shared definitions. */
 export interface DefinitionsDoor<E> {
-  readonly sharedDefinitions: () => Effect.Effect<ReadonlyArray<SharedDefinition>, E>;
+  readonly sharedDefinitions: Effect.Effect<ReadonlyArray<SharedDefinition>, E>;
   readonly setSharedDefinitions: (asked: {
     readonly definitions: ReadonlyArray<SharedDefinition>;
     readonly request: string;
@@ -112,7 +120,7 @@ export interface DefinitionsDoor<E> {
 
 /** What a Machine's host answers about its settings. */
 export interface SettingsDoor<E> {
-  readonly settings: () => Effect.Effect<SharedSettings, E>;
+  readonly settings: Effect.Effect<SharedSettings, E>;
   readonly setSettings: (asked: {
     readonly settings: ReadonlyArray<SharedSetting>;
     readonly request: string;
@@ -131,7 +139,7 @@ export const syncSettings = <E>(
   request: string,
 ) =>
   Effect.gen(function* () {
-    const { give } = takeFrom(flock, name, (yield* door.settings()).settings);
+    const { give } = takeFrom(flock, name, (yield* door.settings).settings);
     return (yield* door.setSettings({ settings: give, request })).settings;
   });
 
@@ -150,15 +158,15 @@ const reasonOf = (cause: Cause.Cause<unknown>) => {
     onSome: ({ reason }) => reason,
     onNone: () => (error instanceof Error ? error.message : String(error)),
   });
-  return said.startsWith("Unknown request tag")
+  return pipe_(said, Str.startsWith("Unknown request tag"))
     ? "its Collie is too old for this; upgrade it"
     : said;
 };
 
-interface Synced<T, M> {
+interface Synced<T, M, SaveError> {
   readonly flock: SubscriptionRef.SubscriptionRef<T>;
   readonly machines: () => ReadonlyArray<M>;
-  readonly save: (flock: T) => Effect.Effect<void, unknown>;
+  readonly save: (flock: T) => Effect.Effect<void, SaveError>;
   readonly request: Effect.Effect<string>;
   readonly told: (machine: M, failed: string | null) => Effect.Effect<void>;
 }
@@ -168,10 +176,10 @@ interface Synced<T, M> {
  * is taken into it as it is by then, so an edit made meanwhile survives, and an edit taken
  * from it goes on to every other connected Machine. Each sync tells how it ended.
  */
-const latestSync = <T, Has, M extends { readonly name: string }>(
-  options: Synced<T, M> & {
+const latestSync = <T, Has, M extends { readonly name: string }, SaveError, ExchangeError>(
+  options: Synced<T, M, SaveError> & {
     readonly what: string;
-    readonly exchange: (held: T, machine: M, request: string) => Effect.Effect<Has, unknown>;
+    readonly exchange: (held: T, machine: M, request: string) => Effect.Effect<Has, ExchangeError>;
     readonly take: (now: T, machine: string, has: Has) => T;
     readonly edits: (held: T) => Readonly<Record<string, { readonly at: string }>>;
   },
@@ -192,7 +200,10 @@ const latestSync = <T, Has, M extends { readonly name: string }>(
           });
           yield* options.save(after);
           const was = options.edits(before);
-          return Object.entries(options.edits(after)).some(([key, { at }]) => was[key]?.at !== at);
+          return Arr.some(
+            Rec.toEntries(options.edits(after)),
+            ([key, { at }]) => was[key]?.at !== at,
+          );
         }),
       );
     /** Why the sync with `machine` failed, or null. */
@@ -202,7 +213,7 @@ const latestSync = <T, Has, M extends { readonly name: string }>(
         Effect.flatMap((changed) =>
           changed
             ? Effect.forEach(
-                options.machines().filter(({ name }) => name !== machine.name),
+                Arr.filter(options.machines(), ({ name }) => name !== machine.name),
                 syncOn,
                 { discard: true },
               )
@@ -223,7 +234,9 @@ const latestSync = <T, Has, M extends { readonly name: string }>(
   });
 
 /** Syncs connected Machines with the Flock's settings. */
-export const flockSync = <E, M extends SettingsMachine<E>>(options: Synced<FlockSettings, M>) =>
+export const flockSync = <E, M extends SettingsMachine<E>, SaveError>(
+  options: Synced<FlockSettings, M, SaveError>,
+) =>
   Effect.gen(function* () {
     const sync = yield* latestSync({
       ...options,
@@ -269,15 +282,16 @@ export const flockSync = <E, M extends SettingsMachine<E>>(options: Synced<Flock
 export const definitionsSync = <
   E,
   M extends { readonly name: string; readonly door: DefinitionsDoor<E> },
+  SaveError,
 >(
-  options: Synced<FlockDefinitions, M>,
+  options: Synced<FlockDefinitions, M, SaveError>,
 ) =>
   latestSync({
     ...options,
     what: "Definitions",
     exchange: (flock, { name, door }, request) =>
       Effect.gen(function* () {
-        const has = yield* door.sharedDefinitions();
+        const has = yield* door.sharedDefinitions;
         const { give } = takeDefinitions(flock, name, has);
         return give.length === 0
           ? has

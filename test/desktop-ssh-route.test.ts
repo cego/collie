@@ -1,6 +1,10 @@
 // ADR-draft-a-blocked-link-rides-the-machines-ssh-connection: a fake local `collie` stands
 // in for `machine connect`.
 
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Scope, Exit } from "effect";
 import { BRIDGE_READY } from "../src/board-model";
@@ -40,14 +44,16 @@ fi
 exit 1
 `,
   };
-  for (const [name, script] of Object.entries(scripts))
+  for (const [name, script] of Rec.toEntries(scripts))
     yield* fs.writeFileString(`${dir}/${name}`, script, { mode: 0o755 });
   const collieLog = fs.readFileString(`${dir}/collie.log`).pipe(
     Effect.orElseSucceed(() => ""),
-    Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+    Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
   );
   const connects = collieLog.pipe(
-    Effect.map((lines) => lines.filter((line) => line.endsWith("machine connect vm-mk"))),
+    Effect.map((lines) =>
+      Arr.filter(lines, (line) => pipe_(line, Str.endsWith("machine connect vm-mk"))),
+    ),
   );
   const sso = (on: boolean) =>
     (on ? fs.writeFileString(`${dir}/sso`, "") : fs.remove(`${dir}/sso`, { force: true })).pipe(
@@ -64,7 +70,7 @@ const run = (argv: ReadonlyArray<string>) =>
   }).pipe(Effect.map(([out, code]) => ({ out, code })));
 
 const kinds = (calls: ReadonlyArray<string>, kind: string) =>
-  calls.filter((line) => line.startsWith(kind));
+  Arr.filter(calls, (line) => pipe_(line, Str.startsWith(kind)));
 
 test("the SSH route opens its connection through collie machine connect and rides the path it answers", () =>
   runEffect(

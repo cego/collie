@@ -1,6 +1,7 @@
 // Claude's native delegation controls, scoped to one managed agent's launch.
 
-import { Schema } from "effect";
+import * as Rec from "effect/Record";
+import { Schema, flow, Result } from "effect";
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -20,10 +21,13 @@ export const decodeSubagents = Schema.decodeUnknownResult(ClaudeSubagents, {
 export const readSubagents = Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeSubagents), {
   onExcessProperty: "error",
 });
-export const encodeSubagents = Schema.encodeSync(Schema.fromJsonString(ClaudeSubagents));
+export const encodeSubagents = flow(
+  Schema.encodeResult(Schema.fromJsonString(ClaudeSubagents)),
+  Result.getOrThrow,
+);
 
 export function parseSubagents(text: string): { policy: ClaudeSubagents } | { refused: string } {
-  const decoded = Schema.decodeUnknownResult(Schema.fromJsonString(ClaudeSubagents), {
+  const decoded = Schema.decodeResult(Schema.fromJsonString(ClaudeSubagents), {
     onExcessProperty: "error",
   })(text);
   return decoded._tag === "Success"
@@ -49,7 +53,7 @@ export function subagentSettings(policy: ClaudeSubagents): Schema.JsonObject {
     env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH = String(policy.maxDepth);
   if (policy.maxConcurrent !== undefined)
     env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS = String(policy.maxConcurrent);
-  if (Object.keys(env).length > 0) settings.env = env;
+  if (Rec.keys(env).length > 0) settings.env = env;
   if (policy.cacheTtl !== undefined) settings.subagentPromptCacheTtl = policy.cacheTtl;
   if (policy.enabled === false) settings.permissions = { deny: ["Agent"] };
   return settings;

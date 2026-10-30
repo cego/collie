@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import type { FlowRun, Panel, VerificationView } from "../../../src/board-model";
 export type InspectorPart = "decision" | "terminal" | "why" | "evidence" | "log" | "details";
 export interface StepLog {
@@ -12,16 +15,18 @@ export const stepLines = (
   starts: ReadonlyArray<number>,
 ): StepLog => {
   if (tail?._tag !== "Text" || start == null) return { panel: null, count: 0, older: null };
-  const all = tail.text === "" ? [] : tail.text.replace(/\n$/, "").split("\n");
-  const next = starts
-    .filter((line) => line > start)
-    .reduce((one, other) => Math.min(one, other), Infinity);
+  const all = tail.text === "" ? [] : Str.split(pipe(tail.text, Str.replace(/\n$/, "")), "\n");
+  const next = Arr.reduce(
+    Arr.filter(starts, (line) => line > start),
+    Infinity,
+    (one, other) => Math.min(one, other),
+  );
   const lines = all.slice(Math.max(0, start - first), Math.max(0, next - first));
   const older = first > start ? "Earlier lines are older than the log shown." : null;
   return {
     panel: {
       _tag: "Text",
-      text: lines.length === 0 ? "" : `${lines.join("\n")}\n`,
+      text: lines.length === 0 ? "" : `${Arr.join(lines, "\n")}\n`,
       truncated: older !== null,
     },
     count: lines.length,
@@ -33,7 +38,7 @@ export const stepEvidence = (
   step: string,
   picked: FlowRun | null,
 ): ReadonlyArray<VerificationView> =>
-  checks.filter((one) => {
+  Arr.filter(checks, (one) => {
     if (one.step !== step) return false;
     if (picked === null) return true;
     const place =
@@ -41,7 +46,10 @@ export const stepEvidence = (
     return place === picked.place;
   });
 export const inspectorPart = (node: FlowRun, live: boolean): InspectorPart => {
-  if (node.wait === "proposal" || node.questions.some((one) => one.open ?? one.answered === null))
+  if (
+    node.wait === "proposal" ||
+    Arr.some(node.questions, (one) => one.open ?? one.answered === null)
+  )
     return "decision";
   if (
     live &&
@@ -59,7 +67,7 @@ export const shownPart = (
   chosen: InspectorPart,
   parts: ReadonlyArray<InspectorTab>,
 ): InspectorPart =>
-  parts.some((one) => one.value === chosen) ? chosen : (parts[0]?.value ?? chosen);
+  Arr.some(parts, (one) => one.value === chosen) ? chosen : (parts[0]?.value ?? chosen);
 export const quietWork = (node: FlowRun) =>
   node.state === "expected"
     ? "This Step has not started yet."

@@ -1,5 +1,6 @@
 // What a card's record decides about its Terminal tab.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import {
@@ -78,8 +79,14 @@ test.each([
   },
 ])("$case", ({ agents, shown, entries }) => {
   expect(
-    agentTabs(agents, shown).map((one) => [one.name, one.run, one.label, one.state, one.shown]),
-  ).toEqual(entries.map((entry) => [...entry]));
+    Arr.map(agentTabs(agents, shown), (one) => [
+      one.name,
+      one.run,
+      one.label,
+      one.state,
+      one.shown,
+    ]),
+  ).toEqual(Arr.map(entries, (entry) => [...entry]));
 });
 
 test.each([
@@ -205,7 +212,7 @@ test("a switch still waiting when the tab closes never opens", () => {
   );
 });
 
-const launched = (...agents: string[]) => agents.map((agent) => ({ agent }));
+const launched = (...agents: string[]) => Arr.map(agents, (agent) => ({ agent }));
 
 test.each([
   {
@@ -245,17 +252,20 @@ test.each([
     offered: [],
   },
 ])("$case", ({ launches, live: agents, offered }) => {
-  expect(recipients(launches, agents).map((one) => [one.name, one.label])).toEqual(
-    offered.map((entry) => [...entry]),
+  expect(Arr.map(recipients(launches, agents), (one) => [one.name, one.label])).toEqual(
+    Arr.map(offered, (entry) => [...entry]),
   );
 });
 
 const choicesOf = (protocol: number | null) =>
-  deliveryChoices(
-    launched("build-1", "review-1"),
-    [live("build-1", "implementer", "working"), live("review-1", "reviewer")],
-    protocol,
-  ).map(({ key, to, agent }) => [key, to ?? agent ?? null]);
+  Arr.map(
+    deliveryChoices(
+      launched("build-1", "review-1"),
+      [live("build-1", "implementer", "working"), live("review-1", "reviewer")],
+      protocol,
+    ),
+    ({ key, to, agent }) => [key, to ?? agent ?? null],
+  );
 
 test.each([3, 4, null])(
   "plan comments prefer the planner even after a second opinion on protocol %p",
@@ -267,7 +277,7 @@ test.each([3, 4, null])(
       "planner",
     );
     expect(offered[0]?.to ?? offered[0]?.agent).toBe(protocol === 4 ? "planner" : "plan-1");
-    expect(offered.some((one) => one.agent === "review-1")).toBe(true);
+    expect(Arr.some(offered, (one) => one.agent === "review-1")).toBe(true);
   },
 );
 

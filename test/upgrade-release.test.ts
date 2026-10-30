@@ -3,6 +3,10 @@
 // version is handed to that version's runner, downloaded from a served fake release and
 // verified first.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
@@ -99,7 +103,7 @@ const run = (cmd: string, args: string[], cwd: string) => {
   if (cmd === "git") return Effect.succeed<Ran>({ code: 128, stdout: "", stderr: "not a git" });
   if (cmd !== "sh") return shell(cmd, args, cwd);
   return Effect.sync((): Ran => {
-    prepared.push(`${cmd} ${args.join(" ")} in ${cwd}`);
+    prepared.push(`${cmd} ${Arr.join(args, " ")} in ${cwd}`);
     return { code: 0, stdout: "prepare: runner: already in place\n" };
   });
 };
@@ -107,7 +111,7 @@ const run = (cmd: string, args: string[], cwd: string) => {
 /** The files an upgrade said it kept, relative to their `kept/<when>/`. */
 const keptOf = (result: Effect.Success<ReturnType<typeof upgrade>>) =>
   result.ok && "kept" in result.data ? result.data.kept : [];
-const shipped = (file: string) => file.replace(/^kept\/[^/]+\//, "");
+const shipped = (file: string) => pipe(file, Str.replace(/^kept\/[^/]+\//, ""));
 
 const releaseEnv = () => {
   const env = rig.pluginEnv();
@@ -153,7 +157,7 @@ test("an edit in a release is kept and named, and a deleted file is restored", (
 
       expect(placed.ok).toBe(true);
       const kept = keptOf(placed);
-      expect(kept.map(shipped).sort()).toEqual(["personas/mine.md", "personas/planner.md"]);
+      expect(Arr.map(kept, shipped).sort()).toEqual(["personas/mine.md", "personas/planner.md"]);
       for (const file of kept) {
         expect(placed.ok && placed.human).toContain(file);
         expect(
@@ -177,7 +181,7 @@ test("every file of a release placed before records existed is kept", () =>
 
       const placed = yield* place();
 
-      expect(keptOf(placed).map(shipped)).toEqual(["personas/planner.md"]);
+      expect(Arr.map(keptOf(placed), shipped)).toEqual(["personas/planner.md"]);
     }),
   ));
 
@@ -210,10 +214,11 @@ test(
 
         const both = yield* Effect.promise(() =>
           Promise.all(
-            [
-              [tree, "1.0.0"],
-              [other, "2.0.0"],
-            ].map(
+            Arr.map(
+              [
+                [tree, "1.0.0"],
+                [other, "2.0.0"],
+              ],
               ([from, version]) =>
                 Bun.spawn([
                   "bun",
@@ -228,7 +233,7 @@ test(
         );
 
         expect(both).toEqual([0, 0]);
-        const record = yield* Schema.decodeUnknownEffect(
+        const record = yield* Schema.decodeEffect(
           Schema.fromJsonString(
             Schema.Struct({ files: Schema.Record(Schema.String, Schema.String) }),
           ),
@@ -238,7 +243,7 @@ test(
           const file = (yield* fs.stat(`${collieDir}/release/${name}`)).type === "File";
           if (file && name !== "placed.json") placed.push(name);
         }
-        expect(placed.sort()).toEqual(Object.keys(record.files).sort());
+        expect(placed.sort()).toEqual(Rec.keys(record.files).sort());
         expect(yield* exists(`${collieDir}/release.new`)).toBe(false);
       }),
     ),

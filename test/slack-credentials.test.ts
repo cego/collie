@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Logger } from "effect";
 import { inspect } from "node:util";
@@ -86,20 +88,25 @@ test("a pasted bot token is checked before storage, handed on stdin, retried aft
         detail: "Posts as collie in Example Co",
       });
       expect(
-        connectionCards([
-          {
-            profile: "vm",
-            name: "vm",
-            workflows: [],
-            problem: null,
-            connections: [
+        Option.getOrUndefined(
+          Arr.findFirst(
+            connectionCards([
               {
-                id: "slack",
-                reading: yield* probeSlack(env, (token) => slackApi(token, fake.client)),
+                profile: "vm",
+                name: "vm",
+                workflows: [],
+                problem: null,
+                connections: [
+                  {
+                    id: "slack",
+                    reading: yield* probeSlack(env, (token) => slackApi(token, fake.client)),
+                  },
+                ],
               },
-            ],
-          },
-        ]).find((card) => card.id === "slack")!.account,
+            ]),
+            (card) => card.id === "slack",
+          ),
+        )!.account,
       ).toBe("Posts as collie in Example Co");
       fake.refuse("invalid_auth");
       expect(yield* probeSlack(env, (token) => slackApi(token, fake.client))).toMatchObject({

@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem } from "effect";
 import { exec } from "./support/command";
@@ -10,7 +13,7 @@ test("a fixture command drains both pipes, keeps its exit code, and inherits the
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-command-" });
-      const out = "ø🙂".repeat(50_000);
+      const out = pipe_("ø🙂", Str.repeat(50_000));
       yield* fs.writeFileString(`${dir}/output`, out);
       const ran = yield* exec(
         [
@@ -55,7 +58,7 @@ test(
           ]),
         );
         yield* until(() => fs.exists(pids).pipe(Effect.orDie), Boolean);
-        const [parent = 0, child = 0] = (yield* fs.readFileString(pids)).split(" ").map(Number);
+        const [parent, child = 0] = Arr.map(Str.split(yield* fs.readFileString(pids), " "), Number);
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
             try {

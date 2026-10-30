@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
 import type { Attached } from "../../../src/shared/attachments";
 
 const props = defineProps<{ file: Attached; removable?: boolean }>();
@@ -7,7 +9,7 @@ const emit = defineEmits<{ remove: [] }>();
 const { bytesOf } = useAttachments();
 const url = ref<string | null>(null);
 let gone = false;
-if (props.file.mediaType.startsWith("image/"))
+if (pipe(props.file.mediaType, Str.startsWith("image/")))
   void bytesOf(props.file).then((blob) => {
     if (blob !== null && !gone) url.value = URL.createObjectURL(blob);
   });

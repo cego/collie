@@ -2,6 +2,10 @@
 // launches and the engine's facts, with the waits and the merge request its card reads,
 // handed to `flow.ts`'s rules.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem } from "effect";
 import type { Flow, FlowLane, FlowNode, FlowRun, MrState } from "./board-model";
 import { mrRefOf, mrUrlOf } from "./board-model";
@@ -67,7 +71,7 @@ const requestedLink = (notice: {
   readonly canResume?: boolean;
 }): FlowRun => ({
   id: `run:${notice.machine.installation}:${notice.run}`,
-  title: `${notice.workflow[0]?.toUpperCase() ?? ""}${notice.workflow.slice(1)} on ${notice.machine.name}`,
+  title: `${Option.getOrUndefined(Option.map(Option.fromNullishOr(notice.workflow[0]), (present) => Str.toUpperCase(present))) ?? ""}${pipe_(notice.workflow, Str.slice(1))} on ${notice.machine.name}`,
   kind: "link",
   description: "",
   role: null,
@@ -106,8 +110,11 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
       Effect.map((done) => ({ launch, done })),
     ),
   );
-  const stop = (yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))).findLast(
-    (line) => line.operation === "stop",
+  const stop = Option.getOrUndefined(
+    Arr.findLast(
+      yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])),
+      (line) => line.operation === "stop",
+    ),
   );
   return laneOf({
     run: {
@@ -136,7 +143,9 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
 /** The Step of a Run that started a child, from the Run's own records. */
 const startedIn = Effect.fn("Flow.startedIn")(function* (parent: RunFacts, child: string) {
   const lines = yield* readStepLines(parent.dir);
-  const started = lines.findLast((line) => line.kind === "child" && line.run === child);
+  const started = Option.getOrUndefined(
+    Arr.findLast(lines, (line) => line.kind === "child" && line.run === child),
+  );
   if (started?.kind !== "child") return null;
   const key = started.key;
   for (const line of lines) if (line.kind === "enter" && line.key === key) return line.step.id;
@@ -176,13 +185,15 @@ export interface TaskFacts {
 
 /** A Task drawn as the work it took (ADR-draft-a-step-is-declared-where-its-work-is-written D3, D5). */
 export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, task: TaskFacts) {
-  const rows = [...task.rows].sort((one, other) => one.created.localeCompare(other.created));
-  const inTask = new Set(rows.map((run) => run.id));
+  const rows = [...task.rows].sort((one, other) =>
+    pipe_(one.created, Str.localeCompare(other.created)),
+  );
+  const inTask = new Set(Arr.map(rows, (run) => run.id));
   const machine = machineOf(env);
   const fs = yield* FileSystem.FileSystem;
-  const installation = (yield* fs
-    .readFileString(`${env.stateDir}/installation`)
-    .pipe(Effect.orElseSucceed(() => ""))).trim();
+  const installation = Str.trim(
+    yield* fs.readFileString(`${env.stateDir}/installation`).pipe(Effect.orElseSucceed(() => "")),
+  );
 
   const linkOf = Effect.fn("Flow.link")(function* (child: RunFacts) {
     const lane = yield* laneFor(env, child);
@@ -204,7 +215,10 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
         mr,
         mrState: mr === null ? null : (task.mrStates.get(task.mrLabel(mr)) ?? null),
         current:
-          at === null ? null : (lane.nodes.find((node) => node.id === at.node)?.said ?? null),
+          at === null
+            ? null
+            : (Option.getOrUndefined(Arr.findFirst(lane.nodes, (node) => node.id === at.node))
+                ?.said ?? null),
       }),
     };
   });
@@ -212,21 +226,27 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
   const lanes: FlowLane[] = [];
   for (const run of rows) {
     const repos = task.repoRunsOf.get(run.id) ?? [];
-    const own = task.all.filter(
+    const own = Arr.filter(
+      task.all,
       (one) => one.parent === run.id && !inTask.has(one.id) && !repos.includes(one),
     );
     const children: ChildFact[] = [];
     for (const child of own)
       children.push({
         id: child.id,
-        title: child.id.startsWith(`${run.id}.`) ? child.id.slice(run.id.length + 1) : child.id,
+        title: pipe_(child.id, Str.startsWith(`${run.id}.`))
+          ? pipe_(child.id, Str.slice(run.id.length + 1))
+          : child.id,
         created: child.created,
         link: yield* linkOf(child),
         wave: null,
       });
-    const waves = task.waves.filter((one) => one.parent === run.id);
+    const waves = Arr.filter(task.waves, (one) => one.parent === run.id);
     const planned = (repo: RunFacts) => {
-      const at = waves.findIndex((one) => one.run === repo.id);
+      const at = Option.getOrElse(
+        Arr.findFirstIndex(waves, (one) => one.run === repo.id),
+        () => -1,
+      );
       return at === -1 ? waves.length : at;
     };
     for (const repo of [...repos].sort((one, other) => planned(one) - planned(other)))
@@ -235,20 +255,21 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
         title: repo.repo ?? repo.id,
         created: repo.created,
         link: yield* linkOf(repo),
-        wave: waves.find((one) => one.run === repo.id)?.wave ?? 1,
+        wave: Option.getOrUndefined(Arr.findFirst(waves, (one) => one.run === repo.id))?.wave ?? 1,
       });
     const lane = yield* laneFor(env, run, {
       children,
-      toCome: waves.filter((one) => one.run === null),
+      toCome: Arr.filter(waves, (one) => one.run === null),
       wait: task.waitOf(run),
       offer: run.id === task.leader.id ? task.offer : null,
       readiness: run.id === task.merging ? task.readiness : null,
     });
-    const links = (yield* readRunLinks(run.dir)).map((one) => ({
+    const links = Arr.map(yield* readRunLinks(run.dir), (one) => ({
       step: one.step,
       node: requestedLink(one),
     }));
-    const requested = task.all.filter(
+    const requested = Arr.filter(
+      task.all,
       (one) =>
         !inTask.has(one.id) &&
         one.requestedBy?.run === run.id &&
@@ -257,10 +278,13 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
     if (requested.length > 0) {
       const launches = yield* readLaunches(env.stateDir, run.id);
       for (const child of requested) {
-        const launch = launches.findLast(
-          (one) =>
-            one.agent === child.requestedBy?.agent &&
-            (one.at === undefined || one.at <= epochMs(child.created)),
+        const launch = Option.getOrUndefined(
+          Arr.findLast(
+            launches,
+            (one) =>
+              one.agent === child.requestedBy?.agent &&
+              (one.at === undefined || one.at <= epochMs(child.created)),
+          ),
         );
         const link = yield* linkOf(child);
         links.push({
@@ -277,27 +301,32 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (env: PluginEnv, tas
         });
       }
     }
-    const nodes: FlowNode[] = lane.nodes.map((node) => {
-      const own = links.filter((one) => one.step === node.id);
+    const nodes: FlowNode[] = Arr.map(lane.nodes, (node) => {
+      const own = Arr.filter(links, (one) => one.step === node.id);
       const mr = mrRefOf(task.mrOf(run) ?? task.mr);
       return {
         ...node,
-        links: own.length === 0 ? node.links : own.map((one) => one.node),
+        links: own.length === 0 ? node.links : Arr.map(own, (one) => one.node),
         url:
           node.produces === "merge-request" && mr !== null ? (mrUrlOf(mr) ?? undefined) : node.url,
       };
     });
-    for (const link of links.filter((one) => !nodes.some((node) => node.id === one.step)))
+    for (const link of Arr.filter(links, (one) => !Arr.some(nodes, (node) => node.id === one.step)))
       nodes.push({ ...link.node, offPath: true, runs: [] });
     const linked = { ...lane, nodes };
-    const parent = run.parent === null ? undefined : rows.find((one) => one.id === run.parent);
+    const parent =
+      run.parent === null
+        ? undefined
+        : Option.getOrUndefined(Arr.findFirst(rows, (one) => one.id === run.parent));
     lanes.push(
       parent === undefined
         ? linked
         : { ...linked, startedBy: { run: parent.id, step: yield* startedIn(parent, run.id) } },
     );
   }
-  const leading = lanes.find((lane) => lane.run === task.leader.id);
+  const leading = Option.getOrUndefined(
+    Arr.findFirst(lanes, (lane) => lane.run === task.leader.id),
+  );
   const flow: Flow = {
     lanes,
     current: task.settled || leading === undefined ? null : currentOf(leading),

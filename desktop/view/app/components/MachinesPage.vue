@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { type OnboardRun, routeSaid, SETTLED } from "../../../src/shared/flock";
 import { buildOf, type InSync, NOT_LIVE_SAID, syncable } from "../../../src/shared/in-sync";
 import { type ScheduleAction, machineSchedules, scheduleAsk } from "../../../src/shared/schedules";
@@ -14,7 +16,9 @@ onMounted(() => void scheduled.refresh());
 const schedulesOf = (row: (typeof machines.value)[number]["row"]) => {
   const read =
     row.state === "live"
-      ? scheduled.machines.value.find(({ profile }) => profile === row.profile)
+      ? Option.getOrUndefined(
+          Arr.findFirst(scheduled.machines.value, ({ profile }) => profile === row.profile),
+        )
       : {
           installation: "",
           profile: row.profile,
@@ -26,7 +30,10 @@ const schedulesOf = (row: (typeof machines.value)[number]["row"]) => {
   return read === undefined ? null : { installation: read.installation, ...machineSchedules(read) };
 };
 const rows = computed(() =>
-  machines.value.map((machine) => ({ ...machine, schedules: schedulesOf(machine.row) })),
+  Arr.map(machines.value, (machine) => ({
+    ...machine,
+    schedules: schedulesOf(machine.row),
+  })),
 );
 const moving = ref<{ name: string; from: string } | null>(null);
 const movingOpen = computed({
@@ -36,12 +43,22 @@ const movingOpen = computed({
   },
 });
 const targets = computed(() =>
-  scheduled.machines.value
-    .filter(
+  Arr.map(
+    Arr.filter(
+      scheduled.machines.value,
       ({ unreachable, problem, installation }) =>
-        !unreachable && problem === null && installation !== moving.value?.from,
-    )
-    .map(({ installation, name }) => ({ installation, name })),
+        !unreachable &&
+        problem === null &&
+        installation !==
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(moving.value), (present) => present.from),
+          ),
+    ),
+    ({ installation, name }) => ({
+      installation,
+      name,
+    }),
+  ),
 );
 const ACTION = {
   pause: { label: "Pause", icon: "i-lucide-pause" },
@@ -64,7 +81,8 @@ const badgeOf = (state: InSync["state"]) =>
         ? { label: "Connecting", color: "neutral" as const }
         : { label: NOT_LIVE_SAID[state], color: "warning" as const };
 
-const missing = (run: OnboardRun) => run.steps.filter(({ status }) => !SETTLED.includes(status));
+const missing = (run: OnboardRun) =>
+  Arr.filter(run.steps, ({ status }) => !SETTLED.includes(status));
 </script>
 
 <template>

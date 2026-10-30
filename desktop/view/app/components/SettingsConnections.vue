@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import type { ConnectionId } from "../../../../src/connection-model";
 import type { SlackChoices } from "../../../../src/slack";
 import {
@@ -22,7 +26,9 @@ const { credentials, trouble: credentialsTrouble } = useCredentials();
 const { own, onboarding } = useFlock();
 const { job } = useOnboarding();
 const opened = ref<ConnectionId | null>(null);
-const current = computed(() => props.cards.find((card) => card.id === opened.value));
+const current = computed(() =>
+  Option.getOrUndefined(Arr.findFirst(props.cards, (card) => card.id === opened.value)),
+);
 const uses = computed(() =>
   opened.value === null ? [] : connectionUses(opened.value, props.workflows),
 );
@@ -30,51 +36,79 @@ const busy = ref<ConnectionId | null>(null);
 const done = ref<Partial<Record<ConnectionId, string>>>({});
 const host = ref("");
 const otherHost = ref(false);
-const saveHost = async () => {
-  if (await saveGitlabHost(host.value.trim())) {
-    host.value = "";
-    emit("refresh");
-  }
+const saveHost = () => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (yield* Effect.promise(() => Promise.resolve(saveGitlabHost(Str.trim(host.value))))) {
+        host.value = "";
+        emit("refresh");
+      }
+    }),
+  );
 };
 const team = (profile: string) =>
-  own.value
-    .find((row) => row.profile === profile)
-    ?.remembered.find((row) => row.key === "linear.team")?.value;
-const run = async (card: ReturnType<typeof connectionCards>[number]) => {
-  const action = card.primary;
-  if (action === null || busy.value !== null) return;
-  opened.value = card.id;
-  if (action.kind === "connect") {
-    if (card.id === "gitlab" && credentials.value !== null)
-      await openLink(credentials.value.tokenPage);
-    return;
-  }
-  busy.value = card.id;
-  delete done.value[card.id];
-  try {
-    if (action.kind === "reuse" && (card.id === "gitlab" || card.id === "github")) {
-      const said = await reuseConnection(card.id, action.from, action.to);
-      if (said !== null) done.value[card.id] = said;
-    } else if (action.kind === "login") {
-      const said = await githubLogin(action.to[0]!);
-      if (said !== null) done.value[card.id] = said;
-    } else if (action.kind === "setup") {
-      const started = await linearSetup(action.to[0]!);
-      if (started !== null) {
-        job.value = started;
-        done.value[card.id] = "Linear setup started; approve its login in your browser.";
+  Option.getOrUndefined(
+    Option.flatMap(
+      Option.fromNullishOr(
+        Option.getOrUndefined(Arr.findFirst(own.value, (row) => row.profile === profile)),
+      ),
+      (present) =>
+        Option.map(
+          Option.fromNullishOr(
+            Option.getOrUndefined(
+              Arr.findFirst(present.remembered, (row) => row.key === "linear.team"),
+            ),
+          ),
+          (present_) => present_.value,
+        ),
+    ),
+  );
+const run = (card: ReturnType<typeof connectionCards>[number]) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const action = card.primary;
+      if (action === null || busy.value !== null) return;
+      opened.value = card.id;
+      if (action.kind === "connect") {
+        const credential = credentials.value;
+        if (card.id === "gitlab" && credential !== null)
+          yield* Effect.promise(() => openLink(credential.tokenPage));
+        return;
       }
-    }
-    emit("refresh");
-  } finally {
-    busy.value = null;
-  }
+      busy.value = card.id;
+      delete done.value[card.id];
+      return yield* Effect.gen(function* () {
+        if (action.kind === "reuse" && (card.id === "gitlab" || card.id === "github")) {
+          const id = card.id;
+          const said = yield* Effect.promise(() => reuseConnection(id, action.from, action.to));
+          if (said !== null) done.value[card.id] = said;
+        } else if (action.kind === "login") {
+          const said = yield* Effect.promise(() => Promise.resolve(githubLogin(action.to[0]!)));
+          if (said !== null) done.value[card.id] = said;
+        } else if (action.kind === "setup") {
+          const started = yield* Effect.promise(() => Promise.resolve(linearSetup(action.to[0]!)));
+          if (started !== null) {
+            job.value = started;
+            done.value[card.id] = "Linear setup started; approve its login in your browser.";
+          }
+        }
+        emit("refresh");
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            busy.value = null;
+          }),
+        ),
+      );
+    }),
+  );
 };
 watch(
   () =>
-    [...onboarding.value.values()]
-      .map((one) => `${one.job}:${one.run.at}:${one.run.ready}`)
-      .join(","),
+    Arr.join(
+      Arr.map([...onboarding.value.values()], (one) => `${one.job}:${one.run.at}:${one.run.ready}`),
+      ",",
+    ),
   () => emit("refresh"),
 );
 </script>
@@ -136,9 +170,10 @@ watch(
         <p class="text-xs text-muted">
           Used by
           {{
-            connectionUses(card.id, workflows)
-              .map((row) => row.id)
-              .join(", ") || "no declared workflow"
+            Arr.join(
+              Arr.map(connectionUses(card.id, workflows), (row) => row.id),
+              ", ",
+            ) || "no declared workflow"
           }}
         </p>
         <p v-if="done[card.id]" class="text-xs text-success" role="status">{{ done[card.id] }}</p>
@@ -270,12 +305,12 @@ watch(
               type="submit"
               size="sm"
               label="Use this GitLab"
-              :disabled="host.trim() === ''"
+              :disabled="Str.trim(host) === ''"
               data-testid="save-gitlab-host"
             />
           </div>
           <p
-            v-if="host.trim() !== '' && host.trim() !== credentials.host"
+            v-if="Str.trim(host) !== '' && Str.trim(host) !== credentials.host"
             class="text-sm text-warning"
           >
             Changing GitLab forgets the token made for {{ credentials.host }}. Make one on the new

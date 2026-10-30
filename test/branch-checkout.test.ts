@@ -1,6 +1,10 @@
 // A branch checkout whose path is already held: two clones of one remote with the same
 // name want the same directory, and neither may be handed or harmed by the other's (#220).
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schedule } from "effect";
 import { runOnPath } from "./support/forge";
@@ -23,8 +27,8 @@ const git = (cwd: string, ...args: string[]) =>
     cwd,
   }).pipe(
     Effect.map((ran) => {
-      if (ran.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${ran.stderr}`);
-      return ran.stdout.trim();
+      if (ran.exitCode !== 0) throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);
+      return Str.trim(ran.stdout);
     }),
   );
 
@@ -72,7 +76,7 @@ const filesUnder = Effect.fn("branchCheckoutTest.filesUnder")(function* (dir: st
   const fs = yield* FileSystem.FileSystem;
   const files: Record<string, string> = {};
   for (const name of (yield* fs.readDirectory(dir, { recursive: true })).sort()) {
-    if (name.startsWith(".git/")) continue;
+    if (pipe_(name, Str.startsWith(".git/"))) continue;
     const at = `${dir}/${name}`;
     if ((yield* fs.stat(at)).type === "File") files[name] = yield* fs.readFileString(at);
   }
@@ -92,10 +96,12 @@ const looksOf = (dir: string) =>
 const checkoutsOf = (repo: string, branch: string) =>
   git(repo, "worktree", "list", "--porcelain").pipe(
     Effect.map((list) =>
-      list
-        .split(/\n\n/)
-        .filter((block) => block.includes(`branch refs/heads/${branch}`))
-        .map((block) => /^worktree (.+)$/m.exec(block)![1]),
+      Arr.map(
+        Arr.filter(Str.split(list, /\n\n/), (block) =>
+          pipe_(block, Str.includes(`branch refs/heads/${branch}`)),
+        ),
+        (block) => /^worktree (.+)$/m.exec(block)![1],
+      ),
     ),
   );
 
@@ -168,7 +174,16 @@ test(
     runOnPath(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        yield* fs.makeDirectory(first.slice(0, first.lastIndexOf("/")), { recursive: true });
+        yield* fs.makeDirectory(
+          pipe_(
+            first,
+            Str.slice(
+              0,
+              Option.getOrElse(pipe_(first, Str.lastIndexOf("/")), () => -1),
+            ),
+          ),
+          { recursive: true },
+        );
         yield* fs.symlink(`${rig.root}/gone`, first);
 
         const checkout = yield* ask();
@@ -244,8 +259,8 @@ test(
 
         const both = yield* Effect.all([ask(), ask()], { concurrency: 2 });
 
-        expect(both.map((one) => one.refused)).toEqual([null, null]);
-        expect(both.map((one) => one.cwd)).toEqual([`${first}-2`, `${first}-2`]);
+        expect(Arr.map(both, (one) => one.refused)).toEqual([null, null]);
+        expect(Arr.map(both, (one) => one.cwd)).toEqual([`${first}-2`, `${first}-2`]);
         expect(yield* checkoutsOf(cloneA, BRANCH)).toEqual([`${first}-2`]);
       }),
     ),

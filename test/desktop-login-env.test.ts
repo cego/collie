@@ -1,5 +1,6 @@
 // What Desktop takes of the login shell's environment, and that every child it starts is given it.
 
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem } from "effect";
 import {
@@ -18,7 +19,7 @@ const END = "<<collie-env-end-7f3a9c>>";
 
 test("variables are read NUL-separated, a value keeping its '=' and newlines", () => {
   const out = `${BEGIN}PATH=/a:/b\0GITTE_CWD=/w\0X=a=b\nc\0${END}`;
-  expect(Object.fromEntries(parseLoginEnv(out))).toEqual({
+  expect(Rec.fromEntries(parseLoginEnv(out))).toEqual({
     PATH: "/a:/b",
     GITTE_CWD: "/w",
     X: "a=b\nc",
@@ -27,7 +28,7 @@ test("variables are read NUL-separated, a value keeping its '=' and newlines", (
 
 test("what an rc file prints before and after is ignored", () => {
   const out = `Welcome\nPATH=nope\0${BEGIN}A=1\0${END}bye\0B=2\0`;
-  expect(Object.fromEntries(parseLoginEnv(out))).toEqual({ A: "1" });
+  expect(Rec.fromEntries(parseLoginEnv(out))).toEqual({ A: "1" });
 });
 
 test("no markers, or an unclosed one, takes nothing", () => {

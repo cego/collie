@@ -1,5 +1,7 @@
 // One merge request taken the rest of the way on a human's go; its agent's Output is never proof.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import {
   AnswerSchema,
   FindingSchema,
@@ -44,6 +46,7 @@ import {
   RolledBack,
   StagedMergeRequest,
   claiming,
+  fitting,
   nth,
   plays,
   quoted,
@@ -112,41 +115,58 @@ const pushing = (url: string) =>
 const rollingBack = (url: string) =>
   `rolling ${url}'s stage back to the newest release production carries`;
 
+const releaseCommit = (url: string) =>
+  `a release commit to ${url}'s default branch, where it makes one`;
+
+const watching = "watching the tag's pipeline there, never playing a production job";
+
 export const RELEASE_CLEARS = {
   answer: (url: string) => [
     pushing(url),
-    `never posting on ${url} or resolving a thread there: Collie replies`,
+    "never posting or resolving a thread there: Collie replies",
   ],
   fix: (url: string) => [pushing(url)],
   stageMergeRequest: (url: string) => [
     `playing, retrying and watching ${url}'s stage deploy job and stage check jobs (e2e-stage, smoke or the like) of the merge request's pipeline`,
-    rollingBack(url),
+    "rolling stage back to the newest release production carries",
     "never a production job",
   ],
   tag: (url: string) => [
-    `a release commit to ${url}'s default branch, where the repository makes one`,
-    `pushing an annotated version tag of ${url} to origin`,
-    `creating its release on ${url}, where the package publishes from its tags`,
-    `watching the tag's pipeline on ${url}, never playing a production job`,
+    releaseCommit(url),
+    "pushing an annotated version tag to origin",
+    "creating its release there, where the package publishes from its tags",
+    watching,
   ],
   /** An application's tag step, which stages the tag too. */
   stage: (url: string) => [
-    `a release commit to ${url}'s default branch, where it makes one`,
+    releaseCommit(url),
     "pushing an annotated version tag to origin, with no forge release",
-    "playing, retrying and watching the tag pipeline's stage deploy and check jobs until only production jobs waiting to be started are left",
+    "playing, retrying and watching the tag's stage deploy and check jobs",
     "rolling stage back to the newest release production carries",
     "never a production job",
   ],
   /** An application's tag step after its merge request was tested on stage. */
   tagTested: (url: string) => [
-    `a release commit to ${url}'s default branch, where it makes one`,
+    releaseCommit(url),
     "pushing an annotated version tag to origin, with no forge release",
-    `watching the tag's pipeline on ${url}, never playing a production job`,
+    watching,
   ],
   rollback: (url: string) => [`${rollingBack(url)}, never a production job`],
-  production: (url: string, jobs: ReadonlyArray<JobLink>) => [
-    `playing ${plays(jobs)} on ${url}, and no other job`,
-  ],
+  production: (url: string, jobs: ReadonlyArray<JobLink>) => {
+    const playing = (named: string) => [`playing ${named} on ${url}, and no other job`];
+    const under = (job: JobLink) =>
+      Str.startsWith(url)(job.url) ? Str.slice(url.length)(job.url) : job.url;
+    return fitting(
+      playing(
+        Arr.join(
+          Arr.map(jobs, (job) => `\`${job.name}\` at ${under(job)}`),
+          ", ",
+        ),
+      ),
+      playing(quoted(Arr.map(jobs, (job) => job.name))),
+      playing(`the ${jobs.length} production jobs its task names`),
+    );
+  },
 };
 
 const verdict = {
@@ -326,17 +346,18 @@ const playProduction = step({
 });
 
 const commentLines = (comments: ReadonlyArray<OpenComment>) =>
-  comments
-    .map((one) => {
+  Arr.join(
+    Arr.map(comments, (one) => {
       const where =
         one.file === null ? "" : ` on ${one.file}${one.line === null ? "" : `:${one.line}`}`;
-      const quoted = one.body
-        .split("\n")
-        .map((line) => `  > ${line}`)
-        .join("\n");
+      const quoted = Arr.join(
+        Arr.map(Str.split(one.body, "\n"), (line) => `  > ${line}`),
+        "\n",
+      );
       return `- \`${one.id}\` by ${one.author}, ${one.url}${where}:\n${quoted}`;
-    })
-    .join("\n");
+    }),
+    "\n",
+  );
 
 /** What a Release Run goes on from once its merge request is merged. */
 interface Landed {
@@ -350,7 +371,7 @@ interface Landed {
 const notReady = (standing: ReviewStanding) => {
   switch (standing._tag) {
     case "Waiting":
-      return standing.why.join("; ");
+      return Arr.join(standing.why, "; ");
     case "Moved":
       return `its head moved to ${short(standing.head)}`;
     case "Unanswered":
@@ -358,7 +379,7 @@ const notReady = (standing: ReviewStanding) => {
     case "Unreadable":
       return `the forge could not be read: ${standing.reason}`;
     default:
-      return standing._tag.toLowerCase();
+      return Str.toLowerCase(standing._tag);
   }
 };
 
@@ -529,16 +550,20 @@ export default defineWorkflow({
         : [...(testJobs.length > 0 ? [GO.test] : []), ...(stageJobs.length > 0 ? [GO.stage] : [])];
       const offered = assessed.is_package
         ? `${GO.release} merges it at that head and tags it;`
-        : [
-            testJobs.length > 0
-              ? `${GO.test} deploys that head to stage for you to test, unmerged, and asks for production before it merges.`
-              : "",
-            stageJobs.length > 0
-              ? `${GO.stage} merges it at that head and tags it, and stage gets the tag; production waits for a second go.`
-              : "",
-          ]
-            .filter((line) => line !== "")
-            .join(" ");
+        : Arr.join(
+            Arr.filter(
+              [
+                testJobs.length > 0
+                  ? `${GO.test} deploys that head to stage for you to test, unmerged, and asks for production before it merges.`
+                  : "",
+                stageJobs.length > 0
+                  ? `${GO.stage} merges it at that head and tags it, and stage gets the tag; production waits for a second go.`
+                  : "",
+              ],
+              (line) => line !== "",
+            ),
+            " ",
+          );
 
       const deploys = {
         applications: assessed.applications ?? [],
@@ -601,14 +626,14 @@ export default defineWorkflow({
             execute: Effect.gen(function* () {
               const checks = yield* host.approved(runId);
               const failed: string[] = [];
-              for (const spec of checks.filter((one) => one.ci === undefined)) {
+              for (const spec of Arr.filter(checks, (one) => one.ci === undefined)) {
                 const ran = yield* host
                   .verify({ runId, name: spec.name, cwd, ...pass })
                   .pipe(Effect.result);
                 if (ran._tag === "Failure") failed.push(`${spec.name}: ${ran.failure.reason}`);
                 else if (ran.success.result !== "pass") failed.push(`${spec.name} failed`);
               }
-              for (const spec of checks.filter((one) => one.ci !== undefined)) {
+              for (const spec of Arr.filter(checks, (one) => one.ci !== undefined)) {
                 const read = yield* host.ciJob({
                   runId,
                   cwd,
@@ -621,7 +646,7 @@ export default defineWorkflow({
               const head = (yield* host.evidence(runId, cwd)).final.head_sha;
               if (failed.length > 0 && parkWith !== null)
                 return yield* park(
-                  `The checks failed at ${short(head)} ${parkWith}: ${failed.join("; ")}`,
+                  `The checks failed at ${short(head)} ${parkWith}: ${Arr.join(failed, "; ")}`,
                 );
               return { head, failed };
             }),
@@ -666,7 +691,17 @@ export default defineWorkflow({
               after.head === before.head &&
               after.fingerprint === before.fingerprint &&
               (fixed.fixed ?? []).length === 0
-                ? `after fix-${n} changed nothing${disputed.length === 0 ? "" : `, disputing ${disputed.map((one) => `${one.title}: ${one.reason ?? "no reason given"}`).join("; ")}`}`
+                ? `after fix-${n} changed nothing${
+                    disputed.length === 0
+                      ? ""
+                      : `, disputing ${Arr.join(
+                          Arr.map(
+                            disputed,
+                            (one) => `${one.title}: ${one.reason ?? "no reason given"}`,
+                          ),
+                          "; ",
+                        )}`
+                  }`
                 : null;
             return { n, stalled };
           });
@@ -678,7 +713,7 @@ export default defineWorkflow({
           Effect.gen(function* () {
             let at = yield* checksAt(name, pass, null);
             for (let rounds = 1; at.failed.length > 0; rounds++) {
-              const findings = at.failed.map((title) => ({
+              const findings = Arr.map(at.failed, (title) => ({
                 severity: "blocker",
                 title,
                 detail: `Collie ran this Run's checks on ${short(at.head)}, the merge request's head, and this is what failed.`,
@@ -728,8 +763,8 @@ export default defineWorkflow({
           name: "share-settings",
           success: Schema.Struct({ on: Schema.Boolean, channel: Schema.String }),
           execute: Effect.gen(function* () {
-            const on = (yield* host.config(SHARE_SETTINGS.on)).trim() === "true";
-            const channel = (yield* host.config(SHARE_SETTINGS.channel)).trim();
+            const on = Str.trim(yield* host.config(SHARE_SETTINGS.on)) === "true";
+            const channel = Str.trim(yield* host.config(SHARE_SETTINGS.channel));
             return { on, channel };
           }),
         });
@@ -845,7 +880,7 @@ export default defineWorkflow({
                     const read = yield* host.reviewHead({
                       runId,
                       cwd,
-                      commits: answered.answers.flatMap((one) =>
+                      commits: Arr.flatMap(answered.answers, (one) =>
                         one.commit === undefined ? [] : [one.commit],
                       ),
                     });
@@ -857,7 +892,10 @@ export default defineWorkflow({
                     });
                     if (answers.replies.length === 0 && answers.carried.length > 0)
                       return yield* park(
-                        `answer-${n} answered none of the comments it was given: ${answers.carried.map((one) => one.url).join(", ")}`,
+                        `answer-${n} answered none of the comments it was given: ${Arr.join(
+                          Arr.map(answers.carried, (one) => one.url),
+                          ", ",
+                        )}`,
                       );
                     return { head: read.head, answers };
                   }),
@@ -887,7 +925,7 @@ export default defineWorkflow({
 
           gos += 1;
           const head = standing.head;
-          const approvers = standing.approvers.join(", ") || "nobody the forge names";
+          const approvers = Arr.join(standing.approvers, ", ") || "nobody the forge names";
           const answer = yield* mergeGo(
             ask({
               name: `go-${gos}`,
@@ -1146,7 +1184,7 @@ export default defineWorkflow({
               pipeline,
               proves: "staged",
               stage: tagStages ? [...new Set([...stageJobs, ...(staged.stage_jobs ?? [])])] : [],
-              production: (staged.production_jobs ?? []).map((job) => job.name),
+              production: Arr.map(staged.production_jobs ?? [], (job) => job.name),
             }),
           });
           if (read._tag === "StageFailed") {
@@ -1207,7 +1245,7 @@ export default defineWorkflow({
                 at: read.at,
                 merged: landed.sha,
                 pipeline: pipeline ?? "",
-                jobs: jobs.map((job) => job.name),
+                jobs: Arr.map(jobs, (job) => job.name),
               }),
             });
             if (now._tag === "Unproved")
@@ -1238,7 +1276,7 @@ export default defineWorkflow({
             jobs,
             played,
             url,
-            slug: landed.slugs.length === 0 ? undefined : landed.slugs.join(", "),
+            slug: landed.slugs.length === 0 ? undefined : Arr.join(landed.slugs, ", "),
           });
           if (!carried) return yield* Workflow.suspend(yield* WorkflowInstance);
         }),

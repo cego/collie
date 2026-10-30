@@ -1,5 +1,6 @@
 // One read of a merge request's review, judged against the head a Release Run proved.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { ReviewComment, ReviewRead } from "../src/forge/review";
 import { reviewWaitOf, settleAnswers, standingOf, waitsOnApproval } from "../src/review-wait";
@@ -233,7 +234,7 @@ test("a fixed answer is replied to with its commit only where the head carries i
   expect(settled.replies).toEqual([
     { id: "1", kind: "fixed", body: `${given[0]!.url}\n\nFixed in \`c0ffee12\`: renamed it` },
   ]);
-  expect(settled.carried.map((one) => one.id)).toEqual(["2"]);
+  expect(Arr.map(settled.carried, (one) => one.id)).toEqual(["2"]);
 });
 
 test("a disputed answer is replied to with its reason, and one left out is carried", () => {
@@ -251,7 +252,7 @@ test("a disputed answer is replied to with its reason, and one left out is carri
       body: `${given[0]!.url}\n\nNot changed: the name is the domain's`,
     },
   ]);
-  expect(settled.carried.map((one) => one.id)).toEqual(["2"]);
+  expect(Arr.map(settled.carried, (one) => one.id)).toEqual(["2"]);
 });
 
 test("a comment answered on the forge since is neither replied to nor carried", () => {

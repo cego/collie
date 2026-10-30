@@ -1751,6 +1751,12 @@ Effect 4.0.0 moved the workflow modules from rc.117's `effect/unstable/workflow`
 `effect/workflow`. A module still on the old path loads and runs until Collie 0.42.0, and
 `collie workflow check` reports the old path as a problem, which is how you hear of it.
 
+Effect 4.1 removed `effect/Crypto`. A random id comes from `SecureRandom` and a hash from
+`Digest`, both under `effect/crypto`, which the executable serves as it does `effect`. The
+host does not lend either, so your `layer` provides `SecureRandom.layerWebCrypto` or
+`Digest.layerWebCrypto`. A module that still imports `effect/Crypto` does not load, and
+`collie workflow check` names the import.
+
 ## Effect stays yours
 
 Collie makes the common cases convenient; it does not stand between you and Effect.

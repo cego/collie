@@ -10,6 +10,9 @@
 // offer is decided again at the moment it is invoked, because the facts move and so does
 // the code that declared it.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import type { ActionFacts } from "./sdk";
 import type { Schema } from "effect";
 import type { ConnectionId } from "./connection-model";
@@ -83,8 +86,11 @@ export function offersFrom(
       unavailable,
     });
   }
-  const first = offers.findIndex((one) => one.unavailable === null);
-  return offers.map((one, at) => (at === first ? { ...one, primary: true } : one));
+  const first = Option.getOrElse(
+    Arr.findFirstIndex(offers, (one) => one.unavailable === null),
+    () => -1,
+  );
+  return Arr.map(offers, (one, at) => (at === first ? { ...one, primary: true } : one));
 }
 
 /**
@@ -179,14 +185,14 @@ const met = (need: Need, facts: ActionFacts): boolean => {
 
 /** A definition's declared offers, as offers. The needs are the eligibility. */
 export function declaredIn(offers: ReadonlyArray<OfferDef>): Declared[] {
-  return offers.map((one) => ({
+  return Arr.map(offers, (one) => ({
     id: one.id,
     title: one.title,
     workflow: one.workflow,
     arguments: null,
     kind: one.kind,
     inputs: one.inputs,
-    eligible: (facts) => one.needs.every((need) => met(need, facts)),
+    eligible: (facts) => Arr.every(one.needs, (need) => met(need, facts)),
   }));
 }
 
@@ -217,7 +223,7 @@ export function inputsFor(
     }
   };
   const given: Record<string, Schema.Json> = {};
-  for (const [name, source] of Object.entries(offer.inputs)) {
+  for (const [name, source] of Rec.toEntries(offer.inputs)) {
     const filled = value(source, name);
     if (filled !== undefined) given[name] = filled;
   }

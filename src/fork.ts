@@ -3,7 +3,10 @@
 // a stub that `extends:` the parent and names only what you came to change, or a
 // full copy that stops tracking the parent altogether.
 
-import { Effect, FileSystem, Path, type PlatformError } from "effect";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { Effect, FileSystem, Path } from "effect";
 import { bodySections, contentHash } from "./definitions";
 import { unsafePathComponent } from "./naming";
 import { setFrontmatterKey, yamlScalar } from "./yaml";
@@ -94,9 +97,7 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
 
   const exists = yield* fs.writeFileString(path, text, { flag: "wx" }).pipe(
     Effect.as(false),
-    Effect.catch((cause: PlatformError.PlatformError) =>
-      cause.reason._tag === "AlreadyExists" ? Effect.succeed(true) : Effect.fail(cause),
-    ),
+    Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(true)),
   );
   if (exists)
     return {
@@ -142,7 +143,13 @@ function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOpti
       `  - id: ${yamlScalar(opts.step)}`,
       `    # Only the keys you change; the rest stay the original's.`,
     );
-    body.push(`## ${opts.step}`, "", opts.section?.trim() || "Your version of this step's prompt.");
+    body.push(
+      `## ${opts.step}`,
+      "",
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(opts.section), (present) => Str.trim(present)),
+      ) || "Your version of this step's prompt.",
+    );
   } else {
     head.push("# Add the keys you are changing; the rest stay the original's.");
     body.push(
@@ -151,5 +158,8 @@ function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOpti
     );
   }
   head.push("---");
-  return `${[head.join("\n"), body.join("\n")].filter((p) => p.trim()).join("\n\n")}\n`;
+  return `${Arr.join(
+    Arr.filter([Arr.join(head, "\n"), Arr.join(body, "\n")], (p) => Boolean(Str.trim(p))),
+    "\n\n",
+  )}\n`;
 }

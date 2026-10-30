@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, type FileSystem, type Path } from "effect";
 import { currentReports, openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
@@ -102,8 +104,9 @@ const driftUnresolved = (
   readDrift(dir).pipe(
     Effect.map(
       (lines) =>
-        currentReports(lines).find((report) => report.resolution === "escalated")?.constraint ??
-        null,
+        Option.getOrUndefined(
+          Arr.findFirst(currentReports(lines), (report) => report.resolution === "escalated"),
+        )?.constraint ?? null,
     ),
     Effect.orElseSucceed(() => null),
   );
@@ -123,7 +126,7 @@ const driftNote = (dir: string): Effect.Effect<string, never, FileSystem.FileSys
     Effect.map((lines) => {
       const open = openReports(lines);
       if (open.length === 0) return "";
-      const blocking = open.filter((report) => report.severity === "block").length;
+      const blocking = Arr.filter(open, (report) => report.severity === "block").length;
       return ` ${open.length} open drift report${open.length === 1 ? "" : "s"}${blocking > 0 ? `, ${blocking} blocking` : ""}.`;
     }),
     Effect.orElseSucceed(() => ""),

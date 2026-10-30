@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { injectRegistry } from "@effect/atom-vue";
 import { Clock, Effect } from "effect";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { settingStored } from "../../../../src/settings";
 import {
   desktopChange,
@@ -31,7 +34,7 @@ const {
   refresh: refreshConnections,
 } = useConnections();
 const connectionsNeedYou = computed(
-  () => connectionCards.value.filter((card) => card.needsYou).length,
+  () => Arr.filter(connectionCards.value, (card) => card.needsYou).length,
 );
 const {
   choices: slackChoices,
@@ -40,17 +43,18 @@ const {
   refresh: refreshSlack,
 } = useSlack();
 const slackDestinations = computed(() =>
-  connectionCards.value.some((card) => card.id === "slack" && card.account !== null)
+  Arr.some(connectionCards.value, (card) => card.id === "slack" && card.account !== null)
     ? slackChoices.value
     : null,
 );
-watch(connectionCards, () => {
-  void refreshSlack();
-});
-const refreshSlackConnection = () => {
-  void refreshConnections();
-  void refreshSlack();
-};
+watch(connectionCards, () => Effect.runPromise(Effect.promise(() => refreshSlack())));
+const refreshSlackConnection = () =>
+  Effect.runPromise(
+    Effect.all([Effect.promise(() => refreshConnections()), Effect.promise(() => refreshSlack())], {
+      concurrency: "unbounded",
+      discard: true,
+    }),
+  );
 const { desktopSettings, change } = useDesktopSettings();
 const { rows: machines, own, now } = useFlock();
 const { machines: catalogues, problem: catalogueProblem } = useCatalogues();
@@ -69,12 +73,14 @@ const sections = computed(() =>
     Effect.runSync(Clock.currentTimeMillis),
   ),
 );
-const agentRows = computed(() => sections.value.find(({ group }) => group === "Agents")!.rows);
+const agentRows = computed(
+  () => Option.getOrThrow(Arr.findFirst(sections.value, ({ group }) => group === "Agents")).rows,
+);
 const agentValue = (key: string) => {
-  const row = agentRows.value.find((row) => row.key === key)!;
+  const row = Option.getOrThrow(Arr.findFirst(agentRows.value, (row) => row.key === key));
   return row.value || row.fallback;
 };
-const profiles = computed(() => machines.value.map(({ profile }) => profile));
+const profiles = computed(() => Arr.map(machines.value, ({ profile }) => profile));
 const agentSettings = computed(() => ({
   harness: agentValue("harness"),
   model: agentValue("model"),
@@ -87,38 +93,55 @@ const fallbacks = computed(() =>
   fallbackList(agentValue("fallbacks"), catalogues.value, profiles.value, usage.value, now.value),
 );
 const choosing = ref(false);
-const chooseAgent = async (key: "harness" | "model" | "effort", value: string, reset = false) => {
-  if (choosing.value) return;
-  choosing.value = true;
-  const row = agentRows.value.find((row) => row.key === key)!;
-  forget(idOf(row));
-  try {
-    const reach = flockReach(readable.value, machines.value);
-    if ("refused" in reach) return void (refusals.value[idOf(row)] = reach.refused);
-    const changes = agentSettingChanges(
-      catalogues.value,
-      profiles.value,
-      agentSettings.value,
-      key,
-      reset ? row.fallback : key === "model" && value === "" ? "default" : value,
-    ).map((edit) => ({ ...edit, value: reset && edit.key === key ? "" : edit.value }));
-    const refused = await setFlockSettings(changes);
-    if (refused !== null) return void (refusals.value[idOf(row)] = refused);
-    for (const edit of changes)
-      saved.value[idOf(agentRows.value.find((row) => row.key === edit.key)!)] = true;
-  } finally {
-    choosing.value = false;
-  }
-};
-const chooseFallback = async (row: SettingRow, value: string) => {
-  if (choosing.value) return;
-  choosing.value = true;
-  try {
-    await set(row, value);
-  } finally {
-    choosing.value = false;
-  }
-};
+const chooseAgent = (key: "harness" | "model" | "effort", value: string, reset = false) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      if (choosing.value) return;
+      choosing.value = true;
+      const row = Option.getOrThrow(Arr.findFirst(agentRows.value, (row) => row.key === key));
+      forget(idOf(row));
+      yield* Effect.gen(function* () {
+        const reach = flockReach(readable.value, machines.value);
+        if ("refused" in reach) return void (refusals.value[idOf(row)] = reach.refused);
+        const changes = Arr.map(
+          agentSettingChanges(
+            catalogues.value,
+            profiles.value,
+            agentSettings.value,
+            key,
+            reset ? row.fallback : key === "model" && value === "" ? "default" : value,
+          ),
+          (edit) => ({ ...edit, value: reset && edit.key === key ? "" : edit.value }),
+        );
+        const refused = yield* Effect.promise(() => setFlockSettings(changes));
+        if (refused !== null) return void (refusals.value[idOf(row)] = refused);
+        for (const edit of changes)
+          saved.value[
+            idOf(Option.getOrThrow(Arr.findFirst(agentRows.value, (row) => row.key === edit.key)))
+          ] = true;
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            choosing.value = false;
+          }),
+        ),
+      );
+    }),
+  );
+const chooseFallback = (row: SettingRow, value: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      if (choosing.value) return;
+      choosing.value = true;
+      yield* setRow(row, value).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            choosing.value = false;
+          }),
+        ),
+      );
+    }),
+  );
 const resetRow = (row: SettingRow) =>
   row.key === "harness" || row.key === "model" || row.key === "effort"
     ? chooseAgent(row.key, "", true)
@@ -134,12 +157,12 @@ const toneClass = { ok: "text-primary", warn: "text-warning" } satisfies Record<
 const query = ref("");
 const onlySet = ref(false);
 const advancedOpen = ref(false);
-const filtering = computed(() => query.value.trim() !== "" || onlySet.value);
+const filtering = computed(() => Str.trim(query.value) !== "" || onlySet.value);
 const kept = (row: SettingRow) => {
-  const asked = query.value.trim().toLowerCase();
+  const asked = Str.toLowerCase(Str.trim(query.value));
   return (
     (!onlySet.value || row.set) &&
-    `${row.label} ${row.key} ${row.description}`.toLowerCase().includes(asked)
+    Str.includes(asked)(Str.toLowerCase(`${row.label} ${row.key} ${row.description}`))
   );
 };
 const LEADS: Partial<Record<SettingSection["group"], string>> = {
@@ -147,20 +170,20 @@ const LEADS: Partial<Record<SettingSection["group"], string>> = {
   Chat: "The Flock chat in Desktop, and each Machine's Native chat. The Flock chat's harness, model and effort are picked in its composer, on this computer.",
 };
 const shown = computed(() =>
-  sections.value.flatMap((section) => {
-    const rows = section.rows.filter(kept);
+  Arr.flatMap(sections.value, (section) => {
+    const rows = Arr.filter(section.rows, kept);
     if (rows.length === 0) return [];
-    const subs = [...new Set(rows.map(({ sub }) => sub))].map((sub) => ({
+    const subs = Arr.map([...new Set(Arr.map(rows, ({ sub }) => sub))], (sub) => ({
       sub,
-      rows: rows.filter((row) => row.sub === sub),
+      rows: Arr.filter(rows, (row) => row.sub === sub),
       collapsed: sub === "Advanced" && !advancedOpen.value && !filtering.value,
-      all: section.rows.filter((row) => row.sub === sub).length,
+      all: Arr.filter(section.rows, (row) => row.sub === sub).length,
     }));
     return [
       {
         ...section,
         subs,
-        set: section.rows.filter(({ set }) => set).length,
+        set: Arr.filter(section.rows, ({ set }) => set).length,
         lead:
           section.group === "Agents"
             ? `What every step's agent runs on, unless it names its own. ${catalogueProblem.value ?? agentSelects.value.lead}`
@@ -169,27 +192,31 @@ const shown = computed(() =>
     ];
   }),
 );
-const total = computed(() => sections.value.reduce((sum, { rows }) => sum + rows.length, 0));
+const total = computed(() => Arr.reduce(sections.value, 0, (sum, { rows }) => sum + rows.length));
 const shownCount = computed(() =>
-  shown.value.reduce((sum, { subs }) => sum + subs.reduce((n, { rows }) => n + rows.length, 0), 0),
+  Arr.reduce(
+    shown.value,
+    0,
+    (sum, { subs }) => sum + Arr.reduce(subs, 0, (n, { rows }) => n + rows.length),
+  ),
 );
 const showConnections = computed(
   () =>
     !onlySet.value &&
-    "connections gitlab github gh linear host token helle slack credentials glab gitlab_host".includes(
-      query.value.trim().toLowerCase(),
+    Str.includes(Str.toLowerCase(Str.trim(query.value)))(
+      "connections gitlab github gh linear host token helle slack credentials glab gitlab_host",
     ),
 );
 const showAbout = computed(
   () =>
     !filtering.value ||
-    "about version update collie desktop".includes(query.value.trim().toLowerCase()),
+    Str.includes(Str.toLowerCase(Str.trim(query.value)))("about version update collie desktop"),
 );
 const showOwn = computed(
   () =>
     !onlySet.value &&
-    "each machine's own projects.root chat_harness harnesses found remembered linear.team gitlab.assignee".includes(
-      query.value.trim().toLowerCase(),
+    Str.includes(Str.toLowerCase(Str.trim(query.value)))(
+      "each machine's own projects.root chat_harness harnesses found remembered linear.team gitlab.assignee",
     ),
 );
 const clearFilters = () => {
@@ -199,7 +226,7 @@ const clearFilters = () => {
 const goTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 
 const idOf = (row: SettingRow) =>
-  `${row.shared ? "flock" : "desktop"}-${row.key}`.replace(/\./g, "-");
+  Str.replace(/\./g, "-")(`${row.shared ? "flock" : "desktop"}-${row.key}`);
 /** What is typed into a field, until it is set. */
 const drafts = ref<Record<string, string>>({});
 const refusals = ref<Record<string, string>>({});
@@ -221,22 +248,27 @@ const typing = (row: SettingRow, typed: string) => {
   forget(idOf(row));
 };
 /** `typed` in the row's unit; empty unsets it. */
-const set = async (row: SettingRow, typed: string) => {
-  const id = idOf(row);
-  forget(id);
-  const refused = row.shared
-    ? await setShared(row, typed)
-    : await change(desktopChange(row.key, typed));
-  if (refused !== null) return void (refusals.value[id] = refused);
-  delete drafts.value[id];
-  saved.value[id] = true;
-};
-const setShared = async (row: SettingRow, typed: string) => {
-  const reach = flockReach(readable.value, machines.value);
-  if ("refused" in reach) return reach.refused;
-  const stored = settingStored(row.key, typed);
-  return "refused" in stored ? stored.refused : setFlockSetting(row.key, stored.stored);
-};
+const setRow = (row: SettingRow, typed: string) =>
+  Effect.gen(function* () {
+    const id = idOf(row);
+    forget(id);
+    const refused = row.shared
+      ? yield* setShared(row, typed)
+      : yield* Effect.promise(() => change(desktopChange(row.key, typed)));
+    if (refused !== null) return void (refusals.value[id] = refused);
+    delete drafts.value[id];
+    saved.value[id] = true;
+  });
+const set = (row: SettingRow, typed: string) => Effect.runPromise(setRow(row, typed));
+const setShared = (row: SettingRow, typed: string) =>
+  Effect.gen(function* () {
+    const reach = flockReach(readable.value, machines.value);
+    if ("refused" in reach) return reach.refused;
+    const stored = settingStored(row.key, typed);
+    return "refused" in stored
+      ? stored.refused
+      : yield* Effect.promise(() => setFlockSetting(row.key, stored.stored));
+  });
 interface Meta {
   readonly said: string;
   /** Its colour, as classes. */
@@ -258,9 +290,10 @@ const metaOf = (row: SettingRow): Meta => {
         : "Enter sets it · Esc puts it back",
       tone: row.multiline ? "text-warning" : "",
     };
-  if (row.edit?.startsWith("Taken from")) return { said: row.edit, tone: "text-info" };
+  if (row.edit !== null && Str.startsWith("Taken from")(row.edit))
+    return { said: row.edit, tone: "text-info" };
   return {
-    said: row.edit === null ? row.defaultSaid : `${row.edit} · ${row.defaultSaid.toLowerCase()}`,
+    said: row.edit === null ? row.defaultSaid : `${row.edit} · ${Str.toLowerCase(row.defaultSaid)}`,
     tone: "",
   };
 };
@@ -524,7 +557,7 @@ const drawnLine = computed(() =>
                           </p>
                         </div>
                         <div
-                          v-if="row.shared && ['harness', 'model', 'effort'].includes(row.key)"
+                          v-if="row.shared && Arr.contains(['harness', 'model', 'effort'], row.key)"
                           class="self-start"
                         >
                           <fieldset :disabled="choosing" class="contents">
@@ -662,7 +695,8 @@ const drawnLine = computed(() =>
                       </div>
                       <SlackDestination
                         v-if="
-                          ['release.approval_channel', 'slack.notification_channel'].includes(
+                          Arr.contains(
+                            ['release.approval_channel', 'slack.notification_channel'],
                             row.key,
                           )
                         "
@@ -835,9 +869,10 @@ const drawnLine = computed(() =>
               >
                 <template #slack-destination>
                   <div
-                    v-for="row in sections
-                      .flatMap((section) => section.rows)
-                      .filter((row) => row.key === 'slack.notification_channel')"
+                    v-for="row in Arr.filter(
+                      Arr.flatMap(sections, (section) => section.rows),
+                      (row) => row.key === 'slack.notification_channel',
+                    )"
                     :key="row.key"
                     class="flex flex-col gap-2"
                   >

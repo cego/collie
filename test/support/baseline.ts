@@ -9,6 +9,11 @@
 // prompts, the skill each step is started with — while the module decides everything that
 // happens: what is asked of whom, in what order, and what the answer starts next.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Struct from "effect/Struct";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
@@ -24,10 +29,12 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Path,
   Result,
   Schedule,
   Schema,
+  flow,
 } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./recorder";
@@ -45,7 +52,7 @@ import {
   type FakeMr,
   type ForgeModel,
 } from "./forge";
-import * as BunServices from "@effect/platform-bun/BunServices";
+import { platformLayer, type PlatformServices } from "../../src/platform";
 import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
 import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
@@ -227,14 +234,16 @@ const children = Layer.succeed(Children)(
         const wait = childWaits.get(child.invocation);
         if (wait !== undefined) yield* Deferred.await(wait);
         if (failing.has(child.invocation))
-          return yield* Effect.fail(new WorkflowError({ reason: `${child.invocation} failed` }));
+          return yield* new WorkflowError({
+            reason: `${child.invocation} failed`,
+          });
         return "done";
       }),
   }),
 );
 
 /** A host layer a test may wrap, for the one capability it has no service to answer with. */
-type HostOverride = Layer.Layer<Host, never, Host | BunServices.BunServices | ForgeHttp>;
+type HostOverride = Layer.Layer<Host, never, Host | PlatformServices | ForgeHttp>;
 
 /** The host's own layers, placing checkouts through the rig's herdr. */
 const foundation = () => ({
@@ -267,15 +276,22 @@ const session = <A, E>(
 ) =>
   Clock.clockWith((clock) =>
     run.pipe(
-      Effect.provide(agentsLayer(hostOf())),
-      Effect.provide(children),
       Effect.provide(
-        override === undefined
-          ? foundationLayer(foundation())
-          : override.pipe(Layer.provideMerge(foundationLayer(foundation()))),
-      ),
-      Effect.provide(
-        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+        agentsLayer(hostOf()).pipe(
+          Layer.provideMerge(children),
+          Layer.provideMerge(
+            override === undefined
+              ? foundationLayer(foundation())
+              : override.pipe(Layer.provideMerge(foundationLayer(foundation()))),
+          ),
+          Layer.provideMerge(
+            ConfigProvider.layerAdd(
+              ConfigProvider.fromUnknown({
+                COLLIE_FORGE_API: forgeApi,
+              }),
+            ),
+          ),
+        ),
       ),
       Effect.scoped,
       // The Run keeps the scenario's clock; the hang guard is real time.
@@ -314,7 +330,7 @@ const laneIn = (runId: string, state: RunState = "running") =>
         state,
         dir: runDir(dir, runId),
         engine: {
-          questions: asked.map((row) => ({
+          questions: Arr.map(asked, (row) => ({
             name: row.decision,
             asked: row.asked,
             answered: row.answered,
@@ -346,10 +362,11 @@ const laneRead = (runId: string) =>
     Effect.scoped,
   );
 
-const nodeIn = (lane: FlowLane, id: string) => lane.nodes.find((node) => node.id === id);
+const nodeIn = (lane: FlowLane, id: string) =>
+  Option.getOrUndefined(Arr.findFirst(lane.nodes, (node) => node.id === id));
 
 /** Each node of a lane as its id and state, in the lane's order. */
-const statesOf = (lane: FlowLane) => lane.nodes.map((node) => [node.id, node.state]);
+const statesOf = (lane: FlowLane) => Arr.map(lane.nodes, (node) => [node.id, node.state]);
 
 /** A Run's lane once `ready` holds of it, while the Run goes on in the background. */
 const laneWhen = (options: {
@@ -406,7 +423,8 @@ const laneWhen = (options: {
           const store = yield* Store;
           yield* until(
             () => store.asked(options.runId),
-            (rows) => rows.some((row) => row.decision === finish.decision && row.answer === null),
+            (rows) =>
+              Arr.some(rows, (row) => row.decision === finish.decision && row.answer === null),
           );
           yield* answerDecision(made, {
             name: finish.decision,
@@ -425,7 +443,7 @@ const laneWhen = (options: {
 const undeclaredWork = () =>
   Effect.gen(function* () {
     const ours = new Set(
-      (
+      Arr.map(
         [
           "plan",
           "implement",
@@ -438,8 +456,9 @@ const undeclaredWork = () =>
           "investigate",
           "self-improve",
           "tune-up",
-        ] as const
-      ).map(shipped),
+        ] as const,
+        shipped,
+      ),
     );
     const loose: Array<readonly [string, string]> = [];
     for (const [runId, entry] of modules)
@@ -509,7 +528,7 @@ const parked = (options: {
         );
         return yield* until(
           () => store.asked(options.runId),
-          (rows) => rows.some((row) => row.decision === options.decision),
+          (rows) => Arr.some(rows, (row) => row.decision === options.decision),
         );
       }).pipe(Effect.provide(made.layer));
     }),
@@ -533,6 +552,8 @@ const answered = (options: {
           executionId: yield* made.workflow.executionId(payload),
           value: options.value,
         }).pipe(Effect.orDie);
+        // Authored modules expose Schema.Unknown failures; this test records their actual result.
+        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
         return yield* made.workflow.execute(payload).pipe(Effect.result);
       }).pipe(Effect.provide(made.layer));
     }),
@@ -561,7 +582,7 @@ const answeredThen = (options: {
         yield* made.workflow.execute(payload, { discard: true });
         return yield* until(
           () => store.asked(options.runId),
-          (rows) => rows.some((row) => row.decision === options.until && row.answer === null),
+          (rows) => Arr.some(rows, (row) => row.decision === options.until && row.answer === null),
         );
       }).pipe(Effect.provide(made.layer));
     }),
@@ -572,8 +593,11 @@ const optionsOf = (
   rows: ReadonlyArray<{ readonly decision: string; readonly options: string }>,
   decision: string,
 ): ReadonlyArray<string> =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.String)))(
-    rows.find((row) => row.decision === decision)?.options ?? "[]",
+  flow(
+    Schema.decodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+    Result.getOrThrow,
+  )(
+    Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === decision))?.options ?? "[]",
   );
 
 const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
@@ -581,23 +605,37 @@ const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
 
 /** Every message herdr was asked to deliver, in order; each names the work it is about. */
 const prompts = () =>
-  rig
-    .calls()
-    .pipe(
-      Effect.map((calls) =>
-        calls.filter((call) => call.cmd === "agent prompt").map((call) => call.argv?.[3] ?? ""),
+  rig.calls().pipe(
+    Effect.map((calls) =>
+      Arr.map(
+        Arr.filter(calls, (call) => call.cmd === "agent prompt"),
+        (call) => call.argv?.[3] ?? "",
       ),
-    );
+    ),
+  );
 
 /** The Clearance line typed with an operation's step message, or "" for none. */
 const clearance = (runId: string, operation: string) =>
   prompts().pipe(
     Effect.map(
       (typed) =>
-        typed
-          .find((one) => one.includes(`${dir}/agents/${runId}/${operation}.prompt.md`))
-          ?.split("\n")
-          .find((line) => line.startsWith("Cleared for this step: ")) ?? "",
+        Option.getOrUndefined(
+          Option.map(
+            Option.fromNullishOr(
+              Option.getOrUndefined(
+                Arr.findFirst(typed, (one) =>
+                  pipe(one, Str.includes(`${dir}/agents/${runId}/${operation}.prompt.md`)),
+                ),
+              ),
+            ),
+            (present) =>
+              Option.getOrUndefined(
+                Arr.findFirst(Str.split(present, "\n"), (line) =>
+                  pipe(line, Str.startsWith("Cleared for this step: ")),
+                ),
+              ),
+          ),
+        ) ?? "",
     ),
   );
 
@@ -605,7 +643,9 @@ const clearance = (runId: string, operation: string) =>
 const checkoutBranch = (runId: string, operation = "mr") =>
   Effect.gen(function* () {
     const root = /^Project root: (.+)$/m.exec(yield* asked(runId, operation))?.[1];
-    return (yield* exec(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: root })).stdout.trim();
+    return Str.trim(
+      (yield* exec(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: root })).stdout,
+    );
   });
 
 /** What an operation was actually asked, which is the file its message named. */
@@ -651,7 +691,7 @@ scenario(
           decision: "next",
         });
         const lane = yield* laneNow("r-architecture-flow", "waiting");
-        expect(lane.nodes.map((node) => [node.title, node.state, node.declared])).toEqual([
+        expect(Arr.map(lane.nodes, (node) => [node.title, node.state, node.declared])).toEqual([
           ["Architecture", "done", true],
           ["What next", "needs-you", true],
         ]);
@@ -675,7 +715,13 @@ scenario(
         });
 
         // A skill that refuses a model's own invocation is started as a human starts one.
-        expect((yield* prompts())[0]?.startsWith("/improve-codebase-architecture ")).toBe(true);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr((yield* prompts())[0]), (present________________) =>
+              pipe(present________________, Str.startsWith("/improve-codebase-architecture ")),
+            ),
+          ),
+        ).toBe(true);
         // The content is the Markdown's, with this Run's own directory rendered into it.
         const work = yield* asked("r-arch", "architecture");
         expect(work).toContain(`Report: ${runDir(dir, "r-arch")}/plan/ARCHITECTURE.md`);
@@ -823,8 +869,11 @@ scenario(
       Effect.gen(function* () {
         yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
         yield* parked({ entry: shipped("plan"), runId: "r-plan", input: GOAL, decision: "next-1" });
-        const planner = (yield* everyRegistered(hostOf().env.stateDir)).find(
-          (one) => one.runId === "r-plan",
+        const planner = Option.getOrUndefined(
+          Arr.findFirst(
+            yield* everyRegistered(hostOf().env.stateDir),
+            (one) => one.runId === "r-plan",
+          ),
         )!;
         const route = yield* session(
           Agents.pipe(Effect.flatMap((agents) => agents.askRoute("planner", ["r-impl", "r-plan"]))),
@@ -855,7 +904,8 @@ scenario(
         expect(sent.delivered).toBe(true);
         expect((yield* prompts()).at(-1)).toContain("From implementer of r-impl on laptop.");
         expect(
-          (yield* deliveriesOf(hostOf().env.stateDir, "r-plan")).some(
+          Arr.some(
+            yield* deliveriesOf(hostOf().env.stateDir, "r-plan"),
             (one) =>
               one.delivery.cause.ref === "planner-question" && SENT_STATES.has(one.delivery.state),
           ),
@@ -883,7 +933,7 @@ scenario(
         // the spec, which is why the spec needs no second telling of what was decided.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
         expect(starts).toHaveLength(1);
 
         const sent = yield* prompts();
@@ -894,8 +944,20 @@ scenario(
         expect(interview).toContain(`collie run answer r-plan "Implement now"`);
         // The two skills that write the plan are started, not merely mentioned: both
         // refuse an agent that invokes them itself.
-        expect(sent[1]?.startsWith("/to-spec ")).toBe(true);
-        expect(sent[2]?.startsWith("/to-tickets ")).toBe(true);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(sent[1]), (present_________________) =>
+              pipe(present_________________, Str.startsWith("/to-spec ")),
+            ),
+          ),
+        ).toBe(true);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(sent[2]), (present__________________) =>
+              pipe(present__________________, Str.startsWith("/to-tickets ")),
+            ),
+          ),
+        ).toBe(true);
         expect(yield* asked("r-plan", "spec")).toContain(
           `Write the spec to \`${runDir(dir, "r-plan")}/plan/SPEC.md\``,
         );
@@ -904,14 +966,14 @@ scenario(
         expect(yield* persona("r-plan", "grill")).toContain("You are a planner");
         // A changelog is for a rewrite, which none of the first three steps is.
         for (const step of ["grill", "spec", "tickets"])
-          expect([step, (yield* asked("r-plan", step)).includes("changelog")]).toEqual([
+          expect([step, pipe(yield* asked("r-plan", step), Str.includes("changelog"))]).toEqual([
             step,
             false,
           ]);
-        expect((yield* persona("r-plan", "grill")).replace(/\s+/g, " ")).toContain(
+        expect(pipe(yield* persona("r-plan", "grill"), Str.replace(/\s+/g, " "))).toContain(
           "Write a `changelog` only when a step asks for one",
         );
-        expect((yield* asked("r-plan", "spec")).replace(/\s+/g, " ")).toContain(
+        expect(pipe(yield* asked("r-plan", "spec"), Str.replace(/\s+/g, " "))).toContain(
           "the spec does not restate them",
         );
         expect((yield* launched())[0]?.args).toContain("--model opus --effort high");
@@ -934,7 +996,7 @@ scenario(
           decision: "next-1",
         });
 
-        const told = (yield* asked("r-plan-checks", "tickets")).replace(/\s+/g, " ");
+        const told = pipe(yield* asked("r-plan-checks", "tickets"), Str.replace(/\s+/g, " "));
         expect(told).toContain("The Run's own Checks are already the gate");
         expect(told).toContain("never a ticket's criterion");
         expect(told).toContain(`This Run's Checks: - check: true (in ${rig.projectDir})`);
@@ -956,7 +1018,7 @@ scenario(
           decision: "next-1",
         });
 
-        const told = (yield* asked("r-plan-no-checks", "tickets")).replace(/\s+/g, " ");
+        const told = pipe(yield* asked("r-plan-no-checks", "tickets"), Str.replace(/\s+/g, " "));
         expect(told).toContain("The Run's own Checks are already the gate");
         expect(told).toContain("never a ticket's criterion");
         expect(told).not.toContain("This Run's Checks:");
@@ -1077,7 +1139,7 @@ scenario(
           value: "Implement now",
         });
 
-        expect(started.map((one) => [one.invocation, one.input, one.options])).toEqual([
+        expect(Arr.map(started, (one) => [one.invocation, one.input, one.options])).toEqual([
           [
             "implement",
             { plan: `${runDir(dir, "r-plan-fan")}/plan` },
@@ -1112,7 +1174,7 @@ scenario(
         expect(started).toEqual([]);
         yield* fs.remove(controlPath(dir, HOLD, runId));
         expect(said(yield* resumed(options))).toContain("3 repositories built in 2 wave(s)");
-        expect(started.map((one) => one.invocation)).toEqual([
+        expect(Arr.map(started, (one) => one.invocation)).toEqual([
           "implement-api",
           "implement-docs",
           "implement-web",
@@ -1139,8 +1201,8 @@ scenario(
 
         expect(said(result)).toContain("3 repositories built in 2 wave(s)");
         // The repositories nothing waits on first, then the one waiting on the api.
-        expect(started.map((one) => [one.invocation, one.workflow, one.options])).toEqual(
-          ["api", "docs", "web"].map((repo) => [
+        expect(Arr.map(started, (one) => [one.invocation, one.workflow, one.options])).toEqual(
+          Arr.map(["api", "docs", "web"], (repo) => [
             `implement-${repo}`,
             "self",
             {
@@ -1152,8 +1214,8 @@ scenario(
           ]),
         );
         // Nobody attends a repository's share, so each ends at its merge request.
-        expect(started.map((one) => one.input)).toEqual(
-          ["api", "docs", "web"].map(() => ({ plan, ...FINISH })),
+        expect(Arr.map(started, (one) => one.input)).toEqual(
+          Arr.map(["api", "docs", "web"], () => ({ plan, ...FINISH })),
         );
         // The parent builds nothing itself, and asks nothing.
         expect(yield* questions("r-impl-fan")).toEqual([]);
@@ -1177,10 +1239,15 @@ scenario(
           input: { plan: `${runDir(dir, "r-impl-stop")}/plan` },
         });
 
-        expect(started.map((one) => one.invocation)).toEqual(["implement-api", "implement-docs"]);
+        expect(Arr.map(started, (one) => one.invocation)).toEqual([
+          "implement-api",
+          "implement-docs",
+        ]);
         expect(reasonOf(result)).toContain("api did not build. Not run: web, waiting on api.");
         // Named for nothing, every repository's branch is named after the Run that fanned out.
-        expect(new Set(started.map((one) => one.options?.task))).toEqual(new Set(["r-impl-stop"]));
+        expect(new Set(Arr.map(started, (one) => one.options?.task))).toEqual(
+          new Set(["r-impl-stop"]),
+        );
       }),
     ),
   120_000,
@@ -1200,8 +1267,8 @@ scenario(
           options: { branch: "topic", risks: "security" },
         });
 
-        expect(started.map((one) => one.options)).toEqual(
-          ["api", "docs", "web"].map((repo) => ({
+        expect(Arr.map(started, (one) => one.options)).toEqual(
+          Arr.map(["api", "docs", "web"], (repo) => ({
             branch: "topic",
             risks: "security",
             repo,
@@ -1298,7 +1365,7 @@ scenario(
         expect(result._tag).toBe("Failure");
         expect(reasonOf(result)).toContain("build: no_progress");
         expect(reasonOf(result)).toContain("Continue with a follow-up Run to finish delivery.");
-        expect((yield* prompts()).join("\n")).not.toContain("r-impl-blocked/mr.prompt.md");
+        expect(Arr.join(yield* prompts(), "\n")).not.toContain("r-impl-blocked/mr.prompt.md");
       }),
     ),
   120_000,
@@ -1348,7 +1415,7 @@ scenario(
           `fix_unverified: check "unit" has no verification record`,
         );
         expect(reasonOf(result)).toContain("Continue with a follow-up Run to finish delivery.");
-        expect((yield* prompts()).join("\n")).not.toContain("r-impl-unverified/mr.prompt.md");
+        expect(Arr.join(yield* prompts(), "\n")).not.toContain("r-impl-unverified/mr.prompt.md");
       }),
     ),
   120_000,
@@ -1426,6 +1493,7 @@ scenario(
         const result = yield* ran({
           entry: shipped("plan"),
           runId: "r-plan-alone",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
           input: { ...GOAL, then: "implement" },
         });
 
@@ -1436,7 +1504,7 @@ scenario(
           expect(prompt).toContain(UNATTENDED);
           expect(prompt).not.toContain("collie run answer");
         }
-        expect(started.map((one) => [one.workflow, one.input, one.options])).toEqual([
+        expect(Arr.map(started, (one) => [one.workflow, one.input, one.options])).toEqual([
           [
             "implement",
             { plan: `${runDir(dir, "r-plan-alone")}/plan`, ...FINISH },
@@ -1463,7 +1531,7 @@ scenario(
           working: { operation: "spec", output: SPEC },
           rest: [TICKETS],
         });
-        expect(lane.nodes.map((node) => [node.title, node.state, node.declared])).toEqual([
+        expect(Arr.map(lane.nodes, (node) => [node.title, node.state, node.declared])).toEqual([
           ["Grill", "done", true],
           ["Spec", "running", true],
           ["Tickets", "expected", true],
@@ -1490,10 +1558,16 @@ scenario(
 
         const lane = yield* laneNow("r-plan-refined", "succeeded");
         expect(
-          lane.nodes.filter((node) => node.id === "menu").map((node) => node.runs.length),
+          Arr.map(
+            Arr.filter(lane.nodes, (node) => node.id === "menu"),
+            (node) => node.runs.length,
+          ),
         ).toEqual([2]);
         expect(
-          lane.nodes.filter((node) => node.id === "refine").map((node) => node.offPath),
+          Arr.map(
+            Arr.filter(lane.nodes, (node) => node.id === "refine"),
+            (node) => node.offPath,
+          ),
         ).toEqual([true]);
       }),
     ),
@@ -1509,6 +1583,7 @@ scenario(
         yield* ran({
           entry: shipped("plan"),
           runId: "r-plan-flow-alone",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
           input: { ...GOAL, then: "implement" },
         });
         expect(statesOf(yield* laneNow("r-plan-flow-alone", "succeeded"))).toEqual([
@@ -1535,6 +1610,7 @@ scenario(
         const result = yield* ran({
           entry: shipped("plan"),
           runId: "r-plan-alone-bad",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
           input: { ...GOAL, then: "implement" },
         });
 
@@ -1581,7 +1657,7 @@ scenario(
         // and then the planner, told what was found rather than sent to read it.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
         expect(starts).toHaveLength(2);
         expect(yield* prompts()).toHaveLength(5);
         expect(yield* asked("r-plan-two", "second-opinion-1")).toContain(
@@ -1602,12 +1678,15 @@ const fork = (name: Shipped, id: string, agents: string) =>
     Effect.flatMap((fs) =>
       fs.writeFileString(
         `${rig.root}/user/workflows/${id}.workflow.ts`,
-        [
-          `import shipped from "${ROOT}workflows/${name}.workflow.ts";`,
-          `import { defineWorkflow } from "collie";`,
-          `export default defineWorkflow({ ...shipped, id: "${id}", agents: ${agents} });`,
-          "",
-        ].join("\n"),
+        Arr.join(
+          [
+            `import shipped from "${ROOT}workflows/${name}.workflow.ts";`,
+            `import { defineWorkflow } from "collie";`,
+            `export default defineWorkflow({ ...shipped, id: "${id}", agents: ${agents} });`,
+            "",
+          ],
+          "\n",
+        ),
       ),
     ),
     Effect.as(`${rig.root}/user/workflows/${id}.workflow.ts`),
@@ -1617,13 +1696,16 @@ const fork = (name: Shipped, id: string, agents: string) =>
 const launched = () =>
   rig.calls().pipe(
     Effect.map((calls) =>
-      calls
-        .map((call) => call.argv ?? [])
-        .filter((argv) => argv[1] === "start")
-        .map((argv) => ({
+      Arr.map(
+        Arr.filter(
+          Arr.map(calls, (call) => call.argv ?? []),
+          (argv) => argv[1] === "start",
+        ),
+        (argv) => ({
           kind: argv[argv.indexOf("--kind") + 1],
-          args: argv.slice(argv.indexOf("--") + 1).join(" "),
-        })),
+          args: Arr.join(argv.slice(argv.indexOf("--") + 1), " "),
+        }),
+      ),
     ),
   );
 
@@ -1689,11 +1771,15 @@ once(
           decision: "post-1",
         });
 
-        const byPersona = Object.fromEntries(
-          (yield* launched()).map((one) => [
-            /agents\/r-review-panel\/([^ ]+)\.persona\.md/.exec(one.args)?.[1],
-            one.kind,
-          ]),
+        const byPersona = Rec.fromEntries(
+          Arr.map(
+            yield* launched(),
+            (one) =>
+              [
+                String(/agents\/r-review-panel\/([^ ]+)\.persona\.md/.exec(one.args)?.[1]),
+                one.kind,
+              ] as const,
+          ),
         );
         expect(byPersona).toEqual({ "review-1": "claude", "review-2": "pi", synthesize: "claude" });
         const fanIn = yield* asked("r-review-panel", "synthesize");
@@ -1803,7 +1889,9 @@ scenario(
         );
         expect(optionsOf(rows, "post-1")).toEqual(["Don't post"]);
         expect(forge.requests()).toEqual([]);
-        expect((yield* forge.calls()).filter((line) => line.startsWith("pr "))).toEqual([]);
+        expect(
+          Arr.filter(yield* forge.calls(), (line) => pipe(line, Str.startsWith("pr "))),
+        ).toEqual([]);
         yield* bin.restore();
       }),
     ),
@@ -1955,13 +2043,13 @@ scenario(
 
 const REVIEWED = {
   gitlab: {
-    diff: "glab mr diff '30' --repo 'gitlab.example.com/group/app'",
-    view: "glab mr view '30' --repo 'gitlab.example.com/group/app'",
+    diff: "glab mr diff 30 --repo gitlab.example.com/group/app",
+    view: "glab mr view 30 --repo gitlab.example.com/group/app",
     other: "gh",
   },
   github: {
-    diff: "gh pr diff '30' --repo 'owner/repo'",
-    view: "gh pr view '30' --repo 'owner/repo'",
+    diff: "gh pr diff 30 --repo owner/repo",
+    view: "gh pr view 30 --repo owner/repo",
     other: "glab",
   },
 } as const;
@@ -2015,7 +2103,7 @@ for (const name of ["gitlab", "github"] as const) {
           const clean = { ...SYNTHESIS, verdict: "clean", findings: [] };
           const { said: message, model } = yield* posted(`r-review-${name}-clean`, clean);
           expect(message).toContain("and approved it");
-          expect(Object.values(model.notes ?? {})).toHaveLength(1);
+          expect(Rec.values(model.notes ?? {})).toHaveLength(1);
           expect(model.approved).toHaveLength(1);
         }),
       ),
@@ -2030,7 +2118,7 @@ for (const name of ["gitlab", "github"] as const) {
           const { said: message, model } = yield* posted(`r-review-${name}-findings`, SYNTHESIS);
           expect(message).toContain("posted the review to");
           expect(message).not.toContain("approve");
-          expect(Object.values(model.notes ?? {})).toHaveLength(1);
+          expect(Rec.values(model.notes ?? {})).toHaveLength(1);
           expect(model.approved ?? []).toEqual([]);
         }),
       ),
@@ -2078,7 +2166,9 @@ scenario(
         const listed = yield* exec(["git", "worktree", "list", "--porcelain"], {
           cwd: rig.projectDir,
         });
-        expect(listed.stdout.match(/^branch refs\/heads\/feature$/gm)).toHaveLength(1);
+        expect(
+          Option.getOrNull(pipe(listed.stdout, Str.match(/^branch refs\/heads\/feature$/gm))),
+        ).toHaveLength(1);
         // A clean review still asks, so a merge request review can still be posted.
         expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
       }),
@@ -2131,7 +2221,7 @@ scenario(
         const there = yield* verified(reviewed);
         expect(there._tag === "Failure" ? there.failure.reason : "").toBe("");
         expect(
-          (yield* readVerifications(evidenceDir(dir, "r-fix-tree"))).map((one) => one.cwd),
+          Arr.map(yield* readVerifications(evidenceDir(dir, "r-fix-tree")), (one) => one.cwd),
         ).toEqual([reviewed]);
         const started = yield* verified(rig.projectDir);
         expect(started._tag === "Failure" ? started.failure.reason : "").toContain(
@@ -2144,19 +2234,25 @@ scenario(
         expect(fix).not.toContain("Do not push");
         expect(fix).toContain("has an open merge request");
         expect(fix).toContain("never force");
-        expect(fix.replace(/\s+/g, " ")).toContain(
+        expect(pipe(fix, Str.replace(/\s+/g, " "))).toContain(
           "Collie checked before this round started that it does not merge itself once green",
         );
         expect(fix).toContain("has no open merge request, do not push");
         expect(fix).toContain("Never open or edit a merge request, and never comment");
-        const section = fix.slice(fix.indexOf("The review is written"), fix.indexOf("OUTPUT_PATH"));
+        const section = pipe(
+          fix,
+          Str.slice(
+            Option.getOrElse(pipe(fix, Str.indexOf("The review is written")), () => -1),
+            Option.getOrElse(pipe(fix, Str.indexOf("OUTPUT_PATH")), () => -1),
+          ),
+        );
         expect(section).not.toMatch(/\b(glab|gh) /);
         expect(yield* asked("r-fix-tree", "review-2-1")).toContain(`Project root: ${reviewed}`);
 
         const row = yield* session(Store.pipe(Effect.flatMap((store) => store.run("r-fix-tree"))));
-        const placed = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Any))(
+        const placed = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Any))(
           row?.checkout ?? "null",
-        );
+        ).pipe(Effect.orDie);
         expect(placed).toMatchObject({
           cwd: reviewed,
           branch: "feature",
@@ -2184,10 +2280,10 @@ scenario(
         });
 
         expect(optionsOf(rows, "post-1")).toEqual(["Don't post"]);
-        expect(rows.find((row) => row.decision === "post-1")?.prompt).toContain(
-          "HEAD is not a branch, so there is nothing to fix on it",
-        );
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-1"))?.prompt,
+        ).toContain("HEAD is not a branch, so there is nothing to fix on it");
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -2230,9 +2326,9 @@ scenario(
         });
 
         expect(optionsOf(rows, "post-1")).toEqual(["Post to merge request", "Don't post"]);
-        expect(rows.find((row) => row.decision === "post-1")?.prompt).toContain(
-          `${rig.projectDir} has no remote, so group/project!42 may not be its own`,
-        );
+        expect(
+          Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-1"))?.prompt,
+        ).toContain(`${rig.projectDir} has no remote, so group/project!42 may not be its own`);
       }),
     ),
   120_000,
@@ -2259,15 +2355,15 @@ scenario(
           until: "post-2",
         });
         expect(optionsOf(rows, "post-2")).toEqual(["Don't post"]);
-        expect(rows.find((row) => row.decision === "post-2")?.prompt).toContain(
-          "HEAD is not a branch, so there is nothing to fix on it",
-        );
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-2"))?.prompt,
+        ).toContain("HEAD is not a branch, so there is nothing to fix on it");
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
 
         yield* answered({ ...review, decision: "post-2", value: "Don't post" });
         const fs = yield* FileSystem.FileSystem;
         const log = yield* fs.readFileString(`${runDir(dir, "r-fix-refused")}/log.txt`);
-        expect(log.split("fix: nothing fixed, HEAD is not a branch").length - 1).toBe(1);
+        expect(Str.split(log, "fix: nothing fixed, HEAD is not a branch").length - 1).toBe(1);
       }),
     ),
   120_000,
@@ -2288,7 +2384,7 @@ scenario(
         const target = "branch:main...feature";
         yield* rig.queueOutputs([
           SYNTHESIS,
-          ...["a", "b", "c", "d"].flatMap((title) => [fixed, raising(title)]),
+          ...Arr.flatMap(["a", "b", "c", "d"], (title) => [fixed, raising(title)]),
         ]);
         yield* parked({
           entry: shipped("review"),
@@ -2382,11 +2478,13 @@ scenario(
           until: "post-2",
         });
 
-        const handed = (yield* prompts()).filter((text) => text.includes("review.md"));
+        const handed = Arr.filter(yield* prompts(), (text) =>
+          pipe(text, Str.includes("review.md")),
+        );
         expect(handed).toHaveLength(1);
         expect(handed[0]).toContain(`${runDir(dir, "r-review-live")}/review.md`);
         // One agent, the lone reviewer; the fix went to the one already here.
-        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
 
         // Collie cannot see that agent finish, so the human says when to look again, and
         // the next review is a follow-up of this one rather than a fresh start.
@@ -2432,17 +2530,17 @@ scenario("implement offers Stage as a follow-up on a succeeded Run with its merg
         claim: null,
       };
       const offered = offersFrom(declared, facts, { self: idOf("implement") });
-      expect(offered.map((offer) => [offer.id, offer.title, offer.workflow])).toContainEqual([
+      expect(Arr.map(offered, (offer) => [offer.id, offer.title, offer.workflow])).toContainEqual([
         "stage",
         "Stage",
         "stage",
       ]);
-      const stage = offered.find((offer) => offer.id === "stage")!;
+      const stage = Option.getOrUndefined(Arr.findFirst(offered, (offer) => offer.id === "stage"))!;
       expect(inputsFor(stage, { runDir: "/r", facts, input: {} })).toEqual({ mr: OPENED.mr_url });
       for (const over of [{ succeeded: false }, { mrUrl: null }, { disposed: true }])
-        expect(offersFrom(declared, { ...facts, ...over }).map((offer) => offer.id)).not.toContain(
-          "stage",
-        );
+        expect(
+          Arr.map(offersFrom(declared, { ...facts, ...over }), (offer) => offer.id),
+        ).not.toContain("stage");
     }),
   ),
 );
@@ -2480,25 +2578,31 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       // and neither answer comes from the workflow being called "review".
       const review = yield* declaredIn(shipped("review"));
       expect(
-        offersFrom(review, facts({ openFindings: 2, diffTarget: "branch:main...HEAD" }), {
-          self: idOf("review"),
-        }).map((offer) => [offer.id, offer.workflow, offer.primary]),
+        Arr.map(
+          offersFrom(review, facts({ openFindings: 2, diffTarget: "branch:main...HEAD" }), {
+            self: idOf("review"),
+          }),
+          (offer) => [offer.id, offer.workflow, offer.primary],
+        ),
       ).toEqual([
         ["fix-open", "implement", true],
         ["run-again", idOf("review"), false],
       ]);
       expect(
-        offersFrom(review, facts({ diffTarget: "branch:main...HEAD" })).map((offer) => offer.id),
+        Arr.map(
+          offersFrom(review, facts({ diffTarget: "branch:main...HEAD" })),
+          (offer) => offer.id,
+        ),
       ).toEqual(["run-again"]);
 
       const implement = yield* declaredIn(shipped("implement"));
       expect(
-        offersFrom(implement, facts({ succeeded: false, branch: "feature" })).map((o) => o.id),
+        Arr.map(offersFrom(implement, facts({ succeeded: false, branch: "feature" })), (o) => o.id),
       ).toEqual(["follow-up"]);
       const mrUrl = "https://gitlab.example.com/group/project/-/merge_requests/7";
       const delivered = facts({ outcome: "feature", branch: "feature", mrUrl });
       const offered = offersFrom(implement, delivered, { self: idOf("implement") });
-      expect(offered.map((o) => [o.id, o.title, o.workflow])).toEqual([
+      expect(Arr.map(offered, (o) => [o.id, o.title, o.workflow])).toEqual([
         ["release", "Release", "release"],
         ["stage", "Stage", "stage"],
         ["follow-up", "Keep going on this", idOf("implement")],
@@ -2508,17 +2612,20 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       });
       expect(offersFrom(implement, { ...delivered, disposed: true })).toEqual([]);
       expect(
-        offersFrom(implement, facts({ outcome: "feature", branch: "feature" })).map((o) => o.id),
+        Arr.map(
+          offersFrom(implement, facts({ outcome: "feature", branch: "feature" })),
+          (o) => o.id,
+        ),
       ).toEqual(["follow-up"]);
-      expect(offersFrom(implement, { ...delivered, succeeded: false }).map((o) => o.id)).toEqual([
-        "follow-up",
-      ]);
+      expect(
+        Arr.map(offersFrom(implement, { ...delivered, succeeded: false }), (o) => o.id),
+      ).toEqual(["follow-up"]);
 
       // A plan offers what it wrote, and only once it has written something.
       const plan = yield* declaredIn(shipped("plan"));
-      expect(offersFrom(plan, facts({ outcome: "plan", planIssues: 3 })).map((o) => o.id)).toEqual([
-        "implement-now",
-      ]);
+      expect(
+        Arr.map(offersFrom(plan, facts({ outcome: "plan", planIssues: 3 })), (o) => o.id),
+      ).toEqual(["implement-now"]);
       // A follow-up is hidden once somebody has said what became of the work.
       expect(offersFrom(plan, facts({ outcome: "plan", planIssues: 3, disposed: true }))).toEqual(
         [],
@@ -2532,12 +2639,12 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       const renovate = yield* declaredIn(shipped("renovate"));
       const failed = facts({ succeeded: false, claim: "project" });
       const recovery = offersFrom(renovate, failed, { self: idOf("renovate") });
-      expect(recovery.map((offer) => [offer.id, offer.workflow])).toEqual([
+      expect(Arr.map(recovery, (offer) => [offer.id, offer.workflow])).toEqual([
         ["recover", idOf("renovate")],
       ]);
       const unclaimed = facts({ succeeded: false });
       const again = offersFrom(renovate, unclaimed, { self: idOf("renovate") });
-      expect(again.map((offer) => [offer.id, offer.workflow])).toEqual([
+      expect(Arr.map(again, (offer) => [offer.id, offer.workflow])).toEqual([
         ["renovate-again", idOf("renovate")],
       ]);
       expect(offersFrom(renovate, facts({ succeeded: true }))).toEqual([]);
@@ -2574,7 +2681,13 @@ once(
 
         // The same question, the same persona, the same report — the module decides all
         // of it, and none of it came from where the file was saved.
-        expect((yield* prompts())[0]?.startsWith("/improve-codebase-architecture ")).toBe(true);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr((yield* prompts())[0]), (present___________________) =>
+              pipe(present___________________, Str.startsWith("/improve-codebase-architecture ")),
+            ),
+          ),
+        ).toBe(true);
         expect(yield* asked("r-mine", "architecture")).toContain(
           `Report: ${runDir(dir, "r-mine")}/plan/ARCHITECTURE.md`,
         );
@@ -2611,6 +2724,8 @@ const ran = (options: {
         options: options.options,
       });
       const payload = { runId: options.runId, input: options.input };
+      // Authored modules expose Schema.Unknown failures; this test records their actual result.
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
       return yield* made.workflow.execute(payload).pipe(Effect.result, Effect.provide(made.layer));
     }),
     options.host,
@@ -2628,7 +2743,7 @@ scenario(
           input: { goal: "Why is the peer behind?" },
         });
         const lane = yield* laneNow("r-investigate-flow", "succeeded");
-        expect(lane.nodes.map((node) => [node.title, node.state, node.produces])).toEqual([
+        expect(Arr.map(lane.nodes, (node) => [node.title, node.state, node.produces])).toEqual([
           ["Investigate", "done", "evidence"],
         ]);
       }),
@@ -2665,25 +2780,34 @@ scenario(
   120_000,
 );
 
-const asApproved = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
-const asJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
+const asApproved = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
+  Result.getOrThrow,
+);
+const asJson = flow(
+  Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
+  Result.getOrThrow,
+);
 
 /** What a human approved Collie to run for this Run, frozen where a start would freeze it. */
 const approve = (runId: string, names: ReadonlyArray<string>) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
-      fs
-        .makeDirectory(evidenceDir(dir, runId), { recursive: true })
-        .pipe(
-          Effect.andThen(
-            fs.writeFileString(
-              `${evidenceDir(dir, runId)}/approved.json`,
-              asApproved(
-                names.map((name) => ({ name, executable: "true", argv: [], cwd: rig.projectDir })),
-              ),
+      fs.makeDirectory(evidenceDir(dir, runId), { recursive: true }).pipe(
+        Effect.andThen(
+          fs.writeFileString(
+            `${evidenceDir(dir, runId)}/approved.json`,
+            asApproved(
+              Arr.map(names, (name) => ({
+                name,
+                executable: "true",
+                argv: [],
+                cwd: rig.projectDir,
+              })),
             ),
           ),
         ),
+      ),
     ),
     Effect.orDie,
   );
@@ -2715,7 +2839,7 @@ const levelRepository = () =>
     yield* fs.copy(`${made}/project`, rig.projectDir);
     const config = `${rig.projectDir}/.git/config`;
     const text = yield* fs.readFileString(config);
-    yield* fs.writeFileString(config, text.replace(`${made}/origin.git`, origin));
+    yield* fs.writeFileString(config, pipe(text, Str.replace(`${made}/origin.git`, origin)));
   }).pipe(Effect.orDie);
 
 // Per home: a `--rerun-each` run removes the last run's.
@@ -2843,18 +2967,17 @@ scenario(
         // its own, because it may not vouch for the change.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
         expect(starts).toHaveLength(2);
         // Tabs open in the order their agents started, whatever the workflow is called.
-        const tabs = yield* rig
-          .calls()
-          .pipe(
-            Effect.map((calls) =>
-              calls
-                .filter((call) => call.cmd === "tab create")
-                .map((call) => call.argv?.[(call.argv?.indexOf("--label") ?? -2) + 1]),
+        const tabs = yield* rig.calls().pipe(
+          Effect.map((calls) =>
+            Arr.map(
+              Arr.filter(calls, (call) => call.cmd === "tab create"),
+              (call) => call.argv?.[(call.argv?.indexOf("--label") ?? -2) + 1],
             ),
-          );
+          ),
+        );
         expect(tabs).toEqual(["Implementer", "Reviewer · review-1"]);
         // The second ticket is handed what the first left, not the whole transcript.
         const second = yield* asked("r-impl", "02-second.md");
@@ -2870,9 +2993,14 @@ scenario(
         ).toContain(`"status":"done"`);
         // Collie keeps progress, so the card has one entry per ticket and no second slug.
         expect(
-          (yield* readCheckpoints(runDir(dir, "r-impl")))
-            .map(({ checkpoint }) => [checkpoint.ticket, checkpoint.status])
-            .toSorted(),
+          Arr.sortWith(
+            Arr.map(yield* readCheckpoints(runDir(dir, "r-impl")), ({ checkpoint }) => [
+              checkpoint.ticket,
+              checkpoint.status,
+            ]),
+            (value) => value,
+            (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+          ),
         ).toEqual([
           ["01-first.md", "done"],
           ["02-second.md", "done"],
@@ -2961,12 +3089,15 @@ scenario(
   120_000,
 );
 
-const CRITERIA = [
-  "## Acceptance criteria",
-  "",
-  "- [ ] **Counted.** Every registry is counted once.",
-  "- [ ] **Named.** Each one is named in the log.",
-].join("\n");
+const CRITERIA = Arr.join(
+  [
+    "## Acceptance criteria",
+    "",
+    "- [ ] **Counted.** Every registry is counted once.",
+    "- [ ] **Named.** Each one is named in the log.",
+  ],
+  "\n",
+);
 
 scenario(
   "a criterion the builder left unanswered goes back to it before any reviewer, who sees every answer",
@@ -3016,9 +3147,9 @@ scenario(
           "acceptance criterion not answered: **Named.** Each one is named in the log.",
         );
         expect(back).not.toContain("not answered: **Counted.**");
-        const order = (yield* prompts()).flatMap((message) =>
-          ["01-first.md.criteria-1", "02-second.md", "review-1"].filter((operation) =>
-            message.includes(`/${operation}.prompt.md`),
+        const order = Arr.flatMap(yield* prompts(), (message) =>
+          Arr.filter(["01-first.md.criteria-1", "02-second.md", "review-1"], (operation) =>
+            pipe(message, Str.includes(`/${operation}.prompt.md`)),
           ),
         );
         expect(order).toEqual(["01-first.md.criteria-1", "02-second.md", "review-1"]);
@@ -3074,7 +3205,7 @@ scenario(
         expect(why).toContain("**Named.** Each one is named in the log.");
         expect(why).toContain("Continue with a follow-up Run to finish delivery.");
         expect(why).toContain("Stop was answered");
-        const sent = (yield* prompts()).join("\n");
+        const sent = Arr.join(yield* prompts(), "\n");
         expect(sent).toContain("01-first.md.criteria-2.prompt.md");
         expect(sent).not.toContain("review-1");
         expect(sent).not.toContain("02-second.md.prompt.md");
@@ -3118,7 +3249,10 @@ scenario(
         const ticket = `${plan}/issues/01-first.md`;
         yield* fs.writeFileString(
           ticket,
-          (yield* fs.readFileString(ticket)).replace("named in the log", "named in the audit log"),
+          pipe(
+            yield* fs.readFileString(ticket),
+            Str.replace("named in the log", "named in the audit log"),
+          ),
         );
         yield* fs.writeFileString(
           `${agents}/01-first.md.json`,
@@ -3182,7 +3316,7 @@ scenario(
         const ticket = `${plan}/issues/01-first.md`;
         yield* fs.writeFileString(
           ticket,
-          (yield* fs.readFileString(ticket)).replace(COUNTED, COUNTED_AMENDED),
+          pipe(yield* fs.readFileString(ticket), Str.replace(COUNTED, COUNTED_AMENDED)),
         );
         yield* fs.writeFileString(
           `${agents}/01-first.md.json`,
@@ -3247,7 +3381,7 @@ scenario(
         const ticket = `${plan}/issues/01-first.md`;
         yield* fs.writeFileString(
           ticket,
-          (yield* fs.readFileString(ticket)).replace(named, amended),
+          pipe(yield* fs.readFileString(ticket), Str.replace(named, amended)),
         );
         yield* fs.writeFileString(
           `${agents}/01-first.md.criteria-1.json`,
@@ -3276,12 +3410,15 @@ scenario(
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
         yield* repository();
-        const shared = [
-          "## Acceptance criteria",
-          "",
-          "- [ ] **Checks.** The first is checked.",
-          "- [ ] **Checks.** The second is checked.",
-        ].join("\n");
+        const shared = Arr.join(
+          [
+            "## Acceptance criteria",
+            "",
+            "- [ ] **Checks.** The first is checked.",
+            "- [ ] **Checks.** The second is checked.",
+          ],
+          "\n",
+        );
         const plan = yield* planOf([
           { file: "01-first.md", title: "the first one", checks: "unit", body: shared },
           { file: "02-second.md", title: "the second one", checks: "unit" },
@@ -3310,9 +3447,11 @@ scenario(
         const ticket = `${plan}/issues/01-first.md`;
         yield* fs.writeFileString(
           ticket,
-          (yield* fs.readFileString(ticket))
-            .replace("- [ ] **Checks.** The first is checked.\n", "")
-            .replace("The second is checked.", "The second is checked twice."),
+          pipe(
+            yield* fs.readFileString(ticket),
+            Str.replace("- [ ] **Checks.** The first is checked.\n", ""),
+            Str.replace("The second is checked.", "The second is checked twice."),
+          ),
         );
         yield* fs.writeFileString(`${agents}/01-first.md.criteria-1.json`, asJson(BUILT));
         const result = yield* Fiber.join(running);
@@ -3370,7 +3509,10 @@ scenario(
         const ticket = `${plan}/issues/01-first.md`;
         yield* fs.writeFileString(
           ticket,
-          (yield* fs.readFileString(ticket)).replace("named in the log", "named in the audit log"),
+          pipe(
+            yield* fs.readFileString(ticket),
+            Str.replace("named in the log", "named in the audit log"),
+          ),
         );
         yield* fs.writeFileString(
           `${agents}/01-first.md.criteria-1.json`,
@@ -3407,13 +3549,16 @@ scenario(
             file: "01-first.md",
             title: "the first one",
             checks: "unit",
-            body: [
-              "",
-              "## After merge",
-              "",
-              "- The nightly deploy counts each registry once.",
-              "- [ ] The dashboard shows it.",
-            ].join("\n"),
+            body: Arr.join(
+              [
+                "",
+                "## After merge",
+                "",
+                "- The nightly deploy counts each registry once.",
+                "- [ ] The dashboard shows it.",
+              ],
+              "\n",
+            ),
           },
         ]);
         yield* approve("r-after-merge", ["unit"]);
@@ -3528,7 +3673,7 @@ scenario(
                 "Hand back",
                 "Stop",
               ]);
-              expect((yield* prompts()).join("\n")).not.toContain("review-1");
+              expect(Arr.join(yield* prompts(), "\n")).not.toContain("review-1");
               yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
               return yield* ended(run.status);
             }),
@@ -3539,7 +3684,7 @@ scenario(
         expect(outcomeText(status)).toContain(
           "acceptance criterion not met: **Named.** Each one is named in the log.",
         );
-        const sent = (yield* prompts()).join("\n");
+        const sent = Arr.join(yield* prompts(), "\n");
         expect(sent).toContain("01-first.md.criteria-2.prompt.md");
         expect(sent).not.toContain("01-first.md.criteria-3.prompt.md");
         expect(sent).not.toContain("review-1");
@@ -3581,9 +3726,9 @@ scenario(
               const ticket = `${plan}/issues/01-first.md`;
               yield* fs.writeFileString(
                 ticket,
-                (yield* fs.readFileString(ticket)).replace(
-                  "named in the log",
-                  "named in the audit log",
+                pipe(
+                  yield* fs.readFileString(ticket),
+                  Str.replace("named in the log", "named in the audit log"),
                 ),
               );
               yield* run.answer("01-first.md.criteria-unmet-1", "Hand back");
@@ -3630,10 +3775,10 @@ const stallAsked = (
   until(
     () => Effect.all([run.asked, run.status]),
     ([rows, got]) =>
-      rows.some((row) => row.decision === name && row.answer === null) ||
+      Arr.some(rows, (row) => row.decision === name && row.answer === null) ||
       got.status === "complete" ||
       got.status === "failed",
-  ).pipe(Effect.map(([rows]) => rows.filter((row) => row.decision === name)));
+  ).pipe(Effect.map(([rows]) => Arr.filter(rows, (row) => row.decision === name)));
 
 scenario(
   "a criteria hand-back that changed nothing and reported a blocker asks, and Stop fails the Run before any review",
@@ -3664,7 +3809,7 @@ scenario(
                 "Hand back",
                 "Stop",
               ]);
-              expect((yield* prompts()).join("\n")).not.toContain(
+              expect(Arr.join(yield* prompts(), "\n")).not.toContain(
                 "01-first.md.criteria-2.prompt.md",
               );
               yield* run.answer("01-first.md.criteria-stalled-1", "Stop");
@@ -3679,7 +3824,7 @@ scenario(
           "01-first.md: a criteria hand-back reported a blocker and changed nothing, so no review starts",
         );
         expect(why).toContain("**Named.** Each one is named in the log.");
-        const sent = (yield* prompts()).join("\n");
+        const sent = Arr.join(yield* prompts(), "\n");
         expect(sent).not.toContain("01-first.md.criteria-2.prompt.md");
         expect(sent).not.toContain("review-1");
       }),
@@ -3718,7 +3863,7 @@ scenario(
         expect(yield* asked("r-handed-again", "01-first.md.criteria-2")).toContain(
           "acceptance criterion not answered: **Named.** Each one is named in the log.",
         );
-        expect((yield* prompts()).join("\n")).not.toContain("01-first.md.criteria-3.prompt.md");
+        expect(Arr.join(yield* prompts(), "\n")).not.toContain("01-first.md.criteria-3.prompt.md");
       }),
     ),
   120_000,
@@ -3748,7 +3893,9 @@ scenario(
             Effect.gen(function* () {
               expect(yield* stallAsked(run, "01-first.md.criteria-unmet-1")).toHaveLength(1);
               expect(
-                (yield* run.asked).filter((row) => row.decision.includes("criteria-stalled")),
+                Arr.filter(yield* run.asked, (row) =>
+                  pipe(row.decision, Str.includes("criteria-stalled")),
+                ),
               ).toHaveLength(0);
               yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
               return yield* ended(run.status);
@@ -3758,7 +3905,7 @@ scenario(
 
         expect(status.status).toBe("failed");
         expect(outcomeText(status)).toContain("after 2 hand-backs");
-        expect((yield* prompts()).join("\n")).toContain("01-first.md.criteria-2.prompt.md");
+        expect(Arr.join(yield* prompts(), "\n")).toContain("01-first.md.criteria-2.prompt.md");
       }),
     ),
   120_000,
@@ -3885,7 +4032,7 @@ for (const [kind, plan] of [
           yield* noMergeRequests;
           yield* repository();
           const fs = yield* FileSystem.FileSystem;
-          const runId = `r-spec-${kind.replace(/\W/g, "-")}`;
+          const runId = `r-spec-${pipe(kind, Str.replace(/\W/g, "-"))}`;
           yield* approve(runId, ["unit"]);
           yield* fs.makeDirectory(`${runDir(dir, runId)}/plan`, { recursive: true });
           yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
@@ -3968,7 +4115,7 @@ scenario(
 const withOrigin = () =>
   Effect.gen(function* () {
     const git = (cwd: string, ...args: string[]) =>
-      exec(["git", ...args], { cwd }).pipe(Effect.map((done) => done.stdout.trim()));
+      exec(["git", ...args], { cwd }).pipe(Effect.map((done) => Str.trim(done.stdout)));
     const remote = `${rig.root}/origin.git`;
     const upstream = `${rig.root}/upstream`;
     yield* git(rig.root, "init", "-q", "--bare", "-b", "master", remote);
@@ -4032,7 +4179,11 @@ const builtUntilParked = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const plan = yield* planOf(
-      tickets.map((file) => ({ file, title: file.replace(/\.md$/, ""), checks: "unit" })),
+      Arr.map(tickets, (file) => ({
+        file,
+        title: pipe(file, Str.replace(/\.md$/, "")),
+        checks: "unit",
+      })),
     );
     yield* approve(runId, ["unit"]);
     yield* rig.queueOutputs(outputs);
@@ -4048,9 +4199,9 @@ const builtUntilParked = (
     const logged = () =>
       fs.readFileString(`${runDir(dir, runId)}/log.txt`).pipe(Effect.orElseSucceed(() => ""));
     const result = yield* Effect.raceFirst(
-      Effect.map(Fiber.join(running), Option.some),
+      Effect.asSome(Fiber.join(running)),
       Effect.as(
-        until(logged, (said) => said.includes(parkedOn)),
+        until(logged, (said) => pipe(said, Str.includes(parkedOn))),
         Option.none(),
       ),
     );
@@ -4083,9 +4234,10 @@ scenario(
 
         expect(log).toContain(`integrated master@${moved}`);
         // A merge commit on the branch, never a rebase: what was built is still its parent.
-        const parents = (yield* git(rig.projectDir, "rev-list", "--parents", "-n", "1", "HEAD"))
-          .split(" ")
-          .slice(1);
+        const parents = Str.split(
+          yield* git(rig.projectDir, "rev-list", "--parents", "-n", "1", "HEAD"),
+          " ",
+        ).slice(1);
         expect(parents).toHaveLength(2);
         expect(parents[1]).toBe(moved);
         expect(yield* asked("r-drift", "02-second.md")).not.toContain("conflicts in");
@@ -4127,9 +4279,10 @@ scenario(
           `Collie merged origin/master (${moved}) into this branch, and the merge stopped on conflicts in: shared.txt.`,
         );
         expect(second).toContain("Finish that merge before this ticket's work goes on");
-        const parents = (yield* git(rig.projectDir, "rev-list", "--parents", "-n", "1", "HEAD"))
-          .split(" ")
-          .slice(1);
+        const parents = Str.split(
+          yield* git(rig.projectDir, "rev-list", "--parents", "-n", "1", "HEAD"),
+          " ",
+        ).slice(1);
         expect(parents[1]).toBe(moved);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${dir}/agents/r-conflict/merge-1.prompt.md`)).toBe(false);
@@ -4165,8 +4318,10 @@ scenario(
         const merge = yield* asked("r-merge", "merge-1");
         expect(merge).toContain("conflicts in: shared.txt");
         expect(merge).toContain("Settle that and nothing else");
-        const order = (yield* prompts()).flatMap((message) =>
-          ["merge-1", "review-1"].filter((operation) => message.includes(`${operation}.prompt.md`)),
+        const order = Arr.flatMap(yield* prompts(), (message) =>
+          Arr.filter(["merge-1", "review-1"], (operation) =>
+            pipe(message, Str.includes(`${operation}.prompt.md`)),
+          ),
         );
         expect(order).toEqual(["merge-1", "review-1"]);
         expect(yield* asked("r-merge", "review-1")).toContain(`${moved}...HEAD`);
@@ -4364,7 +4519,9 @@ scenario(
         const runId = "r-impl-next";
         const { bin, plan, rows } = yield* deliveredAsking(runId);
         expect(optionsOf(rows, "next")).toEqual(["Release", "Stage", "Finish"]);
-        expect(rows.find((row) => row.decision === "next")?.prompt).toContain(OPENED.mr_url);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "next"))?.prompt,
+        ).toContain(OPENED.mr_url);
 
         const result = yield* answered({
           entry: shipped("implement"),
@@ -4400,9 +4557,9 @@ scenario(
               yield* run.answer("next", "Stage");
               yield* until(
                 () => Effect.sync(() => started),
-                (now) => now.some((child) => child.invocation === "stage-1"),
+                (now) => Arr.some(now, (child) => child.invocation === "stage-1"),
               );
-              expect((yield* run.asked).map((row) => row.decision)).not.toContain("next-2");
+              expect(Arr.map(yield* run.asked, (row) => row.decision)).not.toContain("next-2");
               yield* Deferred.succeed(staged, undefined);
               const again = yield* goAsked(run.asked, "next-2");
               expect(optionsOf([again], "next-2")).toEqual(["Release", "Stage", "Finish"]);
@@ -4417,7 +4574,7 @@ scenario(
 
         expect(status.status).toBe("complete");
         expect(outcomeText(status)).toBe(OPENED.mr_url);
-        expect(new Set(started.map((child) => child.invocation))).toEqual(
+        expect(new Set(Arr.map(started, (child) => child.invocation))).toEqual(
           new Set(["stage-1", "stage-2"]),
         );
         expect(started).toContainEqual({
@@ -4457,13 +4614,15 @@ scenario(
                 () => Effect.all({ status: run.status, rows: run.asked }),
                 (now) =>
                   now.status.status === "failed" ||
-                  now.rows.some((row) => row.decision === "next-2" && row.answer === null),
+                  Arr.some(now.rows, (row) => row.decision === "next-2" && row.answer === null),
               );
               expect(resumed.status.status).not.toBe("failed");
               expect(optionsOf(resumed.rows, "next-2")).toEqual(["Release", "Stage", "Finish"]);
-              expect(resumed.rows.find((row) => row.decision === "next-2")?.prompt).toContain(
-                "stage-1 failed: stage-1 failed",
-              );
+              expect(
+                Option.getOrUndefined(
+                  Arr.findFirst(resumed.rows, (row) => row.decision === "next-2"),
+                )?.prompt,
+              ).toContain("stage-1 failed: stage-1 failed");
               yield* run.answer("next-2", "Release");
               return yield* ended(run.status);
             }),
@@ -4507,7 +4666,7 @@ scenario(
         });
         yield* repository();
         yield* exec(["git", "branch", "feature"], { cwd: rig.projectDir });
-        const first = `${rig.root}/.herdr/worktrees/${rig.projectDir.split("/").pop()}/feature`;
+        const first = `${rig.root}/.herdr/worktrees/${Str.split(rig.projectDir, "/").pop()}/feature`;
         for (const slot of [first, `${first}-2`, `${first}-3`])
           yield* fs.makeDirectory(slot, { recursive: true });
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
@@ -4518,9 +4677,13 @@ scenario(
         const stage = runDir(dir, `${runId}-stage-1`);
         yield* fs.makeDirectory(stage, { recursive: true });
         yield* fs.writeFileString(checkoutRefusedFile(stage), "every slot is held\n");
-        const held = [first, `${first}-2`, `${first}-3`]
-          .map((slot) => `${slot} is a checkout that does not say which repository it belongs to`)
-          .join("; ");
+        const held = Arr.join(
+          Arr.map(
+            [first, `${first}-2`, `${first}-3`],
+            (slot) => `${slot} is a checkout that does not say which repository it belongs to`,
+          ),
+          "; ",
+        );
         const status = yield* driven(
           { entry: shipped("implement"), runId, input: { plan } },
           (run) =>
@@ -4548,7 +4711,9 @@ scenario(
         yield* bin.restore();
 
         expect(status.status).toBe("complete");
-        expect(new Set(started.map((child) => child.invocation))).toEqual(new Set(["stage-1"]));
+        expect(new Set(Arr.map(started, (child) => child.invocation))).toEqual(
+          new Set(["stage-1"]),
+        );
       }),
     ),
   120_000,
@@ -4859,12 +5024,15 @@ scenario(
         expect(yield* asked(runId, "review-1")).toContain("(nothing is recorded for this Run)");
         const review = yield* asked(runId, "review-2-1");
         expect(review).toMatch(/- unit: pass \(by collie\), on this tree, at \d{4}-/);
-        const text = review.replace(/\s+/g, " ");
+        const text = pipe(review, Str.replace(/\s+/g, " "));
         expect(text).toContain("never the whole suite");
         expect(text).toContain("read only the entries for the terms the diff touches");
         expect(text).toContain("list every instance of it in the diff in that finding");
 
-        const both = `${yield* persona(runId, "review-2-1")}\n${review}`.replace(/\s+/g, " ");
+        const both = pipe(
+          `${yield* persona(runId, "review-2-1")}\n${review}`,
+          Str.replace(/\s+/g, " "),
+        );
         const rules = [
           "is a follow-up",
           "unless you can answer the reason",
@@ -4876,8 +5044,8 @@ scenario(
           "Change nothing outside your Output file",
           "```json",
         ];
-        expect(rules.map((rule) => [rule, both.split(rule).length - 1])).toEqual(
-          rules.map((rule) => [rule, 1]),
+        expect(Arr.map(rules, (rule) => [rule, Str.split(both, rule).length - 1])).toEqual(
+          Arr.map(rules, (rule) => [rule, 1]),
         );
       }),
     ),
@@ -4924,7 +5092,7 @@ scenario(
           yield* asked("r-impl-fix", "build"),
           yield* asked("r-impl-fix", "fix-1"),
         ]) {
-          const text = prompt.replace(/\s+/g, " ");
+          const text = pipe(prompt, Str.replace(/\s+/g, " "));
           expect(text).toContain("the `tdd` skill");
           expect(text).toMatch(
             /run the typecheck and the test files you touched, each through `collie verify`/i,
@@ -4945,7 +5113,9 @@ scenario(
         for (const message of yield* prompts())
           expect(message).not.toMatch(/^\/(implement|code-review)\b/);
         expect(
-          yield* rig.cmds().pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start"))),
+          yield* rig
+            .cmds()
+            .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start"))),
         ).toHaveLength(3);
         const fixing = yield* asked("r-impl-fix", "fix-1");
         expect(fixing).toContain("the guard is on the wrong side");
@@ -4964,7 +5134,7 @@ once("no shipped prompt sends an agent to a step directory a Run no longer has",
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       for (const name of yield* fs.readDirectory(`${ROOT}workflows`)) {
-        if (!name.endsWith(".md")) continue;
+        if (!pipe(name, Str.endsWith(".md"))) continue;
         const text = yield* fs.readFileString(`${ROOT}workflows/${name}`);
         expect([name, /\/steps\//.test(text)]).toEqual([name, false]);
       }
@@ -5069,7 +5239,9 @@ scenario(
         // The latest record on this tree failed, so the resume runs the check again.
         expect(yield* runsOf(count)).toBeGreaterThan(failedRuns);
         expect(yield* parkedWhy("r-impl-gate")).toBe("");
-        expect((yield* prompts()).filter((one) => one.includes("build-step-1"))).toHaveLength(1);
+        expect(
+          Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes("build-step-1"))),
+        ).toHaveLength(1);
         expect((yield* evidence).final).toEqual(before);
         yield* bin.restore();
       }),
@@ -5143,7 +5315,10 @@ scenario(
 /** The Intent `run intent set-outcome` leaves, written as an agent answers. */
 const outcomeSet = (runId: string, outcome: string) => ({
   path: `${runDir(dir, runId)}/${INTENT_FILE}`,
-  text: Schema.encodeSync(Schema.fromJsonString(IntentSchema))(
+  text: flow(
+    Schema.encodeResult(Schema.fromJsonString(IntentSchema)),
+    Result.getOrThrow,
+  )(
     amend(
       seedIntent(runId, {}),
       { kind: "set-outcome", outcome },
@@ -5456,17 +5631,22 @@ scenario(
         yield* bin.restore();
 
         const passes = ["gate", "recheck", "fix"];
-        const markers = (yield* fs.readFileString(seen))
-          .split("\n")
-          .filter((line) => line !== "")
-          .map((line) => Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(line));
-        expect(markers.slice(0, 3)).toMatchObject(
-          passes.map((pass) => ({ name: "unit", pass, round: pass === "fix" ? 1 : null })),
+        const markers = Arr.map(
+          Arr.filter(Str.split(yield* fs.readFileString(seen), "\n"), (line) => line !== ""),
+          (line) =>
+            flow(
+              Schema.decodeResult(Schema.fromJsonString(Schema.Unknown)),
+              Result.getOrThrow,
+            )(line),
         );
-        const recorded = (yield* readVerifications(evidenceDir(dir, "r-passes"))).filter(
+        expect(markers.slice(0, 3)).toMatchObject(
+          Arr.map(passes, (pass) => ({ name: "unit", pass, round: pass === "fix" ? 1 : null })),
+        );
+        const recorded = Arr.filter(
+          yield* readVerifications(evidenceDir(dir, "r-passes")),
           (one) => one.by === "collie",
         );
-        expect(recorded.slice(0, 3).map((one) => [one.pass, one.round])).toEqual([
+        expect(Arr.map(recorded.slice(0, 3), (one) => [one.pass, one.round])).toEqual([
           ["gate", undefined],
           ["recheck", undefined],
           ["fix", 1],
@@ -5488,7 +5668,7 @@ const leftToCi = (runId: string, jobs: ReadonlyArray<string>) =>
             `${evidenceDir(dir, runId)}/approved.json`,
             asApproved([
               { name: "unit", executable: "true", argv: [], cwd: rig.projectDir },
-              ...jobs.map((job) => ({
+              ...Arr.map(jobs, (job) => ({
                 ...counting(job, `${rig.root}/${job}-runs`),
                 ci: `${job}-job`,
               })),
@@ -5504,11 +5684,11 @@ const CI_MR = `https://${PROJECT.gitlab}/-/merge_requests/31`;
 const OPENED_CI = { ...OPENED, mr_url: CI_MR };
 const ciRecords = (runId: string) =>
   Effect.map(readVerifications(evidenceDir(dir, runId)), (all) =>
-    all.filter((one) => one.pass === "ci"),
+    Arr.filter(all, (one) => one.pass === "ci"),
   );
 const headOf = () =>
   Effect.map(exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir }), (ran) =>
-    ran.stdout.trim(),
+    Str.trim(ran.stdout),
   );
 
 scenario(
@@ -5551,8 +5731,9 @@ scenario(
             "- nuxi: left to CI (job nuxi-job), do not run it",
           );
         const fs = yield* FileSystem.FileSystem;
-        const reviews = (yield* fs.readDirectory(`${dir}/agents/${runId}`)).filter(
-          (file) => file.startsWith("review") && file.endsWith(".prompt.md"),
+        const reviews = Arr.filter(
+          yield* fs.readDirectory(`${dir}/agents/${runId}`),
+          (file) => pipe(file, Str.startsWith("review")) && pipe(file, Str.endsWith(".prompt.md")),
         );
         expect(reviews.length).toBeGreaterThan(0);
         for (const file of reviews)
@@ -5572,9 +5753,11 @@ scenario(
           job: { name: "nuxi-job", url: `https://${PROJECT.gitlab}/-/jobs/1` },
         });
         expect(proof!.executable).toEndWith("/sh");
-        expect(forge.requests().some((call) => call.url.includes("/pipelines/3100/jobs"))).toBe(
-          true,
-        );
+        expect(
+          Arr.some(forge.requests(), (call) =>
+            pipe(call.url, Str.includes("/pipelines/3100/jobs")),
+          ),
+        ).toBe(true);
       }),
     ),
   120_000,
@@ -5613,7 +5796,7 @@ scenario(
         });
         yield* bin.restore();
         expect(why).toContain(
-          `nuxi is left to CI and unproved: job nuxi-job on ${head.slice(0, 12)} is not in its pipeline`,
+          `nuxi is left to CI and unproved: job nuxi-job on ${pipe(head, Str.slice(0, 12))} is not in its pipeline`,
         );
         expect(yield* ciRecords(runId)).toEqual([]);
       }),
@@ -5642,7 +5825,7 @@ scenario(
         });
         expect(why).toContain("Cannot open the merge request");
         expect(why).toContain(
-          `nuxi is left to CI and unproved: job nuxi-job on ${head.slice(0, 12)} cannot be read without one.`,
+          `nuxi is left to CI and unproved: job nuxi-job on ${pipe(head, Str.slice(0, 12))} cannot be read without one.`,
         );
         expect(yield* runsOf(`${rig.root}/nuxi-runs`)).toBe(0);
       }),
@@ -5686,21 +5869,21 @@ scenario(
           options: { outcome: "feature" },
         };
         expect(yield* parkedOn(options)).toContain(
-          `e2e is left to CI and unproved: job e2e-job on ${head.slice(0, 12)} is cancelled`,
+          `e2e is left to CI and unproved: job e2e-job on ${pipe(head, Str.slice(0, 12))} is cancelled`,
         );
-        expect((yield* ciRecords(runId)).map((one) => one.name)).toEqual(["nuxi"]);
+        expect(Arr.map(yield* ciRecords(runId), (one) => one.name)).toEqual(["nuxi"]);
 
         yield* forge.set(mrWith("passed"));
         const result = yield* resumed(options);
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        expect((yield* ciRecords(runId)).map((one) => one.name)).toEqual(["nuxi", "e2e"]);
+        expect(Arr.map(yield* ciRecords(runId), (one) => one.name)).toEqual(["nuxi", "e2e"]);
       }),
     ),
   120_000,
 );
 
-const CI_BASE = "b".repeat(40);
+const CI_BASE = pipe("b", Str.repeat(40));
 const CI_LOG = (id: number) => `glab ci trace ${id} --repo ${PROJECT.gitlab}`;
 
 /** The merge request on `head`, its `nuxi-job` as given, and that job at the base as given. */
@@ -5725,15 +5908,16 @@ const ciFailing: FakeJob = { name: "nuxi-job", state: "failed", retried: "failed
 /** A commit on top of HEAD with the same tree, and the write that makes it HEAD, as a fix's push would. */
 const ciFixCommit = (parent = "HEAD") =>
   Effect.gen(function* () {
-    const sha = (yield* exec(
-      ["git", "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", "ci fix"],
-      {
+    const sha = Str.trim(
+      (yield* exec(["git", "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", "ci fix"], {
         cwd: rig.projectDir,
-      },
-    )).stdout.trim();
-    const branch = (yield* exec(["git", "symbolic-ref", "--short", "HEAD"], {
-      cwd: rig.projectDir,
-    })).stdout.trim();
+      })).stdout,
+    );
+    const branch = Str.trim(
+      (yield* exec(["git", "symbolic-ref", "--short", "HEAD"], {
+        cwd: rig.projectDir,
+      })).stdout,
+    );
     return {
       sha,
       write: { path: `${rig.projectDir}/.git/refs/heads/${branch}`, text: `${sha}\n` },
@@ -5787,16 +5971,20 @@ scenario(
         expect(more).toEqual([]);
         expect(proof).toMatchObject({ name: "nuxi", end: { head_sha: fix.sha } });
         expect(
-          forge.requests().filter((call) => call.method === "POST" && call.url.endsWith("/retry")),
+          Arr.filter(
+            forge.requests(),
+            (call) => call.method === "POST" && pipe(call.url, Str.endsWith("/retry")),
+          ),
         ).toHaveLength(1);
-        expect((yield* ciNotes(forge)).join("\n")).toContain(
+        expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(
           "ci fix 1 landed after the last review and was not re-reviewed",
         );
         // The merge request is updated by the push, never opened again.
         const fs = yield* FileSystem.FileSystem;
         expect(
-          (yield* fs.readDirectory(`${dir}/agents/${runId}`)).filter(
-            (file) => file.startsWith("mr") && file.endsWith(".prompt.md"),
+          Arr.filter(
+            yield* fs.readDirectory(`${dir}/agents/${runId}`),
+            (file) => pipe(file, Str.startsWith("mr")) && pipe(file, Str.endsWith(".prompt.md")),
           ),
         ).toEqual(["mr.prompt.md"]);
       }),
@@ -5824,13 +6012,16 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job also fails at ${CI_BASE.slice(0, 12)}, where this branch leaves its target branch, so it failed before this Run's changes`;
-        expect((yield* ciNotes(forge)).join("\n")).toContain(line);
+        const line = `nuxi: job nuxi-job also fails at ${pipe(CI_BASE, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this Run's changes`;
+        expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
         expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-1.prompt.md`)).toBe(false);
         expect(
-          forge.requests().some((call) => call.method === "POST" && call.url.endsWith("/retry")),
+          Arr.some(
+            forge.requests(),
+            (call) => call.method === "POST" && pipe(call.url, Str.endsWith("/retry")),
+          ),
         ).toBe(false);
         expect(yield* ciRecords(runId)).toEqual([]);
       }),
@@ -5862,8 +6053,8 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job failed on ${head.slice(0, 12)}, then passed when retried — a Flake, so this Run has not settled it.`;
-        expect((yield* ciNotes(forge)).join("\n")).toContain(line);
+        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`;
+        expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
         expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-1.prompt.md`)).toBe(false);
@@ -5905,7 +6096,7 @@ scenario(
         yield* bin.restore();
         expect(why).toContain("Outcome unproved after 4 CI fixes");
         expect(why).toContain(
-          `nuxi is left to CI and unproved: job nuxi-job on ${last.slice(0, 12)} is failed`,
+          `nuxi is left to CI and unproved: job nuxi-job on ${pipe(last, Str.slice(0, 12))} is failed`,
         );
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-4.prompt.md`)).toBe(true);
@@ -5943,7 +6134,7 @@ scenario(
         expect(said(result)).toBe(CI_MR);
         const line =
           "nuxi: its CI job nuxi-job failed: ci fix 1 disputed it and changed nothing: the check is wrong, not the code";
-        expect((yield* ciNotes(forge)).join("\n")).toContain(line);
+        expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
         expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-2.prompt.md`)).toBe(false);
@@ -5974,10 +6165,10 @@ scenario(
         });
         yield* bin.restore();
         expect(why).toContain(
-          `ci fix 1 pushed no new commit: the head is still ${head.slice(0, 12)}`,
+          `ci fix 1 pushed no new commit: the head is still ${pipe(head, Str.slice(0, 12))}`,
         );
         expect(why).toContain(
-          `nuxi is left to CI and unproved: job nuxi-job on ${head.slice(0, 12)} is failed`,
+          `nuxi is left to CI and unproved: job nuxi-job on ${pipe(head, Str.slice(0, 12))} is failed`,
         );
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-2.prompt.md`)).toBe(false);
@@ -5997,7 +6188,7 @@ const counting = (name: string, counter: string, holds = "true") => ({
 const runsOf = (counter: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(counter)),
-    Effect.map((text) => text.split("\n").length - 1),
+    Effect.map((text) => Str.split(text, "\n").length - 1),
     Effect.orElseSucceed(() => 0),
   );
 
@@ -6006,10 +6197,13 @@ const reliedOn = (runId: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${runDir(dir, runId)}/log.txt`)),
     Effect.map((log) =>
-      [...log.matchAll(/proof: (\S+) relies on verification (\S+)/g)].map(([, name, id]) => ({
-        name,
-        id,
-      })),
+      Arr.map(
+        [...pipe(log, Str.matchAll(/proof: (\S+) relies on verification (\S+)/g))],
+        ([, name, id]) => ({
+          name,
+          id,
+        }),
+      ),
     ),
   );
 
@@ -6052,15 +6246,16 @@ scenario(
         expect(said(result)).toBe(OPENED.mr_url);
         expect(yield* runsOf(`${rig.root}/unit-runs`)).toBe(1);
         expect(yield* runsOf(`${rig.root}/lint-runs`)).toBe(1);
-        const gate = (yield* readVerifications(evidenceDir(dir, runId))).filter(
+        const gate = Arr.filter(
+          yield* readVerifications(evidenceDir(dir, runId)),
           (one) => one.by === "collie",
         );
-        expect(gate.map((one) => [one.name, one.pass])).toEqual([
+        expect(Arr.map(gate, (one) => [one.name, one.pass])).toEqual([
           ["unit", "gate"],
           ["lint", "gate"],
         ]);
-        expect(gate.every((one) => one.environment !== undefined)).toBe(true);
-        expect(yield* reliedOn(runId)).toEqual(gate.map(({ name, id }) => ({ name, id })));
+        expect(Arr.every(gate, (one) => one.environment !== undefined)).toBe(true);
+        expect(yield* reliedOn(runId)).toEqual(Arr.map(gate, ({ name, id }) => ({ name, id })));
       }),
     ),
   120_000,
@@ -6113,7 +6308,9 @@ scenario(
         expect(yield* runsOf(`${rig.root}/unit-runs`)).toBe(2);
         const records = yield* readVerifications(evidenceDir(dir, runId));
         const last = (name: string, pass: string) =>
-          records.findLast((one) => one.name === name && one.pass === pass)!.id;
+          Option.getOrUndefined(
+            Arr.findLast(records, (one) => one.name === name && one.pass === pass),
+          )!.id;
         expect(yield* reliedOn(runId)).toEqual([
           { name: "unit", id: last("unit", "fix") },
           { name: "lint", id: last("lint", "gate") },
@@ -6124,17 +6321,20 @@ scenario(
 );
 
 /** bun's output for a run whose one failure is `the flaky one` in test/one.test.ts. */
-const FLAKY_OUTPUT = [
-  "test/one.test.ts:",
-  "(pass) the steady one [1.00ms]",
-  "(fail) the flaky one [2.00ms]",
-  "",
-  "1 tests failed:",
-  "(fail) the flaky one [2.00ms]",
-  "",
-  " 1 pass",
-  " 1 fail",
-].join("\n");
+const FLAKY_OUTPUT = Arr.join(
+  [
+    "test/one.test.ts:",
+    "(pass) the steady one [1.00ms]",
+    "(fail) the flaky one [2.00ms]",
+    "",
+    "1 tests failed:",
+    "(fail) the flaky one [2.00ms]",
+    "",
+    " 1 pass",
+    " 1 fail",
+  ],
+  "\n",
+);
 
 const ONE_PASSES = `printf ' 1 pass\\n 0 fail\\n' >&2`;
 const ONE_FAILS = `printf ' 0 pass\\n 1 fail\\n' >&2; exit 1`;
@@ -6182,7 +6382,10 @@ const failingThen = (
 const passesOf = (runId: string) =>
   readVerifications(evidenceDir(dir, runId)).pipe(
     Effect.map((records) =>
-      records.filter((one) => one.by === "collie").map((one) => one.pass ?? "check"),
+      Arr.map(
+        Arr.filter(records, (one) => one.by === "collie"),
+        (one) => one.pass ?? "check",
+      ),
     ),
   );
 
@@ -6292,13 +6495,13 @@ scenario(
 /** The commit where this branch leaves the default branch, as the merge request shortens it. */
 const baseSha = () =>
   exec(["git", "rev-parse", "--short=12", "HEAD~1"], { cwd: rig.projectDir }).pipe(
-    Effect.map((done) => done.stdout.trim()),
+    Effect.map((done) => Str.trim(done.stdout)),
   );
 
 const runsAtBase = () =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${rig.root}/base-runs`)),
-    Effect.map((text) => text.split("\n").length - 1),
+    Effect.map((text) => Str.split(text, "\n").length - 1),
     Effect.orElseSucceed(() => 0),
   );
 
@@ -6338,18 +6541,21 @@ scenario(
   120_000,
 );
 
-const TWO_FAILED = [
-  "test/one.test.ts:",
-  "(fail) the old one [1.00ms]",
-  "(fail) the new one [2.00ms]",
-  "",
-  "2 tests failed:",
-  "(fail) the old one [1.00ms]",
-  "(fail) the new one [2.00ms]",
-  "",
-  " 0 pass",
-  " 2 fail",
-].join("\n");
+const TWO_FAILED = Arr.join(
+  [
+    "test/one.test.ts:",
+    "(fail) the old one [1.00ms]",
+    "(fail) the new one [2.00ms]",
+    "",
+    "2 tests failed:",
+    "(fail) the old one [1.00ms]",
+    "(fail) the new one [2.00ms]",
+    "",
+    " 0 pass",
+    " 2 fail",
+  ],
+  "\n",
+);
 
 scenario(
   "of two still-failing tests, the one that passes at the base is the only one gate fix 1 is handed",
@@ -6503,26 +6709,29 @@ scenario(
         expect(yield* asked(runId, "mr")).toContain(
           `- ${disputed}: gate fix 1 disputed it and changed nothing`,
         );
-        expect((yield* passesOf(runId)).filter((pass) => pass === "recheck")).toEqual([]);
+        expect(Arr.filter(yield* passesOf(runId), (pass) => pass === "recheck")).toEqual([]);
       }),
     ),
   120_000,
 );
 
-const THREE_FAILED = [
-  "test/one.test.ts:",
-  "(fail) the flaky one [1.00ms]",
-  "(fail) the old one [1.00ms]",
-  "(fail) the new one [2.00ms]",
-  "",
-  "3 tests failed:",
-  "(fail) the flaky one [1.00ms]",
-  "(fail) the old one [1.00ms]",
-  "(fail) the new one [2.00ms]",
-  "",
-  " 0 pass",
-  " 3 fail",
-].join("\n");
+const THREE_FAILED = Arr.join(
+  [
+    "test/one.test.ts:",
+    "(fail) the flaky one [1.00ms]",
+    "(fail) the old one [1.00ms]",
+    "(fail) the new one [2.00ms]",
+    "",
+    "3 tests failed:",
+    "(fail) the flaky one [1.00ms]",
+    "(fail) the old one [1.00ms]",
+    "(fail) the new one [2.00ms]",
+    "",
+    " 0 pass",
+    " 3 fail",
+  ],
+  "\n",
+);
 
 scenario(
   "a check left failing on a disputed test still has its Flake and its base failure named in the merge request",
@@ -6574,7 +6783,7 @@ const stuck = (runId: string, names: ReadonlyArray<string>) =>
     yield* fs.writeFileString(
       `${evidenceDir(dir, runId)}/approved.json`,
       asApproved(
-        names.map((name) =>
+        Arr.map(names, (name) =>
           counting(name, `${rig.root}/${name}-runs`, `[ -f ${rig.root}/repaired ]`),
         ),
       ),
@@ -6584,7 +6793,7 @@ const stuck = (runId: string, names: ReadonlyArray<string>) =>
 
 const disputing = (titles: ReadonlyArray<string>) => ({
   ...GATE_FIX,
-  disputed: titles.map((title) => ({
+  disputed: Arr.map(titles, (title) => ({
     severity: "blocker",
     title,
     reason: "the check is wrong, not the code",
@@ -6629,7 +6838,9 @@ scenario(
           "outcome unproved: unit failed; gate fix 1 disputed them and changed nothing",
         );
         const records = yield* readVerifications(evidenceDir(dir, runId));
-        expect(records.findLast((one) => one.name === "unit")?.result).toBe("fail");
+        expect(
+          Option.getOrUndefined(Arr.findLast(records, (one) => one.name === "unit"))?.result,
+        ).toBe("fail");
         // Nothing runs again on the tree the fix left as it was, not even the proof's recheck.
         expect(yield* passesOf(runId)).toEqual(["gate", "recheck"]);
       }),
@@ -6903,16 +7114,18 @@ scenario(
 
         expect(said(result)).toBe(OPENED.mr_url);
         const records = yield* readVerifications(evidenceDir(dir, runId));
-        const unit = records.filter((one) => one.name === "unit");
+        const unit = Arr.filter(records, (one) => one.name === "unit");
         const final = (yield* fingerprint(rig.projectDir)).fingerprint;
         // Passed at the gate on the tree before lint's file, so run again after the fix.
-        expect(unit.map((one) => [one.pass, one.result])).toEqual([
+        expect(Arr.map(unit, (one) => [one.pass, one.result])).toEqual([
           ["gate", "pass"],
           ["fix", "pass"],
         ]);
         expect(unit[0]?.end.fingerprint).not.toBe(final);
         expect(yield* runsOf(`${rig.root}/unit-runs`)).toBe(2);
-        const relied = (yield* reliedOn(runId)).find((one) => one.name === "unit");
+        const relied = Option.getOrUndefined(
+          Arr.findFirst(yield* reliedOn(runId), (one) => one.name === "unit"),
+        );
         expect(relied?.id).toBe(unit[1]?.id);
         expect(unit[1]?.end.fingerprint).toBe(final);
       }),
@@ -6977,7 +7190,7 @@ scenario(
         yield* repository();
         const git = (...args: string[]) =>
           exec(["git", ...args], { cwd: rig.projectDir }).pipe(
-            Effect.map((done) => done.stdout.trim()),
+            Effect.map((done) => Str.trim(done.stdout)),
           );
         const base = yield* git("rev-parse", "HEAD");
         yield* git("checkout", "-qb", "feature");
@@ -7076,7 +7289,7 @@ scenario(
         expect(opening).toContain("- assumed in build: callers never pass an empty list");
         // Still the human's, so the card counts it whatever the last review wrote.
         expect(
-          (yield* findingsIn(runDir(dir, "r-impl-dispute"))).map((one) => one.title),
+          Arr.map(yield* findingsIn(runDir(dir, "r-impl-dispute")), (one) => one.title),
         ).toContain("the guard is on the wrong side");
       }),
     ),
@@ -7128,7 +7341,10 @@ scenario(
         );
         const onFile = yield* findingsIn(runDir(dir, "r-impl-weakened"));
         expect(
-          onFile.filter((one) => one.title === finding.title).map((one) => one.severity),
+          Arr.map(
+            Arr.filter(onFile, (one) => one.title === finding.title),
+            (one) => one.severity,
+          ),
         ).toEqual(["blocker"]);
       }),
     ),
@@ -7203,7 +7419,7 @@ scenario(
         );
         expect(opening).not.toContain("a reason the reviewer answers");
         expect(
-          (yield* findingsIn(runDir(dir, "r-final-dispute"))).map((one) => one.title),
+          Arr.map(yield* findingsIn(runDir(dir, "r-final-dispute")), (one) => one.title),
         ).toContain("B");
       }),
     ),
@@ -7270,10 +7486,9 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        expect((yield* findingsIn(runDir(dir, "r-final-stands"))).map((one) => one.title)).toEqual([
-          "a nit",
-          "X",
-        ]);
+        expect(
+          Arr.map(yield* findingsIn(runDir(dir, "r-final-stands")), (one) => one.title),
+        ).toEqual(["a nit", "X"]);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, "r-final-stands")}/review.md`)).toContain(
           "four",
@@ -7463,7 +7678,8 @@ exit 127`,
                     parkedWhy(runId),
                   ]),
                 ([got, why]) =>
-                  got === "complete" || (got === "suspended" && why.includes("unit failed")),
+                  got === "complete" ||
+                  (got === "suspended" && pipe(why, Str.includes("unit failed"))),
               );
             }).pipe(Effect.provide(made.layer));
           }),
@@ -7533,7 +7749,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(said(result)).toBe(OPENED.mr_url);
           const prompt = yield* asked(runId, "mr");
           expect(prompt).toContain(`${CLI[name]} ${name === "gitlab" ? "mr" : "pr"} create`);
-          expect(prompt).toContain("--assignee 'tester'");
+          expect(prompt).toContain("--assignee tester");
           expect(prompt).not.toMatch(new RegExp(`\\b${DELIVERY[name].other}\\b`));
           // Branch naming and readiness asked this forge alone.
           expect(yield* other.calls()).toEqual([]);
@@ -7566,8 +7782,8 @@ for (const name of ["gitlab", "github"] as const) {
           const prompt = yield* asked(runId, "mr");
           expect(prompt).toContain(
             name === "gitlab"
-              ? "glab api --hostname 'gitlab.example.com' --method POST 'projects/group%2Fapp/merge_requests/31/notes' -F body=@<file>"
-              : "gh pr comment '31'",
+              ? "glab api --hostname gitlab.example.com --method POST 'projects/group%2Fapp/merge_requests/31/notes' -F body=@<file>"
+              : "gh pr comment 31 --repo owner/repo --body-file <file>",
           );
           expect(prompt).toContain(
             name === "gitlab"
@@ -8029,6 +8245,8 @@ const resumed = (options: {
       const payload = { runId: options.runId, input: options.input };
       return yield* Effect.gen(function* () {
         yield* engine.resume(made.workflow, yield* made.workflow.executionId(payload));
+        // Authored modules expose Schema.Unknown failures; this test records their actual result.
+        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
         return yield* made.workflow.execute(payload).pipe(Effect.result);
       }).pipe(Effect.provide(made.layer));
     }),
@@ -8072,7 +8290,7 @@ const resumedUntilParked = (options: ShippedRun) =>
 const naming = (runId: string, names: ReadonlyArray<string>) => ({
   path: `${evidenceDir(dir, runId)}/approved.json`,
   text: asApproved(
-    names.map((name) => ({ name, executable: "true", argv: [], cwd: rig.projectDir })),
+    Arr.map(names, (name) => ({ name, executable: "true", argv: [], cwd: rig.projectDir })),
   ),
 });
 
@@ -8123,7 +8341,9 @@ scenario(
         const opening = yield* asked("r-impl-none", "mr");
         expect(opening).toMatch(/- unit: \S*true \(in /);
         expect(opening).toContain("- unit: pass (by collie)");
-        expect((yield* prompts()).filter((one) => one.includes("build-step-1"))).toHaveLength(1);
+        expect(
+          Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes("build-step-1"))),
+        ).toHaveLength(1);
       }),
     ),
   120_000,
@@ -8229,7 +8449,7 @@ scenario(
           });
           expect(why).toContain("has written nothing to");
           expect(why).not.toContain("approved");
-          expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+          expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
         }),
       ),
     ),
@@ -8247,7 +8467,7 @@ const buildAsked = (options: ShippedRun) =>
           ),
           Effect.orElseSucceed(() => ""),
         ),
-      (text) => text.includes("OUTPUT_PATH"),
+      (text) => pipe(text, Str.includes("OUTPUT_PATH")),
     ),
   );
 
@@ -8334,7 +8554,7 @@ const helleAnswers = (claim: "held" | "none", production: "deployed" | "read"): 
       if (production === "read") return answered;
       return Host.of({
         ...answered,
-        defaultHead: () => Effect.succeed("0".repeat(40)),
+        defaultHead: () => Effect.succeed(pipe("0", Str.repeat(40))),
         awaitProduction: () => Effect.succeed(true),
       });
     }),
@@ -8732,7 +8952,8 @@ scenario(
             MERGED,
           ],
           ready: (one) =>
-            one.nodes.some(
+            Arr.some(
+              one.nodes,
               (node) =>
                 (node.id === "release" && node.state === "running") ||
                 (node.id === "merge" && node.runs[1]?.state === "running"),
@@ -8747,13 +8968,19 @@ scenario(
         yield* bin.restore();
         const merging = nodeIn(lane, "merge");
         expect(merging?.said).toBe("Slice 2 of 2");
-        expect(merging?.runs.map((one) => [one.place, one.state])).toEqual([
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(merging), (present_) =>
+              Arr.map(present_.runs, (one) => [one.place, one.state]),
+            ),
+          ),
+        ).toEqual([
           ["12", "done"],
           ["13", "running"],
         ]);
         expect(yield* asked("r-renovate-flow", "merge-2")).toContain("request `13`");
         expect(
-          new Set((yield* readLaunches(dir, "r-renovate-flow")).map((one) => one.agent)).size,
+          new Set(Arr.map(yield* readLaunches(dir, "r-renovate-flow"), (one) => one.agent)).size,
         ).toBe(1);
       }),
     ),
@@ -8769,8 +8996,8 @@ const APPLICATION: ReadonlyArray<Schema.Json> = [
   { verdict: "clean", approved_by: ["a-teammate"], head_sha: "abc" },
   MERGED,
 ];
-const OLDER = "1".repeat(40);
-const LATER = "2".repeat(40);
+const OLDER = pipe("1", Str.repeat(40));
+const LATER = pipe("2", Str.repeat(40));
 
 /** A renovatable checkout on `name`'s forge, whose environments are `environments`. */
 const deploying = (name: MrForge, environments: ForgeModel["environments"]) =>
@@ -8788,7 +9015,9 @@ const deploying = (name: MrForge, environments: ForgeModel["environments"]) =>
     yield* exec(["git", "remote", "set-url", "upstream", RENOVATING[name].origin], {
       cwd: rig.projectDir,
     });
-    const head = (yield* exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir })).stdout.trim();
+    const head = Str.trim(
+      (yield* exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir })).stdout,
+    );
     const deployed = (sha: string, more: Partial<ForgeModel> = {}) =>
       forge.set({
         ...model,
@@ -8826,7 +9055,7 @@ for (const name of ["gitlab", "github"] as const) {
                     (why) => why !== "",
                   ),
                 ).toBe(
-                  `Waiting for production: play \`deploy-prod\` at ${url}/jobs/9. The claim on \`project\` is held until the forge shows production carries \`${head.slice(0, 8)}\`.`,
+                  `Waiting for production: play \`deploy-prod\` at ${url}/jobs/9. The claim on \`project\` is held until the forge shows production carries \`${pipe(head, Str.slice(0, 8))}\`.`,
                 );
                 expect(yield* prompts()).toHaveLength(8);
                 expect(claimed).toEqual([`claim ${runId}`]);
@@ -8857,7 +9086,7 @@ for (const name of ["gitlab", "github"] as const) {
           ]);
           claimed.length = 0;
           const entry = shipped("renovate");
-          const waiting = `production to carry \`${head.slice(0, 8)}\` of ${url}, holding the claim on \`project\``;
+          const waiting = `production to carry \`${pipe(head, Str.slice(0, 8))}\` of ${url}, holding the claim on \`project\``;
           const polled = (more: number) =>
             Effect.gen(function* () {
               const before = forge.requests().length;
@@ -8990,7 +9219,8 @@ scenario(
               );
               yield* until(
                 () => Effect.sync(forge.requests),
-                (requests) => requests.some((request) => request.url.includes("deployments")),
+                (requests) =>
+                  Arr.some(requests, (request) => pipe(request.url, Str.includes("deployments"))),
               );
               const fs = yield* FileSystem.FileSystem;
               yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
@@ -9034,11 +9264,11 @@ scenario(
               yield* fs
                 .writeFileString(
                   controlPath(dir, AWAITING, runId),
-                  Schema.encodeSync(AwaitingJson)({
+                  yield* Schema.encodeEffect(AwaitingJson)({
                     on,
                     who: null,
                     since: DateTime.formatIso(threeHoursAgo),
-                  }),
+                  }).pipe(Effect.orDie),
                 )
                 .pipe(Effect.orDie);
               expect(
@@ -9158,7 +9388,7 @@ scenario(
 );
 
 /** A prompt with the Run it is about taken out, so two Runs' prompts can be compared. */
-const byRun = (prompt: string) => prompt.replaceAll(/r-(fork|shipped)/g, "<run>");
+const byRun = (prompt: string) => pipe(prompt, Str.replaceAll(/r-(fork|shipped)/g, "<run>"));
 
 /** Each forge's merge request a Release Run is started on, and its repository. */
 const RELEASING = {
@@ -9220,15 +9450,17 @@ const PIPELINE_PASSED = {
 } satisfies Partial<FakeMr>;
 
 const revParse = (ref: string, cwd = rig.projectDir) =>
-  exec(["git", "rev-parse", ref], { cwd }).pipe(Effect.map((ran) => ran.stdout.trim()));
+  exec(["git", "rev-parse", ref], { cwd }).pipe(Effect.map((ran) => Str.trim(ran.stdout)));
 
 /** A commit on `parent`'s tree, made without a checkout and pushed to origin's `feature`. */
 const pushedBySomebody = (parent: string, force = false) =>
   Effect.gen(function* () {
-    const sha = (yield* exec(
-      ["git", "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", "pushed by somebody"],
-      { cwd: rig.projectDir },
-    )).stdout.trim();
+    const sha = Str.trim(
+      (yield* exec(
+        ["git", "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", "pushed by somebody"],
+        { cwd: rig.projectDir },
+      )).stdout,
+    );
     yield* exec(
       ["git", "push", "-q", ...(force ? ["-f"] : []), "origin", `${sha}:refs/heads/feature`],
       { cwd: rig.projectDir },
@@ -9257,10 +9489,12 @@ const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
     yield* exec(["git", "push", "-q", "origin", "feature"], { cwd: reviewed });
     const head = yield* revParse("HEAD", reviewed);
     const base = yield* revParse("HEAD");
-    const merged = (yield* exec(
-      ["git", "commit-tree", `${head}^{tree}`, "-p", base, "-p", head, "-m", "Merge feature"],
-      { cwd: rig.projectDir },
-    )).stdout.trim();
+    const merged = Str.trim(
+      (yield* exec(
+        ["git", "commit-tree", `${head}^{tree}`, "-p", base, "-p", head, "-m", "Merge feature"],
+        { cwd: rig.projectDir },
+      )).stdout,
+    );
     yield* exec(["git", "push", "-q", "origin", `${merged}:refs/heads/main`], {
       cwd: rig.projectDir,
     });
@@ -9281,7 +9515,7 @@ const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
     const changed = (over: Partial<FakeMr>) =>
       Effect.gen(function* () {
         const now = yield* forge.model();
-        yield* forge.set({ ...now, mrs: now.mrs.map((one) => ({ ...one, ...over })) });
+        yield* forge.set({ ...now, mrs: Arr.map(now.mrs, (one) => ({ ...one, ...over })) });
       });
     return { bin, forge, head, base, merged, reviewed, changed };
   });
@@ -9306,16 +9540,16 @@ const refusedBack: Array<ReadonlyArray<string>> = [];
  * happens elsewhere while the claim is taken, and the host stops for good once it has
  * posted `stallAfterReplies` replies. `helle` answers each claim, where the test says.
  */
-const releaseHost = (
+const releaseHost = <E = never>(
   ends: Ends = {},
-  whileClaiming: Effect.Effect<void, unknown, FileSystem.FileSystem> = Effect.void,
+  whileClaiming: Effect.Effect<void, E, FileSystem.FileSystem> = Effect.void,
   stallAfterReplies = Infinity,
   helle?: () => HelleSays,
 ) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
-      const services = yield* Effect.context<BunServices.BunServices | ForgeHttp>();
+      const services = yield* Effect.context<PlatformServices | ForgeHttp>();
       let replies = 0;
       return Host.of({
         ...host,
@@ -9355,7 +9589,7 @@ const releaseHost = (
         takeOverLanding: (asked) =>
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
-            const runs = yield* Effect.forEach(Object.entries(ends), ([runId, ended]) =>
+            const runs = yield* Effect.forEach(Rec.toEntries(ends), ([runId, ended]) =>
               Effect.map(readLanding(runDir(dir, runId)), (landing) => ({
                 runId,
                 landing,
@@ -9365,7 +9599,7 @@ const releaseHost = (
             const mr = yield* fs.readFileString(`${runDir(dir, asked.runId)}/merge-request`);
             return yield* takeOver({
               runDir: runDir(dir, asked.runId),
-              mr: mr.trim(),
+              mr: Str.trim(mr),
               runs,
               cwd: asked.cwd,
               run: shell,
@@ -9426,8 +9660,12 @@ const goAsked = (
 ) =>
   until(
     () => asked,
-    (rows) => rows.some((row) => row.decision === name && row.answer === null),
-  ).pipe(Effect.map((rows) => rows.find((row) => row.decision === name)!));
+    (rows) => Arr.some(rows, (row) => row.decision === name && row.answer === null),
+  ).pipe(
+    Effect.map((rows) =>
+      Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === name))!,
+    ),
+  );
 
 const PIPELINE_OF = {
   gitlab: "https://gitlab.example.com/group/app/-/pipelines/7",
@@ -9467,7 +9705,7 @@ const ended = (status: Effect.Effect<typeof RunStatus.Type>) =>
 
 const outcomeText = (status: typeof RunStatus.Type) =>
   status.status === "complete"
-    ? Schema.decodeUnknownSync(Schema.String)(status.value)
+    ? flow(Schema.decodeUnknownResult(Schema.String), Result.getOrThrow)(status.value)
     : status.status === "failed"
       ? status.reason
       : status.status;
@@ -9494,7 +9732,7 @@ const agentPush = (
 ) =>
   Effect.gen(function* () {
     const sha = yield* pushedBySomebody(parent);
-    const moved = { ...model, mrs: model.mrs.map((one) => ({ ...one, head: sha })) };
+    const moved = { ...model, mrs: Arr.map(model.mrs, (one) => ({ ...one, head: sha })) };
     return {
       sha,
       writes: [
@@ -9525,7 +9763,7 @@ const sharingIn = (channel: string | null) =>
 const POSTED = { posted: true, link: "https://example.slack.com/archives/D123/p1503435956000247" };
 
 /** The replies Collie posted on the merge request, in order. */
-const repliesOf = (model: ForgeModel) => Object.values(model.replies ?? {}).flat();
+const repliesOf = (model: ForgeModel) => Rec.values(model.replies ?? {}).flat();
 
 const signed = (runId: string) => `\n\nPosted by Collie's Run ${runId} on ${hostname()}.`;
 
@@ -9604,7 +9842,7 @@ scenario(
         yield* forge.set({
           ...passed,
           ancestry: { [before]: [] },
-          mrs: passed.mrs.map((one) => ({ ...one, pipelineAt: before })),
+          mrs: Arr.map(passed.mrs, (one) => ({ ...one, pipelineAt: before })),
         });
         const runId = "r-release-own-check-moved";
         yield* ownCheck(runId);
@@ -9625,15 +9863,15 @@ scenario(
                       Effect.flatMap((fs) => fs.readFileString(`${runDir(dir, runId)}/log.txt`)),
                       Effect.orElseSucceed(() => ""),
                     ),
-                  (log) => log.includes(`ci: waiting on job test for check on ${head}`),
+                  (log) => pipe(log, Str.includes(`ci: waiting on job test for check on ${head}`)),
                 );
-                expect((yield* run.asked).filter((row) => row.decision.startsWith("go-"))).toEqual(
-                  [],
-                );
+                expect(
+                  Arr.filter(yield* run.asked, (row) => pipe(row.decision, Str.startsWith("go-"))),
+                ).toEqual([]);
                 const now = yield* forge.model();
                 yield* forge.set({
                   ...now,
-                  mrs: now.mrs.map(({ pipelineAt: _, ...one }) => one),
+                  mrs: Arr.map(now.mrs, (one) => Struct.omit(one, ["pipelineAt"])),
                 });
                 yield* goAsked(run.asked, "go-1");
                 yield* run.answer("go-1", "Finish");
@@ -9643,7 +9881,9 @@ scenario(
           ),
         );
         yield* bin.restore();
-        expect(asked.filter((row) => row.decision.startsWith("go-"))).toHaveLength(1);
+        expect(Arr.filter(asked, (row) => pipe(row.decision, Str.startsWith("go-")))).toHaveLength(
+          1,
+        );
         expect(yield* runsOf(`${rig.root}/check-runs`)).toBe(0);
         const [proof, ...more] = yield* ciRecords(runId);
         expect(more).toEqual([]);
@@ -9663,7 +9903,7 @@ for (const [state, jobs] of [
       runEffect(
         Effect.gen(function* () {
           const { bin, head } = yield* releasable("github", { jobs });
-          const runId = `r-release-own-check-${state.replace(" ", "-")}`;
+          const runId = `r-release-own-check-${pipe(state, Str.replace(" ", "-"))}`;
           yield* ownCheck(runId);
           yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
           const why = yield* driven(
@@ -9679,15 +9919,15 @@ for (const [state, jobs] of [
                   () => parkedWhy(runId),
                   (why) => why !== "",
                 );
-                expect((yield* run.asked).filter((row) => row.decision.startsWith("go-"))).toEqual(
-                  [],
-                );
+                expect(
+                  Arr.filter(yield* run.asked, (row) => pipe(row.decision, Str.startsWith("go-"))),
+                ).toEqual([]);
                 return why;
               }),
           );
           yield* bin.restore();
           expect(why).toContain(
-            `check is left to CI and unproved: job test on ${head.slice(0, 12)} is ${state === "failing" ? "failed" : "not in its pipeline"}`,
+            `check is left to CI and unproved: job test on ${pipe(head, Str.slice(0, 12))} is ${state === "failing" ? "failed" : "not in its pipeline"}`,
           );
           expect(yield* runsOf(`${rig.root}/check-runs`)).toBe(0);
           expect(yield* ciRecords(runId)).toEqual([]);
@@ -9700,12 +9940,11 @@ const checkedOutThenAssessed = (runId: string) =>
   Effect.gen(function* () {
     const lines = yield* readStepLines(runDir(dir, runId));
     expect(
-      lines.flatMap((line) => ("key" in line && line.key === "checkout" ? [line.kind] : [])),
+      Arr.flatMap(lines, (line) => ("key" in line && line.key === "checkout" ? [line.kind] : [])),
     ).toEqual(["enter", "leave"]);
-    expect(lines.flatMap((line) => (line.kind === "enter" ? [line.key] : [])).slice(0, 2)).toEqual([
-      "checkout",
-      "assess",
-    ]);
+    expect(
+      Arr.flatMap(lines, (line) => (line.kind === "enter" ? [line.key] : [])).slice(0, 2),
+    ).toEqual(["checkout", "assess"]);
   });
 
 const refusingCheckout = (refused: string): HostOverride =>
@@ -9733,10 +9972,12 @@ scenario(
           });
           expect(reasonOf(result)).toBe(`${mr} has no checkout to ${workflow} from: ${refused}`);
           const lines = yield* readStepLines(runDir(dir, runId));
-          expect(lines.flatMap((line) => (line.kind === "enter" ? [line.key] : []))).toEqual([
+          expect(Arr.flatMap(lines, (line) => (line.kind === "enter" ? [line.key] : []))).toEqual([
             "checkout",
           ]);
-          expect(lines.find((line) => line.kind === "fail")).toMatchObject({
+          expect(
+            Option.getOrUndefined(Arr.findFirst(lines, (line) => line.kind === "fail")),
+          ).toMatchObject({
             key: "checkout",
             why: expect.stringContaining(refused),
           });
@@ -9771,7 +10012,7 @@ for (const name of ["gitlab", "github"] as const) {
               Effect.gen(function* () {
                 const go = yield* goAsked(run.asked, "go-1");
                 expect(go.prompt).toContain(mr);
-                expect(go.prompt).toContain(head.slice(0, 8));
+                expect(go.prompt).toContain(pipe(head, Str.slice(0, 8)));
                 expect(go.prompt).toContain("alice");
                 expect(optionsOf([go], "go-1")).toEqual(["Release", "Finish"]);
                 // Nothing shared is touched before the go.
@@ -9779,7 +10020,7 @@ for (const name of ["gitlab", "github"] as const) {
                 yield* run.answer("go-1", "Release");
                 const end = yield* ended(run.status);
                 expect(
-                  (yield* run.asked).filter((row) => row.decision.startsWith("go-")),
+                  Arr.filter(yield* run.asked, (row) => pipe(row.decision, Str.startsWith("go-"))),
                 ).toHaveLength(1);
                 return end;
               }),
@@ -9787,10 +10028,16 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
-          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(model.merges), (present__) =>
+                Arr.map(present__, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* clearance(runId, "tag")).toBe(
-            `Cleared for this step: a release commit to ${url}'s default branch, where the repository makes one; pushing an annotated version tag of ${url} to origin; creating its release on ${url}, where the package publishes from its tags; watching the tag's pipeline on ${url}, never playing a production job.`,
+            `Cleared for this step: a release commit to ${url}'s default branch, where it makes one; pushing an annotated version tag to origin; creating its release there, where the package publishes from its tags; watching the tag's pipeline there, never playing a production job.`,
           );
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
           for (const step of ["assess", "tag"])
@@ -9850,7 +10097,7 @@ for (const name of ["gitlab", "github"] as const) {
                 yield* changed({ head: moved });
                 yield* run.answer("go-1", "Release");
                 const again = yield* goAsked(run.asked, "go-2");
-                expect(again.prompt).toContain(moved.slice(0, 8));
+                expect(again.prompt).toContain(pipe(moved, Str.slice(0, 8)));
                 yield* run.answer("go-2", "Finish");
                 return yield* ended(run.status);
               }),
@@ -9861,7 +10108,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(model.merges ?? []).toEqual([]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           const log = yield* runLog(runId);
-          expect(log).toContain(`go 1 no longer holds for ${head.slice(0, 8)}`);
+          expect(log).toContain(`go 1 no longer holds for ${pipe(head, Str.slice(0, 8))}`);
           expect(log).toContain(`moved the checkout from ${head} to ${moved}`);
         }),
       ),
@@ -9893,14 +10140,15 @@ for (const name of ["gitlab", "github"] as const) {
                 moved = yield* pushedBySomebody(head);
                 yield* changed({ head: moved, checks: [{ name: "build", state: "passed" }] });
                 const go = yield* goAsked(run.asked, "go-1");
-                expect(go.prompt).toContain(moved.slice(0, 8));
+                expect(go.prompt).toContain(pipe(moved, Str.slice(0, 8)));
                 yield* run.answer("go-1", "Finish");
                 return yield* ended(run.status);
               }),
           );
           yield* bin.restore();
           expect(yield* revParse("HEAD", reviewed)).toBe(moved);
-          const proved = (yield* readVerifications(evidenceDir(dir, runId))).map(
+          const proved = Arr.map(
+            yield* readVerifications(evidenceDir(dir, runId)),
             (one) => one.end.head_sha,
           );
           expect(proved).toEqual([head, moved]);
@@ -9929,7 +10177,7 @@ for (const name of ["gitlab", "github"] as const) {
                     (why) => why !== "",
                   ),
                 ).toContain(
-                  `${mrLabel(mr)} cannot be released: the pipeline at ${head.slice(0, 8)} failed (`,
+                  `${mrLabel(mr)} cannot be released: the pipeline at ${pipe(head, Str.slice(0, 8))} failed (`,
                 );
                 yield* changed({ checks: [{ name: "build", state: "passed" }] });
                 yield* goAsked(run.asked, "go-1");
@@ -9970,12 +10218,12 @@ for (const name of ["gitlab", "github"] as const) {
                 );
                 return yield* until(
                   () => parkedWhy(runId),
-                  (why) => why.includes("fast-forward"),
+                  (why) => pipe(why, Str.includes("fast-forward")),
                 );
               }),
           );
           yield* bin.restore();
-          expect(why).toContain(`does not fast-forward ${head.slice(0, 8)}`);
+          expect(why).toContain(`does not fast-forward ${pipe(head, Str.slice(0, 8))}`);
           expect(why).toContain(`Repair it, then resume ${runId}.`);
           expect(yield* revParse("HEAD", reviewed)).toBe(head);
         }),
@@ -10133,7 +10381,7 @@ for (const name of ["gitlab", "github"] as const) {
             claim: "project",
           };
           const offered = offersFrom(declared, facts, { self: idOf("release") });
-          expect(offered.map((offer) => [offer.id, offer.title, offer.workflow])).toEqual([
+          expect(Arr.map(offered, (offer) => [offer.id, offer.title, offer.workflow])).toEqual([
             ["release-again", "Release again", idOf("release")],
           ]);
           expect(inputsFor(offered[0]!, { runDir: "/r", facts, input: { mr: target } })).toEqual({
@@ -10311,12 +10559,15 @@ for (const name of ["gitlab", "github"] as const) {
               Effect.gen(function* () {
                 yield* until(
                   () => awaitingOn(runId),
-                  (on) => on.includes("approval"),
+                  (on) => pipe(on, Str.includes("approval")),
                 );
                 const now = yield* forge.model();
                 const commented = {
                   ...now,
-                  mrs: now.mrs.map((one) => ({ ...one, comments: [...unopened, ...comments] })),
+                  mrs: Arr.map(now.mrs, (one) => ({
+                    ...one,
+                    comments: [...unopened, ...comments],
+                  })),
                 };
                 const pushed = yield* agentPush(forge, commented, head);
                 fix = pushed.sha;
@@ -10340,12 +10591,12 @@ for (const name of ["gitlab", "github"] as const) {
                 );
                 yield* until(
                   () => awaitingOn(runId),
-                  (on) => on.includes("approval"),
+                  (on) => pipe(on, Str.includes("approval")),
                 );
                 yield* changed(approvedBy(name, "dave"));
                 const go = yield* goAsked(run.asked, "go-1");
                 expect(go.prompt).toContain("dave");
-                expect(go.prompt).toContain(fix.slice(0, 8));
+                expect(go.prompt).toContain(pipe(fix, Str.slice(0, 8)));
                 yield* run.answer("go-1", "Finish");
                 return yield* ended(run.status);
               }),
@@ -10353,18 +10604,18 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          const fixed = `${commentUrl(name, 41)}\n\nFixed in \`${fix.slice(0, 8)}\`: renamed it${signed(runId)}`;
+          const fixed = `${commentUrl(name, 41)}\n\nFixed in \`${pipe(fix, Str.slice(0, 8))}\`: renamed it${signed(runId)}`;
           const disputed = `${commentUrl(name, 42)}\n\nNot changed: a map costs more here${signed(runId)}`;
-          expect(repliesOf(model).map((one) => one.body)).toEqual([fixed, disputed]);
+          expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([fixed, disputed]);
           const recorded = yield* readReplies(runDir(dir, runId));
           expect(
-            recorded.map(({ comment, kind, body, mr: on }) => ({ comment, kind, body, on })),
+            Arr.map(recorded, ({ comment, kind, body, mr: on }) => ({ comment, kind, body, on })),
           ).toEqual([
             { comment: commentUrl(name, 41), kind: "fixed", body: fixed, on: mr },
             { comment: commentUrl(name, 42), kind: "disputed", body: disputed, on: mr },
           ]);
           expect(
-            (yield* disputesIn([{ id: runId, dir: runDir(dir, runId) }])).map((one) => one.key),
+            Arr.map(yield* disputesIn([{ id: runId, dir: runDir(dir, runId) }]), (one) => one.key),
           ).toEqual([`${runId}:disputed:${commentUrl(name, 42)}`]);
           const answering = yield* asked(runId, "answer-1");
           expect(answering).toContain(commentUrl(name, 41));
@@ -10372,14 +10623,17 @@ for (const name of ["gitlab", "github"] as const) {
           expect(answering).toContain("use a map here");
           for (const quiet of unopened) expect(answering).not.toContain(quiet.body);
           expect(yield* clearance(runId, "answer-1")).toBe(
-            `Cleared for this step: committing to the merge request's source branch on ${url} and pushing it with a plain push, never a force push; never posting on ${url} or resolving a thread there: Collie replies.`,
+            `Cleared for this step: committing to the merge request's source branch on ${url} and pushing it with a plain push, never a force push; never posting or resolving a thread there: Collie replies.`,
           );
           expect(yield* revParse("HEAD", reviewed)).toBe(fix);
-          const proved = (yield* readVerifications(evidenceDir(dir, runId))).map(
+          const proved = Arr.map(
+            yield* readVerifications(evidenceDir(dir, runId)),
             (one) => one.end.head_sha,
           );
           expect(proved).toEqual([head, fix]);
-          expect((yield* prompts()).filter((one) => one.includes("/answer-"))).toHaveLength(1);
+          expect(
+            Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes("/answer-"))),
+          ).toHaveLength(1);
         }),
       ),
     120_000,
@@ -10412,7 +10666,7 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(said).toEqual(["posted", "already"]);
-          expect(repliesOf(model).map((one) => one.body)).toEqual([
+          expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([
             `${commentUrl(name, 46)}\n\nNot changed: the name is the domain's${signed(runId)}`,
           ]);
         }),
@@ -10450,9 +10704,9 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(said).toEqual(["posted", "already", "already"]);
           const body = `${commentUrl(name, 47)}\n\nNot changed: the name is the domain's${signed(runId)}`;
-          expect(repliesOf(model).map((one) => one.body)).toEqual([body]);
+          expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([body]);
           expect(
-            (yield* readReplies(runDir(dir, runId))).map(({ comment, kind, body, mr: on }) => ({
+            Arr.map(yield* readReplies(runDir(dir, runId)), ({ comment, kind, body, mr: on }) => ({
               comment,
               kind,
               body,
@@ -10503,7 +10757,7 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(said).toEqual(["posted", "posted", "already"]);
-          expect((yield* readReplies(runDir(dir, runId))).map((one) => one.body)).toEqual([
+          expect(Arr.map(yield* readReplies(runDir(dir, runId)), (one) => one.body)).toEqual([
             `Not changed: this one too${signed(runId)}`,
           ]);
         }),
@@ -10547,7 +10801,7 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(said).toEqual(["posted", "already"]);
-          expect((yield* readReplies(runDir(dir, runId))).map((one) => one.comment)).toEqual([
+          expect(Arr.map(yield* readReplies(runDir(dir, runId)), (one) => one.comment)).toEqual([
             commentUrl(name, 520),
           ]);
         }),
@@ -10602,7 +10856,7 @@ for (const name of ["gitlab", "github"] as const) {
                 };
                 yield* forge.set({
                   ...now,
-                  mrs: now.mrs.map((one) => ({
+                  mrs: Arr.map(now.mrs, (one) => ({
                     ...one,
                     comments: [...(one.comments ?? []), followUp],
                   })),
@@ -10620,7 +10874,7 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          expect(repliesOf(model).map((one) => one.thread)).toEqual([thread, thread]);
+          expect(Arr.map(repliesOf(model), (one) => one.thread)).toEqual([thread, thread]);
           expect(yield* asked(runId, "answer-1")).toContain("src/app.ts:3");
           const second = yield* asked(runId, "answer-2");
           expect(second).toContain("why is it the domain's?");
@@ -10635,7 +10889,7 @@ for (const name of ["gitlab", "github"] as const) {
     () =>
       runEffect(
         Effect.gen(function* () {
-          const comments = [61, 62].map((id) => ({
+          const comments = Arr.map([61, 62], (id) => ({
             id,
             author: "bob",
             at: `2026-10-20T11:0${id - 60}:00Z`,
@@ -10647,7 +10901,7 @@ for (const name of ["gitlab", "github"] as const) {
             PACKAGED,
             {
               verdict: "clean",
-              answers: comments.map((one) => ({
+              answers: Arr.map(comments, (one) => ({
                 id: String(one.id),
                 answer: "disputed",
                 note: `not ${one.id}`,
@@ -10673,7 +10927,7 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          expect(repliesOf(model).map((one) => one.body)).toEqual([
+          expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([
             `${commentUrl(name, 61)}\n\nNot changed: not 61${signed(runId)}`,
             `${commentUrl(name, 62)}\n\nNot changed: not 62${signed(runId)}`,
           ]);
@@ -10703,7 +10957,7 @@ for (const name of ["gitlab", "github"] as const) {
             () =>
               until(
                 () => parkedWhy(runId),
-                (why) => why.includes("answered none"),
+                (why) => pipe(why, Str.includes("answered none")),
               ),
           );
           const model = yield* forge.model();
@@ -10756,11 +11010,11 @@ for (const name of ["gitlab", "github"] as const) {
               Effect.gen(function* () {
                 yield* until(
                   () => awaitingOn(runId),
-                  (on) => on.includes("approval"),
+                  (on) => pipe(on, Str.includes("approval")),
                 );
                 yield* until(
                   () => prompts(),
-                  (typed) => typed.some((one) => one.includes("/fix-1.prompt.md")),
+                  (typed) => Arr.some(typed, (one) => pipe(one, Str.includes("/fix-1.prompt.md"))),
                 );
                 yield* changed(approvedBy(name, "dave"));
                 yield* goAsked(run.asked, "go-1");
@@ -10769,7 +11023,7 @@ for (const name of ["gitlab", "github"] as const) {
               }),
           );
           yield* bin.restore();
-          const proved = (yield* readVerifications(evidenceDir(dir, runId))).map((one) => [
+          const proved = Arr.map(yield* readVerifications(evidenceDir(dir, runId)), (one) => [
             one.end.head_sha,
             one.result,
           ]);
@@ -10803,7 +11057,7 @@ for (const name of ["gitlab", "github"] as const) {
               Effect.gen(function* () {
                 const why = yield* until(
                   () => parkedWhy(runId),
-                  (why) => why.includes("fix rounds"),
+                  (why) => pipe(why, Str.includes("fix rounds")),
                 );
                 expect(yield* run.asked).toEqual([]);
                 return why;
@@ -10811,9 +11065,11 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(why).toBe(
-            `The checks failed at ${head.slice(0, 8)} after 4 fix rounds: unit failed. Repair it, then resume ${runId}.`,
+            `The checks failed at ${pipe(head, Str.slice(0, 8))} after 4 fix rounds: unit failed. Repair it, then resume ${runId}.`,
           );
-          expect((yield* prompts()).filter((one) => one.includes("/fix-"))).toHaveLength(4);
+          expect(
+            Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes("/fix-"))),
+          ).toHaveLength(4);
         }),
       ),
     120_000,
@@ -10840,7 +11096,7 @@ for (const name of ["gitlab", "github"] as const) {
                 const late = { id: 91, author: "bob", at: "2026-10-20T11:00:00Z", body: "wait" };
                 yield* forge.set({
                   ...now,
-                  mrs: now.mrs.map((one) => ({ ...one, comments: [late] })),
+                  mrs: Arr.map(now.mrs, (one) => ({ ...one, comments: [late] })),
                 });
                 yield* run.answer("go-1", "Release");
                 yield* goAsked(run.asked, "go-2");
@@ -10855,7 +11111,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(repliesOf(model)).toHaveLength(1);
           expect(yield* runLog(runId)).toContain(
-            `go 1 no longer holds for ${head.slice(0, 8)}: 1 unanswered comment(s)`,
+            `go 1 no longer holds for ${pipe(head, Str.slice(0, 8))}: 1 unanswered comment(s)`,
           );
         }),
       ),
@@ -10880,13 +11136,13 @@ for (const name of ["gitlab", "github"] as const) {
                 yield* run.answer("go-1", "Release");
                 yield* until(
                   () => awaitingOn(runId),
-                  (on) => on.startsWith("CI"),
+                  (on) => pipe(on, Str.startsWith("CI")),
                 );
                 expect(yield* runLog(runId)).not.toContain("no longer holds");
                 yield* changed(PIPELINE_PASSED);
                 const end = yield* ended(run.status);
                 expect(
-                  (yield* run.asked).filter((row) => row.decision.startsWith("go-")),
+                  Arr.filter(yield* run.asked, (row) => pipe(row.decision, Str.startsWith("go-"))),
                 ).toHaveLength(1);
                 return end;
               }),
@@ -10894,7 +11150,13 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
-          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(model.merges), (present___) =>
+                Arr.map(present___, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
         }),
       ),
     120_000,
@@ -10918,12 +11180,12 @@ for (const name of ["gitlab", "github"] as const) {
                 yield* run.answer("go-1", "Release");
                 yield* until(
                   () => awaitingOn(runId),
-                  (on) => on.startsWith("CI"),
+                  (on) => pipe(on, Str.startsWith("CI")),
                 );
                 yield* changed({ checks: [{ name: "build", state: "failed" }], mergeable: "yes" });
                 yield* until(
                   () => runLog(runId),
-                  (log) => log.includes("no longer holds"),
+                  (log) => pipe(log, Str.includes("no longer holds")),
                 );
                 yield* changed(PIPELINE_PASSED);
                 yield* goAsked(run.asked, "go-2");
@@ -10935,7 +11197,7 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(model.merges ?? []).toEqual([]);
-          const at = head.slice(0, 8);
+          const at = pipe(head, Str.slice(0, 8));
           expect(yield* runLog(runId)).toMatch(
             new RegExp(`go 1 no longer holds for ${at}: the pipeline at ${at}, whose \\S+ failed`),
           );
@@ -10963,7 +11225,7 @@ for (const name of ["gitlab", "github"] as const) {
                 yield* run.answer("go-1", "Release");
                 yield* until(
                   () => awaitingOn(runId),
-                  (on) => on.startsWith("CI"),
+                  (on) => pipe(on, Str.startsWith("CI")),
                 );
                 moved = yield* pushedBySomebody(head);
                 yield* changed({ ...PIPELINE_PASSED, head: moved });
@@ -10978,7 +11240,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(model.merges ?? []).toEqual([]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* runLog(runId)).toContain(
-            `go 1 no longer holds for ${head.slice(0, 8)}: its head moved to ${moved.slice(0, 8)}`,
+            `go 1 no longer holds for ${pipe(head, Str.slice(0, 8))}: its head moved to ${pipe(moved, Str.slice(0, 8))}`,
           );
         }),
       ),
@@ -11000,7 +11262,10 @@ for (const name of ["gitlab", "github"] as const) {
           const late = { id: 92, author: "bob", at: "2026-10-20T11:00:00Z", body: "wait" };
           const commented = Effect.gen(function* () {
             const now = yield* forge.model();
-            yield* forge.set({ ...now, mrs: now.mrs.map((one) => ({ ...one, comments: [late] })) });
+            yield* forge.set({
+              ...now,
+              mrs: Arr.map(now.mrs, (one) => ({ ...one, comments: [late] })),
+            });
           });
           const status = yield* driven(
             {
@@ -11024,7 +11289,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(model.merges ?? []).toEqual([]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* runLog(runId)).toContain(
-            `go 1 no longer holds for ${head.slice(0, 8)}: 1 unanswered comment(s)`,
+            `go 1 no longer holds for ${pipe(head, Str.slice(0, 8))}: 1 unanswered comment(s)`,
           );
         }),
       ),
@@ -11049,7 +11314,7 @@ for (const name of ["gitlab", "github"] as const) {
               Effect.gen(function* () {
                 const share = yield* goAsked(run.asked, "share-for-approval");
                 expect(share.prompt).toContain(mr);
-                expect(share.prompt).toContain(head.slice(0, 8));
+                expect(share.prompt).toContain(pipe(head, Str.slice(0, 8)));
                 expect(share.prompt).toContain("Check it first");
                 expect(share.prompt).toContain("C123");
                 expect(slack.calls).toEqual([{ method: "auth.test", parameters: {} }]);
@@ -11060,7 +11325,7 @@ for (const name of ["gitlab", "github"] as const) {
                 yield* run.answer("share-for-approval", "Post for approval");
                 yield* until(
                   () => runLog(runId),
-                  (log) => log.includes(`shared ${mr}`),
+                  (log) => pipe(log, Str.includes(`shared ${mr}`)),
                 );
                 moved = yield* pushedBySomebody(head);
                 yield* changed({ head: moved });
@@ -11068,26 +11333,28 @@ for (const name of ["gitlab", "github"] as const) {
                 // several requests, and one spanning both changes would see the old head approved.
                 yield* until(
                   () => Effect.all([revParse("refs/heads/feature"), awaitingOn(runId)]),
-                  ([at, on]) => at === moved && on.includes("approval"),
+                  ([at, on]) => at === moved && pipe(on, Str.includes("approval")),
                 );
                 yield* changed(approvedBy(name, "dave"));
                 const go = yield* goAsked(run.asked, "go-1");
-                expect(go.prompt).toContain(moved.slice(0, 8));
+                expect(go.prompt).toContain(pipe(moved, Str.slice(0, 8)));
                 yield* run.answer("go-1", "Finish");
                 const status = yield* ended(run.status);
-                return { status, decisions: (yield* run.asked).map((row) => row.decision) };
+                return { status, decisions: Arr.map(yield* run.asked, (row) => row.decision) };
               }),
           );
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          expect(decisions.filter((one) => one.startsWith("share"))).toEqual([
+          expect(Arr.filter(decisions, (one) => pipe(one, Str.startsWith("share")))).toEqual([
             "share-for-approval",
           ]);
           expect(yield* runLog(runId)).toContain(
             `shared ${mr} in C123 for approval: ${POSTED.link}`,
           );
-          expect(slack.calls.filter((call) => call.method.startsWith("chat."))).toEqual([
+          expect(
+            Arr.filter(slack.calls, (call) => pipe(call.method, Str.startsWith("chat."))),
+          ).toEqual([
             {
               method: "chat.postMessage",
               parameters: { channel: "C123", text: `<${mr}|Fix the settings>` },
@@ -11097,7 +11364,9 @@ for (const name of ["gitlab", "github"] as const) {
               parameters: { channel: "D123", message_ts: "1503435956.000247" },
             },
           ]);
-          expect((yield* prompts()).filter((one) => one.includes(`/${runId}/share`))).toEqual([]);
+          expect(
+            Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes(`/${runId}/share`))),
+          ).toEqual([]);
           expect(repliesOf(model)).toEqual([]);
           expect(model.merges ?? []).toEqual([]);
         }),
@@ -11140,7 +11409,9 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(yield* runLog(runId)).toContain(`shared by the operator: ${mr} in #frontend`);
-          expect((yield* rig.calls()).filter((call) => call.cmd === "agent start")).toHaveLength(1);
+          expect(Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start")).toHaveLength(
+            1,
+          );
           expect(slack.calls).toEqual([]);
         }),
       ),
@@ -11166,29 +11437,31 @@ for (const name of ["gitlab", "github"] as const) {
                 moved = yield* pushedBySomebody(head);
                 yield* changed({ head: moved });
                 const again = yield* goAsked(run.asked, "share-for-approval-2");
-                expect(again.prompt).toContain(moved.slice(0, 8));
+                expect(again.prompt).toContain(pipe(moved, Str.slice(0, 8)));
                 yield* run.answer("share-for-approval-2", "Wait for changes");
                 yield* until(
                   () => runLog(runId),
-                  (log) => log.includes(`not shared at ${moved.slice(0, 8)}`),
+                  (log) => pipe(log, Str.includes(`not shared at ${pipe(moved, Str.slice(0, 8))}`)),
                 );
                 yield* changed(approvedBy("gitlab", "dave"));
                 yield* goAsked(run.asked, "go-1");
                 yield* run.answer("go-1", "Finish");
                 const status = yield* ended(run.status);
-                return { status, decisions: (yield* run.asked).map((row) => row.decision) };
+                return { status, decisions: Arr.map(yield* run.asked, (row) => row.decision) };
               }),
           );
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          expect(decisions.filter((one) => one.startsWith("share"))).toEqual([
+          expect(Arr.filter(decisions, (one) => pipe(one, Str.startsWith("share")))).toEqual([
             "share-for-approval",
             "share-for-approval-2",
           ]);
           expect(yield* runLog(runId)).toContain(
-            `not shared at ${head.slice(0, 8)}: waiting for ${mr} to change`,
+            `not shared at ${pipe(head, Str.slice(0, 8))}: waiting for ${mr} to change`,
           );
-          expect((yield* prompts()).filter((one) => one.includes(`/${runId}/share`))).toEqual([]);
+          expect(
+            Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes(`/${runId}/share`))),
+          ).toEqual([]);
         }),
       ),
     120_000,
@@ -11207,17 +11480,17 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               yield* until(
                 () => awaitingOn(runId),
-                (on) => on.includes("approval"),
+                (on) => pipe(on, Str.includes("approval")),
               );
               yield* changed(approvedBy("gitlab", "dave"));
               yield* goAsked(run.asked, "go-1");
               yield* run.answer("go-1", "Finish");
               yield* ended(run.status);
-              return (yield* run.asked).map((row) => row.decision);
+              return Arr.map(yield* run.asked, (row) => row.decision);
             }),
           );
           yield* bin.restore();
-          expect(decisions.filter((one) => one.startsWith("share"))).toEqual([]);
+          expect(Arr.filter(decisions, (one) => pipe(one, Str.startsWith("share")))).toEqual([]);
           expect(yield* runLog(runId)).toContain(
             "release.share_for_approval is on but release.approval_channel names no channel, so nothing is shared for approval",
           );
@@ -11242,11 +11515,11 @@ for (const name of ["gitlab", "github"] as const) {
               yield* run.answer("share-for-approval", "Post for approval");
               yield* until(
                 () => runLog(runId),
-                (log) => log.includes("did not share"),
+                (log) => pipe(log, Str.includes("did not share")),
               );
               yield* until(
                 () => awaitingOn(runId),
-                (on) => on.includes("approval"),
+                (on) => pipe(on, Str.includes("approval")),
               );
               yield* changed(approvedBy("gitlab", "dave"));
               yield* goAsked(run.asked, "go-1");
@@ -11259,8 +11532,10 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* runLog(runId)).toContain(
             `did not share ${mr} in #frontend: Slack chat.postMessage: channel_not_found`,
           );
-          expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
-          expect(slack.calls.some((call) => call.method === "chat.getPermalink")).toBe(false);
+          expect(
+            Arr.filter(slack.calls, (call) => call.method === "chat.postMessage"),
+          ).toHaveLength(1);
+          expect(Arr.some(slack.calls, (call) => call.method === "chat.getPermalink")).toBe(false);
         }),
       ),
     120_000,
@@ -11282,7 +11557,7 @@ for (const name of ["gitlab", "github"] as const) {
               yield* run.answer("share-for-approval", "Post for approval");
               yield* until(
                 () => awaitingOn(runId),
-                (on) => on.includes("approval"),
+                (on) => pipe(on, Str.includes("approval")),
               );
             }),
           );
@@ -11301,8 +11576,12 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* runLog(runId)).toContain(
             `shared ${mr} in C123 for approval: permalink missing: Slack chat.getPermalink: channel_not_found`,
           );
-          expect(slack.calls.filter((call) => call.method === "chat.postMessage")).toHaveLength(1);
-          expect(slack.calls.filter((call) => call.method === "chat.getPermalink")).toHaveLength(1);
+          expect(
+            Arr.filter(slack.calls, (call) => call.method === "chat.postMessage"),
+          ).toHaveLength(1);
+          expect(
+            Arr.filter(slack.calls, (call) => call.method === "chat.getPermalink"),
+          ).toHaveLength(1);
         }),
       ),
     120_000,
@@ -11330,7 +11609,7 @@ for (const name of ["gitlab", "github"] as const) {
                 yield* run.answer("share-for-approval", "Post for approval");
                 yield* until(
                   () => runLog(runId),
-                  (log) => log.includes("did not share"),
+                  (log) => pipe(log, Str.includes("did not share")),
                 );
                 yield* changed(approvedBy("gitlab", "dave"));
                 yield* goAsked(run.asked, "go-1");
@@ -11370,11 +11649,14 @@ for (const name of ["gitlab", "github"] as const) {
                 () => Effect.all([forge.model(), run.asked, awaitingOn(runId)]),
                 ([model, rows, on]) =>
                   repliesOf(model).length === 1 &&
-                  (on.includes("approval") ||
-                    rows.some((row) => row.decision === "share-for-approval-2")),
+                  (pipe(on, Str.includes("approval")) ||
+                    Arr.some(rows, (row) => row.decision === "share-for-approval-2")),
               );
               expect(
-                rows.map((row) => row.decision).filter((one) => one.startsWith("share")),
+                Arr.filter(
+                  Arr.map(rows, (row) => row.decision),
+                  (one) => pipe(one, Str.startsWith("share")),
+                ),
               ).toEqual(["share-for-approval"]);
               yield* changed(approvedBy("gitlab", "dave"));
               yield* goAsked(run.asked, "go-1");
@@ -11403,15 +11685,16 @@ for (const name of ["gitlab", "github"] as const) {
               const rows = yield* until(
                 () => run.asked,
                 (rows) =>
-                  rows.some(
+                  Arr.some(
+                    rows,
                     (row) => row.decision === "go-1" || row.decision === "share-for-approval",
                   ),
               );
-              if (rows.some((row) => row.decision === "go-1")) {
+              if (Arr.some(rows, (row) => row.decision === "go-1")) {
                 yield* run.answer("go-1", "Finish");
                 yield* ended(run.status);
               }
-              return rows.map((row) => row.decision);
+              return Arr.map(rows, (row) => row.decision);
             }),
           );
           yield* bin.restore();
@@ -11437,12 +11720,12 @@ for (const name of ["gitlab", "github"] as const) {
               yield* run.answer("share-for-approval", "Post for approval");
               yield* until(
                 () => runLog(runId),
-                (log) => log.includes("did not share"),
+                (log) => pipe(log, Str.includes("did not share")),
               );
               const moved = yield* pushedBySomebody(head);
               yield* changed({ head: moved });
               const again = yield* goAsked(run.asked, "share-for-approval-2");
-              expect(again.prompt).toContain(moved.slice(0, 8));
+              expect(again.prompt).toContain(pipe(moved, Str.slice(0, 8)));
               yield* run.answer("share-for-approval-2", "Wait for changes");
               yield* changed(approvedBy("gitlab", "dave"));
               yield* goAsked(run.asked, "go-1");
@@ -11478,7 +11761,9 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
-          expect((yield* prompts()).filter((one) => one.includes(`/${runId}/share`))).toEqual([]);
+          expect(
+            Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes(`/${runId}/share`))),
+          ).toEqual([]);
           expect(yield* runLog(runId)).toContain(
             `not shared: ${mr} no longer waits for a teammate's approval`,
           );
@@ -11507,7 +11792,7 @@ const followUpOffered = (name: Shipped, id: string, target: string) =>
       diffTarget: target,
       claim: "project",
     };
-    return offersFrom(declared, facts, { self: idOf(name) }).some((offer) => offer.id === id);
+    return Arr.some(offersFrom(declared, facts, { self: idOf(name) }), (offer) => offer.id === id);
   });
 
 const releaseAgainOffered = (target: string) => followUpOffered("release", "release-again", target);
@@ -11564,7 +11849,7 @@ const stageable = (
         "7": {
           ...tagRun(made.merged),
           status: name === "gitlab" ? "manual" : "waiting",
-          jobs: TAG_JOBS.map((job) => ({ name: job, state: jobs[job] })),
+          jobs: Arr.map(TAG_JOBS, (job) => ({ name: job, state: jobs[job] })),
         },
       },
     };
@@ -11577,6 +11862,10 @@ const stageable = (
 
 /** The production job left waiting on the tag's pipeline, as the forge links it. */
 const waiting = (name: MrForge) => `\`deploy-production\` at ${tagJob(name, "deploy-production")}`;
+
+/** A Clearance names the job by its path under the repository it names once. */
+const clearedJob = (name: MrForge) =>
+  `\`deploy-production\` at ${name === "gitlab" ? "/-/jobs/4" : "/actions/runs/7/job/4"}`;
 
 const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytiger"] };
 
@@ -11632,7 +11921,13 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
           expect(claimedFor).toEqual([
             { applications: ["spilnu", "happytiger"], jobs: ["deploy-stage"] },
           ]);
-          expect((yield* forge.model()).merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr((yield* forge.model()).merges), (present____) =>
+                Arr.map(present____, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           const log = yield* runLog(runId);
           expect(log).toContain("holds happytiger");
@@ -11743,7 +12038,13 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
               }),
           );
           yield* bin.restore();
-          expect((yield* forge.model()).merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr((yield* forge.model()).merges), (present_____) =>
+                Arr.map(present_____, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
           expect(claimed).toEqual([`release ${runId}`]);
           expect(yield* runLog(runId)).toContain(
             `released without a Helle claim on the human's say: ${why}`,
@@ -11775,7 +12076,7 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
                 yield* run.answer("go-1", "Merge, tag and stage");
                 yield* until(
                   () => runLog(runId),
-                  (log) => log.includes("waiting for spilnu"),
+                  (log) => pipe(log, Str.includes("waiting for spilnu")),
                 );
                 yield* Effect.sleep("300 millis");
                 expect((yield* forge.model()).merges ?? []).toEqual([]);
@@ -11787,7 +12088,13 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
               }),
           );
           yield* bin.restore();
-          expect((yield* forge.model()).merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr((yield* forge.model()).merges), (present______) =>
+                Arr.map(present______, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
         }),
       ),
@@ -11827,7 +12134,7 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               const go = yield* goAsked(run.asked, "go-1");
               expect(optionsOf([go], "go-1")).toEqual(["Merge, tag and stage", "Finish"]);
-              expect(go.prompt).toContain(head.slice(0, 8));
+              expect(go.prompt).toContain(pipe(head, Str.slice(0, 8)));
               expect(go.prompt).toContain("stage gets the tag; production waits for a second go");
               expect(claimed).toEqual([]);
               yield* run.answer("go-1", "Merge, tag and stage");
@@ -11837,7 +12144,9 @@ for (const name of ["gitlab", "github"] as const) {
                 "Leave production to me",
               ]);
               expect(production.prompt).toContain("v1.2.0");
-              expect(production.prompt).toContain(`stage carries \`${merged.slice(0, 8)}\``);
+              expect(production.prompt).toContain(
+                `stage carries \`${pipe(merged, Str.slice(0, 8))}\``,
+              );
               expect(production.prompt).toContain(waiting(name));
               expect(claimed).toEqual([`claim ${runId}`]);
               expect(yield* wasAsked(runId, "production")).toBe(false);
@@ -11859,13 +12168,19 @@ for (const name of ["gitlab", "github"] as const) {
           expect(outcomeText(status)).toBe(
             `${mr} merged at ${merged}, released as v1.2.0, in production`,
           );
-          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(model.merges), (present_______) =>
+                Arr.map(present_______, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* clearance(runId, "tag")).toBe(
-            `Cleared for this step: a release commit to ${url}'s default branch, where it makes one; pushing an annotated version tag to origin, with no forge release; playing, retrying and watching the tag pipeline's stage deploy and check jobs until only production jobs waiting to be started are left; rolling stage back to the newest release production carries; never a production job.`,
+            `Cleared for this step: a release commit to ${url}'s default branch, where it makes one; pushing an annotated version tag to origin, with no forge release; playing, retrying and watching the tag's stage deploy and check jobs; rolling stage back to the newest release production carries; never a production job.`,
           );
           expect(yield* clearance(runId, "production")).toBe(
-            `Cleared for this step: playing ${waiting(name)} on ${url}, and no other job.`,
+            `Cleared for this step: playing ${clearedJob(name)} on ${url}, and no other job.`,
           );
           expect(yield* asked(runId, "tag")).toContain("`deploy-stage`");
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
@@ -11896,7 +12211,7 @@ for (const name of ["gitlab", "github"] as const) {
                   (why) => why !== "",
                 ),
               ).toBe(
-                `Waiting for production: play ${waiting(name)}. The claim on \`project\` is held until the forge shows production carries \`${merged.slice(0, 8)}\`.`,
+                `Waiting for production: play ${waiting(name)}. The claim on \`project\` is held until the forge shows production carries \`${pipe(merged, Str.slice(0, 8))}\`.`,
               );
               expect(claimed).toEqual([`claim ${runId}`]);
               yield* forge.set(yield* now({ environments: deploys(merged, merged) }));
@@ -11937,7 +12252,7 @@ for (const name of ["gitlab", "github"] as const) {
               yield* goAsked(run.asked, "go-1");
               yield* run.answer("go-1", "Merge, tag and stage");
               const end = yield* ended(run.status);
-              expect((yield* run.asked).map((row) => row.decision)).not.toContain("production");
+              expect(Arr.map(yield* run.asked, (row) => row.decision)).not.toContain("production");
               return end;
             }),
           );
@@ -11977,7 +12292,7 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `${mr} merged at ${merged}, but stage failed after the merge: \`e2e-stage\` failed on v1.2.0's pipeline at ${PIPELINE_OF[name]}. Its rollback is not shown: stage still carries ${merged.slice(0, 8)}`,
+            `${mr} merged at ${merged}, but stage failed after the merge: \`e2e-stage\` failed on v1.2.0's pipeline at ${PIPELINE_OF[name]}. Its rollback is not shown: stage still carries ${pipe(merged, Str.slice(0, 8))}`,
           );
           expect(claimed).toEqual([`claim ${runId}`]);
           expect(yield* releaseAgainOffered(target)).toBe(true);
@@ -12025,7 +12340,7 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId), (run) =>
             Effect.gen(function* () {
               yield* staged(run);
-              const started = model.runs!["7"]!.jobs!.map((job) =>
+              const started = Arr.map(model.runs!["7"]!.jobs!, (job) =>
                 job.name === "deploy-production" ? { ...job, state: "running" as const } : job,
               );
               yield* forge.set(
@@ -12075,7 +12390,7 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `${mr} merged at ${merged} and tagged v1.2.0, but nothing was sent to production: v1.2.0 on origin does not carry the merged commit ${merged.slice(0, 8)}`,
+            `${mr} merged at ${merged} and tagged v1.2.0, but nothing was sent to production: v1.2.0 on origin does not carry the merged commit ${pipe(merged, Str.slice(0, 8))}`,
           );
           expect(yield* clearance(runId, "production")).toBe("");
           expect(claimed).toEqual([`claim ${runId}`]);
@@ -12104,7 +12419,7 @@ for (const name of ["gitlab", "github"] as const) {
             ),
           );
           expect(claimed).toEqual([`claim ${first}`]);
-          const fixed = TAG_JOBS.map((job) => ({
+          const fixed = Arr.map(TAG_JOBS, (job) => ({
             name: job,
             state: job === "deploy-production" ? ("manual" as const) : ("passed" as const),
           }));
@@ -12116,7 +12431,7 @@ for (const name of ["gitlab", "github"] as const) {
             (run) =>
               Effect.gen(function* () {
                 yield* goAsked(run.asked, "production");
-                expect((yield* run.asked).map((row) => row.decision)).not.toContain("go-1");
+                expect(Arr.map(yield* run.asked, (row) => row.decision)).not.toContain("go-1");
                 yield* run.answer("production", "Leave production to me");
                 yield* until(
                   () => parkedWhy(again),
@@ -12263,9 +12578,9 @@ for (const name of ["gitlab", "github"] as const) {
       const model: ForgeModel = {
         ...made.model,
         environments: deploys(made.base, made.base),
-        mrs: made.model.mrs.map((one) => ({
+        mrs: Arr.map(made.model.mrs, (one) => ({
           ...one,
-          jobs: MR_JOBS.map((job) => ({ name: job, state: jobs[job] })),
+          jobs: Arr.map(MR_JOBS, (job) => ({ name: job, state: jobs[job] })),
         })),
       };
       yield* made.forge.set(model);
@@ -12315,7 +12630,7 @@ for (const name of ["gitlab", "github"] as const) {
                 "Finish",
               ]);
               expect(production.prompt).toContain(mr);
-              expect(production.prompt).toContain(head.slice(0, 8));
+              expect(production.prompt).toContain(pipe(head, Str.slice(0, 8)));
               expect(production.prompt).toContain(stageJobs);
               expect(production.prompt).toContain("for testing, unmerged");
               expect(production.prompt).toContain(
@@ -12331,7 +12646,9 @@ for (const name of ["gitlab", "github"] as const) {
               yield* forge.set(yield* now({ environments: deploys(head, merged) }));
               const end = yield* ended(run.status);
               expect(
-                (yield* run.asked).filter((row) => row.decision.startsWith("production")),
+                Arr.filter(yield* run.asked, (row) =>
+                  pipe(row.decision, Str.startsWith("production")),
+                ),
               ).toHaveLength(1);
               return end;
             }),
@@ -12341,14 +12658,20 @@ for (const name of ["gitlab", "github"] as const) {
           expect(outcomeText(status)).toBe(
             `${mr} merged at ${merged}, released as v1.2.0, in production`,
           );
-          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(model.merges), (present________) =>
+                Arr.map(present________, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* clearance(runId, "stage")).toBe(
-            `Cleared for this step: playing, retrying and watching ${url}'s stage deploy job and stage check jobs (e2e-stage, smoke or the like) of the merge request's pipeline; rolling ${url}'s stage back to the newest release production carries; never a production job.`,
+            `Cleared for this step: playing, retrying and watching ${url}'s stage deploy job and stage check jobs (e2e-stage, smoke or the like) of the merge request's pipeline; rolling stage back to the newest release production carries; never a production job.`,
           );
           expect(yield* asked(runId, "stage")).toContain("`deploy-stage`");
           expect(yield* clearance(runId, "production")).toBe(
-            `Cleared for this step: playing ${waiting(name)} on ${url}, and no other job.`,
+            `Cleared for this step: playing ${clearedJob(name)} on ${url}, and no other job.`,
           );
           const other = new RegExp(`\\b${name === "gitlab" ? "gh" : "glab"}\\b`);
           for (const step of ["stage", "tag"]) expect(yield* asked(runId, step)).not.toMatch(other);
@@ -12387,7 +12710,13 @@ for (const name of ["gitlab", "github"] as const) {
           expect(outcomeText(status)).toBe(
             `${mr} merged at ${merged}, released as v1.2.0, in production`,
           );
-          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(model.merges), (present_________) =>
+                Arr.map(present_________, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
           expect(yield* clearance(runId, "production")).toBe("");
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
         }),
@@ -12435,7 +12764,7 @@ for (const name of ["gitlab", "github"] as const) {
           const late = { id: 95, author: "bob", at: "2026-10-20T11:00:00Z", body: "wait" };
           const commented = (on: ForgeModel) => ({
             ...on,
-            mrs: on.mrs.map((one) => ({ ...one, comments: [late] })),
+            mrs: Arr.map(on.mrs, (one) => ({ ...one, comments: [late] })),
           });
           yield* rig.queueOutputs([
             MR_STAGED,
@@ -12460,7 +12789,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(repliesOf(model)).toHaveLength(1);
           expect(yield* runLog(runId)).toContain(
-            `the production go no longer holds for ${head.slice(0, 8)}: 1 unanswered comment(s)`,
+            `the production go no longer holds for ${pipe(head, Str.slice(0, 8))}: 1 unanswered comment(s)`,
           );
         }),
       ),
@@ -12483,7 +12812,7 @@ for (const name of ["gitlab", "github"] as const) {
           ]);
           const pipeline = (over: Partial<FakeMr>) =>
             Effect.flatMap(forge.model(), (current) =>
-              forge.set({ ...current, mrs: current.mrs.map((one) => ({ ...one, ...over })) }),
+              forge.set({ ...current, mrs: Arr.map(current.mrs, (one) => ({ ...one, ...over })) }),
             );
           const status = yield* driven(options(runId), (run) =>
             Effect.gen(function* () {
@@ -12492,13 +12821,13 @@ for (const name of ["gitlab", "github"] as const) {
               yield* run.answer("production", "Send to production");
               const [, unstaged] = yield* until(
                 () => Effect.all([awaitingOn(runId), wasAsked(runId, "unstage")]),
-                ([on, unstaged]) => on.startsWith("CI") || unstaged,
+                ([on, unstaged]) => pipe(on, Str.startsWith("CI")) || unstaged,
               );
               expect(unstaged).toBe(false);
               yield* pipeline(PIPELINE_PASSED);
               yield* until(
                 () => awaitingOn(runId),
-                (on) => on !== "" && !on.startsWith("CI"),
+                (on) => on !== "" && !pipe(on, Str.startsWith("CI")),
               );
               yield* forge.set(yield* now({ environments: deploys(head, merged) }));
               return yield* ended(run.status);
@@ -12509,7 +12838,13 @@ for (const name of ["gitlab", "github"] as const) {
           expect(outcomeText(status)).toBe(
             `${mr} merged at ${merged}, released as v1.2.0, in production`,
           );
-          expect(model.merges?.map((one) => one.sha)).toEqual([head]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(model.merges), (present__________) =>
+                Arr.map(present__________, (one) => one.sha),
+              ),
+            ),
+          ).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
         }),
       ),
@@ -12532,7 +12867,7 @@ for (const name of ["gitlab", "github"] as const) {
               yield* goAsked(run.asked, "go-1");
               yield* run.answer("go-1", "Stage the merge request");
               yield* goAsked(run.asked, "go-2");
-              expect((yield* run.asked).map((row) => row.decision)).not.toContain("production");
+              expect(Arr.map(yield* run.asked, (row) => row.decision)).not.toContain("production");
               yield* run.answer("go-2", "Finish");
               return yield* ended(run.status);
             }),
@@ -12542,7 +12877,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(model.merges ?? []).toEqual([]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
-          const why = `\`e2e-stage\` has not passed on the merge request's pipeline at ${head.slice(0, 8)}: it is failed`;
+          const why = `\`e2e-stage\` has not passed on the merge request's pipeline at ${pipe(head, Str.slice(0, 8))}: it is failed`;
           expect(yield* asked(runId, "unstage")).toContain(why);
           expect(yield* asked(runId, "fix-1")).toContain(why);
         }),
@@ -12574,7 +12909,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(model.merges ?? []).toEqual([]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* asked(runId, "fix-1")).toContain(
-            `stage does not carry ${head.slice(0, 8)}`,
+            `stage does not carry ${pipe(head, Str.slice(0, 8))}`,
           );
         }),
       ),
@@ -12600,7 +12935,7 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `stage of ${mr} at ${head.slice(0, 8)} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${head.slice(0, 8)}: it is failed. Its rollback is not shown: stage still carries ${head.slice(0, 8)} in \`stage\``,
+            `stage of ${mr} at ${pipe(head, Str.slice(0, 8))} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${pipe(head, Str.slice(0, 8))}: it is failed. Its rollback is not shown: stage still carries ${pipe(head, Str.slice(0, 8))} in \`stage\``,
           );
           expect(model.merges ?? []).toEqual([]);
           expect(claimed).toEqual([`claim ${runId}`]);
@@ -12650,9 +12985,9 @@ for (const name of ["gitlab", "github"] as const) {
     const model: ForgeModel = {
       ...made.model,
       environments: environments([live(made.base)], [live(made.base)]),
-      mrs: made.model.mrs.map((one) => ({
+      mrs: Arr.map(made.model.mrs, (one) => ({
         ...one,
-        jobs: MONOREPO_JOBS.map((job) => ({ name: job, state: "passed" as const })),
+        jobs: Arr.map(MONOREPO_JOBS, (job) => ({ name: job, state: "passed" as const })),
       })),
     };
     yield* made.forge.set(model);
@@ -12690,7 +13025,7 @@ for (const name of ["gitlab", "github"] as const) {
               yield* goAsked(run.asked, "go-1");
               yield* run.answer("go-1", "Stage the merge request");
               yield* goAsked(run.asked, "go-2");
-              expect((yield* run.asked).map((row) => row.decision)).not.toContain("production");
+              expect(Arr.map(yield* run.asked, (row) => row.decision)).not.toContain("production");
               yield* run.answer("go-2", "Finish");
               return yield* ended(run.status);
             }),
@@ -12702,7 +13037,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           const finding = yield* asked(runId, "fix-1");
           expect(finding).toContain(
-            `stage does not carry ${head.slice(0, 8)} in \`stage-happytiger\``,
+            `stage does not carry ${pipe(head, Str.slice(0, 8))} in \`stage-happytiger\``,
           );
           expect(finding).not.toContain("`stage-spilnu`");
         }),
@@ -12732,7 +13067,7 @@ for (const name of ["gitlab", "github"] as const) {
             }),
           );
           yield* bin.restore();
-          expect(prompt).toContain(head.slice(0, 8));
+          expect(prompt).toContain(pipe(head, Str.slice(0, 8)));
           expect(prompt).toContain(monorepoJobs);
         }),
       ),
@@ -12790,7 +13125,7 @@ for (const name of ["gitlab", "github"] as const) {
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `${mr} was left open, but stage was not rolled back. Its rollback is not shown: stage still carries ${head.slice(0, 8)} in \`stage-happytiger\``,
+            `${mr} was left open, but stage was not rolled back. Its rollback is not shown: stage still carries ${pipe(head, Str.slice(0, 8))} in \`stage-happytiger\``,
           );
           expect(model.merges ?? []).toEqual([]);
           expect(claimed).toEqual([`claim ${runId}`]);
@@ -12811,9 +13146,13 @@ for (const name of ["gitlab", "github"] as const) {
           const later = yield* pushedBySomebody(head);
           const changed = (model: ForgeModel): ForgeModel => ({
             ...model,
-            mrs: model.mrs.map((mr) => ({ ...mr, head: later })),
+            mrs: Arr.map(model.mrs, (mr) => ({ ...mr, head: later })),
             checksAt: { [head]: model.mrs[0]?.jobs ?? [] },
-            environments: model.environments?.filter((env) => env.name !== "stage-web"),
+            environments: Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(model.environments), (present___________) =>
+                Arr.filter(present___________, (env) => env.name !== "stage-web"),
+              ),
+            ),
           });
           yield* rig.queueOutputs([
             MONOREPO_STAGED,
@@ -12827,7 +13166,7 @@ for (const name of ["gitlab", "github"] as const) {
               const status = yield* until(
                 () => Effect.all([run.status, run.asked]),
                 ([status, asked]) =>
-                  status.status === "failed" || asked.some((q) => q.decision === "go-2"),
+                  status.status === "failed" || Arr.some(asked, (q) => q.decision === "go-2"),
               );
               expect(status[0].status).toBe("failed");
               return status[0];
@@ -12835,7 +13174,7 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toContain(
-            `stage still carries ${head.slice(0, 8)} in \`stage-happytiger\``,
+            `stage still carries ${pipe(head, Str.slice(0, 8))} in \`stage-happytiger\``,
           );
           expect(claimed).toEqual([`claim ${runId}`]);
         }),
@@ -12890,7 +13229,7 @@ for (const name of ["gitlab", "github"] as const) {
 /** The tags on origin, which a Stage Run never pushes. */
 const originTags = () =>
   exec(["git", "ls-remote", "--tags", "origin"], { cwd: rig.projectDir }).pipe(
-    Effect.map((ran) => ran.stdout.trim()),
+    Effect.map((ran) => Str.trim(ran.stdout)),
   );
 
 for (const name of ["gitlab", "github"] as const) {
@@ -12928,10 +13267,10 @@ for (const name of ["gitlab", "github"] as const) {
       const withJobs = (on: ForgeModel, head: string, e2eNow: "running" | "failed" | "passed") =>
         ({
           ...on,
-          mrs: on.mrs.map((one) => ({
+          mrs: Arr.map(on.mrs, (one) => ({
             ...one,
             head,
-            jobs: MR_JOBS.map((job) => ({
+            jobs: Arr.map(MR_JOBS, (job) => ({
               name: job,
               state: job === "e2e-stage" ? e2eNow : ("passed" as const),
             })),
@@ -12994,7 +13333,7 @@ for (const name of ["gitlab", "github"] as const) {
                 "Leave it on stage",
               ]);
               expect(question.prompt).toContain(mr);
-              expect(question.prompt).toContain(head.slice(0, 8));
+              expect(question.prompt).toContain(pipe(head, Str.slice(0, 8)));
               expect(question.prompt).toContain(stageJobs);
               expect(question.prompt).toContain("project");
               expect(question.prompt).toContain("for testing, unmerged");
@@ -13009,7 +13348,7 @@ for (const name of ["gitlab", "github"] as const) {
           yield* touchedNothing(model);
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `${mr} was staged at ${head.slice(0, 8)} for testing; stage is rolled back`,
+            `${mr} was staged at ${pipe(head, Str.slice(0, 8))} for testing; stage is rolled back`,
           );
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* clearance(runId, "stage")).toContain("never a production job");
@@ -13020,7 +13359,7 @@ for (const name of ["gitlab", "github"] as const) {
           const log = yield* runLog(runId);
           expect(log).not.toMatch(/\b(release[sd]?|approv\w*|go \d)\b/i);
           const lane = yield* laneNow(runId, "succeeded");
-          expect(lane.nodes.map((node) => [node.title, node.state])).toEqual([
+          expect(Arr.map(lane.nodes, (node) => [node.title, node.state])).toEqual([
             ["Checkout", "done"],
             ["Assess", "done"],
             ["Helle claim", "done"],
@@ -13049,7 +13388,7 @@ for (const name of ["gitlab", "github"] as const) {
           yield* fs.writeFileString(`${held}/notes.txt`, "mine\n");
           yield* forge.set({
             ...model,
-            mrs: model.mrs.map((one) => ({ ...one, state: "closed" })),
+            mrs: Arr.map(model.mrs, (one) => ({ ...one, state: "closed" })),
           });
           const runId = `r-stage-held-${name}`;
 
@@ -13076,7 +13415,7 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               yield* forge.set({
                 ...model,
-                mrs: model.mrs.map((one) => ({ ...one, state })),
+                mrs: Arr.map(model.mrs, (one) => ({ ...one, state })),
               });
               const result = yield* ran(options(runId));
               expect(yield* wasAsked(runId, "stage")).toBe(false);
@@ -13120,15 +13459,15 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId), (run) =>
             Effect.gen(function* () {
               const question = yield* goAsked(run.asked, "staged-1");
-              expect(question.prompt).toContain(later.slice(0, 8));
-              expect(question.prompt).not.toContain(head.slice(0, 8));
+              expect(question.prompt).toContain(pipe(later, Str.slice(0, 8)));
+              expect(question.prompt).not.toContain(pipe(head, Str.slice(0, 8)));
               yield* run.answer("staged-1", "Done");
               return yield* ended(run.status);
             }),
           );
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `${mr} was staged at ${later.slice(0, 8)} for testing; stage is rolled back`,
+            `${mr} was staged at ${pipe(later, Str.slice(0, 8))} for testing; stage is rolled back`,
           );
           expect(yield* asked(runId, "stage-2")).toContain(later);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
@@ -13170,7 +13509,11 @@ for (const name of ["gitlab", "github"] as const) {
               writes: [
                 forge.holding({
                   ...at(base),
-                  environments: at(base).environments?.filter((env) => env.name !== "stage-new"),
+                  environments: Option.getOrUndefined(
+                    Option.map(Option.fromNullishOr(at(base).environments), (present____________) =>
+                      Arr.filter(present____________, (env) => env.name !== "stage-new"),
+                    ),
+                  ),
                 }),
               ],
               output: STAGED_MR,
@@ -13187,7 +13530,7 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toContain(
-            `stage still carries ${head.slice(0, 8)} in \`stage-old\``,
+            `stage still carries ${pipe(head, Str.slice(0, 8))} in \`stage-old\``,
           );
           expect(status.status).toBe("failed");
           expect(claimed).toEqual([`claim ${runId}`]);
@@ -13208,7 +13551,7 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId), (run) => ended(run.status));
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `stage of ${mr} at ${head.slice(0, 8)} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${head.slice(0, 8)}: it is failed; stage is back on what production carries`,
+            `stage of ${mr} at ${pipe(head, Str.slice(0, 8))} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${pipe(head, Str.slice(0, 8))}: it is failed; stage is back on what production carries`,
           );
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
           expect(yield* asked(runId, "unstage")).toContain("`e2e-stage`");
@@ -13230,7 +13573,7 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId), (run) => ended(run.status));
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `stage of ${mr} at ${head.slice(0, 8)} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${head.slice(0, 8)}: it is failed. Its rollback is not shown: stage still carries ${head.slice(0, 8)} in \`stage\``,
+            `stage of ${mr} at ${pipe(head, Str.slice(0, 8))} failed: \`e2e-stage\` has not passed on the merge request's pipeline at ${pipe(head, Str.slice(0, 8))}: it is failed. Its rollback is not shown: stage still carries ${pipe(head, Str.slice(0, 8))} in \`stage\``,
           );
           expect(claimed).toEqual([`claim ${runId}`]);
         }),
@@ -13257,7 +13600,9 @@ for (const name of ["gitlab", "github"] as const) {
           );
           const model = yield* forge.model();
           yield* bin.restore();
-          expect(outcomeText(status)).toBe(`stage carries ${mr} at ${head.slice(0, 8)}, unmerged`);
+          expect(outcomeText(status)).toBe(
+            `stage carries ${mr} at ${pipe(head, Str.slice(0, 8))}, unmerged`,
+          );
           expect(model.environments).toEqual(onStage().environments);
           expect(yield* wasAsked(runId, "unstage")).toBe(false);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
@@ -13282,7 +13627,7 @@ for (const name of ["gitlab", "github"] as const) {
               yield* forge.set({ ...(yield* forge.model()), mrs: onStage(later).mrs });
               yield* run.answer("staged-1", "Stage again");
               const again = yield* goAsked(run.asked, "staged-2");
-              expect(again.prompt).toContain(later.slice(0, 8));
+              expect(again.prompt).toContain(pipe(later, Str.slice(0, 8)));
               expect(claimed).toEqual([`claim ${runId}`]);
               yield* run.answer("staged-2", "Done");
               return yield* ended(run.status);
@@ -13290,7 +13635,7 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(outcomeText(status)).toBe(
-            `${mr} was staged at ${later.slice(0, 8)} for testing; stage is rolled back`,
+            `${mr} was staged at ${pipe(later, Str.slice(0, 8))} for testing; stage is rolled back`,
           );
           expect(yield* asked(runId, "stage-2")).toContain(later);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
@@ -13377,7 +13722,10 @@ for (const name of ["gitlab", "github"] as const) {
               writes: [
                 forge.holding({
                   ...model,
-                  environments: model.environments.map((env) => ({ ...env, job: "teammate-job" })),
+                  environments: Arr.map(model.environments, (env) => ({
+                    ...env,
+                    job: "teammate-job",
+                  })),
                 }),
               ],
               output: STAGED_MR,
@@ -13467,10 +13815,10 @@ for (const name of ["gitlab", "github"] as const) {
   const BUSY_ASSESSED = {
     ...APP_ASSESSED,
     applications: [...APPS],
-    stage_jobs: { merge_request: APPS.map(appJob), tag: [] },
+    stage_jobs: { merge_request: Arr.map(APPS, appJob), tag: [] },
   };
   // An unknown commit makes a teammate's deployment incomparable with this checkout.
-  const TEAMMATE = "7ea3a7e0".repeat(5);
+  const TEAMMATE = pipe("7ea3a7e0", Str.repeat(5));
 
   interface BusyHelle {
     readonly holders: Record<string, string | null>;
@@ -13487,7 +13835,7 @@ for (const name of ["gitlab", "github"] as const) {
         const held = new Set<string>();
         const needsOf = (app: string) => [...(helle.declared ?? [app])];
         const neededFor = (deploys?: { readonly applications: ReadonlyArray<string> }) =>
-          [...new Set((deploys?.applications ?? []).flatMap(needsOf))].sort();
+          [...new Set(Arr.flatMap(deploys?.applications ?? [], needsOf))].sort();
         const holderOf = (slug: string) => (held.has(slug) ? null : (helle.holders[slug] ?? null));
         return Host.of({
           ...host,
@@ -13501,14 +13849,17 @@ for (const name of ["gitlab", "github"] as const) {
           holders: (asked) =>
             Effect.succeed({
               _tag: "Read" as const,
-              projects: neededFor(asked.deploys).map((slug) => ({ slug, holder: holderOf(slug) })),
-              applications: (asked.deploys?.applications ?? []).map((app) => ({
+              projects: Arr.map(neededFor(asked.deploys), (slug) => ({
+                slug,
+                holder: holderOf(slug),
+              })),
+              applications: Arr.map(asked.deploys?.applications ?? [], (app) => ({
                 name: app,
                 needs: needsOf(app),
               })),
-              jobs: (asked.deploys?.jobs ?? []).map((job) => ({
+              jobs: Arr.map(asked.deploys?.jobs ?? [], (job) => ({
                 name: job,
-                applications: APPS.filter((app) => job === appJob(app)),
+                applications: Arr.filter(APPS, (app) => job === appJob(app)),
               })),
             }),
           claim: (options) =>
@@ -13521,7 +13872,7 @@ for (const name of ["gitlab", "github"] as const) {
               if (options.free !== true) {
                 claimed.push(`wait ${options.runId}`);
                 if (helle.handedOver !== undefined) yield* Deferred.await(helle.handedOver);
-                needed.forEach(take);
+                Arr.forEach(needed, take);
                 return { slugs: needed };
               }
               if (helle.unresolved !== undefined) return { unresolved: helle.unresolved };
@@ -13553,17 +13904,17 @@ for (const name of ["gitlab", "github"] as const) {
       const before = yield* made.forge.model();
       const at = (deployed: Partial<Record<string, ReadonlyArray<string>>>): ForgeModel => ({
         ...before,
-        mrs: before.mrs.map((one) => ({
+        mrs: Arr.map(before.mrs, (one) => ({
           ...one,
           head: made.head,
-          jobs: APPS.map((app) => ({ name: appJob(app), state: "passed" as const })),
+          jobs: Arr.map(APPS, (app) => ({ name: appJob(app), state: "passed" as const })),
         })),
         environments: [
-          ...APPS.map((app) => ({
+          ...Arr.map(APPS, (app) => ({
             name: `stage-${app}`,
             tier: "staging",
             job: appJob(app),
-            deployments: (deployed[app] ?? start(app)).map(success),
+            deployments: Arr.map(deployed[app] ?? start(app), success),
           })),
           { name: "production", tier: "production", deployments: [success(made.base)] },
         ],
@@ -13571,10 +13922,10 @@ for (const name of ["gitlab", "github"] as const) {
       const model = at({});
       yield* made.forge.set(model);
       const onEach = (apps: ReadonlyArray<string>, shas: (app: string) => ReadonlyArray<string>) =>
-        Object.fromEntries(apps.map((app) => [app, shas(app)]));
+        Rec.fromEntries(Arr.map(apps, (app) => [app, shas(app)] as const));
       const staged = (apps: ReadonlyArray<string>) => ({
         writes: [made.forge.holding(at(onEach(apps, (app) => [made.head, ...start(app)])))],
-        output: { verdict: "clean", stage_jobs: apps.map(appJob) },
+        output: { verdict: "clean", stage_jobs: Arr.map(apps, appJob) },
       });
       const unstaged = (apps: ReadonlyArray<string>) => ({
         writes: [
@@ -13600,7 +13951,7 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId, busyHost(helle)), (run) =>
             Effect.gen(function* () {
               const question = yield* goAsked(run.asked, "staged-1");
-              expect((yield* run.asked).map((row) => row.decision)).not.toContain("claims-1");
+              expect(Arr.map(yield* run.asked, (row) => row.decision)).not.toContain("claims-1");
               expect(leftOff(question.prompt)).toBe("");
               yield* run.answer("staged-1", "Done");
               return yield* ended(run.status);
@@ -13612,17 +13963,19 @@ for (const name of ["gitlab", "github"] as const) {
             expect(yield* asked(runId, "stage")).toContain(`\`${appJob(app)}\``);
           expect(claimed).toEqual([
             `wait ${runId}`,
-            ...APPS.map((app) => `claim ${runId} ${app}`),
-            ...APPS.map((app) => `release ${runId} ${app}`),
+            ...Arr.map(APPS, (app) => `claim ${runId} ${app}`),
+            ...Arr.map(APPS, (app) => `release ${runId} ${app}`),
           ]);
         }),
       ),
     120_000,
   );
 
-  const DANNS = APPS.filter((app) => app !== "playground");
+  const DANNS = Arr.filter(APPS, (app) => app !== "playground");
   const dann = (): BusyHelle & { holders: Record<string, string | null> } => ({
-    holders: Object.fromEntries(DANNS.map((app): [string, string | null] => [app, "Dann"])),
+    holders: Rec.fromEntries(
+      Arr.map(DANNS, (app): [string, string | null] => [app, "Dann"] as const),
+    ),
   });
 
   scenario(
@@ -13651,7 +14004,9 @@ for (const name of ["gitlab", "github"] as const) {
               expect(yield* wasAsked(runId, "stage")).toBe(false);
               yield* run.answer("claims-1", "Stage what is free");
               const question = yield* goAsked(run.asked, "staged-1");
-              expect(leftOff(question.prompt).split(", ").sort()).toEqual([...DANNS]);
+              expect(
+                Arr.sort(Arr.fromIterable(Str.split(leftOff(question.prompt), ", ")), Order.String),
+              ).toEqual([...DANNS]);
               yield* run.answer("staged-1", "Done");
               return yield* ended(run.status);
             }),
@@ -13668,7 +14023,9 @@ for (const name of ["gitlab", "github"] as const) {
             expect(unstage).not.toContain(appJob(app));
           }
           const others = (environments: ForgeModel["environments"]) =>
-            (environments ?? []).filter((env) => DANNS.some((app) => env.name === `stage-${app}`));
+            Arr.filter(environments ?? [], (env) =>
+              Arr.some(DANNS, (app) => env.name === `stage-${app}`),
+            );
           expect(others(after.environments)).toEqual(others(model.environments));
           expect(claimed).toEqual([`claim ${runId} playground`, `release ${runId} playground`]);
         }),
@@ -13691,8 +14048,8 @@ for (const name of ["gitlab", "github"] as const) {
               yield* goAsked(run.asked, "claims-1");
               yield* run.answer("claims-1", "Wait for all");
               yield* until(
-                () => Effect.sync(() => claimed),
-                (now) => now.includes(`wait ${runId}`),
+                () => Effect.succeed(claimed),
+                (now) => Arr.contains(now, `wait ${runId}`),
               );
               expect(yield* wasAsked(runId, "stage")).toBe(false);
               yield* Deferred.succeed(helle.handedOver, undefined);
@@ -13742,12 +14099,12 @@ for (const name of ["gitlab", "github"] as const) {
     () =>
       runEffect(
         Effect.gen(function* () {
-          const busy = DANNS.filter((app) => app !== "poker");
+          const busy = Arr.filter(DANNS, (app) => app !== "poker");
           const { bin, staged, unstaged } = yield* busyStage(busy);
           claimed.length = 0;
           const runId = `r-busy-race-${name}`;
           const helle = {
-            holders: Object.fromEntries(busy.map((app) => [app, "Dann"])),
+            holders: Rec.fromEntries(Arr.map(busy, (app) => [app, "Dann"] as const)),
             racing: { poker: "Mona" },
           };
           yield* rig.queueOutputs([
@@ -13761,9 +14118,9 @@ for (const name of ["gitlab", "github"] as const) {
               expect(claims.prompt).not.toContain("poker (");
               yield* run.answer("claims-1", "Stage what is free");
               const question = yield* goAsked(run.asked, "staged-1");
-              expect(leftOff(question.prompt).split(", ").sort()).toEqual(
-                [...busy, "poker"].sort(),
-              );
+              expect(
+                Arr.sort(Arr.fromIterable(Str.split(leftOff(question.prompt), ", ")), Order.String),
+              ).toEqual([...busy, "poker"].sort());
               expect(question.prompt).toContain("poker (Mona)");
               yield* run.answer("staged-1", "Done");
               return yield* ended(run.status);
@@ -13801,9 +14158,9 @@ for (const name of ["gitlab", "github"] as const) {
               helle.holders.spilnu = null;
               yield* run.answer("staged-1", "Stage again");
               const again = yield* goAsked(run.asked, "staged-2");
-              expect(leftOff(again.prompt).split(", ").sort()).toEqual(
-                DANNS.filter((app) => app !== "spilnu"),
-              );
+              expect(
+                Arr.sort(Arr.fromIterable(Str.split(leftOff(again.prompt), ", ")), Order.String),
+              ).toEqual(Arr.filter(DANNS, (app) => app !== "spilnu"));
               expect(claimed).toEqual([`claim ${runId} playground`, `claim ${runId} spilnu`]);
               yield* run.answer("staged-2", "Done");
               return yield* ended(run.status);
@@ -13940,13 +14297,13 @@ scenario(
           entry: shipped("review"),
           runId: "r-review-flow",
           input: { target: "worktree" },
-          ready: (one) => one.nodes.some((node) => node.ranOn !== null),
+          ready: (one) => Arr.some(one.nodes, (node) => node.ranOn !== null),
           outputs: [],
           working: { operation: "review-1", output: CLEAN_SYNTHESIS },
           rest: [],
           finish: { decision: "post-1", value: "Don't post" },
         });
-        expect(lane.nodes.map((node) => [node.title, node.state, node.declared])).toEqual([
+        expect(Arr.map(lane.nodes, (node) => [node.title, node.state, node.declared])).toEqual([
           ["Review", "running", true],
           ["What next", "expected", true],
         ]);
@@ -13965,12 +14322,12 @@ scenario(
           entry: shipped("general"),
           runId: "r-general-flow",
           input: { goal: CHORE },
-          ready: (one) => one.nodes.some((node) => node.ranOn !== null),
+          ready: (one) => Arr.some(one.nodes, (node) => node.ranOn !== null),
           outputs: [],
           working: { operation: "task", output: DONE },
           rest: [],
         });
-        expect(lane.nodes.map((node) => [node.title, node.state, node.declared])).toEqual([
+        expect(Arr.map(lane.nodes, (node) => [node.title, node.state, node.declared])).toEqual([
           ["Task", "running", true],
         ]);
       }),
@@ -14088,23 +14445,27 @@ const improving: HostOverride = Layer.effect(Host)(
       report: (since) =>
         Effect.gen(function* () {
           const own = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id ?? "";
-          const runs = [{ runId: own, parent: null, workflow: idOf("self-improve") }, ...windowRuns]
-            .map(({ runId, parent, ...rest }) => ({
-              runId,
-              workflow: "workflow" in rest && rest.workflow ? rest.workflow : "implement",
-              parent,
-              project: "project" in rest && rest.project ? rest.project : rig.projectDir,
-              created: "created" in rest && rest.created ? rest.created : since,
-              status: "failed" as const,
-              closes: "closes" in rest && rest.closes ? rest.closes : [],
-            }))
-            .filter(({ created }) => epochOf(created) >= epochOf(since));
+          const runs = Arr.filter(
+            Arr.map(
+              [{ runId: own, parent: null, workflow: idOf("self-improve") }, ...windowRuns],
+              ({ runId, parent, ...rest }) => ({
+                runId,
+                workflow: "workflow" in rest && rest.workflow ? rest.workflow : "implement",
+                parent,
+                project: "project" in rest && rest.project ? rest.project : rig.projectDir,
+                created: "created" in rest && rest.created ? rest.created : since,
+                status: "failed" as const,
+                closes: "closes" in rest && rest.closes ? rest.closes : [],
+              }),
+            ),
+            ({ created }) => epochOf(created) >= epochOf(since),
+          );
           return {
             since,
             total: runs.length,
             runs,
             workflows: [],
-            failed: runs.map(({ runId }) => ({
+            failed: Arr.map(runs, ({ runId }) => ({
               runId,
               workflow: "implement",
               reason: `${runId} broke`,
@@ -14119,7 +14480,7 @@ const improving: HostOverride = Layer.effect(Host)(
           return Effect.fail(new WorkflowError({ reason: "no forge login on this Machine" }));
         if (unlisted && filed.length > 0)
           return Effect.fail(new WorkflowError({ reason: "the forge did not answer" }));
-        const filedIssues = filed.map(({ title, body }, at) => ({
+        const filedIssues = Arr.map(filed, ({ title, body }, at) => ({
           number: 101 + at,
           title,
           body,
@@ -14127,7 +14488,7 @@ const improving: HostOverride = Layer.effect(Host)(
         }));
         const all = [...openIssues, ...filedIssues];
         if (numbers !== undefined)
-          return Effect.succeed(all.filter(({ number }) => numbers.includes(number)));
+          return Effect.succeed(Arr.filter(all, ({ number }) => numbers.includes(number)));
         return Effect.succeed(lagging ? openIssues : all);
       },
       fileIssue: ({ title, body }) =>
@@ -14149,6 +14510,8 @@ const improved = (runId: string, input: Readonly<Record<string, Schema.Json>>) =
     Effect.gen(function* () {
       const made = yield* loaded(shipped("self-improve"), runId);
       yield* admit({ runId, workflow: made.workflow.name, input });
+      // Authored modules expose Schema.Unknown failures; this test records their actual result.
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
       return yield* made.workflow
         .execute({ runId, input })
         .pipe(Effect.result, Effect.provide(made.layer));
@@ -14173,7 +14536,7 @@ const freshDay = () => {
 const readText = (file: string) =>
   FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.readFileString(file)));
 
-const LEAKED = `ghp_${"x".repeat(24)}`;
+const LEAKED = `ghp_${pipe("x", Str.repeat(24))}`;
 const saidBy = (result: Result.Result<unknown, unknown>) =>
   Result.isSuccess(result) ? String(result.success) : "";
 const refusedWith = (result: Result.Result<unknown, unknown>) =>
@@ -14244,7 +14607,13 @@ scenario(
         ]);
         yield* improved("r-improvements-flow", { runs: "machine", improvements: 2 });
         const lane = yield* laneNow("r-improvements-flow", "succeeded");
-        expect(nodeIn(lane, "improvements")?.runs.map((one) => [one.place, one.state])).toEqual([
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(nodeIn(lane, "improvements")), (present_____________) =>
+              Arr.map(present_____________.runs, (one) => [one.place, one.state]),
+            ),
+          ),
+        ).toEqual([
           ["first", "done"],
           ["second", "done"],
         ]);
@@ -14259,10 +14628,13 @@ const schemaDefault = (drawn: Schema.Json | null) =>
   Option.getOrNull(Schema.decodeUnknownOption(DefaultOf)(drawn))?.default ?? null;
 
 const agentPrompts = () =>
-  rig.calls().pipe(Effect.map((calls) => calls.filter((call) => call.cmd === "agent prompt")));
+  rig.calls().pipe(Effect.map((calls) => Arr.filter(calls, (call) => call.cmd === "agent prompt")));
 
 once("self-improve takes improvements as a whole number and runs as checkout or machine", () => {
-  const decode = Schema.decodeUnknownSync(selfImprove.input ?? Schema.Never);
+  const decode = flow(
+    Schema.decodeUnknownResult(selfImprove.input ?? Schema.Never),
+    Result.getOrThrow,
+  );
   expect(decode({ runs: "checkout", improvements: "3" })).toEqual({
     runs: "checkout",
     improvements: 3,
@@ -14291,11 +14663,14 @@ once(
       finding({ key: "elsewhere", runs: ["r-z"] }),
     ];
     const machine = sortOut(findings, window, issues, true);
-    expect(machine.kept.map(({ key }) => key)).toEqual(["crash", "twice", "known"]);
-    expect(machine.leftOut.map(({ why }) => why)).toEqual(["seen once", "no Run of the window"]);
+    expect(Arr.map(machine.kept, ({ key }) => key)).toEqual(["crash", "twice", "known"]);
+    expect(Arr.map(machine.leftOut, ({ why }) => why)).toEqual([
+      "seen once",
+      "no Run of the window",
+    ]);
     const checkout = sortOut(findings, window, issues, false);
-    expect(checkout.kept.map(({ key }) => key)).toEqual(["twice", "known"]);
-    expect(checkout.leftOut.map(({ why }) => why)).toEqual([
+    expect(Arr.map(checkout.kept, ({ key }) => key)).toEqual(["twice", "known"]);
+    expect(Arr.map(checkout.leftOut, ({ why }) => why)).toEqual([
       "about Collie",
       "seen once",
       "no Run of the window",
@@ -14365,7 +14740,7 @@ scenario(
         expect(prompt).not.toContain("r-other");
         expect(prompt).not.toContain("/elsewhere/other");
         expect(prompt).toContain('"about Collie"');
-        expect(filed.map(({ title }) => title)).toEqual(["Project lost-docs"]);
+        expect(Arr.map(filed, ({ title }) => title)).toEqual(["Project lost-docs"]);
         expect(yield* readText(`${runDir(dir, "r-checkout")}/summary.md`)).toContain(
           "Project host-crash: about Collie",
         );
@@ -14394,7 +14769,7 @@ scenario(
         const prompt = yield* readText(`${dir}/agents/r-machine/triage.prompt.md`);
         expect(prompt).toContain("r-other");
         expect(prompt).toContain("`defect` is one more");
-        expect(filed.map(({ title }) => title)).toEqual(["Project host-crash"]);
+        expect(Arr.map(filed, ({ title }) => title)).toEqual(["Project host-crash"]);
       }),
     ),
   120_000,
@@ -14462,7 +14837,7 @@ scenario(
         yield* rig.queueOutputs([triaged([])]);
         yield* improved("r-again", { runs: "checkout", improvements: 1 });
         expect(
-          started.map(({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
+          Arr.map(started, ({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
         ).toEqual([["improvement-docs", "plan", true]]);
         expect(started[0]?.input.then).toBe("implement");
         expect(started[0]?.input.goal).toContain("`Closes #7`");
@@ -14485,7 +14860,7 @@ scenario(
         openIssues = [issueNumbered(7)];
         yield* earlier("r-yesterday", hoursAgo(25), [unstarted("docs", [7])]);
         yield* improved("r-quiet", { runs: "checkout", improvements: 1 });
-        expect(started.map(({ invocation }) => invocation)).toEqual(["improvement-docs"]);
+        expect(Arr.map(started, ({ invocation }) => invocation)).toEqual(["improvement-docs"]);
         expect(yield* readText(`${runDir(dir, "r-quiet")}/summary.md`)).toContain(
           "- docs: r-quiet-improvement-docs, succeeded",
         );
@@ -14557,7 +14932,7 @@ scenario(
         yield* earlier("r-third", hoursAgo(26), [unstarted("docs", [8])]);
         yield* rig.queueOutputs([triaged([])]);
         yield* improved("r-again", { runs: "checkout", improvements: 3 });
-        expect(started.map(({ invocation }) => invocation)).toEqual(["improvement-docs"]);
+        expect(Arr.map(started, ({ invocation }) => invocation)).toEqual(["improvement-docs"]);
         expect(started[0]?.input.goal).toContain("`Closes #7`");
       }),
     ),
@@ -14582,7 +14957,7 @@ scenario(
           ),
         ]);
         yield* improved("r-again", { runs: "checkout", improvements: 2 });
-        expect(new Set(started.map(({ invocation }) => invocation))).toEqual(
+        expect(new Set(Arr.map(started, ({ invocation }) => invocation))).toEqual(
           new Set(["improvement-seven", "improvement-eight"]),
         );
         expect(filed).toHaveLength(1);
@@ -14642,7 +15017,7 @@ const aDay = () =>
       expect(persona).toContain("retrospective");
       expect(persona).toContain(`read \`${retro}\` and follow it`);
 
-      expect(filed.map(({ title }) => title)).toEqual([
+      expect(Arr.map(filed, ({ title }) => title)).toEqual([
         "Project host-crash",
         "Project costly-reads",
         "Project third",
@@ -14650,13 +15025,13 @@ const aDay = () =>
       expect(filed[0]?.body).toEndWith(
         `${markerOf("host-crash")}\n\nFiled by Collie's self-improve Run r-day on ${hostname()}.`,
       );
-      expect(commented.map(({ number }) => number)).toEqual([7, 8]);
+      expect(Arr.map(commented, ({ number }) => number)).toEqual([7, 8]);
       expect(commented[0]?.body).toStartWith("Seen again in r-a ");
 
       expect(started).toHaveLength(2);
       expect(
         new Set(
-          started.map(({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
+          Arr.map(started, ({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
         ),
       ).toEqual(
         new Set([
@@ -14664,8 +15039,12 @@ const aDay = () =>
           ["improvement-second", "plan", true],
         ]),
       );
-      const first = started.find(({ invocation }) => invocation === "improvement-first");
-      const second = started.find(({ invocation }) => invocation === "improvement-second");
+      const first = Option.getOrUndefined(
+        Arr.findFirst(started, ({ invocation }) => invocation === "improvement-first"),
+      );
+      const second = Option.getOrUndefined(
+        Arr.findFirst(started, ({ invocation }) => invocation === "improvement-second"),
+      );
       expect(first?.input.then).toBe("implement");
       expect(first?.input.goal).toContain("`Closes #101`");
       expect(first?.input.goal).toContain("Leaked <github token> in its log.");
@@ -14673,7 +15052,9 @@ const aDay = () =>
       expect(second?.input.goal).toContain("`Closes #102`");
 
       const summary = yield* readText(`${runDir(dir, "r-day")}/summary.md`);
-      expect(summary.indexOf("### defect")).toBeLessThan(summary.indexOf("### tool-economy"));
+      expect(Option.getOrElse(pipe(summary, Str.indexOf("### defect")), () => -1)).toBeLessThan(
+        Option.getOrElse(pipe(summary, Str.indexOf("### tool-economy")), () => -1),
+      );
       expect(summary).toContain("refused, it names another checkout");
       expect(summary).toContain("commented #7");
       expect(summary).toContain("r-day-improvement-second, failed: improvement-second failed");
@@ -14746,7 +15127,7 @@ scenario(
           "Filed 2, commented 0, refused 0; 1 Improvements, 0 failed",
         );
         expect(
-          started.map(({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
+          Arr.map(started, ({ invocation, workflow, ownTask }) => [invocation, workflow, ownTask]),
         ).toEqual([["improvement-docs", "plan", true]]);
         expect(started[0]?.input.then).toBe("implement");
         expect(started[0]?.input.goal).toContain("`Closes #101`, `Closes #102`");
@@ -14773,7 +15154,7 @@ scenario(
         expect(saidBy(yield* improved("r-many", { runs: "checkout", improvements: 0 }))).toContain(
           "Filed 1",
         );
-        expect(filed.map(({ title }) => title)).toEqual(["Project fixed", "Project fewer"]);
+        expect(Arr.map(filed, ({ title }) => title)).toEqual(["Project fixed", "Project fewer"]);
         expect((yield* agentPrompts()).length).toBe(4);
         expect(started).toEqual([]);
       }),
@@ -14786,9 +15167,18 @@ const harnessCommit = (files: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
     yield* levelRepository();
     const fs = yield* FileSystem.FileSystem;
-    for (const [name, text] of Object.entries(files)) {
+    for (const [name, text] of Rec.toEntries(files)) {
       const at = `${rig.projectDir}/${name}`;
-      yield* fs.makeDirectory(at.slice(0, at.lastIndexOf("/")), { recursive: true });
+      yield* fs.makeDirectory(
+        pipe(
+          at,
+          Str.slice(
+            0,
+            Option.getOrElse(pipe(at, Str.lastIndexOf("/")), () => -1),
+          ),
+        ),
+        { recursive: true },
+      );
       yield* fs.writeFileString(at, text);
     }
     yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
@@ -14797,12 +15187,15 @@ const harnessCommit = (files: Readonly<Record<string, string>>) =>
   }).pipe(Effect.orDie);
 
 /** A steady `count` of 7, and a `value` of 5 or 15 by how often it has run. */
-const NOISY_BENCH = [
-  'echo x >> "$1"',
-  'if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then v=5; else v=15; fi',
-  'printf \'{"value": %s, "count": 7}\\n\' "$v"',
-  "",
-].join("\n");
+const NOISY_BENCH = Arr.join(
+  [
+    'echo x >> "$1"',
+    'if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then v=5; else v=15; fi',
+    'printf \'{"value": %s, "count": 7}\\n\' "$v"',
+    "",
+  ],
+  "\n",
+);
 
 const TUNE_DISCOVERED = {
   stack: ["bun", "sqlite"],
@@ -14869,7 +15262,7 @@ const tunedUp = (runId: string, input: Readonly<Record<string, Schema.Json>> = {
 
 const calibrations = (runId: string) =>
   Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
-    all.filter((one) => one.pass === "calibration"),
+    Arr.filter(all, (one) => one.pass === "calibration"),
   );
 
 /** How a start of `id` with these words is refused, checked as a front door checks one. */
@@ -14882,9 +15275,12 @@ const refusedAtStart = (id: Shipped, text: Readonly<Record<string, string>>) =>
         .check({ generation, request: `r-${id}-checked`, project: rig.projectDir, input: {}, text })
         .pipe(Effect.match({ onFailure: (refused) => refused.reason, onSuccess: () => "started" }));
     }).pipe(
-      Effect.provide(registryLayer(dir, { placing: foundation().placing, userDir: rig.userDir })),
-      Effect.provide(forgeHttpLayer),
-      Effect.provide(BunServices.layer),
+      Effect.provide(
+        registryLayer(dir, {
+          placing: foundation().placing,
+          userDir: rig.userDir,
+        }).pipe(Layer.provideMerge(forgeHttpLayer), Layer.provideMerge(platformLayer)),
+      ),
     ),
   );
 
@@ -14896,7 +15292,7 @@ scenario(
         yield* repository();
         for (const cycles of ["0", "21", "2.5"]) {
           const reason = yield* refusedAtStart("tune-up", { cycles });
-          expect([cycles, reason.startsWith("invalid_input:"), reason]).toEqual([
+          expect([cycles, pipe(reason, Str.startsWith("invalid_input:")), reason]).toEqual([
             cycles,
             true,
             expect.stringContaining("cycles"),
@@ -14954,7 +15350,7 @@ scenario(
         expect(calibration!.candidate.content).toBe(calibration!.base.content);
         expect(calibration!.base.commit).toBe(yield* revParse(`${commit}~1`));
         expect(calibration!.plan.samples).toBe(10);
-        const report = yield* readText(said(result).split(": ")[0]!);
+        const report = yield* readText(Str.split(said(result), ": ")[0]!);
         expect(report).toContain("no APM access from this Machine");
       }),
     ),
@@ -14983,7 +15379,7 @@ scenario(
           "switched bench.value to its counter bench.count: bench.value is inconclusive",
         );
         const [first, second] = yield* calibrations(runId);
-        expect(first!.plan.metrics.map((one) => one.name)).toEqual(["bench.value"]);
+        expect(Arr.map(first!.plan.metrics, (one) => one.name)).toEqual(["bench.value"]);
         expect(second!.plan.metrics).toEqual([STEADY_PRIMARY]);
         expect(second!.plan.samples).toBe(4);
       }),
@@ -15042,11 +15438,16 @@ for (const [what, unusable] of [
           expect(log).toContain(
             "research https://gitlab.example.com/group/project/-/issues/7 ruled out an index on name",
           );
-          const report = yield* readText(said(result).split(": ")[0]!);
+          const report = yield* readText(Str.split(said(result), ": ")[0]!);
           // Each source on the line under the opportunity it changed.
-          const lines = report.split("\n");
+          const lines = Str.split(report, "\n");
           const under = (opportunity: string) =>
-            lines[lines.findIndex((line) => line.includes(opportunity)) + 1];
+            lines[
+              Option.getOrElse(
+                Arr.findFirstIndex(lines, (line) => pipe(line, Str.includes(opportunity))),
+                () => -1,
+              ) + 1
+            ];
           expect(under("prepared statements")).toContain("raised by");
           expect(under("prepared statements")).toContain("https://bun.sh/docs/api/sqlite");
           expect(under("an index on name")).toContain("ruled out by");
@@ -15098,14 +15499,17 @@ scenario(
  * `count` and `size` read from files a Cycle may commit; `count` is 3 wherever the default
  * branch brought `fixed`, and `size` swings while `jitter` is there.
  */
-const CYCLE_BENCH = [
-  "count=7; [ -f count ] && count=$(cat count)",
-  "[ -f fixed ] && count=3",
-  "size=100; [ -f size ] && size=$(cat size)",
-  'if [ -e jitter ]; then echo x >> "$1"; if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then size=60; else size=140; fi; fi',
-  'printf \'{"count": %s, "size": %s}\\n\' "$count" "$size"',
-  "",
-].join("\n");
+const CYCLE_BENCH = Arr.join(
+  [
+    "count=7; [ -f count ] && count=$(cat count)",
+    "[ -f fixed ] && count=3",
+    "size=100; [ -f size ] && size=$(cat size)",
+    'if [ -e jitter ]; then echo x >> "$1"; if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then size=60; else size=140; fi; fi',
+    'printf \'{"count": %s, "size": %s}\\n\' "$count" "$size"',
+    "",
+  ],
+  "\n",
+);
 
 const SIZE_GUARDRAIL = { name: "bench.size", direction: "lower", role: "guardrail" } as const;
 
@@ -15156,9 +15560,15 @@ const cycling = (
 const cycleTrees = (runId: string) =>
   Effect.map(runLog(runId), (log) => {
     const trees = (said: string) =>
-      Object.fromEntries(
-        [...log.matchAll(new RegExp(`cycle (\\d+) ${said} (\\S+) (\\S+?):?(?:\\s|$)`, "g"))].map(
-          (one) => [one[1]!, { head: one[2]!, fingerprint: one[3]! }],
+      Rec.fromEntries(
+        Arr.map(
+          [
+            ...pipe(
+              log,
+              Str.matchAll(new RegExp(`cycle (\\d+) ${said} (\\S+) (\\S+?):?(?:\\s|$)`, "g")),
+            ),
+          ],
+          (one) => [one[1]!, { head: one[2]!, fingerprint: one[3]! }] as const,
         ),
       );
     return { started: trees("started on"), reverted: trees("reverted to") };
@@ -15166,7 +15576,7 @@ const cycleTrees = (runId: string) =>
 
 const cyclesMeasured = (runId: string) =>
   Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
-    all.filter((one) => one.pass.startsWith("cycle ")),
+    Arr.filter(all, (one) => pipe(one.pass, Str.startsWith("cycle "))),
   );
 
 /** The tree the Run's checkout holds now, read by the test rather than the Run. */
@@ -15179,7 +15589,7 @@ const checkoutNow = (runId: string) =>
 
 const cyclePrompts = (runId: string) =>
   Effect.map(prompts(), (all) =>
-    all.flatMap((one) => {
+    Arr.flatMap(all, (one) => {
       const named = new RegExp(`/${runId}/(cycle-\\d+(?:-revert)?)\\.prompt\\.md`).exec(one);
       return named === null ? [] : [named[1]!];
     }),
@@ -15202,9 +15612,9 @@ scenario(
           "cycle-2",
           "cycle-2-revert",
         ]);
-        const verdicts = (yield* cyclesMeasured(runId)).map((one) =>
+        const verdicts = Arr.map(yield* cyclesMeasured(runId), (one) =>
           one.result._tag === "Judged"
-            ? one.result.verdicts.map((judged) => `${judged.metric} ${judged.verdict}`)
+            ? Arr.map(one.result.verdicts, (judged) => `${judged.metric} ${judged.verdict}`)
             : [],
         );
         expect(verdicts).toEqual([
@@ -15219,7 +15629,7 @@ scenario(
         expect(log).toContain("cycle 1 reverted to");
         expect(log).toContain("bench.count no-change");
         expect(log).toContain("guardrail bench.size regression");
-        const report = yield* readText(said(result).split(": ")[0]!);
+        const report = yield* readText(Str.split(said(result), ": ")[0]!);
         expect(report).toContain("## Cycles");
         expect(report).toContain("two consecutive Cycles were not kept");
       }),
@@ -15268,7 +15678,7 @@ scenario(
         expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
         expect(yield* runLog(runId)).toContain("checks failed: unit");
         expect(yield* wasAsked(runId, "mr")).toBe(false);
-        expect(yield* readText(said(result).split(": ")[0]!)).toContain("checks failed: unit");
+        expect(yield* readText(Str.split(said(result), ": ")[0]!)).toContain("checks failed: unit");
       }),
     ),
   120_000,
@@ -15431,7 +15841,7 @@ scenario(
           "cycle-3",
           "cycle-3-revert",
         ]);
-        expect((yield* cyclesMeasured(runId)).map((one) => one.pass)).toEqual([
+        expect(Arr.map(yield* cyclesMeasured(runId), (one) => one.pass)).toEqual([
           "cycle 1",
           "cycle 2",
           "cycle 3",
@@ -15477,7 +15887,7 @@ scenario(
         expect(result._tag).toBe("Success");
         expect(said(result)).toContain("wall time 1 hour spent");
         expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
-        expect((yield* cyclesMeasured(runId)).map((one) => one.pass)).toEqual(["cycle 1"]);
+        expect(Arr.map(yield* cyclesMeasured(runId), (one) => one.pass)).toEqual(["cycle 1"]);
         const { started, reverted } = yield* cycleTrees(runId);
         expect(reverted["1"]).toEqual(started["1"]);
       }),
@@ -15497,7 +15907,7 @@ scenario(
         expect(said(result)).toContain("wall time 1 millis spent before Cycle 1");
         expect(yield* cyclePrompts(runId)).toEqual([]);
         expect(yield* wasAsked(runId, "mr")).toBe(false);
-        expect(yield* readText(said(result).split(": ")[0]!)).toContain(
+        expect(yield* readText(Str.split(said(result), ": ")[0]!)).toContain(
           "wall time 1 millis spent before Cycle 1",
         );
       }),
@@ -15552,12 +15962,13 @@ const tuneForge = Effect.gen(function* () {
 
 const finals = (runId: string) =>
   Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
-    all.filter((one) => one.pass === "final"),
+    Arr.filter(all, (one) => one.pass === "final"),
   );
 
 const verdictsOf = (measured: { readonly result: Measurement["result"] }) =>
   measured.result._tag === "Judged"
-    ? measured.result.verdicts.map(
+    ? Arr.map(
+        measured.result.verdicts,
         (one) => `${one.metric} ${one.verdict}${one.held ? "" : ", not held"}`,
       )
     : [measured.result._tag];
@@ -15567,12 +15978,12 @@ const originHead = () =>
     exec(["git", "--git-dir", `${rig.root}/project-origin.git`, "rev-parse", "HEAD"], {
       cwd: rig.root,
     }),
-    (ran) => ran.stdout.trim(),
+    (ran) => Str.trim(ran.stdout),
   );
 
 const checkoutTree = () =>
   Effect.map(exec(["git", "rev-parse", "HEAD^{tree}"], { cwd: rig.projectDir }), (ran) =>
-    ran.stdout.trim(),
+    Str.trim(ran.stdout),
   );
 
 const SECRET = "sk-live0123456789abcdefXYZ";
@@ -15592,7 +16003,7 @@ scenario(
         const result = yield* tunedUp(runId, { samples: 4, cycles: 2 });
         yield* bin.restore();
         expect(said(result)).toBe(OPENED.mr_url);
-        expect((yield* cyclesMeasured(runId)).map(verdictsOf)).toEqual([
+        expect(Arr.map(yield* cyclesMeasured(runId), verdictsOf)).toEqual([
           ["bench.count gain", "bench.size no-change"],
           ["bench.count gain", "bench.size no-change"],
         ]);
@@ -15613,21 +16024,24 @@ scenario(
           `${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`,
         );
         expect(body).toContain("| bench.count | primary | 7 | 3 |");
-        const [table, evidence] = body.split("<details>");
+        const [table, evidence] = Str.split(body, "<details>");
         expect(table).toContain(final!.id);
         for (const metric of ["bench.count", "bench.size"])
           for (const side of ["base", "candidate"] as const) {
-            const line = evidence!
-              .split("\n")
-              .find((one) => one.startsWith(`- ${metric}, ${side}:`));
-            const listed = line!
-              .split(":")[1]!
-              .split(",")
-              .map((one) => Number(one.trim()));
+            const line = Option.getOrUndefined(
+              Arr.findFirst(Str.split(evidence!, "\n"), (one) =>
+                pipe(one, Str.startsWith(`- ${metric}, ${side}:`)),
+              ),
+            );
+            const listed = Arr.map(
+              Arr.fromIterable(Str.split(Str.split(line!, ":")[1]!, ",")),
+              (one) => Number(Str.trim(one)),
+            );
             expect(listed).toEqual(
-              final!.samples
-                .filter((one) => one.tree === side && !one.warmup)
-                .map((one) => one.readings[metric]!),
+              Arr.map(
+                Arr.filter(final!.samples, (one) => one.tree === side && !one.warmup),
+                (one) => one.readings[metric]!,
+              ),
             );
           }
         for (const text of [
@@ -15666,9 +16080,9 @@ scenario(
         expect(moved).not.toBe(original);
         expect(yield* runLog(runId)).toMatch(new RegExp(`integrated \\S+@${moved}`));
         const measured = yield* finals(runId);
-        expect(measured.map((one) => one.base.commit)).toEqual([moved, original]);
+        expect(Arr.map(measured, (one) => one.base.commit)).toEqual([moved, original]);
         expect(verdictsOf(measured[0]!)).toEqual(["bench.count gain", "bench.size no-change"]);
-        expect(measured.map((one) => one.candidate.head_sha)).toEqual([
+        expect(Arr.map(measured, (one) => one.candidate.head_sha)).toEqual([
           yield* headOf(),
           yield* headOf(),
         ]);
@@ -15702,7 +16116,7 @@ scenario(
         expect(verdictsOf(final!)).toEqual(["bench.count no-change", "bench.size no-change"]);
         expect(yield* checkoutTree()).toBe(final!.base.content);
         expect(said(result)).toContain("bench.count no-change, not a gain");
-        expect(yield* readText(said(result).split(": ")[0]!)).toContain(final!.id);
+        expect(yield* readText(Str.split(said(result), ": ")[0]!)).toContain(final!.id);
       }),
     ),
   120_000,
@@ -15760,7 +16174,7 @@ scenario(
         expect(yield* wasAsked(runId, "ci-fix-1.review-1")).toBe(true);
         expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
         // The merge request is told the whole replacement evidence, not only its table.
-        const noted = (yield* ciNotes(forge)).join("\n");
+        const noted = Arr.join(yield* ciNotes(forge), "\n");
         expect(noted).toContain(`Samples of \`final\` Measurement ${measured[1]!.id}`);
         expect(noted).toContain(head);
         expect(noted).toContain("#### Reproduce");
@@ -15793,7 +16207,7 @@ scenario(
         ]);
         expect(reasonOf(result)).toContain(`${CI_MR} is not ready`);
         expect(reasonOf(result)).toContain("bench.count no-change, not a gain");
-        expect((yield* ciNotes(forge)).join("\n")).toContain("not ready");
+        expect(Arr.join(yield* ciNotes(forge), "\n")).toContain("not ready");
         expect((yield* forge.model()).merges ?? []).toEqual([]);
         yield* bin.restore();
       }),
@@ -15867,7 +16281,7 @@ scenario(
         );
         yield* cycling(runId, [
           fasterTo(3),
-          ...[1, 2, 3, 4].flatMap(blockedThenFixed),
+          ...Arr.flatMap([1, 2, 3, 4], blockedThenFixed),
           TUNE_REVIEWED,
           {
             writes: [write],
@@ -15977,7 +16391,7 @@ const emptyTracker = () =>
   );
 const trackerLines = () =>
   Effect.map(readText(tracker()).pipe(Effect.orDie), (text) =>
-    text.split("\n").filter((line) => line !== ""),
+    Arr.filter(Str.split(text, "\n"), (line) => line !== ""),
   );
 const MARKED =
   'marker=$(grep -o \'collie:external-[0-9a-f]*\' "$PROMPT_PATH" | head -n 1); [ -n "$marker" ]';
@@ -16003,7 +16417,7 @@ const withExternal = (
 /** Each search, create and recheck an external finding's Post asked for, in order. */
 const externalPrompts = (runId: string) =>
   Effect.map(prompts(), (all) =>
-    all.flatMap((one) => {
+    Arr.flatMap(all, (one) => {
       const named = new RegExp(
         `/${runId}/(external-[0-9a-f]+-(?:search|create|recheck)(?:-\\d+)?)\\.prompt\\.md`,
       ).exec(one);
@@ -16016,11 +16430,15 @@ type Asked = { decision: string; prompt: string; options: string; answer: string
 const nextAsked = (asked: Effect.Effect<ReadonlyArray<Asked>>, seen: ReadonlyArray<string>) =>
   until(
     () => asked,
-    (rows) => rows.some((row) => row.answer === null && !seen.includes(row.decision)),
+    (rows) => Arr.some(rows, (row) => row.answer === null && !seen.includes(row.decision)),
   ).pipe(
-    Effect.map((rows) => rows.find((row) => row.answer === null && !seen.includes(row.decision))!),
+    Effect.map((rows) =>
+      Option.getOrUndefined(
+        Arr.findFirst(rows, (row) => row.answer === null && !seen.includes(row.decision)),
+      )!,
+    ),
   );
-const openOf = (rows: ReadonlyArray<Asked>) => rows.filter((row) => row.answer === null);
+const openOf = (rows: ReadonlyArray<Asked>) => Arr.filter(rows, (row) => row.answer === null);
 
 scenario(
   "a tune-up puts each external finding to the human one at a time as Ignore or Post, files a Post once with its marker, and proves the same outcome whatever is answered",
@@ -16041,7 +16459,7 @@ scenario(
           const driving = yield* driven(options, (run) =>
             Effect.gen(function* () {
               const pooling = yield* nextAsked(run.asked, []);
-              expect(openOf(yield* run.asked).map((row) => row.decision)).toEqual([
+              expect(Arr.map(openOf(yield* run.asked), (row) => row.decision)).toEqual([
                 pooling.decision,
               ]);
               expect(pooling.prompt).toContain(POOLING.title);
@@ -16066,19 +16484,26 @@ scenario(
           yield* bin.restore();
           const { pooling, fts } = driving;
           expect(outcomeText(driving.status)).toBe(OPENED.mr_url);
-          expect(driving.asked.some((row) => row.prompt.includes(KNOWN.title))).toBe(false);
+          expect(
+            Arr.some(driving.asked, (row) => pipe(row.prompt, Str.includes(KNOWN.title))),
+          ).toBe(false);
           expect(yield* externalPrompts(runId)).toEqual([`${pooling}-search`, `${pooling}-create`]);
           expect(yield* asked(runId, `${pooling}-create`)).toContain(`collie:${pooling}`);
           expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${pooling}`]);
           const log = yield* runLog(runId);
-          const proved = log.indexOf("performance proved on");
+          const proved = Option.getOrElse(
+            pipe(log, Str.indexOf("performance proved on")),
+            () => -1,
+          );
           expect(proved).toBeGreaterThan(-1);
           for (const decided of [
             `external ${pooling}: posted ${ISSUE}`,
             `external ${fts}: ignored`,
             `: existing ${KNOWN.existing}`,
           ])
-            expect(log.indexOf(decided)).toBeGreaterThan(proved);
+            expect(Option.getOrElse(pipe(log, Str.indexOf(decided)), () => -1)).toBeGreaterThan(
+              proved,
+            );
           const report = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-external.md`);
           for (const one of [POOLING, FTS, KNOWN]) {
             expect(report).toContain(one.title);
@@ -16243,8 +16668,8 @@ once("tune-up declares every input with its default, and its path", () =>
   runEffect(
     Effect.gen(function* () {
       const entry = yield* loadEntry(shipped("tune-up"));
-      const defaults = Object.fromEntries(
-        declaredBy(entry).map((one) => [one.name, schemaDefault(one.schema)]),
+      const defaults = Rec.fromEntries(
+        Arr.map(declaredBy(entry), (one) => [one.name, schemaDefault(one.schema)] as const),
       );
       expect(defaults).toEqual({
         repository: "",
@@ -16256,7 +16681,15 @@ once("tune-up declares every input with its default, and its path", () =>
         wall_time: "",
         external: "ask",
       });
-      expect(entry.metadata?.path?.map((one) => one.title)).toEqual([
+      expect(
+        Option.getOrUndefined(
+          Option.flatMap(Option.fromNullishOr(entry.metadata), (present______________) =>
+            Option.map(Option.fromNullishOr(present______________.path), (present_______________) =>
+              Arr.map(present_______________, (one) => one.title),
+            ),
+          ),
+        ),
+      ).toEqual([
         "Discover",
         "Harness",
         "Calibrate",
@@ -16290,14 +16723,14 @@ const noCommandSubstitution = () =>
       const names = yield* fs
         .readDirectory(`${dir}/agents/${run}`)
         .pipe(Effect.orElseSucceed(() => []));
-      for (const name of names.filter((one) => /\.(prompt|persona)\.md$/.test(one))) {
+      for (const name of Arr.filter(names, (one) => /\.(prompt|persona)\.md$/.test(one))) {
         const text = yield* fs.readFileString(`${dir}/agents/${run}/${name}`);
-        const fenced = text.split("```").filter((_, at) => at % 2 === 1);
-        expect([name, text.includes("$("), fenced.some((block) => block.includes("`"))]).toEqual([
+        const fenced = Arr.filter(Str.split(text, "```"), (_, at) => at % 2 === 1);
+        expect([
           name,
-          false,
-          false,
-        ]);
+          pipe(text, Str.includes("$(")),
+          Arr.some(fenced, (block) => pipe(block, Str.includes("`"))),
+        ]).toEqual([name, false, false]);
       }
     }
   }).pipe(Effect.orDie);
@@ -16329,7 +16762,7 @@ scenario(
 
         const built = nodeIn(lane, "build")!;
         expect([built.state, built.said]).toEqual(["running", "Slice 2 of 3"]);
-        expect(built.runs.map((one) => [one.place, one.state])).toEqual([
+        expect(Arr.map(built.runs, (one) => [one.place, one.state])).toEqual([
           ["01-first.md", "done"],
           ["02-second.md", "running"],
           ["03-third.md", "expected"],
@@ -16378,9 +16811,10 @@ scenario(
 
         const lane = yield* laneNow("r-flow-fix", "succeeded");
         expect(
-          lane.nodes
-            .filter((node) => node.id === "review")
-            .map((node) => node.runs.map((one) => one.state)),
+          Arr.map(
+            Arr.filter(lane.nodes, (node) => node.id === "review"),
+            (node) => Arr.map(node.runs, (one) => one.state),
+          ),
         ).toEqual([["done", "done"]]);
       }),
     ),
@@ -16420,7 +16854,10 @@ scenario(
         });
         const lane = yield* laneNow("r-flow-fan", "succeeded");
         expect(statesOf(lane)).toEqual([["repo-runs", "done"]]);
-        expect(nodeIn(lane, "repo-runs")!.runs.map((one) => one.place)).toEqual(["api", "web"]);
+        expect(Arr.map(nodeIn(lane, "repo-runs")!.runs, (one) => one.place)).toEqual([
+          "api",
+          "web",
+        ]);
       }),
     ),
   120_000,
@@ -16469,7 +16906,7 @@ const withForges = (body: () => Promise<void>) =>
           mrs: [],
         });
       forgeApi = yield* serveForges(
-        ...(["gitlab", "github"] as const).map((name) => ({
+        ...Arr.map(["gitlab", "github"] as const, (name) => ({
           forge: name,
           face: (input: string, init?: RequestInit) => forgeFaces.get(name)!.face(input, init),
         })),
@@ -16488,7 +16925,7 @@ export const split = (names: ReadonlyArray<string>, of: number) => {
   return shares;
 };
 
-export const scenarioNames = () => scenarios.map((one) => one.name);
+export const scenarioNames = () => Arr.map(scenarios, (one) => one.name);
 
 export const register = (pass: "shipped" | "unrelated", share: number) => {
   const mine = new Set(split(scenarioNames(), SHARES)[share]);
@@ -16512,20 +16949,23 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
         // keeps them: a mention resolves to a path, and a step that starts one can.
         yield* installFakeSkills(rig.root);
         yield* fs.makeDirectory(`${rig.root}/user/workflows`, { recursive: true });
-        for (const [name, id] of Object.entries(UNRELATED)) {
+        for (const [name, id] of Rec.toEntries(UNRELATED)) {
           yield* fs.writeFileString(
             `${rig.root}/user/workflows/${id}.workflow.ts`,
-            [
-              `import shipped from "${ROOT}workflows/${name}.workflow.ts";`,
-              `import { defineWorkflow } from "collie";`,
-              `export default defineWorkflow({`,
-              `  ...shipped,`,
-              `  id: "${id}",`,
-              `  title: "${id}",`,
-              `  description: "The shipped ${name}, saved under an id of its own.",`,
-              `});`,
-              "",
-            ].join("\n"),
+            Arr.join(
+              [
+                `import shipped from "${ROOT}workflows/${name}.workflow.ts";`,
+                `import { defineWorkflow } from "collie";`,
+                `export default defineWorkflow({`,
+                `  ...shipped,`,
+                `  id: "${id}",`,
+                `  title: "${id}",`,
+                `  description: "The shipped ${name}, saved under an id of its own.",`,
+                `});`,
+                "",
+              ],
+              "\n",
+            ),
           );
         }
       }),
@@ -16533,7 +16973,7 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
   );
 
   afterEach(() => runEffect(rig.close()));
-  for (const one of scenarios.filter((one) => mine.has(one.name))) {
+  for (const one of Arr.filter(scenarios, (one) => mine.has(one.name))) {
     test(
       pass === "unrelated" ? `${one.name} (under an unrelated id)` : one.name,
       () => {

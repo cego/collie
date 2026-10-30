@@ -3,11 +3,13 @@
 // terminal of its own on this computer. Desktop passes on what the controller prints and
 // decides nothing from it.
 
-import { Effect, Option, Schema, Stream } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import { Effect, Option, Result, Schema, Stream, flow } from "effect";
+import { CommandLine } from "effect/process";
 import type { PaneAt } from "../../../src/board-model";
 import { ActionFailed, TerminalCommand, type TerminalEvent } from "../shared/flock";
 import { type ShellRoute, spawned, stderrTail } from "./machine";
-import { quoted } from "../../../src/ssh-argv";
 import { CHILD_CWD, childEnv } from "./login-env";
 
 /** herdr's controller for one pane, taking it over from any other direct attach. */
@@ -49,7 +51,7 @@ const ControllerCommand = Schema.Union([
 
 /** A command as the controller reads it: one JSON object to a line. */
 export const commandLine = (command: typeof ControllerCommand.Type) =>
-  `${Schema.encodeSync(Schema.fromJsonString(ControllerCommand))(command)}\n`;
+  `${flow(Schema.encodeResult(Schema.fromJsonString(ControllerCommand)), Result.getOrThrow)(command)}\n`;
 
 const RELEASE = commandLine({ type: "terminal.release" });
 
@@ -141,7 +143,7 @@ export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
       send: (): Effect.Effect<void> => Effect.void,
     };
   const command = yield* route
-    .sh(shellLine(controlCommand(at.session, at.pane, cols, rows)))
+    .sh(Result.getOrThrow(CommandLine.join(controlCommand(at.session, at.pane, cols, rows))))
     .pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
   const opened = yield* control(command, route.machine.name);
   return {
@@ -157,9 +159,6 @@ export const attachCommand = (target: string | undefined, session: string | null
   ...(session === null ? [] : ["--session", session]),
 ];
 
-export const shellLine = (command: ReadonlyArray<string>) =>
-  command.map((word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : quoted(word))).join(" ");
-
 /** In the order this computer's default terminal is looked for, with how each is told what to run. */
 const TERMINALS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ["x-terminal-emulator", ["-e"]],
@@ -170,7 +169,8 @@ const TERMINALS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ["xterm", ["-e"]],
 ];
 
-const appleString = (text: string) => `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+const appleString = (text: string) =>
+  `"${pipe_(text, Str.replaceAll("\\", "\\\\"), Str.replaceAll('"', '\\"'))}"`;
 
 /** `command` in this computer's default terminal, or null where none is found. */
 export const inTerminal = (
@@ -182,7 +182,7 @@ export const inTerminal = (
     return [
       "osascript",
       "-e",
-      `tell application "Terminal" to do script ${appleString(shellLine(command))}`,
+      `tell application "Terminal" to do script ${appleString(Result.getOrThrow(CommandLine.join(command)))}`,
       "-e",
       `tell application "Terminal" to activate`,
     ];

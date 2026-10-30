@@ -1,8 +1,12 @@
+import * as Cause from "effect/Cause";
 // The grace before a stop: the board marks the run and holds it, and only when the five
 // seconds are up does the Driver hear anything at all. Driven through the bridge, which
 // is where the waiting happens — an undo that raced a signal already sent would not be
 // an undo.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { Rig } from "../support/recorder";
@@ -58,7 +62,7 @@ const until = Effect.fn("stop.until")(function* (what: string, ready: () => bool
     if (ready()) return;
     yield* Effect.sleep("5 millis");
   }
-  return yield* Effect.fail(new Error(`${what} never happened`));
+  return yield* new Cause.TimeoutError(`${what} never happened`);
 });
 
 /** A bridge that records what was asked of it, with a grace short enough to wait out. */
@@ -146,8 +150,14 @@ test("three stops nobody took back are three stops", () =>
           driven.dispatch({ _tag: "StopRun", runId });
         yield* until("all three stops", () => acted.length === 3);
 
-        const stopped = acted.map((command) => (command._tag === "StopRun" ? command.runId : ""));
-        expect(stopped.sort((a, b) => a.localeCompare(b))).toEqual(["run:a", "run:b", "run:c"]);
+        const stopped = Arr.map(acted, (command) =>
+          command._tag === "StopRun" ? command.runId : "",
+        );
+        expect(stopped.sort((a, b) => pipe(a, Str.localeCompare(b)))).toEqual([
+          "run:a",
+          "run:b",
+          "run:c",
+        ]);
         expect(driven.state().stopping).toEqual([]);
       }),
     ),

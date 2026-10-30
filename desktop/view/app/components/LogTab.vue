@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import type { Panel } from "../../../../src/board-model";
 import { FOLLOWING_LOG, type LogPlace, logPlaceOf, logScrollTop } from "../../../src/shared/record";
 
@@ -12,13 +16,15 @@ const props = defineProps<{
 
 const search = defineModel<string>("search", { default: "" });
 const all = computed(() =>
-  props.tail?._tag === "Text" && props.tail.text !== "" ? props.tail.text.split("\n") : [],
+  props.tail?._tag === "Text" && props.tail.text !== "" ? Str.split(props.tail.text, "\n") : [],
 );
-const wanted = computed(() => search.value.trim());
+const wanted = computed(() => Str.trim(search.value));
 const lines = computed(() =>
   wanted.value === ""
     ? all.value
-    : all.value.filter((line) => line.toLowerCase().includes(wanted.value.toLowerCase())),
+    : Arr.filter(all.value, (line) =>
+        pipe(Str.toLowerCase(line), Str.includes(Str.toLowerCase(wanted.value))),
+      ),
 );
 
 /** The record's, so the human's place outlasts the tab; written back only as the tab is left. */
@@ -34,10 +40,14 @@ const showPlace = (box: HTMLElement | null) =>
 watch(shown, showPlace, { flush: "post" });
 watch(
   lines,
-  async () => {
-    if (!at.following) return;
-    await nextTick();
-    showPlace(shown.value);
+  () => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        if (!at.following) return;
+        yield* Effect.promise(() => Promise.resolve(nextTick()));
+        showPlace(shown.value);
+      }),
+    );
   },
   { immediate: true },
 );

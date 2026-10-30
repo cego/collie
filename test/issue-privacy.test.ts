@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -81,7 +82,9 @@ test("the inventory skips dependencies, Git metadata, caches and tool directorie
       for (const dir of skipped) yield* fs.makeDirectory(`${dir}/.git`, { recursive: true });
       const wide = Array.from({ length: 40 }, (_, i) => `${root}/own/node_modules/p${i}`);
       yield* Effect.forEach(
-        wide.flatMap((dir) => Array.from({ length: 40 }, (_, j) => `${dir}/node_modules/q${j}`)),
+        Arr.flatMap(wide, (dir) =>
+          Array.from({ length: 40 }, (_, j) => `${dir}/node_modules/q${j}`),
+        ),
         (dir) => fs.makeDirectory(dir, { recursive: true }),
         { concurrency: 32 },
       );
@@ -137,7 +140,7 @@ test("the walk keeps at most eight filesystem calls in flight however wide the t
       const names = ["a", "b", "c", "d"];
       let level = [root];
       for (let depth = 0; depth < 5; depth++)
-        level = level.flatMap((dir) => names.map((name) => `${dir}/${name}`));
+        level = Arr.flatMap(level, (dir) => Arr.map(names, (name) => `${dir}/${name}`));
       yield* Effect.forEach(level, (dir) => fs.makeDirectory(dir, { recursive: true }), {
         concurrency: 32,
       });

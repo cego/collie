@@ -7,7 +7,7 @@
 // orchestration service: the server lives as long as the chat that started it, and every
 // answer it gives is a read through the shared operations.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import {
   Cause,
   Context,
@@ -16,10 +16,11 @@ import {
   Effect,
   Exit,
   Fiber,
-  FileSystem,
   Logger,
   Ref,
   Schema,
+  flow,
+  Result,
 } from "effect";
 import * as McpProtocol from "effect/ai/McpProtocol";
 import * as McpSchema from "effect/ai/McpSchema";
@@ -38,7 +39,7 @@ import { callTool, TOOLS } from "./tools";
 export const serveMcp = Effect.fn("Mcp.serve")(
   function* () {
     const env = yield* currentEnv;
-    const services = yield* Effect.context<BunServices>();
+    const services = yield* Effect.context<PlatformServices>();
     const server = yield* McpServer.McpServer;
     const answer = yield* answering({
       binary: process.execPath,
@@ -127,12 +128,15 @@ const Answered = Schema.fromJsonString(
     }),
   ]),
 );
-const encodeInput = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject));
+const encodeInput = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.JsonObject)),
+  Result.getOrThrow,
+);
 
 /** One tool call made by the binary now on disk, through the `tools call` a human can run. */
 export const rebuiltAnswer = (binary: string, cwd: string, name: string, input: JsonObject) =>
   shell(binary, ["--json", "tools", "call", name, "--input", encodeInput(input)], cwd).pipe(
-    Effect.flatMap((ran) => Schema.decodeUnknownEffect(Answered)(ran.stdout)),
+    Effect.flatMap((ran) => Schema.decodeEffect(Answered)(ran.stdout)),
     Effect.map((answered) =>
       answered.ok ? answered.data.text : `Collie could not answer: ${answered.error.message}`,
     ),

@@ -19,8 +19,21 @@
 // against inherited user or project configuration reaching the evaluator. They are not
 // an OS sandbox against a malicious process running as the same user.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { BunServices } from "@effect/platform-bun";
-import { Clock, Duration, Effect, FileSystem, ManagedRuntime, Option, Path } from "effect";
+import {
+  Clock,
+  Duration,
+  Effect,
+  FileSystem,
+  ManagedRuntime,
+  Option,
+  Path,
+  flow,
+  Result,
+} from "effect";
 import {
   JudgementSchema,
   REQUIRED_FLAGS,
@@ -32,7 +45,10 @@ import {
 import { Schema } from "effect";
 import { nowIso } from "../src/time";
 
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown, { space: 2 }));
+const encodeJson = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown, { space: 2 })),
+  Result.getOrThrow,
+);
 
 const runtime = ManagedRuntime.make(BunServices.layer);
 const repo = new URL("../", import.meta.url).pathname;
@@ -44,16 +60,19 @@ const LIMITS = {
   effort: "low",
 };
 
-const PACK = [
-  "## The question",
-  "",
-  "Which run is on the wrong branch?",
-  "",
-  "## Runs",
-  "",
-  "- run implement-picker-1: goal 'add a picker', branch feat/add-a-picker, agent impl-1",
-  "- run implement-export-2: goal 'fix the exporter', branch main, agent impl-2",
-].join("\n");
+const PACK = Arr.join(
+  [
+    "## The question",
+    "",
+    "Which run is on the wrong branch?",
+    "",
+    "## Runs",
+    "",
+    "- run implement-picker-1: goal 'add a picker', branch feat/add-a-picker, agent impl-1",
+    "- run implement-export-2: goal 'fix the exporter', branch main, agent impl-2",
+  ],
+  "\n",
+);
 
 /**
  * What a call printed, or what was left of it at the probe's own ceiling. A probe that
@@ -116,16 +135,16 @@ const STRUCTURED_OUTPUT = "StructuredOutput";
 /** What in a stream-json transcript says the isolation failed, by event, not by word. */
 export function leaks(transcript: string): string[] {
   const found: string[] = [];
-  for (const line of transcript.split("\n")) {
+  for (const line of Str.split(transcript, "\n")) {
     const parsed = parseLine(line);
     if (parsed._tag === "None") continue;
     const event = asEvent(parsed.value);
     if (event._tag === "None") continue;
     const e = event.value;
-    if (e.type.startsWith("hook")) found.push(`${e.type} event`);
+    if (pipe_(e.type, Str.startsWith("hook"))) found.push(`${e.type} event`);
     if (e.type === "system" && e.subtype === "init") {
-      const offered = (e.tools ?? []).filter((tool) => tool !== STRUCTURED_OUTPUT);
-      if (offered.length > 0) found.push(`tool(s) offered: ${offered.join(", ")}`);
+      const offered = Arr.filter(e.tools ?? [], (tool) => tool !== STRUCTURED_OUTPUT);
+      if (offered.length > 0) found.push(`tool(s) offered: ${Arr.join(offered, ", ")}`);
       if ((e.mcp_servers?.length ?? 0) > 0) found.push(`${e.mcp_servers!.length} MCP server(s)`);
     }
     for (const block of e.message?.content ?? [])
@@ -142,7 +161,7 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   const help = yield* Effect.promise(() => Bun.$`claude --help`.text().catch(() => ""));
   const missing = missingFlags(help);
   if (missing.length > 0) {
-    yield* Effect.logError(`the installed claude does not take ${missing.join(", ")}`);
+    yield* Effect.logError(`the installed claude does not take ${Arr.join(missing, ", ")}`);
     return 1;
   }
 
@@ -152,7 +171,7 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   const first = yield* one(schema);
   const fixture = path.join(repo, "test", "fixtures", "claude-print-envelope.json");
   yield* fs.makeDirectory(path.dirname(fixture), { recursive: true });
-  yield* fs.writeFileString(fixture, `${first.stdout.trim()}\n`);
+  yield* fs.writeFileString(fixture, `${Str.trim(first.stdout)}\n`);
   yield* Effect.log(`saved the envelope to ${fixture}`);
 
   // (2) Every call has to answer in the schema it was given.
@@ -179,7 +198,7 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   const isolated = Bun.spawn(
     [
       "claude",
-      ...argvFor(LIMITS, schema, `${repo}prompts/steward.md`).map((word) =>
+      ...Arr.map(argvFor(LIMITS, schema, `${repo}prompts/steward.md`), (word) =>
         word === "json" ? "stream-json" : word,
       ),
       "--verbose",
@@ -203,27 +222,30 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0;
 
   yield* Effect.log(
-    [
-      "",
-      `### evaluator — ${(yield* nowIso()).slice(0, 10)}`,
-      "",
-      "| check | result | note |",
-      "|---|---|---|",
-      `| flags | pass | every one of ${REQUIRED_FLAGS.length} is present |`,
-      `| schema-valid | ${good === calls ? "pass" : "fail"} | ${good}/${calls} decoded |`,
-      `| tool-less | ${leaked.length === 0 ? "pass" : "fail"} | ${
-        leaked.length === 0
-          ? "no tool_use, hook or MCP event in the transcript"
-          : `saw ${leaked.join(", ")}`
-      } |`,
-      `| latency | — | p95 ${Math.round(p95)} ms over ${calls} calls |`,
-      "",
-      "Threat boundary: these flags defend against model-initiated tool use and against",
-      "inherited user or project configuration reaching the evaluator. They are not an OS",
-      "sandbox against a malicious process running as the same user.",
-      "",
-      "Paste this into the Run's CAPABILITIES.md under Evaluator.",
-    ].join("\n"),
+    Arr.join(
+      [
+        "",
+        `### evaluator — ${pipe_(yield* nowIso, Str.slice(0, 10))}`,
+        "",
+        "| check | result | note |",
+        "|---|---|---|",
+        `| flags | pass | every one of ${REQUIRED_FLAGS.length} is present |`,
+        `| schema-valid | ${good === calls ? "pass" : "fail"} | ${good}/${calls} decoded |`,
+        `| tool-less | ${leaked.length === 0 ? "pass" : "fail"} | ${
+          leaked.length === 0
+            ? "no tool_use, hook or MCP event in the transcript"
+            : `saw ${Arr.join(leaked, ", ")}`
+        } |`,
+        `| latency | — | p95 ${Math.round(p95)} ms over ${calls} calls |`,
+        "",
+        "Threat boundary: these flags defend against model-initiated tool use and against",
+        "inherited user or project configuration reaching the evaluator. They are not an OS",
+        "sandbox against a malicious process running as the same user.",
+        "",
+        "Paste this into the Run's CAPABILITIES.md under Evaluator.",
+      ],
+      "\n",
+    ),
   );
   return good === calls && leaked.length === 0 ? 0 : 1;
 });

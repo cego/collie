@@ -49,9 +49,7 @@ export const measure = Command.make(
           const fs = yield* FileSystem.FileSystem;
           const text = yield* fs.readFileString(plan).pipe(Effect.option);
           if (Option.isNone(text)) return err("invalid_input", `No plan to read at "${plan}".`);
-          const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(
-            text.value,
-          );
+          const decoded = Schema.decodeOption(Schema.fromJsonString(Schema.Json))(text.value);
           if (Option.isNone(decoded))
             return err("invalid_input", `The plan at "${plan}" is not JSON.`);
           const door = yield* cliDoor(env);
@@ -102,7 +100,12 @@ export const measure = Command.make(
           const { measurement, ran } = answered;
           return {
             ok: true as const,
-            data: { measurement: Schema.encodeSync(MeasurementJson)(measurement), ran },
+            data: {
+              measurement: yield* Schema.encodeEffect(MeasurementJson)(measurement).pipe(
+                Effect.orDie,
+              ),
+              ran,
+            },
             human: `${measurement.pass}: ${summaryOf(measurement)}${ran ? "" : `, not measured again: Measurement ${measurement.id} of these trees under this plan`}`,
           };
         }),

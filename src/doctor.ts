@@ -11,6 +11,9 @@
 // a pane that is the herdr this plugin will actually talk to, and it need not be on
 // PATH at all.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { loadDefaults } from "./config";
@@ -70,7 +73,7 @@ const isString = Schema.is(Schema.String);
  * a bare name is one to find on PATH.
  */
 const located = Effect.fn("Doctor.located")(function* (search: string, bin: string) {
-  if (!bin.includes("/")) return yield* onPath(search, bin);
+  if (!pipe(bin, Str.includes("/"))) return yield* onPath(search, bin);
   return (yield* runnable(bin)) ? bin : null;
 });
 
@@ -92,7 +95,7 @@ const upgradeAdvice = (version: string, min: string): string =>
 
 /** `1.10.0` is newer than `1.9.0`; a string comparison would disagree. */
 function older(version: string, than: string): boolean {
-  const parts = (v: string) => v.split(".").map((n) => Number(n) || 0);
+  const parts = (v: string) => Arr.map(Str.split(v, "."), (n) => Number(n) || 0);
   const [a, b] = [parts(version), parts(than)];
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     const [left, right] = [a[i] ?? 0, b[i] ?? 0];
@@ -209,7 +212,7 @@ const count = Effect.fn("Doctor.count")(function* (
   now: number,
 ) {
   const answer = yield* run("git", ["rev-list", "--count", "HEAD..@{upstream}"], root);
-  const number = answer.stdout.trim();
+  const number = Str.trim(answer.stdout);
   const behind = answer.code === 0 && /^\d+$/.test(number) ? Number(number) : null;
   known.set(root, { ...knownOf(root), countedAt: now, behind });
   return behind;
@@ -226,19 +229,25 @@ const count = Effect.fn("Doctor.count")(function* (
  */
 const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
   const saved = yield* savedModules(env);
-  const own = saved.entries
-    .filter((one) => one.layer !== "shipped")
-    .map((one) => `${one.id} (${one.layer}, ${one.path})`)
-    .sort();
+  const own = Arr.map(
+    Arr.filter(saved.entries, (one) => one.layer !== "shipped"),
+    (one) => `${one.id} (${one.layer}, ${one.path})`,
+  ).sort();
   if (saved.problems.length > 0) {
     return noted(
-      saved.problems.map((one) => `${one.id}: ${one.message}`).join("; "),
-      `fix ${saved.problems.map((one) => one.path).join(" and ")}, or delete it to take the workflow below it`,
+      Arr.join(
+        Arr.map(saved.problems, (one) => `${one.id}: ${one.message}`),
+        "; ",
+      ),
+      `fix ${Arr.join(
+        Arr.map(saved.problems, (one) => one.path),
+        " and ",
+      )}, or delete it to take the workflow below it`,
     );
   }
   return own.length === 0
     ? passed("every workflow here is the one Collie ships")
-    : passed(`overridden here: ${own.join("; ")}`);
+    : passed(`overridden here: ${Arr.join(own, "; ")}`);
 });
 
 /**
@@ -249,7 +258,7 @@ const personas = Effect.fn("Doctor.personas")(function* (env: PluginEnv) {
   const found = yield* loadDefinitions(yield* layers(env));
   return found.errors.length === 0
     ? passed(`${found.personas.size} read, each one telling its agent only what it can fill`)
-    : noted(found.errors.join("; "), "fix each file named");
+    : noted(Arr.join(found.errors, "; "), "fix each file named");
 });
 
 /** Where a Run started from the Home is rooted, and which of the three places said so. */
@@ -288,7 +297,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const text = (args: string[]) =>
     herdr.cli(args).pipe(
       Effect.map((answer) => (isString(answer) ? answer : "")),
-      Effect.catch(() => Effect.succeed("")),
+      Effect.orElseSucceed(() => ""),
     );
   const said = herdrBin ? yield* text(["--version"]) : "";
   const version = VERSION.exec(said)?.[0] ?? "";
@@ -374,7 +383,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   checks.push({
     name: "skills",
     ...((yield* skillFile(dirs, "collie")) !== null
-      ? passed(`the skill store is in place (${dirs.join(", ")})`)
+      ? passed(`the skill store is in place (${Arr.join(dirs, ", ")})`)
       : failed("the operator skill is not installed", `sh ${root}/prepare.sh`)),
   });
 
@@ -388,14 +397,14 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
     ...(absent.length === 0
       ? passed(`${needs.harnesses.length} installed`)
       : failed(
-          `not installed: ${absent.join(", ")}`,
-          `install the harness CLI: ${absent.join(", ")}`,
+          `not installed: ${Arr.join(absent, ", ")}`,
+          `install the harness CLI: ${Arr.join(absent, ", ")}`,
         )),
   });
 
   if ((yield* onPath(search, "claude")) !== null) {
     const status = yield* answered(run("claude", ["auth", "status", "--json"], root));
-    const login = Schema.decodeUnknownOption(ClaudeStatus)(jsonIn(status.stdout));
+    const login = Schema.decodeOption(ClaudeStatus)(jsonIn(status.stdout));
     checks.push({
       name: "claude login",
       ...(Option.isSome(login) && login.value.loggedIn
@@ -410,7 +419,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   // is otherwise ready must not exit non-zero over a line under a prompt.
   const line = yield* readStatusLine(env);
   const settings = yield* claudeSettingsPath(env);
-  const install = `collie ${STATUS_LINE_ARGS.join(" ")} --install`;
+  const install = `collie ${Arr.join(STATUS_LINE_ARGS, " ")} --install`;
   checks.push({
     name: "status line",
     ...(line.kind === "ours"
@@ -456,31 +465,54 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
     const links = yield* machineList(env);
     const views = links.ok ? links.value : [];
     const failures = links.ok
-      ? views
-          .filter(
-            (one) => one.dials === "in" && one.failure?.startsWith("could not listen on port "),
-          )
-          .map((one) => one.failure)
+      ? Arr.map(
+          Arr.filter(views, (one) =>
+            Boolean(
+              one.dials === "in" &&
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(one.failure), (present) =>
+                  pipe(present, Str.startsWith("could not listen on port ")),
+                ),
+              ),
+            ),
+          ),
+          (one) => one.failure,
+        )
       : [links.error.message];
-    const waiting = views.filter((one) => one.waits === "ssh_connection");
-    const overSsh = views.filter((one) => one.state === "live" && one.transport === "ssh");
+    const waiting = Arr.filter(views, (one) => one.waits === "ssh_connection");
+    const overSsh = Arr.filter(views, (one) => one.state === "live" && one.transport === "ssh");
     checks.push({
       name: "paired links",
       ...(failures.length > 0
         ? failed(
-            [...new Set(failures)].join("; "),
+            Arr.join(
+              Arr.map([...new Set(failures)], (part) =>
+                part === null || part === undefined ? "" : globalThis.String(part),
+              ),
+              "; ",
+            ),
             "Free the listening port, then run collie machine list again.",
           )
         : waiting.length > 0
           ? warned(
-              waiting.map((one) => `${one.name}'s link waits on an SSH connection`).join("; "),
-              waiting.map((one) => `collie machine connect ${one.name}`).join("; "),
+              Arr.join(
+                Arr.map(waiting, (one) => `${one.name}'s link waits on an SSH connection`),
+                "; ",
+              ),
+              Arr.join(
+                Arr.map(waiting, (one) => `collie machine connect ${one.name}`),
+                "; ",
+              ),
             )
           : overSsh.length > 0
             ? passed(
-                overSsh
-                  .map((one) => `${one.name}'s link goes over SSH: direct ${one.direct}.`)
-                  .join(" "),
+                Arr.join(
+                  Arr.map(
+                    overSsh,
+                    (one) => `${one.name}'s link goes over SSH: direct ${one.direct}.`,
+                  ),
+                  " ",
+                ),
               )
             : passed("The paired listener has no recorded failure.")),
     });
@@ -502,7 +534,8 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   checks.push(...(yield* githubChecks(env, search, run)));
 
   for (const { id, reading } of yield* readConnections(
-    connectionProbes(env, run).filter(
+    Arr.filter(
+      connectionProbes(env, run),
       ({ id }) => id !== "linear" || needs.harnesses.includes("claude"),
     ),
   )) {
@@ -533,29 +566,30 @@ const diskSpace = Effect.fn("Doctor.diskSpace")(function* (
     if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) dirs.push(dir);
   const df = yield* run("df", ["-Pk", ...dirs], "/");
   const mounts = new Map<string, { size: number; free: number }>();
-  for (const line of df.stdout.split("\n").slice(1)) {
-    const [, blocks, , available, , ...mount] = line.trim().split(/\s+/);
+  for (const line of Str.split(df.stdout, "\n").slice(1)) {
+    const [, blocks, , available, , ...mount] = Str.split(Str.trim(line), /\s+/);
     // A line of df's complaints, not a filesystem.
     if (mount.length === 0 || !/^\d+$/.test(blocks ?? "") || !/^\d+$/.test(available ?? ""))
       continue;
-    mounts.set(mount.join(" "), {
+    mounts.set(Arr.join(mount, " "), {
       size: Number(blocks) * 1024,
       free: Number(available) * 1024,
     });
   }
   if (mounts.size === 0) return noted("could not read how much space is free", "df -h");
-  const low = [...mounts].filter(
+  const low = Arr.filter(
+    [...mounts],
     ([, one]) => one.free < LOW_BYTES || one.free < one.size * LOW_SHARE,
   );
   const said = ([mount, one]: [string, { size: number; free: number }]) =>
     `${mount} has ${humanBytes(one.free)} free (${Math.floor((one.free / one.size) * 100)}%)`;
-  if (low.length === 0) return passed([...mounts].map(said).join("; "));
+  if (low.length === 0) return passed(Arr.join(Arr.map([...mounts], said), "; "));
   const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
   const frees =
     listing !== null && listing.ok
       ? `; \`collie cleanup\` would free ${humanBytes(listing.value.bytes)}`
       : "";
-  return warned(`${low.map(said).join("; ")}${frees}`, "collie cleanup --apply");
+  return warned(`${Arr.join(Arr.map(low, said), "; ")}${frees}`, "collie cleanup --apply");
 });
 
 /**
@@ -572,7 +606,7 @@ export const memoryOutcome = (
   const closes =
     closing === null
       ? ""
-      : `; \`collie cleanup\` would close ${closing.length === 0 ? "no agent" : closing.join(", ")}`;
+      : `; \`collie cleanup\` would close ${closing.length === 0 ? "no agent" : Arr.join(closing, ", ")}`;
   return warned(`short of memory: ${memorySaid(memory)}${closes}`, "collie cleanup --apply");
 };
 
@@ -587,9 +621,10 @@ const memoryCheck = Effect.fn("Doctor.memoryCheck")(function* (
     listing === null
       ? []
       : listing.ok
-        ? listing.value.remove
-            .filter((item) => item.kind === "idle-agent")
-            .map((item) => item.target)
+        ? Arr.map(
+            Arr.filter(listing.value.remove, (item) => item.kind === "idle-agent"),
+            (item) => item.target,
+          )
         : null;
   return memoryOutcome(memory, short, closing);
 });
@@ -599,7 +634,7 @@ const leftoverChecks = Effect.fn("Doctor.leftoverChecks")(function* (env: Plugin
   const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
   const left =
     listing !== null && listing.ok
-      ? listing.value.remove.filter((item) => item.kind === "check")
+      ? Arr.filter(listing.value.remove, (item) => item.kind === "check")
       : [];
   const [first] = left;
   return first === undefined
@@ -612,30 +647,31 @@ const leftoverChecks = Effect.fn("Doctor.leftoverChecks")(function* (env: Plugin
 
 /** One line per check, and under it the command to run where there is one. */
 function render(checks: Check[]): string {
-  return checks
-    .flatMap((check) => [
-      `  ${check.ok ? (check.warn ? "!" : "✓") : "✗"} ${check.name.padEnd(16)}${check.detail}`,
+  return Arr.join(
+    Arr.flatMap(checks, (check) => [
+      `  ${check.ok ? (check.warn ? "!" : "✓") : "✗"} ${pipe(check.name, Str.padEnd(16))}${check.detail}`,
       ...(check.fix === "" ? [] : [`      fix: ${check.fix}`]),
-    ])
-    .join("\n");
+    ]),
+    "\n",
+  );
 }
 
 function report(checks: Check[]) {
-  const failed = checks.filter((check) => !check.ok);
+  const failed = Arr.filter(checks, (check) => !check.ok);
   if (failed.length === 0) {
     return {
       ok: true as const,
       data: { checks, ready: true },
-      human: [`Collie is ready — ${checks.length} checks passed.`, render(checks)].join("\n"),
+      human: Arr.join([`Collie is ready — ${checks.length} checks passed.`, render(checks)], "\n"),
     };
   }
   // The failure envelope prints its message and nothing else, so the message is the
   // whole report: what is wrong, and the command that fixes each of them.
   return err(
     "operation_failed",
-    [`${failed.length} of ${checks.length} checks failed.`, render(checks)].join("\n"),
+    Arr.join([`${failed.length} of ${checks.length} checks failed.`, render(checks)], "\n"),
     // Spread into plain maps: `err` takes a YAML map, and `Check` is an interface,
     // which has no index signature for it to satisfy.
-    { checks: checks.map((check) => ({ ...check })), ready: false },
+    { checks: Arr.map(checks, (check) => ({ ...check })), ready: false },
   );
 }

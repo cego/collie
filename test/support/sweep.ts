@@ -3,6 +3,11 @@
 // Every process a test starts carries `COLLIE_TEST_ROOT` naming its file's root, which is
 // how a leftover is proved to be the suite's. Read from /proc, so Linux only.
 
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+// Called by a process exit listener; Effect FileSystem cannot finish asynchronous cleanup there.
 import {
   accessSync,
   chmodSync,
@@ -11,16 +16,24 @@ import {
   readFileSync,
   rmSync,
   statfsSync,
-} from "node:fs";
+} from "node:fs"; // oxlint-disable-line effecttsgo/node-builtin-import
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { Config, ConfigProvider, Console, Effect, Path } from "effect";
+import * as Rec from "effect/Record";
+const { join } = Effect.runSync(Path.Path.pipe(Effect.provide(Path.layer)));
 
 export const MARKER = "COLLIE_TEST_ROOT";
 /** Where a fixture whose control socket must bind keeps its directory, whatever `TMPDIR` says. */
 export const SOCKET_BASE = "/tmp";
 
 /** A memory filesystem, where a test's database commits and git writes never wait on a disk. */
-export const MEMORY_BASE = process.env.COLLIE_TEST_MEMORY ?? "/dev/shm";
+export const MEMORY_BASE = Effect.runSync(
+  Config.String("COLLIE_TEST_MEMORY").pipe(
+    Config.withDefault("/dev/shm"),
+    // The preload has not set the test environment yet; leave Effect's default provider uninitialized.
+    Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
+  ),
+);
 /** What a memory filesystem must have free to hold a test file's root. */
 export const MEMORY_FREE_BYTES = 2 * 1024 ** 3;
 
@@ -62,7 +75,10 @@ const PF_KTHREAD = 0x200000;
  * environ reads empty, and proc(5)'s field 51, env_end, is 0 as for no memory at all.
  */
 const execing = (stat: string) => {
-  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  const fields = Str.split(
+    pipe(stat, Str.slice(Option.getOrElse(pipe(stat, Str.lastIndexOf(")")), () => -1) + 2)),
+    " ",
+  );
   return fields[0] !== "Z" && (Number(fields[6]) & PF_KTHREAD) === 0 && fields[48] === "0";
 };
 
@@ -74,7 +90,7 @@ export const marked = (
 ): ReadonlyArray<{ pid: number; command: string }> => {
   let pids: Array<string>;
   try {
-    pids = readdirSync(proc).filter((name) => /^\d+$/.test(name));
+    pids = Arr.filter(readdirSync(proc), (name) => /^\d+$/.test(name));
   } catch {
     return [];
   }
@@ -82,24 +98,33 @@ export const marked = (
   // environment fields on every fixture cleanup.
   const want = [
     `\0${MARKER}=${root}\0`,
-    ...Object.entries(bindings).map(([key, value]) => `\0${key}=${value}\0`),
+    ...Arr.map(Rec.toEntries(bindings), ([key, value]) => `\0${key}=${value}\0`),
   ];
-  return pids.flatMap((name) => {
+  return Arr.flatMap(pids, (name) => {
     const pid = Number(name);
     if (pid === process.pid) return [];
     try {
       const environ = () => readFileSync(`${proc}/${name}/environ`, "utf8");
       let read = environ();
       while (read === "" && execing(readFileSync(`${proc}/${name}/stat`, "utf8"))) {
+        // The exit listener must wait for execve synchronously before it can identify a leftover.
+        // oxlint-disable-next-line no-restricted-properties
         Bun.sleepSync(1);
         read = environ();
       }
       // The exec may have finished between the empty read and the stat read.
       if (read === "") read = environ();
       const env = `\0${read}\0`;
-      if (!want.every((binding) => env.includes(binding))) return [];
-      const command = readFileSync(`${proc}/${name}/cmdline`, "utf8").split("\0").join(" ").trim();
-      return [{ pid, command }];
+      if (!Arr.every(want, (binding) => pipe(env, Str.includes(binding)))) return [];
+      const command = Str.trim(
+        Arr.join(Str.split(readFileSync(`${proc}/${name}/cmdline`, "utf8"), "\0"), " "),
+      );
+      return [
+        {
+          pid,
+          command,
+        },
+      ];
     } catch {
       return [];
     }
@@ -111,8 +136,12 @@ export const marked = (
  * carries its marker. A live pid's root is another suite's and is left alone.
  */
 export const sweepDeadRoots = (dir: string): ReadonlyArray<string> =>
-  readdirSync(dir).flatMap((name) => {
-    const pid = Number(/^collie-test-(\d+)-/.exec(name)?.[1] ?? 0);
+  Arr.flatMap(readdirSync(dir), (name) => {
+    const pid = Number(
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(/^collie-test-(\d+)-/.exec(name)), (present) => present[1]),
+      ) ?? 0,
+    );
     if (pid <= 0 || alive(pid)) return [];
     const root = join(dir, name);
     for (const one of marked(root)) kill(one.pid);
@@ -120,7 +149,7 @@ export const sweepDeadRoots = (dir: string): ReadonlyArray<string> =>
   });
 
 export const sweepEveryBase = (memory = MEMORY_BASE) =>
-  [...new Set([tmpdir(), SOCKET_BASE, memory])].flatMap((dir) => {
+  Arr.flatMap([...new Set([tmpdir(), SOCKET_BASE, memory])], (dir) => {
     try {
       return sweepDeadRoots(dir);
     } catch {
@@ -155,7 +184,7 @@ const removed = (root: string) => {
     rmSync(root, { recursive: true, force: true });
     return true;
   } catch (cause) {
-    console.error(`test: could not remove ${root}: ${String(cause)}`);
+    Effect.runSync(Console.error(`test: could not remove ${root}: ${String(cause)}`));
     return false;
   }
 };

@@ -1,6 +1,7 @@
 // What a sweep would remove on each Machine, read by Desktop's main process and drawn by the
 // Cleanup dialog (ADR-0045).
 
+import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
@@ -240,7 +241,7 @@ describe("the Cleanup dialog", () => {
       item("worktree", "/w/b", 2 * GiB),
       item("staged-blob", "/s/x", 5),
     ];
-    const bytes = remove.reduce((sum, { bytes }) => sum + bytes, 0);
+    const bytes = Arr.reduce(remove, 0, (sum, { bytes }) => sum + bytes);
     const [row] = cleanupView(
       [live("vm")],
       reads(listed("vm", { remove, keep: [], bytes })),
@@ -323,11 +324,11 @@ describe("the Cleanup dialog", () => {
       ["update-desktop", "Update Desktop"],
     ] as const;
     const view = cleanupView(
-      states.map(([state]) => ({ profile: `p-${state}`, name: state, state, reason: "why" })),
+      Arr.map(states, ([state]) => ({ profile: `p-${state}`, name: state, state, reason: "why" })),
       reads(),
       null,
     );
-    expect(view.rows.map(({ said, note, choosable }) => [said, note, choosable])).toEqual([
+    expect(Arr.map(view.rows, ({ said, note, choosable }) => [said, note, choosable])).toEqual([
       ["Connecting: why", null, false],
       ["Out of reach: why", "Its host still cleans up there every ten minutes.", false],
       ["Waiting for SSO: why", "Its host still cleans up there every ten minutes.", false],
@@ -346,7 +347,7 @@ describe("the Cleanup dialog", () => {
       24_500,
     );
     expect(
-      view.rows.map(({ said, choosable, chosen, readAgain }) => [
+      Arr.map(view.rows, ({ said, choosable, chosen, readAgain }) => [
         said,
         choosable,
         chosen,
@@ -398,7 +399,7 @@ describe("the Cleanup dialog", () => {
       listed("vm", { remove: [], keep: [], bytes: 0 }),
       failed("old", "the disk is gone"),
     );
-    expect(cleanupView(rows, read, null).rows.map(({ readAgain }) => readAgain)).toEqual([
+    expect(Arr.map(cleanupView(rows, read, null).rows, ({ readAgain }) => readAgain)).toEqual([
       false,
       true,
       true,
@@ -409,7 +410,7 @@ describe("the Cleanup dialog", () => {
       null,
       new Map([["p-vm", { state: "running", request: "s-1" }]]),
     );
-    expect(swept.rows.map(({ readAgain }) => readAgain)).toEqual([false, false, false]);
+    expect(Arr.map(swept.rows, ({ readAgain }) => readAgain)).toEqual([false, false, false]);
   });
 
   test("a listing that arrives after the choice was changed starts unchosen, and with no change chosen", () => {
@@ -418,15 +419,18 @@ describe("the Cleanup dialog", () => {
     const before = cleanupView(rows, reads(listed("a", nothing), reading("late", 0)), null);
     const changed = choose(before, "all");
     const after = reads(listed("a", nothing), listed("late", nothing));
-    expect(cleanupView(rows, after, changed).rows.map(({ chosen }) => chosen)).toEqual([
+    expect(Arr.map(cleanupView(rows, after, changed).rows, ({ chosen }) => chosen)).toEqual([
       true,
       false,
     ]);
-    expect(cleanupView(rows, after, null).rows.map(({ chosen }) => chosen)).toEqual([true, true]);
+    expect(Arr.map(cleanupView(rows, after, null).rows, ({ chosen }) => chosen)).toEqual([
+      true,
+      true,
+    ]);
   });
 
   test("every Machine that can be chosen starts chosen; All and None act on those", () => {
-    const rows = [live("a"), live("b"), live("old"), live("off")].map((row, i) =>
+    const rows = Arr.map([live("a"), live("b"), live("old"), live("off")], (row, i) =>
       i === 3 ? { ...row, state: "unreachable" as const } : row,
     );
     const read = reads(
@@ -435,13 +439,13 @@ describe("the Cleanup dialog", () => {
       failed("old", "the disk is gone"),
     );
     const atStart = cleanupView(rows, read, null);
-    expect(atStart.rows.map(({ chosen }) => chosen)).toEqual([true, true, false, false]);
+    expect(Arr.map(atStart.rows, ({ chosen }) => chosen)).toEqual([true, true, false, false]);
     expect(atStart.chosen).toBe("2 Machines chosen · would free 1.0 GiB");
     const none = cleanupView(rows, read, choose(atStart, "none"));
-    expect(none.rows.map(({ chosen }) => chosen)).toEqual([false, false, false, false]);
+    expect(Arr.map(none.rows, ({ chosen }) => chosen)).toEqual([false, false, false, false]);
     expect(none.chosen).toBe("0 Machines chosen · would free 0 B");
     const all = cleanupView(rows, read, choose(none, "all"));
-    expect(all.rows.map(({ chosen }) => chosen)).toEqual([true, true, false, false]);
+    expect(Arr.map(all.rows, ({ chosen }) => chosen)).toEqual([true, true, false, false]);
   });
 
   test("the chosen line counts the chosen Machines and adds what they would free", () => {
@@ -492,7 +496,7 @@ describe("the Cleanup dialog while and after it sweeps", () => {
       ]),
     );
     expect(
-      view.rows.map(({ said, chosen, choosable, warn }) => [said, chosen, choosable, warn]),
+      Arr.map(view.rows, ({ said, chosen, choosable, warn }) => [said, chosen, choosable, warn]),
     ).toEqual([
       ["Cleaning…", true, false, false],
       ["Cleaning…", true, false, false],

@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import { expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
 import { runEffect } from "../support/effect";
@@ -14,7 +15,7 @@ const untilAsked = Effect.fn("prompts.untilAsked")(function* (asked: () => boole
     if (asked()) return;
     yield* Effect.sleep("2 millis");
   }
-  return yield* Effect.fail(new Error("nothing was ever asked"));
+  return yield* new Cause.TimeoutError("nothing was ever asked");
 });
 
 test("a menu parks until the answer comes back, then hands over the item", () =>

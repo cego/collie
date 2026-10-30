@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 import { forkResolvedDefinition } from "../fork";
@@ -19,15 +22,18 @@ const personaList = Command.make("list", {}, () =>
         const resolved = yield* discoveryContext(global);
         if (resolved._tag === "ContextFailure") return resolved.result;
         const defs = yield* definitions(resolved.env);
-        const personas = [...defs.personas.values()]
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map(personaData);
+        const personas = Arr.map(
+          [...defs.personas.values()].sort((a, b) => pipe_(a.name, Str.localeCompare(b.name))),
+          personaData,
+        );
         return {
           ok: true,
           data: { personas, errors: defs.errors },
           human:
-            personas.map((item) => `${item.name}\t${item.description}`).join("\n") ||
-            "No personas found.",
+            Arr.join(
+              Arr.map(personas, (item) => `${item.name}\t${item.description}`),
+              "\n",
+            ) || "No personas found.",
         };
       }),
       global.json,

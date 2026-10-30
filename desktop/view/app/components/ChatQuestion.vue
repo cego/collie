@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import { type Answers, questionsOf } from "../../../src/shared/chat-view";
 
 const props = defineProps<{ args: string }>();
@@ -11,8 +13,11 @@ const atOnce = computed(
   () => questions.value.length === 1 && questions.value[0]?.multiSelect !== true,
 );
 const answers = () =>
-  Object.fromEntries(
-    questions.value.map(({ question }) => [question, (picked.value[question] ?? []).join(", ")]),
+  Rec.fromEntries(
+    Arr.map(
+      questions.value,
+      ({ question }) => [question, Arr.join(picked.value[question] ?? [], ", ")] as const,
+    ),
   );
 const pick = (question: string, label: string, many: boolean) => {
   const now = picked.value[question] ?? [];
@@ -20,14 +25,14 @@ const pick = (question: string, label: string, many: boolean) => {
     ...picked.value,
     [question]: many
       ? now.includes(label)
-        ? now.filter((one) => one !== label)
+        ? Arr.filter(now, (one) => one !== label)
         : [...now, label]
       : [label],
   };
   if (atOnce.value) emit("answer", answers());
 };
 const complete = computed(() =>
-  questions.value.every(({ question }) => (picked.value[question] ?? []).length > 0),
+  Arr.every(questions.value, ({ question }) => (picked.value[question] ?? []).length > 0),
 );
 </script>
 

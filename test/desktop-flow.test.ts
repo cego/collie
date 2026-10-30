@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import {
   flowAnnouncements,
@@ -16,12 +17,15 @@ test("the inspector can follow either the requesting Run or its Task parent", ()
   const flow = mainFlow();
   const child = {
     ...flow,
-    lanes: flow.lanes.map((lane) => ({ ...lane, startedBy: { run: "parent", step: "build" } })),
+    lanes: Arr.map(flow.lanes, (lane) => ({
+      ...lane,
+      startedBy: { run: "parent", step: "build" },
+    })),
   };
   expect(rowOrigin(child, "build-run")).toEqual({ run: "parent", machine: "laptop" });
   const requested = {
     ...flow,
-    lanes: flow.lanes.map((lane) => ({
+    lanes: Arr.map(flow.lanes, (lane) => ({
       ...lane,
       requestedBy: {
         run: "requester",
@@ -103,9 +107,9 @@ test("Flow announces a new current Step or needs-you transition once", () => {
   expect(flowAnnouncements(after, after)).toEqual([]);
   const asking = {
     ...after,
-    lanes: after.lanes.map((lane) => ({
+    lanes: Arr.map(after.lanes, (lane) => ({
       ...lane,
-      nodes: lane.nodes.map((node) =>
+      nodes: Arr.map(lane.nodes, (node) =>
         node.id === "review"
           ? { ...node, state: "needs-you" as const, said: "Asked 1 min ago" }
           : node,
@@ -124,7 +128,7 @@ test("the inspector folds completed Slices and scopes its header to a picked Sli
   expect(whole.lines).toContain("builder · claude/opus");
   expect(whole.lines).toContain("4 min so far");
   expect(whole.purpose).toBe("Work on the current Slice.");
-  expect(whole.entries.map((entry) => entry.title)).toEqual(["3 done", "04", "05", "06"]);
+  expect(Arr.map(whole.entries, (entry) => entry.title)).toEqual(["3 done", "04", "05", "06"]);
   const picked = inspectorOf(flow, { ...selection, item: "build@04" }, now)!;
   expect(picked.title).toBe("04");
   expect(picked.lines).toContain("builder · codex/default");
@@ -164,11 +168,11 @@ test.each(["done", "expected"] as const)(
     const selection = { run: "build-run", node: "repos", item: null };
     const entries = inspectorOf(flow, selection, 0)!.entries;
     expect(
-      entries.map((entry) => ({
+      Arr.map(entries, (entry) => ({
         title: entry.title,
         wave: entry.wave,
         folded: entry.folded,
-        repos: entry.nodes.map((node) => [node.title, node.link?.run]),
+        repos: Arr.map(entry.nodes, (node) => [node.title, node.link?.run]),
       })),
     ).toEqual([
       {

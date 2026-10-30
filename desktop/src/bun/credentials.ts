@@ -1,7 +1,21 @@
 // What only the human can give, asked once by Desktop: credentials kept in an owner-only file
 // on this computer and handed to each Machine on stdin, and logins approved in this computer's browser.
 
-import { Effect, FileSystem, Option, Queue, Schedule, Schema, Semaphore, Stream } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import {
+  Effect,
+  FileSystem,
+  Option,
+  Queue,
+  Result,
+  Schedule,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
+import { CommandLine } from "effect/process";
 import { BunFileSystem } from "@effect/platform-bun";
 import type { PlatformError } from "effect/PlatformError";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -12,7 +26,6 @@ import { inTerminal } from "../../../src/in-terminal";
 import { scriptLine } from "../../../src/script";
 import type { OnboardRun } from "../shared/flock";
 import { type ShellRoute, spawned } from "./machine";
-import { quoted } from "../../../src/ssh-argv";
 import { CHILD_CWD, childEnv, which } from "./login-env";
 import { ranWith, shOn, tracked } from "./onboarding";
 import { redact } from "../../../src/redact";
@@ -32,9 +45,11 @@ const ENTRIES: ReadonlyArray<KeyringEntry> = ["gitlab-token", "helle-token", "sl
 
 const parsed = (text: string) =>
   new Map(
-    text.split("\n").flatMap((line) => {
-      const at = line.indexOf("=");
-      return at > 0 ? [[line.slice(0, at), line.slice(at + 1)] as const] : [];
+    Arr.flatMap(Str.split(text, "\n"), (line) => {
+      const at = Option.getOrElse(pipe_(line, Str.indexOf("=")), () => -1);
+      return at > 0
+        ? [[pipe_(line, Str.slice(0, at)), pipe_(line, Str.slice(at + 1))] as const]
+        : [];
     }),
   );
 
@@ -68,7 +83,10 @@ export const credentialsFile = (dir: string, secretTool = "secret-tool"): Keyrin
       yield* fs.makeDirectory(dir, { recursive: true, mode: 0o700 });
       yield* fs.chmod(dir, 0o700);
       yield* fs.remove(`${file}.new`, { force: true });
-      const text = [...values].map(([key, value]) => `${key}=${value}\n`).join("");
+      const text = Arr.join(
+        Arr.map([...values], ([key, value]) => `${key}=${value}\n`),
+        "",
+      );
       yield* fs.writeFileString(`${file}.new`, text, { mode: 0o600 });
       yield* fs.rename(`${file}.new`, file);
     });
@@ -140,11 +158,11 @@ export const gitlabToken = (base: string, token: string) =>
         : Effect.fail(`${base} did not accept that token (${response.status})`),
     ),
     Effect.flatMap((text) =>
-      Schema.decodeUnknownEffect(TokenSelf)(text).pipe(Effect.mapError((e) => e.message)),
+      Schema.decodeEffect(TokenSelf)(text).pipe(Effect.mapError((e) => e.message)),
     ),
     Effect.flatMap(({ expires_at, scopes }) =>
-      scopes !== undefined && SCOPES.some((scope) => !scopes.includes(scope))
-        ? Effect.fail(`the token needs the ${SCOPES.join(" and ")} scopes`)
+      scopes !== undefined && Arr.some(SCOPES, (scope) => !scopes.includes(scope))
+        ? Effect.fail(`the token needs the ${Arr.join(SCOPES, " and ")} scopes`)
         : Effect.succeed({ expires: expires_at }),
     ),
     Effect.provide(FetchHttpClient.layer),
@@ -177,7 +195,7 @@ export const helleOwner = (base: string, token: string) =>
           ),
     ),
     Effect.flatMap((text) =>
-      Schema.decodeUnknownEffect(HelleMe)(text).pipe(Effect.mapError((e) => e.message)),
+      Schema.decodeEffect(HelleMe)(text).pipe(Effect.mapError((e) => e.message)),
     ),
     Effect.map((me) => me.display_name ?? me.user_id),
     Effect.timeoutOrElse({
@@ -197,13 +215,15 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
     (route) =>
       shOn(route, script, new TextEncoder().encode(stdin)).pipe(
         Effect.flatMap(({ err, out, code }) =>
-          code === 0 ? Effect.succeed(null) : Effect.fail((err + out).trim() || `exited ${code}`),
+          code === 0 ? Effect.succeed(null) : Effect.fail(Str.trim(err + out) || `exited ${code}`),
         ),
         Effect.timeoutOrElse({
           duration: GIVE_LIMIT,
           orElse: () => Effect.fail("not reached; it is given when it next connects"),
         }),
-        Effect.catch((failed) => Effect.succeed(redact(failed.split(token).join("<redacted>")))),
+        Effect.catch((failed) =>
+          Effect.succeed(redact(Arr.join(Str.split(failed, token), "<redacted>"))),
+        ),
         Effect.map((failed) => ({ name: route.machine.name, failed })),
       ),
     { concurrency: "unbounded" },
@@ -213,7 +233,7 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
 export const giveToken = (routes: ReadonlyArray<ShellRoute>, host: string, token: string) =>
   onEvery(
     routes,
-    `command -v glab >/dev/null 2>&1 || { echo "Install glab on this Machine, then try again" >&2; exit 127; }; glab auth login --hostname ${quoted(host)} --stdin >/dev/null 2>&1 || { echo "glab refused the login; check the token and host" >&2; exit 1; }`,
+    `command -v glab >/dev/null 2>&1 || { echo "Install glab on this Machine, then try again" >&2; exit 127; }; glab auth login --hostname ${Result.getOrThrow(CommandLine.quote(host))} --stdin >/dev/null 2>&1 || { echo "glab refused the login; check the token and host" >&2; exit 1; }`,
     `${token}\n`,
     token,
   );
@@ -307,7 +327,7 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     Stream.filter((url) => url !== undefined),
     // Read to the end all the same: a login whose output is not read dies of SIGPIPE.
     Stream.runForEach((url) =>
-      run.current().steps.some((step) => step.step === login.step && step.url !== undefined)
+      Arr.some(run.current().steps, (step) => step.step === login.step && step.url !== undefined)
         ? Effect.void
         : run.step({
             ...login,
@@ -319,7 +339,7 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
   );
   const handed = shOn(route, `cat ${HANDED} 2>/dev/null && rm -f ${HANDED}`).pipe(
     Effect.flatMap(({ out }) =>
-      out.trim() === "" ? Effect.fail("not yet") : Effect.succeed(out.trim()),
+      Str.trim(out) === "" ? Effect.fail("not yet") : Effect.succeed(Str.trim(out)),
     ),
     Effect.retry({ schedule: Schedule.spaced("1 second") }),
     Effect.flatMap((url) =>

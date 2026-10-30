@@ -6,6 +6,10 @@
 // model tokens. So this is four endpoints over `/api/v1`, with the bearer credentials
 // read from the same environment file the MCP wrapper sources.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Data, Effect, Exit, FileSystem, Schema } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -56,7 +60,7 @@ const Project = Schema.Struct({
   queue: Schema.optionalKey(Schema.NullOr(Schema.Array(Member))),
 });
 const Projects = Schema.Array(Project);
-const Claimed = Schema.Struct({ position: Schema.Number, already_queued: Schema.Boolean });
+const Claimed = Schema.Struct({ position: Schema.Finite, already_queued: Schema.Boolean });
 
 export interface HelleProject extends Schema.Schema.Type<typeof Project> {}
 
@@ -76,12 +80,12 @@ export const credentials = Effect.fn("Helle.credentials")(function* (where: {
     .readFileString(file)
     .pipe(Effect.mapError(() => failed(`helle credentials: cannot read ${file}`)));
   const values = new Map<string, string>();
-  for (const line of text.split("\n")) {
+  for (const line of Str.split(text, "\n")) {
     const entry = /^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-    if (entry) values.set(entry[1]!, entry[2]!.replace(/^["']|["']$/g, ""));
+    if (entry) values.set(entry[1]!, pipe(entry[2]!, Str.replace(/^["']|["']$/g, "")));
   }
   const token = values.get("HELLE_API_TOKEN");
-  if (!token) return yield* Effect.fail(failed(`helle credentials: no HELLE_API_TOKEN in ${file}`));
+  if (!token) return yield* failed(`helle credentials: no HELLE_API_TOKEN in ${file}`);
   return { url: where.url ?? HELLE_URL, token } satisfies HelleCredentials;
 });
 
@@ -111,11 +115,11 @@ const call = Effect.fn("Helle.call")(function* <S extends Schema.Top>(
     ),
   );
   if (response.status < 200 || response.status >= 300) {
-    const body = yield* response.text.pipe(Effect.catch(() => Effect.succeed("")));
-    return yield* Effect.fail(failed(`${what} answered ${response.status}: ${body.slice(0, 200)}`));
+    const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
+    return yield* failed(`${what} answered ${response.status}: ${pipe(body, Str.slice(0, 200))}`);
   }
   const body = yield* response.json.pipe(Effect.mapError((c) => failed(`${what}: ${reason(c)}`)));
-  return yield* Schema.decodeUnknownEffect(schema)(body).pipe(
+  return yield* Schema.decodeEffect(schema)(body).pipe(
     Effect.mapError((c) => failed(`${what}: ${String(c)}`)),
   );
 }, Effect.provide(FetchHttpClient.layer));
@@ -140,8 +144,9 @@ export type Resolution =
   | { _tag: "Ambiguous"; slugs: string[] };
 
 const answersTo = (project: HelleProject, name: string) =>
-  [project.slug, ...(project.shorthand ?? [])].some(
-    (one) => one.toLowerCase() === name.toLowerCase(),
+  Arr.some(
+    [project.slug, ...(project.shorthand ?? [])],
+    (one) => Str.toLowerCase(one) === Str.toLowerCase(name),
   );
 
 /**
@@ -158,20 +163,29 @@ export function resolveProject(
   repositoryPath: string | null,
   repoName: string,
 ): Resolution {
-  const path = repositoryPath?.toLowerCase() ?? "";
+  const path =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(repositoryPath), (present_) => Str.toLowerCase(present_)),
+    ) ?? "";
   // The remote names the repository; the checkout's own clone may be named anything, and a
   // roaming Run's clone is named by a hash that no Helle project will ever be called.
-  const name = repositoryPath?.split("/").pop() || repoName;
-  const byGroup = projects.filter(
-    (p) =>
+  const name =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(repositoryPath), (present__) =>
+        Str.split(present__, "/").pop(),
+      ),
+    ) || repoName;
+  const byGroup = Arr.filter(projects, (p) =>
+    Boolean(
       p.group &&
       answersTo(p, name) &&
-      path.endsWith(`/${p.group.toLowerCase()}/${name.toLowerCase()}`),
+      pipe(path, Str.endsWith(`/${Str.toLowerCase(p.group)}/${Str.toLowerCase(name)}`)),
+    ),
   );
-  const matched = byGroup.length > 0 ? byGroup : projects.filter((p) => answersTo(p, name));
+  const matched = byGroup.length > 0 ? byGroup : Arr.filter(projects, (p) => answersTo(p, name));
   if (matched.length === 1) return { _tag: "Project", slug: matched[0]!.slug };
   if (matched.length === 0) return { _tag: "None" };
-  return { _tag: "Ambiguous", slugs: matched.map((p) => p.slug) };
+  return { _tag: "Ambiguous", slugs: Arr.map(matched, (p) => p.slug) };
 }
 
 export type Needed = { _tag: "Projects"; slugs: string[] } | { _tag: "Unresolved"; why: string };
@@ -189,20 +203,33 @@ export interface Deploys {
 
 /** The path's first segment is the forge's host, which no Helle group names. */
 const groupOf = (repositoryPath: string | null) =>
-  repositoryPath?.toLowerCase().split("/").slice(1, -1).join("/") ?? null;
+  Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(repositoryPath), (present) =>
+      Arr.join(Str.split(Str.toLowerCase(present), "/").slice(1, -1), "/"),
+    ),
+  ) ?? null;
 
 const inGroupOf = (projects: readonly HelleProject[], repositoryPath: string | null) => {
   const group = groupOf(repositoryPath);
   return (name: string) =>
-    projects.filter(
-      (p) => group !== null && p.group?.toLowerCase() === group && answersTo(p, name),
+    Arr.filter(
+      projects,
+      (p) =>
+        group !== null &&
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(p.group), (present___) => Str.toLowerCase(present___)),
+        ) === group &&
+        answersTo(p, name),
     );
 };
 
-const partsOf = (job: string) => job.split(/[:/\s]+/);
+const partsOf = (job: string) => Str.split(job, /[:/\s]+/);
 
 const twice = (name: string, found: readonly HelleProject[]) =>
-  `${name} names ${found.length} Helle projects: ${found.map((p) => p.slug).join(", ")}`;
+  `${name} names ${found.length} Helle projects: ${Arr.join(
+    Arr.map(found, (p) => p.slug),
+    ", ",
+  )}`;
 
 /**
  * Every Helle project a release needs: the repository's own alone where it has one, else each
@@ -215,7 +242,7 @@ export function resolveProjects(projects: readonly HelleProject[], release: Depl
     const slugs = new Set<string>();
     const unknown: string[] = [];
     for (const entry of release.declared) {
-      const found = projects.filter((p) => answersTo(p, entry));
+      const found = Arr.filter(projects, (p) => answersTo(p, entry));
       if (found.length > 1)
         return { _tag: "Unresolved", why: `.collie/helle.json's ${twice(entry, found)}` };
       if (found.length === 0) unknown.push(entry);
@@ -224,7 +251,7 @@ export function resolveProjects(projects: readonly HelleProject[], release: Depl
     return unknown.length > 0
       ? {
           _tag: "Unresolved",
-          why: `.collie/helle.json names ${unknown.join(", ")}, which Helle does not know`,
+          why: `.collie/helle.json names ${Arr.join(unknown, ", ")}, which Helle does not know`,
         }
       : { _tag: "Projects", slugs: [...slugs].sort() };
   }
@@ -232,7 +259,7 @@ export function resolveProjects(projects: readonly HelleProject[], release: Depl
   if (own._tag === "Ambiguous")
     return {
       _tag: "Unresolved",
-      why: `helle has ${own.slugs.length} projects matching ${release.repoName}: ${own.slugs.join(", ")}`,
+      why: `helle has ${own.slugs.length} projects matching ${release.repoName}: ${Arr.join(own.slugs, ", ")}`,
     };
   if (own._tag === "Project") return { _tag: "Projects", slugs: [own.slug] };
   const group = groupOf(release.repositoryPath);
@@ -267,15 +294,21 @@ export function resolveProjects(projects: readonly HelleProject[], release: Depl
 /** Where this user stands: 0 while they hold it, else their place in the queue. */
 function positionOf(project: HelleProject, user: string): number | null {
   if (project.holder?.user_id === user) return 0;
-  const at = (project.queue ?? []).findIndex((member) => member.user_id === user);
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(project.queue ?? [], (member) => member.user_id === user),
+    () => -1,
+  );
   return at < 0 ? null : at + 1;
 }
 
 /** Who holds or queues for a project ahead of this user, by name; null where nobody else does. */
 function holderOf(project: HelleProject, user: string): string | null {
   if (project.holder?.user_id === user) return null;
-  const other = [project.holder, ...(project.queue ?? [])].find(
-    (member) => member != null && member.user_id !== user,
+  const other = Option.getOrUndefined(
+    Arr.findFirst(
+      [project.holder, ...(project.queue ?? [])],
+      (member) => member != null && member.user_id !== user,
+    ),
   );
   return other ? (other.display_name ?? other.user_id) : null;
 }
@@ -307,10 +340,8 @@ const neededOf = Effect.fn("Helle.neededOf")(function* (
     });
   const resolved = resolveProject(projects, where.repositoryPath, where.repoName);
   if (resolved._tag === "Ambiguous")
-    return yield* Effect.fail(
-      failed(
-        `helle has ${resolved.slugs.length} projects matching ${where.repoName}: ${resolved.slugs.join(", ")} — say which`,
-      ),
+    return yield* failed(
+      `helle has ${resolved.slugs.length} projects matching ${where.repoName}: ${Arr.join(resolved.slugs, ", ")} — say which`,
     );
   return resolved._tag === "Project"
     ? ({ _tag: "Projects", slugs: [resolved.slug] } satisfies Needed)
@@ -349,12 +380,12 @@ export const helleHolders = Effect.fn("Helle.holders")(function* (where: HelleWh
   const applications = where.deploys?.applications ?? [];
   const inGroup = inGroupOf(projects, where.repositoryPath);
   const names = (application: string, part: string) =>
-    part.toLowerCase() === application.toLowerCase() ||
-    inGroup(application).some((own) => answersTo(own, part));
+    Str.toLowerCase(part) === Str.toLowerCase(application) ||
+    Arr.some(inGroup(application), (own) => answersTo(own, part));
   return {
     _tag: "Read",
     projects: read,
-    applications: applications.map((name) => {
+    applications: Arr.map(applications, (name) => {
       const needs = resolveProjects(projects, {
         repositoryPath: where.repositoryPath,
         repoName: where.repoName,
@@ -364,10 +395,10 @@ export const helleHolders = Effect.fn("Helle.holders")(function* (where: HelleWh
       });
       return { name, needs: needs._tag === "Projects" ? needs.slugs : [] };
     }),
-    jobs: (where.deploys?.jobs ?? []).map((name) => ({
+    jobs: Arr.map(where.deploys?.jobs ?? [], (name) => ({
       name,
-      applications: applications.filter((application) =>
-        partsOf(name).some((part) => names(application, part)),
+      applications: Arr.filter(applications, (application) =>
+        Arr.some(partsOf(name), (part) => names(application, part)),
       ),
     })),
   } satisfies Holders;
@@ -416,19 +447,24 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
   const needed = yield* neededOf(projects, gate);
   if (needed._tag === "Unresolved") return needed satisfies Held;
   const me = yield* helleMe(creds);
-  const recorded = new Set(gate.claimed.map((one) => one.slug));
+  const recorded = new Set(Arr.map(gate.claimed, (one) => one.slug));
   let adopting: boolean | null = null;
 
   const takeOver = Effect.fn("Helle.takeOver")(function* (slug: string) {
     adopting ??= AFFIRMATIVE.test(
-      (yield* gate.ask(
-        `You already hold or are queued for the Helle project ${slug}. Take that claim over, and release it when the Run is done? [y/N]`,
-      ))?.trim() ?? "",
+      Option.getOrUndefined(
+        Option.map(
+          Option.fromNullishOr(
+            yield* gate.ask(
+              `You already hold or are queued for the Helle project ${slug}. Take that claim over, and release it when the Run is done? [y/N]`,
+            ),
+          ),
+          (present____) => Str.trim(present____),
+        ),
+      ) ?? "",
     );
     if (!adopting) {
-      return yield* Effect.fail(
-        failed(`the Helle claim on ${slug} was already yours and was not taken over`),
-      );
+      return yield* failed(`the Helle claim on ${slug} was already yours and was not taken over`);
     }
     yield* gate.record({ slug, claim: "adopted" });
     recorded.add(slug);
@@ -499,13 +535,16 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
     const positions: (number | null)[] = [];
     for (const slug of needed.slugs)
       positions.push(positionOf(yield* helleProject(creds, slug), me.user_id));
-    const from = needed.slugs.findIndex((slug, i) => !recorded.has(slug) || positions[i] !== 0);
+    const from = Option.getOrElse(
+      Arr.findFirstIndex(needed.slugs, (slug, i) => !recorded.has(slug) || positions[i] !== 0),
+      () => -1,
+    );
     if (from < 0) break;
-    const later = needed.slugs.filter((_, i) => i > from && positions[i] !== null);
+    const later = Arr.filter(needed.slugs, (_, i) => i > from && positions[i] !== null);
     for (const slug of later) if (!recorded.has(slug)) yield* takeOver(slug);
     if (later.length > 0)
       yield* gate.out(
-        `⚠ this Run does not hold ${needed.slugs[from]}, so it gives back ${later.join(", ")} to take them again in order`,
+        `⚠ this Run does not hold ${needed.slugs[from]}, so it gives back ${Arr.join(later, ", ")} to take them again in order`,
       );
     for (const slug of later) {
       yield* releaseClaim(creds, slug);

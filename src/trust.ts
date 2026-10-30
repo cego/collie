@@ -2,6 +2,7 @@
 // once per directory and remembers the answer in ~/.claude.json; this file is
 // Claude's, so unreadable data is always left untouched.
 
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "./yaml";
@@ -33,7 +34,7 @@ const ClaudeConfigJson = Schema.fromJsonString(YamlMapSchema);
 
 const paths = Effect.fn("Trust.paths")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem;
-  const real = yield* fs.realPath(cwd).pipe(Effect.catch(() => Effect.succeed(cwd)));
+  const real = yield* fs.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
   return real === cwd ? [cwd] : [cwd, real];
 });
 
@@ -43,7 +44,7 @@ function projects(config: YamlMap): YamlMap {
 
 function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>): boolean {
   const entries = projects(config);
-  return cwds.some((path) => {
+  return Arr.some(cwds, (path) => {
     const entry = entries[path];
     return isYamlMap(entry) && entry.hasTrustDialogAccepted === true;
   });
@@ -60,7 +61,7 @@ export function claudeTrust(home: string, backupDir: string): Trust {
   const readRaw = Effect.fn("Trust.readRaw")(function* () {
     const fs = yield* FileSystem.FileSystem;
     if (!(yield* fs.exists(configPath))) return null;
-    return yield* fs.readFileString(configPath).pipe(Effect.catch(() => Effect.succeed(null)));
+    return yield* fs.readFileString(configPath).pipe(Effect.orElseSucceed(() => null));
   });
 
   /** Those same bytes and what they decode to, so a write can check them both. */
@@ -69,9 +70,7 @@ export function claudeTrust(home: string, backupDir: string): Trust {
     const config =
       raw === null
         ? null
-        : yield* Schema.decodeUnknownEffect(ClaudeConfigJson)(raw).pipe(
-            Effect.catch(() => Effect.succeed(null)),
-          );
+        : yield* Schema.decodeEffect(ClaudeConfigJson)(raw).pipe(Effect.orElseSucceed(() => null));
     return { raw, config };
   });
 
@@ -137,7 +136,10 @@ export function claudeTrust(home: string, backupDir: string): Trust {
     yield* fs.writeFileString(backup, raw);
     yield* fs.chmod(backup, info.mode & 0o777);
     const tmp = `${configPath}.herdr-${yield* currentPid}`;
-    yield* fs.writeFileString(tmp, `${Schema.encodeSync(ClaudeConfigJson)(config)}\n`);
+    yield* fs.writeFileString(
+      tmp,
+      `${yield* Schema.encodeEffect(ClaudeConfigJson)(config).pipe(Effect.orDie)}\n`,
+    );
     yield* fs.chmod(tmp, info.mode & 0o777);
     if ((yield* readRaw()) !== raw) {
       yield* fs.remove(tmp, { force: true });

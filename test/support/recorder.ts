@@ -1,6 +1,8 @@
 // Test rig: a temp plugin sandbox, a fake `herdr` on HERDR_BIN_PATH and a fake
 // socket on HERDR_SOCKET_PATH, both recording into one ordered log.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   Config,
   DateTime,
@@ -13,6 +15,8 @@ import {
   Queue,
   Schema,
   Scope,
+  flow,
+  Result,
 } from "effect";
 import { readEnv, type PluginEnv } from "../../src/env";
 import { Herdr } from "../../src/herdr";
@@ -20,7 +24,7 @@ import { fakeHerdr, writeFakeHerdrShim } from "./fake-herdr-core";
 
 const JsonString = Schema.fromJsonString(Schema.Json);
 const JsonObjectString = Schema.fromJsonString(Schema.JsonObject);
-const encodeJson = Schema.encodeSync(JsonString);
+const encodeJson = flow(Schema.encodeResult(JsonString), Result.getOrThrow);
 
 const FailuresSchema = Schema.Record(Schema.String, Schema.String);
 
@@ -116,7 +120,7 @@ const TokenStoreJson = Schema.fromJsonString(
     Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.String)),
   ),
 );
-const encodeTokens = Schema.encodeSync(TokenStoreJson);
+const encodeTokens = flow(Schema.encodeResult(TokenStoreJson), Result.getOrThrow);
 const decodeTokens = Schema.decodeUnknownOption(TokenStoreJson);
 
 const MetadataParams = Schema.Struct({
@@ -160,7 +164,7 @@ const rememberTokens = Effect.fn("Rig.rememberTokens")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const file = tokensPath(logPath);
-  const raw = yield* fs.readFileString(file, "utf8").pipe(Effect.catch(() => Effect.succeed("")));
+  const raw = yield* fs.readFileString(file, "utf8").pipe(Effect.orElseSucceed(() => ""));
   const held = decodeTokens(raw);
   const store = held._tag === "Some" ? held.value : { workspaces: {}, panes: {} };
   const kind = store[call.on] ?? {};
@@ -269,7 +273,7 @@ export class Rig {
       const exists = yield* fs.exists(path);
       if (!exists) return {};
       const text = yield* fs.readFileString(path);
-      return yield* Schema.decodeUnknownEffect(JsonObjectString)(text);
+      return yield* Schema.decodeEffect(JsonObjectString)(text);
     });
   }
 
@@ -286,9 +290,9 @@ export class Rig {
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const state = yield* readJsonObject(statePath);
-      const tabs = Option.getOrElse(Schema.decodeUnknownOption(Schema.Number)(state.tabs), () => 0);
+      const tabs = Option.getOrElse(Schema.decodeUnknownOption(Schema.Finite)(state.tabs), () => 0);
       const panes = Option.getOrElse(
-        Schema.decodeUnknownOption(Schema.Number)(state.panes),
+        Schema.decodeUnknownOption(Schema.Finite)(state.panes),
         () => 0,
       );
       const tabList = Option.getOrElse(
@@ -419,7 +423,7 @@ export class Rig {
         Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state.agents),
         (): ReadonlyArray<Schema.JsonObject> => [],
       );
-      const renewed = agents.map((agent) =>
+      const renewed = Arr.map(agents, (agent) =>
         agent.name === name
           ? Object.assign({}, agent, {
               terminal_id: `${isText(agent.terminal_id) ? agent.terminal_id : ""}+next`,
@@ -504,7 +508,7 @@ export class Rig {
       }
       yield* fs.writeFileString(
         statePath,
-        encodeJson(Object.assign({}, state, { worktrees: worktrees.map((w) => ({ ...w })) })),
+        encodeJson(Object.assign({}, state, { worktrees: Arr.map(worktrees, (w) => ({ ...w })) })),
       );
     });
   }
@@ -535,8 +539,8 @@ export class Rig {
         statePath,
         encodeJson(
           Object.assign({}, state, {
-            workspaces: list("workspaces").filter((w) => w.workspace_id !== workspaceId),
-            agents: list("agents").filter((a) => !(isText(a.name) && agents.includes(a.name))),
+            workspaces: Arr.filter(list("workspaces"), (w) => w.workspace_id !== workspaceId),
+            agents: Arr.filter(list("agents"), (a) => !(isText(a.name) && agents.includes(a.name))),
             closedWorkspaces: [...closed, workspaceId],
           }),
         ),
@@ -546,8 +550,11 @@ export class Rig {
 
   /** An agent herdr has forgotten: its pane closed and it went with it. */
   dropAgent(name: string): void {
-    const gone = (Bun.env.FAKE_HERDR_AGENTS_GONE ?? "").split(",").filter((item) => item !== "");
-    Bun.env.FAKE_HERDR_AGENTS_GONE = [...gone, name].join(",");
+    const gone = Arr.filter(
+      Str.split(Bun.env.FAKE_HERDR_AGENTS_GONE ?? "", ","),
+      (item) => item !== "",
+    );
+    Bun.env.FAKE_HERDR_AGENTS_GONE = Arr.join([...gone, name], ",");
     this.gone.push(name);
   }
 
@@ -614,7 +621,7 @@ export class Rig {
                 // The same FAKE_HERDR_FAIL map the CLI side reads, so an rpc-only
                 // call like `tab.move` can be made to fail in a test.
                 const failure = Option.getOrElse(
-                  Schema.decodeUnknownOption(Schema.fromJsonString(FailuresSchema))(
+                  Schema.decodeOption(Schema.fromJsonString(FailuresSchema))(
                     Bun.env.FAKE_HERDR_FAIL ?? "{}",
                   ),
                   (): Record<string, string> => ({}),
@@ -659,10 +666,10 @@ export class Rig {
   }
 
   private requestsFrom(chunk: string): ReadonlyArray<Schema.Schema.Type<typeof RpcRequest>> {
-    return chunk
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .flatMap((line) => Option.toArray(Schema.decodeUnknownOption(RpcRequestString)(line)));
+    return Arr.flatMap(
+      Arr.filter(Str.split(chunk, "\n"), (line) => Str.trim(line) !== ""),
+      (line) => Option.toArray(Schema.decodeUnknownOption(RpcRequestString)(line)),
+    );
   }
 
   env(overrides: RigEnvInput = {}): RigEnv {
@@ -694,7 +701,7 @@ export class Rig {
       COLLIE_PROC: this.procDir,
       ...overrides,
     };
-    if (this.gone.length > 0) environment.FAKE_HERDR_AGENTS_GONE = this.gone.join(",");
+    if (this.gone.length > 0) environment.FAKE_HERDR_AGENTS_GONE = Arr.join(this.gone, ",");
     return environment;
   }
 
@@ -723,7 +730,7 @@ export class Rig {
       if (value) Bun.env[key] = value;
       else delete Bun.env[key];
     }
-    if (this.gone.length > 0) Bun.env.FAKE_HERDR_AGENTS_GONE = this.gone.join(",");
+    if (this.gone.length > 0) Bun.env.FAKE_HERDR_AGENTS_GONE = Arr.join(this.gone, ",");
     return readEnv(env);
   }
 
@@ -735,14 +742,14 @@ export class Rig {
       if (!exists) return [];
       const text = yield* fs.readFileString(logPath);
       return yield* Effect.forEach(
-        text.split("\n").filter((line) => line.trim() !== ""),
-        (line) => Schema.decodeUnknownEffect(CallString)(line),
+        Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== ""),
+        (line) => Schema.decodeEffect(CallString)(line),
       );
     });
   }
 
   cmds(): Effect.Effect<string[], RigError, FileSystem.FileSystem> {
-    return this.calls().pipe(Effect.map((calls) => calls.map((call) => call.cmd)));
+    return this.calls().pipe(Effect.map((calls) => Arr.map(calls, (call) => call.cmd)));
   }
 
   close(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {

@@ -1,6 +1,9 @@
 // A host served in this process, through a FileSystem whose /proc is the test's to hold:
 // what it answers before its start-up sweep of the checks an earlier host left.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Config, ConfigProvider, Deferred, Effect, FileSystem, Option, Schedule } from "effect";
 import {
@@ -104,12 +107,12 @@ test.skipIf(process.platform !== "linux")(
                   fs.readFileString(`${notes}/children`).pipe(
                     Effect.orElseSucceed(() => ""),
                     Effect.flatMap((text) =>
-                      Effect.forEach(text.split("\n").filter(Boolean), (pid) =>
+                      Effect.forEach(Arr.filter(Str.split(text, "\n"), Boolean), (pid) =>
                         processOf(Number(pid)),
                       ),
                     ),
                   ),
-                (found) => found.every((one) => one === null),
+                (found) => Arr.every(found, (one) => one === null),
               ),
             ),
             Effect.ignore,
@@ -156,7 +159,12 @@ test.skipIf(process.platform !== "linux")(
                 .readFileString(`${state}/runs/run-four/log.txt`)
                 .pipe(Effect.orElseSucceed(() => "")),
             (log) =>
-              log.includes("check held of run-four, left running by host 4242 (started 2): ended"),
+              pipe_(
+                log,
+                Str.includes(
+                  "check held of run-four, left running by host 4242 (started 2): ended",
+                ),
+              ),
           ),
         ).toContain("run-four");
       }),
@@ -176,7 +184,7 @@ test.skipIf(process.platform !== "linux")(
 
         yield* serving;
         expect(yield* answered(state)).toBe(true);
-        expect((yield* fs.readFileString(`${state}/installation`)).trim()).not.toBe("");
+        expect(Str.trim(yield* fs.readFileString(`${state}/installation`))).not.toBe("");
         // A sweep starts as the host answers, and lists /proc within a few reads.
         expect(
           Option.isNone(yield* Deferred.await(listed).pipe(Effect.timeoutOption("1 second"))),

@@ -2,6 +2,10 @@
 // behaviours after the popup became components — the filter's ordering, cancelling at any
 // question, and a menu answered by mouse as well as by key.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { createSignal } from "solid-js";
@@ -38,10 +42,12 @@ const mount = Effect.fn("flow.mount")(function* (ask: Pending["ask"], width = 80
         flush,
       ),
     lineOf(text: string) {
-      const y = t
-        .captureCharFrame()
-        .split("\n")
-        .findIndex((l) => l.includes(text));
+      const y = Option.getOrElse(
+        Arr.findFirstIndex(Str.split(t.captureCharFrame(), "\n"), (l) =>
+          pipe(l, Str.includes(text)),
+        ),
+        () => -1,
+      );
       if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
       return y;
     },
@@ -69,7 +75,7 @@ test("a name prefix beats a substring, which beats characters in order", () => {
     { id: "plan", title: "plan — interview me", subtitle: "[baseline]" },
     { id: "review", title: "review — an MR", subtitle: "[user]" },
   ];
-  const ranked = (query: string) => filterItems(items, query, itemHay).map((i) => i.id);
+  const ranked = (query: string) => Arr.map(filterItems(items, query, itemHay), (i) => i.id);
 
   expect(ranked("plan")).toEqual(["plan", "implement"]);
   expect(ranked("review")).toEqual(["review", "implement"]);
@@ -95,7 +101,7 @@ test("the menu marks the row the cursor is on and shows what has been typed", ()
       });
 
       // The marker is on the cursor's row and on no other.
-      let lines = flow.frame().split("\n");
+      let lines = Str.split(flow.frame(), "\n");
       expect(lines[flow.lineOf("plan")]).toContain("❯");
       expect(lines[flow.lineOf("review")]).not.toContain("❯");
 
@@ -103,7 +109,7 @@ test("the menu marks the row the cursor is on and shows what has been typed", ()
       yield* Effect.promise(() => flow.mockInput.typeText("re"));
       yield* flow.flush;
 
-      lines = flow.frame().split("\n");
+      lines = Str.split(flow.frame(), "\n");
       expect(lines[0]).toContain("Workflows");
       expect(lines[1]).toContain("> re");
       // Only "review" matches, so that is the one row and the cursor is on it.
@@ -159,7 +165,7 @@ test("the cursor moves, and follows the list when the filter shortens it", () =>
       // past the end, or Enter would choose nothing.
       for (let n = 0; n < 3; n++) flow.mockInput.pressArrow("down");
       yield* flow.flush;
-      expect(flow.frame().split("\n")[flow.lineOf("review —")]).toContain("❯");
+      expect(Str.split(flow.frame(), "\n")[flow.lineOf("review —")]).toContain("❯");
 
       yield* Effect.promise(() => flow.mockInput.typeText("grill"));
       yield* flow.flush;

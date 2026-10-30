@@ -1,11 +1,13 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { frontDoor, socketOf } from "../src/host";
 import { readLaunches } from "../src/launches";
 import { everyRegistered } from "../src/registry";
 import { until } from "./support/host";
 import { collie, proves } from "./support/world";
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 test(
   "a Step's marker, verification and failing output stay with that Step",
@@ -23,17 +25,27 @@ test(
             { FAKE_HERDR_OUTPUTS: outputs },
           );
           expect(started.envelope).toMatchObject({ ok: true });
-          const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
-            started.envelope.data,
-          );
-          const launch = (yield* until(
-            () => readLaunches(world.state, runId),
-            (rows) => rows.some((one) => one.operation === "second"),
-          )).find((one) => one.operation === "second")!;
-          const entry = (yield* until(
-            () => everyRegistered(world.state),
-            (rows) => rows.some((one) => one.agent === launch.agent),
-          )).find((one) => one.agent === launch.agent)!;
+          const { runId } = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ runId: Schema.String }),
+          )(started.envelope.data).pipe(Effect.orDie);
+          const launch = Option.getOrUndefined(
+            Arr.findFirst(
+              yield* until(
+                () => readLaunches(world.state, runId),
+                (rows) => Arr.some(rows, (one) => one.operation === "second"),
+              ),
+              (one) => one.operation === "second",
+            ),
+          )!;
+          const entry = Option.getOrUndefined(
+            Arr.findFirst(
+              yield* until(
+                () => everyRegistered(world.state),
+                (rows) => Arr.some(rows, (one) => one.agent === launch.agent),
+              ),
+              (one) => one.agent === launch.agent,
+            ),
+          )!;
           const script =
             'for (let i = 0; i < 25; i++) console.log("failure line", i); console.error("last failure detail"); process.exit(1)';
           const verified = yield* collie(
@@ -52,19 +64,44 @@ test(
           const detail = (yield* until(
             read,
             (one) =>
-              one?.flow?.lanes[0]?.nodes.find((node) => node.id === "second")?.state === "failed",
+              Option.getOrUndefined(
+                Option.flatMap(Option.fromNullishOr(one), (present) =>
+                  Option.flatMap(Option.fromNullishOr(present.flow), (present_) =>
+                    Option.flatMap(Option.fromNullishOr(present_.lanes[0]), (present__) =>
+                      Option.map(
+                        Option.fromNullishOr(
+                          Option.getOrUndefined(
+                            Arr.findFirst(present__.nodes, (node) => node.id === "second"),
+                          ),
+                        ),
+                        (present___) => present___.state,
+                      ),
+                    ),
+                  ),
+                ),
+              ) === "failed",
           ))!;
           expect(detail.verifications).toMatchObject([
             { name: "second-proof", step: "second", place: null },
           ]);
-          const log = (yield* fs.readFileString(`${world.state}/runs/${runId}/log.txt`))
-            .trimEnd()
-            .split("\n");
-          const second = detail.flow!.lanes[0]!.nodes.find((node) => node.id === "second")!;
+          const log = Str.split(
+            Str.trimEnd(yield* fs.readFileString(`${world.state}/runs/${runId}/log.txt`)),
+            "\n",
+          );
+          const second = Option.getOrUndefined(
+            Arr.findFirst(detail.flow!.lanes[0]!.nodes, (node) => node.id === "second"),
+          )!;
           expect(second.log).toBeGreaterThan(0);
           expect(log[second.log! - 1]).toBe("── Second ──");
-          expect(log.filter((line) => line === "── Second ──")).toHaveLength(1);
-          expect(second.why?.split("\n").length).toBeLessThanOrEqual(20);
+          expect(Arr.filter(log, (line) => line === "── Second ──")).toHaveLength(1);
+          expect(
+            Option.getOrUndefined(
+              Option.map(
+                Option.fromNullishOr(second.why),
+                (present____) => Str.split(present____, "\n").length,
+              ),
+            ),
+          ).toBeLessThanOrEqual(20);
           expect(second.why).toStartWith(`${process.execPath} -e `);
           expect(second.why).toEndWith("last failure detail");
           expect(second.why).not.toContain("failure line 0\n");

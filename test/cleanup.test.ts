@@ -1,6 +1,9 @@
 // `collie cleanup` lists what the host's sweep would remove and keep, and `--apply`
 // sweeps now; the host also sweeps on its own (ADR-0045).
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   Clock,
@@ -12,6 +15,8 @@ import {
   FileSystem,
   Option,
   Schema,
+  flow,
+  Result,
 } from "effect";
 import { readAudit } from "../src/audit";
 import { loadEntry } from "../src/engine";
@@ -36,11 +41,15 @@ import { collie, proves, type World } from "./support/world";
 
 const DAY_MS = 24 * 60 * 60_000;
 
-const Listed = Schema.decodeUnknownSync(CleanupReport);
-const parsed = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const asRecord = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+const Listed = flow(Schema.decodeUnknownResult(CleanupReport), Result.getOrThrow);
+const parsed = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const asRecord = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))),
+  Result.getOrThrow,
 );
 
 /** A staged generation last used `days` ago, holding one file of `bytes`. */
@@ -49,7 +58,7 @@ const generation = (world: World, name: string, days: number, bytes = 8192) =>
     const fs = yield* FileSystem.FileSystem;
     const dir = `${world.home}/.cache/collie/entries/generations/${name}`;
     yield* fs.makeDirectory(dir, { recursive: true });
-    yield* fs.writeFileString(`${dir}/entry.ts`, "x".repeat(bytes));
+    yield* fs.writeFileString(`${dir}/entry.ts`, Str.repeat(bytes)("x"));
     const at = DateTime.toDateUtc(
       DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - days * DAY_MS),
     );
@@ -89,15 +98,15 @@ const installationIn = (world: World) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     fs.readFileString(`${world.state}/installation`),
   ).pipe(
-    Effect.map((text) => text.trim()),
+    Effect.map((text) => Str.trim(text)),
     Effect.orDie,
   );
 
 const checkItems = (listed: { readonly envelope: { readonly data?: unknown } }) => {
   const report = Listed(listed.envelope.data);
   return {
-    remove: report.remove.filter((item) => item.kind === "check"),
-    keep: report.keep.filter((item) => item.kind === "check"),
+    remove: Arr.filter(report.remove, (item) => item.kind === "check"),
+    keep: Arr.filter(report.keep, (item) => item.kind === "check"),
   };
 };
 
@@ -122,8 +131,8 @@ test(
           const listed = yield* collie(world, ["cleanup"]);
           expect(listed.envelope).toMatchObject({ ok: true });
           const report = Listed(listed.envelope.data);
-          const removable = report.remove.filter((item) => item.kind === "generation");
-          expect(removable.map((item) => item.target)).toEqual([stale]);
+          const removable = Arr.filter(report.remove, (item) => item.kind === "generation");
+          expect(Arr.map(removable, (item) => item.target)).toEqual([stale]);
           expect(removable[0]?.bytes).toBeGreaterThanOrEqual(8192);
           expect(removable[0]?.reason).toBe("unused for 8 days");
           expect(report.keep).toContainEqual({
@@ -131,7 +140,7 @@ test(
             target: used,
             reason: "used 1 day(s) ago",
           });
-          expect(report.bytes).toBe(report.remove.reduce((sum, item) => sum + item.bytes, 0));
+          expect(report.bytes).toBe(Arr.reduce(report.remove, 0, (sum, item) => sum + item.bytes));
           // A listing removes nothing.
           expect(yield* (yield* FileSystem.FileSystem).exists(stale)).toBe(true);
         }),
@@ -154,12 +163,12 @@ test(
           const swept = yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
           expect(swept.envelope).toMatchObject({ ok: true });
           const report = Listed(swept.envelope.data);
-          expect(report.remove.map((item) => item.target)).toEqual([stale]);
+          expect(Arr.map(report.remove, (item) => item.target)).toEqual([stale]);
           expect(report.bytes).toBeGreaterThanOrEqual(8192);
           expect(yield* fs.exists(stale)).toBe(false);
           expect(yield* fs.exists(used)).toBe(true);
 
-          const lines = (yield* journalOf(world)).trim().split("\n");
+          const lines = Str.split(Str.trim(yield* journalOf(world)), "\n");
           expect(lines).toHaveLength(1);
           expect(parsed(lines[0] ?? "{}")).toMatchObject({
             by: { origin: "cli", request: "c-1" },
@@ -170,7 +179,9 @@ test(
 
           // The same request again is the same sweep, not another.
           const again = yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
-          expect(Listed(again.envelope.data).remove.map((item) => item.target)).toEqual([stale]);
+          expect(Arr.map(Listed(again.envelope.data).remove, (item) => item.target)).toEqual([
+            stale,
+          ]);
         }),
       [],
     ),
@@ -222,7 +233,7 @@ test("a sweep asked again under its request while it runs waits for it and answe
       expect(sweeps).toBe(1);
       expect(one.remove).toHaveLength(1);
       expect(two).toEqual(one);
-      expect((yield* readAudit(trail)).filter((line) => line.request === "d-1")).toHaveLength(1);
+      expect(Arr.filter(yield* readAudit(trail), (line) => line.request === "d-1")).toHaveLength(1);
 
       yield* asked("d-2");
       expect(sweeps).toBe(2);
@@ -302,7 +313,7 @@ test("the host sweeps on its own every ten minutes, and journals it as its own",
         (text) => text !== "",
       );
       expect(yield* fs.exists(stale)).toBe(false);
-      expect(parsed(journal.trim())).toMatchObject({
+      expect(parsed(Str.trim(journal))).toMatchObject({
         by: "host",
         kind: "generation",
         target: stale,
@@ -373,7 +384,7 @@ test(
           expect(answered.results).toMatchObject([{ index: 0, kind: "cleanup", state: "applied" }]);
           expect(answered.results[0]?.note).toStartWith("removed 1 item(s)");
           expect(yield* fs.exists(stale)).toBe(false);
-          expect(parsed((yield* journalOf(world)).trim())).toMatchObject({
+          expect(parsed(Str.trim(yield* journalOf(world)))).toMatchObject({
             by: { origin: "chat" },
             target: stale,
           });
@@ -403,12 +414,14 @@ test(
           );
 
           const doctor = yield* collie(world, ["doctor"], { PATH: `${bin}:/usr/bin:/bin` });
-          const checks = Schema.decodeUnknownSync(
+          const checks = yield* Schema.decodeUnknownEffect(
             Schema.Struct({
               checks: Schema.Array(Schema.Struct({ name: Schema.String, detail: Schema.String })),
             }),
-          )(doctor.envelope.data ?? doctor.envelope.error?.details);
-          const disk = checks.checks.find((check) => check.name === "disk");
+          )(doctor.envelope.data ?? doctor.envelope.error?.details).pipe(Effect.orDie);
+          const disk = Option.getOrUndefined(
+            Arr.findFirst(checks.checks, (check) => check.name === "disk"),
+          );
           expect(disk?.detail).toMatch(
             /^\/ has 8\.0 GiB free \(8%\); `collie cleanup` would free \d/,
           );
@@ -429,7 +442,7 @@ test.skipIf(process.platform !== "linux")(
           const left = yield* leftCheck(yield* installationIn(world));
           const checksOf = Effect.gen(function* () {
             const doctor = yield* collie(world, ["doctor"]);
-            const report = Schema.decodeUnknownSync(
+            const report = yield* Schema.decodeUnknownEffect(
               Schema.Struct({
                 checks: Schema.Array(
                   Schema.Struct({
@@ -440,8 +453,10 @@ test.skipIf(process.platform !== "linux")(
                   }),
                 ),
               }),
-            )(doctor.envelope.data ?? doctor.envelope.error?.details);
-            return report.checks.find((check) => check.name === "checks");
+            )(doctor.envelope.data ?? doctor.envelope.error?.details).pipe(Effect.orDie);
+            return Option.getOrUndefined(
+              Arr.findFirst(report.checks, (check) => check.name === "checks"),
+            );
           });
 
           expect(yield* checksOf).toEqual({
@@ -497,12 +512,12 @@ test(
           const herdr = { FAKE_HERDR_AGENTS_IN: late.socket_path };
           yield* fs.writeFileString(`${log}.sessions.json`, asJson([desk]));
           const before = Listed((yield* collie(world, ["cleanup"], herdr)).envelope.data);
-          expect(before.remove.map((item) => item.target)).toContain(controls);
+          expect(Arr.map(before.remove, (item) => item.target)).toContain(controls);
 
           yield* fs.writeFileString(`${log}.sessions.json`, asJson([desk, late]));
           const listed = yield* collie(world, ["cleanup"], herdr);
           expect(listed.envelope.ok).toBe(true);
-          expect(Listed(listed.envelope.data).remove.map((item) => item.target)).not.toContain(
+          expect(Arr.map(Listed(listed.envelope.data).remove, (item) => item.target)).not.toContain(
             controls,
           );
         }),
@@ -538,10 +553,10 @@ test.skipIf(process.platform !== "linux")(
           ]);
 
           const swept = yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
-          expect(checkItems(swept).remove.map((item) => item.target)).toEqual([left.id]);
+          expect(Arr.map(checkItems(swept).remove, (item) => item.target)).toEqual([left.id]);
           expect(yield* stillRunning(left)).toBe(false);
           expect(yield* Effect.forEach([theirs, unmarked], stillRunning)).toEqual([true, true]);
-          expect(parsed((yield* journalOf(world)).trim())).toMatchObject({
+          expect(parsed(Str.trim(yield* journalOf(world)))).toMatchObject({
             by: { origin: "cli", request: "c-1" },
             kind: "check",
             target: left.id,
@@ -570,7 +585,7 @@ test.skipIf(process.platform !== "linux")(
           () => fs.readFileString(`${dir}/cleanup.jsonl`).pipe(Effect.orElseSucceed(() => "")),
           (text) => text !== "",
         );
-        expect(parsed(journal.trim())).toMatchObject({
+        expect(parsed(Str.trim(journal))).toMatchObject({
           by: "host",
           kind: "check",
           target: left.id,
@@ -596,14 +611,14 @@ test.skipIf(process.platform !== "linux")(
           yield* fs.makeDirectory(`${world.project}/.collie`);
           yield* fs.writeFileString(
             `${world.project}/.collie/verify.json`,
-            Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
+            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
               {
                 name: "held",
                 executable: `${root}test/fixtures/checks/held.sh`,
                 argv: [notes],
                 cwd: ".",
               },
-            ]),
+            ]).pipe(Effect.orDie),
           );
           for (const args of [
             ["-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A"],
@@ -620,21 +635,23 @@ test.skipIf(process.platform !== "linux")(
             `cwd=${world.project}`,
           ]);
           const pid = Number(
-            (yield* until(
-              () => fs.readFileString(`${notes}/starts`).pipe(Effect.orElseSucceed(() => "")),
-              (text) => text.trim() !== "",
-            )).trim(),
+            Str.trim(
+              yield* until(
+                () => fs.readFileString(`${notes}/starts`).pipe(Effect.orElseSucceed(() => "")),
+                (text) => Str.trim(text) !== "",
+              ),
+            ),
           );
           const check = { pid, started: (yield* startedOf(pid)) ?? "" };
           const [record] = yield* until(
             () =>
               fs.readDirectory(runningChecksDir(world.state)).pipe(Effect.orElseSucceed(() => [])),
             // Not its `.new`, which the host writes first and renames.
-            (files) => files.length === 1 && files[0]!.endsWith(".json"),
+            (files) => files.length === 1 && pipe_(files[0]!, Str.endsWith(".json")),
           );
           const kept = {
             kind: "check",
-            target: (record ?? "").replace(/\.json$/, ""),
+            target: pipe_(record ?? "", Str.replace(/\.json$/, "")),
             reason: "this host is collecting it",
           };
 

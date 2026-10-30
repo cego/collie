@@ -2,9 +2,13 @@
 // token kept in an owner-only file and handed to every Machine on stdin, and the logins
 // finished in this computer's browser through a forwarded callback port.
 
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer, type PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Queue, type Scope } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -28,8 +32,8 @@ import { type Credential, type MachineGiven, type OnboardRun } from "../desktop/
 import { renewalDue } from "../src/gitlab-token";
 import { HELLE_URL } from "../src/helle-url";
 
-const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>) =>
-  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
+const run = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
+  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(platformLayer)));
 
 const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "collie-credentials-" }),
@@ -244,7 +248,7 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
         () => Effect.void,
       );
       expect(last.ready).toBe(true);
-      expect((yield* fs.readFileString(`${dir}/args`)).trim()).toBe(
+      expect(Str.trim(yield* fs.readFileString(`${dir}/args`))).toBe(
         "--json onboard --to 0.40.0 --secrets-stdin",
       );
       expect(yield* fs.readFileString(`${dir}/stdin`)).toBe("GITLAB_TOKEN=glpat-good\n");
@@ -315,7 +319,19 @@ test("the Claude login finishes by approving in this computer's browser through 
       expect(yield* fs.readFileString(`${dir}/login`)).toBe("browser c-1");
       expect(forwarded).toHaveLength(1);
       // The paste-code URL is offered while the login waits, as the fallback.
-      expect(runs.some(({ steps }) => steps[0]?.url?.includes("platform.claude.com"))).toBe(true);
+      expect(
+        Arr.some(runs, ({ steps }) =>
+          Boolean(
+            Option.getOrUndefined(
+              Option.flatMap(Option.fromNullishOr(steps[0]), (present) =>
+                Option.map(Option.fromNullishOr(present.url), (present_) =>
+                  pipe_(present_, Str.includes("platform.claude.com")),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ).toBe(true);
     }),
   ));
 
@@ -366,7 +382,7 @@ echo "$* $(cat)" >> '${dir}/glab.log'
         { name: "vm", failed: null },
         { name: "down", failed: "ssh: connection refused" },
       ]);
-      expect((yield* fs.readFileString(`${dir}/glab.log`)).trim()).toBe(
+      expect(Str.trim(yield* fs.readFileString(`${dir}/glab.log`))).toBe(
         "auth login --hostname gitlab.example --stdin glpat-new",
       );
     }),
@@ -517,12 +533,12 @@ test("an onboarding that ended ready counts as given what it was handed, and a r
       expect(gave).toEqual([]);
 
       yield* given.drop(vmRoute.machine.profile);
-      expect((yield* given.states([vmRoute.machine])).map((one) => one.given)).toEqual([
+      expect(Arr.map(yield* given.states([vmRoute.machine]), (one) => one.given)).toEqual([
         false,
         false,
       ]);
       const after = yield* givenIn(dir, keyring);
-      expect((yield* after.given.states([vmRoute.machine])).map((one) => one.given)).toEqual([
+      expect(Arr.map(yield* after.given.states([vmRoute.machine]), (one) => one.given)).toEqual([
         false,
         false,
       ]);
@@ -541,7 +557,7 @@ test("a credential the Machine's onboarding skipped is neither given on connect 
       ]);
       expect(yield* given.giveLacking(vmRoute)).toEqual([]);
       expect(gave).toEqual([]);
-      expect((yield* given.states([vmRoute.machine])).map((one) => one.credential)).toEqual([
+      expect(Arr.map(yield* given.states([vmRoute.machine]), (one) => one.credential)).toEqual([
         "gitlab",
       ]);
 

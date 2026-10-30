@@ -1,4 +1,43 @@
-import { Config, Effect, FileSystem, Path } from "effect";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { Cause, Config, ConfigProvider, Effect, FileSystem, Path, Semaphore } from "effect";
+
+const buildingFixture = Semaphore.makeUnsafe(1);
+
+/** Repeated protocol clients must start within the same budget as the native executables. */
+export const fixtureBinary = (kind: "ssh" | "codex") =>
+  Effect.suspend(() =>
+    buildingFixture.withPermits(1)(
+      Effect.gen(function* () {
+        const provided = yield* Config.String(
+          kind === "ssh" ? "COLLIE_TEST_FAKE_SSH" : "COLLIE_TEST_CODEX_SERVER",
+        ).pipe(Config.withDefault(""));
+        if (provided !== "") return provided;
+        const home = yield* Config.String("HOME");
+        const fs = yield* FileSystem.FileSystem;
+        const file = `${home}/collie-fixtures/${kind}`;
+        if (yield* fs.exists(file)) return file;
+        yield* fs.makeDirectory(`${home}/collie-fixtures`, { recursive: true });
+        const built = yield* Effect.promise(() =>
+          Bun.build({
+            entrypoints: [
+              `${import.meta.dir}/${kind === "ssh" ? "fake-ssh-main" : "codex-server"}.ts`,
+            ],
+            target: "bun",
+            bytecode: true,
+            format: "esm",
+            compile: { outfile: file },
+          }),
+        );
+        if (!built.success)
+          return yield* new Cause.UnknownError(
+            built.logs,
+            `Could not build the ${kind} protocol fixture`,
+          );
+        return file;
+      }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv())),
+    ),
+  );
 
 /**
  * The `case` arms a fake git needs before a mutating run can be given a checkout:
@@ -15,9 +54,11 @@ export const loggedGit = (dir: string, log: string) =>
     const real = Bun.which("git");
     const bin = yield* Effect.acquireRelease(FakeBin.make(dir), (bin) => bin.restore());
     yield* bin.add("git", `echo "$*" >> "${log}"\nexec "${real}" "$@"`);
-    return Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)).pipe(
-      Effect.map((text) => text.split("\n").filter((line) => line !== "")),
-      Effect.orElseSucceed((): string[] => []),
+    return yield* Effect.succeed(
+      Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)).pipe(
+        Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
+        Effect.orElseSucceed((): string[] => []),
+      ),
     );
   });
 

@@ -3,6 +3,8 @@
 // create a session. Both said the same thing twice until this seam existed — and the
 // half that had no test was the half that read its log before the shell had made it.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
@@ -68,7 +70,7 @@ afterEach(() =>
   runEffect(
     Effect.gen(function* () {
       const recorded = (yield* fs.exists(pids())) ? yield* fs.readFileString(pids()) : "";
-      for (const pid of recorded.split("\n").filter(Boolean)) {
+      for (const pid of Arr.filter(Str.split(recorded, "\n"), Boolean)) {
         yield* Effect.ignore(Effect.sync(() => process.kill(Number(pid), "SIGKILL")));
       }
       yield* rig.close();

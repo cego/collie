@@ -1,7 +1,7 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
-import * as BunServices from "@effect/platform-bun/BunServices";
 import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "effect";
 import type { PluginEnv } from "./env";
+import type { PlatformServices } from "./platform";
 import type { Herdr } from "./herdr";
 
 /**
@@ -25,7 +25,7 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 type MainError = Error | PlatformError.PlatformError;
-type MainServices = BunServices.BunServices | FileSystem.FileSystem | Path.Path;
+type MainServices = PlatformServices | FileSystem.FileSystem | Path.Path;
 
 const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, MainServices> =
   Effect.fn("main.herdr")(function* (command: string, mode?: string) {
@@ -96,9 +96,9 @@ const compactionProgram = Effect.gen(function* () {
   const [stdin, { recordClaudeEvent }] = yield* Effect.promise(() =>
     Promise.all([Bun.stdin.text(), import("./compactors")]),
   );
-  const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.catch(() => Effect.succeed("")));
+  const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.orElseSucceed(() => ""));
   if (line !== "") yield* Console.log(line);
-}).pipe(Effect.provide(BunServices.layer));
+});
 
 const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
   Effect.catch((cause) =>
@@ -108,7 +108,6 @@ const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
       process.exitCode = 1;
     }),
   ),
-  Effect.provide(BunServices.layer),
 );
 
 const started = Config.String("COLLIE_TEST_STARTS").pipe(
@@ -121,24 +120,21 @@ const started = Config.String("COLLIE_TEST_STARTS").pipe(
         ),
   ),
   Effect.ignore,
-  Effect.provide(BunServices.layer),
 );
 
 // `program`, not `app`: the handler around it is what turns a parse failure into one
 // JSON envelope and exit 2, and running `app` bare bypassed it entirely.
 const cliProgram = Effect.promise(() => import("./collie")).pipe(
   Effect.flatMap(({ program }) => program),
-  Effect.provide(BunServices.layer),
 );
 
+const chosen =
+  args[0] === "herdr" ? (args[1] === "compaction" ? compactionProgram : herdrProgram) : cliProgram;
+
 BunRuntime.runMain(
-  started.pipe(
-    Effect.andThen(
-      args[0] === "herdr"
-        ? args[1] === "compaction"
-          ? compactionProgram
-          : herdrProgram
-        : cliProgram,
+  Effect.promise(() => import("./platform")).pipe(
+    Effect.flatMap(({ platformLayer }) =>
+      started.pipe(Effect.andThen(chosen), Effect.provide(platformLayer)),
     ),
   ),
   { disableErrorReporting: true },

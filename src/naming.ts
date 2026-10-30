@@ -1,6 +1,11 @@
 // herdr agent names must match /^[a-z][a-z0-9_-]{0,31}$/, so they cannot be the
 // readable labels. Labels go on tabs and panes; these go on agents.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Option from "effect/Option";
 import { DEFAULT_MODEL } from "./harness";
 import { mrWords, parseMrTarget } from "./board-model";
 import { diffTargetOf, type Settled } from "./strategies";
@@ -9,11 +14,12 @@ const MAX = 32;
 const DIGEST = 6;
 
 function sanitize(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  return pipe(
+    Str.toLowerCase(text),
+    Str.replace(/[^a-z0-9_-]+/g, "-"),
+    Str.replace(/-+/g, "-"),
+    Str.replace(/^-+|-+$/g, ""),
+  );
 }
 
 /**
@@ -33,9 +39,10 @@ export function agentName(
 ): string {
   const whole = layout(slug, stepId, variantKey, `r${seq}`);
   if (!whole.cut) return whole.name;
-  const sum = Bun.hash(JSON.stringify([slug, stepId, variantKey]))
-    .toString(36)
-    .slice(-DIGEST);
+  const sum = pipe(
+    Bun.hash(JSON.stringify([slug, stepId, variantKey])).toString(36),
+    Str.slice(-DIGEST),
+  );
   return layout(slug, stepId, variantKey, `${sum}-r${seq}`).name;
 }
 
@@ -46,8 +53,17 @@ export const launchedAs = (
 ) => one.agent === agentName(one.runId, name, null, one.sequence ?? 1);
 
 function layout(slug: string, stepId: string, variantKey: string | null, suffix: string) {
-  const trim = (text: string, room: number) => text.slice(0, Math.max(0, room)).replace(/-+$/g, "");
-  const step = sanitize([stepId, variantKey].filter((p) => p).join("-"));
+  const trim = (text: string, room: number) =>
+    pipe(text, Str.slice(0, Math.max(0, room)), Str.replace(/-+$/g, ""));
+  const step = sanitize(
+    Arr.join(
+      Arr.map(
+        Arr.filter([stepId, variantKey], (p) => Boolean(p)),
+        (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
+      ),
+      "-",
+    ),
+  );
   const core = trim(step, MAX - suffix.length - 1);
   const tail = core ? `${core}-${suffix}` : suffix;
   const room = MAX - tail.length - 1;
@@ -55,14 +71,20 @@ function layout(slug: string, stepId: string, variantKey: string | null, suffix:
   const head = room > 0 ? trim(clean, room) : "";
   const name = head ? `${head}-${tail}` : tail;
   return {
-    name: (/^[a-z]/.test(name) ? name : `w${name}`).slice(0, MAX),
+    name: pipe(/^[a-z]/.test(name) ? name : `w${name}`, Str.slice(0, MAX)),
     cut: core !== step || head !== clean,
   };
 }
 
 /** The readable name for a tab or pane. */
 export function stepLabel(slug: string, stepId: string, variantKey: string | null): string {
-  return [slug, stepId, variantKey].filter((p) => p).join("/");
+  return Arr.join(
+    Arr.map(
+      Arr.filter([slug, stepId, variantKey], (p) => Boolean(p)),
+      (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
+    ),
+    "/",
+  );
 }
 
 /**
@@ -74,15 +96,14 @@ export function stepLabel(slug: string, stepId: string, variantKey: string | nul
 export function unsafePathComponent(value: string): string | null {
   if (value === "") return "is empty";
   if (value === "." || value === "..") return `is "${value}"`;
-  if (value.includes("/") || value.includes("\\")) return "contains a path separator";
+  if (pipe(value, Str.includes("/")) || pipe(value, Str.includes("\\")))
+    return "contains a path separator";
   // Filesystem APIs reject NUL in paths, and a newline corrupts the frontmatter a
   // forked name is written into; catching both here keeps the error a field-naming
   // validation message instead of a raw fs throw or a mangled file after the Run starts.
   if (/\p{Cc}/u.test(value)) return "contains a control character";
   return null;
 }
-
-export { shellQuote } from "./script";
 
 /** ⚙ working, ⚠ your turn, ✓ finished, ✗ stopped. */
 /**
@@ -114,9 +135,11 @@ export const COLLIE_TAB = `${COLLIE_GLYPH} Collie`;
  * a branch is not a branch any more once it has been prettied up.
  */
 export function displayName(name: string): string {
-  const [head = "", ...rest] = name.split(" · ");
-  const word = /^[a-z][a-z-]*$/.test(head) ? `${head[0]!.toUpperCase()}${head.slice(1)}` : head;
-  return [word, ...rest].join(" · ");
+  const [head, ...rest] = Str.split(name, " · ");
+  const word = /^[a-z][a-z-]*$/.test(head)
+    ? `${Str.toUpperCase(head[0]!)}${pipe(head, Str.slice(1))}`
+    : head;
+  return Arr.join([word, ...rest], " · ");
 }
 
 /** A sha, or `HEAD`, names nothing a human recognises on a tab. */
@@ -127,7 +150,7 @@ function opaque(ref: string): boolean {
 /** A Run's own name, without the workflow its slug already carries. */
 export function runName(workflow: string, slug: string): string {
   const prefix = `${workflow}-`;
-  return slug.startsWith(prefix) ? slug.slice(prefix.length) : slug;
+  return pipe(slug, Str.startsWith(prefix)) ? pipe(slug, Str.slice(prefix.length)) : slug;
 }
 
 /**
@@ -140,8 +163,8 @@ export function targetLabel(workflow: string, slug: string, target: string): str
   // An MR target carries its project; only the iid belongs on a label.
   const mr = parseMrTarget(target);
   if (mr) return `${mrWords(mr).sign}${mr.iid}`;
-  if (target.startsWith("branch:")) {
-    const [base = "", head = ""] = target.slice(7).split("...");
+  if (pipe(target, Str.startsWith("branch:"))) {
+    const [base, head = ""] = Str.split(pipe(target, Str.slice(7)), "...");
     if (!opaque(head)) return head;
     if (!opaque(base)) return base;
     return "diff";
@@ -160,10 +183,10 @@ export function tabLabel(glyph: string, name: string): string {
 
 /** The name part of a tab label, i.e. what a collision is judged on. */
 export function tabNameOf(label: string): string {
-  const glyphs = [...Object.values(GLYPH), COLLIE_GLYPH].join("");
+  const glyphs = Arr.join([...Rec.values(GLYPH), COLLIE_GLYPH], "");
   // The u flag, or the dog (U+1F415) enters the class as its two surrogate halves
   // and stripping matches one of them, leaving a lone surrogate in the name.
-  return label.replace(new RegExp(`^[${glyphs}]\\s*`, "u"), "").trim();
+  return Str.trim(pipe(label, Str.replace(new RegExp(`^[${glyphs}]\\s*`, "u"), "")));
 }
 
 /** `implement` vs `implement · add-picker`, once something else owns the plain name. */
@@ -181,13 +204,19 @@ export function agentTabLabel(ask: {
   operation: string;
   agent: string | null;
 }): string {
-  const step = ask.agent === null ? ask.operation.slice(ask.operation.lastIndexOf(".") + 1) : "";
+  const step =
+    ask.agent === null
+      ? pipe(
+          ask.operation,
+          Str.slice(Option.getOrElse(pipe(ask.operation, Str.lastIndexOf(".")), () => -1) + 1),
+        )
+      : "";
   return disambiguate(displayName(ask.role), step);
 }
 
 /** `openai-codex/gpt-5.6-sol` is a model id; `gpt-5.6-sol` is the model. */
 function shortModel(model: string): string {
-  return model.slice(model.lastIndexOf("/") + 1);
+  return pipe(model, Str.slice(Option.getOrElse(pipe(model, Str.lastIndexOf("/")), () => -1) + 1));
 }
 
 /**
@@ -207,7 +236,11 @@ export function paneLabel(
     return displayName(name);
   }
   // `use:` prefixes an embedded step's id; the prefix is bookkeeping, not a name.
-  return sharesTab ? displayName(stepId.slice(stepId.lastIndexOf(".") + 1)) : null;
+  return sharesTab
+    ? displayName(
+        pipe(stepId, Str.slice(Option.getOrElse(pipe(stepId, Str.lastIndexOf(".")), () => -1) + 1)),
+      )
+    : null;
 }
 
 /** Splitting N panes evenly: the i-th split leaves the left pane 1/N of the tab. */
@@ -223,15 +256,16 @@ export function runTitle(run: { readonly workflow: string; readonly settled: Set
 
 /** `Collie | Task workspaces`: a task workspace's own label, from its two halves. */
 export function taskWorkspaceLabel(name: { project: string; title: string }): string {
-  return [displayName(oneLine(name.project)), oneLine(name.title)]
-    .filter((part) => part !== "")
-    .join(" | ");
+  return Arr.join(
+    Arr.filter([displayName(oneLine(name.project)), oneLine(name.title)], (part) => part !== ""),
+    " | ",
+  );
 }
 
 /** `Task workspaces` from `Collie | Task workspaces`: what the work is, without its project. */
 export function taskTitleOf(label: string): string {
-  const at = label.indexOf(" | ");
-  return at < 0 ? label : label.slice(at + 3);
+  const at = Option.getOrElse(pipe(label, Str.indexOf(" | ")), () => -1);
+  return at < 0 ? label : pipe(label, Str.slice(at + 3));
 }
 
 /**
@@ -240,8 +274,5 @@ export function taskTitleOf(label: string): string {
  * display data — a newline in one would break the sidebar row it is drawn in.
  */
 export function oneLine(text: string): string {
-  return text
-    .replace(/\p{Cc}/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return Str.trim(pipe(text, Str.replace(/\p{Cc}/gu, " "), Str.replace(/\s+/g, " ")));
 }

@@ -1,5 +1,7 @@
 // ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Clock, Duration, Effect, FileSystem } from "effect";
 import { mrRefOf } from "./board-model";
 import { checkProof } from "./check-proof";
@@ -73,7 +75,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
     log: string | null = null,
   ) =>
     ({
-      unproved: `${spec.name} is left to CI and unproved: job ${job} on ${head.slice(0, 12)} ${why}`,
+      unproved: `${spec.name} is left to CI and unproved: job ${job} on ${pipe_(head, Str.slice(0, 12))} ${why}`,
       state,
       url,
       log,
@@ -106,7 +108,9 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
       if (!read.ok) return unproved(`could not be read: ${read.reason}`);
       // The forge has not seen the push or the retry yet, or the merge request moved on without this checkout.
       const state =
-        read.head !== head || (read.id === retried && read.state === "failed")
+        read.head !== head ||
+        (retried !== null && read.state === "missing") ||
+        (read.id === retried && read.state === "failed")
           ? "pending"
           : read.state;
       const log = read.id === null ? null : forge.jobLog(ref, read.id);
@@ -132,10 +136,10 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
         if (now.head_sha !== head || now.fingerprint !== tree.fingerprint)
           return unproved(`passed, but ${cwd} has moved off it since`);
         const status = yield* shell("git", ["status", "--porcelain", "--untracked-files=all"], cwd);
-        if (status.code !== 0 || status.stdout.trim() !== "")
+        if (status.code !== 0 || Str.trim(status.stdout) !== "")
           return unproved(`passed, but ${cwd} has changes it never saw`);
         if (recorded !== undefined && retried === null) return { proved: recorded };
-        const at = yield* nowIso();
+        const at = yield* nowIso;
         const ran = { name: job, url: read.url };
         const proof: Verification = {
           id: `${asked.runId}-${spec.name}-${epochMs(at)}`,
@@ -191,7 +195,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
               round: null,
               revision: head,
               base: null,
-              started: yield* nowIso(),
+              started: yield* nowIso,
               job,
             }),
           )

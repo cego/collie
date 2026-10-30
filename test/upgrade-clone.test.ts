@@ -2,6 +2,8 @@
 // places the release inside it, and the clone is deleted only when nothing in it is the
 // human's. Real git, because that is git's answer.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { generateKeyPairSync } from "node:crypto";
@@ -35,8 +37,8 @@ const git = (cwd: string, ...args: string[]) =>
   }).pipe(
     Effect.flatMap((done) =>
       done.exitCode === 0
-        ? Effect.succeed(done.stdout.trim())
-        : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+        ? Effect.succeed(Str.trim(done.stdout))
+        : Effect.die(new Error(`git ${Arr.join(args, " ")}: ${done.stderr}`)),
     ),
   );
 
@@ -125,13 +127,13 @@ const files = Effect.gen(function* () {
 /** What git says of the clone, without the two entries a migration adds to its excludes. */
 const status = Effect.gen(function* () {
   const said = yield* git(clone, "status", "--porcelain", "--ignored");
-  return said
-    .split("\n")
-    .filter((line) => line !== "!! release/" && line !== "!! kept/")
-    .join("\n");
+  return Arr.join(
+    Arr.filter(Str.split(said, "\n"), (line) => line !== "!! release/" && line !== "!! kept/"),
+    "\n",
+  );
 });
 
-const keptFor = (prepare: Effect.Effect<unknown, unknown, never>, why: RegExp) =>
+const keptFor = <E>(prepare: Effect.Effect<unknown, E, never>, why: RegExp) =>
   Effect.gen(function* () {
     yield* prepare;
     const before = { files: yield* files, status: yield* status };

@@ -1,6 +1,9 @@
 // The Flock's settings, as Desktop keeps them: each key is decided by its latest edit,
 // made in Desktop or on any Machine, and every Machine is given what it lacks.
 
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import {
   parseSetting,
@@ -112,18 +115,24 @@ const SUBS: ReadonlyArray<readonly [string, (key: string) => boolean]> = [
   ],
   [
     "Advanced",
-    (key) => key.startsWith("models.") || ["agent_profile", "claude_subagents"].includes(key),
+    (key) =>
+      pipe(key, Str.startsWith("models.")) || ["agent_profile", "claude_subagents"].includes(key),
   ],
-  ["Release approvals", (key) => key.startsWith("release.")],
-  ["Toasts", (key) => key.startsWith("notifications.")],
+  ["Release approvals", (key) => pipe(key, Str.startsWith("release."))],
+  ["Toasts", (key) => pipe(key, Str.startsWith("notifications."))],
 ];
-const subOf = (key: string) => SUBS.find(([, has]) => has(key))?.[0] ?? "";
+const subOf = (key: string) =>
+  Option.getOrUndefined(Arr.findFirst(SUBS, ([, has]) => has(key)))?.[0] ?? "";
 /** Where a sub-group falls within its group: none first, then the canvas's order. */
-const subRank = (sub: string) => SUBS.findIndex(([title]) => title === sub);
+const subRank = (sub: string) =>
+  Option.getOrElse(
+    Arr.findFirstIndex(SUBS, ([title]) => title === sub),
+    () => -1,
+  );
 
 /** What setting Desktop's own `key` to `typed` changes; empty sets it back to its default. */
 export const desktopChange = (key: string, typed: string): DesktopSettingsChange => {
-  const setting = DESKTOP_SETTINGS.find((one) => one.key === key)!;
+  const setting = Option.getOrUndefined(Arr.findFirst(DESKTOP_SETTINGS, (one) => one.key === key))!;
   return setting.change(typed || setting.fallback);
 };
 
@@ -168,7 +177,12 @@ const consequenceOf = (key: string, value: string): string | null => {
     return "A quiet agent is never nudged; it waits as long as it takes.";
   const bare =
     key === "models.pi"
-      ? value.split(", ").find((model) => model !== "" && !model.includes("/"))
+      ? Option.getOrUndefined(
+          Arr.findFirst(
+            Str.split(value, ", "),
+            (model) => model !== "" && !pipe(model, Str.includes("/")),
+          ),
+        )
       : undefined;
   return bare === undefined
     ? null
@@ -234,7 +248,7 @@ export const settingSections = (
   timeZone?: string,
 ): ReadonlyArray<SettingSection> => {
   const rows = [
-    ...DESKTOP_SETTINGS.map((setting): SettingRow => {
+    ...Arr.map(DESKTOP_SETTINGS, (setting): SettingRow => {
       const value = setting.read(desktop);
       const set = value !== setting.fallback;
       return {
@@ -249,14 +263,15 @@ export const settingSections = (
         hint: null,
       };
     }),
-    ...SETTINGS.filter(({ key }) => key !== GIVEN_ONLY).map((setting) =>
-      flockRow(flock, setting, now, timeZone),
+    ...Arr.map(
+      Arr.filter(SETTINGS, ({ key }) => key !== GIVEN_ONLY),
+      (setting) => flockRow(flock, setting, now, timeZone),
     ),
   ];
-  return SETTING_GROUPS.flatMap((group) => {
-    const placed = rows
-      .filter((row) => row.group === group)
-      .sort((a, b) => subRank(a.sub) - subRank(b.sub));
+  return Arr.flatMap(SETTING_GROUPS, (group) => {
+    const placed = Arr.filter(rows, (row) => row.group === group).sort(
+      (a, b) => subRank(a.sub) - subRank(b.sub),
+    );
     return placed.length === 0 ? [] : [{ group, rows: placed }];
   });
 };
@@ -272,10 +287,12 @@ const missed = ({ state, settings }: Reached) =>
   state !== "live" || settings === null || settings.failed !== null;
 
 const listed = (names: ReadonlyArray<string>) =>
-  names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  names.length < 2
+    ? Arr.join(names, "")
+    : `${Arr.join(names.slice(0, -1), ", ")} and ${names.at(-1)}`;
 
 const reachedOf = (machines: ReadonlyArray<Reached>) => {
-  const behind = machines.filter(missed);
+  const behind = Arr.filter(machines, missed);
   return {
     behind,
     all: behind.length === 0,
@@ -294,7 +311,7 @@ export const flockReach = (
   if (!readable) return { refused: "Not set: the Flock's settings could not be read" };
   const { behind, all, of } = reachedOf(machines);
   if (all) return { said: `Given to all ${machines.length} Machines`, tone: "ok" };
-  const names = behind.map(({ name }) => name);
+  const names = Arr.map(behind, ({ name }) => name);
   return {
     said: `Given to ${of} · ${listed(names)} ${names.length === 1 ? "gets it when it connects" : "get it when they connect"}`,
     tone: "warn",
@@ -305,7 +322,8 @@ export const syncPill = (readable: boolean, machines: ReadonlyArray<Reached>): S
   if (!readable) return { said: "Showing the Flock's settings as last read", tone: "warn" };
   const { behind, all, of } = reachedOf(machines);
   if (all) return { said: `In sync with all ${machines.length} Machines`, tone: "ok" };
-  const lagging = behind.map(
+  const lagging = Arr.map(
+    behind,
     ({ name, state }) => `${name} ${state === "live" ? "behind" : "out of reach"}`,
   );
   return { said: `In sync with ${of} · ${listed(lagging)}`, tone: "warn" };

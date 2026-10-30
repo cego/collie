@@ -9,6 +9,11 @@
 // module is the author's own top level and their `make`, which is how a schema on either
 // end can be read at all; a Run is started somewhere else entirely.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import {
@@ -43,7 +48,7 @@ export interface Where {
 
 const NOT_DRAWN = { schema: null, limits: [] } as const;
 
-const HOST_OPTIONS = Object.entries(RESERVED_INPUTS).map(([name, meaning]) => ({
+const HOST_OPTIONS = Arr.map(Rec.toEntries(RESERVED_INPUTS), ([name, meaning]) => ({
   name,
   meaning,
 }));
@@ -102,15 +107,15 @@ export const readDefinitions = Effect.fn("Authoring.readDefinitions")(function* 
 }) {
   const fs = yield* FileSystem.FileSystem;
   const { entries, problems } = yield* discover(
-    searchPath({ ...where, project: "" }).filter((root) => root.layer !== "project"),
+    Arr.filter(searchPath({ ...where, project: "" }), (root) => root.layer !== "project"),
   );
   const workflows = yield* Effect.forEach(entries, (found) =>
     Effect.gen(function* () {
       const dir = directoryOf(found.path);
       const own = (name: string) =>
         name === `${stem(found.path)}${ENTRY_SUFFIX}` ||
-        (name.startsWith(`${stem(found.path)}.`) && name.endsWith(".md"));
-      const names = (yield* fs.readDirectory(dir)).filter(own).sort();
+        (pipe_(name, Str.startsWith(`${stem(found.path)}.`)) && pipe_(name, Str.endsWith(".md")));
+      const names = Arr.filter(yield* fs.readDirectory(dir), own).sort();
       const files = yield* Effect.forEach(names, (name) =>
         fs
           .readFileString(`${dir}/${name}`)
@@ -127,7 +132,10 @@ export const readDefinitions = Effect.fn("Authoring.readDefinitions")(function* 
     workflows,
     connectionUses: HOST_CONNECTION_USES,
     problems,
-    personas: [...personas.values()].sort((a, b) => a.name.localeCompare(b.name)).map(personaData),
+    personas: Arr.map(
+      [...personas.values()].sort((a, b) => pipe_(a.name, Str.localeCompare(b.name))),
+      personaData,
+    ),
     errors,
   } satisfies HostDefinitions;
 });
@@ -211,11 +219,11 @@ export const checkModule: (
 
 /** Each place a drawing of this module says less than the module does, named by where. */
 const limitsOf = (described: Described): ReadonlyArray<string> => [
-  ...described.inputs.flatMap((input) =>
-    input.limits.map((limit) => `input "${input.name}": ${limit}`),
+  ...Arr.flatMap(described.inputs, (input) =>
+    Arr.map(input.limits, (limit) => `input "${input.name}": ${limit}`),
   ),
-  ...described.success.limits.map((limit) => `success: ${limit}`),
-  ...described.error.limits.map((limit) => `error: ${limit}`),
+  ...Arr.map(described.success.limits, (limit) => `success: ${limit}`),
+  ...Arr.map(described.error.limits, (limit) => `error: ${limit}`),
 ];
 
 /** What writing a module came to: the file, and the sentence a human reads either way. */
@@ -281,7 +289,7 @@ export const forkEntry: (options: {
  */
 const importOf = (path: Path.Path, dir: string, parent: string): string => {
   const relative = path.relative(dir, parent);
-  const near = relative.startsWith(".") ? relative : `./${relative}`;
+  const near = pipe_(relative, Str.startsWith(".")) ? relative : `./${relative}`;
   return near.length <= parent.length ? near : parent;
 };
 
@@ -291,9 +299,7 @@ const write = Effect.fn("Authoring.write")(function* (dir: string, id: string, t
   yield* fs.makeDirectory(dir, { recursive: true });
   const taken = yield* fs.writeFileString(path, text, { flag: "wx" }).pipe(
     Effect.as(false),
-    Effect.catch((cause: PlatformError.PlatformError) =>
-      cause.reason._tag === "AlreadyExists" ? Effect.succeed(true) : Effect.fail(cause),
-    ),
+    Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(true)),
   );
   if (taken) {
     return {
@@ -314,7 +320,14 @@ const write = Effect.fn("Authoring.write")(function* (dir: string, id: string, t
   };
 });
 
-const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
+const directoryOf = (file: string) =>
+  pipe_(
+    file,
+    Str.slice(
+      0,
+      Option.getOrElse(pipe_(file, Str.lastIndexOf("/")), () => -1),
+    ),
+  );
 
 /** The smallest module that runs: typed input, one recorded step, a typed result. */
 const entryText = (id: string) => `import { Host, Run, defineWorkflow } from "collie";

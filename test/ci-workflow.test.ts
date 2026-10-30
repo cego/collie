@@ -1,6 +1,11 @@
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { approvedFrom } from "../src/verify-spec";
 import { runEffect } from "./support/effect";
 
@@ -21,25 +26,41 @@ const workflowSchema = Schema.Struct({
 
 const workflow = Effect.promise(() =>
   Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text(),
-).pipe(Effect.map((text) => Schema.decodeUnknownSync(workflowSchema)(Bun.YAML.parse(text))));
+).pipe(
+  Effect.map((text) =>
+    flow(Schema.decodeUnknownResult(workflowSchema), Result.getOrThrow)(Bun.YAML.parse(text)),
+  ),
+);
 
 test("every CI job that checks the root installs Desktop's dependencies before it", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const { jobs } = yield* workflow;
-      const checking = Object.values(jobs).filter((job) =>
-        job.steps.some((step) => /^bun run (check|test)\b/.test(step.run ?? "")),
+      const checking = Arr.filter(Rec.values(jobs), (job) =>
+        Arr.some(job.steps, (step) => /^bun run (check|test)\b/.test(step.run ?? "")),
       );
       expect(checking.length).toBeGreaterThan(0);
       for (const { steps } of checking) {
-        const rootInstall = steps.findIndex(
-          (step) => step.run === "bun install --frozen-lockfile" && !step["working-directory"],
+        const rootInstall = Option.getOrElse(
+          Arr.findFirstIndex(
+            steps,
+            (step) => step.run === "bun install --frozen-lockfile" && !step["working-directory"],
+          ),
+          () => -1,
         );
-        const desktopInstall = steps.findIndex(
-          (step) =>
-            step.run === "bun install --frozen-lockfile" && step["working-directory"] === "desktop",
+        const desktopInstall = Option.getOrElse(
+          Arr.findFirstIndex(
+            steps,
+            (step) =>
+              step.run === "bun install --frozen-lockfile" &&
+              step["working-directory"] === "desktop",
+          ),
+          () => -1,
         );
-        const check = steps.findIndex((step) => /^bun run (check|test)\b/.test(step.run ?? ""));
+        const check = Option.getOrElse(
+          Arr.findFirstIndex(steps, (step) => /^bun run (check|test)\b/.test(step.run ?? "")),
+          () => -1,
+        );
 
         expect(rootInstall).toBeGreaterThanOrEqual(0);
         expect(desktopInstall).toBeGreaterThan(rootInstall);
@@ -61,15 +82,32 @@ test("Collie's own check is left to the CI job whose needs run each part of it",
 
       const { jobs } = yield* workflow;
       const gate = jobs[checks[0]!.ci!];
-      const runs = [gate?.needs ?? []]
-        .flat()
-        .flatMap((name) => jobs[name]?.steps.map((step) => step.run) ?? []);
-      const { scripts } = Schema.decodeUnknownSync(
+      const runs = Arr.flatMap(
+        [gate?.needs ?? []].flat(),
+        (name) =>
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(jobs[name]), (present) =>
+              Arr.map(present.steps, (step) => step.run),
+            ),
+          ) ?? [],
+      );
+      const { scripts } = yield* Schema.decodeEffect(
         Schema.fromJsonString(Schema.Struct({ scripts: Schema.Struct({ check: Schema.String }) })),
-      )(yield* fs.readFileString(`${root}/package.json`));
-      const parts = scripts.check.split(" && ");
+      )(yield* fs.readFileString(`${root}/package.json`)).pipe(Effect.orDie);
+      const parts = Str.split(scripts.check, " && ");
       expect(parts.length).toBeGreaterThan(1);
       for (const part of parts)
-        expect(runs.some((run) => run === part || run?.startsWith(`${part} `))).toBe(true);
+        expect(
+          Arr.some(runs, (run) =>
+            Boolean(
+              run === part ||
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(run), (present_) =>
+                  pipe_(present_, Str.startsWith(`${part} `)),
+                ),
+              ),
+            ),
+          ),
+        ).toBe(true);
     }),
   ));

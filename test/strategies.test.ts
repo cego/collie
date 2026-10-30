@@ -7,6 +7,10 @@
 // its previous review and its repository. Every case here is the same workflow twice —
 // once under the shipped names, once renamed — asserted to behave identically.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { runOnPath } from "./support/forge";
@@ -28,7 +32,7 @@ import {
 let rig: Rig;
 let bin: FakeBin;
 
-const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
 
 /** The shipped names, and the same two strategies under an author's own names. */
 const SHIPPED = { plan: "work-source", target: "diff-target" } as const;
@@ -57,20 +61,23 @@ const gitLog = () => join(rig.root, "git.log");
 const fakeGit = (branch = "add-picker") =>
   bin.add(
     "git",
-    `printf '%s\\t%s\\n' "$PWD" "$*" >> "${gitLog()}"\ncase "$*" in\n${[
-      `  "remote get-url origin"*) printf '%b' "git@gitlab.example.com:acme/app.git" ;;`,
-      `  "symbolic-ref --short refs/remotes/origin/HEAD"*) printf '%b' "origin/master" ;;`,
-      `  "rev-parse --verify origin/"*) printf '%b' "deadbeef" ;;`,
-      `  "rev-parse --verify --quiet refs/remotes/origin/"*) printf '%b' "deadbeef" ;;`,
-      `  "rev-parse --abbrev-ref HEAD"*) printf '%b' "${branch}" ;;`,
-      `  "check-ref-format"*) printf '%b' "" ;;`,
-      `  "worktree list --porcelain"*) printf '%b' "worktree ${rig.projectDir}\\nbranch refs/heads/${branch}\\n" ;;`,
-      // Makes the directory it is asked for, so a roaming checkout really lands.
-      `  "worktree add"*) for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done ;;`,
-      `  "fetch"*) printf '%b' "" ;;`,
-      `  "checkout"*) printf '%b' "" ;;`,
-      "  *) exit 1 ;;",
-    ].join("\n")}\nesac`,
+    `printf '%s\\t%s\\n' "$PWD" "$*" >> "${gitLog()}"\ncase "$*" in\n${Arr.join(
+      [
+        `  "remote get-url origin"*) printf '%b' "git@gitlab.example.com:acme/app.git" ;;`,
+        `  "symbolic-ref --short refs/remotes/origin/HEAD"*) printf '%b' "origin/master" ;;`,
+        `  "rev-parse --verify origin/"*) printf '%b' "deadbeef" ;;`,
+        `  "rev-parse --verify --quiet refs/remotes/origin/"*) printf '%b' "deadbeef" ;;`,
+        `  "rev-parse --abbrev-ref HEAD"*) printf '%b' "${branch}" ;;`,
+        `  "check-ref-format"*) printf '%b' "" ;;`,
+        `  "worktree list --porcelain"*) printf '%b' "worktree ${rig.projectDir}\\nbranch refs/heads/${branch}\\n" ;;`,
+        // Makes the directory it is asked for, so a roaming checkout really lands.
+        `  "worktree add"*) for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done ;;`,
+        `  "fetch"*) printf '%b' "" ;;`,
+        `  "checkout"*) printf '%b' "" ;;`,
+        "  *) exit 1 ;;",
+      ],
+      "\n",
+    )}\nesac`,
   );
 
 /** One launch, as a front door settles it: values, where they came from, what they are. */
@@ -83,7 +90,7 @@ const asks = (
   name: "Add a picker",
   inputs,
   strategies,
-  sources: Object.fromEntries(Object.keys(inputs).map((key) => [key, "explicit"])),
+  sources: Rec.fromEntries(Arr.map(Rec.keys(inputs), (key) => [key, "explicit"] as const)),
   login: LOGIN,
   ...extra,
 });
@@ -198,7 +205,7 @@ test("the previous review of a change is found whatever the reviewing Run called
         settled: { inputs: { change: "mr:acme/app!42" }, strategies: RENAMED },
       });
       const found = yield* reviewedTargets([earlier], rig.projectDir, 5);
-      expect(found.map((candidate) => candidate.value)).toEqual(["mr:acme/app!42"]);
+      expect(Arr.map(found, (candidate) => candidate.value)).toEqual(["mr:acme/app!42"]);
     }),
   ));
 

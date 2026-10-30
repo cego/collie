@@ -2,6 +2,9 @@
 // the host, not Desktop, signs it as the human in Desktop and keeps one over the paste budget
 // as a file in the Run (test/finished-steer.test.ts).
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -15,7 +18,8 @@ const machine = { profile: "vm", name: "vm-mk" };
 
 type Called = Extract<RpcGroup.Rpcs<typeof FrontDoorRpcs>, { readonly _tag: "act" | "invoke" }>;
 const Calls = RpcGroup.make(
-  ...[...FrontDoorRpcs.requests.values()].filter(
+  ...Arr.filter(
+    [...FrontDoorRpcs.requests.values()],
     (rpc): rpc is Called => rpc._tag === "act" || rpc._tag === "invoke",
   ),
 );
@@ -55,7 +59,10 @@ const applied = { kind: "deliver", state: "applied", note: "plan-2" };
 test("review comments reach the chosen agent word for word as one delivery, at any length", () =>
   Effect.runPromise(
     Effect.forEach(
-      ["1. the plan's `SPEC.md`\n> x\n\nWhy?", `${"é".repeat(5_000)}\n  kept as typed  `],
+      [
+        "1. the plan's `SPEC.md`\n> x\n\nWhy?",
+        `${pipe_("é", Str.repeat(5_000))}\n  kept as typed  `,
+      ],
       (text) =>
         Effect.gen(function* () {
           const { said, decoded } = yield* sent(

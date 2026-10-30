@@ -2,6 +2,10 @@
 // the refusals: a tree that moved under the command, a tree too big to have been looked
 // at, a directory that is not the Run's, and a command that is not the approved one.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { Effect, Fiber, FileSystem, Path } from "effect";
 import { expect, test } from "bun:test";
 import {
@@ -56,7 +60,7 @@ test("a fingerprint reads HEAD from the status it hashes, in three git starts", 
       const starts = yield* loggedGit(`${aside}/bin`, `${aside}/git.log`);
       const tree = yield* fingerprint(repo);
       expect(tree.head_sha).toHaveLength(40);
-      expect((yield* starts).map((line) => line.split(" ")[0]).sort()).toEqual([
+      expect(Arr.map(yield* starts, (line) => Str.split(line, " ")[0]).sort()).toEqual([
         "diff",
         "ls-files",
         "status",
@@ -150,7 +154,7 @@ test("a command that leaves the tree alone passes; one that changes it is unstab
       });
       expect(passed.result).toBe("pass");
       expect(passed.exit).toBe(0);
-      expect(passed.executable.startsWith("/")).toBe(true);
+      expect(pipe_(passed.executable, Str.startsWith("/"))).toBe(true);
 
       const failed = yield* collect(runDir, {
         run: "r1",
@@ -175,12 +179,12 @@ test("a command that leaves the tree alone passes; one that changes it is unstab
       expect(changed.exit).toBe(0);
 
       const journal = yield* readVerifications(runDir);
-      expect(journal.map((entry) => `${entry.name}:${entry.result}`)).toEqual([
+      expect(Arr.map(journal, (entry) => `${entry.name}:${entry.result}`)).toEqual([
         "true:pass",
         "false:fail",
         "dirty:unstable",
       ]);
-      expect(journal.every((entry) => entry.by === "agent")).toBe(true);
+      expect(Arr.every(journal, (entry) => entry.by === "agent")).toBe(true);
     }),
   ));
 
@@ -199,7 +203,7 @@ test("the argument list is the command; nothing is handed to a shell", () =>
         by: "agent",
       });
       const fs = yield* FileSystem.FileSystem;
-      expect(record.tail.stdout.trim()).toBe("hello; touch injected.txt");
+      expect(Str.trim(record.tail.stdout)).toBe("hello; touch injected.txt");
       expect(yield* fs.exists(path.join(repo, "injected.txt"))).toBe(false);
       expect(record.result).toBe("pass");
     }),
@@ -290,7 +294,9 @@ test("a verification keeps the executable as it was asked beside the path it res
         cwd: repo,
         by: "agent",
       });
-      const kept = (yield* readVerifications(runDir)).find((one) => one.id === ran.id);
+      const kept = Option.getOrUndefined(
+        Arr.findFirst(yield* readVerifications(runDir), (one) => one.id === ran.id),
+      );
       expect(kept?.asked).toBe("bun");
       expect(kept?.executable).toBe(Bun.which("bun") ?? "");
     }),
@@ -439,7 +445,7 @@ test("both streams go to the log as they arrive, readable while the command runs
       // Before it ends: what it has said so far, in the order it said it.
       const early = yield* until(
         () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
-        (text) => text.includes("three"),
+        (text) => pipe_(text, Str.includes("three")),
       );
       expect(early).toBe("one\ntwo\nthree\n");
       const record = yield* Fiber.join(running);
@@ -466,11 +472,14 @@ test("a log past its bound is cut, and says it was", () =>
       });
       const text = yield* fs.readFileString(log);
       expect(
-        text.endsWith(
-          `[collie: the output was cut at ${LOG_BYTES} bytes; the rest was not kept]\n`,
+        pipe_(
+          text,
+          Str.endsWith(
+            `[collie: the output was cut at ${LOG_BYTES} bytes; the rest was not kept]\n`,
+          ),
         ),
       ).toBe(true);
-      expect(text.startsWith("a".repeat(LOG_BYTES))).toBe(true);
+      expect(pipe_(text, Str.startsWith(Str.repeat(LOG_BYTES)("a")))).toBe(true);
       expect(text.length).toBeLessThan(LOG_BYTES + 200);
     }),
   ));

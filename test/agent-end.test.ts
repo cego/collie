@@ -1,7 +1,11 @@
 // Every end of a Run's agent, through the one module that ends one (ADR-0059 D1, D4).
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Schema } from "effect";
+import { Clock, Effect, FileSystem, Schema, flow, Result } from "effect";
 import { endAgent, type EndDeps } from "../src/agent-end";
 import { Agents, agentsLayer } from "../src/agents";
 import { foundationLayer } from "../src/engine";
@@ -13,9 +17,10 @@ import { task as view } from "./support/task";
 import type { CompactionPorts, Stopped } from "../src/compaction";
 import { runEffect } from "./support/effect";
 import { FakeHerdr, Rig } from "./support/recorder";
+import * as Layer from "effect/Layer";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const asLaunch = Schema.encodeSync(Schema.fromJsonString(Launched));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const asLaunch = flow(Schema.encodeResult(Schema.fromJsonString(Launched)), Result.getOrThrow);
 
 let rig: Rig;
 beforeEach(() =>
@@ -31,7 +36,7 @@ afterEach(() => runEffect(rig.close()));
 /** A Codex-like harness whose work runs in a server, stopped to `state`. */
 const served = (state: Stopped["state"], stops: string[]): CompactionPorts => ({
   served: {
-    gate: () => Effect.void,
+    gate: Effect.void,
     install: () => Effect.succeed({ args: [] }),
     request: () => Effect.die("unused"),
     poll: () => Effect.die("unused"),
@@ -97,7 +102,11 @@ const depsOf = (over: Partial<EndDeps> = {}) => {
 
 const paneCloses = Effect.map(
   Effect.suspend(() => rig.calls()),
-  (calls) => calls.filter((call) => call.cmd === "pane close").map((call) => call.argv?.at(2)),
+  (calls) =>
+    Arr.map(
+      Arr.filter(calls, (call) => call.cmd === "pane close"),
+      (call) => call.argv?.at(2),
+    ),
 );
 
 test("a Claude agent ends: nothing runs outside its pane, its pane closes, and the end is logged", () =>
@@ -136,7 +145,7 @@ test("a Codex agent that does not become Quiet keeps its pane, in ADR-0059's wor
         "impl is not stopped: acknowledged, turn tu-1 still running after 30s — thread th-1 turn tu-1",
       );
       expect(yield* paneCloses).toEqual([]);
-      expect(lines.some((line) => line.includes("ended"))).toBe(false);
+      expect(Arr.some(lines, (line) => pipe_(line, Str.includes("ended")))).toBe(false);
     }),
   ));
 
@@ -162,7 +171,7 @@ class NoTerminals extends FakeHerdr {
   override agentList() {
     return super
       .agentList()
-      .pipe(Effect.map((agents) => agents.map((agent) => ({ ...agent, terminalId: null }))));
+      .pipe(Effect.map((agents) => Arr.map(agents, (agent) => ({ ...agent, terminalId: null }))));
   }
 }
 
@@ -303,7 +312,9 @@ test("the workspace is kept when the agent's pane is its last", () =>
       const kept = cmds.indexOf("tab create");
       expect(kept).toBeGreaterThanOrEqual(0);
       expect(kept).toBeLessThan(cmds.indexOf("pane close"));
-      const created = (yield* rig.calls()).find((call) => call.cmd === "tab create");
+      const created = Option.getOrUndefined(
+        Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "tab create"),
+      );
       expect(created?.argv).toEqual(expect.arrayContaining(["--workspace", "w1"]));
     }),
   ));
@@ -334,7 +345,7 @@ test("where the caller closes the panes, none closes while one agent of several 
       expect(stops).toEqual(["review"]);
       expect(yield* paneCloses).toEqual([]);
       // Its end is the caller's to log, once its pane has closed.
-      expect(lines.filter((line) => line.includes("ended"))).toEqual([]);
+      expect(Arr.filter(lines, (line) => pipe_(line, Str.includes("ended")))).toEqual([]);
     }),
   ));
 
@@ -385,9 +396,14 @@ test("a Fallback's close parks on an agent it cannot prove is this Run's, and cl
             permissions: "auto",
             compactAtTokens: 0,
             help: () => Effect.succeed(""),
-          }),
+          }).pipe(
+            Layer.provideMerge(
+              foundationLayer({
+                dir: rig.stateDir,
+              }),
+            ),
+          ),
         ),
-        Effect.provide(foundationLayer({ dir: rig.stateDir })),
         Effect.scoped,
       );
       expect(retired.reason).toBe(
@@ -444,7 +460,7 @@ test("the Task workspace sweep's ends are on the Run's log", () =>
         rig.stateDir,
         "host",
       );
-      expect(swept.remove.map((item) => item.target)).toEqual(["wT"]);
+      expect(Arr.map(swept.remove, (item) => item.target)).toEqual(["wT"]);
       expect(yield* runLog("r1")).toContain("impl ended: its Task's workspace closed");
     }),
   ));

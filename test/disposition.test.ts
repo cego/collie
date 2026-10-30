@@ -6,6 +6,9 @@
 // it is made against a real Run, through the CLI a person actually types: its status
 // before and after, a repeated request id, and a read that reads.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Config, Effect, FileSystem, Option, Schema } from "effect";
 import { expect, test } from "bun:test";
 import {
@@ -20,7 +23,7 @@ import { hosted, settledRun } from "./support/hosted";
 import { runEffect, suiteEnv } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
-const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
 
 const Envelope = Schema.fromJsonString(
   Schema.Struct({
@@ -140,7 +143,7 @@ test("a correction is a new line, so what people believed before is still there"
       yield* recordDisposition(dir, line({ at: "2026-09-12T08:00:00.000Z", by: "mk" }));
 
       const lines = yield* readDispositions(dir);
-      expect(lines.map((l) => l.kind)).toEqual(["abandoned", "merged"]);
+      expect(Arr.map(lines, (l) => l.kind)).toEqual(["abandoned", "merged"]);
       expect(latest(lines)?.ref).toBe("cego/collie!43");
       // An abandoned Run with nothing to point at still reads without a dangling space.
       expect(statusLine("failed", lines[0]!)).toBe("failed · abandoned by mk");

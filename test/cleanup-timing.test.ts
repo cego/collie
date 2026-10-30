@@ -6,6 +6,7 @@ import { Duration, Effect, Fiber, FileSystem, Logger } from "effect";
 import { TestClock } from "effect/testing";
 import { judge, sweep, type Sweeper } from "../src/cleanup";
 import { runEffect } from "./support/effect";
+import * as Layer from "effect/Layer";
 
 const judgedIn = (kind: string, took: Duration.Input): Sweeper => ({
   kind,
@@ -23,7 +24,7 @@ const warnedOver = <A, E, R>(effect: Effect.Effect<A, E, R>, passes: Duration.In
       const running = yield* Effect.forkChild(effect);
       yield* TestClock.adjust(passes);
       yield* Fiber.join(running);
-    }).pipe(Effect.provide(Logger.layer([logger])), Effect.provide(TestClock.layer()));
+    }).pipe(Effect.provide(Logger.layer([logger]).pipe(Layer.provideMerge(TestClock.layer()))));
     return warned;
   });
 

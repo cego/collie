@@ -3,6 +3,10 @@
 // strongest signal that the work landed, so Collie records the disposition itself. The
 // forge's own checks are kept beside the state, for the card to say whether it is ready.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { type ForgeFacts } from "./board";
 import {
@@ -68,7 +72,7 @@ const OldStatesJson = Schema.fromJsonString(Schema.Record(Schema.String, StateSc
 type Entry = typeof EntrySchema.Type;
 
 function stateOf(state: string): MrState {
-  const said = state.toLowerCase();
+  const said = Str.toLowerCase(state);
   if (said === "merged") return "merged";
   if (said === "closed") return "closed";
   return "open";
@@ -111,11 +115,13 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   for (const view of opts.views) {
     const found = view.mr === null ? yield* fromBranch(view, opts) : null;
     const mr = view.mr ?? found?.url ?? null;
-    const repos = view.children.flatMap((child) =>
+    const repos = Arr.flatMap(view.children, (child) =>
       child.run === null || child.mr === null ? [] : [{ run: child.run, mr: child.mr }],
     );
     // A card showing its one Repo run's merge request watches it as that Repo run's.
-    const shown = repos.find((repo) => mr !== null && mrLabel(repo.mr) === mrLabel(mr));
+    const shown = Option.getOrUndefined(
+      Arr.findFirst(repos, (repo) => mr !== null && mrLabel(repo.mr) === mrLabel(mr)),
+    );
     if (mr !== null)
       watched.push({
         mr,
@@ -134,10 +140,10 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   }
   for (const { mr, disposition, runs, owner } of watched) {
     // A merged one is still followed to its deploy jobs, until production has it.
-    if (disposition !== null && !disposition.startsWith("merged")) continue;
+    if (disposition !== null && !pipe_(disposition, Str.startsWith("merged"))) continue;
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) continue;
-    const dirs = runs.map((run) => runDir(opts.stateDir, run));
+    const dirs = Arr.map(runs, (run) => runDir(opts.stateDir, run));
     if (
       opts.states.get(label) !== "in-prod" &&
       (opts.checked.get(label) ?? 0) + MERGE_POLL_MS <= opts.now
@@ -172,7 +178,8 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         ? epochMs(read.mergedAt)
         : yield* firstMerged(dirs, label);
     if (merged === null) continue;
-    const going = opts.runs.filter(
+    const going = Arr.filter(
+      opts.runs,
       (run) =>
         runs.includes(run.id) &&
         (run.state === "running" || run.state === "waiting") &&
@@ -207,7 +214,7 @@ const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
   const ref = mrRefOf(mr);
   const landers: Array<string> = [];
   let read: ReviewRead | undefined;
-  for (const run of opts.runs.filter((one) => ids.includes(one.id))) {
+  for (const run of Arr.filter(opts.runs, (one) => ids.includes(one.id))) {
     const landing = yield* readLanding(run.dir);
     if (landing === null || mrLabel(landing.mr) !== label || landing.state === "withdrawn")
       continue;
@@ -222,7 +229,7 @@ const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
     if (settled._tag === "Unmerged") return null;
     if (settled._tag === "Landed") landers.push(run.id);
   }
-  const parentOf = new Map(opts.runs.map((run) => [run.id, run.parent]));
+  const parentOf = new Map(Arr.map(opts.runs, (run) => [run.id, run.parent]));
   const spared = new Set<string>();
   for (const lander of landers) {
     let at: string | null = lander;
@@ -246,7 +253,7 @@ interface Watched {
 
 /** A Run's latest disposition, as a card says one. */
 const dispositionIn = Effect.fn("Merges.dispositionIn")(function* (dir: string) {
-  const line = latest(yield* readDispositions(dir).pipe(Effect.catch(() => Effect.succeed([]))));
+  const line = latest(yield* readDispositions(dir).pipe(Effect.orElseSucceed(() => [])));
   return line === null ? null : line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
 });
 
@@ -257,7 +264,7 @@ const firstMerged = Effect.fn("Merges.firstMerged")(function* (
 ) {
   let first: number | null = null;
   for (const dir of dirs)
-    for (const line of yield* readDispositions(dir).pipe(Effect.catch(() => Effect.succeed([]))))
+    for (const line of yield* readDispositions(dir).pipe(Effect.orElseSucceed(() => [])))
       if (
         line.kind === "merged" &&
         line.ref === label &&
@@ -284,10 +291,10 @@ const fromBranch = Effect.fn("Merges.fromBranch")(function* <R>(
   },
 ) {
   if (view.branch === null || view.disposition !== null) return null;
-  const runs = opts.runs.filter((run) => view.runs.includes(run.id));
-  const newest = runs
-    .filter((run) => run.branch === view.branch)
-    .sort((a, b) => epochMs(b.created) - epochMs(a.created))[0];
+  const runs = Arr.filter(opts.runs, (run) => view.runs.includes(run.id));
+  const newest = Arr.filter(runs, (run) => run.branch === view.branch).sort(
+    (a, b) => epochMs(b.created) - epochMs(a.created),
+  )[0];
   if (newest === undefined) return null;
   const key = `branch:${newest.project}:${view.branch}`;
   if ((opts.checked.get(key) ?? 0) + MERGE_POLL_MS > opts.now) return null;
@@ -296,10 +303,11 @@ const fromBranch = Effect.fn("Merges.fromBranch")(function* <R>(
   if (!here.ok) return null;
   const listed = yield* here.forge.fromBranch(here.project, view.branch, newest.project, opts.run);
   if (!listed.ok) return null;
-  const began = Math.min(...runs.map((run) => epochMs(run.created)));
-  const mr = listed.mrs
-    .filter((one) => one.ended === null || epochMs(one.ended) >= began)
-    .sort((a, b) => epochMs(b.created) - epochMs(a.created))[0];
+  const began = Math.min(...Arr.map(runs, (run) => epochMs(run.created)));
+  const mr = Arr.filter(
+    listed.mrs,
+    (one) => one.ended === null || epochMs(one.ended) >= began,
+  ).sort((a, b) => epochMs(b.created) - epochMs(a.created))[0];
   if (mr === undefined) return null;
   yield* opts.record(newest.id, mr.url);
   return { run: newest.id, url: mr.url };
@@ -370,7 +378,7 @@ export const writeMrStates = Effect.fn("Merges.write")(function* (
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
   yield* fs.writeFileString(
     file,
-    `${Schema.encodeSync(StatesJson)(Object.fromEntries(entries))}\n`,
+    `${yield* Schema.encodeEffect(StatesJson)(Rec.fromEntries(entries)).pipe(Effect.orDie)}\n`,
   );
 });
 
@@ -380,12 +388,14 @@ const readEntries = Effect.fn("Merges.readEntries")(function* (stateDir: string)
   const path = yield* Path.Path;
   const text = yield* fs
     .readFileString(path.join(stateDir, MR_STATES_FILE))
-    .pipe(Effect.catch(() => Effect.succeed("{}")));
-  const decoded = Schema.decodeUnknownOption(StatesJson)(text);
-  if (Option.isSome(decoded)) return new Map<string, Entry>(Object.entries(decoded.value));
+    .pipe(Effect.orElseSucceed(() => "{}"));
+  const decoded = Schema.decodeOption(StatesJson)(text);
+  if (Option.isSome(decoded)) return new Map<string, Entry>(Rec.toEntries(decoded.value));
   // An unreadable file is no memory, not a failure: the next watch rewrites it.
-  const old = Option.getOrElse(Schema.decodeUnknownOption(OldStatesJson)(text), () => ({}));
-  return new Map<string, Entry>(Object.entries(old).map(([label, state]) => [label, { state }]));
+  const old = Option.getOrElse(Schema.decodeOption(OldStatesJson)(text), () => ({}));
+  return new Map<string, Entry>(
+    Arr.map(Rec.toEntries(old), ([label, state]) => [label, { state }]),
+  );
 });
 
 const factsOf = (entry: Entry | undefined): ForgeFacts | null => {
@@ -398,7 +408,7 @@ const factsOf = (entry: Entry | undefined): ForgeFacts | null => {
 /** Each merge request's state, as the last watch learned it. */
 export const readMrStates = Effect.fn("Merges.read")(function* (stateDir: string) {
   const entries = yield* readEntries(stateDir);
-  return new Map([...entries].map(([label, entry]) => [label, entry.state]));
+  return new Map(Arr.map([...entries], ([label, entry]) => [label, entry.state]));
 });
 
 /** What the forge said of each merge request's checks; an entry in the old shape has none. */

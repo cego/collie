@@ -9,6 +9,10 @@
 // the checkout instead. A record says which it was, because that is who takes the
 // checkout away again.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import {
@@ -299,7 +303,12 @@ const whoami = Effect.fn("worktree.whoami")(function* (
   const here = yield* forgeHere(opts.cwd, run, opts.gitlabHost);
   if (!here.ok) return here;
   const { forge } = here;
-  const named = (forge.name === "github" ? opts.githubLogin : opts.login)?.trim();
+  const named = Option.getOrUndefined(
+    Option.map(
+      Option.fromNullishOr(forge.name === "github" ? opts.githubLogin : opts.login),
+      (present_) => Str.trim(present_),
+    ),
+  );
   return { ...here, who: named ? named : yield* forge.login(opts.cwd, run, here.project) };
 });
 
@@ -339,7 +348,9 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const path = yield* Path.Path;
-  const explicit = opts.explicit?.trim();
+  const explicit = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(opts.explicit), (present__) => Str.trim(present__)),
+  );
   if (explicit) return verbatim(explicit, "explicit");
   // `reviewed` is what `baseFor` needs from here: a branch that already holds the work
   // has to be cut from that work, and a name for work that does not exist yet cannot be.
@@ -356,9 +367,13 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   const target = diffTargetOf(opts);
   const fromTarget = target && said(opts, target.name) ? targetBranch(target.value) : null;
   if (fromTarget) return verbatim(fromTarget, "from target");
-  const task = opts.inputs[TASK_INPUT]?.trim();
+  const task = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(opts.inputs[TASK_INPUT]), (present___) => Str.trim(present___)),
+  );
   if (task) return generated(task, "from the task");
-  const taskBranch = opts.taskBranch?.trim();
+  const taskBranch = Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(opts.taskBranch), (present____) => Str.trim(present____)),
+  );
   if (taskBranch) return verbatim(taskBranch, "from the task", true);
   // The plan directory's own name, not the path to it: every plan under one `tasks/`
   // directory slugs the same way. Only one the operator named, and never a Run's own
@@ -415,12 +430,12 @@ function generated(from: string, source: BranchSource, distinctBy = from): Named
 function taskSlug(from: string, distinctBy: string): string {
   const derived = slugify(from, SLUG_MAX);
   if (letters(from) === letters(derived)) return derived;
-  return `${derived}-${Bun.hash(distinctBy).toString(36).slice(0, 6)}`;
+  return `${derived}-${pipe_(Bun.hash(distinctBy).toString(36), Str.slice(0, 6))}`;
 }
 
 /** Case, spacing and punctuation are not distinctions: the same words are the same task. */
 function letters(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return pipe_(Str.toLowerCase(text), Str.replace(/[^\p{L}\p{N}]+/gu, ""));
 }
 
 /**
@@ -524,7 +539,7 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
     if (panel._tag !== "Details") return { refused: panel.reason };
     if (panel.fork === true)
       return { refused: `${named} comes from a fork, so its branch is not in this checkout` };
-    const source = panel.sourceBranch.trim();
+    const source = Str.trim(panel.sourceBranch);
     return source
       ? { branch: source, reviewed: true }
       : { refused: `${named} names no source branch` };
@@ -541,11 +556,11 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
   }
   // Only the working tree is the caller's own branch; any other shape is refused, not guessed.
   if (target === "") return { refused: "the review names no target, so no branch holds its work" };
-  if (target.trim() !== "worktree") {
+  if (Str.trim(target) !== "worktree") {
     return { refused: `${target} is not a target Collie can find a branch for` };
   }
   const at = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
-  const branch = at.stdout.trim();
+  const branch = Str.trim(at.stdout);
   if (at.code !== 0 || branch === "" || branch === "HEAD") {
     return { refused: `${cwd} is not on a branch to fix` };
   }
@@ -574,7 +589,8 @@ export const workOf = Effect.fn("worktree.workOf")(function* (
   const branch = opts.branch ?? reviewed?.branch ?? null;
   if (branch === null || branch === "" || branch === "HEAD") return null;
   const origin = yield* run("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"], opts.cwd);
-  const base = origin.code === 0 ? origin.stdout.trim().replace(/^origin\//, "") : "";
+  const base =
+    origin.code === 0 ? pipe_(Str.trim(origin.stdout), Str.replace(/^origin\//, "")) : "";
   if (base === "" ? branch === "main" || branch === "master" : branch === base) return null;
   return `${listing.repo}#${branch}`;
 });
@@ -600,7 +616,7 @@ const isBranch = Effect.fn("worktree.isBranch")(function* (
  * same reason. Git's own ref rules — no `..`, no leading `.`, no control characters —
  * are what keep every segment a legal directory name.
  */
-const branchPath = (branch: string) => branch.split("/");
+const branchPath = (branch: string) => Str.split(branch, "/");
 
 /**
  * Every checkout git itself knows about, and which of them the repository is. git's own
@@ -614,12 +630,32 @@ const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
   const listed = yield* run("git", ["worktree", "list", "--porcelain"], cwd);
   if (listed.code !== 0) return null;
   const checkouts: Array<{ path: string; branch: string | null }> = [];
-  for (const block of listed.stdout.split(/\n\s*\n/)) {
-    const at = /^worktree (.+)$/m.exec(block)?.[1]?.trim();
+  for (const block of Str.split(listed.stdout, /\n\s*\n/)) {
+    const at = Option.getOrUndefined(
+      Option.flatMap(Option.fromNullishOr(/^worktree (.+)$/m.exec(block)), (present_____) =>
+        Option.map(Option.fromNullishOr(present_____[1]), (present______) =>
+          Str.trim(present______),
+        ),
+      ),
+    );
     if (at === undefined) continue;
     // A detached checkout has no `branch` line at all, which is what null means here.
-    const ref = /^branch (.+)$/m.exec(block)?.[1]?.trim();
-    checkouts.push({ path: at, branch: ref?.replace(/^refs\/heads\//, "") ?? null });
+    const ref = Option.getOrUndefined(
+      Option.flatMap(Option.fromNullishOr(/^branch (.+)$/m.exec(block)), (present_______) =>
+        Option.map(Option.fromNullishOr(present_______[1]), (present________) =>
+          Str.trim(present________),
+        ),
+      ),
+    );
+    checkouts.push({
+      path: at,
+      branch:
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(ref), (present_________) =>
+            pipe_(present_________, Str.replace(/^refs\/heads\//, "")),
+          ),
+        ) ?? null,
+    });
   }
   // git lists the main worktree first, and that is the one place a command about the
   // repository can be run and still be there once another checkout has been removed.
@@ -686,14 +722,14 @@ const freeSlot = Effect.fn("worktree.freeSlot")(function* (opts: {
     // git lists a checkout whose directory has gone, and will not add another there.
     const taken =
       (yield* occupant(slot)) ??
-      (opts.listing.checkouts.some((checkout) => checkout.path === slot)
+      (Arr.some(opts.listing.checkouts, (checkout) => checkout.path === slot)
         ? { owner: opts.repo }
         : null);
     if (taken === null) return { at: slot, passed };
     const recorded = opts.recordedBy === undefined ? null : yield* opts.recordedBy(slot);
     passed.push(`${slot} is ${occupiedAs(taken.owner, recorded)}`);
   }
-  return { at: null, refused: `${passed.join("; ")}; free one of them and retry` };
+  return { at: null, refused: `${Arr.join(passed, "; ")}; free one of them and retry` };
 });
 
 /** The look and the cut, which run only while this process holds the first slot's lock. */
@@ -705,11 +741,13 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
   recordedBy?: RecordedBy | undefined;
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
 }) {
-  const { run, branch, first } = opts;
+  const { run, branch } = opts;
   // Again, under the lock: a Run that waited here reuses what the one before it cut.
   const listing = yield* gitWorktrees(run, opts.repo);
   if (!listing) return { refused: `${opts.repo} is not a git checkout` };
-  const existing = listing.checkouts.find((checkout) => checkout.branch === branch);
+  const existing = Option.getOrUndefined(
+    Arr.findFirst(listing.checkouts, (checkout) => checkout.branch === branch),
+  );
   if (existing) return { path: existing.path, created: false, passed: [] };
 
   const slot = yield* freeSlot({ ...opts, listing });
@@ -729,14 +767,15 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
       opts.repo,
     );
     if (resolved.code !== 0) return { refused: `${base} is not a commit` };
-    start = resolved.stdout.trim();
+    start = Str.trim(resolved.stdout);
     // Made here rather than by `worktree add -b`, which fails the same way whether or not
     // it made the branch: `git branch` refuses one somebody else made since the look.
     const made = yield* run("git", ["branch", branch, start], opts.repo);
     if (made.code !== 0) return { refused: whatItSaid(made) || `git would not make ${branch}` };
     // What `-b` would have tracked.
-    if (opts.base?.startsWith("origin/"))
-      yield* run("git", ["branch", "--set-upstream-to", opts.base, branch], opts.repo);
+    const remoteBase = opts.base;
+    if (remoteBase !== undefined && pipe_(remoteBase, Str.startsWith("origin/")))
+      yield* run("git", ["branch", "--set-upstream-to", remoteBase, branch], opts.repo);
   }
   const added = yield* run("git", ["worktree", "add", at, branch], opts.repo);
   if (added.code !== 0) {
@@ -766,7 +805,9 @@ const newOnOrigin = Effect.fn("worktree.newOnOrigin")(function* (branch: string,
   );
   if (remote.code !== 2) return null;
   const url = yield* shell("git", ["remote", "get-url", "origin"], cwd);
-  return url.code === 0 && url.stdout.trim() !== "" ? withoutCredentials(url.stdout.trim()) : null;
+  return url.code === 0 && Str.trim(url.stdout) !== ""
+    ? withoutCredentials(Str.trim(url.stdout))
+    : null;
 });
 
 /**
@@ -779,7 +820,9 @@ export const worktreeFor = Effect.fn("worktree.worktreeFor")(function* (
   opts: { cwd: string; branch: string; base?: string; label?: string },
 ) {
   const listing = yield* herdr.worktreeList(opts.cwd);
-  const existing = listing.worktrees.find((worktree) => worktree.branch === opts.branch);
+  const existing = Option.getOrUndefined(
+    Arr.findFirst(listing.worktrees, (worktree) => worktree.branch === opts.branch),
+  );
   // Every open and create is asked from the repository's own checkout, which is what
   // `worktree list` answers with. herdr refuses both from a linked worktree —
   // `linked_worktree_source`, "New and open worktree actions start from the repo
@@ -844,11 +887,9 @@ const occupant = Effect.fn("worktree.occupant")(function* (at: string) {
   // A symlink holds the path even where its target has gone, and `exists` follows it.
   const there =
     Option.isSome(yield* fs.readLink(at).pipe(Effect.option)) ||
-    (yield* fs.exists(at).pipe(Effect.catch(() => Effect.succeed(true))));
+    (yield* fs.exists(at).pipe(Effect.orElseSucceed(() => true)));
   if (!there) return null;
-  const marker = yield* fs
-    .readFileString(`${at}/.git`)
-    .pipe(Effect.catch(() => Effect.succeed("")));
+  const marker = yield* fs.readFileString(`${at}/.git`).pipe(Effect.orElseSucceed(() => ""));
   return { owner: /gitdir:\s*(.+?)\/\.git\/worktrees\//.exec(marker)?.[1] ?? null };
 });
 
@@ -882,7 +923,7 @@ const wouldLose = Effect.fn("worktree.wouldLose")(function* (
 ) {
   const dirty = yield* run("git", ["status", "--porcelain"], at);
   if (dirty.code !== 0) return { unread: "could not read the working tree" };
-  if (dirty.stdout.trim() !== "") return { lost: "uncommitted changes" };
+  if (Str.trim(dirty.stdout) !== "") return { lost: "uncommitted changes" };
   // Only commits no branch or remote has: moving HEAD is what would leave them behind.
   const only = yield* run("git", ["rev-list", "HEAD", "--not", "--branches", "--remotes"], at);
   if (only.code !== 0) return { unread: "could not read what is unpushed" };
@@ -916,7 +957,7 @@ const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
   const listing = yield* gitWorktrees(run, opts.cwd);
   if (!listing) return { refused: `${opts.cwd} is not a git checkout` };
 
-  const slots = ROAMING_DIRS.map((dir) =>
+  const slots = Arr.map(ROAMING_DIRS, (dir) =>
     path.join(opts.worktrees, path.basename(listing.repo), dir),
   );
   const at = slots[0]!;
@@ -965,7 +1006,7 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
   // Listed under the lock: a slot another start has just added is one git lists now.
   const listing = yield* gitWorktrees(run, opts.repo);
   if (listing === null) return { refused: `could not list the worktrees of ${opts.repo}` };
-  const listed = new Set(listing.checkouts.map((checkout) => checkout.path));
+  const listed = new Set(Arr.map(listing.checkouts, (checkout) => checkout.path));
   const seen: Array<{
     at: string;
     taken: { owner: string | null } | null;
@@ -1044,7 +1085,12 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
       return { path: at, base, from: recorded.run, passed };
     }
   }
-  return { refused: passed.map((one) => `${one.at} is ${one.kept}`).join("; ") };
+  return {
+    refused: Arr.join(
+      Arr.map(passed, (one) => `${one.at} is ${one.kept}`),
+      "; ",
+    ),
+  };
 });
 
 /** Where a Run works, and what it records and logs about how it got there. */
@@ -1079,7 +1125,7 @@ const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
 ) {
   const status = yield* shell("git", ["status", "--porcelain"], cwd);
   if (status.code !== 0) return "git could not read it";
-  if (status.stdout.trim() !== "") return "it has uncommitted changes";
+  if (Str.trim(status.stdout) !== "") return "it has uncommitted changes";
   const head = yield* shell("git", ["rev-parse", "HEAD"], cwd);
   if (head.code !== 0) return "git could not read it";
   const hasOrigin = (yield* shell("git", ["remote", "get-url", "origin"], base.in)).code === 0;
@@ -1092,18 +1138,20 @@ const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
     return `origin would not say where ${branch} is`;
   const wanted =
     remote?.code === 0
-      ? { at: remote.stdout.split("\t")[0], name: `${branch}'s head on origin` }
+      ? { at: Str.split(remote.stdout, "\t")[0], name: `${branch}'s head on origin` }
       : {
-          at: (yield* shell("git", ["rev-parse", `${base.ref}^{commit}`], base.in)).stdout.trim(),
+          at: Str.trim(
+            (yield* shell("git", ["rev-parse", `${base.ref}^{commit}`], base.in)).stdout,
+          ),
           name: base.ref,
         };
-  if (head.stdout.trim() !== wanted.at) return `it is not at ${wanted.name}`;
+  if (Str.trim(head.stdout) !== wanted.at) return `it is not at ${wanted.name}`;
   const panes = yield* Effect.result(herdr.paneList());
   if (panes._tag === "Failure") return "herdr would not say which agents work in it";
   for (const pane of panes.success) {
     if (!pane.agent || pane.agentStatus === "idle" || pane.agentStatus === "done") continue;
     for (const at of [pane.cwd, pane.foregroundCwd])
-      if (at !== null && (at === cwd || at.startsWith(`${cwd}/`)))
+      if (at !== null && (at === cwd || pipe_(at, Str.startsWith(`${cwd}/`))))
         return `agent ${pane.agent} in pane ${pane.paneId} is ${pane.agentStatus ?? "unknown"} in it`;
   }
   return null;
@@ -1145,13 +1193,18 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     const repository = repositoryOf(opts)?.value ?? "";
     let from = repository || opts.cwd;
     const project = remoteRepository(repository)
-      ? (projectFromRemote(repository)?.split("/-/")[0] ?? null)
+      ? (Option.getOrUndefined(
+          Option.map(
+            Option.fromNullishOr(projectFromRemote(repository)),
+            (present___________) => Str.split(present___________, "/-/")[0],
+          ),
+        ) ?? null)
       : null;
     if (project !== null) {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       from = path.join(opts.stateDir, "renovate-repositories", Bun.hash(repository).toString(16));
-      const host = project.split("/")[0]!;
+      const host = Str.split(project, "/")[0]!;
       const forge = forgeOfHost(host, opts.gitlabHost);
       if (forge === null) return { ...here, refused: `${host} is neither GitHub nor GitLab` };
       if (!(yield* fs.exists(path.join(from, ".git")))) {
@@ -1182,12 +1235,15 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       ...here,
       cwd: worktree.path,
       worktree,
-      note: [
-        ...made.passed.map((one) => `passed over ${one.at}: ${one.kept}`),
-        made.from === undefined
-          ? `created worktree ${worktree.path} detached at ${made.base}`
-          : `took worktree ${worktree.path} over from Run ${made.from}, detached at ${made.base}`,
-      ].join("; "),
+      note: Arr.join(
+        [
+          ...Arr.map(made.passed, (one) => `passed over ${one.at}: ${one.kept}`),
+          made.from === undefined
+            ? `created worktree ${worktree.path} detached at ${made.base}`
+            : `took worktree ${worktree.path} over from Run ${made.from}, detached at ${made.base}`,
+        ],
+        "; ",
+      ),
     } satisfies Checkout;
   }
 
@@ -1199,16 +1255,22 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       ["rev-parse", "--verify", "--quiet", `refs/heads/${plan.branch}`],
       opts.cwd,
     );
-    if (local.code === 0 && local.stdout.trim() !== opts.branchBase)
+    if (local.code === 0 && Str.trim(local.stdout) !== opts.branchBase)
       return {
         ...here,
         refused: `Local branch ${plan.branch} differs from the fetched revision; preserve or move it before starting remotely.`,
       };
     const trees = yield* gitWorktrees(shell, opts.cwd);
-    const existing = trees?.checkouts.find((one) => one.branch === plan.branch);
+    const existing = Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(trees), (present) =>
+        Option.getOrUndefined(
+          Arr.findFirst(present.checkouts, (one) => one.branch === plan.branch),
+        ),
+      ),
+    );
     if (existing !== undefined) {
       const dirty = yield* shell("git", ["status", "--porcelain"], existing.path);
-      if (dirty.code !== 0 || dirty.stdout.trim() !== "")
+      if (dirty.code !== 0 || Str.trim(dirty.stdout) !== "")
         return {
           ...here,
           refused: `The checkout of ${plan.branch} has local changes; preserve them before starting remotely.`,
@@ -1299,7 +1361,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     cwd: worktree.path,
     worktree,
     note: `${notTaken}${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}${
-      made.passed.length === 0 ? "" : `, passing over ${made.passed.join("; ")}`
+      made.passed.length === 0 ? "" : `, passing over ${Arr.join(made.passed, "; ")}`
     }`,
   } satisfies Checkout;
 });
@@ -1325,7 +1387,7 @@ export const checkoutRefusal = Effect.fn("worktree.checkoutRefusal")(function* (
     return null;
   const listing = yield* gitWorktrees(shell, opts.cwd);
   if (!listing) return `no worktree for ${plan.branch}: ${opts.cwd} is not a git checkout`;
-  if (listing.checkouts.some((checkout) => checkout.branch === plan.branch)) return null;
+  if (Arr.some(listing.checkouts, (checkout) => checkout.branch === plan.branch)) return null;
   const first = path.join(
     yield* herdr.worktreesDirectory(),
     path.basename(listing.repo),
@@ -1351,7 +1413,7 @@ const REPORT_MS = 60 * 60_000;
 export const PRUNE_FILE = "worktrees.json";
 
 const PruneEntry = Schema.Struct({
-  checked_at: Schema.Number,
+  checked_at: Schema.Finite,
   line: Schema.String,
   removed: Schema.Boolean,
   // Which repository this verdict is about. The file is one per installation, and a
@@ -1465,7 +1527,7 @@ const inUse = Effect.fn("worktree.inUse")(function* (
 
 /** Whether this directory is the checkout at `at`, or somewhere inside it. */
 const inside = (at: string, dir: string | null | undefined) =>
-  dir !== null && dir !== undefined && (dir === at || dir.startsWith(`${at}/`));
+  dir !== null && dir !== undefined && (dir === at || pipe_(dir, Str.startsWith(`${at}/`)));
 
 /**
  * Closes the tabs a removed checkout leaves behind: shells still sitting in a
@@ -1498,12 +1560,19 @@ const closeDeadTabs = Effect.fn("worktree.closeDeadTabs")(function* (
   /** Whether the agent left in this pane, if any, has ended, with its end's log once the tab closes. */
   const ends = (pane: PaneInfo, agents: ReadonlyArray<AgentInfo>) =>
     Effect.gen(function* () {
-      const entry = opts.registered.find((one) => one.paneId === pane.paneId);
-      const holder = agents.find((one) => one.paneId === pane.paneId);
+      const entry = Option.getOrUndefined(
+        Arr.findFirst(opts.registered, (one) => one.paneId === pane.paneId),
+      );
+      const holder = Option.getOrUndefined(
+        Arr.findFirst(agents, (one) => one.paneId === pane.paneId),
+      );
       if (holder !== undefined && holder.name !== entry?.agent) return null;
-      if (pane.agent === null || entry === undefined) return Effect.void;
-      const launched = (yield* readLaunches(opts.stateDir, entry.runId)).findLast(
-        (one) => one.agent === entry.agent,
+      if (pane.agent === null || entry === undefined) return yield* Effect.succeed(Effect.void);
+      const launched = Option.getOrUndefined(
+        Arr.findLast(
+          yield* readLaunches(opts.stateDir, entry.runId),
+          (one) => one.agent === entry.agent,
+        ),
       );
       const ended = yield* endAgent(
         {
@@ -1519,17 +1588,19 @@ const closeDeadTabs = Effect.fn("worktree.closeDeadTabs")(function* (
         agents,
       ).pipe(Effect.orElseSucceed(() => null));
       if (ended?._tag !== "Closed") return null;
-      return ended.ended
-        ? runLog(opts.stateDir, entry.runId)(endedLine(entry.agent, why)).pipe(Effect.ignore)
-        : Effect.void;
+      return yield* Effect.succeed(
+        ended.ended
+          ? runLog(opts.stateDir, entry.runId)(endedLine(entry.agent, why)).pipe(Effect.ignore)
+          : Effect.void,
+      );
     });
   let left = 0;
   let agents: Option.Option<ReadonlyArray<AgentInfo>> | undefined;
   for (const tabId of opts.tabs) {
-    const panes = opts.panes.filter((pane) => pane.tabId === tabId);
+    const panes = Arr.filter(opts.panes, (pane) => pane.tabId === tabId);
     // A tab herdr no longer has is nothing to close; one with a pane outside the
     // checkout is a tab somebody has taken over.
-    const isDead = panes.length > 0 && panes.every(isInside);
+    const isDead = panes.length > 0 && Arr.every(panes, isInside);
     if (!isDead) continue;
     agents ??= yield* Effect.option(herdr.agentList());
     if (Option.isNone(agents)) {
@@ -1575,10 +1646,10 @@ const settled = Effect.fn("worktree.settled")(function* (
     project: string;
   },
 ) {
-  const { run, repo, settling } = opts;
+  const { run, settling } = opts;
   const dirty = yield* run("git", ["status", "--porcelain"], worktree.path);
   if (dirty.code !== 0) return keepIt("could not read the working tree");
-  if (dirty.stdout.trim() !== "") return keepIt("uncommitted changes");
+  if (Str.trim(dirty.stdout) !== "") return keepIt("uncommitted changes");
 
   const landed =
     settling.landedAt.get(worktree.path) ??
@@ -1623,10 +1694,12 @@ const landedBy = Effect.fn("worktree.landedBy")(function* (
   const remotes =
     upstream !== null
       ? [upstream]
-      : (yield* opts.run("git", ["remote"], opts.repo)).stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line !== "");
+      : Arr.filter(
+          Arr.map(Str.split((yield* opts.run("git", ["remote"], opts.repo)).stdout, "\n"), (line) =>
+            Str.trim(line),
+          ),
+          (line) => line !== "",
+        );
   if (remotes.length === 0) return keepIt("no remote to compare against");
   for (const remote of remotes) {
     const heads = yield* opts.run(
@@ -1635,7 +1708,7 @@ const landedBy = Effect.fn("worktree.landedBy")(function* (
       opts.repo,
     );
     if (heads.code !== 0) return keepIt("could not reach the remote");
-    if (heads.stdout.trim() !== "") return keepIt("still on the remote");
+    if (Str.trim(heads.stdout) !== "") return keepIt("still on the remote");
   }
   return settledBecause("its remote branch is gone");
 });
@@ -1650,13 +1723,13 @@ const upstreamRemote = Effect.fn("worktree.upstreamRemote")(function* (
     ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     worktree.path,
   );
-  const name = upstream.code === 0 ? upstream.stdout.trim() : "";
-  return name === "" ? null : (name.split("/")[0] ?? null);
+  const name = upstream.code === 0 ? Str.trim(upstream.stdout) : "";
+  return name === "" ? null : (Str.split(name, "/")[0] ?? null);
 });
 
 /** How many lines a `rev-list` answered with; each one is a commit. */
 function commits(result: { stdout: string }): number {
-  return result.stdout.split("\n").filter((line) => line.trim() !== "").length;
+  return Arr.filter(Str.split(result.stdout, "\n"), (line) => Str.trim(line) !== "").length;
 }
 
 /**
@@ -1679,7 +1752,7 @@ const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
   if (count === 0) return null;
   if (mergedHeads.length > 0) {
     const head = yield* run("git", ["rev-parse", "HEAD"], worktree.path);
-    if (head.code === 0 && mergedHeads.includes(head.stdout.trim())) return null;
+    if (head.code === 0 && mergedHeads.includes(Str.trim(head.stdout))) return null;
   }
   return keepIt(`${count} commit(s) on no remote`);
 });
@@ -1703,13 +1776,15 @@ function fromRuns(
   /** The panes each checkout's finished Runs left their agents in. */
   const panes = new Map<string, Set<string>>();
   // The next roaming start takes a failed Run's roaming checkout over, so the sweep may too.
-  const roaming = runs.flatMap(({ worktree }) =>
+  const roaming = Arr.flatMap(runs, ({ worktree }) =>
     worktree?.created_by_collie && worktree.branch === "" ? [worktree.path] : [],
   );
   for (const run of runs) {
     const going = run.state === "running" || run.state === "waiting";
     const worktree = run.worktree?.created_by_collie ? run.worktree : null;
-    const at = worktree?.path ?? roaming.find((path) => inside(path, run.cwd));
+    const at =
+      worktree?.path ??
+      Option.getOrUndefined(Arr.findFirst(roaming, (path) => inside(path, run.cwd)));
     // A stopped or failed Run can be resumed in its checkout, until its work lands anyway.
     const landed =
       (run.worktree !== null && settling.landedAt.has(run.worktree.path)) ||
@@ -1788,9 +1863,9 @@ const prune = Effect.fn("worktree.prune")(function* (
     worktree.branch || path.basename(worktree.path);
   const state = yield* fs.readFileString(statePath).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(PruneStateJson)),
-    Effect.catch(() => Effect.succeed<PruneState>({})),
+    Effect.orElseSucceed((): PruneState => ({})),
   );
-  const before = `${Schema.encodeSync(PruneStateJson)(state)}\n`;
+  const before = `${yield* Schema.encodeEffect(PruneStateJson)(state).pipe(Effect.orDie)}\n`;
 
   const { mine, paths, panes, projects } = opts.recorded;
   const settling = opts.settling ?? NOTHING_SETTLING;
@@ -1828,14 +1903,14 @@ const prune = Effect.fn("worktree.prune")(function* (
   // A worktree of this repository that is no longer listed has nothing left to decide:
   // only a removal is still worth saying, and only while it is news. Another
   // repository's entries are none of this sweep's business.
-  for (const [known, entry] of Object.entries(state)) {
+  for (const [known, entry] of Rec.toEntries(state)) {
     if (entry.repo !== repo || opts.only !== undefined) continue;
-    if (candidates.some((worktree) => worktree.path === known)) continue;
+    if (Arr.some(candidates, (worktree) => worktree.path === known)) continue;
     if (!entry.removed || now - entry.checked_at > REPORT_MS) delete state[known];
   }
 
   const fresh = opts.dryRun === true || opts.only !== undefined;
-  const due = candidates.filter((worktree) => {
+  const due = Arr.filter(candidates, (worktree) => {
     const entry = state[worktree.path];
     return fresh || !entry || entry.removed || now - entry.checked_at >= RECHECK_MS;
   });
@@ -1847,7 +1922,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   // this round rather than judged on an empty list. The board still hears about every
   // candidate being held, and nothing is written down: an unverified round is not a
   // verdict, so the next refresh asks again rather than waiting out the debounce.
-  const leftovers = new Set([...panes.values()].flatMap((left) => [...left]));
+  const leftovers = new Set(Arr.flatMap([...panes.values()], (left) => [...left]));
   const use = yield* inUse(opts.herdr, opts.sessions ?? [], {
     stateDir: opts.stateDir,
     paths,
@@ -1858,8 +1933,8 @@ const prune = Effect.fn("worktree.prune")(function* (
     const standing = yield* conclude(round);
     const unknown = "could not ask herdr what is live";
     return {
-      lines: [...standing, ...due.map((worktree) => `kept ${nameOf(worktree)} · ${unknown}`)],
-      judged: due.map((worktree) => ({ path: worktree.path, keep: unknown, removed: false })),
+      lines: [...standing, ...Arr.map(due, (worktree) => `kept ${nameOf(worktree)} · ${unknown}`)],
+      judged: Arr.map(due, (worktree) => ({ path: worktree.path, keep: unknown, removed: false })),
     };
   }
 
@@ -1887,9 +1962,13 @@ const prune = Effect.fn("worktree.prune")(function* (
             run,
             managedBy: mine.get(worktree.path)?.managed_by ?? "herdr",
             tabs: new Set(
-              use.panes
-                .filter((pane) => panes.get(worktree.path)?.has(pane.paneId) ?? false)
-                .map((pane) => pane.tabId),
+              Arr.map(
+                Arr.filter(
+                  use.panes,
+                  (pane) => panes.get(worktree.path)?.has(pane.paneId) ?? false,
+                ),
+                (pane) => pane.tabId,
+              ),
             ),
             panes: use.panes,
             stateDir: opts.stateDir,
@@ -1905,7 +1984,7 @@ const prune = Effect.fn("worktree.prune")(function* (
         ? { keep: verdict.keep }
         : outcome.removed
           ? { why: verdict.why }
-          : { keep: outcome.line.replace(/^kept [^·]* · /, "") }),
+          : { keep: pipe_(outcome.line, Str.replace(/^kept [^·]* · /, "")) }),
     });
   }
 
@@ -1926,7 +2005,7 @@ const conclude = Effect.fn("worktree.conclude")(function* (opts: {
   /** Whose board this is: only this repository's lines belong on it. */
   repo: string;
 }) {
-  const encoded = `${Schema.encodeSync(PruneStateJson)(opts.state)}\n`;
+  const encoded = `${yield* Schema.encodeEffect(PruneStateJson)(opts.state).pipe(Effect.orDie)}\n`;
   if (encoded !== opts.before) {
     yield* (yield* FileSystem.FileSystem).writeFileString(opts.statePath, encoded);
   }
@@ -1938,13 +2017,15 @@ const conclude = Effect.fn("worktree.conclude")(function* (opts: {
  * news. Only `repo`'s, where one is named.
  */
 function reported(state: PruneState, now: number, repo?: string): string[] {
-  return Object.values(state)
-    .filter(
+  return Arr.map(
+    Arr.filter(
+      Rec.values(state),
       (entry) =>
         (repo === undefined || entry.repo === repo) &&
         (!entry.removed || now - entry.checked_at <= REPORT_MS),
-    )
-    .map((entry) => entry.line);
+    ),
+    (entry) => entry.line,
+  );
 }
 
 /** One line about a removal, and whether the checkout actually went. */
@@ -2059,7 +2140,7 @@ export const judgeWorktrees = (opts: PruneOptions) =>
     const lock = path.join(opts.stateDir, `${PRUNE_FILE}.lock`);
     return yield* withLock(lock, Effect.succeed(null), sweep(opts));
   }).pipe(
-    Effect.catch(() => Effect.succeed(null)),
+    Effect.orElseSucceed(() => null),
     Effect.map((round) => round ?? { lines: [], judged: [], busy: true }),
   );
 
@@ -2085,7 +2166,7 @@ export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(functio
  */
 const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const fs = yield* FileSystem.FileSystem;
-  const checking = new Set((yield* recordsIn(opts.stateDir)).map((record) => record.run));
+  const checking = new Set(Arr.map(yield* recordsIn(opts.stateDir), (record) => record.run));
   const recorded = fromRuns(
     opts.runs,
     opts.registered,
@@ -2100,10 +2181,9 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
     const own = cwd === opts.cwd;
     // A checkout an earlier listing named is in a repository already swept.
     if (!own && (listed.has(cwd) || !(yield* fs.exists(cwd)))) continue;
-    const listing = yield* opts.herdr
-      .worktreeList(cwd)
-      .pipe(Effect.catch(() => Effect.succeed<WorktreeListing | null>(null)));
-    if (!own && (listing === null || listing.worktrees.every((w) => listed.has(w.path)))) continue;
+    const listing = yield* opts.herdr.worktreeList(cwd).pipe(Effect.orElseSucceed(() => null));
+    if (!own && (listing === null || Arr.every(listing.worktrees, (w) => listed.has(w.path))))
+      continue;
     for (const worktree of listing?.worktrees ?? []) listed.add(worktree.path);
     const round = yield* prune({ ...opts, cwd, recorded, listing });
     lines.push(...round.lines);

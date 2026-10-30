@@ -1548,6 +1548,10 @@ What the command prints is shown as it runs — its stdout on stdout and its std
 stderr, or both on stderr under `--json`, where stdout is the one envelope — and the exit
 status is the command's own, so a failure says why the first time.
 
+Command displays preserve argument boundaries: `echo 'a b'` reads differently from
+`echo a b`. Control characters appear as escapes, so displayed commands containing them
+are for reading; the recorded argv retains the original values.
+
 | Flag       | What it does                                                                                                                                                         |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--run`    | The run this is a verification of, and whose tree is snapshotted. Defaults to the Run whose agent this pane is.                                                      |
@@ -1638,10 +1642,11 @@ its pass as a verification of the check, with the job's URL. A failed job is fir
 where the branch leaves its target branch: failed there too, it is reported as failing
 before the run's changes, and left unproved. Otherwise it is retried once, and a pass on
 the retry is reported as a Flake. A job that fails its retry goes to the builder in a CI
-fix round, at most 4; see [`docs/workflows.md`](workflows.md). A skipped, cancelled or
-missing job, a job not finished after 2 hours, a checkout with no forge, or a job still
-failing after the last round parks the run unproved, naming the check, the job and the
-commit.
+fix round, at most 4; see [`docs/workflows.md`](workflows.md). A job missing right after
+its retry, as GitHub holds back a job behind `needs` until its needs finish, is waited on
+like a pending one, up to 2 hours. A skipped, cancelled or missing job, a job not finished
+after 2 hours, a checkout with no forge, or a job still failing after the last round parks
+the run unproved, naming the check, the job and the commit.
 
 ```json
 [

@@ -6,6 +6,8 @@
 // `filePrompts` writes it into the run dir, and an unattended Run must never come to
 // depend on a renderer being there.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Deferred, Effect } from "effect";
 import { createSignal, type Accessor } from "solid-js";
 import type { InputPrompts, PickItem } from "../inputs";
@@ -69,7 +71,10 @@ export function signalPrompts(): Prompting {
             footer: opts.footer ?? MENU_FOOTER,
             items,
           }),
-          (answer) => (answer === null ? null : (items.find((i) => i.id === answer) ?? null)),
+          (answer) =>
+            answer === null
+              ? null
+              : (Option.getOrUndefined(Arr.findFirst(items, (i) => i.id === answer)) ?? null),
         ),
       ask: (question) =>
         waitFor({ _tag: "Question", header: question, footer: QUESTION_FOOTER, initial: "" }),

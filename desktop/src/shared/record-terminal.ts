@@ -1,5 +1,8 @@
 // What a card's record decides about its Terminal tab.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import type { BoardAgent } from "../../../src/board-model";
 import { ROLES } from "../../../src/steer-target";
 
@@ -32,15 +35,15 @@ export const agentTabs = (
   agents: ReadonlyArray<BoardAgent>,
   shown: BoardAgent | null,
 ): AgentTab[] => {
-  const ended = shown !== null && !agents.some((one) => one.name === shown.name);
+  const ended = shown !== null && !Arr.some(agents, (one) => one.name === shown.name);
   const listed = ended ? [...agents, shown] : agents;
   const roleOf = (agent: BoardAgent) => agent.role ?? agent.name;
   const seen = new Map<string, number>();
-  return listed.map((agent) => {
+  return Arr.map(listed, (agent) => {
     const role = roleOf(agent);
     const nth = (seen.get(role) ?? 0) + 1;
     seen.set(role, nth);
-    const shared = listed.filter((one) => roleOf(one) === role).length > 1;
+    const shared = Arr.filter(listed, (one) => roleOf(one) === role).length > 1;
     return {
       name: agent.name,
       run: agent.run,
@@ -57,11 +60,10 @@ export const recipients = (
   launches: ReadonlyArray<{ readonly agent: string }> | undefined,
   live: ReadonlyArray<BoardAgent>,
 ): AgentTab[] => {
-  const tabs = new Map(agentTabs(live, null).map((tab) => [tab.name, tab]));
-  const names = (launches ?? []).map((launch) => launch.agent);
-  return names
-    .filter((name, at) => names.lastIndexOf(name) === at)
-    .flatMap((name) => tabs.get(name) ?? []);
+  const tabs = new Map(Arr.map(agentTabs(live, null), (tab) => [tab.name, tab]));
+  const names = Arr.map(launches ?? [], (launch) => launch.agent);
+  const latest = Arr.filter(names, (name, at) => names.lastIndexOf(name) === at);
+  return Arr.flatMap(latest, (name) => Arr.ensure(tabs.get(name) ?? []));
 };
 
 /** Where a delivery goes: the agent at work, a role, or one agent by name. */
@@ -100,35 +102,45 @@ export const deliveryChoices = (
   preferred?: "planner",
 ): DeliveryChoice[] => {
   const tabs = recipients(launches, live);
-  const byName = tabs.map((tab) => ({ key: tab.name, label: tab.label, agent: tab.name }));
+  const byName = Arr.map(tabs, (tab) => ({ key: tab.name, label: tab.label, agent: tab.name }));
   if (tabs.length === 0) return [];
   const roles = new Set(
-    tabs.flatMap((tab) => live.find((one) => one.name === tab.name)?.role ?? []),
+    Arr.flatMap(tabs, (tab) =>
+      Arr.ensure(
+        Option.getOrUndefined(Arr.findFirst(live, (one) => one.name === tab.name))?.role ?? [],
+      ),
+    ),
   );
   const offered: DeliveryChoice[] =
     protocol === null || protocol < ADDRESSED_DELIVERY
-      ? byName.reverse()
+      ? Arr.reverse(byName)
       : [
           { key: "@work", label: "The agent at work" },
-          ...Object.entries(ROLES)
-            .filter(([, covered]) => covered.some((role) => roles.has(role)))
-            .map(([to]) => ({
+          ...Arr.map(
+            Arr.filter(Rec.toEntries(ROLES), ([, covered]) =>
+              Arr.some(covered, (role) => roles.has(role)),
+            ),
+            ([to]) => ({
               key: `@${to}`,
               label: `The ${to}`,
               to,
-            })),
+            }),
+          ),
           ...byName,
         ];
   const first =
     preferred === undefined
       ? undefined
-      : offered.find(
-          (one) =>
-            one.to === preferred ||
-            (one.agent !== undefined &&
-              live.some((agent) => agent.name === one.agent && agent.role === preferred)),
+      : Option.getOrUndefined(
+          Arr.findFirst(
+            offered,
+            (one) =>
+              one.to === preferred ||
+              (one.agent !== undefined &&
+                Arr.some(live, (agent) => agent.name === one.agent && agent.role === preferred)),
+          ),
         );
-  return first === undefined ? offered : [first, ...offered.filter((one) => one !== first)];
+  return first === undefined ? offered : [first, ...Arr.filter(offered, (one) => one !== first)];
 };
 
 /**
@@ -140,17 +152,18 @@ export const shownAgent = (
   focused: string | undefined,
   before: BoardAgent | null,
 ): BoardAgent | null =>
-  agents.find((one) => one.name === focused) ?? (before?.name === focused ? before : null);
+  Option.getOrUndefined(Arr.findFirst(agents, (one) => one.name === focused)) ??
+  (before?.name === focused ? before : null);
 
 /**
  * The agent the tab opens on: one `blocked`, else one `working`, of the card's own Run first
  * and then the last listed; null where none is either.
  */
 export const atWork = (agents: ReadonlyArray<BoardAgent>, run: string): BoardAgent | null => {
-  const blocked = agents.filter((one) => one.status === "blocked");
+  const blocked = Arr.filter(agents, (one) => one.status === "blocked");
   const candidates =
-    blocked.length > 0 ? blocked : agents.filter((one) => one.status === "working");
-  const own = candidates.filter((one) => one.run === run);
+    blocked.length > 0 ? blocked : Arr.filter(agents, (one) => one.status === "working");
+  const own = Arr.filter(candidates, (one) => one.run === run);
   return (own.length > 0 ? own : candidates).at(-1) ?? null;
 };
 
@@ -164,7 +177,9 @@ export const askedFor = (
   if (picked !== null) return picked;
   if (requested !== undefined)
     return (
-      agentTabs(agents, null).find((one) => one.name === requested) ?? {
+      Option.getOrUndefined(
+        Arr.findFirst(agentTabs(agents, null), (one) => one.name === requested),
+      ) ?? {
         name: requested,
         run,
         label: requested,
@@ -174,7 +189,11 @@ export const askedFor = (
       }
     );
   const busy = atWork(agents, run);
-  return agentTabs(agents, null).find((one) => one.name === busy?.name) ?? null;
+  return (
+    Option.getOrUndefined(
+      Arr.findFirst(agentTabs(agents, null), (one) => one.name === busy?.name),
+    ) ?? null
+  );
 };
 
 /**

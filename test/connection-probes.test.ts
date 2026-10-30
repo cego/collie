@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { probeGitlab, probeGithub, probeLinearMcp } from "../src/connection-probes";
@@ -13,24 +17,25 @@ test("GitLab uses glab's configured host or Collie's explicit host, and identifi
     Effect.gen(function* () {
       const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => rig.close().pipe(Effect.orDie));
       const fs = yield* FileSystem.FileSystem;
-      const config = Schema.decodeUnknownSync(Schema.Struct({ host: Schema.String }))(
+      const config = yield* Schema.decodeUnknownEffect(Schema.Struct({ host: Schema.String }))(
         parseYaml(yield* fs.readFileString(`${import.meta.dir}/fixtures/connections/glab.yml`)),
-      );
+      ).pipe(Effect.orDie);
       const asked: string[] = [];
       const run: Runner = (cmd, args) =>
         Effect.sync((): Ran => {
-          asked.push(args.join(" "));
-          if (args.join(" ") === "config get host --global")
+          asked.push(Arr.join(args, " "));
+          if (Arr.join(args, " ") === "config get host --global")
             return { code: 0, stdout: config.host };
           if (args[0] === "config") return { code: 0, stdout: "fixture-token" };
-          if (args.join(" ") === "api --hostname gitlab.example user")
+          if (Arr.join(args, " ") === "api --hostname gitlab.example user")
             return { code: 0, stdout: '{"username":"mk"}' };
           if (
             cmd === "env" &&
-            args.join(" ") === "GITLAB_HOST=other.example glab api --hostname other.example user"
+            Arr.join(args, " ") ===
+              "GITLAB_HOST=other.example glab api --hostname other.example user"
           )
             return { code: 0, stdout: '{"username":"other-mk"}' };
-          throw new Error(`unexpected glab ${args.join(" ")}`);
+          throw new Error(`unexpected glab ${Arr.join(args, " ")}`);
         });
       expect(yield* probeGitlab(rig.pluginEnv(), run)).toEqual({
         state: "ok",
@@ -76,16 +81,18 @@ test("GitHub names the active gh account, distinguishes absent from invalid, and
         );
         const asked: string[] = [];
         const found = yield* probeGithub(rig.pluginEnv(), (cmd, args) => {
-          asked.push([cmd, ...args].join(" "));
+          asked.push(Arr.join([cmd, ...args], " "));
           return Effect.succeed({ code, stdout: "", stderr });
         });
         expect(asked).toEqual(["gh auth status --active --hostname github.com"]);
         expect(found.state).toBe(state);
         if (found.state === "ok") expect(found.account).toBe("mk");
         else expect(found.fix).toBe("gh auth login --hostname github.com --web");
-        expect(Schema.encodeSync(Schema.fromJsonString(ConnectionReading))(found)).not.toContain(
-          "gho_",
-        );
+        expect(
+          yield* Schema.encodeEffect(Schema.fromJsonString(ConnectionReading))(found).pipe(
+            Effect.orDie,
+          ),
+        ).not.toContain("gho_");
       }
     }),
   ));
@@ -104,7 +111,16 @@ test("Linear is found in Claude, Codex and OpenCode configs; disabled and unread
         ["codex.toml", `${env.home}/.codex/config.toml`, "tickets"],
         ["opencode.jsonc", `${env.home}/.config/opencode/opencode.jsonc`, "linear"],
       ] as const) {
-        yield* fs.makeDirectory(target.slice(0, target.lastIndexOf("/")), { recursive: true });
+        yield* fs.makeDirectory(
+          pipe_(
+            target,
+            Str.slice(
+              0,
+              Option.getOrElse(pipe_(target, Str.lastIndexOf("/")), () => -1),
+            ),
+          ),
+          { recursive: true },
+        );
         yield* fs.copyFile(`${import.meta.dir}/fixtures/connections/${fixture}`, target);
         const found = yield* probeLinearMcp(env);
         expect(found).toMatchObject({ state: "ok", account });

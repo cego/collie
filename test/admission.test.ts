@@ -8,6 +8,10 @@
 // Real processes and a real database, because a gap between two writes is not something a
 // map can have.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
@@ -19,7 +23,7 @@ const complete = (reply: { readonly status?: string }) => reply.status === "comp
 
 /** How many times the run's one launch Activity actually ran. */
 const launches = (log: ReadonlyArray<string>) =>
-  log.filter((line) => line.startsWith("launch")).length;
+  Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch"))).length;
 
 const started = (host: Host, runId: string, note: string) =>
   host.ask({ op: "start", id: "proof", runId, input: { note } });
@@ -253,8 +257,12 @@ for (const { target, stopped } of [
           const next = yield* openHost(state);
           const client = yield* connect(state).pipe(Effect.orDie);
           const rows = yield* client.runs({ task: null }).pipe(Effect.orDie);
-          const pending = rows.find((one) => one.workflow === "proof")!;
-          const done = rows.find((one) => one.workflow === "plain")!;
+          const pending = Option.getOrUndefined(
+            Arr.findFirst(rows, (one) => one.workflow === "proof"),
+          )!;
+          const done = Option.getOrUndefined(
+            Arr.findFirst(rows, (one) => one.workflow === "plain"),
+          )!;
           const missing = yield* client
             .resume({ runId: pending.runId, request: "missing" })
             .pipe(Effect.orDie);
@@ -295,7 +303,11 @@ for (const { target, stopped } of [
           const current = yield* client.run({ runId: pending.runId }).pipe(Effect.orDie);
           expect(current?.controls).not.toContain("stop");
           expect(
-            current?.waiting.some((one) => one.name === "decision" && one.answer === null),
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(current), (present) =>
+                Arr.some(present.waiting, (one) => one.name === "decision" && one.answer === null),
+              ),
+            ),
           ).toBe(true);
           expect(launches(yield* events(state, pending.runId))).toBe(1);
           yield* next.stop;

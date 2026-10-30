@@ -1,6 +1,9 @@
 // `install-desktop.sh`, the one line that installs Collie Desktop: it runs Electrobun's
 // installer only once the download verifies against Collie's release key.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { Effect, FileSystem } from "effect";
@@ -18,7 +21,7 @@ test("the install script checks with the key release-p256.pub holds", () =>
       const fs = yield* FileSystem.FileSystem;
       const script = yield* fs.readFileString(SCRIPT);
       const key = yield* fs.readFileString(`${root}release-p256.pub`);
-      expect(KEY_BLOCK.exec(script)?.[0]).toBe(key.trim());
+      expect(KEY_BLOCK.exec(script)?.[0]).toBe(Str.trim(key));
     }),
   ));
 
@@ -49,7 +52,10 @@ const APPLE_SILICON: System = { os: "Darwin", arch: "arm64" };
 const install = (dir: string, publicKey: string, system: System = LINUX) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const script = (yield* fs.readFileString(SCRIPT)).replace(KEY_BLOCK, publicKey.trim());
+    const script = pipe_(
+      yield* fs.readFileString(SCRIPT),
+      Str.replace(KEY_BLOCK, Str.trim(publicKey)),
+    );
     const home = `${dir}/home`;
     yield* fs.makeDirectory(home, { recursive: true });
     // The system the script is told it runs on, whatever runs the test.
@@ -155,10 +161,7 @@ const hdiutilLog = (dir: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${dir}/hdiutil.log`)),
     Effect.map((text) =>
-      text
-        .trim()
-        .split("\n")
-        .map((line) => line.split(" ")[0]),
+      Arr.map(Str.split(Str.trim(text), "\n"), (line) => Str.split(line, " ")[0]),
     ),
     Effect.orElseSucceed((): string[] => []),
   );

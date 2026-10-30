@@ -1,5 +1,6 @@
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import {
   claudeForbidsBypass,
   foldPreferences,
@@ -78,7 +79,7 @@ test("Codex's accepted effort reaches both its App Server and TUI configuration"
 });
 
 test("`default` pins Claude to Opus while other harnesses keep their native default", () => {
-  for (const harness of Object.values(HARNESSES)) {
+  for (const harness of Rec.values(HARNESSES)) {
     expect(knownModel(harness, DEFAULT_MODEL)).toBe(true);
     expect(modelHint(harness)).toContain(DEFAULT_MODEL);
   }
@@ -127,7 +128,7 @@ test("a skill is started in each harness's own syntax", () => {
   expect(HARNESSES.codex!.skillCommand("code-review")).toBe('the "code-review" skill');
   expect(HARNESSES.opencode!.skillCommand("code-review")).toBe('the "code-review" skill');
   // Every harness in the table answers, so a definition can never name one that cannot.
-  for (const adapter of Object.values(HARNESSES)) {
+  for (const adapter of Rec.values(HARNESSES)) {
     expect(adapter.skillCommand("tdd")).toContain("tdd");
   }
 });
@@ -175,7 +176,7 @@ test("every harness starts in its auto mode, and past its prompts only when bypa
     expect(permissionsOf("pi", "openai-codex/gpt-5.6-sol", mode)).toEqual([]);
 
   // `harness` passes no switch at all, whichever harness a step names.
-  for (const adapter of Object.values(HARNESSES)) {
+  for (const adapter of Rec.values(HARNESSES)) {
     const asked = startArgs(adapter, DEFAULT_MODEL, "/p/i.md", undefined, "harness");
     for (const flag of [
       "--permission-mode",
@@ -348,7 +349,7 @@ test("each harness wires the whole Collie Toolkit with its Run and agent environ
   };
   for (const id of ["claude", "codex", "pi", "opencode"]) {
     const wired = HARNESSES[id]!.mcp(launch);
-    expect(wired.args.length + Object.keys(wired.env).length).toBeGreaterThan(0);
+    expect(wired.args.length + Rec.keys(wired.env).length).toBeGreaterThan(0);
     if (id === "claude") expect(wired.args).toEqual(["--mcp-config", launch.config]);
     if (id === "pi") expect(wired.args).toEqual(["-e", launch.extension]);
     if (id === "codex") {
@@ -381,9 +382,10 @@ test("OpenCode keeps the launch's existing settings and other MCP servers", () =
     },
   });
   expect(
-    Schema.decodeUnknownSync(Schema.fromJsonString(Schema.JsonObject))(
-      wired.env.OPENCODE_CONFIG_CONTENT!,
-    ),
+    flow(
+      Schema.decodeResult(Schema.fromJsonString(Schema.JsonObject)),
+      Result.getOrThrow,
+    )(wired.env.OPENCODE_CONFIG_CONTENT!),
   ).toMatchObject({
     theme: "dark",
     mcp: { other: { url: "https://example.test/mcp" }, collie: { enabled: true } },

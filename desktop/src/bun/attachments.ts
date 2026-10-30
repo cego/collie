@@ -2,16 +2,18 @@
 // parts, kept once by sha256 under Desktop's state directory, and read back by id for the
 // model, a thumbnail or a Run (ADR-0046).
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { PART_BYTES } from "../../../src/board-model";
 import { sha256Hex } from "../../../src/attachments";
 import { capRefusal, type Staged } from "../shared/attachments";
 
-export class AttachmentRefused extends Schema.TaggedError<AttachmentRefused>()(
-  "AttachmentRefused",
-  { reason: Schema.String },
-) {}
+export class AttachmentRefused extends Schema.TaggedError<
+  AttachmentRefused,
+  { readonly brand: unique symbol }
+>()("AttachmentRefused", { reason: Schema.String }) {}
 
 const refused = (reason: string) => new AttachmentRefused({ reason });
 
@@ -32,6 +34,7 @@ const storeOf = (dir: string) => `${dir}/attachments`;
 
 /** A name that stays one entry of the directory it is put in, and one line of a listing. */
 const plainName = (name: string) =>
+  // oxlint-disable-next-line no-control-regex -- File names must reject ASCII control bytes and DEL.
   !["", ".", "..", ".scaled"].includes(name) && !/[/\\\u0000-\u001f\u007f]/.test(name);
 
 /** `<sha256>/<name>`, which is where a copy is kept under the store. */
@@ -42,7 +45,7 @@ const validId = (id: string) => {
 };
 
 const mediaTypeOf = (path: string, given: string) =>
-  Bun.file(path).type.split(";")[0] || given || "application/octet-stream";
+  Str.split(Bun.file(path).type, ";")[0] || given || "application/octet-stream";
 
 /** Desktop's copy of an attachment, or null where it has none, or none any more. */
 export const describeAttachment = Effect.fn("Attachments.describe")(function* (
@@ -54,7 +57,7 @@ export const describeAttachment = Effect.fn("Attachments.describe")(function* (
   const path = `${storeOf(dir)}/${id}`;
   const info = yield* fs.stat(path).pipe(Effect.option);
   if (Option.isNone(info) || info.value.type !== "File") return null;
-  const name = id.slice(65);
+  const name = pipe_(id, Str.slice(65));
   return {
     id,
     name,
@@ -66,7 +69,7 @@ export const describeAttachment = Effect.fn("Attachments.describe")(function* (
 
 /** Where the scaled copy of an image is kept beside its original. */
 const scaledPath = (dir: string, id: string) =>
-  `${storeOf(dir)}/${id.slice(0, 64)}/.scaled/${id.slice(65)}`;
+  `${storeOf(dir)}/${pipe_(id, Str.slice(0, 64))}/.scaled/${pipe_(id, Str.slice(65))}`;
 
 /** The scaled copy of an image, where the view made one. */
 export const scaledCopy = Effect.fn("Attachments.scaledCopy")(function* (dir: string, id: string) {
@@ -85,11 +88,30 @@ const keep = Effect.fn("Attachments.keep")(function* (
   const fs = yield* FileSystem.FileSystem;
   const id = `${sha256Hex(bytes)}/${name}`;
   const kept = `${storeOf(dir)}/${id}`;
-  yield* fs.makeDirectory(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
+  yield* fs.makeDirectory(
+    pipe_(
+      kept,
+      Str.slice(
+        0,
+        Option.getOrElse(pipe_(kept, Str.lastIndexOf("/")), () => -1),
+      ),
+    ),
+    { recursive: true },
+  );
   yield* fs.writeFile(kept, bytes);
   // Attached again, a copy is kept another 30 days from now.
   const now = (yield* Clock.currentTimeMillis) / 1000;
-  yield* fs.utimes(kept.slice(0, kept.lastIndexOf("/")), now, now);
+  yield* fs.utimes(
+    pipe_(
+      kept,
+      Str.slice(
+        0,
+        Option.getOrElse(pipe_(kept, Str.lastIndexOf("/")), () => -1),
+      ),
+    ),
+    now,
+    now,
+  );
   return {
     id,
     name,
@@ -105,7 +127,7 @@ const keep = Effect.fn("Attachments.keep")(function* (
  */
 export const stagePath = Effect.fn("Attachments.stagePath")(function* (dir: string, path: string) {
   const fs = yield* FileSystem.FileSystem;
-  const name = path.split("/").at(-1) ?? "";
+  const name = Str.split(path, "/").at(-1) ?? "";
   if (!plainName(name)) return { refused: `${path} is not a file's name` };
   const info = yield* fs.stat(path).pipe(Effect.option);
   if (Option.isNone(info)) return { refused: `${path} cannot be read` };

@@ -1,5 +1,6 @@
 // What `collie upgrade` does to an installation, and what it says it did.
 
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -35,12 +36,15 @@ afterEach(() =>
   ),
 );
 
-const PREPARED = [
-  "prepare: plugin-link: already in place",
-  "prepare: runner: done",
-  "prepare: operator-skill: done",
-  "prepare: skills: skipped — no npx on PATH; install Node, then run `collie upgrade`",
-].join("\n");
+const PREPARED = Arr.join(
+  [
+    "prepare: plugin-link: already in place",
+    "prepare: runner: done",
+    "prepare: operator-skill: done",
+    "prepare: skills: skipped — no npx on PATH; install Node, then run `collie upgrade`",
+  ],
+  "\n",
+);
 
 /** A checkout that answers `git` and a `prepare.sh` that says what it did. */
 const fakeTools = Effect.fn("operationsTest.fakeTools")(function* (opts: {

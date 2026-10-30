@@ -1,5 +1,10 @@
 // What `self-improve` decides, as pure functions its module and its tests share.
 
+import * as Num from "effect/Number";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { DateTime, Schema } from "effect";
 
 export const CATEGORIES = [
@@ -67,12 +72,12 @@ const MARKER = /<!-- collie-finding: ([a-z0-9-]+) -->/g;
 export const markerOf = (key: string) => `<!-- collie-finding: ${key} -->`;
 
 export const keysIn = (body: string): ReadonlyArray<string> =>
-  [...body.matchAll(MARKER)].map((match) => match[1] ?? "");
+  Arr.map([...pipe(body, Str.matchAll(MARKER))], (match) => match[1] ?? "");
 
 /** The open issue a finding is about: the one it names, else the one carrying its key. */
 export const targetOf = (finding: Finding, open: ReadonlyArray<OpenIssue>): OpenIssue | null =>
-  open.find((one) => one.number === finding.issue) ??
-  open.find((one) => one.keys.includes(finding.key)) ??
+  Option.getOrUndefined(Arr.findFirst(open, (one) => one.number === finding.issue)) ??
+  Option.getOrUndefined(Arr.findFirst(open, (one) => one.keys.includes(finding.key))) ??
   null;
 
 /**
@@ -88,8 +93,8 @@ export const sortOut = (
   const kept: Finding[] = [];
   const leftOut: LeftOut[] = [];
   for (const finding of findings) {
-    const runs = new Set(finding.runs.filter((run) => window.has(run)));
-    if (kept.some((one) => one.key === finding.key))
+    const runs = new Set(Arr.filter(finding.runs, (run) => window.has(run)));
+    if (Arr.some(kept, (one) => one.key === finding.key))
       leftOut.push({ what: finding.title, why: `the same key as another finding, ${finding.key}` });
     else if (runs.size === 0) leftOut.push({ what: finding.title, why: "no Run of the window" });
     else if (finding.category === "defect" && !defects)
@@ -112,11 +117,10 @@ export const chosen = (
   outcomes: ReadonlyMap<string, Outcome>,
   bound: number,
 ): ReadonlyArray<Improvement> =>
-  improvements
-    .filter(
-      ({ keys }) => keys.length > 0 && keys.every((key) => outcomes.get(key)?.kind === "filed"),
-    )
-    .slice(0, bound);
+  Arr.filter(
+    improvements,
+    ({ keys }) => keys.length > 0 && Arr.every(keys, (key) => outcomes.get(key)?.kind === "filed"),
+  ).slice(0, bound);
 
 export const goalOf = (
   issues: ReadonlyArray<{
@@ -126,12 +130,21 @@ export const goalOf = (
     readonly url: string;
   }>,
 ) =>
-  [
-    "Fix these issues in Collie, which a self-improve Run filed:",
-    ...issues.map(({ number, title, url, body }) => `## #${number} ${title}\n\n${url}\n\n${body}`),
-    `The merge request must say ${issues.map(({ number }) => `\`Closes #${number}\``).join(", ")}, one per issue, so merging it closes them.`,
-    "Quote nothing from anywhere else: no Run's goal, no person's words, no transcript and no other repository.",
-  ].join("\n\n");
+  Arr.join(
+    [
+      "Fix these issues in Collie, which a self-improve Run filed:",
+      ...Arr.map(
+        issues,
+        ({ number, title, url, body }) => `## #${number} ${title}\n\n${url}\n\n${body}`,
+      ),
+      `The merge request must say ${Arr.join(
+        Arr.map(issues, ({ number }) => `\`Closes #${number}\``),
+        ", ",
+      )}, one per issue, so merging it closes them.`,
+      "Quote nothing from anywhere else: no Run's goal, no person's words, no transcript and no other repository.",
+    ],
+    "\n\n",
+  );
 
 export const Ended = Schema.Struct({
   name: Schema.String,
@@ -161,19 +174,35 @@ export const restartsOf = (
   const at = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
   const seen = new Set<string>();
   const restarts: Starting[] = [];
-  for (const { created, ended } of earlier.toSorted((a, b) => at(a.created) - at(b.created)))
+  for (const { created, ended } of Arr.sortWith(
+    earlier,
+    (value) => value,
+    (a, b) => Num.sign(at(a.created) - at(b.created)),
+  ))
     for (const { name, issues, ended: how } of ended) {
-      const same = `${name} ${issues.toSorted((a, b) => a - b).join(",")}`;
-      if (!how.startsWith(FAILED_TO_START) || seen.has(same)) continue;
+      const same = `${name} ${Arr.join(
+        Arr.map(
+          Arr.sortWith(
+            issues,
+            (value) => value,
+            (a, b) => Num.sign(a - b),
+          ),
+          (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
+        ),
+        ",",
+      )}`;
+      if (!pipe(how, Str.startsWith(FAILED_TO_START)) || seen.has(same)) continue;
       seen.add(same);
-      const taken = since.some(
+      const taken = Arr.some(
+        since,
         (run) =>
-          at(run.created) > at(created) && run.closes.some((number) => issues.includes(number)),
+          at(run.created) > at(created) &&
+          Arr.some(run.closes, (number) => issues.includes(number)),
       );
       if (
         !taken &&
-        issues.every((number) => open.some((one) => one.number === number)) &&
-        !restarts.some((one) => one.name === name)
+        Arr.every(issues, (number) => Arr.some(open, (one) => one.number === number)) &&
+        !Arr.some(restarts, (one) => one.name === name)
       )
         restarts.push({ name, issues });
     }
@@ -187,34 +216,47 @@ export const summaryOf = (options: {
   readonly improvements: ReadonlyArray<Ended>;
   readonly leftOut: ReadonlyArray<LeftOut>;
 }) => {
-  const categories = [...new Set(options.acted.map(({ finding }) => finding.category))];
+  const categories = [...new Set(Arr.map(options.acted, ({ finding }) => finding.category))];
   const line = ({ finding, outcome }: (typeof options.acted)[number]) =>
     outcome.kind === "refused"
       ? `- ${finding.title} (${finding.severity}): refused, ${outcome.reason}`
       : `- ${finding.title} (${finding.severity}): ${outcome.kind} #${outcome.number} ${outcome.url}`;
-  return [
-    `# self-improve ${options.runId}`,
-    `Runs since ${options.since}.`,
-    "## Issues",
-    ...(categories.length === 0
-      ? ["None."]
-      : categories.flatMap((category) => [
-          `### ${category}`,
-          options.acted
-            .filter(({ finding }) => finding.category === category)
-            .map(line)
-            .join("\n"),
-        ])),
-    "## Improvements",
-    options.improvements.length === 0
-      ? "None."
-      : options.improvements
-          .map(({ name, runId, ended }) => `- ${name}: ${runId ?? "not started"}, ${ended}`)
-          .join("\n"),
-    "## Left out",
-    options.leftOut.length === 0
-      ? "None."
-      : options.leftOut.map(({ what, why }) => `- ${what}: ${why}`).join("\n"),
-    "",
-  ].join("\n\n");
+  return Arr.join(
+    [
+      `# self-improve ${options.runId}`,
+      `Runs since ${options.since}.`,
+      "## Issues",
+      ...(categories.length === 0
+        ? ["None."]
+        : Arr.flatMap(categories, (category) => [
+            `### ${category}`,
+            Arr.join(
+              Arr.map(
+                Arr.filter(options.acted, ({ finding }) => finding.category === category),
+                line,
+              ),
+              "\n",
+            ),
+          ])),
+      "## Improvements",
+      options.improvements.length === 0
+        ? "None."
+        : Arr.join(
+            Arr.map(
+              options.improvements,
+              ({ name, runId, ended }) => `- ${name}: ${runId ?? "not started"}, ${ended}`,
+            ),
+            "\n",
+          ),
+      "## Left out",
+      options.leftOut.length === 0
+        ? "None."
+        : Arr.join(
+            Arr.map(options.leftOut, ({ what, why }) => `- ${what}: ${why}`),
+            "\n",
+          ),
+      "",
+    ],
+    "\n\n",
+  );
 };

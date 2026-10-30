@@ -1,8 +1,10 @@
 // A question about one Run asks the host for that Run, and an answer lists every Run at most once.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -73,7 +75,11 @@ const hostOf = (dir: string, views: ReadonlyArray<RunView>, build = BUILD) =>
           Asked.toLayer({
             identity: () => Effect.succeed({ build, pid: process.pid, dir }),
             run: ({ runId }) =>
-              count("run").pipe(Effect.as(views.find((one) => one.runId === runId) ?? null)),
+              count("run").pipe(
+                Effect.as(
+                  Option.getOrUndefined(Arr.findFirst(views, (one) => one.runId === runId)) ?? null,
+                ),
+              ),
             runs: () => count("runs").pipe(Effect.as(views)),
             progress: () => Effect.succeed(null),
             offers: () => Effect.succeed([]),
@@ -92,7 +98,7 @@ const inDir = <A, E>(
   body: (
     env: ReturnType<typeof readEnv>,
     dir: string,
-  ) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  ) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
   runEffect(
     Effect.gen(function* () {
@@ -136,6 +142,6 @@ test("collie_run about a Run that started others lists the Runs once, and still 
       );
       expect(said).toContain("Runs it started");
       expect(said).toContain("child");
-      expect(asked.filter((one) => one === "runs")).toHaveLength(1);
+      expect(Arr.filter(asked, (one) => one === "runs")).toHaveLength(1);
     }),
   ));

@@ -3,10 +3,12 @@
 // never under a running Desktop. A throwaway data home and a local release, signed with a
 // key of the test's own.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, FileSystem, Path, Schema, Scope } from "effect";
+import { Effect, FileSystem, Path, Schema, Scope, flow, Result } from "effect";
 import { dataHomeOf, updateDesktop } from "../src/desktop";
 import { upgrade } from "../src/operations";
 import { signRelease } from "../src/signing";
@@ -23,7 +25,7 @@ const pair = () => {
   };
 };
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 const TAR = new TextEncoder().encode("the 0.34.0 bundle");
 const ARTIFACT = "stable-linux-x64-collie-desktop.tar.zst";
@@ -59,7 +61,10 @@ const serveRelease = (signature: string | null, tar: Uint8Array = TAR, version =
       const server = Bun.serve({
         port: 0,
         fetch: (request) => {
-          const name = new URL(request.url).pathname.replace(`/download/${version}/`, "");
+          const name = pipe_(
+            new URL(request.url).pathname,
+            Str.replace(`/download/${version}/`, ""),
+          );
           asked.push(name);
           const body = files.get(name);
           return body === undefined ? new Response("", { status: 404 }) : new Response(body);
@@ -109,7 +114,7 @@ const staged = (data: string) =>
     const fs = yield* FileSystem.FileSystem;
     const record = `${data}/${ROOT}/self-extraction/.electrobun-prepared-update.json`;
     if (!(yield* fs.exists(record))) return null;
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+    return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
       yield* fs.readFileString(record),
     );
   });

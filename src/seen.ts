@@ -1,6 +1,7 @@
 // Whether anyone has seen what a finished Run reported, recorded by its host once for the
 // whole Flock (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
 
+import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { Seen } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
@@ -45,6 +46,6 @@ export const seenSince = Effect.fn("Seen.since")(function* (stateDir: string) {
     .readFileString(yield* sincePath(stateDir))
     .pipe(Effect.option, Effect.map(Option.getOrNull));
   if (text === null) return null;
-  const at = epochMs(text.trim());
+  const at = epochMs(Str.trim(text));
   return Number.isFinite(at) ? at : null;
 });

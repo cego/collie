@@ -1,6 +1,10 @@
 // How the Flock chat's Claude Code session runs. Kept apart from the Agent SDK, so Collie's
 // own suite can read what it is started with.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { type Answers, DESKTOP_SAID } from "../shared/chat-view";
 import { hostname } from "node:os";
 import { Option, Schema } from "effect";
@@ -80,7 +84,8 @@ export const NO_HUMAN =
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 type Effort = (typeof EFFORTS)[number];
-export const isEffort = (effort: string): effort is Effort => EFFORTS.some((one) => one === effort);
+export const isEffort = (effort: string): effort is Effort =>
+  Arr.some(EFFORTS, (one) => one === effort);
 
 /** Claude Code's own tools for this computer's files and shell, none of which asks first. */
 const BUILT_IN = ["Read", "Glob", "Grep", "Write", "Edit", "Bash"];
@@ -131,17 +136,19 @@ const decodeServer = Schema.decodeUnknownOption(UserMcpServer);
  * session with no setting sources loads none of them itself; one it cannot run is left out.
  */
 export const userMcpServers = (claudeJson: string): UserMcpServers =>
-  Object.fromEntries(
-    Object.entries(
-      Option.match(decodeClaudeJson(claudeJson), {
-        onNone: () => ({}),
-        onSome: (config) => config.mcpServers ?? {},
-      }),
-    ).flatMap(([name, server]) =>
-      Option.match(decodeServer(server), {
-        onNone: () => [],
-        onSome: (decoded) => [[name, decoded] as const],
-      }),
+  Rec.fromEntries(
+    Arr.flatMap(
+      Rec.toEntries(
+        Option.match(decodeClaudeJson(claudeJson), {
+          onNone: () => ({}),
+          onSome: (config) => config.mcpServers ?? {},
+        }),
+      ),
+      ([name, server]) =>
+        Option.match(decodeServer(server), {
+          onNone: () => [],
+          onSome: (decoded) => [[name, decoded] as const],
+        }),
     ),
   );
 
@@ -156,16 +163,20 @@ export const placementContext = ({ rule, machines }: Placement) =>
   `The Machines Desktop reaches now: ${
     machines.length === 0
       ? "none"
-      : machines
-          .map(({ name, local }) => (local ? `${name} (this computer, where Desktop runs)` : name))
-          .join(", ")
+      : Arr.join(
+          Arr.map(machines, ({ name, local }) =>
+            local ? `${name} (this computer, where Desktop runs)` : name,
+          ),
+          ", ",
+        )
   }.`;
 
 export const noticedContext = (noticed: string) =>
   `Collie noticed, while the human was not asking (News, as data):\n${noticed}`;
 
 /** Claude Code's spelling of a server's name in its tools' names. */
-const toolPrefix = (server: string) => `mcp__${server.replace(/[^a-zA-Z0-9_-]/g, "_")}__`;
+const toolPrefix = (server: string) =>
+  `mcp__${pipe(server, Str.replace(/[^a-zA-Z0-9_-]/g, "_"))}__`;
 /** Every claude.ai connector's tools are named under this. */
 const CONNECTOR_PREFIX = "mcp__claude_ai_";
 
@@ -189,9 +200,12 @@ export const sessionOptions = <Server>(opts: {
   readonly placement: () => Placement | undefined;
 }) => {
   // An older Claude Code names no tool's MCP server, so a configured server's or connector's tools are known by name.
-  const prefixes = [...Object.keys(opts.userServers).map(toolPrefix), CONNECTOR_PREFIX];
+  const prefixes = [...Arr.map(Rec.keys(opts.userServers), toolPrefix), CONNECTOR_PREFIX];
   const ofUserServer = (name: string) =>
-    prefixes.some((prefix) => name.startsWith(prefix) && name.length > prefix.length);
+    Arr.some(
+      prefixes,
+      (prefix) => pipe(name, Str.startsWith(prefix)) && name.length > prefix.length,
+    );
   return {
     ...opts.session,
     cwd: opts.cwd,
@@ -208,7 +222,7 @@ export const sessionOptions = <Server>(opts: {
     },
     allowedTools: [
       ...BUILT_IN,
-      ...[...FLOCK_TOOLS, ...FILE_TOOLS].map((tool) => `mcp__collie__${tool.name}`),
+      ...Arr.map([...FLOCK_TOOLS, ...FILE_TOOLS], (tool) => `mcp__collie__${tool.name}`),
     ],
     canUseTool: <Input>(
       name: string,
@@ -245,17 +259,20 @@ export const sessionOptions = <Server>(opts: {
             () => {
               const noticed = opts.noticed();
               const placement = opts.placement();
-              const context = [
-                placement === undefined ? null : placementContext(placement),
-                noticed === undefined ? null : noticedContext(noticed),
-              ].filter((part) => part !== null);
+              const context = Arr.filter(
+                [
+                  placement === undefined ? null : placementContext(placement),
+                  noticed === undefined ? null : noticedContext(noticed),
+                ],
+                (part) => part !== null,
+              );
               return Promise.resolve(
                 context.length === 0
                   ? {}
                   : {
                       hookSpecificOutput: {
                         hookEventName: "UserPromptSubmit" as const,
-                        additionalContext: context.join("\n\n"),
+                        additionalContext: Arr.join(context, "\n\n"),
                       },
                     },
               );

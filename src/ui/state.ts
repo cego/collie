@@ -8,6 +8,10 @@
 // transitive graph: the value imports below reach `effect` through their own imports, and
 // what matters is that nothing in this file or the components can run an Effect.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import type { PendingChoice } from "../board";
 import type { UsageReading } from "../usage-model";
 import type { PickItem } from "../inputs";
@@ -23,13 +27,12 @@ import {
   type CardAction,
   cardActions,
   dispositionActions,
-  mrRefOf,
   primaryAction,
   type RunDetail,
   type TaskView,
 } from "../board-model";
 import { mrTarget } from "../mr";
-import { openMrLabel, parseMrTarget, parseMrUrl } from "../board-model";
+import { openMrLabel } from "../board-model";
 import type { Live } from "../live";
 import type { Selection } from "../selection";
 
@@ -365,7 +368,7 @@ const FOCUS_ONLY = [
 export type FocusCommand = Extract<Command, { _tag: (typeof FOCUS_ONLY)[number] }>;
 
 export function changesFocusOnly(command: Command): command is FocusCommand {
-  return FOCUS_ONLY.some((tag) => tag === command._tag);
+  return Arr.some(FOCUS_ONLY, (tag) => tag === command._tag);
 }
 
 /**
@@ -421,7 +424,7 @@ export interface Rereads {
 // `shown: [...at.shown]` — turn every cursor move back into a full re-read of the run
 // dirs, the definition layers and the config, with no test to catch it.
 const sameViews = (a: ReadonlyArray<ViewName>, b: ReadonlyArray<ViewName>) =>
-  a.length === b.length && a.every((view, at) => view === b[at]);
+  a.length === b.length && Arr.every(a, (view, at) => view === b[at]);
 
 /**
  * What a new Focus means for the reads behind it. One decision, in one place: "only the
@@ -516,7 +519,10 @@ function agentRow(a: AgentRow, connector: string, marks?: Marks): Row {
  * it is on there, and it comes back on the same `agent list` the statuses do.
  */
 function doingLine(a: AgentRow, ...rest: string[]): string {
-  return [a.status, a.now ?? "", ...rest].filter((part) => part !== "").join(" · ");
+  return Arr.join(
+    Arr.filter([a.status, a.now ?? "", ...rest], (part) => part !== ""),
+    " · ",
+  );
 }
 
 /**
@@ -537,7 +543,7 @@ function agentGroup(
   row: (a: AgentRow, connector: string, marks?: Marks) => Row,
   marks?: Marks,
 ): Row[] {
-  return agents.map((a, at) => row(a, at === agents.length - 1 ? "└" : "├", marks));
+  return Arr.map(agents, (a, at) => row(a, at === agents.length - 1 ? "└" : "├", marks));
 }
 
 /** The prefix a Run's row id carries, minted here and read back by `runIdOf`. */
@@ -549,7 +555,9 @@ const RUN_ROW = "run:";
  * second `startsWith("run:")` elsewhere is a format two modules have to agree on.
  */
 export function runIdOf(rowId: string | null): string | null {
-  return rowId !== null && rowId.startsWith(RUN_ROW) ? rowId.slice(RUN_ROW.length) : null;
+  return rowId !== null && pipe(rowId, Str.startsWith(RUN_ROW))
+    ? pipe(rowId, Str.slice(RUN_ROW.length))
+    : null;
 }
 
 /** The row id a Run is selected by, minted here because `runIdOf` reads it back. */
@@ -586,9 +594,13 @@ function definitionRow(d: DefinitionRow): Row {
     // A fork that cannot run should be visible here rather than at launch.
     glyph: d.problems.length > 0 ? GLYPH.failed : GLYPH.done,
     title: d.title || d.name,
-    detail: [`[${d.layer}]`, d.problems.length > 0 ? `${d.problems.length} problem(s)` : ""]
-      .filter((part) => part !== "")
-      .join(" · "),
+    detail: Arr.join(
+      Arr.filter(
+        [`[${d.layer}]`, d.problems.length > 0 ? `${d.problems.length} problem(s)` : ""],
+        (part) => part !== "",
+      ),
+      " · ",
+    ),
     definition: d,
   };
 }
@@ -633,9 +645,10 @@ export function rowsOf(board: WorkspaceView, marks?: Marks): Row[] {
   const rows: Row[] = [];
   const onBoard = [...board.active, ...board.recent];
   /** The rows this board has, by id: what a child id and an agent's run resolve against. */
-  const byId = new Map(onBoard.map((r) => [r.id, r]));
-  const agentsOf = (run: RunRow) => board.agents.filter((a) => a.run === run.id);
-  const childrenOf = (run: RunRow) => run.children.flatMap((id) => byId.get(id) ?? []);
+  const byId = new Map(Arr.map(onBoard, (r) => [r.id, r]));
+  const agentsOf = (run: RunRow) => Arr.filter(board.agents, (a) => a.run === run.id);
+  const childrenOf = (run: RunRow) =>
+    Arr.flatMap(run.children, (id) => Arr.ensure(byId.get(id) ?? []));
   /**
    * One run, its children, and each of their agents — a run that fanned out into one
    * run per repository is one thing on the board, not several beside each other.
@@ -644,29 +657,29 @@ export function rowsOf(board: WorkspaceView, marks?: Marks): Row[] {
     nested(runRow(run, board.now, kind, marks), depth),
     // An agent sits at its run's own depth: the connector is what joins it, and the
     // gutter is what says which run is inside which.
-    ...agentGroup(agentsOf(run), agentRow, marks).map((a) => nested(a, depth)),
-    ...childrenOf(run).flatMap((child) =>
+    ...Arr.map(agentGroup(agentsOf(run), agentRow, marks), (a) => nested(a, depth)),
+    ...Arr.flatMap(childrenOf(run), (child) =>
       under(child, board.active.includes(child) ? "active" : "recent", depth + 1),
     ),
   ];
   // A child is drawn under its parent, so it is not also drawn beside it. Filtered once
   // here, because a header counted over one list and drawn over another is how the
   // "Needs you" header came to stand over no rows at all.
-  const nestedIds = new Set(onBoard.flatMap((r) => r.children));
-  const top = (runs: ReadonlyArray<RunRow>) => runs.filter((run) => !nestedIds.has(run.id));
+  const nestedIds = new Set(Arr.flatMap(onBoard, (r) => r.children));
+  const top = (runs: ReadonlyArray<RunRow>) => Arr.filter(runs, (run) => !nestedIds.has(run.id));
   const active = top(board.active);
   // The runs that have stopped for the human first, under a header saying so: a
   // blocked run costs the whole run's wall-clock and used to be visible only if its
   // row happened to be the Selection. Each keeps the agents nested under it.
-  const waiting = active.filter((r) => r.needsYou);
+  const waiting = Arr.filter(active, (r) => r.needsYou);
   if (waiting.length > 0) rows.push(headerRow(NEEDS_YOU));
-  for (const run of [...waiting, ...active.filter((r) => !r.needsYou)]) {
+  for (const run of [...waiting, ...Arr.filter(active, (r) => !r.needsYou)]) {
     rows.push(...under(run, "active"));
   }
   for (const run of top(board.recent)) {
     rows.push(...under(run, "recent"));
   }
-  const orphans = board.agents.filter((a) => !byId.has(a.run));
+  const orphans = Arr.filter(board.agents, (a) => !byId.has(a.run));
   if (orphans.length > 0) {
     rows.push(headerRow("agents with no run here"));
     rows.push(...agentGroup(orphans, orphanRow, marks));
@@ -698,42 +711,52 @@ export function wideRows(wide: WideView, marks?: Marks): Row[] {
      * full: the model is what tells two variants of one step apart.
      */
     const inGroup = [...group.active, ...group.recent];
-    const byId = new Map(inGroup.map((r) => [r.id, r]));
+    const byId = new Map(Arr.map(inGroup, (r) => [r.id, r]));
     const under = (run: RunRow, kind: "active" | "recent", depth = 1): Row[] => {
       const row = runRow(run, wide.now, kind, marks);
+      const children = Arr.getSomes(
+        Arr.map(run.children, (id) => Option.fromUndefinedOr(byId.get(id))),
+      );
       return [
         nested(away ? row : unqualified(row), depth),
-        ...agentGroup(
-          group.agents.filter((a) => a.run === run.id),
-          agentRow,
-          marks,
-        ).map((agent) => nested(agent, depth + 1)),
-        // A repository run of a plan that fanned out, under the plan run that started it.
-        ...run.children
-          .flatMap((id) => byId.get(id) ?? [])
-          .flatMap((child) =>
-            under(child, group.active.includes(child) ? "active" : "recent", depth + 1),
+        ...Arr.map(
+          agentGroup(
+            Arr.filter(group.agents, (a) => a.run === run.id),
+            agentRow,
+            marks,
           ),
+          (agent) => nested(agent, depth + 1),
+        ),
+        // A repository run of a plan that fanned out, under the plan run that started it.
+        ...Arr.flatMap(children, (child) =>
+          under(child, group.active.includes(child) ? "active" : "recent", depth + 1),
+        ),
       ];
     };
     // A child is drawn under its parent, so it is not also drawn beside it.
-    const nestedIds = new Set(inGroup.flatMap((r) => r.children));
-    const top = (runs: ReadonlyArray<RunRow>) => runs.filter((run) => !nestedIds.has(run.id));
+    const nestedIds = new Set(Arr.flatMap(inGroup, (r) => r.children));
+    const top = (runs: ReadonlyArray<RunRow>) => Arr.filter(runs, (run) => !nestedIds.has(run.id));
     const atTop = top(group.active);
     // The runs with a question first, the way the local board lists them: a run that
     // has stopped for you is costing its whole wall-clock while it waits.
-    const active = [...atTop.filter((r) => r.needsYou), ...atTop.filter((r) => !r.needsYou)];
+    const active = [
+      ...Arr.filter(atTop, (r) => r.needsYou),
+      ...Arr.filter(atTop, (r) => !r.needsYou),
+    ];
     const inside = [
       groupRow(group, marks),
-      ...active.flatMap((r) => under(r, "active")),
-      ...top(group.recent).flatMap((r) => under(r, "recent")),
-      ...agentGroup(
-        group.agents.filter((a) => !byId.has(a.run)),
-        orphanRow,
-        marks,
-      ).map((row) => nested(row, 1)),
+      ...Arr.flatMap(active, (r) => under(r, "active")),
+      ...Arr.flatMap(top(group.recent), (r) => under(r, "recent")),
+      ...Arr.map(
+        agentGroup(
+          Arr.filter(group.agents, (a) => !byId.has(a.run)),
+          orphanRow,
+          marks,
+        ),
+        (row) => nested(row, 1),
+      ),
     ];
-    rows.push(...(away ? inside.map(unreachable) : inside));
+    rows.push(...(away ? Arr.map(inside, unreachable) : inside));
   }
   return keyedInOrder([...rows, ...quietRow(wide)]);
 }
@@ -746,7 +769,7 @@ export function wideRows(wide: WideView, marks?: Marks): Row[] {
  */
 function keyedInOrder(rows: readonly Row[]): Row[] {
   let digit = 0;
-  return rows.map((row) => {
+  return Arr.map(rows, (row) => {
     if (row.kind !== "agent") return row;
     digit += 1;
     return { ...row, key: digit <= MAX_AGENTS ? String(digit) : null };
@@ -777,7 +800,7 @@ function nested(row: Row, depth: number): Row {
  * says what the workspace is for, and the run's own detail and age are what tell two
  * runs of it apart.
  */
-const unqualified = (row: Row): Row => ({ ...row, title: row.title.split(" · ")[0]! });
+const unqualified = (row: Row): Row => ({ ...row, title: Str.split(row.title, " · ")[0]! });
 
 /**
  * One workspace. Selectable and bold: its own line is where the eye stops, and the
@@ -793,7 +816,7 @@ function groupRow(group: WideGroup, marks?: Marks): Row {
     id: `group:${group.workspaceId ?? ELSEWHERE}`,
     kind: "group",
     glyph: group.glyph,
-    marks: worstOf([...group.active, ...group.recent].map((run) => markFor(marks, run.id))),
+    marks: worstOf(Arr.map([...group.active, ...group.recent], (run) => markFor(marks, run.id))),
     title: group.label,
     detail: group.summary,
     jump: group.workspaceId
@@ -816,7 +839,7 @@ function quietRow(wide: WideView): Row[] {
       id: "header:quiet",
       kind: "header",
       title: `${wide.quiet.length} more workspace(s)`,
-      detail: `nothing of Collie's in them · ${wide.quiet.join(" · ")}`,
+      detail: `nothing of Collie's in them · ${Arr.join(wide.quiet, " · ")}`,
     },
   ];
 }
@@ -839,8 +862,8 @@ function headerRow(title: string): Row {
  * the human about what they are looking at.
  */
 export function needsYouStatus(rows: readonly Row[], selected: string | null): string | null {
-  const waiting = rows.filter((row) => row.needsYou);
-  if (waiting.length === 0 || waiting.some((row) => row.id === selected)) return null;
+  const waiting = Arr.filter(rows, (row) => row.needsYou);
+  if (waiting.length === 0 || Arr.some(waiting, (row) => row.id === selected)) return null;
   return `${waiting.length} run(s) need you`;
 }
 
@@ -851,7 +874,7 @@ export function needsYouStatus(rows: readonly Row[], selected: string | null): s
  * draws every row — this is only about where the Selection can rest.
  */
 export function selectableRows(rows: readonly Row[]): Row[] {
-  return rows.filter((row) => row.kind !== "header");
+  return Arr.filter(rows, (row) => row.kind !== "header");
 }
 
 /**
@@ -871,7 +894,9 @@ export function runsRows(state: AppState): Row[] {
   const filter = state.filter;
   if (filter.kind === "run") return onlyRun(everyRow(state), filter.id);
   if (filter.kind === "workspace" && state.wide) {
-    const group = state.wide.groups.find((g) => g.workspaceId === filter.id);
+    const group = Option.getOrUndefined(
+      Arr.findFirst(state.wide.groups, (g) => g.workspaceId === filter.id),
+    );
     // Not on the wide board at all — a workspace Collie has nothing in — so this
     // board's own runs are what is left to show.
     if (!group) return rowsOf(state.board, state.marks);
@@ -895,7 +920,10 @@ function everyRow(state: AppState): Row[] {
  * when it is nested under what has been kept so far.
  */
 function onlyRun(rows: readonly Row[], runId: string): Row[] {
-  const at = rows.findIndex((row) => row.kind !== "agent" && row.runId === runId);
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(rows, (row) => row.kind !== "agent" && row.runId === runId),
+    () => -1,
+  );
   if (at < 0) return [];
   const start = rows[at]!;
   const kept = [start];
@@ -916,16 +944,18 @@ export function viewRows(state: AppState): Row[] {
     case "runs":
       return runsRows(state);
     case "history":
-      return (state.history ?? []).map((r) => runRow(r, state.board.now, "history", state.marks));
+      return Arr.map(state.history ?? [], (r) =>
+        runRow(r, state.board.now, "history", state.marks),
+      );
     case "workflows":
       // Workflows only: a persona is instructions, not something that can be run, so a
       // persona row here offered a key that did nothing. Fork is where they are acted on.
-      return (state.definitions?.workflows ?? []).map(definitionRow);
+      return Arr.map(state.definitions?.workflows ?? [], definitionRow);
     case "settings": {
       const settings = state.settings;
       if (!settings) return [];
       return [
-        ...settings.defaults.map((d) =>
+        ...Arr.map(settings.defaults, (d) =>
           settingRow(
             d.key,
             d.key,
@@ -935,7 +965,9 @@ export function viewRows(state: AppState): Row[] {
             d.multiline,
           ),
         ),
-        ...settings.remembered.map((d) => settingRow(`remembered:${d.key}`, d.key, d.value, false)),
+        ...Arr.map(settings.remembered, (d) =>
+          settingRow(`remembered:${d.key}`, d.key, d.value, false),
+        ),
         settingRow(
           "trust-here",
           "trust (this directory)",
@@ -972,8 +1004,14 @@ export function clampSelection(
   after: readonly Row[],
 ): string | null {
   if (after.length === 0) return null;
-  if (selected !== null && after.some((r) => r.id === selected)) return selected;
-  const was = selected === null ? -1 : before.findIndex((r) => r.id === selected);
+  if (selected !== null && Arr.some(after, (r) => r.id === selected)) return selected;
+  const was =
+    selected === null
+      ? -1
+      : Option.getOrElse(
+          Arr.findFirstIndex(before, (r) => r.id === selected),
+          () => -1,
+        );
   return after[Math.min(Math.max(was, 0), after.length - 1)]!.id;
 }
 
@@ -1041,7 +1079,7 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
     actions.push({ key: "x", label: "offers", command: { _tag: "ChooseOffer", runId } });
   }
   if (row.target) {
-    if (row.target.startsWith("mr:")) {
+    if (pipe(row.target, Str.startsWith("mr:"))) {
       // Posting needs a review to post, and `fixable` is the row's only word on whether
       // one was written. Looking at the merge request needs nothing but the target, so a
       // review that came back clean is still one you can open.
@@ -1112,7 +1150,7 @@ const PASTED = new TextDecoder();
  * sent. Non-ASCII letters survive — a pasted branch name keeps them.
  */
 export function pasteInto(value: string, bytes: Uint8Array): string {
-  return value + PASTED.decode(bytes).replace(/\p{C}/gu, "");
+  return value + pipe(PASTED.decode(bytes), Str.replace(/\p{C}/gu, ""));
 }
 
 /**
@@ -1206,13 +1244,13 @@ export function primaryFor(view: TaskView): MenuItem | null {
 export function menuFor(view: TaskView): MenuItem[] {
   return [
     { key: "enter", label: "Open record", command: { _tag: "OpenRecord", id: view.id } },
-    ...cardActions(view).map((action) => itemFor(view, action, false)),
+    ...Arr.map(cardActions(view), (action) => itemFor(view, action, false)),
   ];
 }
 
 /** What became of the work, for work that is over. */
 export function dispositionsFor(view: TaskView): MenuItem[] {
-  return dispositionActions(view).map((action) => itemFor(view, action, false));
+  return Arr.map(dispositionActions(view), (action) => itemFor(view, action, false));
 }
 
 /** The earlier finished runs on screen, and whether there are more to ask for. */
@@ -1236,8 +1274,8 @@ export function olderFinished(
   batch = OLDER_BATCH,
 ): Older {
   if (history === null) return { rows: [], more: true };
-  const carded = new Set(finished.flatMap((view) => view.runs));
-  const rest = history.filter((row) => !carded.has(row.id));
+  const carded = new Set(Arr.flatMap(finished, (view) => view.runs));
+  const rest = Arr.filter(history, (row) => !carded.has(row.id));
   const rows = rest.slice(0, pages * batch);
   return { rows, more: rows.length < rest.length };
 }
@@ -1245,12 +1283,6 @@ export function olderFinished(
 /** Where this Task's work is. Which tab that is stays for the handler to resolve. */
 export function goToTab(view: TaskView): Command {
   return { _tag: "Jump", jump: { kind: "run", runId: view.run, label: view.name } };
-}
-
-/** However the Task names its merge request: the URL one opened, or the target one was
-    pointed at. */
-function mrOf(view: TaskView) {
-  return mrRefOf(view.mr);
 }
 
 /**
@@ -1311,7 +1343,7 @@ export function footerKeys(opts: {
   // Selection's buttons were: `k` typed a `k` while `[k stop]` stopped the run.
   if (opts.on._tag === "Filter") return "type to narrow · Enter keep it · Esc drop it";
   if (opts.on._tag === "Proposal") return "Enter carry it out · Esc decline it";
-  return [...opts.panel, ...globalKeys(opts.filter)].join(" · ");
+  return Arr.join([...opts.panel, ...globalKeys(opts.filter)], " · ");
 }
 
 /**
@@ -1422,7 +1454,10 @@ function takesText(on: Keyboarding): boolean {
  */
 export function nextQuestionId(rows: readonly Row[], selected: string | null): string | null {
   const list = selectableRows(rows);
-  const at = list.findIndex((row) => row.id === selected);
+  const at = Option.getOrElse(
+    Arr.findFirstIndex(list, (row) => row.id === selected),
+    () => -1,
+  );
   const from = at < 0 ? -1 : at;
   for (let step = 1; step <= list.length; step++) {
     const row = list[(from + step + list.length) % list.length]!;
@@ -1483,7 +1518,7 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
     if (key.name === "escape") return { _tag: "Filtering", filter: "", typing: false };
     if (key.name === "return") return { _tag: "Filtering", filter: at.query, typing: false };
     if (key.name === "backspace") {
-      return { _tag: "Filtering", filter: at.query.slice(0, -1), typing: true };
+      return { _tag: "Filtering", filter: pipe(at.query, Str.slice(0, -1)), typing: true };
     }
     if (PRINTABLE.test(key.sequence)) {
       return { _tag: "Filtering", filter: at.query + key.sequence, typing: true };
@@ -1500,7 +1535,10 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
       return { _tag: "Submitted", command };
     }
     if (key.name === "backspace") {
-      return { _tag: "Editing", editing: { ...editing, value: editing.value.slice(0, -1) } };
+      return {
+        _tag: "Editing",
+        editing: { ...editing, value: pipe(editing.value, Str.slice(0, -1)) },
+      };
     }
     if (PRINTABLE.test(key.sequence)) {
       return { _tag: "Editing", editing: { ...editing, value: editing.value + key.sequence } };
@@ -1549,7 +1587,9 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   // A digit focuses that agent wherever the Selection is: those keys are the board's
   // shortcut into a pane, not an action on a row.
   if (/^[1-9]$/.test(key.sequence)) {
-    const agent = at.rows.find((r) => r.kind === "agent" && r.key === key.sequence);
+    const agent = Option.getOrUndefined(
+      Arr.findFirst(at.rows, (r) => r.kind === "agent" && r.key === key.sequence),
+    );
     return agent?.agent ? doing({ _tag: "FocusAgent", agent: agent.agent }) : null;
   }
   // The way into the whole session, and back. The Runs view's own key: it is the only
@@ -1576,8 +1616,11 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
     return doing({ _tag: "SetFilter", filter: { kind: "workspace", id: at.row.jump.workspaceId } });
   }
   if (key.name === "return" && at.row?.jump) return doing({ _tag: "Jump", jump: at.row.jump });
-  const action = actionsFor(at.row, at.filter).find(
-    (a) => a.key === (key.name === "return" ? "\r" : key.sequence),
+  const action = Option.getOrUndefined(
+    Arr.findFirst(
+      actionsFor(at.row, at.filter),
+      (a) => a.key === (key.name === "return" ? "\r" : key.sequence),
+    ),
   );
   return action ? doing(action.command) : null;
 }
@@ -1607,7 +1650,7 @@ export function answerFor(choice: PendingChoice, asking: Asking, key: string): A
   }
   if (choice.kind === "ask") {
     if (key === "\x7f" || key === "\b") {
-      return { asking: { ...asking, typed: asking.typed.slice(0, -1) }, value: null };
+      return { asking: { ...asking, typed: pipe(asking.typed, Str.slice(0, -1)) }, value: null };
     }
     if (/^[\x20-\x7e]$/.test(key)) {
       return { asking: { ...asking, typed: asking.typed + key }, value: null };
@@ -1660,15 +1703,15 @@ function subsequence(needle: string, hay: string): boolean {
  * pass is what makes a half-remembered name findable at all.
  */
 export function filterItems<T>(items: readonly T[], query: string, hay: (item: T) => string): T[] {
-  const needle = query.trim().toLowerCase();
+  const needle = Str.toLowerCase(Str.trim(query));
   if (needle === "") return [...items];
   const prefix: T[] = [];
   const anywhere: T[] = [];
   const fuzzy: T[] = [];
   for (const item of items) {
-    const straw = hay(item).toLowerCase();
-    if (straw.startsWith(needle)) prefix.push(item);
-    else if (straw.includes(needle)) anywhere.push(item);
+    const straw = Str.toLowerCase(hay(item));
+    if (pipe(straw, Str.startsWith(needle))) prefix.push(item);
+    else if (pipe(straw, Str.includes(needle))) anywhere.push(item);
     else if (subsequence(needle, straw)) fuzzy.push(item);
   }
   return [...prefix, ...anywhere, ...fuzzy];
@@ -1685,13 +1728,14 @@ export function filterItems<T>(items: readonly T[], query: string, hay: (item: T
  * what a pick list wants; here it would lift an agent above the run it hangs off.
  */
 export function matching(rows: readonly Row[], query: string): Row[] {
-  if (query.trim() === "") return [...rows];
+  if (Str.trim(query) === "") return [...rows];
   // A header is not something to look for: it says what the group under it is, so it is
   // never a match of its own — a heading kept over a group that was filtered out is a
   // line that names nothing.
-  const looked = rows.filter((row) => row.kind !== "header");
-  const hit = new Set(filterItems(looked, query, rowHay).map((row) => row.id));
-  return rows.filter(
+  const looked = Arr.filter(rows, (row) => row.kind !== "header");
+  const hit = new Set(Arr.map(filterItems(looked, query, rowHay), (row) => row.id));
+  return Arr.filter(
+    rows,
     (row, at) =>
       hit.has(row.id) ||
       (opensAGroup(row) && groupHasAMatch(rows, at, hit)) ||

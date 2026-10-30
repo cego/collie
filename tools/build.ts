@@ -3,9 +3,20 @@
 // [outfile]`. Every release artifact and the local `bun run build` come through here,
 // so the plugin, the libc pin and the renderer gate below cannot drift apart.
 
-import { cpSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import * as BunRuntime from "@effect/platform-bun/BunRuntime";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import {
+  Array as Arr,
+  Cause,
+  Config,
+  Console,
+  Effect,
+  FileSystem,
+  Path,
+  Schema,
+  Stdio,
+  String as Str,
+} from "effect";
 import solidPlugin from "@opentui/solid/bun-plugin";
 
 /**
@@ -14,9 +25,9 @@ import solidPlugin from "@opentui/solid/bun-plugin";
  * decided which native renderer to embed, so a musl machine building from source got a
  * glibc-linked executable it could not run, which is not what it asked for.
  */
-function bunTarget(name: string): string {
-  const full = name.startsWith("bun-") ? name : `bun-${name}`;
-  return libc === "musl" && full.includes("-linux-") && !full.endsWith("-musl")
+function bunTarget(name: string, libc: "musl" | "glibc"): string {
+  const full = Str.startsWith("bun-")(name) ? name : `bun-${name}`;
+  return libc === "musl" && Str.includes("-linux-")(full) && !Str.endsWith("-musl")(full)
     ? `${full}-musl`
     : full;
 }
@@ -28,7 +39,27 @@ function bunTarget(name: string): string {
  * a build-time define instead. The releases are glibc; a musl machine building from
  * source sets `OPENTUI_LIBC=musl` and gets its own.
  */
-const libc = process.env.OPENTUI_LIBC === "musl" ? "musl" : "glibc";
+const libcConfig = Config.String("OPENTUI_LIBC").pipe(Config.withDefault(""));
+
+const Architecture = Schema.Literals(["x64", "arm64", "aarch64"]);
+const Simd = Schema.Literals(["baseline", "modern"]);
+const Target = Schema.Union([
+  Schema.TemplateLiteral(["bun-darwin-", Architecture]),
+  Schema.TemplateLiteral(["bun-darwin-", Architecture, "-", Simd]),
+  Schema.TemplateLiteral(["bun-linux-", Architecture]),
+  Schema.TemplateLiteral(["bun-linux-", Architecture, "-", Schema.Literals(["glibc", "musl"])]),
+  Schema.TemplateLiteral(["bun-linux-", Architecture, "-", Simd]),
+  Schema.TemplateLiteral([
+    "bun-linux-",
+    Architecture,
+    "-",
+    Simd,
+    "-",
+    Schema.Literals(["glibc", "musl"]),
+  ]),
+  Schema.TemplateLiteral(["bun-windows-", Architecture]),
+  Schema.TemplateLiteral(["bun-windows-x64-", Simd]),
+]);
 
 /**
  * The native renderer a given target must end up carrying. `@opentui/core` picks its
@@ -38,19 +69,12 @@ const libc = process.env.OPENTUI_LIBC === "musl" ? "musl" : "glibc";
  * below is the name the bundler registers the embedded library under, so its presence in
  * the artifact is the proof; it appears in no other target's binary.
  */
-function nativeMarker(target: string): string {
-  const [, platform = "", arch = ""] = target.split("-");
+function nativeMarker(target: string, libc: "musl" | "glibc"): string {
+  const [, platform = "", arch = ""] = Str.split(target, "-");
   if (platform === "darwin") return `@opentui/core-darwin-${arch}/libopentui.dylib`;
   const suffix = platform === "linux" && libc === "musl" ? "-musl" : "";
   return `@opentui/core-${platform}-${arch}${suffix}/libopentui.so`;
 }
-
-const target = bunTarget(Bun.argv[2] ?? `${process.platform}-${process.arch}`);
-const outfile = Bun.argv[3] ?? "bin/collie";
-// Build beside the binary and rename over it: replacing a running runner's own file in
-// place kills the process executing it. `collie upgrade` runs from that very binary, so
-// this is the load-bearing half of being able to upgrade at all.
-const staging = `${outfile}.new`;
 
 /** What an Installation reads at runtime, placed by the runner as `release/`. */
 const RELEASE_TREE = [
@@ -64,37 +88,67 @@ const RELEASE_TREE = [
   "skills/collie",
   "assets/brand/logos/collie-horizontal-light-512.png",
 ];
-// Named `release` because the embedded directory keeps its basename: `/$bunfs/root/release`.
-const tree = `${mkdtempSync(`${tmpdir()}/collie-build-`)}/release`;
-for (const entry of RELEASE_TREE) cpSync(entry, `${tree}/${entry}`, { recursive: true });
-const carried = readdirSync(tree, { recursive: true, withFileTypes: true })
-  .filter((entry) => entry.isFile())
-  .map((entry) => `release/${relative(tree, join(entry.parentPath, entry.name))}`);
+const program = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const args = yield* (yield* Stdio.Stdio).args;
+  const libc = (yield* libcConfig) === "musl" ? "musl" : "glibc";
+  const target = yield* Schema.decodeUnknownEffect(Target)(
+    bunTarget(args[0] ?? `${process.platform}-${process.arch}`, libc),
+  );
+  const outfile = args[1] ?? "bin/collie";
+  // Renaming a sibling preserves the executable bit and never overwrites a running runner in place.
+  const staging = `${outfile}.new`;
+  // Named `release` because the embedded directory keeps its basename: `/$bunfs/root/release`.
+  const tree = paths.join(
+    yield* fs.makeTempDirectoryScoped({ prefix: "collie-build-" }),
+    "release",
+  );
+  for (const entry of RELEASE_TREE)
+    yield* fs.copy(entry, paths.join(tree, entry), { overwrite: true });
+  const entries = yield* fs.readDirectory(tree, { recursive: true });
+  const files = yield* Effect.filter(entries, (entry) =>
+    fs.lstat(paths.join(tree, entry)).pipe(Effect.map((info) => info.type === "File")),
+  );
+  const carried = Arr.map(files, (entry) => `release/${entry}`);
+  const libcDefine = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(libc);
 
-await Bun.build({
-  entrypoints: ["src/main.ts"],
-  target: "bun",
-  plugins: [solidPlugin],
-  define: { "process.env.OPENTUI_LIBC": JSON.stringify(libc) },
-  // Compiled ahead rather than parsed at every start: a start is a quarter of a second
-  // instead of most of one, and hooks, agents and the board start one constantly. ESM,
-  // because `@opentui/core` awaits at its top level, which bytecode's default CJS cannot.
-  bytecode: true,
-  format: "esm",
-  compile: { target, outfile: staging, assets: [tree] },
+  yield* Effect.promise(() =>
+    Bun.build({
+      entrypoints: ["src/main.ts"],
+      target: "bun",
+      plugins: [solidPlugin],
+      define: { "process.env.OPENTUI_LIBC": libcDefine },
+      // Bytecode starts faster; ESM supports the renderer's top-level await.
+      bytecode: true,
+      format: "esm",
+      compile: { target, outfile: staging, assets: [tree] },
+    }),
+  );
+
+  const marker = nativeMarker(target, libc);
+  const artifact = Buffer.from(yield* fs.readFile(staging));
+  const missing = Arr.filter([marker, ...carried], (name) => !artifact.includes(name));
+  if (missing.length > 0) {
+    yield* fs.remove(staging);
+    return yield* Effect.die(
+      new Error(
+        `${target}: the artifact does not embed ${Arr.join(missing, ", ")}; not shipping it`,
+      ),
+    );
+  }
+
+  yield* fs.rename(staging, outfile);
+  yield* Console.log(
+    `built ${outfile} for ${target}, embedding ${marker} and ${carried.length} release files`,
+  );
 });
-rmSync(`${tree}/..`, { recursive: true });
 
-const marker = nativeMarker(target);
-const artifact = readFileSync(staging);
-const missing = [marker, ...carried].filter((name) => !artifact.includes(name));
-if (missing.length > 0) {
-  rmSync(staging);
-  throw new Error(`${target}: the artifact does not embed ${missing.join(", ")}; not shipping it`);
-}
-
-// `renameSync`, not a copy: it is atomic and it keeps the executable bit compile set on it.
-renameSync(staging, outfile);
-console.log(
-  `built ${outfile} for ${target}, embedding ${marker} and ${carried.length} release files`,
+BunRuntime.runMain(
+  program.pipe(
+    Effect.scoped,
+    Effect.tapCause((cause) => Console.error(Cause.pretty(cause))),
+    Effect.provide(BunServices.layer),
+  ),
+  { disableErrorReporting: true },
 );

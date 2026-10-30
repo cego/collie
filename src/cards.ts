@@ -11,6 +11,10 @@
 // Nothing in this file focuses anything. A card arriving must never move a human off what
 // they are doing; the only thing that still takes focus is a pending question.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Significance, mrWords, readMrRef } from "./board-model";
 import { forgeOf } from "./forge/forge";
@@ -98,7 +102,7 @@ export const readCards = Effect.fn("Cards.read")(function* (runDir: string) {
  */
 export const finishedOnRecord = Effect.fn("Cards.finishedOnRecord")(function* (runDir: string) {
   const cards = yield* readCards(runDir).pipe(Effect.orElseSucceed((): ReadonlyArray<Card> => []));
-  return cards.findLast((card) => card.kind === "final")?.at ?? null;
+  return Option.getOrUndefined(Arr.findLast(cards, (card) => card.kind === "final"))?.at ?? null;
 });
 
 /** The newest card per slice of work: a re-written card replaces the one it re-writes. */
@@ -223,8 +227,8 @@ export function inspectFor(options: {
 export function clean(card: Card): Card {
   return {
     ...card,
-    claims: card.claims.map((claim) => ({ ...claim, text: redact(claim.text) })),
-    missing: card.missing.map(redact),
+    claims: Arr.map(card.claims, (claim) => ({ ...claim, text: redact(claim.text) })),
+    missing: Arr.map(card.missing, redact),
     narrative: card.narrative === null ? null : redact(card.narrative),
   };
 }
@@ -263,13 +267,13 @@ export interface CardSources {
  * nothing verified it.
  */
 export function buildCard(sources: CardSources): Card {
-  const verifications = sources.verifications.map((entry) =>
+  const verifications = Arr.map(sources.verifications, (entry) =>
     verificationOn(entry, sources.revision),
   );
   const ready = readiness({
     claimed: sources.claims.length > 0,
     changed: sources.changes.files.length > 0 || sources.revision.dirty,
-    verifiedHere: verifications.some((entry) => entry.result === "pass"),
+    verifiedHere: Arr.some(verifications, (entry) => entry.result === "pass"),
   });
   return clean({
     id: `card-${Bun.hash(`${sources.run}${sources.step}${sources.iteration}${sources.kind}${sources.at}`).toString(16)}`,
@@ -315,13 +319,13 @@ export const readCheckpoints = Effect.fn("Cards.readCheckpoints")(function* (run
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = path.join(runDir, "steering", "progress");
-  const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
+  const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
   const found: Array<{ file: string; checkpoint: Checkpoint }> = [];
   for (const name of names) {
-    if (!name.endsWith(".json")) continue;
+    if (!pipe_(name, Str.endsWith(".json"))) continue;
     const file = path.join(dir, name);
-    const raw = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
-    const decoded = Schema.decodeUnknownOption(CheckpointJson)(raw);
+    const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+    const decoded = Schema.decodeOption(CheckpointJson)(raw);
     if (decoded._tag === "Some") found.push({ file, checkpoint: decoded.value });
   }
   return found;

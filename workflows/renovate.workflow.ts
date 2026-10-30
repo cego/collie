@@ -12,6 +12,7 @@
 //
 // The Markdown beside this file is the content: what each step judges, and how.
 
+import * as Arr from "effect/Array";
 import {
   FindingSchema,
   Agents,
@@ -513,7 +514,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
         );
         if ("unresolved" in held)
           yield* host.record(runId, `◦ ${held.unresolved} — carrying on without one`);
-        const claim = "slugs" in held && held.slugs.length > 0 ? held.slugs.join(", ") : null;
+        const claim = "slugs" in held && held.slugs.length > 0 ? Arr.join(held.slugs, ", ") : null;
         // Given back once the work is finished, merged or not, and not before: holding it
         // across a consultation is what stops anyone deploying on a half-finished renovation.
         const finished = (outcome: string) =>
@@ -580,10 +581,10 @@ export const renovation = (landing: Landing = shippedLanding) =>
                 merge_operation: index === 0 ? "merge" : `merge-${index + 1}`,
               },
             }),
-            { item: String(current.iid), items: pending.map((one) => String(one.iid)) },
+            { item: String(current.iid), items: Arr.map(pending, (one) => String(one.iid)) },
           );
           for (const discovered of merged.remaining_requests ?? [])
-            if (!pending.some((one) => String(one.iid) === String(discovered.iid)))
+            if (!Arr.some(pending, (one) => String(one.iid) === String(discovered.iid)))
               pending.push(discovered);
         }
         // Everything this Run merged, read once so a replay waits for the same commit.
@@ -601,10 +602,10 @@ export const renovation = (landing: Landing = shippedLanding) =>
         const jobs = released.prod_jobs ?? [];
         const outcome = `${tracked.issue}: ${recorded.status}${released.version ? ` ${released.version}` : ""}`;
         if (claim === null || head === null) {
-          const left = jobs.map((job) => `\`${job.name}\`${job.url ? ` at ${job.url}` : ""}`);
+          const left = Arr.map(jobs, (job) => `\`${job.name}\`${job.url ? ` at ${job.url}` : ""}`);
           return left.length === 0
             ? outcome
-            : `${outcome}; production jobs left to play: ${left.join(", ")}`;
+            : `${outcome}; production jobs left to play: ${Arr.join(left, ", ")}`;
         }
         // The forge decides when production carries the merge, never the Output.
         const carried = yield* productionStep(

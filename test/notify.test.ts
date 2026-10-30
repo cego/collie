@@ -1,5 +1,9 @@
 // The taxonomy is the contract: what is sent, how it is titled, and how often.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, type Schema } from "effect";
@@ -29,7 +33,7 @@ test("every kind names the repo and the run, and none of them is a bare slug", (
   // say which one.
   for (const kind of NOTIFICATION_KINDS) {
     const title = notificationTitle(kind, "/home/mk/work/collie", "review-mr-2");
-    expect(title.startsWith("collie · review-mr-2 ")).toBe(true);
+    expect(pipe_(title, Str.startsWith("collie · review-mr-2 "))).toBe(true);
   }
   expect(notificationTitle("run-done", "/home/mk/work/collie/", "review-mr-2")).toBe(
     "collie · review-mr-2 finished",
@@ -110,17 +114,26 @@ const session = <A, E>(
         model: "opus",
         permissions: "auto",
         compactAtTokens: 0,
-      }),
-    ),
-    Effect.provide(Layer.succeed(Children)(Children.of({ start: nothing, result: nothing }))),
-    Effect.provide(
-      foundationLayer({
-        dir,
-        userDir: rig.pluginEnv().userDir,
-        toast: (title, body, sound) => Effect.sync(() => toasts.push(`${sound}|${title}|${body}`)),
-        placing: { env: rig.pluginEnv(), herdr: new FakeHerdr(rig.pluginEnv()) },
-        ...options,
-      }),
+      }).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(
+            Children.of({
+              start: nothing,
+              result: nothing,
+            }),
+          ),
+        ),
+        Layer.provideMerge(
+          foundationLayer({
+            dir,
+            userDir: rig.pluginEnv().userDir,
+            placing: { env: rig.pluginEnv(), herdr: new FakeHerdr(rig.pluginEnv()) },
+            toast: (title, body, sound) =>
+              Effect.sync(() => toasts.push(`${sound}|${title}|${body}`)),
+            ...options,
+          }),
+        ),
+      ),
     ),
     Effect.scoped,
     Effect.orDie,
@@ -131,6 +144,7 @@ const executed = (entry: string, runId: string, input: Readonly<Record<string, S
     Effect.gen(function* () {
       const described = yield* loadEntry(`${fixtures}/${entry}`).pipe(Effect.orDie);
       const made = described.make(`${described.id}@${runId}`);
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       return yield* made.workflow
         .execute({ runId, input })
         .pipe(Effect.result, Effect.provide(made.layer));
@@ -285,7 +299,7 @@ test("two hosts send a needs-you event once from its owning host without Desktop
         slack: (token) => slackApi(token, peer.client),
         toast: undefined,
       });
-      expect(owner.calls.filter((call) => call.method === "chat.postMessage")).toEqual([
+      expect(Arr.filter(owner.calls, (call) => call.method === "chat.postMessage")).toEqual([
         {
           method: "chat.postMessage",
           parameters: { channel: "C123", text: "collie · r-own needs you\nChoose the approach" },
@@ -309,7 +323,7 @@ test("a notification for a person opens the DM and posts only in the returned ch
         }),
         { slack: (token) => slackApi(token, slack.client), toast: undefined },
       );
-      expect(slack.calls.filter((call) => call.method !== "auth.test")).toEqual([
+      expect(Arr.filter(slack.calls, (call) => call.method !== "auth.test")).toEqual([
         { method: "conversations.open", parameters: { users: "U789" } },
         {
           method: "chat.postMessage",
@@ -332,9 +346,11 @@ test("notification text cannot turn a Run's words into Slack mentions", () =>
         }),
         { slack: (token) => slackApi(token, slack.client) },
       );
-      expect(slack.calls.find((call) => call.method === "chat.postMessage")?.parameters.text).toBe(
-        "collie · r-own needs you\nChoose &lt;@U789&gt; &amp; &lt;!channel&gt;",
-      );
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(slack.calls, (call) => call.method === "chat.postMessage"),
+        )?.parameters.text,
+      ).toBe("collie · r-own needs you\nChoose &lt;@U789&gt; &amp; &lt;!channel&gt;");
       expect(toasts).toEqual(["request|collie · r-own needs you|Choose <@U789> & <!channel>"]);
     }),
   ));

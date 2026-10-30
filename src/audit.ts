@@ -1,7 +1,11 @@
 // A Run's audit trail: every operation a front door asked of it, who asked, and what came
 // of it. Written by the host alone, which stamps the front door the channel declared.
 
-import { Effect, FileSystem, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { FrontDoor, RequestConflict, Where } from "./board-model";
 import { voiceOf, type Voice } from "./proposals";
 import { appendJournal, readJournal } from "./journal";
@@ -45,14 +49,16 @@ export const startedBy = (
   lines: ReadonlyArray<AuditLine>,
   run: { readonly id: string; readonly parent: string | null },
 ): string | undefined => {
-  const actor = lines.find((line) => line.operation === "start")?.actor;
+  const actor = Option.getOrUndefined(
+    Arr.findFirst(lines, (line) => line.operation === "start"),
+  )?.actor;
   if (actor?.schedule !== undefined)
     return `Started by schedule \`${actor.schedule.name}\` for ${actor.schedule.occurrence}`;
   const door = actor === undefined ? undefined : STARTED_FROM[actor.origin];
   if (door !== undefined) return `Started from ${door}`;
   if (run.parent === null) return undefined;
-  const invocation = run.id.startsWith(`${run.parent}.`)
-    ? run.id.slice(run.parent.length + 1)
+  const invocation = pipe_(run.id, Str.startsWith(`${run.parent}.`))
+    ? pipe_(run.id, Str.slice(run.parent.length + 1))
     : run.id;
   return `Started by ${run.parent} as ${invocation}`;
 };
@@ -73,14 +79,14 @@ export const trimAudit = Effect.fn("Audit.trim")(function* (runDir: string, keep
   const lines = yield* readAudit(runDir);
   if (lines.length <= keep) return;
   const fs = yield* FileSystem.FileSystem;
-  const encode = Schema.encodeSync(AuditJson);
+  const encode = flow(Schema.encodeResult(AuditJson), Result.getOrThrow);
   const tmp = `${fileOf(runDir)}.${process.pid}.tmp`;
   yield* fs.writeFileString(
     tmp,
-    lines
-      .slice(-keep)
-      .map((line) => `${encode(line)}\n`)
-      .join(""),
+    Arr.join(
+      Arr.map(lines.slice(-keep), (line) => `${encode(line)}\n`),
+      "",
+    ),
   );
   yield* fs.rename(tmp, fileOf(runDir));
 });
@@ -115,11 +121,11 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
   },
 ) {
   const written: AuditLine = {
-    at: yield* nowIso(),
+    at: yield* nowIso,
     operation: line.operation,
     request: line.request,
     actor: actorOf(line, line.request),
-    result: Schema.encodeSync(line.result)(line.value),
+    result: yield* Schema.encodeEffect(line.result)(line.value).pipe(Effect.orDie),
   };
   let full = written;
   if (line.reason !== undefined) full = { ...full, reason: line.reason };
@@ -146,7 +152,9 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
   },
   act: Effect.Effect<A, E, R>,
 ) {
-  const prior = (yield* readAudit(runDir)).find((one) => one.request === line.request);
+  const prior = Option.getOrUndefined(
+    Arr.findFirst(yield* readAudit(runDir), (one) => one.request === line.request),
+  );
   if (prior !== undefined) {
     if (prior.operation !== line.operation) {
       return yield* new RequestConflict({

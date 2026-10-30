@@ -11,16 +11,20 @@
 // `CAPABILITIES.md`. Attribution asks for a line typed into that pane, by a person or an
 // agent, and waits.
 
-import { BunServices } from "@effect/platform-bun";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import { platformLayer } from "../src/platform";
 import { Clock, Effect, FileSystem, ManagedRuntime, Path } from "effect";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { externalSubmissions, installedVersion, submittedDelivery } from "../src/compactors";
 import { controlDir } from "../src/compaction";
-import { ackPath, entryFromLive, transaction, INTERRUPT_WAIT_MS } from "../src/dispatcher";
+import { entryFromLive, transaction, INTERRUPT_WAIT_MS } from "../src/dispatcher";
 import { nowIso } from "../src/time";
 
-const runtime = ManagedRuntime.make(BunServices.layer);
+const runtime = ManagedRuntime.make(platformLayer);
+const ackPath = (dir: string, id: string) => `${dir}/steering/acks/${id}.txt`;
 
 type Result = "pass" | "fail" | "not-run";
 interface Row {
@@ -32,18 +36,21 @@ interface Row {
 const CAPABILITIES = ["now", "interrupt", "ack", "attribution"] as const;
 
 function allNotRun(note: string): Row[] {
-  return CAPABILITIES.map((capability) => ({ capability, result: "not-run" as const, note }));
+  return Arr.map(CAPABILITIES, (capability) => ({ capability, result: "not-run" as const, note }));
 }
 
 /** What a delivery asks for in this experiment: the token, and the ack, and nothing else. */
 function askFor(runDir: string, id: string): string {
-  return [
-    `collie-delivery:${id}`,
-    "Stop what you are doing and do this instead:",
-    `write \`${ackPath(runDir, id)}\` containing`,
-    `{"delivery":"${id}","intent_version":1,"attempt":1,"understood":"<one sentence>"}`,
-    "and then wait.",
-  ].join("\n");
+  return Arr.join(
+    [
+      `collie-delivery:${id}`,
+      "Stop what you are doing and do this instead:",
+      `write \`${ackPath(runDir, id)}\` containing`,
+      `{"delivery":"${id}","intent_version":1,"attempt":1,"understood":"<one sentence>"}`,
+      "and then wait.",
+    ],
+    "\n",
+  );
 }
 
 const live = Effect.fn("live.run")(function* (harness: string, agent: string, keep: boolean) {
@@ -102,7 +109,11 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
         attempt: 1,
         requestId: id,
       }),
-    ).pipe(Effect.catch(() => Effect.succeed({ ok: false as const })));
+    ).pipe(
+      Effect.orElseSucceed(() => ({
+        ok: false as const,
+      })),
+    );
   });
 
   const rows: Row[] = [];
@@ -130,8 +141,8 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
   // observed; it is not a claim that the harness stopped.
   const before = yield* herdr
     .agentStatus(agent)
-    .pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
-  yield* herdr.agentSendKeys(agent, ["Escape"]).pipe(Effect.catch(() => Effect.void));
+    .pipe(Effect.orElseSucceed(() => "unknown" as const));
+  yield* herdr.agentSendKeys(agent, ["Escape"]).pipe(Effect.ignore);
   const moved = yield* leftWorking(herdr, agent, INTERRUPT_WAIT_MS);
   const interruptId = "live-interrupt-1";
   const interruptSent = yield* deliver(interruptId, "interrupt");
@@ -175,7 +186,7 @@ const leftWorking = Effect.fn("live.leftWorking")(function* (
   while ((yield* Clock.currentTimeMillis) < deadline) {
     const status = yield* herdr
       .agentStatus(agent)
-      .pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
+      .pipe(Effect.orElseSucceed(() => "unknown" as const));
     if (status !== "working") return true;
     yield* Effect.sleep(250);
   }
@@ -192,16 +203,16 @@ const report = Effect.fn("live.report")(function* (harness: string) {
   const { version, rows } = yield* live(harness, agent, Bun.argv.includes("--keep"));
   const lines = [
     "",
-    `### ${harness} ${version} — ${(yield* nowIso()).slice(0, 10)}`,
+    `### ${harness} ${version} — ${pipe_(yield* nowIso, Str.slice(0, 10))}`,
     "",
     "| capability | result | note |",
     "|---|---|---|",
-    ...rows.map((row) => `| ${row.capability} | ${row.result} | ${row.note} |`),
+    ...Arr.map(rows, (row) => `| ${row.capability} | ${row.result} | ${row.note} |`),
     "",
     "Paste these rows into the Run's CAPABILITIES.md, and flip the table in",
     "src/steering-caps.ts only for the ones that say pass.",
   ];
-  yield* Effect.log(lines.join("\n"));
+  yield* Effect.log(Arr.join(lines, "\n"));
   return 0;
 });
 

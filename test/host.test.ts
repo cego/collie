@@ -6,6 +6,9 @@
 // client cancel the work it accepted, does a pending decision outlive the process — and
 // none of them has an answer in one process with an in-memory engine.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   Clock,
@@ -99,7 +102,7 @@ test(
         // Four at once against a directory with no host: each finds nothing answering and
         // starts one, and three of those lose the lock and leave.
         const identities = yield* Effect.all(
-          [1, 2, 3, 4].map(() =>
+          Arr.map([1, 2, 3, 4], () =>
             Effect.scoped(
               connect(state).pipe(
                 Effect.flatMap((client) => client.identity()),
@@ -109,7 +112,7 @@ test(
           ),
           { concurrency: "unbounded" },
         );
-        expect(new Set(identities.map((who) => who.pid)).size).toBe(1);
+        expect(new Set(Arr.map(identities, (who) => who.pid)).size).toBe(1);
 
         // The one they reached is the one that owns the directory, not merely the one
         // that answered first.
@@ -266,13 +269,13 @@ test(
         // The same claim, four times over one host: the database settles which of them
         // made the run, and the other three are told about it.
         const admitted = yield* Effect.all(
-          [1, 2, 3, 4].map(() =>
+          Arr.map([1, 2, 3, 4], () =>
             client.start({ project, id: "proof", request: "req-1", input: { note: "once" } }),
           ),
           { concurrency: "unbounded" },
         ).pipe(Effect.orDie);
-        expect(new Set(admitted.map((one) => one.runId)).size).toBe(1);
-        expect(admitted.filter((one) => one.fresh)).toHaveLength(1);
+        expect(new Set(Arr.map(admitted, (one) => one.runId)).size).toBe(1);
+        expect(Arr.filter(admitted, (one) => one.fresh)).toHaveLength(1);
 
         // A different claim for the same work is different work: two starts, two runs.
         const other = yield* client
@@ -496,9 +499,17 @@ test(
         );
         const owner = yield* ownerOf(env.stateDir);
         expect(owner?.pid).not.toBe(old.pid);
-        const shown = (yield* rig.calls()).find((call) => call.cmd === "notification show");
+        const shown = Option.getOrUndefined(
+          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "notification show"),
+        );
         expect(shown?.argv).toContain("Collie host restarted");
-        expect(shown?.argv?.join(" ")).toContain(`pid ${old.pid}`);
+        expect(
+          Option.getOrUndefined(
+            Option.flatMap(Option.fromNullishOr(shown), (present) =>
+              Option.map(Option.fromNullishOr(present.argv), (present_) => Arr.join(present_, " ")),
+            ),
+          ),
+        ).toContain(`pid ${old.pid}`);
         yield* stopHost(env.stateDir);
       }).pipe(Effect.scoped, Effect.orDie),
     ),
@@ -663,7 +674,7 @@ const recordedChecks = (state: string, least: number) =>
       until(
         () =>
           fs.readDirectory(runningChecksDir(state)).pipe(
-            Effect.map((files) => files.filter((file) => file.endsWith(".json"))),
+            Effect.map((files) => Arr.filter(files, (file) => pipe_(file, Str.endsWith(".json")))),
             Effect.orElseSucceed((): ReadonlyArray<string> => []),
           ),
         (files) => files.length >= least,
@@ -681,9 +692,9 @@ const runsAHeldCheck = (watch: string) =>
     yield* fs.makeDirectory(notes);
     yield* fs.writeFileString(
       `${project}/.collie/verify.json`,
-      Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
+      yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
         { name: "held", executable: heldCheck, argv: [notes], cwd: "." },
-      ]),
+      ]).pipe(Effect.orDie),
     );
     for (const args of [
       ["init", "-q"],
@@ -708,8 +719,8 @@ const runsAHeldCheck = (watch: string) =>
     const pidIn = (file: string) =>
       until(
         () => fs.readFileString(`${notes}/${file}`).pipe(Effect.orElseSucceed(() => "")),
-        (text) => text.trim() !== "",
-      ).pipe(Effect.map((text) => Number(text.trim())));
+        (text) => Str.trim(text) !== "",
+      ).pipe(Effect.map((text) => Number(Str.trim(text))));
     const check = yield* Effect.forEach([yield* pidIn("starts"), yield* pidIn("children")], (pid) =>
       Effect.map(startedOf(pid), (started) => ({ pid, started: started ?? "" })),
     );
@@ -751,7 +762,7 @@ test.skipIf(process.platform !== "linux")(
         const recorded = yield* readVerifications(evidenceDir(state, runId)).pipe(
           Effect.orElseSucceed(() => []),
         );
-        expect(recorded.filter((one) => one.name === "held")).toEqual([]);
+        expect(Arr.filter(recorded, (one) => one.name === "held")).toEqual([]);
         expect(yield* fs.readFileString(`${state}/host.log`)).toContain(
           `ended check held of ${runId}`,
         );
@@ -774,7 +785,7 @@ test.skipIf(process.platform !== "linux")(
             yield* client.control({ runId, control: "stop", set: true, request: "stop-1" });
             yield* until(
               () => Effect.forEach(check, stillRunning),
-              (running) => running.every((alive) => !alive),
+              (running) => Arr.every(running, (alive) => !alive),
             );
             yield* until(
               () => client.status({ runId }),
@@ -816,7 +827,7 @@ test.skipIf(process.platform !== "linux")(
         yield* fs.makeDirectory(`${state}/agents`, { recursive: true });
         yield* fs.writeFileString(
           `${state}/agents/test.json`,
-          Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))([
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
             {
               role: "implementer",
               agent: "build-1",
@@ -826,7 +837,7 @@ test.skipIf(process.platform !== "linux")(
               workflow: "stubborn",
               at: "2026-10-26T00:00:00.000Z",
             },
-          ]),
+          ]).pipe(Effect.orDie),
         );
         const agent = yield* connect(state).pipe(Effect.orDie);
         yield* agent.declare({ frontDoor: "agent", from: { agent: "build-1" } }).pipe(Effect.orDie);
@@ -864,7 +875,9 @@ test.skipIf(process.platform !== "linux")(
         const recorded = yield* readVerifications(evidenceDir(state, runId)).pipe(
           Effect.orElseSucceed(() => []),
         );
-        expect(recorded.filter((one) => one.name === "held" && one.result === "pass")).toEqual([]);
+        expect(Arr.filter(recorded, (one) => one.name === "held" && one.result === "pass")).toEqual(
+          [],
+        );
       }),
     ),
   120_000,
@@ -895,7 +908,7 @@ test.skipIf(process.platform !== "linux")(
 const notedIn = (notes: string, file: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${notes}/${file}`)),
-    Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+    Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
@@ -904,7 +917,7 @@ const recordedLeaders = (state: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
       fs.readDirectory(runningChecksDir(state)).pipe(
-        Effect.map((names) => names.filter((name) => name.endsWith(".json"))),
+        Effect.map((names) => Arr.filter(names, (name) => pipe_(name, Str.endsWith(".json")))),
         Effect.flatMap((names) =>
           Effect.forEach(names, (name) =>
             fs
@@ -929,7 +942,7 @@ const releasedOnce = (state: string, runId: string, notes: string) =>
         (status) => status.status === "complete",
       );
       const recorded = yield* readVerifications(evidenceDir(state, runId));
-      return recorded.filter((one) => one.name === "held");
+      return Arr.filter(recorded, (one) => one.name === "held");
     }),
   ).pipe(Effect.orDie);
 
@@ -1081,7 +1094,7 @@ test.skipIf(process.platform !== "linux")(
         // The sweep follows the host's first answer.
         yield* until(
           () => Effect.forEach(ours, stillRunning),
-          (running) => !running.some(Boolean),
+          (running) => !Arr.some(running, Boolean),
         );
         yield* until(
           () => fs.readDirectory(runningChecksDir(state)),
@@ -1094,11 +1107,17 @@ test.skipIf(process.platform !== "linux")(
               fs.readFileString(`${state}/host.log`),
             ]).pipe(Effect.orElseSucceed(() => ["", ""])),
           ([run, host]) =>
-            run.includes(
-              "check held (pass gate) of run-four, left running by host 4242 (started 2): ended",
+            pipe_(
+              run,
+              Str.includes(
+                "check held (pass gate) of run-four, left running by host 4242 (started 2): ended",
+              ),
             ) &&
-            host.includes(
-              "check held of run-one, left running by host 4241 (started 1): already gone",
+            pipe_(
+              host,
+              Str.includes(
+                "check held of run-one, left running by host 4241 (started 1): already gone",
+              ),
             ),
         );
         expect(yield* Effect.forEach([reused, theirs, unmarked], stillRunning)).toEqual([
@@ -1374,7 +1393,7 @@ test(
         // a child of this test would linger as a zombie once killed, which a signal still
         // reaches, where a test process that exits is reaped by whoever started it.
         const detached = yield* exec(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
-        const outlived = Number(detached.stdout.trim());
+        const outlived = Number(Str.trim(detached.stdout));
         const suite = yield* suiteEnv;
         yield* Effect.addFinalizer(() => signalProcess(outlived, "SIGKILL"));
         const hostFor = (state: string, watch: string) =>
@@ -1399,7 +1418,7 @@ test(
           );
         // Its exit, as the handle sees it: a signal would still reach it as a zombie until
         // it is reaped, which is not the host still serving.
-        const gone = (host: { readonly exitCode: Effect.Effect<unknown, unknown> }) =>
+        const gone = <A, E>(host: { readonly exitCode: Effect.Effect<A, E> }) =>
           host.exitCode.pipe(Effect.timeout("20 seconds"), Effect.orDie);
 
         const watching = (yield* workspace("collie-host-watched-")).state;
@@ -1461,7 +1480,7 @@ test(
               GIT_COMMITTER_NAME: "t",
               GIT_COMMITTER_EMAIL: "t@example.com",
             },
-          }).pipe(Effect.map((done) => done.stdout.trim()));
+          }).pipe(Effect.map((done) => Str.trim(done.stdout)));
         yield* git("init", "--quiet", "-b", "feature");
         yield* git("commit", "--quiet", "--allow-empty", "-m", "work");
         const sha = yield* git("rev-parse", "--short", "HEAD");
