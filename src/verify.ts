@@ -12,10 +12,10 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
-import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result, type Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
-import { CheckProcesses } from "./check-processes";
+import { CheckProcesses, type CheckOf } from "./check-processes";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
 import { appendJournal, readJournal } from "./journal";
@@ -338,17 +338,34 @@ export interface Collected {
   readonly test?: FailedTest;
 }
 
+/** How much of a stream's end is read for its tail: enough bytes for its last `TAIL_BYTES` characters. */
+const TAIL_READ = 4 * TAIL_BYTES;
+
+const tailOf = (output: string) =>
+  Effect.tryPromise(() => {
+    const file = Bun.file(output);
+    return file.slice(Math.max(0, file.size - TAIL_READ)).text();
+  }).pipe(
+    Effect.map(tail),
+    Effect.orElseSucceed(() => ""),
+  );
+
+/** A check `startCheck` started, finished by `finishCheck` once `exit` is known. */
+export interface StartedCheck {
+  readonly id: string;
+  readonly exit: Effect.Effect<number>;
+}
+
 /**
- * Run it, watch it, and record what the tree was at both ends. The exit status is passed
- * back to the caller unchanged: `collie verify -- bun test` has to behave like `bun test`
- * for anything wrapping it, whatever the tree did.
+ * Starts it in the caller's Scope, with what finishing it needs in its record, its output
+ * written to its log and shown as it arrives. Never succeeds where the host would not start it.
  */
-export const collect = Effect.fn("Verify.collect")(function* (
+export const startCheck = Effect.fn("Verify.startCheck")(function* (
   runDir: string,
   what: Collected,
   /** Where each stream is shown as it arrives, for a caller watching the command run. */
   echo?: Echo,
-): Effect.fn.Return<Verification, VerifyRefused, Services> {
+): Effect.fn.Return<StartedCheck, VerifyRefused, Services | Scope.Scope> {
   const absolute = yield* resolveExecutable(what.executable, what.cwd);
   if (absolute === null)
     return yield* new VerifyRefused({ why: `nothing on PATH called "${what.executable}"` });
@@ -375,94 +392,158 @@ export const collect = Effect.fn("Verify.collect")(function* (
         : `${Buffer.from(chunk, "utf8").subarray(0, room).toString("utf8")}\n[collie: the output was cut at ${LOG_BYTES} bytes; the rest was not kept]\n`;
     return fs.writeFileString(what.log, text, { flag: "a" }).pipe(Effect.ignore);
   };
+  const atStep = yield* CurrentStep;
+  const step = what.step === undefined ? atStep : { step: what.step, place: what.place ?? null };
+  const checks = yield* CheckProcesses;
   // No shell, and the argument list whole: a verification's value is that what ran is
   // what was written down, and a shell string is a second language in between.
-  const [stdout, stderr, exit] = yield* Effect.gen(function* () {
-    const checks = yield* CheckProcesses;
-    const handle = yield* checks.run(
+  const handle = yield* checks
+    .run(
       { run: what.run, name: what.name, by: what.by, ...(what.pass && { pass: what.pass }) },
-      { executable: absolute, argv: what.argv, cwd: what.cwd },
-      echo?.said,
-    );
-    if (handle.pid !== null && echo?.said !== undefined)
-      yield* echo.said(`"${what.name}" started, pid ${handle.pid}`);
-    // Tailed as it arrives, never folded whole: only the last 4 KiB is recorded, and a
-    // verification that prints for an hour must not allocate for an hour to say so.
-    const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
-      stream.pipe(
-        Stream.decodeText(),
-        Stream.tap((chunk) => toLog(chunk)),
-        Stream.tap((chunk) => (shown === undefined ? Effect.void : shown(chunk))),
-        Stream.runFold(
-          () => "",
-          (kept: string, chunk: string) => tail(kept + chunk),
-        ),
-      );
-    return yield* handle.collected(
-      Effect.all(
-        [drain(handle.stdout, echo?.stdout), drain(handle.stderr, echo?.stderr), handle.exit],
-        {
-          concurrency: "unbounded",
+      {
+        executable: absolute,
+        argv: what.argv,
+        cwd: what.cwd,
+        spec: {
+          evidence: runDir,
+          asked: what.executable,
+          start,
+          began,
+          expect: what.expect ?? "pass",
+          step,
+          ...(what.log !== undefined && { log: what.log }),
+          ...(what.test !== undefined && { test: what.test }),
+          ...(environment !== null && { environment }),
         },
+      },
+      echo?.said,
+    )
+    .pipe(
+      Effect.catch((cause) =>
+        cause._tag === "CheckRefused"
+          ? Effect.fail(
+              new VerifyRefused({
+                why: `${cause.why}; \`collie cleanup --apply\` tries to end it again and reports what is left`,
+                state: true,
+              }),
+            )
+          : Effect.die(cause),
       ),
     );
-  }).pipe(
-    Effect.scoped,
-    Effect.catch((cause) =>
-      cause._tag === "CheckRefused"
-        ? Effect.fail(
-            new VerifyRefused({
-              why: `${cause.why}; \`collie cleanup --apply\` tries to end it again and reports what is left`,
-              state: true,
-            }),
-          )
-        : Effect.die(cause),
-    ),
-  );
-  const end = yield* fingerprint(what.cwd);
+  if (handle.id === null) return yield* Effect.never;
+  if (handle.pid !== null && echo?.said !== undefined)
+    yield* echo.said(`"${what.name}" started, pid ${handle.pid}`);
+  // Never folded whole: its tail is read from its output once it ends, and a verification
+  // that prints for an hour must not allocate for an hour to say so.
+  const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
+    stream.pipe(
+      Stream.decodeText(),
+      Stream.tap((chunk) => toLog(chunk)),
+      Stream.tap((chunk) => (shown === undefined ? Effect.void : shown(chunk))),
+      Stream.runDrain,
+    );
+  return {
+    id: handle.id,
+    exit: handle
+      .collected(
+        Effect.all(
+          [drain(handle.stdout, echo?.stdout), drain(handle.stderr, echo?.stderr), handle.exit],
+          { concurrency: "unbounded" },
+        ),
+      )
+      .pipe(
+        Effect.map(([, , exit]) => exit),
+        Effect.orDie,
+      ),
+  };
+});
+
+/**
+ * The Verification of a check that exited with `exit`, from its record and output alone, so
+ * any host on its state directory can finish it; appended to its Run's evidence.
+ */
+export const finishCheck = Effect.fn("Verify.finishCheck")(function* (
+  id: string,
+  exit: number,
+): Effect.fn.Return<Verification, never, Services> {
+  const found = yield* (yield* CheckProcesses).finished(id);
+  if (found === null) return yield* Effect.die(`check ${id} has no record to finish it from`);
+  const { check, command } = found;
+  const { spec } = command;
+  const fs = yield* FileSystem.FileSystem;
+  const [stdout, stderr] = yield* Effect.all([tailOf(found.stdout), tailOf(found.stderr)]);
+  const end = yield* fingerprint(command.cwd);
   const at = yield* nowIso;
   const output = `${stdout}\n${stderr}`;
   const testPassed =
-    what.test === undefined ||
-    (what.pass?.pass === "baseline"
-      ? !failedAlone(Number(exit), output, what.test)
-      : ranAlone(Number(exit), output));
-  const judged = what.test === undefined ? Number(exit) : testPassed ? 0 : Number(exit) || 1;
+    spec.test === undefined ||
+    (check.pass?.pass === "baseline"
+      ? !failedAlone(exit, output, spec.test)
+      : ranAlone(exit, output));
+  const judged = spec.test === undefined ? exit : testPassed ? 0 : exit || 1;
   const failed =
-    what.test !== undefined || what.log === undefined || Number(exit) === 0
+    spec.test !== undefined || spec.log === undefined || exit === 0
       ? null
-      : failedTests(yield* fs.readFileString(what.log).pipe(Effect.orElseSucceed(() => "")));
+      : failedTests(yield* fs.readFileString(spec.log).pipe(Effect.orElseSucceed(() => "")));
 
   const record: Verification = {
-    id: `${what.run}-${what.name}-${epochMs(at)}`,
-    run: what.run,
-    name: what.name,
-    executable: absolute,
-    asked: what.executable,
-    argv: [...what.argv],
-    cwd: what.cwd,
-    start,
+    id: `${check.run}-${check.name}-${epochMs(at)}`,
+    run: check.run,
+    name: check.name,
+    executable: command.executable,
+    asked: spec.asked,
+    argv: [...command.argv],
+    cwd: command.cwd,
+    start: spec.start,
     end,
-    exit: Number(exit),
-    seconds: Math.max(0, (epochMs(at) - epochMs(began)) / 1000),
+    exit,
+    seconds: Math.max(0, (epochMs(at) - epochMs(spec.began)) / 1000),
     tail: { stdout, stderr },
-    expect: what.expect ?? "pass",
-    result: resultOf(start, end, judged, what.expect ?? "pass"),
+    expect: spec.expect,
+    result: resultOf(spec.start, end, judged, spec.expect),
     at,
-    by: what.by,
-    ...passFields(what.pass),
+    by: check.by,
+    ...passFields(passOf(check.pass)),
   };
   const read: Verification = failed === null ? record : { ...record, failed };
-  const tested: Verification = what.test === undefined ? read : { ...read, test: what.test };
-  const placed: Verification = environment === null ? tested : { ...tested, environment };
-  const loggedRecord: Verification = what.log === undefined ? placed : { ...placed, log: what.log };
-  const atStep = yield* CurrentStep;
-  const step = what.step === undefined ? atStep : { step: what.step, place: what.place ?? null };
+  const tested: Verification = spec.test === undefined ? read : { ...read, test: spec.test };
+  const placed: Verification =
+    spec.environment === undefined ? tested : { ...tested, environment: spec.environment };
+  const loggedRecord: Verification = spec.log === undefined ? placed : { ...placed, log: spec.log };
   const kept: Verification =
-    step === null ? loggedRecord : { ...loggedRecord, step: step.step, place: step.place };
-  yield* appendVerification(runDir, kept).pipe(Effect.orDie);
+    spec.step === null
+      ? loggedRecord
+      : { ...loggedRecord, step: spec.step.step, place: spec.step.place };
+  yield* appendVerification(spec.evidence, kept).pipe(Effect.orDie);
   return kept;
 });
+
+/**
+ * Run it, watch it, and record what the tree was at both ends. The exit status is passed
+ * back to the caller unchanged: `collie verify -- bun test` has to behave like `bun test`
+ * for anything wrapping it, whatever the tree did.
+ */
+export const collect = (
+  runDir: string,
+  what: Collected,
+  /** Where each stream is shown as it arrives, for a caller watching the command run. */
+  echo?: Echo,
+): Effect.Effect<Verification, VerifyRefused, Services> =>
+  startCheck(runDir, what, echo).pipe(
+    Effect.flatMap((started) =>
+      Effect.flatMap(started.exit, (exit) => finishCheck(started.id, exit)),
+    ),
+    Effect.scoped,
+    Effect.withSpan("Verify.collect"),
+  );
+
+/** A record's pass, where it is one a Verification keeps. */
+function passOf(given: CheckOf["pass"]): CheckPass | undefined {
+  if (given === undefined || !Schema.is(Pass)(given.pass)) return undefined;
+  return given.round === undefined
+    ? { pass: given.pass }
+    : { pass: given.pass, round: given.round };
+}
 
 /** The pass and round a record keeps, with nothing where no pass was given. */
 function passFields(given: CheckPass | undefined): Pick<Verification, "pass" | "round"> {

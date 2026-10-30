@@ -576,7 +576,11 @@ test.skipIf(process.platform !== "linux")(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const dir = yield* fs.makeTempDirectoryScoped({ prefix: "swept-checks-" });
-        const checks = yield* hostCheckProcesses({ dir, installation: "installation-under-test" });
+        const checks = yield* hostCheckProcesses({
+          dir,
+          installation: "installation-under-test",
+          sweep: true,
+        });
         const left = yield* leftCheck("installation-under-test");
         yield* Effect.forkScoped(
           fastForward(sweepEvery(dir, Effect.succeed([checksSweeper(checks)])), 60_000),

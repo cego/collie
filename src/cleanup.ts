@@ -526,6 +526,7 @@ const KEPT_KINDS = new Set([
   "files",
   "claude.json.bak",
   "running-checks",
+  "check-output",
 ]);
 const MARKER_KINDS = ["stop", "hold", "parked", "awaiting", "notified"];
 const MARKER = new RegExp(`^(?:${Arr.join(MARKER_KINDS, "|")})\\.(.+)$`);

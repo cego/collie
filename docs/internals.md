@@ -102,6 +102,14 @@ runs it once more. No check of a Run starts while one a previous host left of th
 still running: one that survives SIGKILL is ended again a second later, and named again,
 until it is gone.
 
+A check's record, `running-checks/<id>.json`, holds what its Verification is finished
+from: the command as resolved, the tree it started on, when, what it expects and where its
+evidence goes. Its stdout and stderr are written straight to `check-output/<id>.stdout`
+and `.stderr`, never through a pipe the host holds, and the host follows them every 50 ms
+for its log and a watching client until the leader has exited and nothing of its process
+group is left. Finishing reads the record, the tails of those two files and the exit
+status, so any host on the state directory could finish it. All three go together.
+
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no
 frozen copy of the workflow: an unchanged one resumes where it was, one edited out of shape
