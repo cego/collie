@@ -528,7 +528,7 @@ test("a tree git cannot stage is no tree, so an edit it hides moves nothing into
     }),
   ));
 
-test("an edit inside a submodule moves the tree, and undoing it moves it back", () =>
+test("an edit inside a submodule moves the tree, measured from any directory of it, and undoing it moves it back", () =>
   inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -546,12 +546,16 @@ test("an edit inside a submodule moves the tree, and undoing it moves it back", 
       expect(
         yield* git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", inner, "mod"]),
       ).toBe(0);
+      yield* fs.makeDirectory(path.join(repo, "pkg"));
+      yield* fs.writeFileString(path.join(repo, "pkg", "a.txt"), "a\n");
+      yield* git(["add", "-A"]);
       yield* git(["commit", "-qm", "submodule"]);
       const clean = yield* fingerprint(repo);
 
       yield* fs.writeFileString(path.join(repo, "mod", "lib.txt"), "two\n");
       const edited = yield* fingerprint(repo);
       expect(sameTree(edited, clean)).toBe(false);
+      expect(sameTree(yield* fingerprint(path.join(repo, "pkg")), edited)).toBe(true);
       yield* fs.writeFileString(path.join(repo, "mod", "new.txt"), "n\n");
       expect(sameTree(yield* fingerprint(repo), edited)).toBe(false);
 

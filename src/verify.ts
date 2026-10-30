@@ -142,8 +142,12 @@ export const treeOf: (
   const tree = yield* workingTree(cwd);
   if (tree === UNMEASURED) return { head_sha, fingerprint: UNMEASURED, branch, dirty };
   const parts = [tree];
-  for (const sub of changedSubmodules(entries)) {
-    const inner = (yield* treeOf(path.join(cwd, sub))).fingerprint;
+  const subs = changedSubmodules(entries);
+  // Status names a submodule from the repository root, not from cwd.
+  const root =
+    subs.length === 0 ? "" : Str.trim((yield* git(["rev-parse", "--show-toplevel"], cwd)).stdout);
+  for (const sub of subs) {
+    const inner = (yield* treeOf(path.join(root, sub))).fingerprint;
     if (inner === TOO_LARGE || inner === UNMEASURED || inner === "")
       return { head_sha, fingerprint: inner === TOO_LARGE ? TOO_LARGE : UNMEASURED, branch, dirty };
     parts.push(`${sub}=${inner}`);
