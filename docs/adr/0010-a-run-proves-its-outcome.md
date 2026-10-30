@@ -165,5 +165,7 @@ A tree is now the Git tree its working tree would commit as, untracked files git
 ignore included, built in a scratch copy of the index. The same bytes are the same tree, at
 any commit and staged or not. Any changed byte is another tree. The commit is still recorded
 beside it, for a human and for what is about a commit as such: a CI job, a pushed head, a
-Measurement's base. A tree too large to look at is still never equal to another. Records
+Measurement's base. A submodule whose checkout has edits or untracked files adds its own
+tree, since the superproject's tree records only its commit. A tree too large to look at,
+or one git could not stage, is never equal to another. Records
 made before this read as being on an earlier tree, and their checks run again.

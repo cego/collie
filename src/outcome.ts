@@ -21,7 +21,6 @@ import {
   ranOneTest,
   sameAsked,
   sameTree,
-  TOO_LARGE,
   type CheckCommand,
   type FailedTest,
   type Snapshot,
@@ -698,10 +697,9 @@ export function endsWithoutPatch(kind: Outcome, got: Collected): boolean {
   const base = got.measurements?.at(-1)?.base;
   return (
     base !== undefined &&
-    base.fingerprint !== TOO_LARGE &&
+    sameTree(base, got.final) &&
     base.content !== "" &&
-    base.content === got.content &&
-    base.fingerprint === got.final.fingerprint
+    base.content === got.content
   );
 }
 

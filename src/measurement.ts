@@ -38,7 +38,7 @@ import { waitForMemory } from "./memory-wait";
 import { shell } from "./mr";
 import { machineName } from "./peers";
 import { nowIso } from "./time";
-import { contentOf, environmentOf, fingerprint, resolveExecutable, TOO_LARGE } from "./verify";
+import { contentOf, environmentOf, fingerprint, resolveExecutable, sameTree } from "./verify";
 
 const MeasurementLine = Schema.fromJsonString(MeasurementJson);
 
@@ -349,11 +349,10 @@ const recordedFor = (
     Arr.findFirst(
       records,
       (one) =>
-        key.print !== TOO_LARGE &&
+        sameTree({ fingerprint: key.print }, one.candidate) &&
         one.base.commit === key.commit &&
         one.plan_digest === key.digest &&
-        one.candidate.head_sha === key.head &&
-        one.candidate.fingerprint === key.print,
+        one.candidate.head_sha === key.head,
     ),
   ) ?? null;
 

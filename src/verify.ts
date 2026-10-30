@@ -40,6 +40,9 @@ export const LOG_BYTES = 8 * 1024 * 1024;
  */
 export const TOO_LARGE = "unstable:too-large";
 
+/** A repository's tree git could not write, which is never the same as another for the same reason as `TOO_LARGE`. */
+export const UNMEASURED = "unstable:unmeasured";
+
 export { PASSES, Pass, VerificationSchema, type FailedTest, type Snapshot } from "./verify-model";
 /** A pass, and the gate fix it follows where it is a `fix`. */
 export interface CheckPass {
@@ -93,12 +96,28 @@ const statusParts = (stdout: string) => {
  * The fingerprint, with the branch HEAD names (`HEAD` when detached, null before a first
  * commit) and whether anything is uncommitted, all from one status.
  */
-export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
+export const treeOf: (
+  cwd: string,
+) => Effect.Effect<
+  { head_sha: string; fingerprint: string; branch: string | null; dirty: boolean },
+  never,
+  Services
+> = Effect.fn("Verify.treeOf")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const [status, changed] = yield* Effect.all(
     [
-      git(["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "-z"], cwd),
+      git(
+        [
+          "status",
+          "--porcelain=v2",
+          "--branch",
+          "--no-ahead-behind",
+          "--ignore-submodules=none",
+          "-z",
+        ],
+        cwd,
+      ),
       git(["ls-files", "--modified", "--others", "--exclude-standard", "-z"], cwd),
     ],
     { concurrency: "unbounded" },
@@ -120,8 +139,43 @@ export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
     );
     if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
   }
-  return { head_sha, fingerprint: yield* workingTree(cwd), branch, dirty };
+  const tree = yield* workingTree(cwd);
+  if (tree === UNMEASURED) return { head_sha, fingerprint: UNMEASURED, branch, dirty };
+  const parts = [tree];
+  for (const sub of changedSubmodules(entries)) {
+    const inner = (yield* treeOf(path.join(cwd, sub))).fingerprint;
+    if (inner === TOO_LARGE || inner === UNMEASURED || inner === "")
+      return { head_sha, fingerprint: inner === TOO_LARGE ? TOO_LARGE : UNMEASURED, branch, dirty };
+    parts.push(`${sub}=${inner}`);
+  }
+  return { head_sha, fingerprint: Arr.join(parts, " "), branch, dirty };
 });
+
+/**
+ * The submodules whose checkout has edits or untracked files: the superproject's tree
+ * records only a submodule's commit, so their content is fingerprinted on its own.
+ */
+const changedSubmodules = (entries: string) => {
+  const found: string[] = [];
+  let original = false;
+  for (const record of Str.split(entries, "\0")) {
+    // A rename's original path is the record after it.
+    if (original) {
+      original = false;
+      continue;
+    }
+    const [kind, , sub, ...rest] = Str.split(record, " ");
+    original = kind === "2";
+    if (
+      (kind === "1" || kind === "2") &&
+      sub !== undefined &&
+      sub[0] === "S" &&
+      (sub[2] === "M" || sub[3] === "U")
+    )
+      found.push(Arr.join(Arr.drop(rest, kind === "1" ? 5 : 6), " "));
+  }
+  return found;
+};
 
 /** The tree `git add -A` would stage, written through a scratch copy so the checkout's own index is left as it was. */
 const workingTree = Effect.fn("Verify.workingTree")(
@@ -129,29 +183,34 @@ const workingTree = Effect.fn("Verify.workingTree")(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const own = yield* git(["rev-parse", "--git-path", "index"], cwd);
+    // Outside a repository there is no tree to move, as there never was.
+    if (own.code !== 0) return "";
     return yield* Effect.acquireUseRelease(
       fs.makeTempDirectory({ prefix: "collie-index-" }),
       (scratch) =>
         Effect.gen(function* () {
           const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
-          yield* fs
-            .copyFile(path.resolve(cwd, Str.trim(own.stdout)), env.GIT_INDEX_FILE)
-            .pipe(Effect.ignore);
-          yield* shell("git", ["add", "-A"], cwd, env);
+          const index = path.resolve(cwd, Str.trim(own.stdout));
+          // A repository nothing was ever staged in has no index yet.
+          if (yield* fs.exists(index)) yield* fs.copyFile(index, env.GIT_INDEX_FILE);
+          if ((yield* shell("git", ["add", "-A"], cwd, env)).code !== 0) return UNMEASURED;
           const tree = yield* shell("git", ["write-tree"], cwd, env);
-          return tree.code === 0 ? Str.trim(tree.stdout) : "";
+          return tree.code === 0 ? Str.trim(tree.stdout) : UNMEASURED;
         }),
       (scratch) => fs.remove(scratch, { recursive: true }).pipe(Effect.ignore),
     );
   },
-  Effect.orElseSucceed(() => ""),
+  Effect.orElseSucceed(() => UNMEASURED),
 );
 
-/** Whether two snapshots are the same bytes, whatever commit each was on. A tree too large to look at is never the same as another. */
+/** Whether two snapshots are the same bytes, whatever commit each was on. A tree nobody measured is never the same as another. */
 export const sameTree = (
   one: Pick<Snapshot, "fingerprint">,
   other: Pick<Snapshot, "fingerprint">,
-) => one.fingerprint !== TOO_LARGE && one.fingerprint === other.fingerprint;
+) =>
+  one.fingerprint !== TOO_LARGE &&
+  one.fingerprint !== UNMEASURED &&
+  one.fingerprint === other.fingerprint;
 
 /**
  * Whether the tree was the same at both ends, and so whether the exit code says anything

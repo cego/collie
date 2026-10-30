@@ -88,7 +88,6 @@ test("the fingerprint moves for anything that changes what a command would see",
       const unstaged = yield* fingerprint(repo);
       expect(unstaged.fingerprint).not.toBe(clean.fingerprint);
 
-      // Staging the same bytes leaves them the same tree.
       yield* git(["add", "-A"]);
       expect((yield* fingerprint(repo)).fingerprint).toBe(unstaged.fingerprint);
 
@@ -115,7 +114,6 @@ test("two trees nobody measured are not the same tree", () => {
   const sentinel = { head_sha: "abc", fingerprint: TOO_LARGE };
   expect(resultOf(sentinel, sentinel, 0)).toBe("unstable");
   expect(resultOf({ head_sha: "abc", fingerprint: "x" }, sentinel, 0)).toBe("unstable");
-  // A commit of the same bytes is the same tree; a tree that moved says nothing about either end.
   expect(
     resultOf({ head_sha: "abc", fingerprint: "x" }, { head_sha: "def", fingerprint: "x" }, 0),
   ).toBe("pass");
@@ -512,6 +510,57 @@ test("a clean tree is its commit's tree, and a tree too large is no tree", () =>
     }),
   ));
 
+test("a tree git cannot stage is no tree, so an edit it hides moves nothing into a pass", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.writeFileString(path.join(repo, ".gitattributes"), "*.txt filter=broken\n");
+      yield* git(["add", "-A"]);
+      yield* git(["commit", "-qm", "attributes"]);
+      yield* git(["config", "filter.broken.clean", "false"]);
+      yield* git(["config", "filter.broken.required", "true"]);
+      const before = yield* fingerprint(repo);
+      yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
+      const after = yield* fingerprint(repo);
+      expect(sameTree(before, after)).toBe(false);
+      expect(sameTree(after, after)).toBe(false);
+    }),
+  ));
+
+test("an edit inside a submodule moves the tree, and undoing it moves it back", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const inner = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-sub-" });
+      for (const args of [
+        ["init", "-q"],
+        ["config", "user.email", "t@example.com"],
+        ["config", "user.name", "t"],
+      ])
+        yield* git(args, inner);
+      yield* fs.writeFileString(path.join(inner, "lib.txt"), "one\n");
+      yield* git(["add", "-A"], inner);
+      yield* git(["commit", "-qm", "lib"], inner);
+      expect(
+        yield* git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", inner, "mod"]),
+      ).toBe(0);
+      yield* git(["commit", "-qm", "submodule"]);
+      const clean = yield* fingerprint(repo);
+
+      yield* fs.writeFileString(path.join(repo, "mod", "lib.txt"), "two\n");
+      const edited = yield* fingerprint(repo);
+      expect(sameTree(edited, clean)).toBe(false);
+      yield* fs.writeFileString(path.join(repo, "mod", "new.txt"), "n\n");
+      expect(sameTree(yield* fingerprint(repo), edited)).toBe(false);
+
+      yield* fs.remove(path.join(repo, "mod", "new.txt"));
+      yield* fs.writeFileString(path.join(repo, "mod", "lib.txt"), "one\n");
+      expect(sameTree(yield* fingerprint(repo), clean)).toBe(true);
+    }),
+  ));
+
 test("Collie's own run carries the expectation it was approved with", () =>
   inRepository(
     Effect.gen(function* () {
@@ -663,7 +712,6 @@ test("a pass is relied on only while its tree, its command and its environment a
       yield* git(["checkout", "-q", "--", "."]);
       expect((yield* relied())?.id).toBe(collies.id);
 
-      // The same bytes, committed.
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
       const dirty = yield* runApproved(runDir, run, [spec], spec);
       yield* git(["commit", "-qam", "the verified bytes"]);
