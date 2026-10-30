@@ -395,6 +395,8 @@ export const DesktopSettings = Schema.Struct({
   chatEffort: Schema.optionalKey(Schema.String),
   /** The Flock chat's width beside the board in CSS pixels; unset is `chatWidth`'s start. */
   chatWidth: Schema.optionalKey(Schema.Finite),
+  /** Whether each record open's timing marks are also logged; unset is off. */
+  recordTiming: Schema.optionalKey(Schema.Boolean),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
@@ -409,6 +411,7 @@ export const DesktopSettingsChange = Schema.Struct({
   chatEffort: Schema.optionalKey(Schema.String),
   /** Null unsets it. */
   chatWidth: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  recordTiming: Schema.optionalKey(Schema.Boolean),
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
@@ -728,6 +731,10 @@ export const DesktopRpcs = RpcGroup.make(
     payload: DesktopSettingsChange,
     success: DesktopSettings,
     error: ActionFailed,
+  }),
+  /** One of a record open's timing marks, logged where the record timing setting is on. */
+  Rpc.make("recordMark", {
+    payload: { name: Schema.String, at: Schema.Finite, card: Schema.String },
   }),
 );
 

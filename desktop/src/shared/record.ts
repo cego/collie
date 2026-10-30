@@ -205,3 +205,29 @@ export const summaryOf = (detail: SummaryFacts): ReadonlyArray<SummarySection> =
       : [{ section: "replies", replies: detail.replies } as const]),
   ];
 };
+
+export type RecordMark = "record:click" | "record:mounted" | "record:frame" | "record:usable";
+
+/**
+ * Marks each step of opening a card's record, from its click to a usable Flow, in order and
+ * once each. A card no longer the one last clicked marks nothing more.
+ */
+export const recordTiming = (mark: (name: RecordMark, at: number, card: string) => void) => {
+  let clicked: string | null = null;
+  let reached: RecordMark | null = null;
+  const after = (previous: RecordMark, next: RecordMark) => (card: string, at: number) => {
+    if (card !== clicked || reached !== previous) return;
+    reached = next;
+    mark(next, at, card);
+  };
+  return {
+    click: (card: string, at: number) => {
+      clicked = card;
+      reached = "record:click";
+      mark("record:click", at, card);
+    },
+    mounted: after("record:click", "record:mounted"),
+    frame: after("record:mounted", "record:frame"),
+    usable: after("record:frame", "record:usable"),
+  };
+};

@@ -1679,8 +1679,8 @@ scope's rule once:
   the Flock chat's **Machine rule** (`machine_rule`) and **Flock chat speaks first**
   (`flock_chat.proactive`) beside each Machine's **Native chat speaks first**
   (`proactive`), so every Desktop routes work the same way, and the TUI shows them too.
-- **This computer** is **Zoom** alone, under Board, marked **This computer** and saved on
-  this computer, since monitors differ between computers. The Flock chat's harness, model,
+- **This computer** is **Zoom** and **Record timing**, under Board, marked **This computer**
+  and saved on this computer, since monitors differ between computers. The Flock chat's harness, model,
   effort and width stay this computer's too, but have no rows here: they are chosen beside
   its message box ([The Flock chat](#the-flock-chat)).
 - **Each Machine's own** is a read-only table: the Machine and where it is, its settings
@@ -1738,7 +1738,7 @@ how far the edit reached, after a fresh exchange with connected Machines: "Given
 read, an edit to them is not sent, and the row says "Not set: the Flock's settings could not
 be read"; Zoom is still saved. A malformed settings file is kept without overwriting it;
 repair it and restart Desktop to read it again. A Machine that has not exchanged settings
-yet stays behind. Zoom says "Saved on this computer".
+yet stays behind. Zoom and Record timing say "Saved on this computer".
 
 A Desktop from before kept the Machine rule and whether the Flock chat speaks first as its
 own. The first start of this one carries each into the Flock's settings once, as an edit
@@ -1747,7 +1747,7 @@ Flock chat left speaking first, the default, carries nothing.
 
 The groups, names, descriptions and units live with each key in the one list of settings
 (`src/settings.ts`) that the TUI's Settings reads too, so a new setting shows up in both,
-except Zoom, whose is in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI
+except Zoom's and Record timing's, which are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI
 does not show the names, descriptions or minutes yet. Desktop keeps the Flock's in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
 Machine's host, never by editing a file over SSH. A Machine is synced each time it
@@ -1799,6 +1799,12 @@ board's window is drawn — "Drawn at 1.5× on DP-1 (3840×2160, Hyprland scale 
 at 2×, so zoom 75% × your 100%." — and says so where the window's pixel ratio is not what
 that zoom should give. Where Desktop cannot read the monitor's scale, as on another
 compositor or an X11 session, it says the scale is not known and why, and Zoom alone applies.
+
+**Record timing**, under **Board** and off by default, appends each record open's timing
+marks to `record-timing.log` in Desktop's state directory: `record:click`, `record:mounted`,
+`record:frame` and `record:usable`, one JSON line each with the card and the time. Desktop
+sets the same marks as User Timing marks either way ([Measuring a record
+open](internals.md#measuring-a-record-open)).
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with

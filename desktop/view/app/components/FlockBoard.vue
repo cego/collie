@@ -68,8 +68,9 @@ watch(page, (now, before) => {
 const { chip, choose } = useChip();
 const pageId = (open: typeof page.value) =>
   open === null ? null : open.kind === "record" ? open.key : open.kind;
+const timing = useRecordTiming();
 /** Every board gesture, decided by `afterGesture` and applied to the chip and the page. */
-const gesture = (done: Gesture, tab: string | null = null) => {
+const gesture = (done: Gesture, tab: string | null = null, clickedAt?: number) => {
   const about = chip.value;
   // A chip whose card has left the board stays selected under a key no card has.
   const selected =
@@ -95,7 +96,10 @@ const gesture = (done: Gesture, tab: string | null = null) => {
   for (const { installation, action } of seenOnOpening(before, after, placedBy))
     void run(installation, action);
   if (after.page === null) back();
-  else showRecord(after.page, tab);
+  else {
+    showRecord(after.page, tab);
+    if (clickedAt !== undefined) timing.click(after.page, clickedAt);
+  }
 };
 provide("gesture", gesture);
 const { run } = useActions();
@@ -112,9 +116,10 @@ watch(
 );
 
 const targetOf = (event: Event) => (event.target instanceof Element ? event.target : null);
-const click = (event: MouseEvent) => gesture({ kind: "click", landed: landedOn(targetOf(event)) });
+const click = (event: MouseEvent) =>
+  gesture({ kind: "click", landed: landedOn(targetOf(event)) }, null, event.timeStamp);
 const doubleClick = (event: MouseEvent) =>
-  gesture({ kind: "double-click", landed: landedOn(targetOf(event)) });
+  gesture({ kind: "double-click", landed: landedOn(targetOf(event)) }, null, event.timeStamp);
 const escape = (event: KeyboardEvent) => {
   if (event.key === "Escape") gesture(escapeOn(targetOf(event), document));
 };

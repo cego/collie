@@ -1493,6 +1493,14 @@ const main = Effect.gen(function* () {
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.choices), Stream.empty)),
     drawn: () => SubscriptionRef.changes(drawn).pipe(Stream.filter((now) => now !== null)),
     setSettings: saveSettings,
+    recordMark: (mark) =>
+      settings().recordTiming === true
+        ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
+            fs.writeFileString(`${own}/record-timing.log`, `${JSON.stringify(mark)}\n`, {
+              flag: "a",
+            }),
+          ).pipe(Effect.ignore)
+        : Effect.void,
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(

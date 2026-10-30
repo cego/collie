@@ -8,6 +8,7 @@ import {
   FOLLOWING_LOG,
   type KeyFacts,
   keyAction,
+  recordTiming,
   landingOf,
   logPlaceOf,
   logScrollTop,
@@ -408,5 +409,68 @@ describe("the tab beside the one shown", () => {
   test("stops at the first and last tab", () => {
     expect(tabBeside(tabs, "summary", -1)).toBeNull();
     expect(tabBeside(tabs, "facts", 1)).toBeNull();
+  });
+});
+
+describe("timing a record open", () => {
+  const timed = () => {
+    const marks: Array<readonly [string, number, string]> = [];
+    const timing = recordTiming((name, at, card) => marks.push([name, at, card]));
+    return { marks, timing };
+  };
+
+  test("marks the click, the mount, the first value and the usable Flow, in that order", () => {
+    const { marks, timing } = timed();
+    timing.click("A", 10);
+    timing.mounted("A", 14);
+    timing.frame("A", 90);
+    timing.usable("A", 130);
+    expect(marks).toEqual([
+      ["record:click", 10, "A"],
+      ["record:mounted", 14, "A"],
+      ["record:frame", 90, "A"],
+      ["record:usable", 130, "A"],
+    ]);
+  });
+
+  test("never marks a card usable once another card was clicked", () => {
+    const { marks, timing } = timed();
+    timing.click("A", 10);
+    timing.mounted("A", 14);
+    timing.click("B", 50);
+    timing.frame("A", 90);
+    timing.usable("A", 130);
+    timing.mounted("B", 52);
+    timing.frame("B", 140);
+    timing.usable("B", 170);
+    expect(
+      Arr.map(
+        Arr.filter(marks, ([, , card]) => card === "A"),
+        ([name]) => name,
+      ),
+    ).toEqual(["record:click", "record:mounted"]);
+    expect(
+      Arr.map(
+        Arr.filter(marks, ([, , card]) => card === "B"),
+        ([name]) => name,
+      ),
+    ).toEqual(["record:click", "record:mounted", "record:frame", "record:usable"]);
+  });
+
+  test("marks a Flow usable only after its first value, and only once", () => {
+    const { marks, timing } = timed();
+    timing.click("A", 10);
+    timing.mounted("A", 14);
+    timing.usable("A", 20);
+    timing.frame("A", 90);
+    timing.frame("A", 95);
+    timing.usable("A", 130);
+    timing.usable("A", 150);
+    expect(Arr.map(marks, ([name, at]) => `${name}@${at}`)).toEqual([
+      "record:click@10",
+      "record:mounted@14",
+      "record:frame@90",
+      "record:usable@130",
+    ]);
   });
 });

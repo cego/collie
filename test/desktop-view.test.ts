@@ -167,6 +167,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         chatChoices: () => Stream.die("not asked"),
         setSettings: () => Effect.die("not asked"),
         drawn: () => Stream.die("not asked"),
+        recordMark: () => Effect.die("not asked"),
       }),
     ),
     Layer.provide(Layer.effect(RpcServer.Protocol, serverProtocol(main))),

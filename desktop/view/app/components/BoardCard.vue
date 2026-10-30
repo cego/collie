@@ -31,7 +31,8 @@ const props = defineProps<{
 const { run, openLink } = useActions();
 const toast = useToast();
 // SAFETY: FlockBoard provides it to every card it draws.
-const gesture = inject<(done: Gesture, tab?: string) => void>("gesture")!;
+const gesture =
+  inject<(done: Gesture, tab?: string | null, clickedAt?: number) => void>("gesture")!;
 // A dialog opened before its Machine dropped is outside the card's disabled controls.
 const act = (action: DesktopAction, tried?: (done: boolean | null) => void) =>
   run(
@@ -63,7 +64,8 @@ const { chip } = useChip();
 const chosen = computed(
   () => chip.value?.machine === props.machine && chip.value.task === props.task.id,
 );
-const openRecord = () => gesture({ kind: "name", card: props.cardKey });
+const openRecord = (event: MouseEvent) =>
+  gesture({ kind: "name", card: props.cardKey }, null, event.timeStamp);
 const flow = computed(() => cardFlow(props.task.flow));
 
 const STATES: Record<
@@ -261,7 +263,7 @@ const menu = computed(() =>
         type="button"
         class="mt-2 flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-left text-xs text-muted hover:text-default focus-visible:outline-2 focus-visible:outline-primary"
         :aria-label="flow.name"
-        @click="gesture({ kind: 'name', card: cardKey }, 'flow')"
+        @click="gesture({ kind: 'name', card: cardKey }, 'flow', $event.timeStamp)"
       >
         <span class="flex shrink-0 items-center gap-1" aria-hidden="true">
           <span

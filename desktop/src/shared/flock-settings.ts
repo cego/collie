@@ -92,6 +92,18 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
     read: (desktop: DesktopSettings) => percent(desktop.zoom ?? 1),
     change: (typed) => ({ zoom: Number.parseInt(typed, 10) / 100 }),
   },
+  {
+    key: "record_timing",
+    kind: "choice",
+    choices: ["off", "on"],
+    fallback: "off",
+    group: "Board",
+    label: "Record timing",
+    description:
+      "Logs how long each record took to open, to record-timing.log in Desktop's state directory.",
+    read: (desktop: DesktopSettings) => (desktop.recordTiming === true ? "on" : "off"),
+    change: (typed) => ({ recordTiming: typed === "on" }),
+  },
 ];
 
 /** What Settings says of a setting while it is unset, where its default says nothing. */

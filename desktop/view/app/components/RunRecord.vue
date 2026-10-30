@@ -41,6 +41,9 @@ const recordPlaced = computed(() => ({
   task: { ...props.placed.task, run: shownRun.value },
 }));
 
+const timing = useRecordTiming();
+timing.mounted(props.placed.key);
+
 const { value: read, trouble } = useHeld(() =>
   runDetailAtom(runDetailKey({ installation: props.placed.installation, runId: shownRun.value })),
 );
@@ -49,7 +52,15 @@ const flow = shallowRef<Flow | null>(null);
 watch(
   detail,
   (shown) => {
-    if (shown?.flow !== undefined) flow.value = shown.flow;
+    if (shown?.flow === undefined) return;
+    const first = flow.value === null;
+    flow.value = shown.flow;
+    if (!first) return;
+    const card = props.placed.key;
+    timing.frame(card);
+    void nextTick(() =>
+      requestAnimationFrame(() => requestAnimationFrame(() => timing.usable(card))),
+    );
   },
   { immediate: true },
 );

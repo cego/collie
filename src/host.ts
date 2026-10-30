@@ -17,6 +17,7 @@
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
 import { createConnection, type Socket as NetSocket } from "node:net";
 import { withdrawStepNote } from "./step-steering";
@@ -543,7 +544,7 @@ const AllRpcs = HostRpcs.merge(FrontDoorRpcs);
 /** How long an RPC may take to answer before the host log says so. */
 const SLOW_RPC_MS = 2_000;
 
-/** Logs an RPC slow to answer. A stream is meant to stay open, so it is never timed. */
+/** Logs an RPC slow to answer. A stream is meant to stay open, so `timingFirstValues` times it. */
 export class SlowRpcs extends RpcMiddleware.Service<SlowRpcs>()("collie/SlowRpcs") {}
 
 export const slowRpcsLayer = Layer.succeed(SlowRpcs)((effect, { rpc }) =>
@@ -562,6 +563,36 @@ export const slowRpcsLayer = Layer.succeed(SlowRpcs)((effect, { rpc }) =>
         );
       }),
 );
+
+/** Logs each stream among `handlers` that is slow to send its first value. */
+export const timingFirstValues = <
+  H extends Record<string, (...args: ReadonlyArray<never>) => object>,
+>(
+  handlers: H,
+): H =>
+  // SAFETY: each handler is replaced by one taking its arguments and answering its type.
+  Rec.map(handlers, (handler, name) => (...args: ReadonlyArray<never>) => {
+    const answer = handler(...args);
+    return Stream.isStream(answer) ? firstValueTimed(name, answer) : answer;
+  }) as H;
+
+const firstValueTimed = <A, E, R>(name: string, stream: Stream.Stream<A, E, R>) =>
+  Stream.unwrap(
+    Effect.map(Clock.currentTimeMillis, (started) => {
+      let first = true;
+      return Stream.tap(stream, () => {
+        if (!first) return Effect.void;
+        first = false;
+        return Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          now - started > SLOW_RPC_MS
+            ? Effect.logWarning(
+                `the ${name} stream took ${now - started} ms to send its first value`,
+              )
+            : Effect.void,
+        );
+      });
+    }),
+  );
 
 export type HostClient = RpcClient.RpcClient<
   RpcGroup.Rpcs<typeof AllRpcs>,
@@ -926,7 +957,7 @@ const handlers = (
           );
         },
       });
-    }),
+    }).pipe(Effect.map(timingFirstValues)),
   );
 
 /** What a steer's request has to ask again, as `AskedFor` is a start's. */
@@ -3160,7 +3191,7 @@ const frontDoorHandlers = (
             ),
           ).pipe(Stream.orDie),
       });
-    }),
+    }).pipe(Effect.map(timingFirstValues)),
   );
 
 /** The state directory's own id, made the first time a host owns it and kept from then on. */

@@ -74,7 +74,8 @@ Machine, or a failed line in a Run's own log, is a warning. A cleanup listing
 or sweep over 2 s in all, counting the time spent gathering what its sweepers judge, also
 says that time and how long each kind took to judge, slowest first:
 `the cleanup listing took 4000 ms; gathering took 500 ms; judging took task 3000 ms, worktree 500 ms`. A stream, such as
-the board's, is never timed: it is meant to stay open. Lines are flushed
+the board's or a record's `runDetail`, is meant to stay open, so only its first value is timed:
+one that took over 2 s is logged as `the runDetail stream took 4900 ms to send its first value`. Lines are flushed
 every 100 ms, so a host killed outright can lose its last few. Past 1 MiB the file starts
 again and the previous one is kept as `host.log.1`. Look there first when a host stops
 answering. What a host started by a client writes to its stdout and stderr, a stack trace
@@ -1772,6 +1773,92 @@ its time.
   `effect/http` by module rather than through their index. `test/startup.test.ts`
   holds the first and keeps the engine and the board out of the compaction helper; lint
   holds the second.
+
+### Measuring a record open
+
+`bench/record-open/` times a click on a board card to its record's Flow painted, usable and
+correct, in Desktop's own view. It is a benchmark, not a test: the suite never runs it.
+
+```sh
+bun install && (cd desktop && bun install)
+bun bench/record-open/run.ts --cells local --bar 200
+```
+
+What one run does:
+
+- **Refuses** to start where its state directory or socket would be the user's own.
+- **Waits** while another process holds the Machine Measurement lock and says so, then holds
+  it. Inside a Measurement it leaves the lock to the host that took it.
+- **Builds** the tree's own view through a Nuxt layer in `bench/record-open/view` that
+  swaps Electrobun's transport for a WebSocket. It also turns on Vue's production devtools
+  hooks, on every tree alike, so the harness can read what FlowMap rendered.
+- **Prepares** a host on a state directory of its own under `$TMPDIR/cro-<hash>`, on the
+  fake herdr: 520 Runs of `bench-steps`, most taking 6 Steps. 5 of them take 220 Steps and 3
+  are live, taking a Step every 2 s while the samples run. 40 are moved 40 days back, each
+  with a plan ticket nobody built: landed work older than a day leaves Desktop's board.
+- **Starts Desktop.** Desktop's own main process, `desktop/src/bun/index.ts`, starts with
+  `electrobun/bun` mapped to `bench/record-open/electrobun-bun.ts`. That stand-in serves
+  the view and its frames on loopback.
+- **Launches Chrome:** the Chrome for Testing that Puppeteer or Playwright installed, as
+  `--headless=new` with a 1600×1000 window and its own profile, killed when the run ends.
+  It runs without the sandbox, which Ubuntu's AppArmor refuses. `--chrome <binary>` names
+  another; `--cdp <endpoint>` uses a Chrome already running, which must share this Machine's
+  loopback. The shared Chrome at `127.0.0.1:9222` on vm-mk is an SSH tunnel to another
+  computer, so it cannot load the view.
+
+Each sample:
+
+1. Sends a real `Input.dispatchMouseEvent` click on the card's name.
+2. `probe.js`, injected before the page loads, takes the click's `timeStamp`. It waits for
+   the frame where the record's Flow shows every node of that Run, then two more frames,
+   until the Flow's buttons are enabled. The sample's time runs to that point.
+3. Reads the painted Flow in that same frame, after its time is taken: each row, node and
+   action by accessible name, and each node's attempts and wait from FlowMap's props.
+4. Compares it with the host's Flow, read over the front door after the paint. A mismatch
+   fails the sample. A live Run is read once more, half a second later, before it fails.
+
+A Flow of another Run shown after the click also fails the sample. While a cell runs, the
+harness times an `identity` RPC every 50 ms; its p99 is a proxy for the host's event-loop lag.
+
+| Cell           | What each sample opens                                             |
+| -------------- | ------------------------------------------------------------------ |
+| `first`        | a settled Run's card not opened before                             |
+| `repeat`       | a card just opened and closed                                      |
+| `rapid`        | 10 cards at 10 a second; the last is timed                         |
+| `large`        | a Run of 220 Steps                                                 |
+| `old`          | a Run settled 40 days ago                                          |
+| `live`         | a live Run                                                         |
+| `checks`       | a settled card while 4 Checks run on a live Run                    |
+| `desktop-cold` | a settled card in a new tab, after Desktop's main process restarts |
+| `host-cold`    | a settled card after the host restarts and the board paints again  |
+| `storm`        | a settled card while a Run starts every 200 ms                     |
+
+In `desktop-cold` the click comes 3 s after the board paints: in a tab's first seconds,
+Chrome gives a card's button the click's pointer events but not the click.
+
+`--cells` takes `local` or a comma-separated list. `--samples` sets the timed opens per cell
+(200), and `--warmup` the opens before them (5), which are kept but not counted. `--runs`
+sets the fixture's size (520), which must leave settled Runs beside the 40 old ones.
+
+The run writes `samples.jsonl`, every sample with its marks and differences, and
+`summary.json` to `.scratch/record-open/<time>/`, or to `--out`. Per cell, the summary gives:
+
+- p50, p95, max and n by nearest rank, and `failed`, the samples whose Flow was wrong;
+- `lag_p99_ms`;
+- `stages`: where Desktop's `record:*` marks exist, `mount` (click to mounted),
+  `bridge_and_host` (mounted to first value) and `render` (first value to usable). A tree
+  without the marks reports `absent`.
+
+It also records the tree, the fixture and the Chrome: its version, its flags, and that it is
+headless and software-rendered. These are Chrome numbers on a build with Vue's devtools hooks
+on, not native Desktop numbers, nor headed or GPU ones.
+
+The last stdout line is one JSON object of numbers, such as `first_local_p95`, for
+`collie measure`. With `--bar 200` the run exits 1 when any cell's p95 or max is 200 ms or
+more, or any sample failed.
+
+Native Desktop has no CDP. Its Settings has **Record timing** (off by default), which appends
+the same marks to `record-timing.log` in Desktop's state directory, one JSON line each.
 
 ### Test-suite measurements, 26 October 2026
 
