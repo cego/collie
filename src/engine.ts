@@ -2566,42 +2566,48 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
  */
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
   Effect.fn("Engine.revisionOf")(function* (dir: string) {
-    const fs = yield* FileSystem.FileSystem;
-    const contents = new Map<string, string>();
-    const contentOf = (file: string) => {
-      const cached = contents.get(file);
-      return cached !== undefined
-        ? Effect.succeed(cached)
-        : fs.readFileString(file).pipe(
-            Effect.orElseSucceed(() => ""),
-            Effect.map((content) => {
-              contents.set(file, content);
-              return content;
-            }),
-          );
-    };
-    // An installed dependency counts by its names alone: the toolchain a module is
-    // typechecked against lives here too, and reading all of it would cost more than
-    // every start it is on the way of.
-    const installed = yield* fs
-      .readDirectory(`${dir}/node_modules`, { recursive: true })
-      .pipe(Effect.orElseSucceed((): Array<string> => []));
-    let read = installed
-      .sort()
-      .map((name) => `node_modules/${name}\n`)
-      .join("");
-    for (const name of (yield* sourcesIn(dir)).sort()) {
-      // A directory reads as nothing, and what is inside it is in the list under a name
-      // of its own.
-      const content = yield* contentOf(`${dir}/${name}`);
-      read += `${name}:${Bun.hash(content).toString(16)}\n`;
-    }
-    for (const file of yield* outsideOf(dir, contentOf)) {
-      const content = yield* contentOf(file);
-      read += `${file}:${Bun.hash(content).toString(16)}\n`;
-    }
-    return Bun.hash(read).toString(16);
+    return (yield* sourceTree(dir)).revision;
   });
+
+const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const contents = new Map<string, string>();
+  const contentOf = (file: string) => {
+    const cached = contents.get(file);
+    return cached !== undefined
+      ? Effect.succeed(cached)
+      : fs.readFileString(file).pipe(
+          Effect.orElseSucceed(() => ""),
+          Effect.map((content) => {
+            contents.set(file, content);
+            return content;
+          }),
+        );
+  };
+  // An installed dependency counts by its names alone: the toolchain a module is
+  // typechecked against lives here too, and reading all of it would cost more than
+  // every start it is on the way of.
+  const installed = yield* fs
+    .readDirectory(`${dir}/node_modules`, { recursive: true })
+    .pipe(Effect.orElseSucceed((): Array<string> => []));
+  let read = installed
+    .sort()
+    .map((name) => `node_modules/${name}\n`)
+    .join("");
+  const names = (yield* sourcesIn(dir)).sort();
+  for (const name of names) {
+    // A directory reads as nothing, and what is inside it is in the list under a name
+    // of its own.
+    const content = yield* contentOf(`${dir}/${name}`);
+    read += `${name}:${Bun.hash(content).toString(16)}\n`;
+  }
+  const outside = yield* outsideOf(dir, contentOf, names);
+  for (const file of outside) {
+    const content = yield* contentOf(file);
+    read += `${file}:${Bun.hash(content).toString(16)}\n`;
+  }
+  return { names, outside, revision: Bun.hash(read).toString(16) };
+});
 
 /**
  * The files outside `dir` its code imports by a relative path or a package import, what
@@ -2610,9 +2616,10 @@ export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSyste
 const outsideOf = Effect.fn("Engine.outsideOf")(function* (
   dir: string,
   contentOf?: (file: string) => Effect.Effect<string>,
+  names?: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const pending = (yield* sourcesIn(dir)).map((name) => `${dir}/${name}`);
+  const pending = (names ?? (yield* sourcesIn(dir))).map((name) => `${dir}/${name}`);
   const outside = new Set<string>();
   const looked = new Set<string>();
   for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
@@ -2683,16 +2690,24 @@ export const stageGeneration: (options: {
   readonly entry: string;
 }) => Effect.Effect<string, EntryError, FileSystem.FileSystem | Path.Path> = Effect.fn(
   "Engine.stageGeneration",
-)(function* (options: { readonly dir: string; readonly name: string; readonly entry: string }) {
+)((options) => stageFiles(options));
+
+const stageFiles = Effect.fn("Engine.stageFiles")(function* (
+  options: { readonly dir: string; readonly name: string; readonly entry: string },
+  sources?: { readonly names: ReadonlyArray<string>; readonly outside: ReadonlyArray<string> },
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const from = directoryOf(options.entry);
-  const outside = yield* outsideOf(from);
+  const outside = sources?.outside ?? (yield* outsideOf(from));
   const staged = (file: string) => path.join(options.dir, "generations", options.name, file);
   const failed = (cause: unknown) =>
     new EntryError({ file: options.entry, message: String(cause) });
   yield* fs.makeDirectory(staged(from), { recursive: true }).pipe(Effect.mapError(failed));
-  for (const name of yield* fs.readDirectory(from).pipe(Effect.mapError(failed))) {
+  const names =
+    sources?.names.filter((name) => !name.includes("/")) ??
+    (yield* fs.readDirectory(from).pipe(Effect.mapError(failed)));
+  for (const name of names) {
     if (unstaged(name)) continue;
     yield* fs
       .copy(path.join(from, name), staged(path.join(from, name)), { overwrite: true })
@@ -2727,10 +2742,6 @@ const loaderOf = (name: string): "ts" | "tsx" | "js" | null => {
 
 const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
 const parentOf = (at: string) => at.slice(0, Math.max(at.lastIndexOf("/"), 1));
-
-/** A file and what was in its directory when it was read, as one value. */
-const sourceOf = (entry: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
-  revisionOf(directoryOf(entry)).pipe(Effect.map((revision) => `${entry}@${revision}`));
 
 /** Every generation a host staged, gone: a new host stages from the sources again. */
 export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
@@ -6055,8 +6066,13 @@ const makeRegistry: (
 
   const stageEntry = Effect.fn("Engine.stageEntry")(function* (file: string) {
     const name = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-    const staged = yield* stageGeneration({ dir, name, entry: file });
-    return yield* readStagedEntry(file, { file: staged, root: `${dir}/generations/${name}` });
+    const sources = yield* sourceTree(directoryOf(file));
+    const staged = yield* stageFiles({ dir, name, entry: file }, sources);
+    const entry = yield* readStagedEntry(file, {
+      file: staged,
+      root: `${dir}/generations/${name}`,
+    });
+    return { entry, source: `${file}@${sources.revision}` };
   });
 
   const register = Effect.fn("Engine.register")(function* (
@@ -6066,9 +6082,9 @@ const makeRegistry: (
       readonly entry: string;
     },
     recovered?: Set<string>,
-    prepared?: WorkflowEntry,
+    prepared?: { readonly entry: WorkflowEntry; readonly source: string },
   ) {
-    const entry = prepared ?? (yield* stageEntry(route.entry));
+    const { entry, source } = prepared ?? (yield* stageEntry(route.entry));
     const registration = entry.make(route.name);
     const pending: Array<{ row: RunRow; parked: Option.Option<string> }> = [];
     if (recovered !== undefined) {
@@ -6127,7 +6143,7 @@ const makeRegistry: (
       fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
       closes: entry.metadata?.closes,
       checkout: entry.metadata?.checkout ?? "none",
-      source: yield* sourceOf(route.entry),
+      source,
       metadata: describeMetadata(entry.metadata),
       connections: entry.metadata?.connections,
       offers: declaredByModule(entry.metadata),
@@ -7404,8 +7420,8 @@ const makeRegistry: (
     // generation of that id.
     const described = yield* stageEntry(file);
     const route = {
-      workflow: described.id,
-      name: nextRegistrationName(known, described.id),
+      workflow: described.entry.id,
+      name: nextRegistrationName(known, described.entry.id),
       entry: file,
     };
     const generation = yield* register(route, undefined, described);

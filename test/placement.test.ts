@@ -224,10 +224,20 @@ export default defineWorkflow({ id: "cost", title, run: () => Effect.void });
 `,
       );
       const copies: string[] = [];
+      const reads: string[] = [];
+      const listings: string[] = [];
       const counted: FileSystem.FileSystem = {
         ...fs,
         copy: (from, to, options) =>
           Effect.sync(() => copies.push(from)).pipe(Effect.andThen(fs.copy(from, to, options))),
+        readFileString: (file, encoding) =>
+          Effect.sync(() => reads.push(file)).pipe(
+            Effect.andThen(fs.readFileString(file, encoding)),
+          ),
+        readDirectory: (dir, options) =>
+          Effect.sync(() => listings.push(dir)).pipe(
+            Effect.andThen(fs.readDirectory(dir, options)),
+          ),
       };
       yield* Effect.gen(function* () {
         const registry = yield* Registry;
@@ -237,13 +247,21 @@ export default defineWorkflow({ id: "cost", title, run: () => Effect.void });
         expect(first.name).toBe("cost@1");
         expect(yield* fs.readFileString(imports)).toBe("loaded\n");
         expect(copies).toHaveLength(1);
+        expect(listings.filter((dir) => dir === at)).toHaveLength(1);
+        expect(reads.filter((one) => one === file)).toHaveLength(1);
+        expect(reads.filter((one) => one === `${rig.root}/helper.ts`)).toHaveLength(1);
         copies.length = 0;
+        reads.length = 0;
+        listings.length = 0;
         const second = yield* registry
           .load(file)
           .pipe(Effect.provideService(FileSystem.FileSystem, counted));
         expect(second.name).toBe("cost@2");
         expect(yield* fs.readFileString(imports)).toBe("loaded\nloaded\n");
         expect(copies).toHaveLength(1);
+        expect(listings.filter((dir) => dir === at)).toHaveLength(1);
+        expect(reads.filter((one) => one === file)).toHaveLength(1);
+        expect(reads.filter((one) => one === `${rig.root}/helper.ts`)).toHaveLength(1);
       }).pipe(hosted);
       yield* fs.writeFileString(`${rig.root}/helper.ts`, 'export const title = "After";');
       const recovered = yield* Registry.pipe(

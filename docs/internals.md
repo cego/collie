@@ -1983,6 +1983,15 @@ are still required. The supplied plan forbids starting load solely to create
 contention; a controlled-load exception or different infrastructure requires the
 human's decision. The CI correctness gate remains the `test` job.
 
+Fix round 2 shares one source-tree read between a Registry registration's revision
+and staging. The failing-first `fix2-registration-source-red` observed four root
+directory listings for one registration; its green check observes one listing and
+one read of each source, while retaining separate imports and copies per generation
+and fresh external-helper recovery. The source snapshot lasts for that registration
+only. The six focused loader suites pass, including entry, helper and prompt edits
+while older work keeps its generation. These operation counts establish the removed
+duplication; they do not establish either whole-suite performance target.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
