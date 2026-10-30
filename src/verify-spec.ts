@@ -9,7 +9,11 @@
 // and nobody approves them: the human reads what ran in the merge request, before it
 // lands (ADR-0055).
 
-import { Data, Effect, FileSystem, Path, Schema } from "effect";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { CommandLine } from "effect/process";
 
 /**
  * Exactly what Collie runs for a check, bound argument by argument: the wrapper is part
@@ -30,7 +34,7 @@ const decodeGiven = Schema.decodeUnknownResult(Schema.fromJsonString(VerifySpecS
 
 const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
 const decodeApproved = Schema.decodeUnknownEffect(ApprovedJson);
-export const encodeApproved = Schema.encodeSync(ApprovedJson);
+export const encodeApproved = flow(Schema.encodeResult(ApprovedJson), Result.getOrThrow);
 
 /** Where a Run's checks are frozen, in its evidence directory. */
 export const approvedFile = (evidenceDir: string) => `${evidenceDir}/approved.json`;
@@ -72,8 +76,9 @@ export class ApprovedUnreadable extends Data.TaggedError("ApprovedUnreadable")<{
 }
 
 /** What a layer's file holds: the specs, whole. A file is taken or refused, never merged. */
-export const encodeApprovedFile = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Array(VerifySpecSchema), { space: 2 }),
+export const encodeApprovedFile = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema), { space: 2 })),
+  Result.getOrThrow,
 );
 
 /** The project's own list, and then the user's. Relative to the Run's root. */
@@ -84,7 +89,7 @@ export const USER_FILE = "verify.json";
  * Null for a remote whose path would leave `verify/`.
  */
 export const rememberedFile = (userDir: string, project: string): string | null =>
-  project.split("/").some((part) => part === "" || part === "." || part === "..")
+  Arr.some(Str.split(project, "/"), (part) => part === "" || part === "." || part === "..")
     ? null
     : `${userDir}/verify/${project}.json`;
 
@@ -111,7 +116,7 @@ export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (laye
   const path = yield* Path.Path;
   const onDisk = (file: string) => ({
     file,
-    text: fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(null))),
+    text: fs.readFileString(file).pipe(Effect.orElseSucceed(() => null)),
   });
   const remembered = layers.project ? rememberedFile(layers.userDir, layers.project) : null;
   const files = [
@@ -127,12 +132,10 @@ export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (laye
   for (const { file, text: reading } of files) {
     const text = yield* reading;
     if (text === null) continue;
-    const decoded = yield* Schema.decodeUnknownEffect(ApprovedJson)(text.trim()).pipe(
-      Effect.result,
-    );
+    const decoded = yield* Schema.decodeEffect(ApprovedJson)(Str.trim(text)).pipe(Effect.result);
     if (decoded._tag === "Failure")
       return yield* new ApprovedUnreadable({ file, why: String(decoded.failure) });
-    return decoded.success.map((spec) => ({ ...spec, argv: [...spec.argv] }));
+    return Arr.map(decoded.success, (spec) => ({ ...spec, argv: [...spec.argv] }));
   }
   const none: VerifySpec[] = [];
   return none;
@@ -155,13 +158,14 @@ export function approvedFor(
 /** A Run's checks as the commands a human would type, for a prompt to name them. */
 export function renderApproved(approved: ReadonlyArray<VerifySpec>): string {
   if (approved.length === 0) return "(no check is named for this Run yet)";
-  return approved
-    .map((spec) =>
+  return Arr.join(
+    Arr.map(approved, (spec) =>
       spec.ci === undefined
-        ? `- ${spec.name}: ${[spec.executable, ...spec.argv].join(" ")} (in ${spec.cwd})`
+        ? `- ${spec.name}: ${CommandLine.display([spec.executable, ...spec.argv])} (in ${spec.cwd})`
         : `- ${spec.name}: left to CI (job ${spec.ci}), do not run it`,
-    )
-    .join("\n");
+    ),
+    "\n",
+  );
 }
 
 const PACKAGE_MANAGERS = new Set(["bun", "npm", "pnpm", "yarn", "deno"]);
@@ -171,11 +175,12 @@ const PACKAGE_MANAGERS = new Set(["bun", "npm", "pnpm", "yarn", "deno"]);
  * the manager and its subcommand, else the tool.
  */
 export function checkNameOf(executable: string, argv: ReadonlyArray<string>): string {
-  const tool = executable.split("/").at(-1) ?? executable;
+  const tool = Str.split(executable, "/").at(-1) ?? executable;
   const passed = argv.indexOf("--");
   // A flag's value is a plain word too, so a script is the last one before `--`.
-  const words = (passed === -1 ? argv : argv.slice(0, passed)).filter(
-    (word) => !word.startsWith("-"),
+  const words = Arr.filter(
+    passed === -1 ? argv : argv.slice(0, passed),
+    (word) => !pipe_(word, Str.startsWith("-")),
   );
   const [first] = words;
   if (!PACKAGE_MANAGERS.has(tool) || first === undefined) return tool;

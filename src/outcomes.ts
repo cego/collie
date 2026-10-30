@@ -2,6 +2,10 @@
 // steering, verifications, parks and context. Each measure is counted from what a Run
 // recorded and names the Runs it counts. Data only: nothing here is a threshold.
 
+import * as Num from "effect/Number";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Effect, FileSystem, Schema } from "effect";
 import { evidenceDir, runDir } from "./engine";
 import { readAudit } from "./audit";
@@ -10,7 +14,6 @@ import { launchDir, readLaunches, stemOf } from "./launches";
 import { deliveriesOf } from "./steering";
 import { readVerifications } from "./verify";
 import type { Metric } from "./metrics";
-import type { FrontDoor } from "./board-model";
 
 const STEERING = ["steer", "followup", "deliver", "correction"] as const;
 type SteeringKind = (typeof STEERING)[number];
@@ -70,7 +73,7 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
     disposition:
       latest(yield* readDispositions(dir).pipe(Effect.orElseSucceed(() => [])))?.kind ?? null,
     steering,
-    verifications: verifications.map((one) => ({
+    verifications: Arr.map(verifications, (one) => ({
       name: one.name,
       executable: one.executable,
       argv: one.argv,
@@ -92,7 +95,7 @@ export const ORIGINS = ["human", "chat", "agent", "host"] as const;
 export type Origin = (typeof ORIGINS)[number];
 
 /** Which kind of asker a front door is: a person at it, chat, an agent's CLI, or Collie. */
-export const originOf = (door: FrontDoor | string): Origin => {
+export const originOf = (door: string): Origin => {
   switch (door) {
     case "cli-tty":
     case "board":
@@ -154,7 +157,11 @@ const counted = (runs: ReadonlyArray<string>): Counted => ({
 
 const median = (values: ReadonlyArray<number>): number | null => {
   if (values.length === 0) return null;
-  const sorted = values.toSorted((a, b) => a - b);
+  const sorted = Arr.sortWith(
+    values,
+    (value) => value,
+    (a, b) => Num.sign(a - b),
+  );
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 };
@@ -163,13 +170,15 @@ const COLLECT_EXPIRY = "has written nothing";
 
 /** A park's reason without what names one Run, pane, path or command, so like counts with like. */
 export const reasonOf = (note: string): string =>
-  note
-    .replace(/`[^`]*`/g, "<command>")
-    .replace(/(?<![\w-])\/\S+/g, "<path>")
-    .replace(/\brun-[0-9a-f]+[\w.-]*/g, "<run>")
-    .replace(/\bw\w*:p\d+\b/g, "<pane>");
+  pipe(
+    note,
+    Str.replace(/`[^`]*`/g, "<command>"),
+    Str.replace(/(?<![\w-])\/\S+/g, "<path>"),
+    Str.replace(/\brun-[0-9a-f]+[\w.-]*/g, "<run>"),
+    Str.replace(/\bw\w*:p\d+\b/g, "<pane>"),
+  );
 
-const executableName = (path: string) => path.split("/").at(-1) ?? path;
+const executableName = (path: string) => Str.split(path, "/").at(-1) ?? path;
 
 export function measuresOf(
   runs: ReadonlyArray<{
@@ -196,27 +205,26 @@ export function measuresOf(
   for (const { runId, records, metrics } of runs) {
     for (const line of metrics) {
       if (line.kind !== "halt") continue;
-      if (line.note.includes(COLLECT_EXPIRY)) collectExpiries.push(runId);
+      if (pipe(line.note, Str.includes(COLLECT_EXPIRY))) collectExpiries.push(runId);
       else {
         const reason = reasonOf(line.note);
         reasons.set(reason, [...(reasons.get(reason) ?? []), runId]);
       }
     }
-    const peak = metrics
-      .filter((line) => line.kind === "context")
-      .reduce<Metric | null>(
-        (top, line) => (top === null || line.value > top.value ? line : top),
-        null,
-      );
+    const peak = Arr.reduce<Metric, Metric | null>(
+      Arr.filter(metrics, (line) => line.kind === "context"),
+      null,
+      (top, line) => (top === null || line.value > top.value ? line : top),
+    );
     peakContext.push({ runId, tokens: peak?.value ?? null, agent: peak?.subject ?? null });
 
     if (records === null) continue;
-    const rally = records.rounds.filter((one) => one.of > 1);
+    const rally = Arr.filter(records.rounds, (one) => one.of > 1);
     if (rally.length > 0)
       rounds.push({
         runId,
-        reached: Math.max(...rally.map((one) => one.round)),
-        cap: Math.max(...rally.map((one) => one.of)),
+        reached: Math.max(...Arr.map(rally, (one) => one.round)),
+        cap: Math.max(...Arr.map(rally, (one) => one.of)),
       });
     if (records.disposition !== null) dispositions[records.disposition].push(runId);
 
@@ -263,11 +271,14 @@ export function measuresOf(
   const disposed =
     dispositions.merged.length + dispositions.superseded.length + dispositions.abandoned.length;
   const share = (of: string[]) => (disposed === 0 ? null : of.length / disposed);
-  const atCap = rounds.filter((one) => one.reached >= one.cap).map((one) => one.runId);
+  const atCap = Arr.map(
+    Arr.filter(rounds, (one) => one.reached >= one.cap),
+    (one) => one.runId,
+  );
   return {
     rounds: {
       runs: rounds,
-      median: median(rounds.map((one) => one.reached)),
+      median: median(Arr.map(rounds, (one) => one.reached)),
       atCap: counted(atCap),
     },
     dispositions: {
@@ -285,19 +296,21 @@ export function measuresOf(
       },
     },
     verifications: {
-      total: verifications.reduce((sum, one) => sum + one.total, 0),
+      total: Arr.reduce(verifications, 0, (sum, one) => sum + one.total),
       runs: verifications,
       byCollector: {
-        agent: verifications.reduce((sum, one) => sum + one.agent, 0),
-        collie: verifications.reduce((sum, one) => sum + one.collie, 0),
+        agent: Arr.reduce(verifications, 0, (sum, one) => sum + one.agent),
+        collie: Arr.reduce(verifications, 0, (sum, one) => sum + one.collie),
       },
       repeated: counted(repeated),
       executableOnly: counted(executableOnly),
     },
     parks: {
-      byReason: [...reasons]
-        .map(([reason, of]) => ({ reason, ...counted(of) }))
-        .toSorted((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
+      byReason: Arr.sortWith(
+        Arr.map([...reasons], ([reason, of]) => ({ reason, ...counted(of) })),
+        (value) => value,
+        (a, b) => Num.sign(b.count - a.count || pipe(a.reason, Str.localeCompare(b.reason))),
+      ),
       collectExpiries: counted(collectExpiries),
     },
     peakContext,

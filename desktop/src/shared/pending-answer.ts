@@ -1,5 +1,7 @@
 // A card's questions and answers in flight; no Bun-only import, as the view bundles this.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { Decision, Question, TaskView } from "../../../src/board-model";
 
 export interface InFlight {
@@ -76,14 +78,14 @@ export const answersSettled = (
   board: ReadonlyArray<{ readonly installation: string; readonly task: QuestionsOf }>,
 ): Answering => {
   const open = new Set(
-    board.flatMap(({ installation, task }) =>
-      openQuestions(task).map((asked) => answerKey(installation, asked.run, asked.id)),
+    Arr.flatMap(board, ({ installation, task }) =>
+      Arr.map(openQuestions(task), (asked) => answerKey(installation, asked.run, asked.id)),
     ),
   );
   const held = [...state.answers.keys(), ...state.latest.keys(), ...state.drafts.keys()];
-  if (held.every((key) => open.has(key))) return state;
+  if (Arr.every(held, (key) => open.has(key))) return state;
   const settle = <A>(map: ReadonlyMap<string, A>) =>
-    new Map([...map].filter(([key]) => open.has(key)));
+    new Map(Arr.filter([...map], ([key]) => open.has(key)));
   return {
     answers: settle(state.answers),
     latest: settle(state.latest),
@@ -115,7 +117,7 @@ export const cardQuestion = (
   const open = openQuestions(task);
   const answerOf = (asked: Question) =>
     state.answers.get(answerKey(installation, asked.run, asked.id));
-  const unanswered = open.filter((asked) => answerOf(asked) === undefined);
+  const unanswered = Arr.filter(open, (asked) => answerOf(asked) === undefined);
   const text = (unanswered[0] ?? open[0] ?? task.decision).text;
   if (unanswered.length > 0 || open.length === 0)
     return {
@@ -123,7 +125,7 @@ export const cardQuestion = (
       label: unanswered.length > 1 ? `Answer ${unanswered.length} questions…` : "Answer…",
       pending: null,
     };
-  const answers = open.map((asked) => answerOf(asked)!);
+  const answers = Arr.map(open, (asked) => answerOf(asked)!);
   const machine = answers[0]!.machine;
   return {
     text,
@@ -131,7 +133,7 @@ export const cardQuestion = (
     pending:
       answers.length === 1
         ? sendingSaid(answers[0]!)
-        : answers.some((answer) => !answer.confirmed)
+        : Arr.some(answers, (answer) => !answer.confirmed)
           ? `Sending ${answers.length} answers to ${machine}…`
           : `Answered ${answers.length} questions; waiting for ${machine}'s board`,
   };
@@ -167,7 +169,7 @@ const sameQuestion = (one: Question, other: Question) =>
   one.run === other.run && one.id === other.id;
 
 const conditionOf = (entry: SittingEntry, now: Now): Condition => {
-  const open = now.open.some((asked) => sameQuestion(asked, entry.question));
+  const open = Arr.some(now.open, (asked) => sameQuestion(asked, entry.question));
   const answer = now.answering.answers.get(
     answerKey(now.installation, entry.question.run, entry.question.id),
   );
@@ -181,29 +183,38 @@ const conditionOf = (entry: SittingEntry, now: Now): Condition => {
 
 /** Each entry as the board and answers have it now, and the questions new to the board. */
 const refreshed = (entries: ReadonlyArray<SittingEntry>, now: Now) =>
-  [
-    ...entries,
-    ...now.open
-      .filter((asked) => !entries.some((entry) => sameQuestion(entry.question, asked)))
-      .map((question): SittingEntry => ({ question, seen: null, was: "gone" })),
-  ].map((entry): SittingEntry => {
-    const question = now.open.find((asked) => sameQuestion(asked, entry.question));
-    if (question === undefined) return entry;
-    const answer = now.answering.answers.get(
-      answerKey(now.installation, question.run, question.id),
-    );
-    return {
-      question,
-      seen:
-        answer === undefined
-          ? null
-          : { shown: answer.shown, machine: answer.machine, confirmed: answer.confirmed },
-      was: entry.was,
-    };
-  });
+  Arr.map(
+    [
+      ...entries,
+      ...Arr.map(
+        Arr.filter(
+          now.open,
+          (asked) => !Arr.some(entries, (entry) => sameQuestion(entry.question, asked)),
+        ),
+        (question): SittingEntry => ({ question, seen: null, was: "gone" }),
+      ),
+    ],
+    (entry): SittingEntry => {
+      const question = Option.getOrUndefined(
+        Arr.findFirst(now.open, (asked) => sameQuestion(asked, entry.question)),
+      );
+      if (question === undefined) return entry;
+      const answer = now.answering.answers.get(
+        answerKey(now.installation, question.run, question.id),
+      );
+      return {
+        question,
+        seen:
+          answer === undefined
+            ? null
+            : { shown: answer.shown, machine: answer.machine, confirmed: answer.confirmed },
+        was: entry.was,
+      };
+    },
+  );
 
 const settledWas = (entries: ReadonlyArray<SittingEntry>, now: Now) =>
-  entries.map((entry) => ({ ...entry, was: conditionOf(entry, now).kind }));
+  Arr.map(entries, (entry) => ({ ...entry, was: conditionOf(entry, now).kind }));
 
 /** The card's open questions, on the first that is unanswered. */
 export const sittingStarts = (now: Now): Sitting => {
@@ -212,7 +223,10 @@ export const sittingStarts = (now: Now): Sitting => {
     entries,
     cursor: Math.max(
       0,
-      entries.findIndex((entry) => entry.was === "unanswered"),
+      Option.getOrElse(
+        Arr.findFirstIndex(entries, (entry) => entry.was === "unanswered"),
+        () => -1,
+      ),
     ),
   };
 };
@@ -228,7 +242,7 @@ export const sittingSees = (sitting: Sitting, now: Now): Sitting => {
     entry.was !== "unanswered" && conditionOf(entry, now).kind === "unanswered";
   const moveTo =
     current !== undefined && conditionOf(current, now).kind !== "unanswered"
-      ? entries.findIndex(answerable)
+      ? Option.getOrElse(Arr.findFirstIndex(entries, answerable), () => -1)
       : -1;
   return { entries: settledWas(entries, now), cursor: moveTo === -1 ? sitting.cursor : moveTo };
 };
@@ -236,8 +250,10 @@ export const sittingSees = (sitting: Sitting, now: Now): Sitting => {
 /** The question at the cursor was just answered: on to the next unanswered, wrapping round. */
 export const sittingAnswered = (sitting: Sitting, now: Now): Sitting => {
   const entries = settledWas(refreshed(sitting.entries, now), now);
-  const order = entries.map((_, at) => (sitting.cursor + 1 + at) % entries.length);
-  const next = order.find((at) => entries[at]!.was === "unanswered");
+  const order = Arr.map(entries, (_, at) => (sitting.cursor + 1 + at) % entries.length);
+  const next = Option.getOrUndefined(
+    Arr.findFirst(order, (at) => entries[at]!.was === "unanswered"),
+  );
   return { entries, cursor: next ?? sitting.cursor };
 };
 
@@ -250,7 +266,7 @@ export const sittingMoved = (sitting: Sitting, by: number): Sitting => ({
 /** What the dialog draws: "Question k of N", the question, its condition, and whether it is done. */
 export const sittingView = (sitting: Sitting, now: Now) => {
   const entry = sitting.entries[sitting.cursor];
-  const conditions = sitting.entries.map((one) => conditionOf(one, now));
+  const conditions = Arr.map(sitting.entries, (one) => conditionOf(one, now));
   return {
     k: sitting.cursor + 1,
     n: sitting.entries.length,
@@ -258,7 +274,8 @@ export const sittingView = (sitting: Sitting, now: Now) => {
     condition: entry === undefined ? null : conditionOf(entry, now),
     back: sitting.cursor > 0,
     next: sitting.cursor < sitting.entries.length - 1,
-    done: conditions.every(
+    done: Arr.every(
+      conditions,
       (condition) =>
         condition.kind === "gone" || (condition.kind === "answered" && !condition.sending),
     ),

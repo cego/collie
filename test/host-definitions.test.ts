@@ -1,5 +1,9 @@
 // What a front door is told a Machine's Workflows and Personas are, in one read of its host.
 
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { PROTOCOL } from "../src/board-model";
@@ -94,17 +98,22 @@ test(
           const door = yield* frontDoor(socketOf(world.state));
           const read = yield* door.definitions();
 
-          const byId = new Map(read.workflows.map((one) => [one.id, one]));
-          expect(read.workflows.map((one) => one.id).sort()).toEqual(
+          const byId = new Map(Arr.map(read.workflows, (one) => [one.id, one]));
+          expect(Arr.map(read.workflows, (one) => one.id).sort()).toEqual(
             [...SHIPPED, "unbuilt"].sort(),
           );
-          for (const id of SHIPPED.filter((one) => one !== "general")) {
+          for (const id of Arr.filter(SHIPPED, (one) => one !== "general")) {
             expect(byId.get(id)).toMatchObject({ layer: "shipped", broken: null });
             expect(byId.get(id)?.inputs.length).toBeGreaterThan(0);
             expect(byId.get(id)?.metadata).toMatchObject({ hints: expect.any(Object) });
           }
           const shippedDir = `${world.install}/workflows`;
-          const named = (id: string) => byId.get(id)?.files.map((file) => file.path);
+          const named = (id: string) =>
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(byId.get(id)), (present) =>
+                Arr.map(present.files, (file) => file.path),
+              ),
+            );
           expect(named("plan")).toEqual([
             `${shippedDir}/plan.md`,
             `${shippedDir}/plan.workflow.ts`,
@@ -118,9 +127,12 @@ test(
             `${shippedDir}/review.md`,
             `${shippedDir}/review.workflow.ts`,
           ]);
-          expect(read.workflows.flatMap((one) => one.files).map((file) => file.path)).not.toContain(
-            `${shippedDir}/reviewing.ts`,
-          );
+          expect(
+            Arr.map(
+              Arr.flatMap(read.workflows, (one) => one.files),
+              (file) => file.path,
+            ),
+          ).not.toContain(`${shippedDir}/reviewing.ts`);
           const implement = byId.get("implement")?.files[0];
           expect(implement?.text).toBe(yield* fs.readFileString(`${root}workflows/implement.md`));
 
@@ -141,12 +153,12 @@ test(
             expect.objectContaining({ id: "garbled", layer: "user", message: expect.any(String) }),
           ]);
 
-          const personas = new Map(read.personas.map((one) => [one.name, one]));
-          const shippedPersonas = (yield* fs.readDirectory(`${root}personas`)).filter((name) =>
-            name.endsWith(".md"),
+          const personas = new Map(Arr.map(read.personas, (one) => [one.name, one]));
+          const shippedPersonas = Arr.filter(yield* fs.readDirectory(`${root}personas`), (name) =>
+            pipe_(name, Str.endsWith(".md")),
           );
           expect(read.personas.length).toBe(shippedPersonas.length + 1);
-          for (const persona of read.personas.filter((one) => one.name !== "mine")) {
+          for (const persona of Arr.filter(read.personas, (one) => one.name !== "mine")) {
             expect(persona).toMatchObject({ layer: "baseline", extends: null });
             expect(persona.body.length).toBeGreaterThan(0);
           }

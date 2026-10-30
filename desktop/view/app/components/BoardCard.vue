@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
+import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
 import {
   type CardAction,
   cardActions,
@@ -51,7 +55,7 @@ const asOfLabel = computed(() => {
   const { hour, minute } = DateTime.toParts(
     DateTime.makeZonedUnsafe(props.asOf, { timeZone: DateTime.zoneMakeLocal() }),
   );
-  const two = (n: number) => String(n).padStart(2, "0");
+  const two = (n: number) => pipe(String(n), Str.padStart(2, "0"));
   return `as of ${two(hour)}:${two(minute)}`;
 });
 
@@ -76,7 +80,13 @@ const STATES: Record<
 };
 const state = computed(() => STATES[props.task.state]);
 const repoAndBranch = computed(() =>
-  [props.task.project.split("/").at(-1), props.task.branch].filter(Boolean).join(" · "),
+  Arr.join(
+    Arr.filter(
+      [Str.split(props.task.project, "/").at(-1), props.task.branch],
+      (part): part is string => Boolean(part),
+    ),
+    " · ",
+  ),
 );
 
 /** Words a Steer or a Follow-up needs before it can be sent. */
@@ -165,9 +175,13 @@ const doing = (action: CardAction, primary: boolean) => {
     case "acknowledge":
       return {
         label: "Acknowledge",
-        press: () => {
-          for (const seen of seenBy(props)) act(seen.action);
-        },
+        press: () =>
+          Effect.runPromise(
+            Effect.forEach(seenBy(props), (seen) => Effect.promise(() => act(seen.action)), {
+              concurrency: "unbounded",
+              discard: true,
+            }),
+          ),
       };
   }
 };
@@ -180,9 +194,16 @@ const primary = computed(() => {
 
 /** What this Task can be asked for, as the TUI board's menu offers it, and what became of it. */
 const menu = computed(() =>
-  [...cardActions(props.task), ...dispositionActions(props.task)].flatMap((action) => {
+  Arr.flatMap([...cardActions(props.task), ...dispositionActions(props.task)], (action) => {
     const one = doing(action, false);
-    return one === null ? [] : [{ label: one.label, onSelect: one.press }];
+    return one === null
+      ? []
+      : [
+          {
+            label: one.label,
+            onSelect: one.press,
+          },
+        ];
   }),
 );
 </script>

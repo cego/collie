@@ -2,6 +2,8 @@
 // (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement). Pure and seeded from
 // the Measurement id, so a replay of the same samples judges identically.
 
+import * as Num from "effect/Number";
+import * as Arr from "effect/Array";
 import { Data, Effect, Random, Schema } from "effect";
 
 const RESAMPLES = 4000;
@@ -24,8 +26,10 @@ export interface Limits {
 export const Judgement = Schema.Struct({
   metric: Schema.String,
   /** Candidate's median over base's. */
+  // oxlint-disable-next-line effecttsgo/schema-number -- A zero baseline yields an infinite ratio.
   ratio: Schema.Number,
   /** The 95% bootstrap interval on `ratio`. */
+  // oxlint-disable-next-line effecttsgo/schema-number -- Bootstrap ratio bounds can be infinite too.
   interval: Schema.Tuple([Schema.Number, Schema.Number]),
   verdict: Schema.Literals(["gain", "no-change", "regression", "inconclusive"]),
   /** The interval's worse bound is within tolerance. */
@@ -46,7 +50,11 @@ export class MeasurementRefused extends Data.TaggedError("MeasurementRefused")<{
 }
 
 const median = (values: ReadonlyArray<number>) => {
-  const sorted = values.toSorted((a, b) => a - b);
+  const sorted = Arr.sortWith(
+    values,
+    (value) => value,
+    (a, b) => Num.sign(a - b),
+  );
   const middle = sorted.length >> 1;
   return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 };
@@ -60,7 +68,7 @@ const refusal = (samples: MetricSamples) => {
     ["candidate", samples.candidate],
   ] as const) {
     if (values.length < 2) return `${side} has ${values.length} sample(s), at least 2 are needed`;
-    if (!values.every(Number.isFinite)) return `${side} has a non-finite sample`;
+    if (!Arr.every(values, Number.isFinite)) return `${side} has a non-finite sample`;
   }
   return null;
 };
@@ -76,7 +84,7 @@ export const judge = (
 
     const random = yield* Random.Random;
     const resample = (values: ReadonlyArray<number>) =>
-      median(values.map(() => values[Math.floor(random.nextDoubleUnsafe() * values.length)]!));
+      median(Arr.map(values, () => values[Math.floor(random.nextDoubleUnsafe() * values.length)]!));
     const ratios = Array.from({ length: RESAMPLES }, () =>
       ratioOf(resample(samples.candidate), resample(samples.base)),
     ).sort((a, b) => a - b);

@@ -1,8 +1,12 @@
 // A Measurement taken by the shipped host, asked through `collie measure` and through
 // `host.measure` (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement, D1, D2, D4).
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { evidenceDir, runDir } from "../src/engine";
 import { readMeasurements } from "../src/measurement";
 import type { BenchmarkPlan, Measurement } from "../src/measurement-model";
@@ -12,7 +16,7 @@ import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 type Plan = typeof BenchmarkPlan.Encoded;
 const Started = Schema.Struct({ runId: Schema.String });
 const Waited = Schema.Struct({
@@ -51,7 +55,7 @@ const project = (world: World) =>
           ["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", message],
           { cwd: world.project },
         );
-        return (yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout.trim();
+        return Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout);
       });
     yield* write("value", "10\n");
     yield* write("bun.lock", "{}\n");
@@ -94,7 +98,8 @@ const asking = (world: World, extra: Record<string, string>) =>
   Effect.gen(function* () {
     const started = yield* collie(world, ["run", "start", "asks", "--input", "goal=hold"], extra);
     expect(started.envelope.ok).toBe(true);
-    return Schema.decodeUnknownSync(Started)(started.envelope.data).runId;
+    return (yield* Schema.decodeUnknownEffect(Started)(started.envelope.data).pipe(Effect.orDie))
+      .runId;
   });
 
 const measuring = (
@@ -134,13 +139,15 @@ const recorded = (world: World, runId: string) =>
 const linesOf = (world: World, file: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(file)),
-    Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+    Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
     Effect.orElseSucceed((): Array<string> => []),
   );
 
 const verdictOf = (measurement: Measurement, metric: string) =>
   measurement.result._tag === "Judged"
-    ? (measurement.result.verdicts.find((one) => one.metric === metric)?.verdict ?? null)
+    ? (Option.getOrUndefined(
+        Arr.findFirst(measurement.result.verdicts, (one) => one.metric === metric),
+      )?.verdict ?? null)
     : null;
 
 test(
@@ -159,12 +166,15 @@ test(
 
           const answered = yield* measuring(world, extra, runId, base, plan);
           expect(answered.envelope.error).toBeUndefined();
-          expect(Schema.decodeUnknownSync(Answered)(answered.envelope.data).ran).toBe(true);
+          expect(
+            (yield* Schema.decodeUnknownEffect(Answered)(answered.envelope.data).pipe(Effect.orDie))
+              .ran,
+          ).toBe(true);
           const [measured] = yield* recorded(world, runId);
           expect(measured).toBeDefined();
           const cli = measured!;
           expect(verdictOf(cli, "bench.counter")).toBe("gain");
-          expect(cli.samples.map((one) => [one.tree, one.warmup])).toEqual([
+          expect(Arr.map(cli.samples, (one) => [one.tree, one.warmup])).toEqual([
             ["base", true],
             ["candidate", true],
             ["base", false],
@@ -172,22 +182,22 @@ test(
             ["candidate", false],
             ["base", false],
           ]);
-          expect(cli.samples.map((one) => one.readings["bench.counter"])).toEqual([
+          expect(Arr.map(cli.samples, (one) => one.readings["bench.counter"])).toEqual([
             10, 7, 10, 7, 7, 10,
           ]);
           // What ran, in the order it ran: the base tree is a checkout of Collie's own.
           const order = yield* linesOf(world, ran);
-          expect(order.map((dir) => (dir === world.project ? "candidate" : "base"))).toEqual(
-            cli.samples.map((one) => one.tree),
+          expect(Arr.map(order, (dir) => (dir === world.project ? "candidate" : "base"))).toEqual(
+            Arr.map(cli.samples, (one) => one.tree),
           );
           expect(cli.base.commit).toBe(base);
           expect(cli.candidate.head_sha).toBe(product);
           expect(cli.base.fingerprint).not.toBe("");
           expect(cli.candidate.fingerprint).not.toBe("");
           expect(cli.base.lockfiles).toEqual(cli.candidate.lockfiles);
-          expect(Object.keys(cli.candidate.lockfiles)).toEqual(["bun.lock"]);
+          expect(Rec.keys(cli.candidate.lockfiles)).toEqual(["bun.lock"]);
           expect(cli.plan.commands).toEqual(plan.commands);
-          expect(cli.samples.every((one) => one.load.length === 3)).toBe(true);
+          expect(Arr.every(cli.samples, (one) => one.load.length === 3)).toBe(true);
           expect(cli.waited).toEqual({ memory: false, machine: [] });
 
           // The same request through a workflow records the same Measurement.
@@ -202,18 +212,22 @@ test(
             "--input",
             "pass=calibration",
           ]);
-          const workflowRun = Schema.decodeUnknownSync(Started)(started.envelope.data).runId;
+          const workflowRun = (yield* Schema.decodeUnknownEffect(Started)(
+            started.envelope.data,
+          ).pipe(Effect.orDie)).runId;
           const finished = yield* collie(world, ["run", "wait", workflowRun]);
-          const status = Schema.decodeUnknownSync(Waited)(finished.envelope.data).run.status;
+          const status = (yield* Schema.decodeUnknownEffect(Waited)(finished.envelope.data).pipe(
+            Effect.orDie,
+          )).run.status;
           expect(status.status).toBe("complete");
           const [fromWorkflow] = yield* recorded(world, workflowRun);
-          const read = Schema.decodeUnknownSync(Read)(status.value);
+          const read = yield* Schema.decodeEffect(Read)(status.value).pipe(Effect.orDie);
           expect(fromWorkflow?.id).toBe(read.id);
           // The host's evidence carries the Measurements: a product change is no tree to end on.
           expect(read.withoutPatch).toBe(false);
           expect(read.gaps).toContainEqual(expect.stringContaining("no `final` Measurement"));
           const same = (one: Measurement) => ({
-            keys: Object.keys(one).sort(),
+            keys: Rec.keys(one).sort(),
             pass: one.pass,
             plan_digest: one.plan_digest,
             base: {
@@ -223,7 +237,7 @@ test(
             },
             candidate: one.candidate,
             environment: one.environment,
-            samples: one.samples.map((sample) => [
+            samples: Arr.map(one.samples, (sample) => [
               sample.tree,
               sample.warmup,
               sample.readings["bench.counter"],
@@ -244,9 +258,11 @@ test(
           // Back at the base tree's content, a `final` Measurement reads as no patch, judged
           // against the merge base the host found rather than the base it was asked for.
           yield* exec(["git", "branch", "-M", "master"], { cwd: world.project });
-          const back = (yield* exec(["git", "rev-parse", "HEAD"], {
-            cwd: world.project,
-          })).stdout.trim();
+          const back = Str.trim(
+            (yield* exec(["git", "rev-parse", "HEAD"], {
+              cwd: world.project,
+            })).stdout,
+          );
           const again = yield* collie(world, [
             "run",
             "start",
@@ -258,21 +274,25 @@ test(
             "--input",
             "pass=final",
           ]);
-          const againRun = Schema.decodeUnknownSync(Started)(again.envelope.data).runId;
-          const reread = Schema.decodeUnknownSync(Read)(
-            Schema.decodeUnknownSync(Waited)(
+          const againRun = (yield* Schema.decodeUnknownEffect(Started)(again.envelope.data).pipe(
+            Effect.orDie,
+          )).runId;
+          const reread = yield* Schema.decodeEffect(Read)(
+            (yield* Schema.decodeUnknownEffect(Waited)(
               (yield* collie(world, ["run", "wait", againRun])).envelope.data,
-            ).run.status.value,
-          );
+            ).pipe(Effect.orDie)).run.status.value,
+          ).pipe(Effect.orDie);
           expect(reread.withoutPatch).toBe(true);
           expect(reread.gaps).toContainEqual(expect.stringContaining(`not the merge base ${back}`));
           const shown = (yield* collie(world, ["run", "show", againRun])).envelope.data;
-          expect(Schema.decodeUnknownSync(Proves)(shown).run).toEqual({
-            outcome: "performance",
-            measurement: expect.stringContaining(
-              `final Measurement ${reread.id}: bench.counter no-change`,
-            ),
-          });
+          expect((yield* Schema.decodeUnknownEffect(Proves)(shown).pipe(Effect.orDie)).run).toEqual(
+            {
+              outcome: "performance",
+              measurement: expect.stringContaining(
+                `final Measurement ${reread.id}: bench.counter no-change`,
+              ),
+            },
+          );
 
           // Its base tree goes with the Run, once a sweep finds nothing needs it.
           const trees = `${world.state}/measurements/trees/${runId}`;
@@ -312,7 +332,9 @@ test(
           const runs = (yield* linesOf(world, ran)).length;
 
           const again = yield* measuring(world, extra, runId, base, noisy, "cycle 1");
-          expect(Schema.decodeUnknownSync(Answered)(again.envelope.data)).toEqual({
+          expect(
+            yield* Schema.decodeUnknownEffect(Answered)(again.envelope.data).pipe(Effect.orDie),
+          ).toEqual({
             ran: false,
             measurement: expect.objectContaining({ id: inconclusive!.id }),
           });
@@ -328,7 +350,11 @@ test(
             "calibration",
             "three samples a side",
           );
-          expect(Schema.decodeUnknownSync(Answered)(replanned.envelope.data).ran).toBe(true);
+          expect(
+            (yield* Schema.decodeUnknownEffect(Answered)(replanned.envelope.data).pipe(
+              Effect.orDie,
+            )).ran,
+          ).toBe(true);
           expect((yield* linesOf(world, ran)).length).toBeGreaterThan(runs);
           expect(yield* recorded(world, runId)).toHaveLength(2);
           expect((yield* recorded(world, runId)).at(-1)?.plan_reason).toBe("three samples a side");
@@ -422,7 +448,9 @@ test(
           ];
           const shown = (runId: string) =>
             collie(world, ["run", "show", runId], extra).pipe(
-              Effect.map((one) => Schema.decodeUnknownSync(Shown)(one.envelope.data)),
+              Effect.map((one) =>
+                flow(Schema.decodeUnknownResult(Shown), Result.getOrThrow)(one.envelope.data),
+              ),
             );
 
           const holding = yield* Effect.forkChild(measuring(world, extra, holder, base, gated));

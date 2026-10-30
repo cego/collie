@@ -11,6 +11,12 @@
 // is empty, and the narrative is last and named as Collie's. A `tone` is a hint about
 // emphasis and never the only carrier — every line reads correctly with no colour at all.
 
+import * as Struct from "effect/Struct";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import { CommandLine } from "effect/process";
 import type { Card } from "./cards";
 import type { Delivery } from "./steering";
 import type { DriftReport, Ref } from "./evaluator";
@@ -29,12 +35,20 @@ export interface Line {
 const line = (text: string, tone: Tone = "dim", depth = 0): Line => ({ text, tone, depth });
 
 /** A short revision: enough to say which tree a card is about without filling its header. */
-const short = (sha: string) => sha.slice(0, 7);
+const short = (sha: string) => pipe(sha, Str.slice(0, 7));
 
 /** Where a piece of evidence is, in the words a human would use to go and look. */
 export function refText(ref: Ref): string {
-  const where = [ref.path, ref.line === undefined ? "" : `:${ref.line}`].join("");
-  return [ref.kind, where === "" ? (ref.sha ?? "") : where].filter((part) => part !== "").join(" ");
+  const where = Arr.join(
+    Arr.map([ref.path, ref.line === undefined ? "" : `:${ref.line}`], (part) =>
+      part === null || part === undefined ? "" : globalThis.String(part),
+    ),
+    "",
+  );
+  return Arr.join(
+    Arr.filter([ref.kind, where === "" ? (ref.sha ?? "") : where], (part) => part !== ""),
+    " ",
+  );
 }
 
 /** What a verification's result asks for. A pass takes none: plain text reads as ordinary. */
@@ -61,7 +75,7 @@ export function cardLines(card: Card): Line[] {
     lines.push(line(`constraint: ${constraint}`, "dim", 1));
   }
   if (card.changes.files.length > 0) {
-    lines.push(line(`changed: ${card.changes.files.join(" ")}`));
+    lines.push(line(`changed: ${Arr.join(card.changes.files, " ")}`));
   }
   // What somebody ran, bound to this tree. Never mixed with what an agent said.
   for (const check of card.verifications) {
@@ -79,7 +93,7 @@ export function cardLines(card: Card): Line[] {
   // Always: the half of a report that is usually missing from one.
   lines.push(
     line(
-      `missing: ${card.missing.length === 0 ? "nothing was left unchecked" : card.missing.join("; ")}`,
+      `missing: ${card.missing.length === 0 ? "nothing was left unchecked" : Arr.join(card.missing, "; ")}`,
       "dim",
       1,
     ),
@@ -89,7 +103,10 @@ export function cardLines(card: Card): Line[] {
       line(`look at ${entry.what}: ${entry.how}${entry.note ? ` (${entry.note})` : ""}`, "dim", 1),
     );
   }
-  for (const [name, where] of Object.entries(card.links)) {
+  for (const [name, where] of Arr.map(
+    Struct.keys(card.links),
+    (key) => [key, card.links[key]] as const,
+  )) {
     lines.push(line(`${name}: ${String(where)}`, "dim", 1));
   }
   // Last, and dim: prose a model wrote about its own work, marked as its author.
@@ -129,7 +146,7 @@ export function ownershipLines(why: string, candidates: ReadonlyArray<string>): 
   return [
     line("Collie cannot tell which workspace is this Herd's Home.", "bad"),
     line(why, "bad", 1),
-    line(`candidates: ${candidates.join(", ")}`, "bad", 1),
+    line(`candidates: ${Arr.join(candidates, ", ")}`, "bad", 1),
     line("`collie home reconcile --adopt <id>` or `--forget` settles it.", "bad", 1),
   ];
 }
@@ -154,6 +171,7 @@ export function newsLines(news: { waiting: number; uncertain: number }): Line[] 
 }
 
 /** One line as text, indented. What the one-screen view draws and what a test reads. */
+// oxlint-disable-next-line effecttsgo/prefer-effect-string -- Effect repeat would remove RangeError validation for negative indentation.
 export const asText = (entry: Line) => `${"  ".repeat(entry.depth)}${entry.text}`;
 
 function everyNewRunIn(workspace: string): string {
@@ -164,10 +182,10 @@ const commandLine = (command: {
   readonly executable: string;
   readonly argv: ReadonlyArray<string>;
   readonly cwd: string;
-}) => `${[command.executable, ...command.argv].join(" ")} (in ${command.cwd})`;
+}) => `${CommandLine.display([command.executable, ...command.argv])} (in ${command.cwd})`;
 
 const named = (fields: Record<string, string>) =>
-  Object.entries(fields).map(([name, value]) => `${name}=${value}`);
+  Arr.map(Rec.toEntries(fields), ([name, value]) => `${name}=${value}`);
 
 /**
  * One proposed action in a sentence. Here rather than beside the CLI that first needed
@@ -201,7 +219,7 @@ export function describeAction(action: Action): string {
     case "upgrade":
       return "upgrade this installation of Collie";
     case "onboard":
-      return `onboard this Machine: install or repair what Collie needs here${action.skip?.length ? `, without ${action.skip.join(" and ")}` : ""}`;
+      return `onboard this Machine: install or repair what Collie needs here${action.skip?.length ? `, without ${Arr.join(action.skip, " and ")}` : ""}`;
     case "hold":
       return action.until === undefined
         ? `hold ${action.run}`
@@ -220,16 +238,19 @@ export function describeAction(action: Action): string {
       // alone is a yes to a plan nobody read.
       const on = named(action.inputs);
       const decided = named(action.decisions ?? {});
-      const checks = (action.verify ?? []).map((spec) => `${spec.name}: ${commandLine(spec)}`);
-      return [
-        `start ${action.workflow} in ${where}`,
-        ...(on.length === 0 ? [] : [`on ${on.join(", ")}`]),
-        ...(decided.length === 0 ? [] : [`with ${decided.join(", ")} already decided`]),
-        ...(checks.length === 0 ? [] : [`letting Collie run ${checks.join("; ")}`]),
-      ].join(" ");
+      const checks = Arr.map(action.verify ?? [], (spec) => `${spec.name}: ${commandLine(spec)}`);
+      return Arr.join(
+        [
+          `start ${action.workflow} in ${where}`,
+          ...(on.length === 0 ? [] : [`on ${Arr.join(on, ", ")}`]),
+          ...(decided.length === 0 ? [] : [`with ${Arr.join(decided, ", ")} already decided`]),
+          ...(checks.length === 0 ? [] : [`letting Collie run ${Arr.join(checks, "; ")}`]),
+        ],
+        " ",
+      );
     }
     default:
-      return `${action.kind} ${"run" in action ? action.run : ""}`.trim();
+      return Str.trim(`${action.kind} ${"run" in action ? action.run : ""}`);
   }
 }
 
@@ -286,15 +307,19 @@ const MARKS: ReadonlyArray<readonly [keyof RunMarks, string]> = [
  * a human sending to an agent behind Collie's back is what stops corrections.
  */
 export function marksOf(marks: RunMarks): string {
-  return MARKS.filter(([key]) => marks[key])
-    .map(([, glyph]) => glyph)
-    .join(" ");
+  return Arr.join(
+    Arr.map(
+      Arr.filter(MARKS, ([key]) => marks[key]),
+      ([, glyph]) => glyph,
+    ),
+    " ",
+  );
 }
 
 /** The marks a group row inherits: the worst of what is under it. */
 export function worstOf(marks: ReadonlyArray<RunMarks>): string {
   for (const [key, glyph] of MARKS) {
-    if (marks.some((mark) => mark[key])) return glyph;
+    if (Arr.some(marks, (mark) => mark[key])) return glyph;
   }
   return "";
 }

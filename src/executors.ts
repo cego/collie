@@ -5,7 +5,7 @@
 // confirmation time with `executor_missing` and recorded as skipped, which tells a human
 // what this build cannot do rather than letting it succeed at nothing.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import type { Effect } from "effect";
 import type { Action, ActionKind } from "./actions";
 import type { Actor } from "./proposals";
@@ -26,14 +26,14 @@ export type Executor<K extends ActionKind> = (
   by: Actor,
   /** The asker's, so a workspace or pane is looked up in the herdr session it is in. */
   env: PluginEnv,
-) => Effect.Effect<ExecutionResult, never, BunServices>;
+) => Effect.Effect<ExecutionResult, never, PlatformServices>;
 
 /** What the registry holds: an action of any kind, narrowed by the kind it was filed under. */
 type AnyExecutor = (
   action: Action,
   by: Actor,
   env: PluginEnv,
-) => Effect.Effect<ExecutionResult, never, BunServices>;
+) => Effect.Effect<ExecutionResult, never, PlatformServices>;
 
 const registry = new Map<ActionKind, AnyExecutor>();
 

@@ -1,6 +1,10 @@
 // Collie speaking without being spoken to. What matters is that it speaks about the right
 // things, says each of them once, and that speaking first buys it no authority at all.
 
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -93,11 +97,11 @@ test("a release Run awaiting CI or a teammate's approval says nothing consequent
 
 /** What `sayWhatHappened` keeps: every event this Herd has not already said. */
 const unsaid = (events: ReadonlyArray<Event>, said: ReadonlySet<string>) =>
-  events.filter((event) => !said.has(event.key));
+  Arr.filter(events, (event) => !said.has(event.key));
 
 test("a Run that stopped says so once, and says so again only for a different reason", () => {
   const asked = eventsIn([record({ id: "r1", state: "waiting", asking: [asking] })]);
-  const said = new Set(asked.map((e) => e.key));
+  const said = new Set(Arr.map(asked, (e) => e.key));
 
   // The board redraws every few seconds: the same question must not be reported every time.
   expect(
@@ -121,7 +125,7 @@ test("several Runs ending together is every one of them, kept for one batch", ()
   // All three, not the first: none of them is dropped because the others happened at the
   // same moment. What stops three turns is that they go into one bounded batch, which is
   // `news.ts`'s job — not this one's.
-  expect(unsaid(events, new Set()).map((event) => event.run)).toEqual(["r1", "r2", "r3"]);
+  expect(Arr.map(unsaid(events, new Set()), (event) => event.run)).toEqual(["r1", "r2", "r3"]);
 });
 
 test("a Run says the most pressing thing about it, not every true thing", () => {
@@ -170,8 +174,8 @@ test("the event carries no action, so speaking first grants nothing", () => {
   // An Event is a Run, a key, a question and how much it matters. There is nowhere in it
   // to put a thing to do: what may be done comes back from the evaluator and through
   // `validate`, exactly as it does for a message somebody typed.
-  expect(Object.keys(event).sort()).toEqual(["key", "run", "significance", "text"]);
-  expect(event.text.endsWith("?")).toBe(true);
+  expect(Rec.keys(event).sort()).toEqual(["key", "run", "significance", "text"]);
+  expect(pipe(event.text, Str.endsWith("?"))).toBe(true);
 });
 
 test("noticing something costs a file append, and noticing nothing costs nothing", () =>
@@ -216,7 +220,7 @@ test("a Run ready to release when it ends is said once as ready, never as ended"
       ]);
       for (let tick = 0; tick < 20; tick++)
         for (const event of eventsIn(ended, new Map(), ready)) yield* appendNews(file, event);
-      expect(pendingNews(yield* readNews(file)).items.map((item) => item.key)).toEqual([
+      expect(Arr.map(pendingNews(yield* readNews(file)).items, (item) => item.key)).toEqual([
         "r1:ready:1a2b3c4d",
       ]);
     }),
@@ -232,8 +236,8 @@ test("a Reopened agent finishing what it was told is said once, and not while it
   const seen = new Set<string>();
   const ended = [record({ id: "r1", state: "succeeded" })];
   const said = (status: string) =>
-    eventsIn(ended, new Map(), new Map(), idleAgain([card(status)], seen)).filter((event) =>
-      event.key.includes(":reopened:"),
+    Arr.filter(eventsIn(ended, new Map(), new Map(), idleAgain([card(status)], seen)), (event) =>
+      pipe(event.key, Str.includes(":reopened:")),
     );
 
   // Idle before anyone saw it work: nothing it was told has finished yet.

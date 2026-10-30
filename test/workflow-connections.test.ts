@@ -1,5 +1,10 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Layer } from "effect";
 import { startRun } from "../src/lifecycle";
 import { connect } from "../src/host";
 import { stopHost, until } from "./support/host";
@@ -44,13 +49,16 @@ test(
           expect(started).toMatchObject({ ok: false });
           if (started.ok) throw new Error("absent Helle accepted");
           const client = yield* connect(world.state);
-          const helle = (yield* client.connections()).find(({ id }) => id === "helle")!.reading;
+          const helle = Option.getOrUndefined(
+            Arr.findFirst(yield* client.connections(), ({ id }) => id === "helle"),
+          )!.reading;
           if (helle.state === "ok") throw new Error("fixture has Helle credentials");
           expect(started.error.message).toContain(helle.fix);
           expect(
-            (yield* fs
-              .readDirectory(`${world.state}/runs`)
-              .pipe(Effect.orElseSucceed(() => []))).filter((name) => name.startsWith("run-")),
+            Arr.filter(
+              yield* fs.readDirectory(`${world.state}/runs`).pipe(Effect.orElseSucceed(() => [])),
+              (name) => pipe_(name, Str.startsWith("run-")),
+            ),
           ).toEqual([]);
         }),
       [],
@@ -96,17 +104,20 @@ test(
               dir: rig.stateDir,
               userDir: rig.userDir,
               placing: { herdr: new FakeHerdr(env), env },
-            }),
-          ),
-          Effect.provide(
-            ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+            }).pipe(
+              Layer.provide(
+                ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+              ),
+            ),
           ),
         );
         expect(answer).toMatchObject({
           ok: false,
           reason: "no GitHub login on this Machine. Fix: gh auth login --hostname github.com --web",
         });
-        expect((yield* forge.calls()).filter((line) => line.startsWith("pr "))).toEqual([]);
+        expect(
+          Arr.filter(yield* forge.calls(), (line) => pipe_(line, Str.startsWith("pr "))),
+        ).toEqual([]);
         expect(forge.requests()).toEqual([]);
         yield* bin.restore();
       }).pipe(Effect.scoped),
@@ -186,7 +197,13 @@ test(
             () => client.run({ runId: started.runId }),
             (one) => (one?.waiting.length ?? 0) > 0 || one?.status.status === "failed",
           );
-          expect(waiting?.waiting.map((one) => one.name)).toEqual(["continue"]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(waiting), (present) =>
+                Arr.map(present.waiting, (one) => one.name),
+              ),
+            ),
+          ).toEqual(["continue"]);
           yield* fs.writeFileString(
             `${world.project}/.mcp.json`,
             '{"mcpServers":{"linear":{"url":"https://mcp.linear.app/mcp"}}}',
@@ -222,7 +239,9 @@ test(
           yield* fs.copy(`${root}/workflows`, `${world.install}/workflows`);
           const view = yield* readDefinitions(env);
           expect(view.problems).toEqual([]);
-          const review = view.workflows.find(({ id }) => id === "review");
+          const review = Option.getOrUndefined(
+            Arr.findFirst(view.workflows, ({ id }) => id === "review"),
+          );
           expect(review?.metadata).toMatchObject({
             connections: {
               uses: {
@@ -243,14 +262,17 @@ test(
             review: { needs: [], uses: ["gitlab", "github"] },
             "self-improve": { needs: [], uses: ["gitlab", "github"] },
           };
-          for (const [id, entries] of Object.entries(declared)) {
-            expect(view.workflows.find((one) => one.id === id)?.metadata).toMatchObject({
+          for (const [id, entries] of Rec.toEntries(declared)) {
+            expect(
+              Option.getOrUndefined(Arr.findFirst(view.workflows, (one) => one.id === id))
+                ?.metadata,
+            ).toMatchObject({
               connections: {
-                needs: Object.fromEntries(
-                  entries.needs.map((id) => [id, { with: expect.any(String) }]),
+                needs: Rec.fromEntries(
+                  Arr.map(entries.needs, (id) => [id, { with: expect.any(String) }]),
                 ),
-                uses: Object.fromEntries(
-                  entries.uses.map((id) => [
+                uses: Rec.fromEntries(
+                  Arr.map(entries.uses, (id) => [
                     id,
                     { with: expect.any(String), without: expect.any(String) },
                   ]),
@@ -274,9 +296,11 @@ test(
               }),
             ]),
           );
-          expect(invalid.problems.find(({ id }) => id === "bad-connection")?.message).toContain(
-            "without",
-          );
+          expect(
+            Option.getOrUndefined(
+              Arr.findFirst(invalid.problems, ({ id }) => id === "bad-connection"),
+            )?.message,
+          ).toContain("without");
         }),
       [],
     ),
@@ -302,14 +326,14 @@ test(
             () => client.run({ runId: started.runId }),
             (one) => one?.status.status === "complete",
           );
-          expect((yield* client.offers({ runId: started.runId })).map((one) => one.id)).toEqual([
+          expect(Arr.map(yield* client.offers({ runId: started.runId }), (one) => one.id)).toEqual([
             "local",
           ]);
           yield* fs.writeFileString(
             `${world.project}/.mcp.json`,
             '{"mcpServers":{"linear":{"url":"https://mcp.linear.app/mcp"}}}',
           );
-          expect((yield* client.offers({ runId: started.runId })).map((one) => one.id)).toEqual([
+          expect(Arr.map(yield* client.offers({ runId: started.runId }), (one) => one.id)).toEqual([
             "file",
             "local",
           ]);

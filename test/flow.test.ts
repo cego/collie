@@ -2,9 +2,24 @@
 // module declares, or of what happened where it declares none
 // (ADR-draft-a-step-is-declared-where-its-work-is-written).
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, DateTime, Effect, FileSystem, Option, Schema, type Scope, Stream } from "effect";
+import type { PlatformServices } from "../src/platform";
+import {
+  Clock,
+  DateTime,
+  Effect,
+  FileSystem,
+  Option,
+  Schema,
+  type Scope,
+  Stream,
+  flow as Schemaflow,
+  Result,
+} from "effect";
 import type { Flow, FlowLane, FlowNode } from "../src/board-model";
 import { STEPS_FILE } from "../src/steps";
 import { writeTask } from "../src/task";
@@ -14,7 +29,10 @@ import { frontDoor, ownerOf, socketOf } from "../src/host";
 import { until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = Schemaflow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 const outputsOf = (world: World) => `${world.home}/outputs.json`;
 const gatesOf = (world: World) => `${world.home}/gates`;
@@ -29,7 +47,7 @@ const cli = (world: World, args: ReadonlyArray<string>) =>
 /** A world whose fake agents answer each prompt in turn with these Outputs. */
 const flowing = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   answers: number,
   modules: ReadonlyArray<string> = ["stepped.workflow.ts"],
 ) =>
@@ -57,7 +75,7 @@ const start = (world: World, workflow: string, input: Readonly<Record<string, st
     "run",
     "start",
     workflow,
-    ...Object.entries(input).flatMap(([name, value]) => ["--input", `${name}=${value}`]),
+    ...Arr.flatMap(Rec.toEntries(input), ([name, value]) => ["--input", `${name}=${value}`]),
   ]).pipe(
     Effect.flatMap(({ envelope }) => Schema.decodeUnknownEffect(RunId)(envelope.data)),
     Effect.map(({ runId }) => runId),
@@ -119,9 +137,9 @@ const until_ = (world: World, runId: string, wanted: (flow: Flow) => boolean) =>
 
 const laneOf = (flow: Flow): FlowLane => flow.lanes[0]!;
 const nodeOf = (flow: Flow, id: string): FlowNode | undefined =>
-  laneOf(flow).nodes.find((node) => node.id === id);
+  Option.getOrUndefined(Arr.findFirst(laneOf(flow).nodes, (node) => node.id === id));
 const statesOf = (flow: Flow) =>
-  laneOf(flow).nodes.map((node) => ({ id: node.id, state: node.state }));
+  Arr.map(laneOf(flow).nodes, (node) => ({ id: node.id, state: node.state }));
 
 test.each(["working", "blocked"])(
   "RunDetail and run show offer Watch and Tell for a live %s agent",
@@ -223,7 +241,7 @@ test(
             runId,
             (flow) => laneOf(flow).execution === "completed",
           );
-          expect(laneOf(done).nodes.map((node) => node.state)).toEqual([
+          expect(Arr.map(laneOf(done).nodes, (node) => node.state)).toEqual([
             "done",
             "done",
             "done",
@@ -263,20 +281,28 @@ test(
           const second = yield* until_(
             world,
             items,
-            (flow) => nodeOf(flow, "slice")?.runs.some((one) => one.id === "slice@b") ?? false,
+            (flow) =>
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(nodeOf(flow, "slice")), (present) =>
+                  Arr.some(present.runs, (one) => one.id === "slice@b"),
+                ),
+              ) ?? false,
           );
           const slice = nodeOf(second, "slice")!;
           expect(laneOf(second).nodes).toHaveLength(1);
           expect(slice).toMatchObject({ state: "running", said: "Slice 2 of 3" });
-          expect(slice.runs.map((one) => [one.title, one.state])).toEqual([
+          expect(Arr.map(slice.runs, (one) => [one.title, one.state])).toEqual([
             ["a", "done"],
             ["b", "running"],
             ["c", "expected"],
           ]);
           expect(slice.runs[1]!.log).toBeGreaterThan(0);
-          const itemLog = (yield* (yield* FileSystem.FileSystem).readFileString(
-            `${runDir(world.state, items)}/log.txt`,
-          )).split("\n");
+          const itemLog = Str.split(
+            yield* (yield* FileSystem.FileSystem).readFileString(
+              `${runDir(world.state, items)}/log.txt`,
+            ),
+            "\n",
+          );
           expect(itemLog[slice.runs[1]!.log! - 1]).toBe("── Build a slice · b ──");
           expect(slice.runs[0]!.log).not.toBe(slice.runs[1]!.log);
 
@@ -286,11 +312,14 @@ test(
             rounds,
             (flow) => laneOf(flow).execution === "completed",
           );
-          expect(laneOf(reviewed).nodes.map((node) => node.id)).toEqual(["review"]);
-          expect(nodeOf(reviewed, "review")?.runs.map((one) => one.title)).toEqual([
-            "Round 1",
-            "Round 2",
-          ]);
+          expect(Arr.map(laneOf(reviewed).nodes, (node) => node.id)).toEqual(["review"]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(nodeOf(reviewed, "review")), (present_) =>
+                Arr.map(present_.runs, (one) => one.title),
+              ),
+            ),
+          ).toEqual(["Round 1", "Round 2"]);
 
           const offpath = yield* stepped(world, "offpath");
           const off = yield* until_(
@@ -298,7 +327,7 @@ test(
             offpath,
             (flow) => laneOf(flow).execution === "completed",
           );
-          expect(laneOf(off).nodes.map((node) => node.id)).toEqual(["build", "extra", "ship"]);
+          expect(Arr.map(laneOf(off).nodes, (node) => node.id)).toEqual(["build", "extra", "ship"]);
           expect(nodeOf(off, "extra")?.offPath).toBe(true);
           expect(nodeOf(off, "extra")?.said).toStartWith("Off the path · ");
           expect(nodeOf(off, "ship")?.offPath).toBe(false);
@@ -363,18 +392,26 @@ test(
           yield* open(world, "build");
           const flow = yield* until_(world, runId, (one) => laneOf(one).execution === "completed");
           const build = nodeOf(flow, "build")!;
-          expect(build.attempts.map((one) => one.cause)).toEqual([null, "restarted"]);
+          expect(Arr.map(build.attempts, (one) => one.cause)).toEqual([null, "restarted"]);
           expect(build.said).toEndWith(" · 2nd attempt");
-          const lines = (yield* (yield* FileSystem.FileSystem)
-            .readFileString(`${runDir(world.state, runId)}/${STEPS_FILE}`)
-            .pipe(Effect.orDie))
-            .split("\n")
-            .filter((line) => line.includes('"kind":"enter"') && line.includes('"key":"build"'));
+          const lines = Arr.filter(
+            Str.split(
+              yield* (yield* FileSystem.FileSystem)
+                .readFileString(`${runDir(world.state, runId)}/${STEPS_FILE}`)
+                .pipe(Effect.orDie),
+              "\n",
+            ),
+            (line) =>
+              pipe_(line, Str.includes('"kind":"enter"')) &&
+              pipe_(line, Str.includes('"key":"build"')),
+          );
           expect(lines).toHaveLength(1);
           const log = yield* (yield* FileSystem.FileSystem)
             .readFileString(`${runDir(world.state, runId)}/log.txt`)
             .pipe(Effect.orElseSucceed(() => ""));
-          expect(log.split("\n").filter((line) => line === "── Build it ──")).toHaveLength(1);
+          expect(
+            Arr.filter(Str.split(log, "\n"), (line) => line === "── Build it ──"),
+          ).toHaveLength(1);
         }),
       0,
     ),
@@ -394,10 +431,13 @@ test(
           const resumed = yield* cli(world, ["run", "resume", runId]);
           expect(resumed.envelope.ok).toBe(true);
           const flow = yield* until_(world, runId, (one) => laneOf(one).execution === "completed");
-          expect(nodeOf(flow, "build")?.attempts.map((one) => one.cause)).toEqual([
-            null,
-            "resumed",
-          ]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(nodeOf(flow, "build")), (present__) =>
+                Arr.map(present__.attempts, (one) => one.cause),
+              ),
+            ),
+          ).toEqual([null, "resumed"]);
         }),
       0,
     ),
@@ -441,10 +481,13 @@ test(
           yield* open(world, "pass");
           expect((yield* cli(world, ["run", "resume", run])).envelope.ok).toBe(true);
           const resumed = yield* until_(world, run, (one) => laneOf(one).execution === "completed");
-          expect(nodeOf(resumed, "second")?.attempts.map((one) => one.cause)).toEqual([
-            null,
-            "resumed",
-          ]);
+          expect(
+            Option.getOrUndefined(
+              Option.map(Option.fromNullishOr(nodeOf(resumed, "second")), (present___) =>
+                Arr.map(present___.attempts, (one) => one.cause),
+              ),
+            ),
+          ).toEqual([null, "resumed"]);
         }),
       0,
       ["retry-steps.workflow.ts"],
@@ -470,7 +513,7 @@ test(
           expect(nap.wait).toBe("timer");
           // The host was started on UTC, as this process is.
           const wakes = (at: number) =>
-            `Wakes at ${DateTime.formatIso(DateTime.makeUnsafe(at + 3_600_000)).slice(11, 16)}`;
+            `Wakes at ${pipe_(DateTime.formatIso(DateTime.makeUnsafe(at + 3_600_000)), Str.slice(11, 16))}`;
           const after = yield* Clock.currentTimeMillis;
           expect([wakes(before), wakes(after)]).toContain(nap.said!);
         }),
@@ -488,7 +531,7 @@ test(
         Effect.gen(function* () {
           const runId = yield* start(world, "attended", { work: "it" });
           const asking = yield* until_(world, runId, (flow) =>
-            laneOf(flow).nodes.some((node) => node.state === "needs-you"),
+            Arr.some(laneOf(flow).nodes, (node) => node.state === "needs-you"),
           );
           expect(laneOf(asking).declared).toBe(false);
           expect(statesOf(asking)).toEqual([
@@ -508,7 +551,7 @@ test(
             runId,
             (flow) => laneOf(flow).execution === "completed",
           );
-          expect(laneOf(done).nodes.map((node) => [node.title, node.state])).toEqual([
+          expect(Arr.map(laneOf(done).nodes, (node) => [node.title, node.state])).toEqual([
             ["build", "done"],
             ["go", "done"],
             ["check", "done"],
@@ -534,7 +577,10 @@ test(
           yield* fs
             .writeFileString(
               `${world.user}/stepped.workflow.ts`,
-              source.replace("path: [build, decide, ship]", "path: [build, decide, build]"),
+              pipe_(
+                source,
+                Str.replace("path: [build, decide, ship]", "path: [build, decide, build]"),
+              ),
             )
             .pipe(Effect.orDie);
           const checked = yield* cli(world, ["workflow", "check", "stepped"]);
@@ -553,7 +599,8 @@ const RunShow = Schema.Struct({ flow: Schema.Unknown });
 const children = (world: World, parent: string) =>
   until(
     () => cli(world, ["run", "list"]),
-    ({ envelope }) => JSON.stringify(envelope.data ?? "").includes(`"parent":"${parent}"`),
+    ({ envelope }) =>
+      pipe_(JSON.stringify(envelope.data ?? ""), Str.includes(`"parent":"${parent}"`)),
   ).pipe(
     Effect.flatMap(({ envelope }) =>
       Schema.decodeUnknownEffect(
@@ -564,7 +611,12 @@ const children = (world: World, parent: string) =>
         }),
       )(envelope.data),
     ),
-    Effect.map(({ runs }) => runs.filter((one) => one.parent === parent).map((one) => one.runId)),
+    Effect.map(({ runs }) =>
+      Arr.map(
+        Arr.filter(runs, (one) => one.parent === parent),
+        (one) => one.runId,
+      ),
+    ),
     Effect.orDie,
   );
 
@@ -581,12 +633,13 @@ test(
             world,
             parent,
             (one) =>
-              one.lanes.length === 2 && one.lanes.every((lane) => lane.execution === "completed"),
+              one.lanes.length === 2 &&
+              Arr.every(one.lanes, (lane) => lane.execution === "completed"),
           );
           const [kid] = yield* children(world, parent);
-          expect(flow.lanes.map((lane) => lane.run)).toEqual([parent, kid!]);
+          expect(Arr.map(flow.lanes, (lane) => lane.run)).toEqual([parent, kid!]);
           expect(flow.lanes[1]!.startedBy).toEqual({ run: parent, step: "spawn" });
-          expect(flow.lanes[0]!.nodes.map((node) => [node.id, node.kind])).toEqual([
+          expect(Arr.map(flow.lanes[0]!.nodes, (node) => [node.id, node.kind])).toEqual([
             ["spawn", "workflow"],
             ["wrap", "check"],
           ]);
@@ -613,10 +666,14 @@ test(
               ),
             }),
           )(board.envelope.data).pipe(Effect.orDie);
-          const card = tasks.find((one) => one.runs.includes(parent))!;
-          const leading = flow.lanes.find((lane) => lane.run === card.run)!;
+          const card = Option.getOrUndefined(
+            Arr.findFirst(tasks, (one) => one.runs.includes(parent)),
+          )!;
+          const leading = Option.getOrUndefined(
+            Arr.findFirst(flow.lanes, (lane) => lane.run === card.run),
+          )!;
           expect(card.flow).toEqual({
-            glyphs: leading.nodes.map((node) => ({ title: node.title, state: node.state })),
+            glyphs: Arr.map(leading.nodes, (node) => ({ title: node.title, state: node.state })),
             release: 0,
             current: null,
           });
@@ -627,10 +684,11 @@ test(
             world,
             loose,
             (one) =>
-              one.lanes.length === 2 && one.lanes.every((lane) => lane.execution === "completed"),
+              one.lanes.length === 2 &&
+              Arr.every(one.lanes, (lane) => lane.execution === "completed"),
           );
           expect(outside.lanes[1]!.startedBy).toEqual({ run: loose, step: null });
-          expect(outside.lanes[0]!.nodes.map((node) => [node.id, node.state])).toEqual([
+          expect(Arr.map(outside.lanes[0]!.nodes, (node) => [node.id, node.state])).toEqual([
             ["spawn", "not-run"],
             ["wrap", "done"],
           ]);
@@ -654,7 +712,7 @@ test(
           expect(flow.lanes).toHaveLength(1);
           expect(nodeOf(flow, "spawn")?.link).toMatchObject({ run: kid!, state: "done" });
           const own = yield* until_(world, kid!, (one) => one.lanes.length > 0);
-          expect(own.lanes.map((lane) => lane.run)).toEqual([kid!]);
+          expect(Arr.map(own.lanes, (lane) => lane.run)).toEqual([kid!]);
         }),
       0,
       ["parents.workflow.ts", "plain.workflow.ts"],
@@ -674,12 +732,12 @@ test(
           const kids = yield* children(world, parent);
           const spawn = nodeOf(flow, "spawn")!;
           expect(spawn.link).toBeUndefined();
-          expect(spawn.runs.map((one) => [one.title, one.link?.state])).toEqual([
+          expect(Arr.map(spawn.runs, (one) => [one.title, one.link?.state])).toEqual([
             ["first", "done"],
             ["second", "done"],
           ]);
-          expect(new Set(spawn.runs.map((one) => one.link?.run))).toEqual(new Set(kids));
-          expect(new Set(spawn.runs.map((one) => one.link?.run)).size).toBe(2);
+          expect(new Set(Arr.map(spawn.runs, (one) => one.link?.run))).toEqual(new Set(kids));
+          expect(new Set(Arr.map(spawn.runs, (one) => one.link?.run)).size).toBe(2);
         }),
       0,
       ["parents.workflow.ts", "plain.workflow.ts"],

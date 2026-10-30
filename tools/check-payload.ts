@@ -3,6 +3,9 @@
 // path over the 100 characters a tar header holds. Checked before a release publishes one.
 // A macOS app carries its payload as a `.tar.zst` of its own, which is checked as it is.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Data, Effect, FileSystem } from "effect";
 
@@ -13,7 +16,8 @@ const MARKER = new TextEncoder().encode("ELECTROBUN_ARCHIVE_V1");
 const BLOCK = 512;
 const LONGEST = 100;
 
-const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes).replace(/\0.*$/s, "");
+const text = (bytes: Uint8Array) =>
+  pipe_(new TextDecoder().decode(bytes), Str.replace(/\0.*$/s, ""));
 
 /** Every path in a tar whose header the extractor could not read, with why. */
 const unreadable = (tar: Uint8Array) => {
@@ -26,7 +30,7 @@ const unreadable = (tar: Uint8Array) => {
     const prefix = ustar ? text(header.subarray(345, 500)) : "";
     const path = prefix === "" ? name : `${prefix}/${name}`;
     const type = String.fromCharCode(header[156] || 48);
-    const size = Number.parseInt(text(header.subarray(124, 136)).trim() || "0", 8);
+    const size = Number.parseInt(Str.trim(text(header.subarray(124, 136))) || "0", 8);
     if (type === "L" || type === "K") {
       const long = text(tar.subarray(at + BLOCK, at + BLOCK + size));
       found.push(`${long} (a GNU long-name entry)`);
@@ -42,7 +46,7 @@ const program = Effect.gen(function* () {
   for (const installer of process.argv.slice(2)) {
     const bytes = yield* fs.readFile(installer);
     const marker = Buffer.from(bytes).lastIndexOf(MARKER);
-    if (marker === -1 && !installer.endsWith(".tar.zst")) {
+    if (marker === -1 && !pipe_(installer, Str.endsWith(".tar.zst"))) {
       return yield* new PayloadRefused({ message: `${installer} has no Electrobun payload` });
     }
     const tar = Bun.zstdDecompressSync(
@@ -51,10 +55,13 @@ const program = Effect.gen(function* () {
     const found = unreadable(tar);
     if (found.length > 0) {
       return yield* new PayloadRefused({
-        message: [
-          `${installer}: its self-extractor cannot read these paths, so it is not published:`,
-          ...found.map((path) => `  ${path}`),
-        ].join("\n"),
+        message: Arr.join(
+          [
+            `${installer}: its self-extractor cannot read these paths, so it is not published:`,
+            ...Arr.map(found, (path) => `  ${path}`),
+          ],
+          "\n",
+        ),
       });
     }
     yield* Effect.log(`${installer}: every path fits in ${LONGEST} characters`);

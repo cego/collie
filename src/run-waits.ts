@@ -1,5 +1,7 @@
 // What holds one Run up now, read once for every view that shows it.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect } from "effect";
 import type { Awaiting } from "./awaiting";
 import type { BoardAgent, Question } from "./board-model";
@@ -29,17 +31,20 @@ export const runWaits = Effect.fn("RunWaits.of")(function* (
   now: number,
 ) {
   const waits: RunWaits = {
-    questions: run.asking.map((asked) => ({
+    questions: Arr.map(run.asking, (asked) => ({
       kind: "question",
       run: run.id,
       id: asked.name,
       step: run.workflow,
       topic: asked.name,
       text: asked.prompt,
-      options: asked.options.map((option) => ({ id: option, title: option, subtitle: null })),
+      options: Arr.map(asked.options, (option) => ({ id: option, title: option, subtitle: null })),
     })),
     proposals: pendingFor(proposals, run.id, now),
-    blocked: agents.find((agent) => agent.run === run.id && agent.status === "blocked") ?? null,
+    blocked:
+      Option.getOrUndefined(
+        Arr.findFirst(agents, (agent) => agent.run === run.id && agent.status === "blocked"),
+      ) ?? null,
     parked: run.state === "waiting" && run.asking.length === 0 ? { reason: run.parked } : null,
     // A hold left on a Run that ended holds nothing, and a finished Run refuses its release.
     held: run.held && !settled(run),

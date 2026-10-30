@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { Effect, Option } from "effect";
 import type { RunView } from "./engine";
 import type { PluginEnv } from "./env";
@@ -18,10 +19,13 @@ export const notifyRunLink = Effect.fn("RunLinks.notify")(function* (
   const who = view.requestedBy;
   if (who === undefined || who.machine.installation === installation) return;
   const dir = `${env.stateDir}/runs/${view.runId}`;
-  if ((yield* readLinkDeliveries(dir)).some((one) => one.phase === phase)) return;
-  const at = yield* nowIso();
-  const peer = (yield* peersOf(env.stateDir)).find(
-    (one) => one.installation === who.machine.installation,
+  if (Arr.some(yield* readLinkDeliveries(dir), (one) => one.phase === phase)) return;
+  const at = yield* nowIso;
+  const peer = Option.getOrUndefined(
+    Arr.findFirst(
+      yield* peersOf(env.stateDir),
+      (one) => one.installation === who.machine.installation,
+    ),
   );
   let state: "delivered" | "undelivered" = "undelivered";
   let note = `The requesting Machine ${who.machine.name} is no longer paired.`;
@@ -41,7 +45,9 @@ export const notifyRunLink = Effect.fn("RunLinks.notify")(function* (
         ...run,
         finished: phase === "settled" ? at : null,
         mrState: null,
-        current: lane.nodes.find((one) => one.id === current?.node)?.said ?? null,
+        current:
+          Option.getOrUndefined(Arr.findFirst(lane.nodes, (one) => one.id === current?.node))
+            ?.said ?? null,
       }),
     };
     const sent = yield* asksRun(

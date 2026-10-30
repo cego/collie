@@ -1,9 +1,14 @@
+import * as Cause from "effect/Cause";
 // Persona definitions across the three Layers: baseline (this repo), the user's plugin
 // config dir, and the project's .collie/. Later wins by name.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expressionsIn, malformedIn } from "./template";
 import { parseDocument, YamlError, type YamlValue } from "./yaml";
-import { Crypto, Effect, FileSystem, Path, Result, type PlatformError } from "effect";
+import { Effect, FileSystem, Path, Result, type PlatformError } from "effect";
+import * as Digest from "effect/crypto/Digest";
 import { isString } from "./schema";
 import type { PersonaView } from "./definitions-model";
 
@@ -80,11 +85,11 @@ export function isStale(def: Provenance): boolean {
 }
 
 export const contentHash = Effect.fn("Definitions.contentHash")(function* (text: string) {
-  const crypto = yield* Crypto.Crypto;
-  const bytes = yield* crypto.digest("SHA-1", new TextEncoder().encode(text));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 12);
+  const digest = yield* Digest.Digest;
+  return pipe_(
+    yield* digest.digestHex(Digest.sha1, new TextEncoder().encode(text)),
+    Str.slice(0, 12),
+  );
 });
 
 /** What the layers hold. Workflows are modules now, and are found by `discovery`. */
@@ -122,10 +127,10 @@ const markdownFiles = Effect.fn("Definitions.markdownFiles")(function* (dir: str
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if (!(yield* fs.exists(dir))) return [];
-  return (yield* fs.readDirectory(dir))
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .map((f) => path.join(dir, f));
+  return Arr.map(
+    Arr.filter(yield* fs.readDirectory(dir), (f) => pipe_(f, Str.endsWith(".md"))).sort(),
+    (f) => path.join(dir, f),
+  );
 });
 
 function str(value: YamlValue | undefined, fallback = ""): string {
@@ -142,12 +147,13 @@ const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
   const text = yield* fs.readFileString(file);
   const { data, body } = yield* Effect.try({
     try: () => parseDocument(text),
-    catch: (cause) => (cause instanceof YamlError ? cause : new Error(String(cause))),
+    catch: (cause) =>
+      cause instanceof YamlError ? cause : new Cause.UnknownError(cause, String(cause)),
   });
   const unfilled = personaHoles(body);
   if (unfilled.length > 0) {
-    return yield* Effect.fail(
-      new Error(`it names ${unfilled.join(", ")}; a persona is told nothing but {{skill:name}}`),
+    return yield* new Cause.IllegalArgumentError(
+      `it names ${Arr.join(unfilled, ", ")}; a persona is told nothing but {{skill:name}}`,
     );
   }
   const persona: PersonaDef = {
@@ -164,7 +170,7 @@ const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
 
 /** Every expression in a persona that nothing fills: all of them but a skill. */
 export const personaHoles = (body: string): string[] => [
-  ...expressionsIn(body).map((name) => `{{${name}}}`),
+  ...Arr.map(expressionsIn(body), (name) => `{{${name}}}`),
   ...malformedIn(body),
 ];
 
@@ -174,7 +180,7 @@ export const loadDefinitions = Effect.fn("Definitions.loadDefinitions")(function
   const personas = new Map<string, PersonaDef>();
   const errors: string[] = [];
 
-  for (const layer of Array.isArray(layers) ? layers : layers.all) {
+  for (const layer of Arr.isArray(layers) ? layers : layers.all) {
     yield* loadLayer(personas, layer, "personas", parsePersona, mergePersona, errors);
   }
 
@@ -221,7 +227,7 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
   ): Effect.Effect<
     void,
     PlatformError.PlatformError,
-    FileSystem.FileSystem | Path.Path | Crypto.Crypto
+    FileSystem.FileSystem | Path.Path | Digest.Digest
   > =>
     Effect.gen(function* () {
       if (settled.has(name)) return;
@@ -237,7 +243,7 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
         return;
       }
       if (chain.includes(parentName)) {
-        errors.push(`${def.path}: extends cycle (${[...chain, parentName].join(" → ")})`);
+        errors.push(`${def.path}: extends cycle (${Arr.join([...chain, parentName], " → ")})`);
         return;
       }
       if (parsed.has(parentName) && parentName !== name)
@@ -268,7 +274,7 @@ const withParentHash = Effect.fn("Definitions.withParentHash")(function* <
 
 const readHash = Effect.fn("Definitions.readHash")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
-  const text = yield* fs.readFileString(path).pipe(Effect.catch(() => Effect.succeed(undefined)));
+  const text = yield* fs.readFileString(path).pipe(Effect.catch(() => Effect.void));
   return text === undefined ? undefined : yield* contentHash(text);
 });
 
@@ -300,10 +306,13 @@ function mergeBody(parent: string, child: string): string {
   const sections = new Map(a.sections);
   for (const [name, text] of b.sections) sections.set(name, text);
 
-  const preamble = b.preamble.trim() === "" ? a.preamble : b.preamble;
-  const parts = [preamble.trim()];
+  const preamble = Str.trim(b.preamble) === "" ? a.preamble : b.preamble;
+  const parts = [Str.trim(preamble)];
   for (const [name, text] of sections) parts.push(`## ${name}\n\n${text}`);
-  return `${parts.filter((p) => p !== "").join("\n\n")}\n`;
+  return `${Arr.join(
+    Arr.filter(parts, (p) => p !== ""),
+    "\n\n",
+  )}\n`;
 }
 
 /** Body split into a shared preamble plus one section per `## <step-id>` heading. */
@@ -314,12 +323,12 @@ export interface BodySections {
 
 export function bodySections(body: string): BodySections {
   const sections = new Map<string, string>();
-  const lines = body.split("\n");
+  const lines = Str.split(body, "\n");
   const preamble: string[] = [];
   let current: string | null = null;
   let buf: string[] = [];
   const flush = () => {
-    if (current !== null) sections.set(current, buf.join("\n").trim());
+    if (current !== null) sections.set(current, Str.trim(Arr.join(buf, "\n")));
     buf = [];
   };
   for (const line of lines) {
@@ -333,7 +342,7 @@ export function bodySections(body: string): BodySections {
     else buf.push(line);
   }
   flush();
-  return { preamble: preamble.join("\n").trim(), sections };
+  return { preamble: Str.trim(Arr.join(preamble, "\n")), sections };
 }
 
 export const skillFile = Effect.fn("Definitions.skillFile")(function* (

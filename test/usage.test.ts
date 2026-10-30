@@ -1,9 +1,13 @@
+import * as Cause from "effect/Cause";
 // The host's Usage readings: how often each endpoint is called, what a refusal or a silent
 // endpoint leaves behind, a login read and never written, and the status lines' samples.
 
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { DateTime, Effect, Fiber, FileSystem, Path, Schema, Scope } from "effect";
+import { DateTime, Effect, Fiber, FileSystem, Path, Schema, Scope, flow, Result } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { TestClock } from "effect/testing";
@@ -25,7 +29,7 @@ import codexRateLimits from "./fixtures/usage/codex-account-ratelimits-read.json
 import codexAccount from "./fixtures/usage/codex-account-read.json";
 
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 const onTestClock = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>) =>
   Effect.runPromise(
@@ -224,7 +228,7 @@ describe("Claude's login", () => {
           },
         ]);
         expect(asked.reading.source).toBe("claude-usage");
-        expect(asked.reading.windows.map((window) => window.usedPercent)).toEqual([31, 88, 0]);
+        expect(Arr.map(asked.reading.windows, (window) => window.usedPercent)).toEqual([31, 88, 0]);
       }),
     ));
 
@@ -295,7 +299,7 @@ describe("ChatGPT", () => {
           "Codex is not logged in on this Machine; run `codex login`",
         );
         const missing = yield* codexReading(
-          Effect.fail(new Error("Codex is not installed on this Machine")),
+          Effect.fail(new Cause.UnknownError(undefined, "Codex is not installed on this Machine")),
         );
         expect(missing.reading.problem).toBe("Codex is not installed on this Machine");
       }),
@@ -336,7 +340,13 @@ describe("status-line samples", () => {
           at: iso(60_000),
           plan: "max",
         });
-        expect(claude?.windows.map((window) => [window.label, window.usedPercent])).toEqual([
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(claude), (present) =>
+              Arr.map(present.windows, (window) => [window.label, window.usedPercent]),
+            ),
+          ),
+        ).toEqual([
           ["Session", 64],
           ["Weekly", 90],
           ["Weekly Fable", 5],
@@ -372,20 +382,23 @@ describe("collie usage's lines", () => {
       accountLabel: "me@example.com",
     };
     const resetsAt = "2026-10-08T10:49:00Z";
-    const lines = usageLines(
-      [
-        {
-          ...claude,
-          windows: [{ ...claude.windows[0]!, resetsAt }],
-        },
-        {
-          ...read("chatgpt", now, 0),
-          windows: [],
-          problem: "Codex is not installed on this Machine",
-        },
-      ],
-      now,
-    ).split("\n");
+    const lines = Str.split(
+      usageLines(
+        [
+          {
+            ...claude,
+            windows: [{ ...claude.windows[0]!, resetsAt }],
+          },
+          {
+            ...read("chatgpt", now, 0),
+            windows: [],
+            problem: "Codex is not installed on this Machine",
+          },
+        ],
+        now,
+      ),
+      "\n",
+    );
     expect(lines[0]).toMatch(
       /^claude {2}team · me@example\.com {2}Session 31% · resets \d\d:\d\d \(in 2h 3m\)$/,
     );
@@ -393,7 +406,7 @@ describe("collie usage's lines", () => {
       "claude  read 3 minutes ago from claude-usage",
       "chatgpt Codex is not installed on this Machine",
     ]);
-    const refused = usageLines([{ ...claude, problem: "refusing" }], now).split("\n");
+    const refused = Str.split(usageLines([{ ...claude, problem: "refusing" }], now), "\n");
     expect(refused.at(-1)).toBe("claude  refusing; read 3 minutes ago from claude-usage");
   });
 });

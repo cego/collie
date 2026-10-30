@@ -5,11 +5,13 @@
 // the workers free, whatever waits before it; arrival order decides only between those that
 // do not fit, so a large one can wait behind a stream of smaller ones.
 
+import * as Arr from "effect/Array";
+import * as Num from "effect/Number";
 // FileSystem cannot write to or close a pipe it did not open.
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { closeSync, writeSync } from "node:fs";
 import { getPriority, setPriority, tmpdir } from "node:os";
-import { Clock, Duration, Effect, FileSystem, Option, Schema } from "effect";
+import { Clock, Duration, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
 import { ensureLockDir, holderLives, processStartTime, withLock } from "../src/lock";
 import { described, elapsed } from "./suite-lock";
 
@@ -53,16 +55,19 @@ export const admission = (
   request: Entry,
 ): Admission => {
   const share = shareOf(budget, request.kind);
-  const classOf = entries.filter(
+  const classOf = Arr.filter(
+    entries,
     (one) => one.id !== request.id && (pooled(budget) || one.kind === request.kind),
   );
-  const holds = classOf.filter((one) => one.state === "held");
-  let free = share - holds.reduce((sum, one) => sum + one.workers, 0);
+  const holds = Arr.filter(classOf, (one) => one.state === "held");
+  let free = share - Arr.reduce(holds, 0, (sum, one) => sum + one.workers);
   // An earlier waiter that fits now is admitted on its own look, so its workers are not free.
   const ahead: Entry[] = [];
-  for (const one of classOf
-    .filter((it) => it.state === "waiting" && it.seq < request.seq)
-    .toSorted((a, b) => a.seq - b.seq)) {
+  for (const one of Arr.sortWith(
+    Arr.filter(classOf, (it) => it.state === "waiting" && it.seq < request.seq),
+    (entry: Entry) => entry.seq,
+    Num.Order,
+  )) {
     const wants = Math.min(one.asked, share);
     if (wants > free) continue;
     free -= wants;
@@ -98,7 +103,7 @@ const StoredSchema = Schema.Struct({
 const StateSchema = Schema.Struct({ next: Schema.Int, entries: Schema.Array(StoredSchema) });
 const StateJson = Schema.fromJsonString(StateSchema);
 const decodeState = Schema.decodeUnknownOption(StateJson);
-const encodeState = Schema.encodeSync(StateJson);
+const encodeState = flow(Schema.encodeResult(StateJson), Result.getOrThrow);
 
 export type Process = typeof ProcessSchema.Type;
 export type Stored = typeof StoredSchema.Type;
@@ -175,14 +180,16 @@ type Looked =
 /** One look: admits the ticket when it may go, and otherwise says whom it waits behind. */
 export const look = (dir: string, budget: Budget, id: string) =>
   modify(dir, (state): readonly [State, Looked] => {
-    const mine = state.entries.find((one) => one.id === id);
+    const mine = Option.getOrUndefined(Arr.findFirst(state.entries, (one) => one.id === id));
     if (mine === undefined) throw new Error(`ticket ${id} is not in the budget's store`);
     const decided = admission(budget, state.entries, mine);
     if (decided._tag === "wait") {
-      const behind = decided.behind.map((one) => state.entries.find((it) => it.id === one.id)!);
+      const behind = Arr.map(decided.behind, (one) =>
+        Option.getOrUndefined(Arr.findFirst(state.entries, (it) => it.id === one.id))!,
+      );
       return [state, { _tag: "wait", behind }];
     }
-    const entries = state.entries.map((one) =>
+    const entries = Arr.map(state.entries, (one) =>
       one.id === id ? { ...one, state: "held" as const, workers: decided.workers } : one,
     );
     return [{ ...state, entries }, decided];
@@ -192,7 +199,10 @@ export const leave = (dir: string, id: string) =>
   modify(
     dir,
     (state) =>
-      [{ ...state, entries: state.entries.filter((one) => one.id !== id) }, undefined] as const,
+      [
+        { ...state, entries: Arr.filter(state.entries, (one) => one.id !== id) },
+        undefined,
+      ] as const,
   );
 
 /** Names another process that runs on the hold, such as the `bun test` its runner starts. */
@@ -203,7 +213,7 @@ export const join = (dir: string, id: string, joined: Process) =>
       [
         {
           ...state,
-          entries: state.entries.map((one) =>
+          entries: Arr.map(state.entries, (one) =>
             one.id === id ? { ...one, processes: [...one.processes, joined] } : one,
           ),
         },

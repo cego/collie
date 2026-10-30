@@ -2,6 +2,7 @@
 // every hour and when asked, downloaded in the background, and applied only once the tar it
 // would install verifies against Collie's release key.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { Deferred, Effect, Fiber, FileSystem, Schedule, Stream } from "effect";
@@ -16,6 +17,10 @@ import {
 } from "../desktop/src/bun/updates";
 import type { UpdateNews } from "../desktop/src/shared/flock";
 import { fastForward } from "./support/effect";
+import {
+  electrobunUpdater,
+  type ElectrobunUpdaterApi,
+} from "../desktop/src/bun/electrobun-updater";
 
 const pair = () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -122,6 +127,106 @@ const told = <A, E, R>(
     return said;
   });
 
+const upstreamUpdater = (dir: string) => {
+  const calls: string[] = [];
+  const checked = { error: "", updateAvailable: true, version: "0.33.0" };
+  const downloaded = { error: "" };
+  const history: Array<{ message: string }> = [];
+  const api: ElectrobunUpdaterApi = {
+    getLocalInfo: () =>
+      Promise.resolve({ channel: "stable", hash: "old", baseUrl: "https://updates.example.com" }),
+    appDataFolder: () => Promise.resolve(dir),
+    checkForUpdate: () => {
+      calls.push("check");
+      return Promise.resolve(checked);
+    },
+    downloadUpdate: () => {
+      calls.push("download");
+      return Promise.resolve();
+    },
+    updateInfo: () => {
+      calls.push("download status");
+      return downloaded;
+    },
+    applyUpdate: () => {
+      calls.push("apply");
+      return Promise.resolve();
+    },
+    getStatusHistory: () => {
+      calls.push("apply status");
+      return history;
+    },
+  };
+  return { api, calls, checked, downloaded, history };
+};
+
+test("the Electrobun adapter keeps SDK refusals and the latest apply message as string failures", () =>
+  run((dir) =>
+    Effect.gen(function* () {
+      const sdk = upstreamUpdater(dir);
+      const port = yield* electrobunUpdater(sdk.api);
+      expect(yield* port.channel).toBe("stable");
+      expect(yield* port.hash).toBe("old");
+      expect(yield* port.check).toEqual({ available: true, version: "0.33.0" });
+      sdk.checked.error = "HTTP 503";
+      expect(yield* port.check.pipe(Effect.flip)).toBe("HTTP 503");
+      sdk.downloaded.error = "download refused";
+      expect(yield* port.download.pipe(Effect.flip)).toBe("download refused");
+      sdk.downloaded.error = "";
+      yield* port.download;
+      sdk.history.push({ message: "earlier" }, { message: "restart cancelled" });
+      expect(yield* port.apply.pipe(Effect.flip)).toBe("restart cancelled");
+      sdk.history.length = 0;
+      expect(yield* port.apply.pipe(Effect.flip)).toBe("Electrobun did not install it");
+      expect(sdk.calls).toEqual([
+        "check",
+        "check",
+        "download",
+        "download status",
+        "download",
+        "download status",
+        "apply",
+        "apply status",
+        "apply",
+        "apply status",
+      ]);
+    }),
+  ));
+
+test("the Electrobun adapter keeps rejected SDK operations in the port's string error channel", () =>
+  run((dir) =>
+    Effect.gen(function* () {
+      const sdk = upstreamUpdater(dir);
+      const port = yield* electrobunUpdater({
+        ...sdk.api,
+        checkForUpdate: () => Promise.reject(new Error("check offline")),
+        downloadUpdate: () => Promise.reject(new Error("download offline")),
+        applyUpdate: () => Promise.reject(new Error("apply offline")),
+      });
+      expect(yield* port.check.pipe(Effect.flip)).toBe("Error: check offline");
+      expect(yield* port.download.pipe(Effect.flip)).toBe("Error: download offline");
+      expect(yield* port.apply.pipe(Effect.flip)).toBe("Error: apply offline");
+      expect(sdk.calls).toEqual([]);
+    }),
+  ));
+
+test("the Electrobun adapter validates JavaScript SDK fields before failing with them", () =>
+  run((dir) =>
+    Effect.gen(function* () {
+      const sdk = upstreamUpdater(dir);
+      const port = yield* electrobunUpdater(sdk.api);
+      // The SDK runs as JavaScript even when its generated declarations are present.
+      Object.defineProperty(sdk.checked, "error", { value: 42 });
+      expect(yield* port.check.pipe(Effect.flip)).toContain("string");
+      Object.defineProperty(sdk.downloaded, "error", { value: false });
+      expect(yield* port.download.pipe(Effect.flip)).toContain("string");
+      const status = { message: "ready" };
+      Object.defineProperty(status, "message", { value: 42 });
+      sdk.history.push(status);
+      expect(yield* port.apply.pipe(Effect.flip)).toContain("string");
+    }),
+  ));
+
 test("a signed update is checked for at launch, said to be downloading, then to be ready, without being applied", () => {
   const key = pair();
   return run((dir) =>
@@ -196,8 +301,8 @@ test("a check asked for while one runs joins it rather than downloading twice", 
       const [first, second] = yield* Fiber.join(asked);
       expect(first).toEqual({ _tag: "Ready", version: "0.33.0" });
       expect(second).toEqual(first);
-      expect(calls.filter((call) => call === "download")).toHaveLength(1);
-      expect(calls.filter((call) => call === "check")).toHaveLength(1);
+      expect(Arr.filter(calls, (call) => call === "download")).toHaveLength(1);
+      expect(Arr.filter(calls, (call) => call === "check")).toHaveLength(1);
     }).pipe(Effect.scoped),
   );
 });
@@ -243,9 +348,9 @@ test("Desktop checks again every hour", () => {
       const { port, calls } = yield* fakeUpdater(dir, { signature: null, available: false });
       yield* updatesOf(port, "0.32.0", key.publicKey);
       yield* Effect.sleep("50 minutes");
-      expect(calls.filter((call) => call === "check")).toHaveLength(1);
+      expect(Arr.filter(calls, (call) => call === "check")).toHaveLength(1);
       yield* Effect.sleep("20 minutes");
-      expect(calls.filter((call) => call === "check")).toHaveLength(2);
+      expect(Arr.filter(calls, (call) => call === "check")).toHaveLength(2);
     }).pipe(Effect.scoped, (effect) => fastForward(effect, 60_000)),
   );
 });

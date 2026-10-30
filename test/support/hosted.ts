@@ -1,8 +1,9 @@
 // A Herd with a host in it: the installation, the state directory the host owns, and the
 // Runs chat reads and acts on, which are the host's.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Crypto, Effect, FileSystem, type Scope } from "effect";
+import type { PlatformServices } from "../../src/platform";
+import { Effect, FileSystem, type Scope } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { readEnv, type PluginEnv } from "../../src/env";
 import { resetExecutors } from "../../src/executors";
 import { connect } from "../../src/host";
@@ -24,7 +25,10 @@ export const MODULES = [
 /** One test, in an installation of its own whose host is stopped when it ends. */
 export const hosted = <A, E>(
   prefix: string,
-  body: (herd: { world: World; env: PluginEnv }) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (herd: {
+    world: World;
+    env: PluginEnv;
+  }) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string> = MODULES,
 ) =>
   proves(
@@ -52,7 +56,7 @@ export const hostedRun = Effect.fn("test.hostedRun")(function* (
   authority?: Authority,
 ) {
   const client = yield* connect(world.state).pipe(Effect.orDie);
-  const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const started = yield* client
     .start({ project: world.project, id: "proof", request, input: { note: goal } })
     .pipe(Effect.orDie);
@@ -75,7 +79,7 @@ export const settledRun = Effect.fn("test.settledRun")(function* (
   options?: Readonly<Record<string, string>>,
 ) {
   const client = yield* connect(world.state).pipe(Effect.orDie);
-  const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const input = workflow === "hello" ? { name: "picker" } : { note: "picker" };
   const started = yield* client
     .start({ project: world.project, id: workflow, request, input, options })

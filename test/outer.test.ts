@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { Effect, FileSystem } from "effect";
 import { expect, test } from "bun:test";
 import { attachedTerms, everyViewerPaints, paintsGraphics } from "../src/outer";
@@ -20,7 +21,7 @@ const fakeProc = Effect.fn("test.fakeProc")(function* (
   for (const proc of procs) {
     const dir = `${root}/${pid++}`;
     yield* fs.makeDirectory(dir);
-    yield* fs.writeFileString(`${dir}/cmdline`, `${proc.cmdline.join("\0")}\0`);
+    yield* fs.writeFileString(`${dir}/cmdline`, `${Arr.join(proc.cmdline, "\0")}\0`);
     yield* fs.writeFileString(
       `${dir}/environ`,
       `HOME=/home/x\0${proc.term === null ? "" : `TERM=${proc.term}\0`}PATH=/bin\0`,

@@ -1,4 +1,5 @@
-import { Cause, Crypto, Effect, Exit, Result } from "effect";
+import { Cause, Exit, Result } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type { ActionFailed, DesktopAction } from "./flock";
 import { saidOf } from "./said";
@@ -12,14 +13,8 @@ export const failureOf = (cause: Cause.Cause<Failed>) => {
     : { reason: saidOf(cause), request: undefined };
 };
 
-// The view's own: Desktop's channel to it carries no Crypto service.
-const viewCrypto = Crypto.make({
-  randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
-  digest: () => Effect.die("the view digests nothing"),
-});
-
 /** A gesture's request, sent again on every Try again. */
-export const newRequest = () => Effect.runSync(viewCrypto.randomUUIDv4);
+export const newRequest = () => SecureRandom.uuidV4Unsafe();
 
 export interface ActionNotice {
   readonly title: string;

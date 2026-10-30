@@ -1,9 +1,23 @@
 // Desktop reaches Local's host the way it reaches any Machine's: through a bridge it starts
 // as `desktop`, never through Collie's own host client.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { homedir } from "node:os";
-import { Config, Deferred, Effect, Option, Queue, Schedule, Schema, Stream } from "effect";
+import {
+  Config,
+  Deferred,
+  Effect,
+  Option,
+  Queue,
+  Schedule,
+  Schema,
+  Stream,
+  flow,
+  Result,
+} from "effect";
 import { type BoardMessage, type BoardSnapshot, PROTOCOL } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
@@ -23,7 +37,10 @@ import { fastForward, suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves } from "./support/world";
 
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
 
 test(
   "Desktop sees Local's board through a bridge it started, a Run appears on it live, and what Desktop does there is recorded as Desktop's",
@@ -48,9 +65,10 @@ test(
             FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
           });
           const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: door };
-          const board = yield* machineBoard({ profile: "local", name: "mk-pc" }, door).pipe(
-            Stream.toPull,
-          );
+          const board = yield* machineBoard(
+            { profile: "local", name: "mk-pc" },
+            { board: door.board() },
+          ).pipe(Stream.toPull);
 
           const first = yield* board;
           const snapshot = first[0].message;
@@ -69,7 +87,8 @@ test(
           let seen = false;
           while (!seen) {
             const next = yield* board;
-            seen = next.some(
+            seen = Arr.some(
+              next,
               (item) => item.message._tag === "Upsert" && item.message.task.runs.includes(runId),
             );
           }
@@ -116,7 +135,7 @@ test(
           expect(noWork.reason).not.toContain("Resumed");
 
           const trail = yield* readAudit(runDir(world.state, runId));
-          expect(trail.map((line) => line.actor)).toEqual([
+          expect(Arr.map(trail, (line) => line.actor)).toEqual([
             { origin: "desktop", requestId: "start-1", from: { client: "mk-pc" } },
             { origin: "desktop", requestId: "hold-1", from: { client: "mk-pc" } },
           ]);
@@ -155,7 +174,7 @@ test("Desktop's main process never reaches Collie's own host client", () =>
           ],
         }),
       );
-      expect(built.logs.filter((log) => log.level === "error")).toEqual([]);
+      expect(Arr.filter(built.logs, (log) => log.level === "error")).toEqual([]);
       expect(reached).toEqual([]);
     }),
   ));
@@ -171,7 +190,7 @@ const snapshot = (installation: string): BoardSnapshot => ({
 });
 interface Fake {
   readonly name: string;
-  readonly board: () => Stream.Stream<BoardMessage, { readonly message: string }>;
+  readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
 }
 const fakeRoute = (
   name: string,
@@ -180,7 +199,7 @@ const fakeRoute = (
 ): Route<Fake> => ({
   machine: { profile: `p-${name}`, name, target: `mk@${name}` },
   open: () =>
-    Effect.acquireRelease(Effect.succeed<Fake>({ name, board: () => board }), () =>
+    Effect.acquireRelease(Effect.succeed<Fake>({ name, board: Stream.suspend(() => board) }), () =>
       Effect.sync(() => closed.push(name)),
     ),
   collie: () => Effect.die("not asked"),
@@ -255,7 +274,9 @@ test("a working link displaces a configured link that fell back to SSH", () =>
             Effect.succeed({
               name: "fallback",
               machine: { ...first.machine, route: "ssh" as const },
-              board: () => Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)),
+              board: Stream.suspend(() =>
+                Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)),
+              ),
             }),
             () => Effect.sync(() => closed.push("fallback")),
           ),
@@ -298,12 +319,13 @@ test("a link owner that reconnects through SSH yields to another working link", 
                   name: "primary",
                   route: first ? ("link" as const) : ("ssh" as const),
                 },
-                board: () =>
+                board: Stream.suspend(() =>
                   Stream.make(snapshot("vm")).pipe(
                     Stream.concat(
                       first ? Stream.fromEffectDrain(Deferred.await(dropped)) : Stream.never,
                     ),
                   ),
+                ),
               };
             }),
         };
@@ -419,7 +441,9 @@ test("a route that cannot be opened says why and tries again by itself", () =>
               ? Effect.fail({ state: "unreachable" as const, reason: "ssh: connection refused" })
               : Effect.succeed<Fake>({
                   name: "vm",
-                  board: () => Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)),
+                  board: Stream.suspend(() =>
+                    Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)),
+                  ),
                 }),
           ),
       };
@@ -428,7 +452,7 @@ test("a route that cannot be opened says why and tries again by itself", () =>
         Effect.forkScoped,
       );
       yield* until(() => told.length === 2);
-      expect(told.map(toldOf)).toEqual(["vm Lost", "vm Snapshot"]);
+      expect(Arr.map(told, toldOf)).toEqual(["vm Lost", "vm Snapshot"]);
       expect(told[0]).toMatchObject({ state: "unreachable", reason: "ssh: connection refused" });
     }).pipe(Effect.scoped, fastForward),
   ));
@@ -492,11 +516,19 @@ test("an older release is upgraded once through its route while its board stays 
         open: () =>
           Effect.sync(() => ({
             name: "vm",
-            board: () =>
+            board: Stream.suspend(() =>
               Stream.fromIterable<BoardMessage>([
-                { ...snapshot("vm"), build },
-                { _tag: "Remove", seq: 1, id: "t-gone" },
+                {
+                  ...snapshot("vm"),
+                  build,
+                },
+                {
+                  _tag: "Remove",
+                  seq: 1,
+                  id: "t-gone",
+                },
               ]).pipe(Stream.concat(Stream.never)),
+            ),
           })),
         collie: (args) =>
           Deferred.await(upgradeMayFinish).pipe(
@@ -540,7 +572,11 @@ test("a board a newer collie serves that this Desktop cannot read asks for a new
             opened++;
             return {
               name: "vm",
-              board: () => Stream.fail({ message: "could not decode Snapshot" }),
+              board: Stream.suspend(() =>
+                Stream.fail({
+                  message: "could not decode Snapshot",
+                }),
+              ),
             };
           }),
         collie: () => Effect.succeed({ out: "collie v0.40.0\n", err: "", code: 0 }),
@@ -569,8 +605,12 @@ test("a Machine that cannot be upgraded says why in its own words, and is shown 
         open: () =>
           Effect.succeed({
             name: "vm",
-            board: () =>
-              Stream.make({ ...snapshot("vm"), build: "0.30.2" }).pipe(Stream.concat(Stream.never)),
+            board: Stream.suspend(() =>
+              Stream.make({
+                ...snapshot("vm"),
+                build: "0.30.2",
+              }).pipe(Stream.concat(Stream.never)),
+            ),
           }),
         collie: () =>
           Effect.succeed({
@@ -604,10 +644,12 @@ test("a Machine out of reach when Desktop starts is upgraded once it connects", 
           reachable
             ? Effect.succeed<Fake>({
                 name: "vm",
-                board: () =>
-                  Stream.make<[BoardMessage]>({ ...snapshot("vm"), build }).pipe(
-                    Stream.concat(Stream.never),
-                  ),
+                board: Stream.suspend(() =>
+                  Stream.make<[BoardMessage]>({
+                    ...snapshot("vm"),
+                    build,
+                  }).pipe(Stream.concat(Stream.never)),
+                ),
               })
             : Effect.fail({ state: "unreachable" as const, reason: "Connection refused" }),
         collie: (args) =>
@@ -651,17 +693,29 @@ test("a failed upgrade is tried again when the Machine next connects, and only o
             drops.push(drop);
             return {
               name: "vm",
-              board: () =>
+              board: Stream.suspend(() =>
                 Stream.make<[BoardMessage, BoardMessage]>(
-                  { ...snapshot("vm"), build: "0.30.2" },
-                  { ...snapshot("vm"), build: "0.30.2", seq: 1 },
+                  {
+                    ...snapshot("vm"),
+                    build: "0.30.2",
+                  },
+                  {
+                    ...snapshot("vm"),
+                    build: "0.30.2",
+                    seq: 1,
+                  },
                 ).pipe(
                   Stream.concat(
                     Stream.fromEffect(Deferred.await(drop)).pipe(
-                      Stream.flatMap(() => Stream.fail({ message: "connection reset" })),
+                      Stream.flatMap(() =>
+                        Stream.fail({
+                          message: "connection reset",
+                        }),
+                      ),
                     ),
                   ),
                 ),
+              ),
             };
           }),
         collie: () =>
@@ -696,14 +750,22 @@ test("an upgrade cut off by its connection dropping is tried again when the Mach
             drops.push(drop);
             return {
               name: "vm",
-              board: () =>
-                Stream.make<[BoardMessage]>({ ...snapshot("vm"), build: "0.30.2" }).pipe(
+              board: Stream.suspend(() =>
+                Stream.make<[BoardMessage]>({
+                  ...snapshot("vm"),
+                  build: "0.30.2",
+                }).pipe(
                   Stream.concat(
                     Stream.fromEffect(Deferred.await(drop)).pipe(
-                      Stream.flatMap(() => Stream.fail({ message: "connection reset" })),
+                      Stream.flatMap(() =>
+                        Stream.fail({
+                          message: "connection reset",
+                        }),
+                      ),
                     ),
                   ),
                 ),
+              ),
             };
           }),
         // Never answers: the connection drops first.
@@ -729,10 +791,12 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
             connections++;
             return {
               name: "vm",
-              board: () =>
-                Stream.make<[BoardMessage]>({ ...snapshot("vm"), build: "0.30.2" }).pipe(
-                  Stream.concat(Stream.never),
-                ),
+              board: Stream.suspend(() =>
+                Stream.make<[BoardMessage]>({
+                  ...snapshot("vm"),
+                  build: "0.30.2",
+                }).pipe(Stream.concat(Stream.never)),
+              ),
             };
           }),
         collie: () =>
@@ -761,8 +825,8 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
       });
       yield* until(() => connections === 2 && asked === 2);
       // Reopened, not lost: what it showed is dated until it connects again.
-      expect(told.filter((one) => one.endsWith("Lost"))).toEqual([]);
-      yield* until(() => told.filter((one) => one === "Snapshot 0.30.2").length === 2);
+      expect(Arr.filter(told, (one) => pipe_(one, Str.endsWith("Lost")))).toEqual([]);
+      yield* until(() => Arr.filter(told, (one) => one === "Snapshot 0.30.2").length === 2);
       const reconnecting = told.indexOf("vm Reconnecting");
       expect(told.slice(reconnecting, reconnecting + 2)).toEqual([
         "vm Reconnecting",
@@ -785,10 +849,12 @@ test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () 
             connections++;
             return {
               name: "vm",
-              board: () =>
-                Stream.make<[BoardMessage]>({ ...snapshot("vm"), build: "0.30.2" }).pipe(
-                  Stream.concat(Stream.never),
-                ),
+              board: Stream.suspend(() =>
+                Stream.make<[BoardMessage]>({
+                  ...snapshot("vm"),
+                  build: "0.30.2",
+                }).pipe(Stream.concat(Stream.never)),
+              ),
             };
           }),
         collie: () =>

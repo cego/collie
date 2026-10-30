@@ -1,7 +1,11 @@
 // Input inference: branch, cwd, earlier Runs and the open MR. The human is asked
 // only when inference fails (CONTEXT.md, Input).
 
-import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
+import { pipe } from "effect/Function";
+import { Clock, Effect, FileSystem, Option, Path } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/process";
 import type { InputStrategy } from "./definitions";
@@ -152,7 +156,7 @@ export function inferInput(
         // A directory that is not a checkout offers nothing to infer from, and a
         // list of only menu-only entries is the same answer: ask rather than review
         // whichever unrelated merge request happens to sort first.
-        const inferred = candidates.find((c) => !c.menuOnly);
+        const inferred = Option.getOrUndefined(Arr.findFirst(candidates, (c) => !c.menuOnly));
         if (!inferred) {
           return {
             ...common,
@@ -209,7 +213,7 @@ function ticketFromBranch(
   ChildProcessSpawner.ChildProcessSpawner
 > {
   return Effect.gen(function* () {
-    const branch = (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout.trim();
+    const branch = Str.trim((yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout);
     const m = /([A-Z][A-Z0-9]+-\d+)/.exec(branch);
     return m ? { value: m[1]!, source: `branch ${branch}` } : null;
   });
@@ -223,7 +227,7 @@ export function inferInputs(
   PlatformError,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
 > {
-  return Effect.forEach(Object.entries(inputs), ([name, strategy]) =>
+  return Effect.forEach(Rec.toEntries(inputs), ([name, strategy]) =>
     inferInput(name, strategy, ctx),
   );
 }
@@ -234,8 +238,8 @@ export function defaultBase(
 ): Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.gen(function* () {
     const head = yield* run("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd);
-    if (head.code === 0 && head.stdout.trim()) {
-      return head.stdout.trim().replace(/^origin\//, "");
+    if (head.code === 0 && Str.trim(head.stdout)) {
+      return pipe(Str.trim(head.stdout), Str.replace(/^origin\//, ""));
     }
     for (const candidate of ["main", "master"]) {
       const exists = yield* run("git", ["rev-parse", "--verify", "--quiet", candidate], cwd);
@@ -251,7 +255,8 @@ export function defaultBase(
  * Tasks existed: an upgraded installation's earlier plans stay findable.
  */
 function finishedHere(runs: ReadonlyArray<RunFacts>, cwd: string, task?: string | null) {
-  return runs.filter(
+  return Arr.filter(
+    runs,
     (run) => run.project === cwd && run.state === "succeeded" && run.task === (task ?? null),
   );
 }
@@ -359,7 +364,7 @@ export function targetCandidates(
     const project = inRepo ? yield* projectHere(ctx.cwd, run) : null;
 
     const branch = inRepo
-      ? (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim()
+      ? Str.trim((yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout)
       : "";
     const here = inRepo ? yield* forgeHere(ctx.cwd, run, ctx.gitlabHost) : null;
     const forge = here?.ok === true ? here.forge : null;
@@ -392,11 +397,11 @@ export function targetCandidates(
         });
       }
 
-      const dirty = (yield* run("git", ["status", "--porcelain"], ctx.cwd)).stdout.trim() !== "";
+      const dirty = Str.trim((yield* run("git", ["status", "--porcelain"], ctx.cwd)).stdout) !== "";
       // Last, and always there when nothing else is: the working tree is the one
       // target every checkout has, and inference already fell back to it. Menu-only
       // entries do not count, or inference would have nothing left to land on.
-      if (dirty || out.every((c) => c.menuOnly)) {
+      if (dirty || Arr.every(out, (c) => Boolean(c.menuOnly))) {
         out.push({
           kind: "worktree",
           value: "worktree",
@@ -408,7 +413,7 @@ export function targetCandidates(
     // After inference, so "launch and take the default" is unchanged: what this repo
     // has reviewed before, for the second review of the same thing.
     if (ctx.runs) {
-      const offered = new Set(out.map((c) => c.value));
+      const offered = new Set(Arr.map(out, (c) => c.value));
       for (const remembered of yield* reviewedTargets(
         ctx.runs,
         ctx.cwd,
@@ -430,9 +435,9 @@ function myOpenMrs(
   project: string | null,
 ): Effect.Effect<Candidate[], never, ChildProcessSpawner.ChildProcessSpawner | ForgeHttp> {
   return Effect.map(forge.mine(project, cwd, run), (mine) =>
-    [...mine]
-      .sort((a, b) => Number(a.iid) - Number(b.iid))
-      .map(({ iid, title }) => {
+    Arr.map(
+      [...mine].sort((a, b) => Number(a.iid) - Number(b.iid)),
+      ({ iid, title }) => {
         const words = mrWords({ project, iid });
         const short = forge.name === "github" ? "PR" : "MR";
         return {
@@ -444,7 +449,8 @@ function myOpenMrs(
           label: `${words.sign}${iid}`,
           menuOnly: true,
         } satisfies Candidate;
-      }),
+      },
+    ),
   );
 }
 
@@ -457,7 +463,7 @@ export function classifyTarget(
   baseRef: string,
   project: string | null = null,
 ): Candidate | null {
-  const text = typed.trim();
+  const text = Str.trim(typed);
   if (text === "") return null;
   const source = "typed";
 
@@ -472,7 +478,8 @@ export function classifyTarget(
   if (/^worktree$/i.test(text))
     return { kind: "worktree", value: "worktree", source, label: "working tree" };
 
-  if (text.includes("...")) return { kind: "branch", value: `branch:${text}`, source, label: text };
+  if (pipe(text, Str.includes("...")))
+    return { kind: "branch", value: `branch:${text}`, source, label: text };
 
   if (!baseRef) return null;
   return { kind: "branch", value: `branch:${baseRef}...${text}`, source, label: text };
@@ -490,8 +497,8 @@ export function classifyGivenTarget(
   return Effect.gen(function* () {
     // An already-normalised target — from a chained Run, a resume, or a careful
     // human — is passed through: classifying it again would nest its prefix.
-    const kind = targetKind(typed.trim());
-    if (kind !== "") return { kind, value: typed.trim(), source: "typed" };
+    const kind = targetKind(Str.trim(typed));
+    if (kind !== "") return { kind, value: Str.trim(typed), source: "typed" };
     const run = ctx.run ?? shell;
     const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
     const project = yield* projectHere(ctx.cwd, run);
@@ -502,10 +509,10 @@ export function classifyGivenTarget(
 
 /** The Linear issue a typed work source names, by its URL or bare id, and null for anything else. */
 export function linearIssueOf(typed: string): string | null {
-  const text = typed.trim();
+  const text = Str.trim(typed);
   const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
-  if (url) return url[1]!.toUpperCase();
-  return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text) ? text.toUpperCase() : null;
+  if (url) return Str.toUpperCase(url[1]!);
+  return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text) ? Str.toUpperCase(text) : null;
 }
 
 /** What the human typed: a plan directory, a Linear issue, or the work in their own words. */
@@ -514,14 +521,19 @@ export function classifyWorkSource(
 ): Effect.Effect<WorkSourceCandidate, PlatformError, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const path = yield* Path.Path;
-    const text = typed.trim();
+    const text = Str.trim(typed);
     const source = "typed";
 
     // A finished Run whose outcome needs more work. Named rather than inferred: a
     // follow-up reuses that Run's branch and updates its merge request, and neither of
     // those is something to guess at from a path.
-    if (text.startsWith("followup:"))
-      return { kind: "followup", value: text, source, label: text.slice("followup:".length) };
+    if (pipe(text, Str.startsWith("followup:")))
+      return {
+        kind: "followup",
+        value: text,
+        source,
+        label: pipe(text, Str.slice("followup:".length)),
+      };
 
     const issue = linearIssueOf(text);
     if (issue !== null) return { kind: "linear", value: issue, source };
@@ -591,7 +603,7 @@ function resolveFromMenu<E, R>(
 ): Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> {
   return Effect.gen(function* () {
     const candidates = r.candidates ?? [];
-    const items: PickItem[] = candidates.map((c, i) => ({
+    const items: PickItem[] = Arr.map(candidates, (c, i) => ({
       id: String(i),
       title: c.label ?? c.value,
       subtitle: `${c.kind} · ${c.source}`,
@@ -603,7 +615,7 @@ function resolveFromMenu<E, R>(
         header: spec.header,
         footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
       })
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     if (!chosen) return false;
 
     if (chosen.id !== TYPE_IT) {
@@ -611,8 +623,8 @@ function resolveFromMenu<E, R>(
       return true;
     }
 
-    const typed = yield* prompts.ask(spec.question).pipe(Effect.catch(() => Effect.succeed(null)));
-    if (typed === null || typed.trim() === "") return false;
+    const typed = yield* prompts.ask(spec.question).pipe(Effect.orElseSucceed(() => null));
+    if (typed === null || Str.trim(typed) === "") return false;
     const classified = yield* spec.classify(typed, r);
     if (!classified) return false;
     settle(r, classified);
@@ -658,11 +670,10 @@ function isPlanDir(
 
 /** A few words, enough to name the Run after work that has no shorter name. */
 function textLabel(text: string): string {
-  const words = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .split(" ")
-    .filter(Boolean);
+  const words = Arr.filter(
+    Str.split(pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, " ")), " "),
+    Boolean,
+  );
   let label = "";
   for (const word of words) {
     const next = label ? `${label}-${word}` : word;
@@ -688,16 +699,17 @@ export function confirmLine(
   /** The branch a mutating Run was given, and where it came from. */
   branch?: { name: string | null; source: string | null } | null,
 ): string {
-  const parts = resolutions.map((r) => {
+  const parts = Arr.map(resolutions, (r) => {
     // A target's value already says its kind (`mr:42`), so only name it when it adds something.
-    const where = r.kind && !r.value.startsWith(r.kind) ? `${r.kind} · ${r.source}` : r.source;
+    const where =
+      r.kind && !pipe(r.value, Str.startsWith(r.kind)) ? `${r.kind} · ${r.source}` : r.source;
     return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
   });
   if (branch?.name) parts.push(`branch=${branch.name} [${branch.source ?? "resolved"}]`);
-  return `${workflow}: ${parts.join("  ")}`;
+  return `${workflow}: ${Arr.join(parts, "  ")}`;
 }
 
 /** Free text is a whole sentence; the confirm line only has room for the start of it. */
 function abbreviate(value: string): string {
-  return value.length > 60 ? `${value.slice(0, 57)}...` : value;
+  return value.length > 60 ? `${pipe(value, Str.slice(0, 57))}...` : value;
 }

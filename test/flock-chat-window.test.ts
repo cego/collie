@@ -1,5 +1,7 @@
 // What the Flock chat's window says of a tool call and of the card a message is about.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Stream } from "effect";
 import { ChatClient } from "../desktop/node_modules/@tanstack/ai-client";
@@ -75,12 +77,12 @@ test("a card a message is about reads as its Machine and its name", () => {
 test("Desktop's note of the card a message is about reads back as that card, and nothing else does", () => {
   const about = { machine: "vm-mk", task: "t-1", run: "r-2", name: 'Fix "board"\nbugs' };
   const note = aboutNote(about);
-  expect(note.split("\n")[0]).toStartWith("[Desktop:");
+  expect(Str.split(note, "\n")[0]).toStartWith("[Desktop:");
   expect(fromAboutNote(note)).toEqual(about);
   expect(fromAboutNote("this one, please")).toBeNull();
   expect(fromAboutNote(`${note}\nand more`)).toBeNull();
-  expect(fromAboutNote(note.replace('"t-1"', "1"))).toBeNull();
-  expect(fromAboutNote(note.split("\n")[1]!)).toBeNull();
+  expect(fromAboutNote(pipe_(note, Str.replace('"t-1"', "1")))).toBeNull();
+  expect(fromAboutNote(Str.split(note, "\n")[1]!)).toBeNull();
 });
 
 test("Earlier conversations ends by saying that opening another harness's conversation moves the chat to it", () => {

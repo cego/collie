@@ -1,4 +1,6 @@
-import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import { Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
 import type { PluginEnv } from "./env";
 import { credentials, helleMe } from "./helle";
 import { helleUrlOf } from "./helle-url";
@@ -66,7 +68,7 @@ export const LINEAR_MCP_ADD = [
   "linear-server",
   "https://mcp.linear.app/mcp",
 ];
-export const LINEAR_MCP_FIX = `claude ${LINEAR_MCP_ADD.join(" ")}`;
+export const LINEAR_MCP_FIX = `claude ${Arr.join(LINEAR_MCP_ADD, " ")}`;
 
 const Servers = Schema.Record(
   Schema.String,
@@ -85,10 +87,10 @@ const McpConfig = Schema.Struct({
   ),
 });
 type McpConfig = Schema.Schema.Type<typeof McpConfig>;
-const decodeMcpConfig = Schema.decodeUnknownSync(McpConfig);
+const decodeMcpConfig = flow(Schema.decodeUnknownResult(McpConfig), Result.getOrThrow);
 
 const linearAmong = (servers: Servers | undefined): string | null => {
-  for (const [name, server] of Object.entries(servers ?? {})) {
+  for (const [name, server] of Rec.toEntries(servers ?? {})) {
     if (server.enabled !== false && (/linear/i.test(name) || /linear/i.test(server.url ?? "")))
       return name;
   }
@@ -99,7 +101,10 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const configDir = env.raw["CLAUDE_CONFIG_DIR"] ?? env.home;
-  const json = Schema.decodeUnknownSync(Schema.fromJsonString(McpConfig));
+  const json = flow(
+    Schema.decodeUnknownResult(Schema.fromJsonString(McpConfig)),
+    Result.getOrThrow,
+  );
   const jsonc = (text: string) => decodeMcpConfig(Bun.JSONC.parse(text));
   const toml = (text: string) => decodeMcpConfig(Bun.TOML.parse(text));
   const places: {
@@ -126,24 +131,33 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
       parse: json,
       servers: (config) => config.mcpServers,
     },
-    ...[
-      path.join(env.raw.CODEX_HOME ?? path.join(env.home, ".codex"), "config.toml"),
-      path.join(env.cwd, ".codex", "config.toml"),
-    ].map((file) => ({
-      file,
-      harness: "Codex",
-      parse: toml,
-      servers: (config: McpConfig) => config.mcp_servers,
-    })),
-    ...[
-      env.raw.OPENCODE_CONFIG,
-      ...[
-        path.join(env.raw.XDG_CONFIG_HOME ?? path.join(env.home, ".config"), "opencode"),
-        env.cwd,
-      ].flatMap((dir) => [path.join(dir, "opencode.json"), path.join(dir, "opencode.jsonc")]),
-    ]
-      .filter((file) => file !== undefined)
-      .map((file) => ({
+    ...Arr.map(
+      [
+        path.join(env.raw.CODEX_HOME ?? path.join(env.home, ".codex"), "config.toml"),
+        path.join(env.cwd, ".codex", "config.toml"),
+      ],
+      (file) => ({
+        file,
+        harness: "Codex",
+        parse: toml,
+        servers: (config: McpConfig) => config.mcp_servers,
+      }),
+    ),
+    ...Arr.map(
+      Arr.filter(
+        [
+          env.raw.OPENCODE_CONFIG,
+          ...Arr.flatMap(
+            [
+              path.join(env.raw.XDG_CONFIG_HOME ?? path.join(env.home, ".config"), "opencode"),
+              env.cwd,
+            ],
+            (dir) => [path.join(dir, "opencode.json"), path.join(dir, "opencode.jsonc")],
+          ),
+        ],
+        (file) => file !== undefined,
+      ),
+      (file) => ({
         file,
         harness: "OpenCode",
         parse: jsonc,
@@ -153,14 +167,15 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
             return config.mcp.servers;
           return Schema.is(Servers)(config.mcp) ? config.mcp : undefined;
         },
-      })),
+      }),
+    ),
   ];
   const seen: string[] = [];
   let broken: Probe | undefined;
   for (const place of places) {
     if (!(yield* fs.exists(place.file))) continue;
     if (!seen.includes(place.file)) seen.push(place.file);
-    const text = yield* fs.readFileString(place.file).pipe(Effect.catch(() => Effect.succeed("")));
+    const text = yield* fs.readFileString(place.file).pipe(Effect.orElseSucceed(() => ""));
     const config = yield* Effect.try(() => place.parse(text)).pipe(Effect.result);
     if (Result.isFailure(config)) {
       broken ??= {
@@ -178,7 +193,7 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
     broken ??
     ({
       state: "absent",
-      detail: `no Linear MCP server in Claude Code (looked in ${seen.length === 0 ? path.join(configDir, ".claude.json") : seen.join(", ")}); plan's "Offload to Linear" and a Linear issue as the work need one`,
+      detail: `no Linear MCP server in Claude Code (looked in ${seen.length === 0 ? path.join(configDir, ".claude.json") : Arr.join(seen, ", ")}); plan's "Offload to Linear" and a Linear issue as the work need one`,
       fix: LINEAR_MCP_FIX,
     } satisfies Probe)
   );

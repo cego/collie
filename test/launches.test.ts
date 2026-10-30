@@ -1,8 +1,9 @@
 // A Run's agents, read back from the launch records its agents layer wrote, and shown in
 // its detail and in `collie run show`.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { frontDoor, socketOf } from "../src/host";
 import { agentLines } from "../src/commands/run";
 import { LAUNCH_ORDER, launchDir, runAgents, type Launched } from "../src/launches";
@@ -25,7 +26,7 @@ const launched = (runId: string, over: Partial<Launched>): Launched => ({
   ...over,
 });
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 /** Writes a Run's launch records as the agents layer does: one file each, and the order. */
 const seed = Effect.fn("test.seed")(function* (
@@ -40,7 +41,10 @@ const seed = Effect.fn("test.seed")(function* (
     yield* fs.writeFileString(`${dir}/${one.operation}.launch.json`, encode(one));
   yield* fs.writeFileString(
     `${dir}/${LAUNCH_ORDER}`,
-    `${launches.map((one) => one.operation).join("\n")}\n`,
+    `${Arr.join(
+      Arr.map(launches, (one) => one.operation),
+      "\n",
+    )}\n`,
   );
 });
 
@@ -128,7 +132,7 @@ test("a Fallback's launch says what it fell back from and why, and an earlier on
         `  review  ${agents[0]!.agent}  codex/default (fell back from claude/opus: session 100%, resets 15:45)`,
         `  build  ${agents[1]!.agent}  claude/default`,
       ]);
-      expect((yield* runAgents(state, "r1")).map(({ at }) => at)).toEqual([
+      expect(Arr.map(yield* runAgents(state, "r1"), ({ at }) => at)).toEqual([
         "2026-10-08T13:45:00.000Z",
         null,
       ]);
@@ -146,11 +150,15 @@ test(
         const detail = yield* (yield* frontDoor(socketOf(world.state)))
           .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
           .pipe(Stream.runHead, Effect.timeout("30 seconds"));
-        expect(Option.getOrNull(detail)?.agents?.map((one) => one.operation)).toEqual([
-          "review",
-          "build",
-          "re-review",
-        ]);
+        expect(
+          Option.getOrUndefined(
+            Option.flatMap(Option.fromNullishOr(Option.getOrNull(detail)), (present) =>
+              Option.map(Option.fromNullishOr(present.agents), (present_) =>
+                Arr.map(present_, (one) => one.operation),
+              ),
+            ),
+          ),
+        ).toEqual(["review", "build", "re-review"]);
 
         // Chat's read of the Run says the same.
         const facts = yield* runFacts(env, (yield* findRun(env, run.id))!);

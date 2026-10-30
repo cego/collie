@@ -1,6 +1,9 @@
 // What a Release Run has the host prove: its checkout at the merge request's head, its tag
 // on origin and the tag's pipeline, read from git and the forge rather than an Output.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import type { Runner } from "../src/mr";
@@ -15,8 +18,8 @@ const PIPELINE = `https://${PROJECT.gitlab}/-/pipelines/7`;
 const git = (cwd: string, ...args: string[]) =>
   Effect.gen(function* () {
     const ran = yield* exec(["git", ...args], { cwd });
-    if (ran.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${ran.stderr}`);
-    return ran.stdout.trim();
+    if (ran.exitCode !== 0) throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);
+    return Str.trim(ran.stdout);
   });
 
 /** git for real; any other command is the forge's, answered by `forge`. */
@@ -159,7 +162,7 @@ test("a package's tag is proved only by a pipeline of its own project, tag and c
         }).pipe(Effect.provide(fake.layer));
       };
       expect((yield* read(PIPELINE, { "7": tagRun(at) }))._tag).toBe("Proved");
-      const elsewhere = PIPELINE.replace("group/app", "other/project");
+      const elsewhere = pipe_(PIPELINE, Str.replace("group/app", "other/project"));
       expect((yield* read(elsewhere, { "7": tagRun(at) }))._tag).toBe("Unproved");
       expect((yield* read(PIPELINE, { "7": tagRun(at, { ref: "main" }) }))._tag).toBe("Unproved");
       expect((yield* read(PIPELINE, { "7": tagRun("0ld") }))._tag).toBe("Unproved");
@@ -211,7 +214,9 @@ test("an application's tag is not ready for production on a pipeline of another 
           run: fake.run,
         }).pipe(Effect.provide(fake.layer));
       expect((yield* read(PIPELINE))._tag).toBe("Proved");
-      expect((yield* read(PIPELINE.replace("group/app", "other/project")))._tag).toBe("Unproved");
+      expect((yield* read(pipe_(PIPELINE, Str.replace("group/app", "other/project"))))._tag).toBe(
+        "Unproved",
+      );
     }).pipe(Effect.scoped),
   ));
 

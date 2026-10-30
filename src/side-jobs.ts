@@ -1,6 +1,8 @@
 // What the host does on its own, whether or not a pane is open: the merge watch, each
 // Herd's News, the cleanup sweep and keeping each Herd's Home tokened.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Clock, Effect, Schedule, type Duration } from "effect";
 import type { TaskView, MrState, Reopened } from "./board-model";
 import { readyRuns } from "./board";
@@ -31,8 +33,10 @@ const escalatedDrift = Effect.fn("SideJobs.escalatedDrift")(function* (
   const drifting = new Map<string, string>();
   for (const run of runs) {
     if (settled(run)) continue;
-    const lines = yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
-    const stuck = currentReports(lines).find((report) => report.resolution === "escalated");
+    const lines = yield* readDrift(run.dir).pipe(Effect.orElseSucceed(() => []));
+    const stuck = Option.getOrUndefined(
+      Arr.findFirst(currentReports(lines), (report) => report.resolution === "escalated"),
+    );
     if (stuck) drifting.set(run.id, stuck.constraint);
   }
   return drifting;
@@ -68,7 +72,7 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
       text: event.text,
       significance: event.significance,
     }).pipe(Effect.catchCause(() => Effect.succeed(null)));
-    if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
+    if (queued !== null) yield* remember(dir, event.key, yield* nowIso);
   }
   yield* supersede(file, (item) => held.has(item.key));
 });
@@ -96,12 +100,13 @@ const news = Effect.fn("SideJobs.news")(function* (
   if (!(yield* loadDefaults(env.userDir)).proactive) return;
   // Unread Tasks would put every Run in the host's own Herd and retire the rest's News.
   const herdOfTask = new Map(
-    (yield* listTasks(env.stateDir)).map((task) => [task.id, task.herd ?? null]),
+    Arr.map(yield* listTasks(env.stateDir), (task) => [task.id, task.herd ?? null]),
   );
   const own = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   for (const { herd } of sessions) {
     if (herd === null) continue;
-    const mine = runs.filter(
+    const mine = Arr.filter(
+      runs,
       (run) => ((run.task === null ? null : herdOfTask.get(run.task)) ?? own) === herd,
     );
     yield* sayWhatHappened(env.stateDir, herd, mine, views, done);
@@ -213,7 +218,7 @@ export const sideJobs = <E, R>(opts: {
           env.stateDir,
           herds.pipe(
             Effect.map((sessions) =>
-              sessions.flatMap((session) =>
+              Arr.flatMap(sessions, (session) =>
                 session.herd === null
                   ? []
                   : [{ key: session.herd, deps: homeDeps(session.herdr, () => Effect.void) }],

@@ -1,4 +1,8 @@
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { parseDocument } from "./yaml";
 import { isString } from "./schema";
 
@@ -18,7 +22,7 @@ const Overrides = Schema.fromJsonString(
     skillOverrides: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
   }),
 );
-const decodeOverrides = Schema.decodeUnknownOption(Overrides);
+const decodeOverrides = Schema.decodeOption(Overrides);
 
 /** Shorten unnamed skills while preserving operator choices and invocation restrictions. */
 export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
@@ -37,11 +41,11 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
     if (yield* fs.exists(`${dir}/.git`)) {
       inRepository = true;
       const gitfile = yield* read(`${dir}/.git`);
-      if (Option.isSome(gitfile) && gitfile.value.startsWith("gitdir: ")) {
-        const gitdir = path.resolve(dir, gitfile.value.slice(8).trim());
+      if (Option.isSome(gitfile) && pipe(gitfile.value, Str.startsWith("gitdir: "))) {
+        const gitdir = path.resolve(dir, pipe(gitfile.value, Str.slice(8), Str.trim));
         const common = yield* read(`${gitdir}/commondir`);
         if (Option.isSome(common)) {
-          const main = `${path.dirname(path.resolve(gitdir, common.value.trim()))}/.claude`;
+          const main = `${path.dirname(path.resolve(gitdir, Str.trim(common.value)))}/.claude`;
           settingsDirs.push(main);
           if (where.mainCheckoutSkills !== false && !(yield* fs.exists(`${dir}/.claude/skills`)))
             projects.push(main);
@@ -54,7 +58,7 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
   if (!inRepository) projects.splice(1);
   settingsDirs.push(...projects);
   const decided = new Set<string>();
-  for (const file of settingsDirs.flatMap((dir) => [
+  for (const file of Arr.flatMap(settingsDirs, (dir) => [
     `${dir}/settings.json`,
     `${dir}/settings.local.json`,
   ])) {
@@ -62,7 +66,7 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
     if (Option.isNone(text)) continue;
     const settings = decodeOverrides(text.value);
     if (Option.isSome(settings))
-      for (const name of Object.keys(settings.value.skillOverrides ?? {})) decided.add(name);
+      for (const name of Rec.keys(settings.value.skillOverrides ?? {})) decided.add(name);
   }
   const candidates: string[] = [];
   for (const base of [claudeDir, ...projects]) {
@@ -72,15 +76,19 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
       const entries = yield* fs
         .readDirectory(dir, { recursive: isCommand })
         .pipe(Effect.orElseSucceed(() => []));
-      for (const entry of entries.toSorted((a, b) => a.localeCompare(b))) {
-        if (isCommand && !entry.endsWith(".md")) continue;
+      for (const entry of Arr.sort(entries, (a: string, b: string) =>
+        pipe(a, Str.localeCompare(b)),
+      )) {
+        if (isCommand && !pipe(entry, Str.endsWith(".md"))) continue;
         const text = yield* read(isCommand ? `${dir}/${entry}` : `${dir}/${entry}/SKILL.md`);
         if (Option.isNone(text)) continue;
-        const name = isCommand ? entry.slice(0, -3).replaceAll(path.sep, ":") : entry;
+        const name = isCommand
+          ? pipe(entry, Str.slice(0, -3), Str.replaceAll(path.sep, ":"))
+          : entry;
         const skill = describedNames(name, text.value, !isCommand);
         if (
           !skill.described ||
-          skill.names.some((name) => kept.includes(name) || decided.has(name))
+          Arr.some(skill.names, (name) => Arr.contains(kept, name) || decided.has(name))
         ) {
           for (const name of skill.names) decided.add(name);
         } else candidates.push(...skill.names);

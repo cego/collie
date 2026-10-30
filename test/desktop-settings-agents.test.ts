@@ -1,5 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, flow, Result } from "effect";
 import { CodexModelList, codexEntries, withAdded } from "../src/catalogue-model";
 import codexModelList from "./fixtures/catalogue/codex-model-list.json";
 import { epochMs } from "../src/time";
@@ -93,7 +95,9 @@ test("an explicitly added hidden model is offered for the primary agent and fall
             harness: "codex",
             at: "2026-10-29T12:00:00Z",
             table: null,
-            entries: codexEntries(Schema.decodeUnknownSync(CodexModelList)(codexModelList)),
+            entries: codexEntries(
+              flow(Schema.decodeResult(CodexModelList), Result.getOrThrow)(codexModelList),
+            ),
           },
           ["gpt-reserve"],
         ),
@@ -101,15 +105,19 @@ test("an explicitly added hidden model is offered for the primary agent and fall
     },
   ];
   expect(
-    settingsAgentSelects(added, ["a"], { harness: "codex" }).model.options.find(
-      ({ value }) => value === "gpt-reserve",
+    Option.getOrUndefined(
+      Arr.findFirst(
+        settingsAgentSelects(added, ["a"], { harness: "codex" }).model.options,
+        ({ value }) => value === "gpt-reserve",
+      ),
     ),
   ).toMatchObject({
     value: "gpt-reserve",
     description: expect.stringContaining("Added by models.codex"),
   });
   expect(
-    fallbackList("", added, ["a"], [], 0).add.options.some(
+    Arr.some(
+      fallbackList("", added, ["a"], [], 0).add.options,
       ({ value }) => value === "codex/gpt-reserve",
     ),
   ).toBe(true);
@@ -126,7 +134,9 @@ test("a native-default model offers its reported efforts and preserves the confi
           harness: "codex",
           at: "2026-10-29T12:00:00Z",
           table: null,
-          entries: codexEntries(Schema.decodeUnknownSync(CodexModelList)(codexModelList)),
+          entries: codexEntries(
+            flow(Schema.decodeResult(CodexModelList), Result.getOrThrow)(codexModelList),
+          ),
         },
       ],
     },
@@ -135,7 +145,7 @@ test("a native-default model offers its reported efforts and preserves the confi
     const view = settingsAgentSelects(native, ["a"], { harness: "codex", model, effort: "high" });
     expect(view.effort.disabled).toBe(false);
     expect(view.effort.label).toBe("high");
-    expect(view.effort.options.map(({ value }) => value)).toEqual([
+    expect(Arr.map(view.effort.options, ({ value }) => value)).toEqual([
       "",
       "low",
       "medium",
@@ -187,7 +197,7 @@ test("native defaults merge each Machine's capabilities and use reported efforts
     },
   ];
   const view = settingsAgentSelects(machines, ["a", "b"], { harness: "codex", model: "default" });
-  expect(view.effort.options.map(({ value, description }) => [value, description])).toEqual([
+  expect(Arr.map(view.effort.options, ({ value, description }) => [value, description])).toEqual([
     ["", undefined],
     ["low", "1 of 2 Machines"],
     ["high", "1 of 2 Machines"],
@@ -201,24 +211,28 @@ test("Settings merges models and each effort across Machines without claiming un
     model: "opus",
     effort: "max",
   });
-  expect(view.model.options.find(({ value }) => value === "sonnet")?.description).toContain(
-    "1 of 2 Machines",
-  );
-  expect(view.model.options.find(({ value }) => value === "opus")?.description).toContain(
-    "2 of 2 Machines",
-  );
   expect(
-    view.effort.options
-      .filter(({ value }) => value !== "")
-      .map(({ value, description }) => [value, description]),
+    Option.getOrUndefined(Arr.findFirst(view.model.options, ({ value }) => value === "sonnet"))
+      ?.description,
+  ).toContain("1 of 2 Machines");
+  expect(
+    Option.getOrUndefined(Arr.findFirst(view.model.options, ({ value }) => value === "opus"))
+      ?.description,
+  ).toContain("2 of 2 Machines");
+  expect(
+    Arr.map(
+      Arr.filter(view.effort.options, ({ value }) => value !== ""),
+      ({ value, description }) => [value, description],
+    ),
   ).toEqual([
     ["high", "2 of 2 Machines"],
     ["max", "1 of 2 Machines"],
     ["low", "1 of 2 Machines"],
   ]);
-  expect(view.model.options.find(({ value }) => value === "proxy")?.description).toContain(
-    "Added by models.claude",
-  );
+  expect(
+    Option.getOrUndefined(Arr.findFirst(view.model.options, ({ value }) => value === "proxy"))
+      ?.description,
+  ).toContain("Added by models.claude");
   expect(view.lead).toContain("12:00");
 });
 
@@ -243,7 +257,7 @@ test("an unreachable Machine keeps its last catalogue count and names its older 
     rememberCatalogues(
       remembered,
       readings,
-      machines.slice(0, 2).map((one) => ({ ...one, state: "live" as const })),
+      Arr.map(machines.slice(0, 2), (one) => ({ ...one, state: "live" as const })),
     )[0]?.problem,
   ).toBeNull();
 });
@@ -351,7 +365,7 @@ test("fallback order is saved and entries carry their Subscription usage without
     ],
     epochMs("2026-10-29T12:01:00Z"),
   );
-  expect(view.entries.map(({ usage }) => usage.map(({ text }) => text))).toEqual([
+  expect(Arr.map(view.entries, ({ usage }) => Arr.map(usage, ({ text }) => text))).toEqual([
     ["Claude 72%"],
     ["ChatGPT 21%"],
     [],

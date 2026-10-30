@@ -2,6 +2,9 @@
 // look different on screen: a claim an agent wrote must not read as a pass, `missing` is
 // always drawn, and the narrative is last and dim because it is the least of it.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { JSX } from "solid-js";
@@ -60,10 +63,7 @@ function live(over: Partial<Live> = {}): Live {
 const shown = Effect.fn("live.shown")(function* (node: () => JSX.Element, width = 90, height = 30) {
   const t = yield* Effect.promise(() => testRender(node, { width, height }));
   yield* Effect.promise(() => t.flush());
-  return t
-    .captureCharFrame()
-    .replace(/[│┌┐└┘─]/g, " ")
-    .replace(/\s+/g, " ");
+  return pipe(t.captureCharFrame(), Str.replace(/[│┌┐└┘─]/g, " "), Str.replace(/\s+/g, " "));
 });
 
 test("a card says what was asked for, what changed, and what nobody checked", () =>
@@ -95,7 +95,9 @@ test("a card says what was asked for, what changed, and what nobody checked", ()
       expect(said).toContain("git show abc1234");
       // The narrative is a model's prose and is marked as such, last.
       expect(said).toContain("Collie: This went smoothly.");
-      expect(said.indexOf("Collie: This")).toBeGreaterThan(said.indexOf("bun test pass"));
+      expect(Option.getOrElse(pipe(said, Str.indexOf("Collie: This")), () => -1)).toBeGreaterThan(
+        Option.getOrElse(pipe(said, Str.indexOf("bun test pass")), () => -1),
+      );
     }),
   ));
 

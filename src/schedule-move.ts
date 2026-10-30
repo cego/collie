@@ -1,6 +1,9 @@
 // Moving a Schedule to another Machine (ADR-0052 D8): add it there paused, remove it here,
 // resume it there. Desktop and the CLI run this one sequence over each Machine's host.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect } from "effect";
 import type { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
 
@@ -11,7 +14,7 @@ type DoorFailure = { readonly reason: string } | { readonly message: string };
 export interface ScheduleDoor {
   /** What the human calls the Machine. */
   readonly name: string;
-  readonly schedules: () => Effect.Effect<ScheduleListing, DoorFailure>;
+  readonly schedules: Effect.Effect<ScheduleListing, DoorFailure>;
   readonly changeSchedule: (asked: {
     readonly change: ScheduleChange;
     readonly request: string;
@@ -47,24 +50,27 @@ export const moveSchedule = Effect.fn("ScheduleMove.move")(function* (asked: {
 }): Effect.fn.Return<Moved> {
   const { from, to, name, request } = asked;
   const listed = yield* Effect.all(
-    [from, to].map((door) =>
-      door.schedules().pipe(
+    Arr.map([from, to], (door) =>
+      door.schedules.pipe(
         Effect.mapError((cause) => `${door.name} did not answer: ${why(cause)}`),
         Effect.result,
       ),
     ),
     { concurrency: "unbounded" },
   );
-  const unreachable = listed.flatMap((one) => (one._tag === "Failure" ? [one.failure] : []));
+  const unreachable = Arr.flatMap(listed, (one) => (one._tag === "Failure" ? [one.failure] : []));
   if (unreachable.length > 0)
     return {
       ok: false,
       code: "machine_unreachable",
-      message: `${unreachable.join("; ")}. Nothing was moved.`,
+      message: `${Arr.join(unreachable, "; ")}. Nothing was moved.`,
     };
-  const found = listed
-    .flatMap((one) => (one._tag === "Success" ? one.success.schedules : []))
-    .find((one) => one.name === name);
+  const found = Option.getOrUndefined(
+    Arr.findFirst(
+      Arr.flatMap(listed, (one) => (one._tag === "Success" ? one.success.schedules : [])),
+      (one) => one.name === name,
+    ),
+  );
   if (found === undefined)
     return {
       ok: false,
@@ -82,7 +88,13 @@ export const moveSchedule = Effect.fn("ScheduleMove.move")(function* (asked: {
     cron: found.cron,
     tz: found.tz,
     paused: true,
-    start: { ...found.start, workspace: asked.checkout?.trim() || found.start.workspace },
+    start: {
+      ...found.start,
+      workspace:
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(asked.checkout), (present) => Str.trim(present)),
+        ) || found.start.workspace,
+    },
   });
   if (added._tag === "Failure")
     return {

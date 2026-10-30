@@ -1,5 +1,6 @@
 // Where Runs end, counted across all of them. Data only: nothing here is a threshold.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { HOLD, STOP, type RunView } from "../src/engine";
 import type { Metrics } from "../src/board-model";
@@ -58,7 +59,7 @@ test("each workflow is tallied by how its Runs ended, and only a recorded MR cou
     null,
   );
   expect(report.total).toBe(5);
-  expect(report.workflows.map((tally) => tally.workflow)).toEqual(["implement", "review"]);
+  expect(Arr.map(report.workflows, (tally) => tally.workflow)).toEqual(["implement", "review"]);
   const [implement, review] = report.workflows;
   expect(implement).toMatchObject({ total: 3, complete: 2, failed: 1, withMr: 1 });
   expect(review).toMatchObject({ total: 2, suspended: 1, pending: 1, complete: 0, withMr: 0 });
@@ -79,7 +80,7 @@ test("a Run lists each issue its input says Closes #n for, once", () => {
     new Map(),
     null,
   );
-  expect(report.runs.map(({ closes }) => closes)).toEqual([[12, 13], []]);
+  expect(Arr.map(report.runs, ({ closes }) => closes)).toEqual([[12, 13], []]);
 });
 
 test("a Run carrying a stop control is counted and listed as stopped", () => {
@@ -209,7 +210,7 @@ test("an empty window measures nothing, and says no share rather than zero", () 
 
 test("every measure is counted from the Runs' records, and names the Runs it counts", () => {
   const report = reportOf(
-    ["a", "b", "c", "d"].map((runId) => view({ runId })),
+    Arr.map(["a", "b", "c", "d"], (runId) => view({ runId })),
     new Map(),
     null,
     new Map([

@@ -2,7 +2,10 @@
 // at all, who to assign, which template to fill, and which Linear tickets this
 // branch is answering. Push is this step's business and nothing else's.
 
-import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
+import { Effect, FileSystem, Option, Path, Redacted, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { YamlValue } from "./yaml";
@@ -20,10 +23,14 @@ import { FORGES, forgeOf, forgeOfHost, type Forge } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
 import type { MrReady, Posted } from "./sdk";
 
+/** Variables a command gets on top of this process's environment. */
+export type RunnerEnv = Record<string, string | Redacted.Redacted<string>>;
+
 export type Runner<R = never> = (
   cmd: string,
   args: string[],
   cwd: string,
+  env?: RunnerEnv,
 ) => Effect.Effect<Ran, never, R>;
 
 /** What a command said. `stderr` is optional so fakes may omit it; real runners always fill it. */
@@ -35,7 +42,18 @@ export interface Ran {
 
 /** What a command told a human — its stdout, then its stderr. An answer is read from `stdout` alone. */
 export function whatItSaid(result: Ran): string {
-  return [result.stdout.trim(), result.stderr?.trim() ?? ""].filter(Boolean).join("\n");
+  return Arr.join(
+    Arr.filter(
+      [
+        Str.trim(result.stdout),
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(result.stderr), (present) => Str.trim(present)),
+        ) ?? "",
+      ],
+      Boolean,
+    ),
+    "\n",
+  );
 }
 
 /**
@@ -68,8 +86,15 @@ const LINEAR_ID = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
  * what a caller may do with it depends on what the caller wants it for.
  */
 export function branchTargetHead(target: string): string | null {
-  if (!target.startsWith("branch:")) return null;
-  return target.slice("branch:".length).split("...").at(-1)?.trim() ?? "";
+  if (!pipe_(target, Str.startsWith("branch:"))) return null;
+  return (
+    Option.getOrUndefined(
+      Option.map(
+        Option.fromNullishOr(Str.split(pipe_(target, Str.slice("branch:".length)), "...").at(-1)),
+        (present_) => Str.trim(present_),
+      ),
+    ) ?? ""
+  );
 }
 
 /**
@@ -150,15 +175,15 @@ export { mrTarget, targetKind };
  * same project; either is what a bare iid or a branch's MR is resolved against.
  */
 export function projectFromRemote(url: string): string | null {
-  const text = url.trim();
+  const text = Str.trim(url);
   if (text === "") return null;
   const ssh = /^(?:ssh:\/\/)?(?:[^@\s]+@)?([^:/\s]+)[:/](.+?)(?:\.git)?$/.exec(
-    text.replace(/^https?:\/\//, ""),
+    pipe_(text, Str.replace(/^https?:\/\//, "")),
   );
   if (!ssh) return null;
   const [, host = "", path = ""] = ssh;
-  if (!host.includes(".") || path === "") return null;
-  return `${host}/${path.replace(/^\/+/, "").replace(/\.git$/, "")}`;
+  if (!pipe_(host, Str.includes(".")) || path === "") return null;
+  return `${host}/${pipe_(path, Str.replace(/^\/+/, ""), Str.replace(/\.git$/, ""))}`;
 }
 
 /**
@@ -170,11 +195,13 @@ export function shell(
   cmd: string,
   args: string[],
   cwd: string,
+  env?: RunnerEnv,
 ): Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make(cmd, args, {
       cwd,
+      env,
       stdout: "pipe",
       stderr: "pipe",
       // extendEnv, so git and glab inherit this process's environment and find their
@@ -229,7 +256,7 @@ export function forgeHere<R>(
 ): Effect.Effect<ForgeHere, never, R> {
   return Effect.map(projectHere(cwd, run), (project): ForgeHere => {
     if (project === null) return { ok: false, reason: "this repo has no remote" };
-    const host = project.split("/")[0]!;
+    const host = Str.split(project, "/")[0]!;
     const name = forgeOfHost(host, gitlabHost);
     return name === null
       ? { ok: false, reason: `${host} is neither GitHub nor GitLab` }
@@ -265,7 +292,7 @@ export function autoMergingHere<R>(
   return Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
     if (!here.ok) return null;
-    const branch = (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout.trim();
+    const branch = Str.trim((yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout);
     if (branch === "HEAD" || branch === "") return null;
     const found = yield* here.forge.forBranch(here.project, branch, cwd, run);
     if (!found.ok) return yield* Effect.fail(found.reason);
@@ -296,8 +323,8 @@ export function resolveAssignee<R>(
   project: string | null = null,
 ): Effect.Effect<string | null, never, R | ForgeHttp> {
   return Effect.gen(function* () {
-    if (configured !== undefined && isString(configured) && configured.trim() !== "")
-      return configured.trim();
+    if (configured !== undefined && isString(configured) && Str.trim(configured) !== "")
+      return Str.trim(configured);
     return yield* forge.login(cwd, run, project);
   });
 }
@@ -313,7 +340,7 @@ export function linearIssues<R>(
   return Effect.gen(function* () {
     const found: string[] = [];
     const add = (id: string) => {
-      const up = id.toUpperCase();
+      const up = Str.toUpperCase(id);
       if (!found.includes(up)) found.push(up);
     };
 
@@ -327,7 +354,7 @@ export function linearIssues<R>(
 }
 
 function matchAll(text: string): string[] {
-  return [...text.matchAll(LINEAR_ID)].map((m) => m[1]!);
+  return Arr.map([...pipe_(text, Str.matchAll(LINEAR_ID))], (m) => m[1]!);
 }
 
 /** The forge this branch pushes to, and the facts its delivery prompt needs. */
@@ -371,11 +398,9 @@ export function prepareMergeRequest<R>(
     );
     if (assignee === null && forge.name === "github")
       return unavailable("gh did not report a GitHub login");
-    const branch = (yield* run(
-      "git",
-      ["rev-parse", "--abbrev-ref", "HEAD"],
-      opts.cwd,
-    )).stdout.trim();
+    const branch = Str.trim(
+      (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd)).stdout,
+    );
     // A detached checkout, as renovate's is, is on no branch to have a merge request.
     const found =
       branch === "HEAD" || branch === ""

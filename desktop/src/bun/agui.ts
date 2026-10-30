@@ -2,6 +2,7 @@
 // stream is its test; and decoded rather than typed against the SDK, which Collie's own
 // suite does not install. Anything this does not know is skipped.
 
+import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
 import type { AguiEvent } from "../shared/agui";
@@ -24,15 +25,15 @@ const StreamEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("content_block_start"),
-    index: Schema.Number,
+    index: Schema.Finite,
     content_block: Block,
   }),
   Schema.Struct({
     type: Schema.Literal("content_block_delta"),
-    index: Schema.Number,
+    index: Schema.Finite,
     delta: Delta,
   }),
-  Schema.Struct({ type: Schema.Literal("content_block_stop"), index: Schema.Number }),
+  Schema.Struct({ type: Schema.Literal("content_block_stop"), index: Schema.Finite }),
 ]);
 
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
@@ -106,7 +107,10 @@ export const startState = (thread: string): AguiState => ({
 const textOf = (content: typeof ToolResult.Type.content) =>
   isString(content)
     ? content
-    : content.flatMap((part) => ("text" in part ? [part.text] : [])).join("\n");
+    : Arr.join(
+        Arr.flatMap(content, (part) => ("text" in part ? [part.text] : [])),
+        "\n",
+      );
 
 /** What one SDK message adds to the stream, and the state after it. */
 export const step = (
@@ -136,12 +140,12 @@ export const step = (
     case "user": {
       const results = isString(read.message.content)
         ? []
-        : read.message.content.flatMap((part) => ("tool_use_id" in part ? [part] : []));
+        : Arr.flatMap(read.message.content, (part) => ("tool_use_id" in part ? [part] : []));
       return [
         now,
         [
           ...begun,
-          ...results.map((result): AguiEvent => ({
+          ...Arr.map(results, (result): AguiEvent => ({
             type: "TOOL_CALL_RESULT",
             toolCallId: result.tool_use_id,
             messageId: `${result.tool_use_id}:result`,

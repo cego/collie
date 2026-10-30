@@ -1,3 +1,9 @@
+import * as Num from "effect/Number";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
 import type { Flow, FlowNode, FlowRun } from "../../../src/board-model";
 import { epochMs } from "../../../src/time";
 import { stepTiming } from "./step-timing";
@@ -14,7 +20,7 @@ export interface FlowCard {
   readonly runs: ReadonlyArray<string>;
 }
 export const rowOrigin = (flow: Flow, run: string) => {
-  const row = flow.lanes.find((one) => one.run === run);
+  const row = Option.getOrUndefined(Arr.findFirst(flow.lanes, (one) => one.run === run));
   if (row?.requestedBy != null)
     return { run: row.requestedBy.run, machine: row.requestedBy.machine.name };
   if (row?.startedBy !== undefined) return { run: row.startedBy.run, machine: row.machine };
@@ -24,16 +30,23 @@ export const nodeName = (
   node: FlowRun,
   options: { missing?: boolean; notLive?: boolean; action?: string } = {},
 ): string =>
-  [
-    node.title,
-    node.state.replaceAll("-", " "),
-    node.state === "expected" ? null : node.said,
-    options.missing ? "not on the board" : null,
-    options.notLive && node.link?.asOf != null ? `as of ${node.link.asOf}` : null,
-    options.action,
-  ]
-    .filter(Boolean)
-    .join(", ");
+  Arr.join(
+    Arr.map(
+      Arr.filter(
+        [
+          node.title,
+          pipe(node.state, Str.replaceAll("-", " ")),
+          node.state === "expected" ? null : node.said,
+          options.missing ? "not on the board" : null,
+          options.notLive && node.link?.asOf != null ? `as of ${node.link.asOf}` : null,
+          options.action,
+        ],
+        Boolean,
+      ),
+      (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
+    ),
+    ", ",
+  );
 
 export const flowAnnouncements = (before: Flow | null, after: Flow): string[] => {
   if (before === null) return [];
@@ -68,9 +81,20 @@ export const flowKey = (
 } | null => {
   if (isFlowMenuKey(key, shift)) return { focus, close: false, select: false, menu: true };
   if (key === "Enter" && shift) return { focus, close: false, select: false, primary: true };
-  const rows = flowRows(flow).filter((row) => row.nodes.length > 0);
-  let row = rows.findIndex((one) => one.run === focus.run);
-  let at = rows[row]?.nodes.findIndex((one) => one.id === focus.node) ?? -1;
+  const rows = Arr.filter(flowRows(flow), (row) => row.nodes.length > 0);
+  let row = Option.getOrElse(
+    Arr.findFirstIndex(rows, (one) => one.run === focus.run),
+    () => -1,
+  );
+  let at =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(rows[row]), (present) =>
+        Option.getOrElse(
+          Arr.findFirstIndex(present.nodes, (one) => one.id === focus.node),
+          () => -1,
+        ),
+      ),
+    ) ?? -1;
   if (row < 0 || at < 0) return null;
   switch (key) {
     case "ArrowLeft":
@@ -124,18 +148,19 @@ export type FlowEntry = {
   readonly wave?: number;
 };
 const dateParts = (ms: number, timeZone: string | undefined) =>
-  Object.fromEntries(
-    new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    })
-      .formatToParts(ms)
-      .map((part) => [part.type, part.value]),
+  Rec.fromEntries(
+    Arr.map(
+      new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(ms),
+      (part) => [part.type, part.value] as const,
+    ),
   );
 
 /** An instant on this Machine's clock: `11:22` today, `24 Oct, 11:22` on another day. */
@@ -156,28 +181,36 @@ export interface StepFact {
 const DURATION = /^(under a minute|\d+ min|\d+ h( \d+ min)?)$/;
 /** The host's words for a Step, less what its timing and warning already say. */
 const statusOf = (node: FlowRun, timing: string | null) =>
-  [
-    ...(node.said ?? "")
-      .split(" · ")
-      .filter(
+  Arr.join(
+    [
+      ...Arr.filter(
+        Str.split(node.said ?? "", " · "),
         (part) =>
           part !== "" && !DURATION.test(part) && !(node.long && part === "Longer than usual"),
       ),
-    ...(timing === null ? [] : [timing]),
-  ].join(" · ") || null;
+      ...(timing === null ? [] : [timing]),
+    ],
+    " · ",
+  ) || null;
 const factOf = (label: string, value: string | null | undefined): StepFact[] =>
-  value?.trim() ? [{ label, value: value.trim() }] : [];
+  Option.match(Option.fromNullishOr(value), {
+    onNone: () => [],
+    onSome: (raw) => {
+      const text = Str.trim(raw);
+      return text === "" ? [] : [{ label, value: text }];
+    },
+  });
 const factsOf = (node: FlowRun, when: (iso: string) => string): StepFact[] => [
   ...factOf("Role", node.role),
   ...factOf("Agent", node.agent),
   ...factOf("Model", node.ranOn),
   ...(node.started === null ? [] : [{ label: "Started", value: when(node.started) }]),
   ...(node.ended === null ? [] : [{ label: "Ended", value: when(node.ended) }]),
-  ...node.attempts.slice(1).map((attempt, i) => ({
+  ...Arr.map(node.attempts.slice(1), (attempt, i) => ({
     label: `Attempt ${i + 2}`,
     value: `${attempt.cause ?? "retried"} · ${when(attempt.at)}`,
   })),
-  ...node.questions.flatMap((question) =>
+  ...Arr.flatMap(node.questions, (question) =>
     question.answered === null
       ? []
       : [
@@ -199,37 +232,49 @@ export const inspectorOf = (
   const parent = nodeAt(flow, selection);
   if (parent === null) return null;
   const all = [...parent.runs, ...(parent.links ?? [])];
-  const node = all.find((one) => one.id === selection.item) ?? parent;
+  const node =
+    Option.getOrUndefined(Arr.findFirst(all, (one) => one.id === selection.item)) ?? parent;
   const lines: string[] = [];
   if (node.agent != null) lines.push(`Agent ${node.agent}`);
-  if (node.ranOn !== null) lines.push([node.role, node.ranOn].filter(Boolean).join(" · "));
+  if (node.ranOn !== null)
+    lines.push(
+      Arr.join(
+        Arr.map(Arr.filter([node.role, node.ranOn], Boolean), (part) =>
+          part === null || part === undefined ? "" : globalThis.String(part),
+        ),
+        " · ",
+      ),
+    );
   if (node.started !== null) {
     lines.push(`Started ${when(node.started)}`);
   }
   const timing = stepTiming(node, now);
   if (timing !== null) lines.push(timing);
   if (node.ended !== null) lines.push(`Ended ${when(node.ended)}`);
-  node.attempts
-    .slice(1)
-    .forEach((attempt, i) =>
-      lines.push(`Attempt ${i + 2} · ${attempt.cause ?? "retried"} · ${when(attempt.at)}`),
-    );
+  Arr.forEach(node.attempts.slice(1), (attempt, i) =>
+    lines.push(`Attempt ${i + 2} · ${attempt.cause ?? "retried"} · ${when(attempt.at)}`),
+  );
   for (const question of node.questions)
     if (question.answered !== null)
       lines.push(
         `Answered ${when(question.answered)}${question.by === null ? "" : ` by ${question.by}`}`,
       );
-  const waves = [
-    ...new Set(all.flatMap((one) => (one.wave === undefined ? [] : [one.wave]))),
-  ].toSorted((one, other) => one - other);
-  const entries: FlowEntry[] = waves.map((wave) => ({
+  const waves = Arr.sortWith(
+    [...new Set(Arr.flatMap(all, (one) => (one.wave === undefined ? [] : [one.wave])))],
+    (value) => value,
+    (one, other) => Num.sign(one - other),
+  );
+  const entries: FlowEntry[] = Arr.map(waves, (wave) => ({
     title: `Wave ${wave}`,
-    nodes: all.filter((one) => one.wave === wave),
+    nodes: Arr.filter(all, (one) => one.wave === wave),
     folded: false,
     wave,
   }));
-  const ungrouped = all.filter((one) => one.wave === undefined);
-  const first = ungrouped.findIndex((one) => one.state !== "done");
+  const ungrouped = Arr.filter(all, (one) => one.wave === undefined);
+  const first = Option.getOrElse(
+    Arr.findFirstIndex(ungrouped, (one) => one.state !== "done"),
+    () => -1,
+  );
   const count = first === -1 ? ungrouped.length : first;
   if (count > 1)
     entries.push({ title: `${count} done`, nodes: ungrouped.slice(0, count), folded: true });
@@ -240,7 +285,7 @@ export const inspectorOf = (
     state: node.state,
     said: node.said,
     status: statusOf(node, timing),
-    purpose: node.description.trim() || null,
+    purpose: Str.trim(node.description) || null,
     facts: factsOf(node, when),
     lines,
     entries,
@@ -249,7 +294,7 @@ export const inspectorOf = (
   };
 };
 export const flowRows = (flow: Flow) => [
-  ...flow.lanes.map((lane) => ({
+  ...Arr.map(flow.lanes, (lane) => ({
     ...lane,
     name: `${lane.title}, ${lane.run}, on ${lane.machine}, ${lane.execution}`,
   })),
@@ -269,20 +314,29 @@ export const flowRows = (flow: Flow) => [
       ]),
 ];
 export const nodeAt = (flow: Flow, spot: FlowSpot): FlowNode | null =>
-  flowRows(flow)
-    .find((row) => row.run === spot.run)
-    ?.nodes.find((node) => node.id === spot.node) ?? null;
+  Option.getOrUndefined(
+    Option.map(
+      Option.fromNullishOr(
+        Option.getOrUndefined(Arr.findFirst(flowRows(flow), (row) => row.run === spot.run)),
+      ),
+      (present_) =>
+        Option.getOrUndefined(Arr.findFirst(present_.nodes, (node) => node.id === spot.node)),
+    ),
+  ) ?? null;
 export const owningRun = (flow: Flow, spot: FlowSpot) =>
   spot.run === "release" ? (flow.lanes.at(-1)?.run ?? spot.run) : spot.run;
 const sameSpot = (one: FlowSpot | null, other: FlowSpot | null) =>
   one?.run === other?.run && one?.node === other?.node;
 export const cardForLink = (node: FlowRun, cards: ReadonlyArray<FlowCard>) =>
-  cards.find(
-    (card) =>
-      node.link?.run !== null &&
-      node.link?.run !== undefined &&
-      card.runs.includes(node.link.run) &&
-      (node.link.machine === null || node.link.machine === card.machine),
+  Option.getOrUndefined(
+    Arr.findFirst(
+      cards,
+      (card) =>
+        node.link?.run !== null &&
+        node.link?.run !== undefined &&
+        card.runs.includes(node.link.run) &&
+        (node.link.machine === null || node.link.machine === card.machine),
+    ),
   );
 
 export type FlowPick =
@@ -299,7 +353,9 @@ export const selectEntry = (
 ): FlowPick => {
   const parent = nodeAt(flow, selection);
   if (parent === null) return { kind: "none" };
-  const node = [...parent.runs, ...(parent.links ?? [])].find((one) => one.id === item);
+  const node = Option.getOrUndefined(
+    Arr.findFirst([...parent.runs, ...(parent.links ?? [])], (one) => one.id === item),
+  );
   if (node?.link !== undefined) {
     const card = cardForLink(node, cards);
     return card === undefined || node.link.run === null
@@ -324,7 +380,11 @@ export const selectNode = (
       : { kind: "open", card: card.key, run: node.link.run };
   }
   if (node.kind === "offer")
-    return { kind: "offer", run: owningRun(flow, spot), offer: node.id.replace(/^offer:/, "") };
+    return {
+      kind: "offer",
+      run: owningRun(flow, spot),
+      offer: pipe(node.id, Str.replace(/^offer:/, "")),
+    };
   return sameSpot(spot, selected)
     ? { kind: "close" }
     : { kind: "inspect", run: owningRun(flow, spot), selection: { ...spot, item: null } };

@@ -1,3 +1,7 @@
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { IconUsageScanner } from "../desktop/node_modules/@nuxt/icon/dist/utils.mjs";
 import { iconScan } from "../desktop/view/icon-scan";
@@ -29,13 +33,21 @@ const node: FlowRun = flowNode("build", {
 });
 
 test("every Flow and lane action's icon is compiled into Desktop's bundle", () => {
-  const icons = [
-    ...FlowAction.literals.map((kind) => desktopFlowAction(kind, node, lane, "vm-id", true)),
-    ...FlowLaneAction.literals.map((kind) =>
-      desktopLaneAction(kind, { ...lane, actions: [kind] }, "vm-id", true),
-    ),
-  ].map((action) => action?.icon.replace(/^i-lucide-/, "lucide:"));
+  const icons = Arr.map(
+    [
+      ...Arr.map(FlowAction.literals, (kind) => desktopFlowAction(kind, node, lane, "vm-id", true)),
+      ...Arr.map(FlowLaneAction.literals, (kind) =>
+        desktopLaneAction(kind, { ...lane, actions: [kind] }, "vm-id", true),
+      ),
+    ],
+    (action) =>
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(action), (present) =>
+          pipe(present.icon, Str.replace(/^i-lucide-/, "lucide:")),
+        ),
+      ),
+  );
   return bundled().then((scanned) =>
-    expect(icons.filter((icon) => icon === undefined || !scanned.has(icon))).toEqual([]),
+    expect(Arr.filter(icons, (icon) => icon === undefined || !scanned.has(icon))).toEqual([]),
   );
 });

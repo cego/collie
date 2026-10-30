@@ -9,6 +9,8 @@
 // a claim reads as `claimed:` and `missing` is always there, exactly as the Live region
 // draws them.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { createEffect, createMemo, createResource, For, Show, type JSX } from "solid-js";
 import {
   TextAttributes,
@@ -93,14 +95,15 @@ interface Line {
 export function Drawer(props: DrawerProps) {
   const glyph = () => stateGlyph(props.view.state);
   /** The step durations the record knows, which the TaskView's own steps do not carry. */
-  const took = () => new Map((props.detail?.steps ?? []).map((step) => [step.id, step.took ?? ""]));
+  const took = () =>
+    new Map(Arr.map(props.detail?.steps ?? [], (step) => [step.id, step.took ?? ""]));
 
   const intent = (): Line[] => {
     const held = props.detail?.intent;
     if (!held) return [{ text: "no intent recorded for this run", fg: C.dim }];
     return [
       { text: held.goal ?? "no goal recorded", mark: "›", markFg: C.blue },
-      ...held.constraints.map((text) => ({ text, mark: "¬", markFg: C.amber, fg: C.muted })),
+      ...Arr.map(held.constraints, (text) => ({ text, mark: "¬", markFg: C.amber, fg: C.muted })),
       ...(held.constraints.length > 0
         ? []
         : [{ text: "no constraints beyond the workspace defaults", fg: C.dim }]),
@@ -108,7 +111,7 @@ export function Drawer(props: DrawerProps) {
   };
 
   const steps = (): Line[] =>
-    props.view.steps.map((step) => ({
+    Arr.map(props.view.steps, (step) => ({
       text: step.name,
       mark: stepGlyph(step.state).glyph,
       markFg: stepGlyph(step.state).fg,
@@ -134,14 +137,14 @@ export function Drawer(props: DrawerProps) {
   const agents = (): Line[] =>
     props.view.agents.length === 0
       ? [{ text: "no live agent: the host holds this run", fg: C.dim }]
-      : props.view.agents.map((agent) => ({
+      : Arr.map(props.view.agents, (agent) => ({
           text: `${agent.name} — ${agent.now ?? agent.status}`,
           mark: "●",
           markFg: C.blue,
         }));
 
   const ranOnLines = (): Line[] =>
-    (props.detail?.agents ?? []).map((agent) => ({
+    Arr.map(props.detail?.agents ?? [], (agent) => ({
       text: `${agent.operation}  ${ranOn(agent)}`,
       right: agent.agent,
       fg: C.muted,
@@ -164,7 +167,7 @@ export function Drawer(props: DrawerProps) {
     if (decision?.kind !== "proposal") return [];
     return [
       { text: decision.text },
-      ...decision.actions.map((action) => ({
+      ...Arr.map(decision.actions, (action) => ({
         text: `${action.text} · ${action.allowed ? "allowed now" : "needs your yes"}`,
         mark: action.allowed ? "✓" : "?",
         markFg: action.allowed ? C.muted : C.amber,
@@ -175,7 +178,7 @@ export function Drawer(props: DrawerProps) {
 
   /** What the Run was given, where its agents read it. */
   const attached = (): Line[] =>
-    (props.detail?.attachments ?? []).map((file) => ({
+    Arr.map(props.detail?.attachments ?? [], (file) => ({
       text: `${props.detail!.dir}/attachments/${file.name}`,
       mark: "•",
       right: `${file.size} bytes`,
@@ -183,16 +186,20 @@ export function Drawer(props: DrawerProps) {
 
   /** What its agents left for whoever comes next. */
   const handedOn = (): Line[] =>
-    (props.detail?.handoffFiles ?? []).map((file) => ({
+    Arr.map(props.detail?.handoffFiles ?? [], (file) => ({
       text: `${handoffsDir(props.detail!.dir)}/${file.name}`,
       mark: "•",
       right: `${file.bytes} bytes`,
     }));
 
   const replied = (): Line[] =>
-    (props.detail?.replies ?? []).flatMap((reply) => [
+    Arr.flatMap(props.detail?.replies ?? [], (reply) => [
       { text: replyLine(reply), mark: reply.kind === "disputed" ? "!" : "•" },
-      ...reply.body.split("\n").map((text) => ({ text: `  ${text}`, mark: " ", fg: C.muted })),
+      ...Arr.map(Str.split(reply.body, "\n"), (text) => ({
+        text: `  ${text}`,
+        mark: " ",
+        fg: C.muted,
+      })),
     ]);
 
   const branch = (): Line[] => [
@@ -207,7 +214,7 @@ export function Drawer(props: DrawerProps) {
   const mr = () => props.detail?.mr ?? null;
 
   const findings = (): Line[] =>
-    (props.detail?.findings ?? []).map((finding) => ({
+    Arr.map(props.detail?.findings ?? [], (finding) => ({
       text: finding.title,
       mark: "•",
       right:
@@ -218,30 +225,30 @@ export function Drawer(props: DrawerProps) {
 
   /** The Run's branch against its merge base, one line per file, as plain text. */
   const changed = (): Line[] =>
-    (props.detail?.diff?.files ?? []).map((file) => ({
+    Arr.map(props.detail?.diff?.files ?? [], (file) => ({
       text: file.path,
       mark: file.status === "added" ? "+" : file.status === "deleted" ? "-" : "~",
       right: file.added === null ? "binary" : `+${file.added} -${file.removed}`,
     }));
 
   const verified = (): Line[] =>
-    (props.detail?.verifications ?? []).map((one) => {
+    Arr.map(props.detail?.verifications ?? [], (one) => {
       const held = one.result === one.expect;
       return { text: one.name, mark: held ? "✓" : "✗", markFg: held ? C.green : C.red };
     });
 
   const card = (): Line[] => {
     const newest = props.live?.cards[0];
-    return newest === undefined ? [] : cardLines(newest).map((line) => ({ text: line.text }));
+    return newest === undefined ? [] : Arr.map(cardLines(newest), (line) => ({ text: line.text }));
   };
 
   /** The card's own menu, as buttons, without the one that opens what is already open. */
   const buttons = (): MenuItem[] => [
-    ...menuFor(props.view).filter((item) => item.command._tag !== "OpenRecord"),
+    ...Arr.filter(menuFor(props.view), (item) => item.command._tag !== "OpenRecord"),
     ...dispositionsFor(props.view),
   ];
   /** Steering a Run nothing is driving would be words nobody reads. */
-  const steerable = () => menuFor(props.view).some((item) => item.label === "Steer…");
+  const steerable = () => Arr.some(menuFor(props.view), (item) => item.label === "Steer…");
 
   return (
     <box
@@ -404,7 +411,7 @@ export function Drawer(props: DrawerProps) {
               props.steer.typing ? "▏" : ""
             }`}
           </text>
-          <Show when={props.steer.text.trim() !== ""}>
+          <Show when={Str.trim(props.steer.text) !== ""}>
             <Button label="Send" onPress={() => props.steer.onSend()} />
           </Show>
         </box>
@@ -440,7 +447,7 @@ function Titled(props: { title: string; flush?: boolean; children: JSX.Element }
   return (
     <box style={{ flexDirection: "column", paddingTop: 1, paddingBottom: 1, flexShrink: 0 }}>
       <text fg={C.dim} attributes={TextAttributes.BOLD}>
-        {props.title.toUpperCase()}
+        {Str.toUpperCase(props.title)}
       </text>
       <box style={{ flexDirection: "column", paddingLeft: props.flush ? 0 : 2 }}>
         {props.children}
@@ -521,7 +528,14 @@ function Markdown(props: { text: string }) {
   createEffect(() => {
     if (node) node.content = (styled.state === "ready" && styled()) || text();
   });
-  return <text ref={node} fg={C.text} />;
+  return (
+    <text
+      ref={(renderable) => {
+        node = renderable;
+      }}
+      fg={C.text}
+    />
+  );
 }
 
 /**
@@ -602,7 +616,7 @@ function Cards(props: { live: Live | null }) {
           when={deliveries().length > 0}
           fallback={<text fg={C.dim}>{"nothing has been sent to this run"}</text>}
         >
-          <Evidenced lines={deliveries().map(deliveryLine)} />
+          <Evidenced lines={Arr.map(deliveries(), deliveryLine)} />
         </Show>
       </Titled>
     </box>
@@ -644,14 +658,18 @@ function MergeRequestDetails(props: { mr: MrDetails; reviewedAt: number }) {
       <text fg={C.text}>{`${words().sign}${props.mr.iid} · ${props.mr.title}`}</text>
       <text fg={C.dim}>{`${props.mr.state}${props.mr.author ? ` · ${props.mr.author}` : ""}`}</text>
       <text fg={C.dim}>
-        {[
-          props.mr.pipeline ? `${words().checks} ${props.mr.pipeline}` : "",
-          props.mr.approvals,
-          props.mr.unresolved ? "unresolved discussion(s)" : "",
-          props.mr.notes > 0 ? `${props.mr.notes} note(s)` : "",
-        ]
-          .filter((part) => part !== "")
-          .join(" · ")}
+        {Arr.join(
+          Arr.filter(
+            [
+              props.mr.pipeline ? `${words().checks} ${props.mr.pipeline}` : "",
+              props.mr.approvals,
+              props.mr.unresolved ? "unresolved discussion(s)" : "",
+              props.mr.notes > 0 ? `${props.mr.notes} note(s)` : "",
+            ],
+            (part) => part !== "",
+          ),
+          " · ",
+        )}
       </text>
       <Show when={moved() !== ""}>
         <text fg={props.mr.updatedAt > props.reviewedAt ? C.blue : C.dim}>{moved()}</text>

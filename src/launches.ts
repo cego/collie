@@ -1,6 +1,9 @@
 // What a Run's agents were launched on, as each launch recorded it. Apart from the agents
 // layer so the board and the CLI can read it without loading it.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
 import { RanOn, type RunAgent, type RunStep } from "./board-model";
 import { StepPlace } from "./steps";
@@ -43,9 +46,9 @@ export const Launched = Schema.Struct({
   effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
   claudeSubagents: Schema.optionalKey(ClaudeSubagents),
   /** When it was given this work, on the clock its harness's telemetry is stamped with. */
-  at: Schema.optionalKey(Schema.Number),
+  at: Schema.optionalKey(Schema.Finite),
   /** Which agent of this work it is: past 1, one that took over from an agent that ran out. */
-  sequence: Schema.optionalKey(Schema.Number),
+  sequence: Schema.optionalKey(Schema.Finite),
   /** What this work fell back from, and why, where it did. */
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
@@ -75,14 +78,15 @@ export const readLaunches = Effect.fn("Launches.read")(function* (stateDir: stri
   const fs = yield* FileSystem.FileSystem;
   const dir = launchDir(stateDir, runId);
   const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-  const order = (yield* fs
-    .readFileString(`${dir}/${LAUNCH_ORDER}`)
-    .pipe(Effect.orElseSucceed(() => ""))).split("\n");
+  const order = Str.split(
+    yield* fs.readFileString(`${dir}/${LAUNCH_ORDER}`).pipe(Effect.orElseSucceed(() => "")),
+    "\n",
+  );
   // A launch from before the order was kept sorts first, by name.
-  const rank = (name: string) => order.lastIndexOf(name.slice(0, -LAUNCH_SUFFIX.length));
+  const rank = (name: string) =>
+    order.lastIndexOf(pipe_(name, Str.slice(0, -LAUNCH_SUFFIX.length)));
   const launches: Launched[] = [];
-  const launched = names
-    .filter((one) => one.endsWith(LAUNCH_SUFFIX))
+  const launched = Arr.filter(names, (one) => pipe_(one, Str.endsWith(LAUNCH_SUFFIX)))
     .sort()
     .sort((one, other) => rank(one) - rank(other));
   for (const name of launched) {
@@ -97,7 +101,7 @@ export const readLaunches = Effect.fn("Launches.read")(function* (stateDir: stri
 export const runAgents = (stateDir: string, runId: string) =>
   readLaunches(stateDir, runId).pipe(
     Effect.map((launches) =>
-      launches.map((one): RunAgent => ({
+      Arr.map(launches, (one): RunAgent => ({
         operation: one.operation,
         agent: one.agent,
         harness: one.harness,

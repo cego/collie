@@ -1,4 +1,8 @@
-import { Data, Schema, Effect, FileSystem, Path } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { Data, Schema, Effect, FileSystem, Path, flow, Result } from "effect";
 import type { AgentInfo } from "./herdr";
 import { ensureLockDir, withLock } from "./lock";
 import { epochMs } from "./time";
@@ -51,7 +55,7 @@ const AgentEntrySchema = Schema.Struct({
   incarnation: Schema.optionalKey(IncarnationSchema),
 });
 const RegistryJson = Schema.fromJsonString(Schema.Array(AgentEntrySchema));
-const encodeRegistry = Schema.encodeSync(RegistryJson);
+const encodeRegistry = flow(Schema.encodeResult(RegistryJson), Result.getOrThrow);
 const decodeRegistry = Schema.decodeUnknownEffect(RegistryJson);
 
 /**
@@ -65,7 +69,7 @@ export const registryPath = Effect.fn("registryPath")(function* (
 ) {
   const path = yield* Path.Path;
   const where = scope.workspaceId ?? scope.cwd;
-  const name = path.basename(where).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo";
+  const name = pipe_(path.basename(where), Str.replace(/[^A-Za-z0-9._-]+/g, "-")) || "repo";
   return path.join(stateDir, "agents", `${name}-${scopeKey(scope)}.json`);
 });
 
@@ -78,9 +82,7 @@ export const registryPath = Effect.fn("registryPath")(function* (
  */
 export function scopeKey(scope: RegistryScope): string {
   const where = scope.workspaceId ?? scope.cwd;
-  return Bun.hash(`${scope.session ?? ""} ${where}`)
-    .toString(16)
-    .slice(0, 12);
+  return pipe_(Bun.hash(`${scope.session ?? ""} ${where}`).toString(16), Str.slice(0, 12));
 }
 
 export function scopeFor(
@@ -102,7 +104,7 @@ export const readRegistry = Effect.fn("readRegistry")(function* (file: string) {
   if (!(yield* fs.exists(file))) return [];
   return yield* fs.readFileString(file).pipe(
     Effect.flatMap(decodeRegistry),
-    Effect.catch(() => Effect.succeed([])),
+    Effect.orElseSucceed(() => []),
   );
 });
 
@@ -110,8 +112,11 @@ const registryFiles = Effect.fn("registryFiles")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = path.join(stateDir, "agents");
-  const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
-  return names.filter((one) => one.endsWith(".json")).map((name) => path.join(dir, name));
+  const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
+  return Arr.map(
+    Arr.filter(names, (one) => pipe_(one, Str.endsWith(".json"))),
+    (name) => path.join(dir, name),
+  );
 });
 
 /** Every agent registered in this state directory, whichever Session registered it. */
@@ -148,12 +153,12 @@ export const registerAgent = Effect.fn("registerAgent")(function* (
     `${file}.lock`,
     Effect.fail(new RegistryBusy({ file })),
     Effect.gen(function* () {
-      const others = (yield* readRegistry(file)).filter((e) => e.agent !== entry.agent);
+      const others = Arr.filter(yield* readRegistry(file), (e) => e.agent !== entry.agent);
       const live = new Set(alive === undefined ? others : liveEntries(others, alive.agents));
       const kept =
         alive === undefined
           ? others
-          : others.filter((e) => live.has(e) || epochMs(e.at) >= epochMs(alive.listedAt));
+          : Arr.filter(others, (e) => live.has(e) || epochMs(e.at) >= epochMs(alive.listedAt));
       const entries = [...kept, entry];
       yield* write(file, entries);
       return entries;
@@ -205,7 +210,8 @@ export function verifyIncarnation(
 }
 
 function matching(entry: AgentEntry, alive: ReadonlyArray<AgentInfo>): AgentInfo[] {
-  return alive.filter(
+  return Arr.filter(
+    alive,
     (a) =>
       a.name === entry.agent &&
       a.paneId === entry.paneId &&
@@ -217,7 +223,7 @@ export function liveEntries(
   entries: ReadonlyArray<AgentEntry>,
   alive: ReadonlyArray<AgentInfo>,
 ): AgentEntry[] {
-  return entries.filter((e) => matching(e, alive).length > 0);
+  return Arr.filter(entries, (e) => matching(e, alive).length > 0);
 }
 
 /**
@@ -235,7 +241,9 @@ export const lineageAgent = Effect.fn("lineageAgent")(function* (
   for (const file of yield* registryFiles(stateDir))
     live.push(...liveEntries(yield* readRegistry(file), alive));
   for (const runId of lineage) {
-    const found = live.findLast((e) => e.role === role && e.runId === runId);
+    const found = Option.getOrUndefined(
+      Arr.findLast(live, (e) => e.role === role && e.runId === runId),
+    );
     if (found !== undefined) return found;
   }
   return null;

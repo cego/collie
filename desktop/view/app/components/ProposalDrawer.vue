@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
 import type { Proposal } from "../../../../src/board-model";
 
 const props = defineProps<{ proposal: Proposal }>();
@@ -15,11 +16,16 @@ const look = () => {
 };
 watch(
   () => [open.value, props.proposal.hash] as const,
-  async ([isOpen]) => {
-    seen.value = false;
-    if (!isOpen) return;
-    await nextTick();
-    requestAnimationFrame(look);
+  (input) => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const [isOpen] = input;
+        seen.value = false;
+        if (!isOpen) return;
+        yield* Effect.promise(() => Promise.resolve(nextTick()));
+        requestAnimationFrame(look);
+      }),
+    );
   },
 );
 // What the human read, not whatever the card holds by the time the click lands.

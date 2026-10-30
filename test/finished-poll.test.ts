@@ -1,8 +1,12 @@
 // A listing pays only for what can still change: the engine is asked about a finished Run
 // once, and everything a finished Run may still be given is read on every view.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun";
+import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Layer, type Schema, type Scope } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
@@ -47,7 +51,7 @@ afterEach(() => runEffect(rig.close()));
 const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT });
 const dir = () => env().stateDir;
 
-const runEffect = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
 /** How many times the engine was polled for each execution. */
@@ -65,7 +69,7 @@ const counted = Layer.effect(WorkflowEngine.WorkflowEngine)(
 );
 
 const hosted = <A, E>(
-  run: Effect.Effect<A, E, Registry | Store | HostServices | BunServices.BunServices | Scope.Scope>,
+  run: Effect.Effect<A, E, Registry | Store | HostServices | PlatformServices | Scope.Scope>,
 ) =>
   Effect.suspend(() => {
     polls = new Map();
@@ -73,24 +77,33 @@ const hosted = <A, E>(
   }).pipe(
     Effect.provide(
       registryLayer(dir(), {
-        placing: { herdr: new FakeHerdr(env()), env: env() },
-      }),
+        placing: {
+          herdr: new FakeHerdr(env()),
+          env: env(),
+        },
+      }).pipe(
+        Layer.provideMerge(counted),
+        Layer.provideMerge(
+          agentsLayer({
+            dir: dir(),
+            env: env(),
+            herdr: new FakeHerdr(env()),
+            harness: "claude",
+            model: "opus",
+            permissions: "auto",
+            compactAtTokens: 0,
+            pollMs: 20,
+            collectMs: 60_000,
+          }),
+        ),
+        Layer.provideMerge(
+          foundationLayer({
+            dir: dir(),
+            userDir: rig.userDir,
+          }),
+        ),
+      ),
     ),
-    Effect.provide(counted),
-    Effect.provide(
-      agentsLayer({
-        dir: dir(),
-        env: env(),
-        herdr: new FakeHerdr(env()),
-        harness: "claude",
-        model: "opus",
-        permissions: "auto",
-        compactAtTokens: 0,
-        pollMs: 20,
-        collectMs: 60_000,
-      }),
-    ),
-    Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
     Effect.scoped,
     Effect.orDie,
   );
@@ -137,9 +150,18 @@ const write = (path: string, text: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
       fs
-        .makeDirectory(path.slice(0, path.lastIndexOf("/")), {
-          recursive: true,
-        })
+        .makeDirectory(
+          pipe_(
+            path,
+            Str.slice(
+              0,
+              Option.getOrElse(pipe_(path, Str.lastIndexOf("/")), () => -1),
+            ),
+          ),
+          {
+            recursive: true,
+          },
+        )
         .pipe(Effect.andThen(fs.writeFileString(path, text))),
     ),
     Effect.orDie,
@@ -159,13 +181,17 @@ test(
           yield* settled(run.runId, "complete");
           polls.delete(run.execution);
 
-          const first = (yield* registry.views(null)).find((view) => view.runId === run.runId);
+          const first = Option.getOrUndefined(
+            Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
+          );
           expect(first?.report).toBeUndefined();
           expect(first?.controls).toEqual([]);
 
           yield* write(`${runDir(dir(), run.runId)}/report.json`, REPORT);
           yield* write(controlPath(dir(), HOLD, run.runId), "");
-          const second = (yield* registry.views(null)).find((view) => view.runId === run.runId);
+          const second = Option.getOrUndefined(
+            Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
+          );
 
           expect(polls.get(run.execution) ?? 0).toBeLessThanOrEqual(1);
           expect(second?.status.status).toBe("complete");
@@ -191,11 +217,15 @@ test(
           const claim = `${runDir(dir(), run.runId)}/helle.json`;
 
           yield* write(claim, '{"slug":"project","claim":"mine"}');
-          const held = (yield* registry.views(null)).find((view) => view.runId === run.runId);
+          const held = Option.getOrUndefined(
+            Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
+          );
           expect(held?.diagnostic).toContain("claim on project retained; recovery required");
 
           yield* FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.remove(claim)));
-          const gone = (yield* registry.views(null)).find((view) => view.runId === run.runId);
+          const gone = Option.getOrUndefined(
+            Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
+          );
           expect(gone?.status.status).toBe("failed");
           expect(gone?.diagnostic).toBeNull();
           expect(polls.get(run.execution) ?? 0).toBeLessThanOrEqual(1);
@@ -229,9 +259,12 @@ test(
           });
           const after = yield* until(
             () => registry.views(null),
-            (views) => views.some((view) => view.status.status === "complete"),
+            (views) => Arr.some(views, (view) => view.status.status === "complete"),
           );
-          expect(after.find((view) => view.runId === run.runId)?.status.status).toBe("complete");
+          expect(
+            Option.getOrUndefined(Arr.findFirst(after, (view) => view.runId === run.runId))?.status
+              .status,
+          ).toBe("complete");
         }),
       ),
     ),
@@ -264,11 +297,26 @@ test(
 
           const rows = yield* store.runs;
           const all = yield* registry.views(null);
-          expect(all.map((view) => view.runId)).toEqual(rows.map((row) => row.run));
-          expect(all.map((view) => view.runId).toSorted()).toEqual(runs.toSorted());
+          expect(Arr.map(all, (view) => view.runId)).toEqual(Arr.map(rows, (row) => row.run));
+          expect(
+            Arr.sortWith(
+              Arr.map(all, (view) => view.runId),
+              (value) => value,
+              (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+            ),
+          ).toEqual(
+            Arr.sortWith(
+              runs,
+              (value) => value,
+              (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0),
+            ),
+          );
           const ofTask = yield* registry.views("task-1");
-          expect(ofTask.map((view) => view.runId)).toEqual(
-            rows.filter((row) => row.task === "task-1").map((row) => row.run),
+          expect(Arr.map(ofTask, (view) => view.runId)).toEqual(
+            Arr.map(
+              Arr.filter(rows, (row) => row.task === "task-1"),
+              (row) => row.run,
+            ),
           );
           expect(ofTask).toHaveLength(2);
         }),
@@ -353,7 +401,7 @@ test(
           const run = yield* started(yield* loaded("reported"), "r1", {}, "task-1");
           yield* settled(run.runId, "complete");
           const report = `${runDir(dir(), run.runId)}/report.json`;
-          yield* write(report, CLOSED.replace('"closed":true', '"closed":false'));
+          yield* write(report, pipe_(CLOSED, Str.replace('"closed":true', '"closed":false')));
 
           yield* sweeping;
           yield* until(
@@ -361,7 +409,7 @@ test(
             (views) => views.includes("task-1"),
           );
 
-          expect(built.filter((one) => one !== run.runId)).toEqual(["task-1"]);
+          expect(Arr.filter(built, (one) => one !== run.runId)).toEqual(["task-1"]);
         }),
       ),
     ),

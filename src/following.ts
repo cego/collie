@@ -1,6 +1,7 @@
 // What `collie run wait` stops at, and what `--follow` says changed, read from the Run's
 // view and its progress. Pure, so the wait and its tests decide the same way.
 
+import * as Arr from "effect/Array";
 import type { ForgeChecks, ReadyToRelease, RunProgress } from "./board-model";
 import type { RunView } from "./engine";
 
@@ -25,7 +26,7 @@ export function reached(
   if (progress === null) return "waiting";
   const ready = progress.ready.ready;
   const human =
-    atAttention(view) || (settled && progress.ready.missing.every((one) => !one.settling));
+    atAttention(view) || (settled && Arr.every(progress.ready.missing, (one) => !one.settling));
   if (until === "ready") return ready ? "reached" : human ? "stuck" : "waiting";
   return ready || human ? "reached" : "waiting";
 }
@@ -54,8 +55,8 @@ const ciSaid = (ci: ForgeChecks) => (ci.state === "failed" ? `failed: ${ci.name}
 export function followEvents(before: Followed, after: Followed): ReadonlyArray<FollowEvent> {
   const events: FollowEvent[] = [];
   if (after.progress !== null) {
-    const was = new Map((before.progress?.steps ?? []).map((step) => [step.operation, step]));
-    const agents = new Set((before.progress?.steps ?? []).map((step) => step.agent));
+    const was = new Map(Arr.map(before.progress?.steps ?? [], (step) => [step.operation, step]));
+    const agents = new Set(Arr.map(before.progress?.steps ?? [], (step) => step.agent));
     for (const step of after.progress.steps) {
       const prior = was.get(step.operation);
       if (!agents.has(step.agent)) {
@@ -117,7 +118,8 @@ export const readyLines = (ready: ReadyToRelease): ReadonlyArray<string> =>
     ? ["Ready to release."]
     : [
         "Not ready to release:",
-        ...ready.missing.map(
+        ...Arr.map(
+          ready.missing,
           (one) => `- ${one.said}${one.settling ? " (may come by itself)" : ""}`,
         ),
       ];

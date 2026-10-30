@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
 import { choose, cleanupView } from "../../../src/shared/machine-cleanup";
 
 const open = defineModel<boolean>("open", { required: true });
@@ -9,13 +10,16 @@ watch(
   (shown) =>
     shown &&
     void opened(
-      machines.value.filter(({ row }) => row.state === "live").map(({ row }) => row.profile),
+      Arr.map(
+        Arr.filter(machines.value, ({ row }) => row.state === "live"),
+        ({ row }) => row.profile,
+      ),
     ),
 );
 
 const view = computed(() =>
   cleanupView(
-    machines.value.map(({ row }) => row),
+    Arr.map(machines.value, ({ row }) => row),
     reads.value,
     chosen.value,
     sweeps.value,
@@ -23,7 +27,12 @@ const view = computed(() =>
   ),
 );
 const toggle = (profile: string, on: boolean) => {
-  const picked = new Set(view.value.rows.filter((row) => row.chosen).map((row) => row.profile));
+  const picked = new Set(
+    Arr.map(
+      Arr.filter(view.value.rows, (row) => row.chosen),
+      (row) => row.profile,
+    ),
+  );
   if (on) picked.add(profile);
   else picked.delete(profile);
   chosen.value = picked;

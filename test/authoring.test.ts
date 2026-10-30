@@ -5,6 +5,10 @@
 // the schema read as a limit rather than a fault, and does a module that will not compile
 // say so without a Run, an agent or a worktree. Writing is the same file the reading finds.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { checkModule, createEntry, describeModule, forkEntry } from "../src/authoring";
@@ -33,9 +37,9 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-env-" });
-        const pkg = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject))({
+        const pkg = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
           scripts: { postinstall: `${process.execPath} record.ts` },
-        });
+        }).pipe(Effect.orDie);
         yield* fs.writeFileString(`${dir}/package.json`, pkg);
         yield* fs.writeFileString(
           `${dir}/record.ts`,
@@ -48,7 +52,7 @@ await Bun.write(process.env.TMPDIR + "/installer-temporary-file", "temporary");
 `,
         );
         yield* provisionToolchain(dir);
-        const recorded = yield* Schema.decodeUnknownEffect(
+        const recorded = yield* Schema.decodeEffect(
           Schema.fromJsonString(
             Schema.Struct({
               home: Schema.NullOr(Schema.String),
@@ -88,7 +92,7 @@ test(
         yield* fs.remove(installed);
         yield* fs.writeFileString(
           installed,
-          pkg.replace(/"version"\s*:\s*"[^"]+"/, '"version": "0.0.0"'),
+          pipe_(pkg, Str.replace(/"version"\s*:\s*"[^"]+"/, '"version": "0.0.0"')),
         );
         expect(yield* fs.readFileString(shared)).toBe(pkg);
         yield* Effect.acquireRelease(
@@ -120,7 +124,8 @@ const layers = Effect.fn("AuthoringTest.layers")(function* (prefix: string) {
     project: `${dir}/project`,
   });
   for (const root of roots) yield* fs.makeDirectory(root.dir, { recursive: true });
-  const dirOf = (layer: EntryLayer) => roots.find((root) => root.layer === layer)!.dir;
+  const dirOf = (layer: EntryLayer) =>
+    Option.getOrUndefined(Arr.findFirst(roots, (root) => root.layer === layer))!.dir;
   return {
     roots,
     dirOf,
@@ -144,7 +149,7 @@ test("a module is read as its public id, where it came from, and the shapes on b
       expect(described.path).toBe(path);
       expect(described.broken).toBeNull();
       // What a caller may put in, drawn from the author's own schemas.
-      expect(described.inputs.map((one) => [one.name, one.required, one.strategy])).toEqual([
+      expect(Arr.map(described.inputs, (one) => [one.name, one.required, one.strategy])).toEqual([
         ["text", true, "work-source"],
         ["times", true, null],
       ]);
@@ -153,7 +158,7 @@ test("a module is read as its public id, where it came from, and the shapes on b
       expect(described.success.schema).toMatchObject({ type: "string" });
       expect(described.error.schema).toMatchObject({ $defs: { WorkflowErrorEncoded: {} } });
       // What the host settles beside the payload, so a caller knows the names it may use.
-      expect(described.options.map((one) => one.name)).toContain("branch");
+      expect(Arr.map(described.options, (one) => one.name)).toContain("branch");
       // The domain metadata, as data rather than as the author's closures.
       expect(described.metadata).toMatchObject({
         hints: { text: "work-source" },
@@ -177,7 +182,7 @@ test("checking reads the module and the compiler, and keeps the three answers ap
 
       // A module that contradicts itself is refused at load, with no compiler involved.
       const refused = yield* checkModule({ layer: "user", path: conflicted });
-      expect(refused.problems.join(" ")).toContain("outcome");
+      expect(Arr.join(refused.problems, " ")).toContain("outcome");
       expect(refused.id).toBe("conflicted");
     }).pipe(Effect.scoped),
   ));
@@ -245,7 +250,7 @@ test(
         const pkg = yield* fs.readFileString(`${dir}/package.json`);
         yield* fs.writeFileString(
           `${dir}/package.json`,
-          pkg.replace(`"effect": "${TOOLCHAIN.effect}"`, '"effect": "4.0.0-rc.117"'),
+          pipe_(pkg, Str.replace(`"effect": "${TOOLCHAIN.effect}"`, '"effect": "4.0.0-rc.117"')),
         );
         const tmp = `${dir}/tmp`;
         yield* fs.makeDirectory(tmp);
@@ -262,7 +267,7 @@ test(
         const installed = yield* fs.readFileString(`${dir}/node_modules/effect/package.json`);
         expect(installed).toContain(`"version": "${TOOLCHAIN.effect}"`);
         expect(checked.toolchain).toBeNull();
-        expect(checked.problems.join("\n")).toContain("effect/unstable/workflow/Activity");
+        expect(Arr.join(checked.problems, "\n")).toContain("effect/unstable/workflow/Activity");
       }).pipe(Effect.scoped),
     ),
   180_000,
@@ -320,7 +325,7 @@ test("creating writes a module the search path finds, and never over one already
 
       const found = yield* discover(where.roots);
       expect(found.problems).toEqual([]);
-      expect(found.entries.map((one) => [one.id, one.layer])).toEqual([["tally", "user"]]);
+      expect(Arr.map(found.entries, (one) => [one.id, one.layer])).toEqual([["tally", "user"]]);
 
       const again = yield* createEntry({ dir: where.dirOf("user"), id: "tally" });
       expect(again.ok).toBe(false);
@@ -350,12 +355,14 @@ test(
         // Both are found, each under its own id, and the fork takes the parent's inputs.
         const found = yield* discover(where.roots);
         expect(found.problems).toEqual([]);
-        expect(found.entries.map((one) => [one.id, one.layer])).toEqual([
+        expect(Arr.map(found.entries, (one) => [one.id, one.layer])).toEqual([
           ["echo", "shipped"],
           ["echo-mine", "user"],
         ]);
-        const mine = found.entries.find((one) => one.id === "echo-mine")!;
-        expect(mine.inputs.map((one) => one.name)).toEqual(["text", "times"]);
+        const mine = Option.getOrUndefined(
+          Arr.findFirst(found.entries, (one) => one.id === "echo-mine"),
+        )!;
+        expect(Arr.map(mine.inputs, (one) => one.name)).toEqual(["text", "times"]);
 
         // A host runs a staged copy, and the parent the fork climbs out to is still found.
         const staged = yield* stageGeneration({
@@ -379,11 +386,14 @@ test("a helper outside a module's directory is part of its revision, and each ge
       const entry = `${root}/mod/entry.ts`;
       yield* fs.writeFileString(
         entry,
-        [
-          `import { n } from "../shared/helper";`,
-          `export const value = n;`,
-          `export const said = "../shared/helper";`,
-        ].join("\n"),
+        Arr.join(
+          [
+            `import { n } from "../shared/helper";`,
+            `export const value = n;`,
+            `export const said = "../shared/helper";`,
+          ],
+          "\n",
+        ),
       );
       const helper = (n: number) =>
         fs.writeFileString(`${root}/shared/helper.ts`, `export const n = ${n};\n`);
@@ -436,21 +446,27 @@ test("a staged helper resolves packages and package imports as it does where its
       yield* fs.writeFileString(`${root}/project/shared/local.ts`, `export const n = 42;\n`);
       yield* fs.writeFileString(
         `${root}/project/shared/helper.ts`,
-        [
-          `import { from as above } from "collie-probe-above";`,
-          `import { from as beside } from "collie-probe-beside";`,
-          `import { n } from "#local";`,
-          `export const both = [above, beside];`,
-          `export const local = n;`,
-        ].join("\n"),
+        Arr.join(
+          [
+            `import { from as above } from "collie-probe-above";`,
+            `import { from as beside } from "collie-probe-beside";`,
+            `import { n } from "#local";`,
+            `export const both = [above, beside];`,
+            `export const local = n;`,
+          ],
+          "\n",
+        ),
       );
       const entry = `${root}/project/mod/entry.ts`;
       yield* fs.writeFileString(
         entry,
-        [
-          `export { both, local } from "../shared/helper";`,
-          `export { from as own } from "collie-probe-entry";`,
-        ].join("\n"),
+        Arr.join(
+          [
+            `export { both, local } from "../shared/helper";`,
+            `export { from as own } from "collie-probe-entry";`,
+          ],
+          "\n",
+        ),
       );
 
       const file = yield* stageGeneration({ dir: `${root}/state`, name: "mod@1", entry });
@@ -589,6 +605,31 @@ test(
   300_000,
 );
 
+test(
+  "checking a module that imports effect/Crypto names the import, and its replacement loads",
+  () =>
+    provesWith(
+      "collie-authoring-crypto-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.copyFile(`${fixtures}crypto.workflow.ts`, `${world.user}/crypto.workflow.ts`);
+          const checked = yield* collie(world, ["workflow", "check", "crypto"]);
+          expect(checked.exit).not.toBe(0);
+          expect(checked.envelope.error?.message ?? "").toContain("crypto\tuser\t1 problem(s)");
+          expect(checked.envelope.error?.message ?? "").toContain("effect/Crypto");
+
+          // What replaces it is served from the executable, as `effect` is.
+          yield* fs.copyFile(`${fixtures}random.workflow.ts`, `${world.user}/random.workflow.ts`);
+          const replaced = yield* collie(world, ["workflow", "check", "random"]);
+          expect(replaced.exit).toBe(0);
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  120_000,
+);
+
 test("reported is the one workflow declaration that closes after its report", () =>
   runEffect(
     Effect.gen(function* () {
@@ -600,7 +641,10 @@ test("reported is the one workflow declaration that closes after its report", ()
       const fs = yield* FileSystem.FileSystem;
       yield* fs.writeFileString(
         path,
-        (yield* fs.readFileString(path)).replace('closes: "reported"', 'closes: "always"'),
+        pipe_(
+          yield* fs.readFileString(path),
+          Str.replace('closes: "reported"', 'closes: "always"'),
+        ),
       );
       const bad = yield* loadEntry(path).pipe(Effect.result);
       expect(bad._tag).toBe("Failure");

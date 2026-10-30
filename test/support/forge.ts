@@ -2,8 +2,12 @@
 // a FakeBin executable answering from the same model for host-driven tests. Both log
 // every call they get.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import type * as BunServices from "@effect/platform-bun/BunServices";
+import { type PlatformServices } from "../../src/platform";
 import {
   Clock,
   Config,
@@ -13,16 +17,19 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Path,
   Schema,
   type Scope,
+  flow,
+  Result,
 } from "effect";
 import { ChildProcessSpawner } from "effect/process";
 import type { MrForge } from "../../src/board-model";
 import { forgeHttpTest, type ForgeHttp } from "../../src/forge/http";
 import { runEffect } from "./effect";
 import { glabExpiry, MONTHS } from "../../src/forge/gitlab";
-import { shell, type Ran, type Runner } from "../../src/mr";
+import { shell, type Ran, type Runner, type RunnerEnv } from "../../src/mr";
 import type { FakeBin } from "./bin";
 import { recordStart } from "../../src/starts";
 import { forwarding } from "./forwarding";
@@ -48,13 +55,13 @@ export const FakeJob = Schema.Struct({
   /** What a retry leaves it in; unchanged where unsaid. */
   retried: Schema.optionalKey(JobStates),
   /** Its id once retried, as the forge gives a retry a job of its own. */
-  id: Schema.optionalKey(Schema.Number),
+  id: Schema.optionalKey(Schema.Finite),
 });
 export type FakeJob = typeof FakeJob.Type;
 
 /** A comment on a merge request; on GitHub one with a thread is a review comment. */
 export const FakeComment = Schema.Struct({
-  id: Schema.Number,
+  id: Schema.Finite,
   author: Schema.String,
   /** A person where unsaid; `system` is a GitLab system note. */
   kind: Schema.optionalKey(Schema.Literals(["person", "bot", "system"])),
@@ -63,13 +70,13 @@ export const FakeComment = Schema.Struct({
   /** GitLab's discussion id, or the id of a GitHub review thread's first comment. */
   thread: Schema.optionalKey(Schema.String),
   file: Schema.optionalKey(Schema.String),
-  line: Schema.optionalKey(Schema.Number),
+  line: Schema.optionalKey(Schema.Finite),
 });
 export type FakeComment = typeof FakeComment.Type;
 
 /** A GitHub review, with the body it was submitted with. */
 export const FakeReview = Schema.Struct({
-  id: Schema.Number,
+  id: Schema.Finite,
   author: Schema.String,
   bot: Schema.optionalKey(Schema.Boolean),
   state: Schema.Literals(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]),
@@ -81,7 +88,7 @@ export type FakeReview = typeof FakeReview.Type;
 /** A GitLab approval rule, with who approved for it. */
 const FakeRule = Schema.Struct({
   name: Schema.String,
-  required: Schema.Number,
+  required: Schema.Finite,
   approvers: Schema.Array(Schema.String),
 });
 
@@ -129,7 +136,7 @@ export const FakeMr = Schema.Struct({
   reviews: Schema.optionalKey(Schema.Array(FakeReview)),
   /** GitLab: who approved it, and how many approvals it requires. */
   approvers: Schema.optionalKey(Schema.Array(Schema.String)),
-  required: Schema.optionalKey(Schema.Number),
+  required: Schema.optionalKey(Schema.Finite),
   /** GitLab's approval rules; one rule of `required` and `approvers` where unsaid. */
   rules: Schema.optionalKey(Schema.Array(FakeRule)),
   /** GitLab's merge status says changes were requested. */
@@ -179,7 +186,7 @@ export const ForgeModel = Schema.Struct({
   httpFault: Schema.optionalKey(
     Schema.Union([
       Schema.Struct({
-        status: Schema.Number,
+        status: Schema.Finite,
         headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
       }),
       Schema.Literals(["network", "hold"]),
@@ -210,7 +217,7 @@ export const ForgeModel = Schema.Struct({
               sha: Schema.String,
               status: Schema.Literals(["success", "failed", "running"]),
               job: Schema.optionalKey(Schema.String),
-              jobId: Schema.optionalKey(Schema.Number),
+              jobId: Schema.optionalKey(Schema.Finite),
               logUrl: Schema.optionalKey(Schema.String),
               pipeline: Schema.optionalKey(
                 Schema.Struct({ ref: Schema.String, sha: Schema.String }),
@@ -275,8 +282,8 @@ export const ForgeModel = Schema.Struct({
   /** GitHub's required approving reviews: branch protection's, each ruleset's, and code owners'. */
   reviewsRequired: Schema.optionalKey(
     Schema.Struct({
-      classic: Schema.optionalKey(Schema.Number),
-      rulesets: Schema.optionalKey(Schema.Array(Schema.Number)),
+      classic: Schema.optionalKey(Schema.Finite),
+      rulesets: Schema.optionalKey(Schema.Array(Schema.Finite)),
       codeOwners: Schema.optionalKey(Schema.Boolean),
     }),
   ),
@@ -337,7 +344,8 @@ interface Answer {
 
 const Json = Schema.fromJsonString(Schema.Json);
 const ok = (stdout = ""): Answer => ({ ran: { code: 0, stdout } });
-const json = (value: Schema.Json): Answer => ok(Schema.encodeSync(Json)(value));
+const json = (value: Schema.Json): Answer =>
+  ok(flow(Schema.encodeResult(Json), Result.getOrThrow)(value));
 const no = (code = 1): Answer => ({ ran: { code, stdout: "" } });
 
 const flag = (args: ReadonlyArray<string>, name: string) => {
@@ -347,11 +355,18 @@ const flag = (args: ReadonlyArray<string>, name: string) => {
 
 /** Every `-f name=value` an API call carries, or each `-F` one. */
 const fieldsOf = (args: ReadonlyArray<string>, kind = "-f") =>
-  args.flatMap((arg, at) => (args[at - 1] === kind ? [arg] : []));
+  Arr.flatMap(args, (arg, at) => (args[at - 1] === kind ? [arg] : []));
 const field = (args: ReadonlyArray<string>, name: string, kind = "-f") =>
-  fieldsOf(args, kind)
-    .find((one) => one.startsWith(`${name}=`))
-    ?.slice(name.length + 1);
+  Option.getOrUndefined(
+    Option.map(
+      Option.fromNullishOr(
+        Option.getOrUndefined(
+          Arr.findFirst(fieldsOf(args, kind), (one) => pipe(one, Str.startsWith(`${name}=`))),
+        ),
+      ),
+      (present) => pipe(present, Str.slice(name.length + 1)),
+    ),
+  );
 
 /** A refusal, with what the CLI says of it. */
 const refused = (said: string): Answer => ({ ran: { code: 1, stdout: "", stderr: said } });
@@ -393,10 +408,10 @@ function discussionsOf(mr: FakeMr) {
     const id = comment.thread ?? `note-${comment.id}`;
     threads.set(id, [...(threads.get(id) ?? []), comment]);
   }
-  return [...threads].map(([id, notes]) => ({
+  return Arr.map([...threads], ([id, notes]) => ({
     id,
     individual_note: notes[0]?.thread === undefined,
-    notes: notes.map((note) => ({
+    notes: Arr.map(notes, (note) => ({
       id: note.id,
       body: note.body,
       author: { username: note.author, bot: note.kind === "bot" },
@@ -439,8 +454,8 @@ function decisionOf(model: ForgeModel, pull: FakeMr): string | null {
   const required = Math.max(rules?.classic ?? 0, ...(rules?.rulesets ?? []));
   if (required === 0 && rules?.codeOwners !== true) return null;
   const standing = standingOf(pull.reviews ?? []);
-  if (standing.some((one) => one.state === "CHANGES_REQUESTED")) return "CHANGES_REQUESTED";
-  return standing.filter((one) => one.state === "APPROVED").length >= required
+  if (Arr.some(standing, (one) => one.state === "CHANGES_REQUESTED")) return "CHANGES_REQUESTED";
+  return Arr.filter(standing, (one) => one.state === "APPROVED").length >= required
     ? "APPROVED"
     : "REVIEW_REQUIRED";
 }
@@ -455,20 +470,25 @@ const pagesOf = (items: ReadonlyArray<Schema.Json>, args: ReadonlyArray<string>)
   json(
     args.includes("--slurp")
       ? [[...items]]
-      : pageOf(args.find((one) => one.startsWith("repos/")) ?? "", items),
+      : pageOf(
+          Option.getOrUndefined(
+            Arr.findFirst(args, (one) => pipe(one, Str.startsWith("repos/"))),
+          ) ?? "",
+          items,
+        ),
   );
 
 function issueAnswer(forge: MrForge, model: ForgeModel, args: ReadonlyArray<string>): Answer {
   const project = `${forge === "github" ? "github.com/" : ""}${flag(args, "--repo") ?? ""}`;
-  const issues = (model.issues ?? []).filter((one) => one.project === project);
+  const issues = Arr.filter(model.issues ?? [], (one) => one.project === project);
   const url = (number: number) =>
     `https://${project}/${forge === "gitlab" ? "-/issues" : "issues"}/${number}`;
   if (args[1] === "list") {
-    const open = issues.filter((one) => one.state === "open");
+    const open = Arr.filter(issues, (one) => one.state === "open");
     const page = Number(flag(args, "--page") ?? "1");
     const size = Number(flag(args, "--per-page") ?? flag(args, "--limit") ?? "30");
     return json(
-      open.slice((page - 1) * size, page * size).map((one): Schema.Json =>
+      Arr.map(open.slice((page - 1) * size, page * size), (one): Schema.Json =>
         forge === "github"
           ? { number: one.number, title: one.title, body: one.body, url: url(one.number) }
           : {
@@ -481,7 +501,7 @@ function issueAnswer(forge: MrForge, model: ForgeModel, args: ReadonlyArray<stri
     );
   }
   if (args[1] === "create") {
-    const number = Math.max(0, ...issues.map((one) => one.number)) + 1;
+    const number = Math.max(0, ...Arr.map(issues, (one) => one.number)) + 1;
     return {
       ...ok(`${url(number)}\n`),
       filedIssue: {
@@ -495,7 +515,7 @@ function issueAnswer(forge: MrForge, model: ForgeModel, args: ReadonlyArray<stri
   }
   if (args[1] === "comment" || args[1] === "note") {
     const number = Number(args[2]);
-    if (!issues.some((one) => one.number === number)) return no();
+    if (!Arr.some(issues, (one) => one.number === number)) return no();
     return {
       ...ok(),
       issueNoted: {
@@ -525,7 +545,7 @@ function issueApi(
   const path = decodeURIComponent(match[1]!);
   const project = `${forge === "github" ? "github.com" : flag(args, "--hostname")}/${path}`;
   if (flag(args, "-X") === "POST" && match[2] !== undefined && match[3] !== undefined) {
-    if (model.mrs.some((one) => one.project === project && one.iid === match[2])) return null;
+    if (Arr.some(model.mrs, (one) => one.project === project && one.iid === match[2])) return null;
     const noted = issueAnswer(forge, model, [
       "issue",
       "comment",
@@ -574,8 +594,11 @@ function issueApi(
   if ((flag(args, "-X") ?? "GET") !== "GET") return null;
   if (match[3] !== undefined) return null;
   if (match[2] !== undefined) {
-    const one = (model.issues ?? []).find(
-      (issue) => issue.project === project && issue.number === Number(match[2]),
+    const one = Option.getOrUndefined(
+      Arr.findFirst(
+        model.issues ?? [],
+        (issue) => issue.project === project && issue.number === Number(match[2]),
+      ),
     );
     if (one === undefined) return no();
     return json(
@@ -596,16 +619,17 @@ function issueApi(
           },
     );
   }
-  const query = new URLSearchParams(route.split("?")[1]);
-  const issues: Schema.Json[] = (model.issues ?? [])
-    .filter(
+  const query = new URLSearchParams(Str.split(route, "?")[1]);
+  const issues: Schema.Json[] = Arr.map(
+    Arr.filter(
+      model.issues ?? [],
       (one) =>
         one.project === project &&
         one.state === "open" &&
         !query.has("creator") &&
         !query.has("assignee"),
-    )
-    .map((one): Schema.Json =>
+    ),
+    (one): Schema.Json =>
       forge === "github"
         ? {
             number: one.number,
@@ -621,26 +645,28 @@ function issueApi(
             state: "opened",
             web_url: `https://${project}/-/issues/${one.number}`,
           },
-    );
+  );
   if (forge === "github")
     issues.push(
-      ...model.mrs
-        .filter(
+      ...Arr.map(
+        Arr.filter(
+          model.mrs,
           (one) =>
             one.project === project &&
             one.state === "open" &&
             (!query.has("creator") || one.author === query.get("creator")) &&
             (!query.has("assignee") || (one.assignees ?? []).includes(query.get("assignee")!)),
-        )
-        .map((one) => ({
+        ),
+        (one) => ({
           number: Number(one.iid),
           title: one.title ?? "",
           body: "",
           state: "open",
           pull_request: {},
           user: { login: one.author ?? "" },
-          assignees: (one.assignees ?? []).map((login) => ({ login })),
-        })),
+          assignees: Arr.map(one.assignees ?? [], (login) => ({ login })),
+        }),
+      ),
     );
   return json(pageOf(route, issues));
 }
@@ -650,7 +676,8 @@ const keyOf = (forge: MrForge, mr: FakeMr) =>
 
 /** Open merge requests the logged-in user is assigned to (`--assignee`) or wrote (`--author`). */
 const mine = (model: ForgeModel, who: string | undefined) =>
-  model.mrs.filter(
+  Arr.filter(
+    model.mrs,
     (one) =>
       one.state === "open" &&
       model.login !== null &&
@@ -661,8 +688,8 @@ const mine = (model: ForgeModel, who: string | undefined) =>
 
 function pipelineOf(checks: ReadonlyArray<Check> | undefined): string | null {
   if (checks === undefined || checks.length === 0) return null;
-  if (checks.some((one) => one.state === "failed")) return "failed";
-  if (checks.some((one) => one.state === "running")) return "running";
+  if (Arr.some(checks, (one) => one.state === "failed")) return "failed";
+  if (Arr.some(checks, (one) => one.state === "running")) return "running";
   return "success";
 }
 
@@ -687,10 +714,11 @@ const GITHUB_RUN = {
 } as const;
 
 /** The pipelines or Actions runs for `ref`, newest first. */
-const runsFor = (model: ForgeModel, ref: string) =>
-  Object.entries(model.runs ?? {})
-    .filter(([, one]) => one.ref === ref)
-    .toSorted(([a], [b]) => Number(b) - Number(a));
+const runsFor = (model: ForgeModel, ref: string) => {
+  const entries = Rec.toEntries(model.runs ?? {});
+  const runs = Arr.filter(entries, ([, one]) => one.ref === ref);
+  return Arr.sortWith(runs, ([id]) => Number(id), Order.flip(Order.Number));
+};
 
 /** The page a GitLab list route asks for, 20 to a page where it does not say. */
 function pageOf<T>(route: string, all: ReadonlyArray<T>): Array<T> {
@@ -704,14 +732,17 @@ const pipelineIdOf = (mr: FakeMr) => Number(mr.iid) * 100;
 
 /** A job as a forge lists it: the head pipeline's nth has id n, its base's 1000 + n, its target's 2000 + n. */
 const jobsOf = (jobs: ReadonlyArray<FakeJob>, from: number) =>
-  jobs.map((job, at) => ({ ...job, id: job.id ?? from + at + 1 }));
+  Arr.map(jobs, (job, at) => ({ ...job, id: job.id ?? from + at + 1 }));
 
 const actionsRun = (mr: FakeMr | undefined) => 4000 + Number(mr?.iid ?? 0);
 
 /** The merge request a project's job `id` is on its head pipeline of. */
 const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: number) => {
-  for (const mr of model.mrs.filter(project)) {
-    const at = jobsOf(mr.jobs ?? [], 0).findIndex((job) => job.id === id);
+  for (const mr of Arr.filter(model.mrs, project)) {
+    const at = Option.getOrElse(
+      Arr.findFirstIndex(jobsOf(mr.jobs ?? [], 0), (job) => job.id === id),
+      () => -1,
+    );
     if (at !== -1) return { mr, at };
   }
   return undefined;
@@ -726,7 +757,7 @@ function glabMrJson(mr: FakeMr) {
     state: mr.state === "open" ? "opened" : mr.state,
     draft: mr.draft ?? false,
     author: { username: mr.author ?? "" },
-    assignees: (mr.assignees ?? []).map((username) => ({ username })),
+    assignees: Arr.map(mr.assignees ?? [], (username) => ({ username })),
     sha: mr.head ?? null,
     merge_commit_sha: mr.mergedSha ?? null,
     merged_at: mr.mergedAt ?? null,
@@ -771,7 +802,7 @@ export const tokenOf = (forge: MrForge, model: ForgeModel) =>
 /** A time as glab stores an OAuth token's expiry: Go's RFC 822, in UTC. */
 export const rfc822 = (ms: number) => {
   const at = DateTime.toPartsUtc(DateTime.makeUnsafe(ms));
-  const two = (n: number) => String(n).padStart(2, "0");
+  const two = (n: number) => pipe(String(n), Str.padStart(2, "0"));
   return `${two(at.day)} ${MONTHS[at.month - 1]} ${two(at.year % 100)} ${two(at.hour)}:${two(at.minute)} UTC`;
 };
 
@@ -808,7 +839,12 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
     return model.login === null ? no() : json({ username: model.login });
   const mrAt = (iid: string | undefined) => {
     const repo = flag(args, "--repo");
-    return model.mrs.find((one) => one.iid === iid && (repo === undefined || one.project === repo));
+    return Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) => one.iid === iid && (repo === undefined || one.project === repo),
+      ),
+    );
   };
   if (verb === "mr" && sub === "view") {
     const mr = mrAt(args[2]);
@@ -816,16 +852,17 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
   }
   if (verb === "mr" && sub === "list" && flag(args, "--source-branch") !== undefined) {
     const repo = flag(args, "--repo");
-    if (repo !== undefined && !model.loggedIn.includes(repo.split("/")[0]!)) return no();
+    if (repo !== undefined && !model.loggedIn.includes(Str.split(repo, "/")[0]!)) return no();
     return json(
-      model.mrs
-        .filter(
+      Arr.map(
+        Arr.filter(
+          model.mrs,
           (one) =>
             (args.includes("--all") || one.state === "open") &&
             one.sourceBranch === flag(args, "--source-branch") &&
             (repo === undefined || one.project === repo),
-        )
-        .map((one) => ({
+        ),
+        (one) => ({
           iid: Number(one.iid),
           web_url: `https://${one.project}/-/merge_requests/${one.iid}`,
           merge_when_pipeline_succeeds: one.autoMerge ?? false,
@@ -833,12 +870,13 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
           created_at: one.createdAt ?? null,
           merged_at: one.mergedAt ?? null,
           closed_at: one.closedAt ?? null,
-        })),
+        }),
+      ),
     );
   }
   if (verb === "mr" && sub === "list" && args[3] === "@me")
     return json(
-      mine(model, args[2]).map((one) => ({ iid: Number(one.iid), title: one.title ?? "" })),
+      Arr.map(mine(model, args[2]), (one) => ({ iid: Number(one.iid), title: one.title ?? "" })),
     );
   if (verb === "mr" && sub === "approve") {
     const mr = mrAt(args[2]);
@@ -864,7 +902,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
         : json(
             pageOf(
               route,
-              (model.protectedBranches ?? []).map((one) => ({
+              Arr.map(model.protectedBranches ?? [], (one) => ({
                 name: one.name,
                 allow_force_push: one.allowForcePush ?? false,
               })),
@@ -876,19 +914,22 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       return json(
         pageOf(
           route,
-          environments.map(({ name, tier }) => ({ name, tier })),
+          Arr.map(environments, ({ name, tier }) => ({ name, tier })),
         ),
       );
-    if (route.includes("/deployments?"))
+    if (pipe(route, Str.includes("/deployments?")))
       return json(
         pageOf(
           route,
-          deploymentsAsked(model, route).map(({ sha, status, environment, job, pipeline }) => ({
-            sha,
-            status,
-            environment: { name: environment },
-            deployable: job === undefined ? null : { name: job, pipeline: pipeline ?? null },
-          })),
+          Arr.map(
+            deploymentsAsked(model, route),
+            ({ sha, status, environment, job, pipeline }) => ({
+              sha,
+              status,
+              environment: { name: environment },
+              deployable: job === undefined ? null : { name: job, pipeline: pipeline ?? null },
+            }),
+          ),
         ),
       );
     const byBranch = /^projects\/([^/]+)\/merge_requests\?(.*)$/.exec(route);
@@ -899,17 +940,18 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       return json(
         pageOf(
           route,
-          model.mrs
-            .filter(
+          Arr.map(
+            Arr.filter(
+              model.mrs,
               (one) =>
-                one.project.endsWith(`/${path}`) &&
+                pipe(one.project, Str.endsWith(`/${path}`)) &&
                 (!query.has("source_branch") || one.sourceBranch === query.get("source_branch")) &&
                 (!query.has("author_username") || one.author === query.get("author_username")) &&
                 (!query.has("assignee_username") ||
                   (one.assignees ?? []).includes(query.get("assignee_username")!)) &&
                 (state === null || state === "all" || glabMrJson(one).state === state),
-            )
-            .map((one) => ({
+            ),
+            (one) => ({
               iid: Number(one.iid),
               title: one.title ?? "",
               web_url: `https://${one.project}/-/merge_requests/${one.iid}`,
@@ -918,37 +960,51 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
               created_at: one.createdAt ?? NOW,
               merged_at: one.mergedAt ?? null,
               closed_at: one.closedAt ?? null,
-            })),
+            }),
+          ),
         ),
       );
     }
     const onMr = /^projects\/([^/]+)\/merge_requests\/(\d+)(?:\/(.+))?$/.exec(route);
     if (onMr) {
       const [, path = "", iid = "", rest] = onMr;
-      const mr = model.mrs.find(
-        (one) => one.iid === iid && one.project.endsWith(`/${decodeURIComponent(path)}`),
+      const mr = Option.getOrUndefined(
+        Arr.findFirst(
+          model.mrs,
+          (one) =>
+            one.iid === iid && pipe(one.project, Str.endsWith(`/${decodeURIComponent(path)}`)),
+        ),
       );
       return mr === undefined ? no() : glabOnMr(model, mr, rest ?? "", args);
     }
     const retry = /^projects\/([^/]+)\/jobs\/(\d+)\/retry$/.exec(route);
     if (retry && args.includes("POST")) {
       const path = decodeURIComponent(retry[1]!);
-      const found = headJobAt(model, (one) => one.project.endsWith(`/${path}`), Number(retry[2]));
+      const found = headJobAt(
+        model,
+        (one) => pipe(one.project, Str.endsWith(`/${path}`)),
+        Number(retry[2]),
+      );
       return found === undefined ? no() : { ...json({ id: Number(retry[2]) }), retried: found };
     }
     const bySha = /\/pipelines\?sha=([^&]+)/.exec(route);
     if (bySha) {
       const sha = bySha[1]!;
-      const mr = model.mrs.find((one) => one.base?.at === sha && one.base?.jobs !== undefined);
+      const mr = Option.getOrUndefined(
+        Arr.findFirst(model.mrs, (one) => one.base?.at === sha && one.base?.jobs !== undefined),
+      );
       return json(mr === undefined ? [] : [{ id: pipelineIdOf(mr) + 1, sha }]);
     }
     const byRef = /\/pipelines\?ref=([^&]+)/.exec(route);
     const tagged = byRef === null ? [] : runsFor(model, decodeURIComponent(byRef[1]!));
     if (tagged.length > 0)
-      return json(tagged.map(([id, one]) => ({ id: Number(id), sha: one.sha ?? "" })));
+      return json(Arr.map(tagged, ([id, one]) => ({ id: Number(id), sha: one.sha ?? "" })));
     if (byRef) {
-      const mr = model.mrs.find(
-        (one) => one.targetBranch === decodeURIComponent(byRef[1]!) && one.target !== undefined,
+      const mr = Option.getOrUndefined(
+        Arr.findFirst(
+          model.mrs,
+          (one) => one.targetBranch === decodeURIComponent(byRef[1]!) && one.target !== undefined,
+        ),
       );
       return json(mr === undefined ? [] : [{ id: pipelineIdOf(mr) + 2, sha: mr.target!.at }]);
     }
@@ -956,7 +1012,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
     const named = jobs === null ? undefined : model.runs?.[jobs[2]!]?.jobs;
     if (named !== undefined)
       return json(
-        named.map((job, at) => ({
+        Arr.map(named, (job, at) => ({
           id: at + 1,
           name: job.name,
           status: GITLAB_JOB[job.state],
@@ -965,7 +1021,9 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       );
     if (jobs) {
       const id = Number(jobs[2]);
-      const mr = model.mrs.find((one) => Math.floor(id / 100) === Number(one.iid));
+      const mr = Option.getOrUndefined(
+        Arr.findFirst(model.mrs, (one) => Math.floor(id / 100) === Number(one.iid)),
+      );
       const listed =
         mr === undefined
           ? undefined
@@ -979,7 +1037,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       return mr === undefined || listed === undefined
         ? no()
         : json(
-            listed.slice((page - 1) * size, page * size).map((job) => ({
+            Arr.map(listed.slice((page - 1) * size, page * size), (job) => ({
               id: job.id,
               name: job.name,
               status: GITLAB_JOB[job.state],
@@ -991,7 +1049,9 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
     if (commit) {
       const parents =
         model.ancestry?.[commit[1]!] ??
-        (deploymentsOf(model).some((deployment) => deployment.sha === commit[1]) ? [] : undefined);
+        (Arr.some(deploymentsOf(model), (deployment) => deployment.sha === commit[1])
+          ? []
+          : undefined);
       return parents === undefined ? no() : json({ id: commit[1]!, parent_ids: [...parents] });
     }
     const pipeline = /\/pipelines\/(\d+)$/.exec(route);
@@ -1037,31 +1097,31 @@ function glabOnMr(
     return model.free === true
       ? refused("403 Forbidden")
       : json({
-          rules: rulesOf(mr).map((rule) => ({
+          rules: Arr.map(rulesOf(mr), (rule) => ({
             name: rule.name,
             approvals_required: rule.required,
-            approved_by: rule.approvers.map((username) => ({ username })),
+            approved_by: Arr.map(rule.approvers, (username) => ({ username })),
           })),
         });
   if (rest === "approvals") {
     const rules = rulesOf(mr);
-    const named = mr.approvers ?? [...new Set(rules.flatMap((rule) => rule.approvers))];
+    const named = mr.approvers ?? [...new Set(Arr.flatMap(rules, (rule) => rule.approvers))];
     const approvers = named.length === 0 && mr.approved === true ? ["a-reviewer"] : named;
-    const required = mr.required ?? Math.max(0, ...rules.map((rule) => rule.required));
+    const required = mr.required ?? Math.max(0, ...Arr.map(rules, (rule) => rule.required));
     return json({
       approvals_required: required,
       approvals_left: Math.max(0, required - approvers.length),
-      approved_by: approvers.map((username) => ({ user: { username } })),
+      approved_by: Arr.map(approvers, (username) => ({ user: { username } })),
     });
   }
-  if (rest.startsWith("discussions?") && method === "GET") {
+  if (pipe(rest, Str.startsWith("discussions?")) && method === "GET") {
     const page = Number(/[?&]page=(\d+)/.exec(rest)?.[1] ?? "1");
     const size = Number(/[?&]per_page=(\d+)/.exec(rest)?.[1] ?? "20");
     return json(discussionsOf(mr).slice((page - 1) * size, page * size));
   }
   const thread = /^discussions\/([^/]+)\/notes$/.exec(rest)?.[1];
   if ((thread !== undefined || rest === "notes") && method === "POST") {
-    if (thread !== undefined && !discussionsOf(mr).some((one) => one.id === thread))
+    if (thread !== undefined && !Arr.some(discussionsOf(mr), (one) => one.id === thread))
       return refused("404 Discussion Not Found");
     return {
       ...json({ id: 1 }),
@@ -1080,27 +1140,28 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
   const body = field(args, "body") ?? "";
   if (kind === "issues" && rest === "comments" && method === "POST")
     return { ...json({ id: 1 }), replied: { mr: pull, thread: null, body } };
-  if (kind === "issues" && rest.startsWith("comments?"))
+  if (kind === "issues" && pipe(rest, Str.startsWith("comments?")))
     return pagesOf(
-      comments
-        .filter((one) => one.thread === undefined)
-        .map((one) => ({
+      Arr.map(
+        Arr.filter(comments, (one) => one.thread === undefined),
+        (one) => ({
           id: one.id,
           html_url: `${url}#issuecomment-${one.id}`,
           user: userOf(one.author, one.kind === "bot"),
           created_at: one.at,
           body: one.body,
-        })),
+        }),
+      ),
       args,
     );
   const replyTo = /^comments\/(\d+)\/replies$/.exec(rest)?.[1];
   if (kind === "pulls" && replyTo !== undefined && method === "POST")
-    return comments.some((one) => String(one.id) === replyTo && one.thread === replyTo)
+    return Arr.some(comments, (one) => String(one.id) === replyTo && one.thread === replyTo)
       ? { ...json({ id: 1 }), replied: { mr: pull, thread: replyTo, body } }
       : refused("Not Found (HTTP 404)");
-  if (kind === "pulls" && rest.startsWith("comments?"))
+  if (kind === "pulls" && pipe(rest, Str.startsWith("comments?")))
     return pagesOf(
-      comments.flatMap((one) =>
+      Arr.flatMap(comments, (one) =>
         one.thread === undefined
           ? []
           : [
@@ -1118,9 +1179,9 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
       ),
       args,
     );
-  if (kind === "pulls" && rest.startsWith("reviews?"))
+  if (kind === "pulls" && pipe(rest, Str.startsWith("reviews?")))
     return pagesOf(
-      (pull.reviews ?? []).map((one) => ({
+      Arr.map(pull.reviews ?? [], (one) => ({
         id: one.id,
         html_url: `${url}#pullrequestreview-${one.id}`,
         user: userOf(one.author, one.bot),
@@ -1138,10 +1199,10 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
 /** A pull request as GitHub's GraphQL answers the panel's query. */
 const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
   title: pull.title ?? "",
-  state: pull.state.toUpperCase(),
+  state: Str.toUpperCase(pull.state),
   isDraft: pull.draft ?? false,
   author: { login: pull.author ?? "" },
-  assignees: { nodes: (pull.assignees ?? []).map((login) => ({ login })) },
+  assignees: { nodes: Arr.map(pull.assignees ?? [], (login) => ({ login })) },
   headRefName: pull.sourceBranch ?? "",
   isCrossRepository: pull.fork === true,
   baseRefName: pull.targetBranch ?? "",
@@ -1164,7 +1225,7 @@ const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
               ? null
               : {
                   contexts: {
-                    nodes: (pull.checks ?? []).map((check) => ({
+                    nodes: Arr.map(pull.checks ?? [], (check) => ({
                       __typename: "CheckRun",
                       name: check.name,
                       detailsUrl: pull.checksUrl ?? null,
@@ -1189,15 +1250,18 @@ const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
 function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | undefined {
   const query = field(args, "query") ?? "";
   const typed = (name: string) => field(args, name, "-F");
-  if (query.includes("viewerDefaultMergeMethod"))
+  if (pipe(query, Str.includes("viewerDefaultMergeMethod")))
     return json({
       data: { repository: { viewerDefaultMergeMethod: model.mergeMethod ?? "MERGE" } },
     });
-  if (query.includes("statusCheckRollup") || query.includes("mergedBy")) {
-    const pull = model.mrs.find(
-      (one) =>
-        one.project === `github.com/${typed("owner")}/${typed("name")}` &&
-        one.iid === typed("number"),
+  if (pipe(query, Str.includes("statusCheckRollup")) || pipe(query, Str.includes("mergedBy"))) {
+    const pull = Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) =>
+          one.project === `github.com/${typed("owner")}/${typed("name")}` &&
+          one.iid === typed("number"),
+      ),
     );
     if (pull === undefined)
       return json({
@@ -1206,20 +1270,25 @@ function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | und
       });
     return json({ data: { repository: { pullRequest: ghPullNode(model, pull) } } });
   }
-  if (query.includes("reviewThreads")) {
-    const pull = model.mrs.find(
-      (one) =>
-        one.project === `github.com/${typed("owner")}/${typed("name")}` &&
-        one.iid === typed("number"),
+  if (pipe(query, Str.includes("reviewThreads"))) {
+    const pull = Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) =>
+          one.project === `github.com/${typed("owner")}/${typed("name")}` &&
+          one.iid === typed("number"),
+      ),
     );
     if (pull === undefined) return no();
-    const threads = new Set((pull.comments ?? []).flatMap((one) => one.thread ?? []));
+    const threads = new Set(
+      Arr.flatMap(pull.comments ?? [], (one) => Arr.ensure(one.thread ?? [])),
+    );
     const page = {
       data: {
         repository: {
           pullRequest: {
             reviewThreads: {
-              nodes: [...threads].map((thread) => ({
+              nodes: Arr.map([...threads], (thread) => ({
                 isResolved: (pull.resolved ?? []).includes(thread),
                 comments: { nodes: [{ databaseId: Number(thread) }] },
               })),
@@ -1231,7 +1300,7 @@ function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | und
     };
     return json(args.includes("--slurp") ? [page] : page);
   }
-  if (query.includes("refUpdateRule")) {
+  if (pipe(query, Str.includes("refUpdateRule"))) {
     if (model.protectionDown === true) return no();
     const required = model.reviewsRequired;
     return json({
@@ -1255,35 +1324,41 @@ function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | und
 
 /** Each environment's deployments, newest first: by default a failed newer one, then what is live. */
 const deploymentsOf = (model: ForgeModel) =>
-  (model.environments ?? []).flatMap((env, at) =>
-    (
+  Arr.flatMap(model.environments ?? [], (env, at) =>
+    Arr.map(
       env.deployments ?? [
         ...(env.failed === undefined || env.failed === ""
           ? []
           : [{ sha: env.failed, status: "failed" as const }]),
         ...(env.deployed === undefined ? [] : [{ sha: env.deployed, status: "success" as const }]),
-      ]
-    ).map((one, n) => ({
-      id: at * 1000 + n + 1,
-      sha: one.sha,
-      environment: env.name,
-      state:
-        one.status === "failed" ? "failure" : one.status === "running" ? "in_progress" : one.status,
-      status: one.status,
-      job: "job" in one ? one.job : env.job,
-      jobId: "jobId" in one ? one.jobId : undefined,
-      logUrl: "logUrl" in one ? one.logUrl : undefined,
-      pipeline: "pipeline" in one ? one.pipeline : undefined,
-    })),
+      ],
+      (one, n) => ({
+        id: at * 1000 + n + 1,
+        sha: one.sha,
+        environment: env.name,
+        state:
+          one.status === "failed"
+            ? "failure"
+            : one.status === "running"
+              ? "in_progress"
+              : one.status,
+        status: one.status,
+        job: "job" in one ? one.job : env.job,
+        jobId: "jobId" in one ? one.jobId : undefined,
+        logUrl: "logUrl" in one ? one.logUrl : undefined,
+        pipeline: "pipeline" in one ? one.pipeline : undefined,
+      }),
+    ),
   );
 
 /** The deployments a deployment list route asks for, by its `environment`, `sha` and `status`. */
 const deploymentsAsked = (model: ForgeModel, route: string) => {
-  const query = new URLSearchParams(route.split("?")[1] ?? "");
+  const query = new URLSearchParams(Str.split(route, "?")[1] ?? "");
   const environment = query.get("environment");
   const sha = query.get("sha");
   const status = query.get("status");
-  return deploymentsOf(model).filter(
+  return Arr.filter(
+    deploymentsOf(model),
     (one) =>
       (environment === null || one.environment === environment) &&
       (sha === null || one.sha === sha) &&
@@ -1305,10 +1380,13 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     const required = model.reviewsRequired;
     return pagesOf(
       [
-        ...(model.rulesets ?? [])
-          .filter((pattern) => new Bun.Glob(pattern).match(decodeURIComponent(ruled[1]!)))
-          .map((_, at) => ({ type: "pull_request", ruleset_id: at + 1 })),
-        ...(required?.rulesets ?? []).map((count, at) => ({
+        ...Arr.map(
+          Arr.filter(model.rulesets ?? [], (pattern) =>
+            new Bun.Glob(pattern).match(decodeURIComponent(ruled[1]!)),
+          ),
+          (_, at) => ({ type: "pull_request", ruleset_id: at + 1 }),
+        ),
+        ...Arr.map(required?.rulesets ?? [], (count, at) => ({
           type: "pull_request",
           ruleset_id: 100 + at,
           parameters: {
@@ -1325,19 +1403,20 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   const pulls = /^repos\/([^/]+\/[^/]+)\/pulls\?(.*)$/.exec(route);
   if (pulls) {
     const query = new URLSearchParams(pulls[2]);
-    const [owner = "", branch = ""] = (query.get("head") ?? "").split(/:(.*)/);
+    const [owner, branch = ""] = Str.split(query.get("head") ?? "", /:(.*)/);
     return json(
       pageOf(
         route,
-        model.mrs
-          .filter(
+        Arr.map(
+          Arr.filter(
+            model.mrs,
             (one) =>
               one.project === `github.com/${pulls[1]}` &&
-              pulls[1]!.startsWith(`${owner}/`) &&
+              pipe(pulls[1]!, Str.startsWith(`${owner}/`)) &&
               (query.get("state") === "all" || one.state === "open") &&
               one.sourceBranch === branch,
-          )
-          .map((one) => ({
+          ),
+          (one) => ({
             number: Number(one.iid),
             html_url: `https://${one.project}/pull/${one.iid}`,
             state: one.state === "open" ? "open" : "closed",
@@ -1349,14 +1428,18 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
               one.autoMerge === true
                 ? { merge_method: "merge", enabled_by: { login: "me" } }
                 : null,
-          })),
+          }),
+        ),
       ),
     );
   }
   const pullOnly = /^repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(route);
   if (pullOnly) {
-    const pull = model.mrs.find(
-      (one) => one.project === `github.com/${pullOnly[1]}` && one.iid === pullOnly[2],
+    const pull = Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) => one.project === `github.com/${pullOnly[1]}` && one.iid === pullOnly[2],
+      ),
     );
     return pull === undefined
       ? no()
@@ -1369,8 +1452,8 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   const onPull = /^repos\/([^/]+\/[^/]+)\/(pulls|issues)\/(\d+)\/(.+)$/.exec(route);
   if (onPull) {
     const [, repo = "", kind = "", number = "", rest = ""] = onPull;
-    const pull = model.mrs.find(
-      (one) => one.project === `github.com/${repo}` && one.iid === number,
+    const pull = Option.getOrUndefined(
+      Arr.findFirst(model.mrs, (one) => one.project === `github.com/${repo}` && one.iid === number),
     );
     if (pull !== undefined && kind === "pulls" && rest === "reviews" && flag(args, "-X") === "POST")
       return model.refusesApproval
@@ -1395,16 +1478,17 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
           data: {
             repository: {
               branchProtectionRules: {
-                nodes: (model.protectedBranches ?? []).map((one) => ({ pattern: one.name })),
+                nodes: Arr.map(model.protectedBranches ?? [], (one) => ({ pattern: one.name })),
               },
             },
           },
         });
   if (model.deploysDown === true) return no();
   const tierOf = (name: string) =>
-    (model.environments ?? []).find((env) => env.name === name)?.tier;
+    Option.getOrUndefined(Arr.findFirst(model.environments ?? [], (env) => env.name === name))
+      ?.tier;
   if (/\/environments\?/.test(route)) {
-    const environments = (model.environments ?? []).map((env) => ({ name: env.name }));
+    const environments = Arr.map(model.environments ?? [], (env) => ({ name: env.name }));
     const page = {
       total_count: environments.length,
       environments: args.includes("--slurp") ? environments : pageOf(route, environments),
@@ -1412,7 +1496,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     return json(args.includes("--slurp") ? [page] : page);
   }
   if (/\/deployments\?/.test(route)) {
-    const deployments = deploymentsAsked(model, route).map(({ id, sha, environment }) => ({
+    const deployments = Arr.map(deploymentsAsked(model, route), ({ id, sha, environment }) => ({
       id,
       sha,
       environment,
@@ -1426,13 +1510,18 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   }
   const statuses = /\/deployments\/(\d+)\/statuses/.exec(route);
   if (statuses) {
-    const one = deploymentsOf(model).find((deployment) => deployment.id === Number(statuses[1]));
+    const one = Option.getOrUndefined(
+      Arr.findFirst(deploymentsOf(model), (deployment) => deployment.id === Number(statuses[1])),
+    );
     if (one === undefined) return no();
     const mr = model.mrs[0];
     const jobId =
       one.jobId ??
-      (mr?.jobs ?? []).find((job) => job.name === one.job)?.id ??
-      (mr?.jobs ?? []).findIndex((job) => job.name === one.job) + 1;
+      Option.getOrUndefined(Arr.findFirst(mr?.jobs ?? [], (job) => job.name === one.job))?.id ??
+      Option.getOrElse(
+        Arr.findFirstIndex(mr?.jobs ?? [], (job) => job.name === one.job),
+        () => -1,
+      ) + 1;
     return json([
       {
         state: one.state,
@@ -1450,7 +1539,9 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
         : (model.ancestry?.[live] ?? []).includes(merged)
           ? "ahead"
           : "behind";
-    const pull = model.mrs.find((one) => one.targetBranch === merged && one.head === live);
+    const pull = Option.getOrUndefined(
+      Arr.findFirst(model.mrs, (one) => one.targetBranch === merged && one.head === live),
+    );
     return json({
       status,
       merge_base_commit: pull?.base === undefined ? null : { sha: pull.base.at },
@@ -1462,10 +1553,12 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     );
   if (checkRuns) {
     const [, repo = "", sha = "", name] = checkRuns;
-    const ofRepo = model.mrs.filter((one) => one.project === `github.com/${repo}`);
-    const head = ofRepo.find((one) => one.head === sha);
-    const base = ofRepo.find((one) => one.base?.at === sha);
-    const target = ofRepo.find((one) => one.targetBranch === sha && one.target !== undefined);
+    const ofRepo = Arr.filter(model.mrs, (one) => one.project === `github.com/${repo}`);
+    const head = Option.getOrUndefined(Arr.findFirst(ofRepo, (one) => one.head === sha));
+    const base = Option.getOrUndefined(Arr.findFirst(ofRepo, (one) => one.base?.at === sha));
+    const target = Option.getOrUndefined(
+      Arr.findFirst(ofRepo, (one) => one.targetBranch === sha && one.target !== undefined),
+    );
     const [jobs, at] =
       head !== undefined
         ? [jobsOf(head.jobs ?? [], 0), sha]
@@ -1475,12 +1568,17 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
             ? [jobsOf(target.target!.jobs, 2000), target.target!.at]
             : [jobsOf(model.checksAt?.[sha] ?? [], 0), sha];
     const page = {
-      check_runs: jobs
-        .filter(
+      check_runs: pipe(
+        jobs,
+        Arr.filter(
           (job, at) =>
-            route.includes("filter=all") || jobs.findIndex((one) => one.name === job.name) === at,
-        )
-        .flatMap((job) =>
+            pipe(route, Str.includes("filter=all")) ||
+            Option.getOrElse(
+              Arr.findFirstIndex(jobs, (one) => one.name === job.name),
+              () => -1,
+            ) === at,
+        ),
+        Arr.flatMap((job) =>
           name === undefined || job.name === decodeURIComponent(name)
             ? [
                 {
@@ -1493,6 +1591,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
               ]
             : [],
         ),
+      ),
     };
     return args.includes("--slurp")
       ? json([page])
@@ -1500,17 +1599,20 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   }
   const rerun = /^repos\/(.+)\/actions\/runs\/(\d+)\/rerun-failed-jobs$/.exec(route);
   if (rerun && args.includes("POST")) {
-    const mr = model.mrs.find(
-      (one) => one.project === `github.com/${rerun[1]}` && actionsRun(one) === Number(rerun[2]),
+    const mr = Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) => one.project === `github.com/${rerun[1]}` && actionsRun(one) === Number(rerun[2]),
+      ),
     );
-    const at = (mr?.jobs ?? []).flatMap((job, n) => (job.state === "failed" ? [n] : []));
+    const at = Arr.flatMap(mr?.jobs ?? [], (job, n) => (job.state === "failed" ? [n] : []));
     return mr === undefined || at.length === 0 ? no() : { ...ok(), retried: { mr, at } };
   }
   const runJobs = /^repos\/(.+)\/actions\/runs\/(\d+)\/jobs/.exec(route);
   if (runJobs) {
     const said = model.runs?.[runJobs[2]!];
     if (said === undefined) return no();
-    const jobs = (said.jobs ?? []).map((job, at) => ({
+    const jobs = Arr.map(said.jobs ?? [], (job, at) => ({
       id: at + 1,
       name: job.name,
       ...GITHUB_RUN[job.state],
@@ -1535,18 +1637,20 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
         });
   }
   const byBranch = /^repos\/(.+)\/actions\/runs\?.*\bbranch=([^&]+)/.exec(route);
-  if (byBranch)
+  if (byBranch) {
+    const event = /[?&]event=([^&]+)/.exec(route)?.[1];
+    const runs = runsFor(model, decodeURIComponent(byBranch[2]!));
+    const matching = Arr.filter(
+      runs,
+      ([, one]) => event === undefined || (one.event ?? "push") === event,
+    );
     return json({
-      workflow_runs: runsFor(model, decodeURIComponent(byBranch[2]!))
-        .filter(([, one]) => {
-          const event = /[?&]event=([^&]+)/.exec(route)?.[1];
-          return event === undefined || (one.event ?? "push") === event;
-        })
-        .map(([id]) => ({
-          id: Number(id),
-          html_url: `https://github.com/${byBranch[1]}/actions/runs/${id}`,
-        })),
+      workflow_runs: Arr.map(matching, ([id]) => ({
+        id: Number(id),
+        html_url: `https://github.com/${byBranch[1]}/actions/runs/${id}`,
+      })),
     });
+  }
   return no();
 }
 
@@ -1577,8 +1681,11 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>): Answer {
       : json({ nameWithOwner: repo, viewerDefaultMergeMethod: model.mergeMethod ?? "MERGE" });
   }
   const pullAt = (number: string | undefined) =>
-    model.mrs.find(
-      (one) => one.iid === number && one.project === `github.com/${flag(args, "--repo")}`,
+    Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) => one.iid === number && one.project === `github.com/${flag(args, "--repo")}`,
+      ),
     );
   if (verb === "pr" && sub === "view" && args.includes("--web"))
     return pullAt(args[2]) ? ok() : no();
@@ -1596,10 +1703,10 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>): Answer {
     if (pull === undefined) return no();
     return json({
       title: pull.title ?? "",
-      state: pull.state.toUpperCase(),
+      state: Str.toUpperCase(pull.state),
       isDraft: pull.draft ?? false,
       author: { login: pull.author ?? "" },
-      assignees: (pull.assignees ?? []).map((login) => ({ login })),
+      assignees: Arr.map(pull.assignees ?? [], (login) => ({ login })),
       headRefName: pull.sourceBranch ?? "",
       isCrossRepository: pull.fork === true,
       baseRefName: pull.targetBranch ?? "",
@@ -1613,7 +1720,7 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>): Answer {
       ...GITHUB_MERGE_STATE[pull.mergeable ?? "yes"],
       mergeCommit: pull.mergedSha === undefined ? null : { oid: pull.mergedSha },
       mergedAt: pull.mergedAt ?? null,
-      statusCheckRollup: (pull.checks ?? []).map((check) => ({
+      statusCheckRollup: Arr.map(pull.checks ?? [], (check) => ({
         __typename: "CheckRun",
         name: check.name,
         detailsUrl: pull.checksUrl ?? null,
@@ -1626,31 +1733,34 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>): Answer {
   if (verb === "pr" && sub === "list" && args.includes("@me")) {
     const who = args.includes("--assignee") ? "--assignee" : "--author";
     return json(
-      mine(model, who)
-        .filter((one) => one.project === `github.com/${flag(args, "--repo")}`)
-        .map((one) => ({ number: Number(one.iid), title: one.title ?? "" })),
+      Arr.map(
+        Arr.filter(mine(model, who), (one) => one.project === `github.com/${flag(args, "--repo")}`),
+        (one) => ({ number: Number(one.iid), title: one.title ?? "" }),
+      ),
     );
   }
   if (verb === "pr" && sub === "list") {
     const repo = `github.com/${flag(args, "--repo")}`;
     return json(
-      model.mrs
-        .filter(
+      Arr.map(
+        Arr.filter(
+          model.mrs,
           (one) =>
             one.project === repo &&
             (flag(args, "--state") === "all" || one.state === "open") &&
             one.sourceBranch === flag(args, "--head"),
-        )
-        .map((one) => ({
+        ),
+        (one) => ({
           number: Number(one.iid),
           url: `https://${one.project}/pull/${one.iid}`,
           autoMergeRequest: one.autoMerge === true ? { enabledAt: "2026-10-01T00:00:00Z" } : null,
-          state: one.state.toUpperCase(),
+          state: Str.toUpperCase(one.state),
           createdAt: one.createdAt ?? "",
           mergedAt: one.mergedAt ?? null,
           // GitHub stamps a merged pull request closed too.
           closedAt: one.closedAt ?? one.mergedAt ?? null,
-        })),
+        }),
+      ),
     );
   }
   if (verb === "pr" && sub === "comment") {
@@ -1686,6 +1796,14 @@ export function answer(
       environment: false,
     });
   }
+  // GitLab's clone is git's own, with glab's token as its header.
+  const cloning =
+    cmd === "git" && args[0] === "clone" ? /^https:\/\/(.+)\.git$/.exec(args.at(-2) ?? "") : null;
+  if (cloning)
+    return {
+      ran: ok().ran,
+      model: { ...model, cloned: [...(model.cloned ?? []), `${cloning[1]} ${args.at(-1)}`] },
+    };
   if (cmd === "git") {
     const said =
       args[0] === "remote" && args[1] === "get-url"
@@ -1694,23 +1812,13 @@ export function answer(
           : args[2] === "upstream"
             ? model.upstream
             : undefined
-        : args.join(" ") === "rev-parse --abbrev-ref HEAD"
+        : Arr.join(args, " ") === "rev-parse --abbrev-ref HEAD"
           ? model.branch
-          : args.join(" ") === "symbolic-ref --quiet --short HEAD" && model.branch !== "HEAD"
+          : Arr.join(args, " ") === "symbolic-ref --quiet --short HEAD" && model.branch !== "HEAD"
             ? model.branch
             : undefined;
     return { ran: said === undefined ? no().ran : ok(`${said}\n`).ran, model };
   }
-  // GitLab's clone is git's own, with glab's token as its header.
-  const cloning =
-    cmd === "env" && args.includes("clone")
-      ? /^https:\/\/(.+)\.git$/.exec(args.at(-2) ?? "")
-      : null;
-  if (cloning)
-    return {
-      ran: ok().ran,
-      model: { ...model, cloned: [...(model.cloned ?? []), `${cloning[1]} ${args.at(-1)}`] },
-    };
   if (cmd !== CLI[forge]) return { ran: no(127).ran, model };
   const said = forge === "gitlab" ? glab(model, args, under) : gh(model, args);
   let after = model;
@@ -1735,12 +1843,12 @@ export function answer(
     const { mr, at } = said.retried;
     after = {
       ...after,
-      mrs: after.mrs.map((one) =>
+      mrs: Arr.map(after.mrs, (one) =>
         one !== mr
           ? one
           : {
               ...one,
-              jobs: (one.jobs ?? []).map((job, n) =>
+              jobs: Arr.map(one.jobs ?? [], (job, n) =>
                 [at].flat().includes(n)
                   ? { ...job, state: job.retried ?? job.state, id: (job.id ?? n + 1) + 100 }
                   : job,
@@ -1754,7 +1862,9 @@ export function answer(
     const key = keyOf(forge, mr);
     const replies = after.replies ?? {};
     const unthreaded: FakeComment = {
-      id: Math.max(0, ...after.mrs.flatMap((one) => (one.comments ?? []).map((c) => c.id))) + 1,
+      id:
+        Math.max(0, ...Arr.flatMap(after.mrs, (one) => Arr.map(one.comments ?? [], (c) => c.id))) +
+        1,
       author: after.login ?? "",
       at: after.now ?? NOW,
       body,
@@ -1763,7 +1873,7 @@ export function answer(
     after = {
       ...after,
       replies: { ...replies, [key]: [...(replies[key] ?? []), { thread, body }] },
-      mrs: after.mrs.map((one) =>
+      mrs: Arr.map(after.mrs, (one) =>
         one === mr ? { ...one, comments: [...(one.comments ?? []), comment] } : one,
       ),
     };
@@ -1778,7 +1888,7 @@ export function answer(
         ...(after.merges ?? []),
         { key: keyOf(forge, mr), sha, method: method ?? null, fields, by, at },
       ],
-      mrs: after.mrs.map((one) =>
+      mrs: Arr.map(after.mrs, (one) =>
         one === mr
           ? { ...one, state: "merged", mergedSha: mergeCommitOf(one), mergedBy: by, mergedAt: at }
           : one,
@@ -1802,7 +1912,7 @@ const GraphqlBody = Schema.fromJsonString(
     variables: Schema.optionalKey(
       Schema.Record(
         Schema.String,
-        Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]),
+        Schema.Union([Schema.String, Schema.Finite, Schema.Boolean, Schema.Null]),
       ),
     ),
   }),
@@ -1815,7 +1925,7 @@ const graphqlFields = (body: RequestInit["body"]) => {
   return [
     "-f",
     `query=${sent.value.query}`,
-    ...Object.entries(sent.value.variables ?? {}).flatMap(([name, value]) =>
+    ...Arr.flatMap(Rec.toEntries(sent.value.variables ?? {}), ([name, value]) =>
       value === null ? [] : ["-F", `${name}=${String(value)}`],
     ),
   ];
@@ -1826,13 +1936,13 @@ const bodyFields = (body: RequestInit["body"]) => {
     Schema.fromJsonString(
       Schema.Record(
         Schema.String,
-        Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]),
+        Schema.Union([Schema.String, Schema.Finite, Schema.Boolean, Schema.Null]),
       ),
     ),
   )(body);
   return Option.isNone(read)
     ? []
-    : Object.entries(read.value).flatMap(([name, value]) =>
+    : Arr.flatMap(Rec.toEntries(read.value), ([name, value]) =>
         value === null ? [] : ["-f", `${name}=${String(value)}`],
       );
 };
@@ -1861,8 +1971,11 @@ export function httpFace(
       headers: { "content-type": "application/json", ...headers },
     });
   const respond = Effect.fn("forge.httpFace")(function* (input: string, init: RequestInit) {
-    const method = (init.method ?? "GET").toUpperCase();
-    const token = (new Headers(init.headers).get("authorization") ?? "").replace(/^Bearer /, "");
+    const method = Str.toUpperCase(init.method ?? "GET");
+    const token = pipe(
+      new Headers(init.headers).get("authorization") ?? "",
+      Str.replace(/^Bearer /, ""),
+    );
     requests.push({ method, url: input, token });
     const model = yield* state.read;
     const fault = model.httpFault;
@@ -1882,7 +1995,7 @@ export function httpFace(
     const host = forge === "github" ? FORGE_HOST.github : url.host;
     if (!model.loggedIn.includes(host) || model.revoked === true || token !== tokenOf(forge, model))
       return answered(401, `{"message":"401 Unauthorized"}`);
-    const route = `${url.pathname.slice(API[forge].length)}${url.search}`;
+    const route = `${pipe(url.pathname, Str.slice(API[forge].length))}${url.search}`;
     const args =
       forge === "github"
         ? ["api", route, "-X", method, ...graphqlFields(init.body), ...bodyFields(init.body)]
@@ -1895,7 +2008,7 @@ export function httpFace(
       const headers: Record<string, string> = {};
       const size = Number(url.searchParams.get("per_page"));
       const page = Number(url.searchParams.get("page") ?? "1");
-      const items = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Schema.Json)))(
+      const items = Schema.decodeOption(Schema.fromJsonString(Schema.Array(Schema.Json)))(
         said.ran.stdout,
       );
       if (size > 0 && Option.isSome(items) && items.value.length === size) {
@@ -1905,7 +2018,12 @@ export function httpFace(
       return answered(said.ran.stdout === "" ? 204 : 200, said.ran.stdout, headers);
     }
     const status = Number(/^(\d{3})\b/.exec(said.ran.stderr ?? "")?.[1] ?? "404");
-    return answered(status, Schema.encodeSync(Said)({ message: said.ran.stderr || `${status}` }));
+    return answered(
+      status,
+      yield* Schema.encodeEffect(Said)({ message: said.ran.stderr || `${status}` }).pipe(
+        Effect.orDie,
+      ),
+    );
   });
   return (input: string, init: RequestInit = {}) => Effect.runPromise(respond(input, init));
 }
@@ -1920,9 +2038,9 @@ export const cliFetch =
     Effect.runPromise(
       Effect.gen(function* () {
         const url = new URL(input);
-        const method = (init.method ?? "GET").toUpperCase();
+        const method = Str.toUpperCase(init.method ?? "GET");
         const github = url.host === "api.github.com";
-        const route = `${url.pathname.slice((github ? API.github : API.gitlab).length)}${url.search}`;
+        const route = `${pipe(url.pathname, Str.slice((github ? API.github : API.gitlab).length))}${url.search}`;
         const ran = github
           ? yield* run(
               "gh",
@@ -1940,10 +2058,15 @@ export const cliFetch =
             headers: { "content-type": "application/json" },
           });
         const status = Number(/^(\d{3})\b/.exec(ran.stderr ?? "")?.[1] ?? "404");
-        return new Response(Schema.encodeSync(Said)({ message: ran.stderr || `${status}` }), {
-          status,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          yield* Schema.encodeEffect(Said)({ message: ran.stderr || `${status}` }).pipe(
+            Effect.orDie,
+          ),
+          {
+            status,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }),
     );
 
@@ -1959,21 +2082,23 @@ export const forgeHttpOnPath = Layer.unwrap(
 
 /** `runEffect`, with a ForgeHttp of its own asking the forge CLIs on PATH. */
 export const runOnPath = <A, E>(
-  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | BunServices.BunServices>,
+  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices>,
 ) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttpOnPath))));
 
 /**
- * The Runner face, which logs `cmd args…` to `calls`, and the HTTP face, which logs to
+ * The Runner face, which logs `cmd args…` to `calls` and its env to `environments`, and the HTTP face, which logs to
  * `requests`, answering from one model; `layer` is ForgeHttp reaching the forge through both.
  */
 export function fakeForge(forge: MrForge, start: ForgeModel) {
   const calls: string[] = [];
+  const environments: Array<RunnerEnv | undefined> = [];
   const requests: FakeRequest[] = [];
   const aborted: string[] = [];
   let model = start;
-  const run: Runner = (cmd, args) =>
+  const run: Runner = (cmd, args, _cwd, env) =>
     Effect.map(Clock.currentTimeMillis, (now) => {
-      calls.push([cmd, ...args].join(" "));
+      calls.push(Arr.join([cmd, ...args], " "));
+      environments.push(env);
       const said = answer(forge, model, cmd, args, { now, environment: true });
       model = said.model;
       return said.ran;
@@ -1993,6 +2118,7 @@ export function fakeForge(forge: MrForge, start: ForgeModel) {
   return {
     run,
     calls,
+    environments,
     requests,
     aborted,
     fetch,
@@ -2018,7 +2144,7 @@ const writeModel = (file: string, model: ForgeModel) =>
     const fs = yield* FileSystem.FileSystem;
     const staged = `${file}.${process.pid}.${++modelWrites}.tmp`;
     yield* fs
-      .writeFileString(staged, Schema.encodeSync(ModelJson)(model))
+      .writeFileString(staged, yield* Schema.encodeEffect(ModelJson)(model).pipe(Effect.orDie))
       .pipe(
         Effect.andThen(fs.rename(staged, file)),
         Effect.ensuring(fs.remove(staged).pipe(Effect.ignore)),
@@ -2032,8 +2158,12 @@ export const forgeBin = Effect.fn("forge.bin")(function* (
   args: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const model = Schema.decodeSync(ModelJson)(yield* fs.readFileString(file));
-  yield* fs.writeFileString(`${file}.log`, `${[CLI[forge], ...args].join(" ")}\n`, { flag: "a" });
+  const model = yield* Schema.decodeEffect(ModelJson)(yield* fs.readFileString(file)).pipe(
+    Effect.orDie,
+  );
+  yield* fs.writeFileString(`${file}.log`, `${Arr.join([CLI[forge], ...args], " ")}\n`, {
+    flag: "a",
+  });
   const said = answer(forge, model, CLI[forge], args, {
     now: yield* Clock.currentTimeMillis,
     environment: yield* glabEnvironment,
@@ -2071,7 +2201,12 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   const face = httpFace(
     forge,
     {
-      read: Effect.orDie(Effect.map(fs.readFileString(file), Schema.decodeSync(ModelJson))),
+      read: Effect.orDie(
+        Effect.map(
+          fs.readFileString(file),
+          flow(Schema.decodeResult(ModelJson), Result.getOrThrow),
+        ),
+      ),
       write: (next) =>
         Effect.orDie(writeModel(file, next).pipe(Effect.provideService(FileSystem.FileSystem, fs))),
     },
@@ -2084,14 +2219,17 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
     face,
     requests: () => [...requests],
     /** The model file holding `next`, as an agent's scripted write would leave it. */
-    holding: (next: ForgeModel) => ({ path: file, text: Schema.encodeSync(ModelJson)(next) }),
+    holding: (next: ForgeModel) => ({
+      path: file,
+      text: flow(Schema.encodeResult(ModelJson), Result.getOrThrow)(next),
+    }),
     set: (next: ForgeModel) =>
       writeModel(file, next).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
-    model: () => Effect.map(fs.readFileString(file), Schema.decodeSync(ModelJson)),
+    model: () =>
+      Effect.map(fs.readFileString(file), flow(Schema.decodeResult(ModelJson), Result.getOrThrow)),
     calls: () =>
-      Effect.map(
-        fs.readFileString(`${file}.log`).pipe(Effect.catch(() => Effect.succeed(""))),
-        (text) => text.split("\n").filter(Boolean),
+      Effect.map(fs.readFileString(`${file}.log`).pipe(Effect.orElseSucceed(() => "")), (text) =>
+        Arr.filter(Str.split(text, "\n"), Boolean),
       ),
   };
 });
@@ -2114,13 +2252,15 @@ export const serveForges = (
           port: 0,
           fetch: (request) => {
             const url = new URL(request.url);
-            const [, apiHost = "", ...rest] = url.pathname.split("/");
+            const [, apiHost = "", ...rest] = Str.split(url.pathname, "/");
             const forge = apiHost === "api.github.com" ? "github" : "gitlab";
-            const face = onPath.find((one) => one.forge === forge)?.face;
+            const face = Option.getOrUndefined(
+              Arr.findFirst(onPath, (one) => one.forge === forge),
+            )?.face;
             if (face === undefined) return new Response(null, { status: 404 });
             const body = request.body === null ? Promise.resolve(undefined) : request.text();
             return body.then((body) =>
-              face(`https://${apiHost}/${rest.join("/")}${url.search}`, {
+              face(`https://${apiHost}/${Arr.join(rest, "/")}${url.search}`, {
                 method: request.method,
                 headers: request.headers,
                 signal: request.signal,

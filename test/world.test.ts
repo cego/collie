@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
@@ -73,11 +76,7 @@ test("world cleanup waits for a host to exit after it gives back its lock", () =
       );
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
-          try {
-            child.kill();
-          } catch {
-            // It exited before cleanup.
-          }
+          yield* Effect.try(() => child.kill()).pipe(Effect.ignore);
           yield* Effect.promise(() => child.exited);
         }),
       );
@@ -134,17 +133,23 @@ test.skipIf(process.platform !== "linux")(
         const finished = child;
         expect(yield* Effect.promise(() => finished?.exited ?? Promise.resolve(null))).toBe(0);
         expect(other?.exitCode).toBeNull();
-        expect(yield* fs.exists(state.slice(0, state.lastIndexOf("/")))).toBe(false);
+        expect(
+          yield* fs.exists(
+            pipe_(
+              state,
+              Str.slice(
+                0,
+                Option.getOrElse(pipe_(state, Str.lastIndexOf("/")), () => -1),
+              ),
+            ),
+          ),
+        ).toBe(false);
       }).pipe(
         Effect.ensuring(
           Effect.gen(function* () {
             for (const pending of [child, other]) {
               if (pending === undefined) continue;
-              try {
-                pending.kill();
-              } catch {
-                /* It exited already. */
-              }
+              yield* Effect.try(() => pending.kill()).pipe(Effect.ignore);
               yield* Effect.promise(() => pending.exited);
             }
           }),

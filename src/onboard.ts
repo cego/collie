@@ -3,7 +3,10 @@
 // running it again is how a half-onboarded Machine is repaired. Nothing here runs sudo:
 // a step that needs root stops with the command to run.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import type { PlatformServices } from "./platform";
 import { Effect, FileSystem, Option, Schedule, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -98,9 +101,9 @@ const rootCommand = Effect.fn("Onboard.rootCommand")(function* (
   packages: ReadonlyArray<string>,
 ) {
   for (const [manager, install] of PACKAGE_MANAGERS) {
-    if ((yield* onPath(search, manager)) !== null) return `${install} ${packages.join(" ")}`;
+    if ((yield* onPath(search, manager)) !== null) return `${install} ${Arr.join(packages, " ")}`;
   }
-  return `install ${packages.join(" ")} with your package manager`;
+  return `install ${Arr.join(packages, " ")} with your package manager`;
 });
 
 const needsRoot = Effect.fn("Onboard.needsRoot")(function* (
@@ -110,15 +113,15 @@ const needsRoot = Effect.fn("Onboard.needsRoot")(function* (
 ) {
   return {
     status: "needs_root",
-    detail: `${tools.join(" and ")} must be installed as root; run the command, then onboard again`,
+    detail: `${Arr.join(tools, " and ")} must be installed as root; run the command, then onboard again`,
     command: yield* rootCommand(search, packages),
   } satisfies Outcome;
 });
 
 const profileOf = (env: PluginEnv) => {
   const shell = env.raw["SHELL"] ?? "";
-  if (shell.endsWith("/zsh")) return `${env.home}/.zshrc`;
-  if (shell.endsWith("/bash")) return `${env.home}/.bashrc`;
+  if (pipe_(shell, Str.endsWith("/zsh"))) return `${env.home}/.zshrc`;
+  if (pipe_(shell, Str.endsWith("/bash"))) return `${env.home}/.bashrc`;
   return `${env.home}/.profile`;
 };
 
@@ -131,8 +134,10 @@ const decodeChecks = Schema.decodeUnknownOption(
 export const onboard = Effect.fn("Onboard.onboard")(function* (
   env: PluginEnv,
   options: OnboardOptions,
-  emit: (event: OnboardEvent) => Effect.Effect<void, never, BunServices>,
-  check: (env: PluginEnv) => Effect.Effect<OpResult, Error | PlatformError, BunServices> = doctor,
+  emit: (event: OnboardEvent) => Effect.Effect<void, never, PlatformServices>,
+  check: (
+    env: PluginEnv,
+  ) => Effect.Effect<OpResult, Error | PlatformError, PlatformServices> = doctor,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -142,10 +147,10 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   }
   const localBin = `${env.home}/.local/bin`;
   const binDir = env.raw["COLLIE_BIN_DIR"] ?? localBin;
-  const inherited = (env.raw["PATH"] ?? "").split(":").filter((dir) => dir !== "");
+  const inherited = Arr.filter(Str.split(env.raw["PATH"] ?? "", ":"), (dir) => dir !== "");
   // Where the installers put herdr, Claude Code and `collie`, ahead of the PATH this
   // process was started with, which a fresh SSH session's may not include yet.
-  const search = [...new Set([binDir, localBin, ...inherited])].join(":");
+  const search = Arr.join([...new Set([binDir, localBin, ...inherited])], ":");
   const release = `${env.collieDir}/release`;
   // Where the plugin is prepared and doctor looks: a development checkout's own root.
   let root = release;
@@ -197,7 +202,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       Effect.catch((cause) => Effect.succeed({ code: 127, stdout: "", stderr: String(cause) })),
     );
   const exec = (cmd: string, args: ReadonlyArray<string>, cwd: string) => piped(cmd, args, cwd);
-  const lastWords = (output: string) => output.trim().split("\n").slice(-3).join(" ");
+  const lastWords = (output: string) => Arr.join(Str.split(Str.trim(output), "\n").slice(-3), " ");
 
   const outcomes: Array<{ step: string } & Outcome> = [];
   const step = Effect.fn("Onboard.step")(function* <E, R>(
@@ -213,18 +218,30 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   });
 
   const finish = (development: boolean) => {
-    const ready = outcomes.every((outcome) => SETTLED.includes(outcome.status));
-    const data = { root, version: to, development, ready, steps: outcomes.map((o) => ({ ...o })) };
+    const ready = Arr.every(outcomes, (outcome) => SETTLED.includes(outcome.status));
+    const data = {
+      root,
+      version: to,
+      development,
+      ready,
+      steps: Arr.map(outcomes, (o) => ({ ...o })),
+    };
     if (ready) {
       return { ok: true as const, data, human: "Onboarded: collie doctor is ready." };
     }
-    const left = outcomes.filter((o) => !SETTLED.includes(o.status));
+    const left = Arr.filter(outcomes, (o) => !SETTLED.includes(o.status));
     return err(
       "operation_failed",
-      [
-        "Not onboarded yet:",
-        ...left.map((o) => `  ${o.step}: ${o.detail}${o.command ? `\n    run: ${o.command}` : ""}`),
-      ].join("\n"),
+      Arr.join(
+        [
+          "Not onboarded yet:",
+          ...Arr.map(
+            left,
+            (o) => `  ${o.step}: ${o.detail}${o.command ? `\n    run: ${o.command}` : ""}`,
+          ),
+        ],
+        "\n",
+      ),
       data,
     );
   };
@@ -266,7 +283,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         { to, ...(options.carried !== undefined && { carried: options.carried }) },
         exec,
       );
-      return placed.ok ? done(placed.human.split("\n")[0] ?? "") : failed(placed.error.message);
+      return placed.ok
+        ? done(Str.split(placed.human, "\n")[0] ?? "")
+        : failed(placed.error.message);
     }),
   );
   if (collie.status === "failed") return finish(false);
@@ -296,12 +315,19 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       "path",
       `${binDir} on PATH`,
       Effect.gen(function* () {
-        const absent = [...new Set([binDir, localBin])].filter((dir) => !inherited.includes(dir));
+        const absent = Arr.filter(
+          [...new Set([binDir, localBin])],
+          (dir) => !inherited.includes(dir),
+        );
         if (absent.length === 0) return inPlace(`${binDir} is on PATH`);
         const profile = profileOf(env);
-        const text = yield* fs.readFileString(profile).pipe(Effect.catch(() => Effect.succeed("")));
-        if (text.includes(PROFILE_MARKER)) return inPlace(`${profile} adds it; a new shell has it`);
-        const lines = absent.map((dir) => `export PATH="${dir}:$PATH"`).join("\n");
+        const text = yield* fs.readFileString(profile).pipe(Effect.orElseSucceed(() => ""));
+        if (pipe_(text, Str.includes(PROFILE_MARKER)))
+          return inPlace(`${profile} adds it; a new shell has it`);
+        const lines = Arr.join(
+          Arr.map(absent, (dir) => `export PATH="${dir}:$PATH"`),
+          "\n",
+        );
         yield* fs.writeFileString(profile, `${text}\n${PROFILE_MARKER}\n${lines}\n`);
         return done(`added to ${profile}; a new shell has it`);
       }),
@@ -313,16 +339,20 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       Effect.gen(function* () {
         const prepared = yield* exec("sh", ["prepare.sh"], root);
         const steps = prepareSteps(prepared.stdout);
-        const said = steps
-          .map((one) => `${one.step}: ${one.state}${one.detail ? ` — ${one.detail}` : ""}`)
-          .join("; ");
+        const said = Arr.join(
+          Arr.map(
+            steps,
+            (one) => `${one.step}: ${one.state}${one.detail ? ` — ${one.detail}` : ""}`,
+          ),
+          "; ",
+        );
         if (prepared.code !== 0) {
           return failed(
             `prepare.sh failed: ${said || lastWords(whatItSaid(prepared))}`,
             `sh ${root}/prepare.sh`,
           );
         }
-        return steps.some((one) => one.state === "done") ? done(said) : inPlace(said);
+        return Arr.some(steps, (one) => one.state === "done") ? done(said) : inPlace(said);
       }),
     );
   }
@@ -389,7 +419,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           token === undefined
             ? null
             : yield* exec("glab", ["config", "get", "token", "--host", host], root);
-        if (held === null || held.stdout.trim() === token)
+        if (held === null || Str.trim(held.stdout) === token)
           return inPlace(`glab is logged in to ${host}`);
       }
       if (token === undefined) {
@@ -418,7 +448,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     Effect.gen(function* () {
       const ssh = (yield* onPath(search, "ssh")) !== null;
       const status = yield* exec("glab", ["auth", "status", "--hostname", host], root);
-      const known = glabHosts(whatItSaid(status)).find((one) => one.host === host) ?? {
+      const known = Option.getOrUndefined(
+        Arr.findFirst(glabHosts(whatItSaid(status)), (one) => one.host === host),
+      ) ?? {
         host,
         https: false,
       };
@@ -499,7 +531,16 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       // Other Helle clients read the URL from this file.
       const text = `HELLE_API_URL=${helleUrlOf(here.raw)}\nHELLE_API_TOKEN=${token}\n`;
       const current = there ? yield* fs.readFileString(file) : "";
-      yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+      yield* fs.makeDirectory(
+        pipe_(
+          file,
+          Str.slice(
+            0,
+            Option.getOrElse(pipe_(file, Str.lastIndexOf("/")), () => -1),
+          ),
+        ),
+        { recursive: true },
+      );
       // Before the write: a file from before may be readable by others, and `mode` only applies to a new one.
       if (there) yield* fs.chmod(file, 0o600);
       if (current !== text) yield* fs.writeFileString(file, text, { mode: 0o600 });
@@ -539,7 +580,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       const handed = `${shims}/url`;
       yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
       yield* fs.chmod(`${shims}/browser`, 0o755);
-      const login = yield* inTerminal([claude, ...LINEAR_LOGIN.split(" ").slice(1)], {
+      const login = yield* inTerminal([claude, ...Str.split(LINEAR_LOGIN, " ").slice(1)], {
         cwd: env.home,
         env: { ...Bun.env, ...childEnv, BROWSER: `${shims}/browser` },
       });
@@ -592,7 +633,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         changed = true;
       }
       const connected = exec("claude", ["mcp", "get", "linear-server"], env.home).pipe(
-        Effect.map((answer) => answer.stdout.includes("Connected")),
+        Effect.map((answer) => pipe_(answer.stdout, Str.includes("Connected"))),
       );
       if (yield* connected) {
         return changed ? done("added, and connected") : inPlace("connected");
@@ -619,10 +660,14 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       if (report.ok) return done("ready");
       const failing = Option.match(decodeChecks(report.error.details), {
         onNone: () => [],
-        onSome: ({ checks }) => checks.filter((one) => !one.ok).map((one) => one.name),
+        onSome: ({ checks }) =>
+          Arr.map(
+            Arr.filter(checks, (one) => !one.ok),
+            (one) => one.name,
+          ),
       });
       return failed(
-        failing.length > 0 ? `not ready: ${failing.join(", ")}` : report.error.message,
+        failing.length > 0 ? `not ready: ${Arr.join(failing, ", ")}` : report.error.message,
         "collie doctor",
       );
     }),

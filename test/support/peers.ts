@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 // Two Machines on one computer, as a pairing test needs them: two installations, each with
 // its state directory, its own fake herdr and its own `collie`, and the fake `ssh` on the
 // first's PATH, whose sessions run as a login on the second would and whose forwards reach
@@ -5,9 +6,13 @@
 // sockets is faked: both hosts are the shipped `collie host`, started by the CLI as an
 // installation's are, and the link between them is the real listener on 127.0.0.1.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import solidPlugin from "@opentui/solid/bun-plugin";
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, Schema, type Scope } from "effect";
+import type { PlatformServices } from "../../src/platform";
+import { Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
 import { exec } from "./command";
 import { suiteEnv } from "./effect";
 import { writeFakeHerdrShim } from "./fake-herdr-core";
@@ -16,8 +21,11 @@ import { fixtures, root, stopHost } from "./host";
 import { peersOf } from "../../src/peers";
 import { collie, collieCommand, type World } from "./world";
 
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 /** One Machine of the pair. */
 export interface Side {
@@ -43,8 +51,8 @@ export interface Side {
 /** The port `listener`'s host answered `dialler`'s invitation with. */
 export const listenerPort = (dialler: Side, listener: Side) =>
   Effect.gen(function* () {
-    const paired = (yield* peersOf(dialler.world.state)).find(
-      (peer) => peer.name === listener.name,
+    const paired = Option.getOrUndefined(
+      Arr.findFirst(yield* peersOf(dialler.world.state), (peer) => peer.name === listener.name),
     );
     if (paired?.url === undefined)
       return yield* Effect.die(new Error(`${dialler.name} has no url for ${listener.name}`));
@@ -65,7 +73,7 @@ const machineOf = (side: Side) => ({
  */
 export const twoMachines = <A, E>(
   prefix: string,
-  body: (first: Side, second: Side) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (first: Side, second: Side) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string>,
   options: {
     /** Each Machine's `COLLIE_PEER_PORT`, by name; 0, where its listener binds what is free. */
@@ -73,7 +81,7 @@ export const twoMachines = <A, E>(
     /** Runs before any host starts, with the `COLLIE_PEER_PORT` each Machine was given. */
     readonly before?: (
       ports: Readonly<Record<string, string>>,
-    ) => Effect.Effect<void, never, BunServices | Scope.Scope>;
+    ) => Effect.Effect<void, never, PlatformServices | Scope.Scope>;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -82,7 +90,7 @@ export const twoMachines = <A, E>(
     const suite = yield* suiteEnv;
     const make = (name: string) =>
       Effect.gen(function* () {
-        const dir = yield* socketDir(`${prefix.slice(0, 12)}${name}-`);
+        const dir = yield* socketDir(`${pipe(prefix, Str.slice(0, 12))}${name}-`);
         const world: World = {
           install: `${dir}/install`,
           user: `${dir}/install/user/workflows`,
@@ -111,7 +119,10 @@ export const twoMachines = <A, E>(
           yield* fs.writeFileString(`${bin}/${harness}`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
         yield* fs.writeFileString(
           `${bin}/collie`,
-          `#!/bin/sh\nexec ${command.map((part) => `'${part}'`).join(" ")} "$@"\n`,
+          `#!/bin/sh\nexec ${Arr.join(
+            Arr.map(command, (part) => `'${part}'`),
+            " ",
+          )} "$@"\n`,
           { mode: 0o755 },
         );
         const herdrLog = `${dir}/herdr-calls.jsonl`;
@@ -141,7 +152,7 @@ export const twoMachines = <A, E>(
           cli: (args, extra = {}) => collie(world, args, { ...env, ...extra }),
           lists: (machines) =>
             fs
-              .writeFileString(`${herdrLog}.machines.json`, encode(machines.map(machineOf)))
+              .writeFileString(`${herdrLog}.machines.json`, encode(Arr.map(machines, machineOf)))
               .pipe(Effect.orDie),
         });
         return { side, bin, sshDir, env };
@@ -176,7 +187,7 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
           setup(builder) {
             builder.onLoad({ filter: /herdr-plugin\.toml$/ }, () => ({
               loader: "toml",
-              contents: manifest.replace(/^version = ".*"/m, `version = "${version}"`),
+              contents: pipe(manifest, Str.replace(/^version = ".*"/m, `version = "${version}"`)),
             }));
           },
         },
@@ -185,5 +196,13 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
     }),
   );
   if (!built.success)
-    return yield* Effect.fail(new Error(`could not build ${version}: ${built.logs.join("\n")}`));
+    return yield* new Cause.UnknownError(
+      built.logs,
+      `could not build ${version}: ${Arr.join(
+        Arr.map(built.logs, (part) =>
+          part === null || part === undefined ? "" : globalThis.String(part),
+        ),
+        "\n",
+      )}`,
+    );
 });

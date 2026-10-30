@@ -6,8 +6,21 @@
 // the same public id stay each other's business, and does a restart read the files as they
 // are now. Every host is a real process, because none of those has an answer in one.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
+import {
+  Config,
+  ConfigProvider,
+  Effect,
+  FileSystem,
+  Option,
+  Schema,
+  Scope,
+  flow,
+  Result,
+} from "effect";
 import { ChildProcessSpawner } from "effect/process";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
@@ -17,7 +30,10 @@ const repo = new URL("../", import.meta.url).pathname;
 const fixtures = `${repo}test/fixtures/workflows`;
 
 /** The command a client starts a host with, as `connect` reads it. */
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
 
 /** The prompt the entry imports, rewritten mid-test: its length is what the run records. */
 const PROMPT = "A shorter prompt.\n";
@@ -189,7 +205,7 @@ test(
         ).pipe(Effect.orDie);
 
         // One id, two generations, and each project's own file behind its own.
-        expect(new Set(started.map((one) => one.registration)).size).toBe(2);
+        expect(new Set(Arr.map(started, (one) => one.registration)).size).toBe(2);
         expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual([
           "proof@1",
           "proof@2",
@@ -249,9 +265,12 @@ test(
           .pipe(Effect.orDie);
         yield* write(
           `${world.user}/proof.workflow.ts`,
-          entry.replace(
-            'title: "A workflow that waits for a decision",',
-            'title: "Edited while a run was waiting",',
+          pipe_(
+            entry,
+            Str.replace(
+              'title: "A workflow that waits for a decision",',
+              'title: "Edited while a run was waiting",',
+            ),
           ),
         );
         yield* write(
@@ -313,10 +332,10 @@ test(
 
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const found = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
-        expect(found.entries.map((entry) => entry.id)).toEqual(["plain"]);
-        expect(found.problems.map((problem) => [problem.id, problem.layer, problem.path])).toEqual([
-          ["proof", "project", broken],
-        ]);
+        expect(Arr.map(found.entries, (entry) => entry.id)).toEqual(["plain"]);
+        expect(
+          Arr.map(found.problems, (problem) => [problem.id, problem.layer, problem.path]),
+        ).toEqual([["proof", "project", broken]]);
 
         // Refused by the file that is wrong, not run from the one it was written to replace.
         const refused = yield* client
@@ -339,7 +358,7 @@ test(
         yield* fs.remove(broken).pipe(Effect.orDie);
         const repaired = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
         expect(repaired.problems).toEqual([]);
-        expect(repaired.entries.map((entry) => [entry.id, entry.layer])).toEqual([
+        expect(Arr.map(repaired.entries, (entry) => [entry.id, entry.layer])).toEqual([
           ["plain", "user"],
           ["proof", "user"],
         ]);
@@ -387,15 +406,15 @@ test(
 
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const client = yield* connect(world.state).pipe(Effect.orDie);
-            const held = yield* client.registrations().pipe(Effect.orDie);
+            const client = yield* connect(world.state);
+            const held = yield* client.registrations();
             expect(held.live).toEqual([]);
-            expect(held.unavailable.join("\n")).toContain("proof.workflow.ts");
+            expect(Arr.join(held.unavailable, "\n")).toContain("proof.workflow.ts");
             // Pending with the file to repair named, rather than failed or run on
             // whatever code is nearest.
-            const refused = yield* client.status({ runId }).pipe(Effect.flip, Effect.orDie);
+            const refused = yield* client.status({ runId }).pipe(Effect.flip);
             expect(refused.reason).toContain("proof.workflow.ts");
-          }),
+          }).pipe(Effect.orDie),
         );
         yield* stopHost(world.state);
 
@@ -427,7 +446,9 @@ test(
             ).toEqual({ status: "complete", value: "note:durable=back" });
             // The Activity that ran before the restart ran once, whatever replay did.
             expect(
-              (yield* events(world.state, runId)).filter((line) => line.startsWith("launch")),
+              Arr.filter(yield* events(world.state, runId), (line) =>
+                pipe_(line, Str.startsWith("launch")),
+              ),
             ).toHaveLength(1);
           }),
         );

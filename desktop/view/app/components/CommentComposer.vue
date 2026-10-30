@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Str from "effect/String";
 defineProps<{ location: string; quote?: string }>();
 const emit = defineEmits<{ add: [text: string]; cancel: [] }>();
 const words = ref("");
@@ -15,7 +16,7 @@ const words = ref("");
       <UButton
         label="Comment"
         size="sm"
-        :disabled="words.trim() === ''"
+        :disabled="Str.trim(words) === ''"
         data-testid="add-comment"
         @click="emit('add', words)"
       />

@@ -1,5 +1,6 @@
 // The Tasks this Herd has: what `run start --task` names, and what a picker offers.
 
+import * as Arr from "effect/Array";
 import { Effect } from "effect";
 import { Command } from "effect/cli";
 import { listRuns } from "../runs";
@@ -11,19 +12,24 @@ const list = Command.make("list", {}, () =>
     Effect.gen(function* () {
       const tasks = yield* listTasks(env.stateDir);
       const runs = yield* listRuns(env);
-      const data = tasks.map((task) => ({
+      const data = Arr.map(tasks, (task) => ({
         ...task,
-        runs: runs.filter((run) => run.task === task.id).map((run) => run.id),
+        runs: Arr.map(
+          Arr.filter(runs, (run) => run.task === task.id),
+          (run) => run.id,
+        ),
       }));
       return {
         ok: true,
         data: { tasks: data },
         human:
-          data
-            .map(
+          Arr.join(
+            Arr.map(
+              data,
               (task) => `${task.id}\t${task.label}\t${task.workspace}\t${task.runs.length} run(s)`,
-            )
-            .join("\n") || "No tasks found.",
+            ),
+            "\n",
+          ) || "No tasks found.",
       };
     }),
   ),

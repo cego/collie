@@ -3,6 +3,8 @@
 // run in a temporary HOME with the fake-PATH rig in front of the outside world, and
 // what is asserted is the state left behind rather than the steps taken to get there.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { exec } from "./support/command";
@@ -157,7 +159,7 @@ test("a second run changes nothing and says every step is already in place", () 
       expect(again.out).toContain("prepare: operator-skill: already in place");
       expect(again.code).toBe(0);
       // Linked once, not once per run: a re-link fires herdr's build hook.
-      expect((yield* read(`${home}/herdr-calls`)).trim()).toBe("link");
+      expect(Str.trim(yield* read(`${home}/herdr-calls`))).toBe("link");
     }),
   ));
 
@@ -202,13 +204,13 @@ test("what prepare reports is what `collie upgrade` reads back", () =>
       // would notice a step line reworded on one side only.
       const steps = prepareSteps((yield* prepare()).out);
 
-      expect(steps.map((s) => s.step)).toEqual([
+      expect(Arr.map(steps, (s) => s.step)).toEqual([
         "plugin-link",
         "runner",
         "operator-skill",
         "skills",
       ]);
-      expect(steps.every((s) => s.state !== "")).toBe(true);
+      expect(Arr.every(steps, (s) => s.state !== "")).toBe(true);
     }),
   ));
 
@@ -232,7 +234,7 @@ test("a link that builds the runner is not a second build reported as no change"
 
       // Built once, by the hook, and said so — not built again and called unchanged.
       expect(run.out).toContain("prepare: runner: done");
-      expect((yield* read(`${home}/builds`)).trim()).toBe("build");
+      expect(Str.trim(yield* read(`${home}/builds`))).toBe("build");
       expect(yield* fs.exists(`${home}/.local/bin/collie`)).toBe(false);
       expect(run.code).toBe(0);
     }),
@@ -327,8 +329,8 @@ test("prepare repoints a skill link to another Collie installation, as a clone i
  * `updates` is what an `update` leaves behind, so a test can have upstream move.
  */
 const fakeSkillsCli = (behaviour = "exit 0", updates = "") =>
-  Effect.gen(function* () {
-    yield* bin.add(
+  Effect.suspend(() =>
+    bin.add(
       "skills",
       `echo "BUN_BE_BUN=$BUN_BE_BUN $*" >> "${home}/skills-calls"
       if [ "$2" = add ]; then
@@ -340,8 +342,8 @@ const fakeSkillsCli = (behaviour = "exit 0", updates = "") =>
         ${updates || ":"}
       fi
       ${behaviour}`,
-    );
-  });
+    ),
+  );
 
 test("prepare installs the skills the workflows require into the global store", () =>
   runEffect(

@@ -6,6 +6,9 @@
 // release would have: with the host stopped, every child's row names an execution the
 // payload no longer derives.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import { Effect, Layer } from "effect";
@@ -62,12 +65,12 @@ const executionsOf = (world: World, runId: string) =>
           readonly entity_id: string;
         }>`SELECT DISTINCT entity_id FROM cluster_messages WHERE tag = 'run' AND payload LIKE ${`%"runId":"${runId}"%`}`,
     ),
-  ).pipe(Effect.map((rows) => rows.map((row) => row.entity_id)));
+  ).pipe(Effect.map((rows) => Arr.map(rows, (row) => row.entity_id)));
 
 /** What a paced child recorded doing its work, apart from oversight's lines. */
 const ran = (world: World, runId: string) =>
   events(world.state, runId).pipe(
-    Effect.map((lines) => lines.filter((line) => line.startsWith("ran "))),
+    Effect.map((lines) => Arr.filter(lines, (line) => pipe_(line, Str.startsWith("ran ")))),
   );
 
 const parked = Effect.fn("ChildExecutionTest.parked")(function* (
@@ -80,7 +83,7 @@ const parked = Effect.fn("ChildExecutionTest.parked")(function* (
     .pipe(Effect.orDie);
   yield* until(
     () => client.run({ runId: started.runId }).pipe(Effect.orDie),
-    (view) => (view?.waiting ?? []).some((one) => one.name === "go"),
+    (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "go"),
   );
   return started.runId;
 });
@@ -149,7 +152,7 @@ test(
                 Effect.orDie,
                 Effect.flatMap((client) => client.run({ runId: child }).pipe(Effect.orDie)),
               ),
-            (view) => (view?.waiting ?? []).some((one) => one.name === "release"),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "release"),
           );
           yield* stopHost(world.state);
 

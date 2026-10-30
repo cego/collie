@@ -1,6 +1,7 @@
 // Collie explains an old herdr and never upgrades it or stops its server (ADR-0048, D4):
 // stopping a server ends the human's work, so when to do it is the human's choice.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -28,18 +29,18 @@ const offenders = Effect.fn("herdrLeftAlone.offenders")(function* (
   const found: string[] = [];
   for (const file of files) {
     const text = yield* fs.readFileString(`${root}${file}`);
-    if (runs.some((run) => run.test(text))) found.push(file);
+    if (Arr.some(runs, (run) => run.test(text))) found.push(file);
   }
   return found;
 });
 
 test("the patterns catch a call, and not the advice that names one", () => {
-  expect(RUNS_IN_TYPESCRIPT.some((run) => run.test(`herdr.cli(["update"])`))).toBe(true);
-  expect(RUNS_IN_TYPESCRIPT.some((run) => run.test(`cli(["server", "stop"])`))).toBe(true);
-  expect(RUNS_IN_SHELL.some((run) => run.test("  herdr server stop\n"))).toBe(true);
-  expect(RUNS_IN_SHELL.some((run) => run.test("x && herdr update"))).toBe(true);
-  expect(RUNS_IN_TYPESCRIPT.some((run) => run.test("`\\`herdr update\\`, then`"))).toBe(false);
-  expect(RUNS_IN_SHELL.some((run) => run.test(`step x "collie doctor says how"`))).toBe(false);
+  expect(Arr.some(RUNS_IN_TYPESCRIPT, (run) => run.test(`herdr.cli(["update"])`))).toBe(true);
+  expect(Arr.some(RUNS_IN_TYPESCRIPT, (run) => run.test(`cli(["server", "stop"])`))).toBe(true);
+  expect(Arr.some(RUNS_IN_SHELL, (run) => run.test("  herdr server stop\n"))).toBe(true);
+  expect(Arr.some(RUNS_IN_SHELL, (run) => run.test("x && herdr update"))).toBe(true);
+  expect(Arr.some(RUNS_IN_TYPESCRIPT, (run) => run.test("`\\`herdr update\\`, then`"))).toBe(false);
+  expect(Arr.some(RUNS_IN_SHELL, (run) => run.test(`step x "collie doctor says how"`))).toBe(false);
 });
 
 test("no Collie source runs `herdr update` or `herdr server stop`", () =>

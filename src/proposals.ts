@@ -6,8 +6,13 @@
 // Nothing here runs an action: `confirm` returns the actions that may run, and who runs
 // them is `executors.ts` and the front door's business.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import type { FrontDoor, Where } from "./board-model";
-import { Data, DateTime, Duration, Effect, FileSystem, Path, Schema } from "effect";
+import { Data, DateTime, Duration, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { Action, ActionKind } from "./actions";
 import { ActionSchema } from "./actions";
 import { appendJournal, readJournal } from "./journal";
@@ -93,10 +98,13 @@ export function contentHash(
   return Bun.hash(encodeContent({ targets: [...targets], actions: [...actions] })).toString(16);
 }
 
-const encodeContent = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({ targets: Schema.Array(TargetSchema), actions: Schema.Array(ActionSchema) }),
+const encodeContent = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Struct({ targets: Schema.Array(TargetSchema), actions: Schema.Array(ActionSchema) }),
+    ),
   ),
+  Result.getOrThrow,
 );
 
 export const proposalsPath = Effect.fn("Proposals.path")(function* (
@@ -123,8 +131,10 @@ export const everyJournal = Effect.fn("Proposals.everyJournal")(function* (state
 /** The Herd journal this proposal was written to, or null where no Herd has one by that id. */
 export const journalOf = Effect.fn("Proposals.journalOf")(function* (stateDir: string, id: string) {
   const journals = yield* everyJournal(stateDir);
-  const found = journals.find(({ lines }) =>
-    lines.some((line) => line.kind === "proposal" && line.id === id),
+  const found = Option.getOrUndefined(
+    Arr.findFirst(journals, ({ lines }) =>
+      Arr.some(lines, (line) => line.kind === "proposal" && line.id === id),
+    ),
   );
   return found?.file ?? null;
 });
@@ -259,7 +269,8 @@ function unsettled(lines: ReadonlyArray<ProposalLine>, id: string): number[] {
   const indices: number[] = [];
   for (const line of lines) {
     if (line.kind !== "step" || line.proposal !== id || line.state !== "started") continue;
-    const answered = lines.some(
+    const answered = Arr.some(
+      lines,
       (other) =>
         other.kind === "step" &&
         other.proposal === id &&
@@ -281,7 +292,7 @@ export function pendingHerdWide(
   lines: ReadonlyArray<ProposalLine>,
   nowMs: number,
 ): ProposalRecord[] {
-  return unanswered(lines, nowMs).filter((line) => line.targets.length === 0);
+  return Arr.filter(unanswered(lines, nowMs), (line) => line.targets.length === 0);
 }
 
 /**
@@ -293,19 +304,20 @@ export function pendingFor(
   run: string,
   nowMs: number,
 ): ProposalRecord[] {
-  return unanswered(lines, nowMs).filter((line) =>
-    line.targets.some((target) => target.run === run),
+  return Arr.filter(unanswered(lines, nowMs), (line) =>
+    Arr.some(line.targets, (target) => target.run === run),
   );
 }
 
 /** Proposals nobody has answered and nothing has expired, whatever they are about. */
 function unanswered(lines: ReadonlyArray<ProposalLine>, nowMs: number): ProposalRecord[] {
   const answered = new Set(
-    lines.flatMap((line) =>
+    Arr.flatMap(lines, (line) =>
       line.kind === "confirmed" || line.kind === "declined" ? [line.id] : [],
     ),
   );
-  return lines.filter(
+  return Arr.filter(
+    lines,
     (line): line is ProposalRecord =>
       line.kind === "proposal" && !answered.has(line.id) && epochMs(line.expires_at) > nowMs,
   );
@@ -326,13 +338,19 @@ export function judgeConfirmation(
   nowMs: number,
   currentVersions: ReadonlyMap<string, number>,
 ): Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } {
-  const found = lines.find(
-    (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
+  const found = Option.getOrUndefined(
+    Arr.findFirst(
+      lines,
+      (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
+    ),
   );
   if (!found) return { refused: "not_found", detail: `no proposal "${id}"` };
 
-  const settled = lines.find(
-    (line) => (line.kind === "confirmed" || line.kind === "declined") && line.id === id,
+  const settled = Option.getOrUndefined(
+    Arr.findFirst(
+      lines,
+      (line) => (line.kind === "confirmed" || line.kind === "declined") && line.id === id,
+    ),
   );
   if (settled) return { refused: "not_pending", detail: `"${id}" is already ${settled.kind}` };
 
@@ -340,7 +358,12 @@ export function judgeConfirmation(
   if (waiting.length > 0)
     return {
       refused: "reconcile_required",
-      detail: `action ${waiting.join(", ")} started and never settled; reconcile it before confirming again`,
+      detail: `action ${Arr.join(
+        Arr.map(waiting, (part) =>
+          part === null || part === undefined ? "" : globalThis.String(part),
+        ),
+        ", ",
+      )} started and never settled; reconcile it before confirming again`,
     };
 
   if (epochMs(found.expires_at) <= nowMs)
@@ -350,7 +373,7 @@ export function judgeConfirmation(
       refused: "hash_mismatch",
       detail: `"${id}" is ${found.content_hash}, not ${hash}`,
     };
-  for (const [run, version] of Object.entries(found.intent_versions)) {
+  for (const [run, version] of Rec.toEntries(found.intent_versions)) {
     const now = currentVersions.get(run);
     if (now !== undefined && now !== version)
       return {
@@ -368,7 +391,7 @@ export const confirm = Effect.fn("Proposals.confirm")(function* (
   actor: Actor,
   currentVersions: ReadonlyMap<string, number>,
 ) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   return yield* withProposalsLock(
     file,
     Effect.gen(function* () {
@@ -407,17 +430,20 @@ export const decline = Effect.fn("Proposals.decline")(function* (
   id: string,
   actor: Actor,
 ) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   return yield* withProposalsLock(
     file,
     Effect.gen(function* () {
       const lines = yield* read(file);
-      if (!lines.some((line) => line.kind === "proposal" && line.id === id))
+      if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === id))
         return settledAs("not_found", `no proposal "${id}"`, id);
       // Already answered. Appending a second answer would leave the journal saying a
       // proposal was both confirmed and declined, and the journal is the account.
-      const settled = lines.find(
-        (line) => (line.kind === "confirmed" || line.kind === "declined") && line.id === id,
+      const settled = Option.getOrUndefined(
+        Arr.findFirst(
+          lines,
+          (line) => (line.kind === "confirmed" || line.kind === "declined") && line.id === id,
+        ),
       );
       if (settled) return settledAs("not_pending", `"${id}" is already ${settled.kind}`, id);
       yield* append(file, { kind: "declined", id, at, by: actorName(actor), ...voiceOf(actor) });
@@ -431,10 +457,16 @@ export function answeredBy(
   lines: ReadonlyArray<ProposalLine>,
   request: string,
 ): { readonly kind: "confirmed" | "declined"; readonly id: string } | undefined {
-  return lines.find(
-    (line): line is Schema.Schema.Type<typeof SettledSchema> =>
-      (line.kind === "confirmed" || line.kind === "declined") &&
-      line.by.slice(line.by.indexOf(":") + 1) === request,
+  return Option.getOrUndefined(
+    Arr.findFirst(
+      lines,
+      (line): line is Schema.Schema.Type<typeof SettledSchema> =>
+        (line.kind === "confirmed" || line.kind === "declined") &&
+        pipe(
+          line.by,
+          Str.slice(Option.getOrElse(pipe(line.by, Str.indexOf(":")), () => -1) + 1),
+        ) === request,
+    ),
   );
 }
 
@@ -444,8 +476,11 @@ export function answeredBy(
  * except after the `ask_human` a carry-out stops at.
  */
 export function stepResults(lines: ReadonlyArray<ProposalLine>, id: string) {
-  const proposal = lines.find(
-    (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
+  const proposal = Option.getOrUndefined(
+    Arr.findFirst(
+      lines,
+      (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
+    ),
   );
   const last = new Map<number, Schema.Schema.Type<typeof StepSchema>>();
   for (const line of lines)
@@ -483,7 +518,7 @@ export const stepStarted = Effect.fn("Proposals.stepStarted")(function* (
     proposal,
     index,
     state: "started",
-    at: yield* nowIso(),
+    at: yield* nowIso,
   });
 });
 
@@ -494,7 +529,7 @@ export const stepSettled = Effect.fn("Proposals.stepSettled")(function* (
   state: "applied" | "failed" | "skipped" | "unknown",
   note?: string,
 ) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   const line: ProposalLine = { kind: "step", proposal, index, state, at };
   yield* append(file, note === undefined ? line : { ...line, note });
 });
@@ -514,7 +549,7 @@ export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
     file,
     Effect.gen(function* () {
       const lines = yield* read(file);
-      if (!lines.some((line) => line.kind === "proposal" && line.id === proposal))
+      if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === proposal))
         return settledAs("not_found", `no proposal "${proposal}"`, proposal);
       // Only a `started` nobody answered. Anything else and this would be recording a
       // human's word about an action that never ran, in the journal that is the record

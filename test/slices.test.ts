@@ -5,6 +5,9 @@
 // Both are here rather than in the engine because a module writing its own loop needs
 // the same answers — and two readings of "which result is this item's" is one too many.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { identityProblem, renderProgress, type Handed } from "../src/slices";
 
@@ -37,7 +40,9 @@ test("the items are rendered in the order they were handed over", () => {
     handed({ item: "01-api.md", title: "one" }),
     handed({ item: "02-ui.md", title: "two" }),
   ]);
-  expect(text.indexOf("01-api.md")).toBeLessThan(text.indexOf("02-ui.md"));
+  expect(Option.getOrElse(pipe(text, Str.indexOf("01-api.md")), () => -1)).toBeLessThan(
+    Option.getOrElse(pipe(text, Str.indexOf("02-ui.md")), () => -1),
+  );
 });
 
 test("distinct identities are what a list of work needs, and nothing more", () => {

@@ -1,6 +1,8 @@
 // Collie's published releases: the newest, and a release's runner verified against the release key.
 
-import { Crypto, Data, Duration, Effect, FileSystem, Option } from "effect";
+import * as Str from "effect/String";
+import { Data, Duration, Effect, FileSystem, Option } from "effect";
+import * as Digest from "effect/crypto/Digest";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { RELEASE_TAG } from "./release";
@@ -23,7 +25,7 @@ export const ownPlatform = () =>
 export const newestRelease = (source: string) =>
   HttpClient.get(`${source}/latest`).pipe(
     Effect.map((response) => {
-      const tag = (response.headers.location ?? "").split("/").at(-1) ?? "";
+      const tag = Str.split(response.headers.location ?? "", "/").at(-1) ?? "";
       return RELEASE_TAG.test(tag) ? tag : null;
     }),
     Effect.provide(FetchHttpClient.layer),
@@ -140,14 +142,6 @@ export const verifiedRunner = Effect.fn("Releases.verifiedRunner")(function* (
       ),
     );
   }
-  const digest = yield* (yield* Crypto.Crypto).digest("SHA-256", bytes).pipe(
-    Effect.mapError(
-      (error) =>
-        new RunnerRefused({
-          reason: `could not hash ${asset}: ${error.message}`,
-          missing: false,
-        }),
-    ),
-  );
-  return { asset, file, bytes, sha256: Buffer.from(digest).toString("hex") };
+  const sha256 = yield* (yield* Digest.Digest).digestHex(Digest.sha256, bytes);
+  return { asset, file, bytes, sha256 };
 });

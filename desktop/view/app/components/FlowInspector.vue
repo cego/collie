@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { nodeName, type inspectorOf, type FlowSelection } from "../../../src/shared/flow";
 defineProps<{
   info: NonNullable<ReturnType<typeof inspectorOf>>;
@@ -33,7 +35,7 @@ const labels = {
         <h3 class="flex items-center gap-2 font-semibold">
           <FlowGlyph :state="info.state" /><span class="min-w-0 truncate">{{ info.title }}</span>
           <span class="shrink-0 text-sm font-normal text-muted">{{
-            info.state.replaceAll("-", " ")
+            Str.replaceAll("-", " ")(info.state)
           }}</span>
         </h3>
         <p v-if="info.status" class="text-sm">{{ info.status }}</p>
@@ -103,7 +105,7 @@ const labels = {
             <li v-for="(entry, at) in info.entries" :key="at">
               <component
                 :is="entry.folded ? 'details' : 'div'"
-                :open="entry.nodes.some((node) => node.id === selected.item)"
+                :open="Arr.some(entry.nodes, (node) => node.id === selected.item)"
                 :role="entry.wave === undefined ? undefined : 'group'"
                 :aria-label="entry.wave === undefined ? undefined : entry.title"
               >

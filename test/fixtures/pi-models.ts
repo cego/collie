@@ -1,4 +1,7 @@
-import { Effect, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import { Effect, Schema, flow, Result } from "effect";
 import { childEnv } from "../../desktop/src/bun/login-env";
 import type { JsonObject } from "../../src/schema";
 
@@ -31,10 +34,13 @@ let busy = false;
 let previousId = "old";
 for await (const chunk of Bun.stdin.stream()) {
   pending += new TextDecoder().decode(chunk);
-  while (pending.includes("\n")) {
-    const end = pending.indexOf("\n");
-    const command = Schema.decodeUnknownSync(Schema.fromJsonString(Command))(pending.slice(0, end));
-    pending = pending.slice(end + 1);
+  while (pipe_(pending, Str.includes("\n"))) {
+    const end = Option.getOrElse(pipe_(pending, Str.indexOf("\n")), () => -1);
+    const command = flow(
+      Schema.decodeResult(Schema.fromJsonString(Command)),
+      Result.getOrThrow,
+    )(pipe_(pending, Str.slice(0, end)));
+    pending = pipe_(pending, Str.slice(end + 1));
     if (busy) {
       process.stderr.write("Commands overlapped before Pi answered");
       process.exit(2);

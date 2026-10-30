@@ -2,6 +2,8 @@
 // everything on it is a fact the TaskView already carries — this file decides colour and
 // placement and nothing else.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { For, Show, type JSX } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { agentCount, finishedLabel, whereItIs, workingLabel, waitingLabel } from "../board";
@@ -307,7 +309,7 @@ export function Board(props: BoardProps) {
 
         <Show when={empty()}>
           <text fg={C.dim} onMouseDown={() => props.onClearQuery()}>
-            {props.query.trim() === ""
+            {Str.trim(props.query) === ""
               ? "Nothing on the board yet."
               : "Nothing matches. Show everything"}
           </text>
@@ -459,7 +461,7 @@ function Grid(props: {
  */
 /** `…` at the end of what will not fit, so a name never pushes the age off its card. */
 function clipped(text: string, room: number): string {
-  return text.length <= room ? text : `${text.slice(0, Math.max(0, room - 1))}…`;
+  return text.length <= room ? text : `${pipe(text, Str.slice(0, Math.max(0, room - 1)))}…`;
 }
 
 function Card(props: {
@@ -595,7 +597,7 @@ function Deciding(props: { decision: Decision; decide: Decide }) {
 
 function Asked(props: { question: Question; decide: Decide }) {
   const draft = () => props.decide.draft(props.question);
-  const send = () => props.decide.answer(props.question, draft().trim());
+  const send = () => props.decide.answer(props.question, Str.trim(draft()));
   return (
     <box style={{ flexDirection: "column" }}>
       <text fg={C.text}>{props.question.text}</text>
@@ -627,7 +629,7 @@ function Asked(props: { question: Question; decide: Decide }) {
               props.decide.typing(props.question) ? "▏" : ""
             }`}
           </text>
-          <Show when={draft().trim() !== ""}>
+          <Show when={Str.trim(draft()) !== ""}>
             <Button label="Send" primary onPress={send} />
           </Show>
         </box>

@@ -4,6 +4,9 @@
 // as it installs its own: on Restart Desktop, or as it next starts. Nothing here replaces a
 // Desktop, running or not.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -57,7 +60,11 @@ export const PreparedRecord = Schema.fromJsonString(
 
 /** `version`'s own release, where `baseUrl` is the newest one's `latest/download`. */
 export const releaseOf = (baseUrl: string, version: string) =>
-  baseUrl.replace(/\/+$/, "").replace(/\/latest\/download$/, `/download/${version}`);
+  pipe_(
+    baseUrl,
+    Str.replace(/\/+$/, ""),
+    Str.replace(/\/latest\/download$/, `/download/${version}`),
+  );
 
 /**
  * Where Electrobun keeps an app's data per user: `~/Library/Application Support` on macOS;
@@ -70,7 +77,7 @@ export const dataHomeOf = (
 ) =>
   platform === "darwin"
     ? `${home}/Library/Application Support`
-    : xdgDataHome !== undefined && xdgDataHome.startsWith("/") && xdgDataHome !== "/"
+    : xdgDataHome !== undefined && pipe_(xdgDataHome, Str.startsWith("/")) && xdgDataHome !== "/"
       ? xdgDataHome
       : `${home}/.local/share`;
 
@@ -121,9 +128,9 @@ export const runningFrom = (app: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const pids = yield* fs.readDirectory("/proc");
-    for (const pid of pids.filter((name) => /^\d+$/.test(name))) {
+    for (const pid of Arr.filter(pids, (name) => /^\d+$/.test(name))) {
       const exe = yield* fs.readLink(`/proc/${pid}/exe`).pipe(Effect.orElseSucceed(() => ""));
-      if (exe.startsWith(`${app}/`)) return true;
+      if (pipe_(exe, Str.startsWith(`${app}/`))) return true;
     }
     return false;
   }).pipe(Effect.orElseSucceed(() => false));
@@ -178,7 +185,7 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
     const release = releaseOf(installed.value.baseUrl, to);
     const manifest = yield* bodyOf(`${release}/${PREFIX}-update.json`).pipe(
       Effect.flatMap((bytes) =>
-        Schema.decodeUnknownEffect(Manifest)(new TextDecoder().decode(bytes)).pipe(
+        Schema.decodeEffect(Manifest)(new TextDecoder().decode(bytes)).pipe(
           Effect.mapError(() => `release ${to} has no Desktop update for ${RELEASED_FOR}`),
         ),
       ),
@@ -293,10 +300,9 @@ export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: Des
   }
 
   const runners = `${own.root}/runners`;
-  const versions = (yield* list(runners)).filter((name) => Bun.semver.satisfies(name, "*"));
-  const newest = versions.reduce<string | null>(
-    (best, one) => (best === null || Bun.semver.order(one, best) > 0 ? one : best),
-    null,
+  const versions = Arr.filter(yield* list(runners), (name) => Bun.semver.satisfies(name, "*"));
+  const newest = Arr.reduce<string, string | null>(versions, null, (best, one) =>
+    best === null || Bun.semver.order(one, best) > 0 ? one : best,
   );
   for (const version of versions) {
     const target = `${runners}/${version}`;
@@ -326,9 +332,9 @@ export const desktopVerdicts = Effect.fn("desktop.verdicts")(function* (own: Des
   const log = `${own.state}/flock-usage.jsonl`;
   const text = yield* fs.readFileString(log).pipe(Effect.orElseSucceed(() => ""));
   const since = now - USAGE_KEEP_MS;
-  const lines = text.split("\n").filter((line) => line.trim() !== "");
-  const recent = lines.filter((line) =>
-    Option.match(Schema.decodeUnknownOption(UsageAt)(line), {
+  const lines = Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "");
+  const recent = Arr.filter(lines, (line) =>
+    Option.match(Schema.decodeOption(UsageAt)(line), {
       onNone: () => true,
       onSome: ({ at }) => epochMs(at) >= since,
     }),
@@ -358,7 +364,13 @@ export const trimUsage = (usage: {
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const tmp = `${usage.target}.${process.pid}.tmp`;
-    yield* fs.writeFileString(tmp, usage.kept.map((line) => `${line}\n`).join(""));
+    yield* fs.writeFileString(
+      tmp,
+      Arr.join(
+        Arr.map(usage.kept, (line) => `${line}\n`),
+        "",
+      ),
+    );
     yield* fs.rename(tmp, usage.target);
   }).pipe(Effect.ignore);
 

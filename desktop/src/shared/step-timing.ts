@@ -1,3 +1,5 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import type { FlowRun } from "../../../src/board-model";
 import { stepElapsed } from "../../../src/flow-timing";
 import { epochMs, minutes } from "../../../src/time";
@@ -12,5 +14,5 @@ export const stepTiming = (
       : `${minutes(epochMs(node.ended) - epochMs(node.started))} total`;
   return node.usual == null
     ? elapsed
-    : `${elapsed}, usually ${minutes(node.usual).replace(/ min$/, "")}`;
+    : `${elapsed}, usually ${pipe(minutes(node.usual), Str.replace(/ min$/, ""))}`;
 };

@@ -1,7 +1,8 @@
 // A Measurement's verdict per metric, from hand-picked samples with known answers.
 
+import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, flow, Result } from "effect";
 import {
   JudgementJson,
   judge,
@@ -130,8 +131,8 @@ describe("a metric's verdict", () => {
 
   test("an infinite ratio and bound survive the record", () => {
     const judged = run(latency(of(0), of(3)));
-    const json = Schema.encodeSync(JudgementJson)(judged);
-    expect(Schema.decodeSync(JudgementJson)(json)).toEqual(judged);
+    const json = flow(Schema.encodeResult(JudgementJson), Result.getOrThrow)(judged);
+    expect(flow(Schema.decodeResult(JudgementJson), Result.getOrThrow)(json)).toEqual(judged);
   });
 });
 
@@ -146,10 +147,22 @@ describe("a replay", () => {
   });
 
   test("draws its resamples from the Measurement id", () => {
-    const intervals = ["measurement-a", "measurement-b", "measurement-c"].map(
+    const intervals = Arr.map(
+      ["measurement-a", "measurement-b", "measurement-c"],
       (id) => run(noisy, id).interval,
     );
-    expect(new Set(intervals.map((interval) => interval.join())).size).toBeGreaterThan(1);
+    expect(
+      new Set(
+        Arr.map(intervals, (interval) =>
+          Arr.join(
+            Arr.map(interval, (part) =>
+              part === null || part === undefined ? "" : globalThis.String(part),
+            ),
+            ",",
+          ),
+        ),
+      ).size,
+    ).toBeGreaterThan(1);
   });
 });
 

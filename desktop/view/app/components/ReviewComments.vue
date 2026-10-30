@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { BoardAgent, RunAgent } from "../../../../src/board-model";
 import { addressOf, deliveryChoices } from "../../../src/shared/record-terminal";
 import { compose, counted, locationOf, quoteOf } from "../../../src/shared/review-comments";
@@ -19,33 +22,43 @@ const offered = computed(() =>
     props.launches,
     props.live,
     props.protocol,
-    drafts.value.some((draft) => draft.anchor._tag === "Plan") ? "planner" : undefined,
+    Arr.some(drafts.value, (draft) => draft.anchor._tag === "Plan") ? "planner" : undefined,
   ),
 );
 /** The human's choice while the Run still offers it, else the first offered. */
 const picked = ref<string>();
 const choice = computed(
-  () => offered.value.find((one) => one.key === picked.value) ?? offered.value[0],
+  () =>
+    Option.getOrUndefined(Arr.findFirst(offered.value, (one) => one.key === picked.value)) ??
+    offered.value[0],
 );
 
 const sending = ref(false);
-const send = async () => {
-  if (choice.value === undefined) return;
-  const who = addressOf(choice.value);
-  const sent = [...drafts.value];
-  sending.value = true;
-  await run(
-    props.installation,
-    {
-      _tag: "Deliver",
-      runId: props.runId,
-      ...who,
-      text: compose(sent),
-    },
-    undefined,
-    () => clear(sent),
+const send = () => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (choice.value === undefined) return;
+      const who = addressOf(choice.value);
+      const sent = [...drafts.value];
+      sending.value = true;
+      yield* Effect.promise(() =>
+        Promise.resolve(
+          run(
+            props.installation,
+            {
+              _tag: "Deliver",
+              runId: props.runId,
+              ...who,
+              text: compose(sent),
+            },
+            undefined,
+            () => clear(sent),
+          ),
+        ),
+      );
+      sending.value = false;
+    }),
   );
-  sending.value = false;
 };
 </script>
 
@@ -73,7 +86,7 @@ const send = async () => {
       <USelect
         v-if="offered.length > 0"
         :model-value="choice?.key"
-        :items="offered.map((one) => ({ label: one.label, value: one.key }))"
+        :items="Arr.map(offered, (one) => ({ label: one.label, value: one.key }))"
         size="sm"
         aria-label="Send to"
         @update:model-value="(name: string) => (picked = name)"

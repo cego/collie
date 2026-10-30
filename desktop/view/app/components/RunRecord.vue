@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { inField, overlayOpen } from "../../../src/shared/board-clicks";
 import { offersTerminal, opensHerdrWithoutPane } from "../../../src/shared/record-terminal";
 import type { PlacedTask } from "../../../src/shared/flock";
@@ -66,7 +68,16 @@ const target = ref<DiffTarget | null>(null);
 const landing = computed(() =>
   target.value === null
     ? null
-    : landingOf(target.value, detail.value?.diff?.files.map(({ path }) => path) ?? null),
+    : landingOf(
+        target.value,
+        Option.getOrUndefined(
+          Option.flatMap(Option.fromNullishOr(detail.value), (present) =>
+            Option.map(Option.fromNullishOr(present.diff), (present_) =>
+              Arr.map(present_.files, ({ path }) => path),
+            ),
+          ),
+        ) ?? null,
+      ),
 );
 /** Whether the tab shown was reached by a jump, which lands on its target rather than restoring. */
 const landed = ref(false);
@@ -138,10 +149,14 @@ const restore = (position: number) => {
   const grown = new ResizeObserver(() => reached() && stopRestoring());
   grown.observe(content);
   const gaveUp = () => stopRestoring();
-  HUMAN_SCROLLS.forEach((event) => box.addEventListener(event, gaveUp, { passive: true }));
+  Arr.forEach(HUMAN_SCROLLS, (event) =>
+    box.addEventListener(event, gaveUp, {
+      passive: true,
+    }),
+  );
   stopRestoring = () => {
     grown.disconnect();
-    HUMAN_SCROLLS.forEach((event) => box.removeEventListener(event, gaveUp));
+    Arr.forEach(HUMAN_SCROLLS, (event) => box.removeEventListener(event, gaveUp));
     stopRestoring = () => {};
   };
 };
@@ -168,7 +183,7 @@ const key = (event: KeyboardEvent) => {
     key: event.key,
     ctrlOrMeta: event.ctrlKey || event.metaKey,
     inField: inField(
-      typedIn(event.composedPath().map((entry) => (entry instanceof Element ? entry : null))),
+      typedIn(Arr.map(event.composedPath(), (entry) => (entry instanceof Element ? entry : null))),
     ),
     overlay: overlayOpen(document),
     tab: tab.value,

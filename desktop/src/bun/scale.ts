@@ -1,5 +1,7 @@
 // Draws each Desktop window at its monitor's own scale (ADR-0047).
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { type BrowserWindow, Screen } from "electrobun/bun";
 import { Effect, Queue, Stream } from "effect";
 import { type Drawn, type MonitorScale, monitorOf, zoomFor } from "../shared/scale";
@@ -25,12 +27,15 @@ const renderedScale = (window: BrowserWindow) => {
   const { x, y, width, height } = window.getFrame();
   const [cx, cy] = [x + width / 2, y + height / 2];
   const displays = Screen.getAllDisplays();
-  const holding = displays.find(
-    ({ bounds }) =>
-      cx >= bounds.x &&
-      cx < bounds.x + bounds.width &&
-      cy >= bounds.y &&
-      cy < bounds.y + bounds.height,
+  const holding = Option.getOrUndefined(
+    Arr.findFirst(
+      displays,
+      ({ bounds }) =>
+        cx >= bounds.x &&
+        cx < bounds.x + bounds.width &&
+        cy >= bounds.y &&
+        cy < bounds.y + bounds.height,
+    ),
   );
   return (holding ?? Screen.getPrimaryDisplay()).scaleFactor || 1;
 };

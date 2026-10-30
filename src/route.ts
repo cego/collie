@@ -3,6 +3,10 @@
 // its remote; anything else is one routing call, and an answer that is not exactly one of
 // the checkouts it was shown places nothing.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect } from "effect";
 import { mrRefOf } from "./board-model";
 import type { PluginEnv } from "./env";
@@ -33,11 +37,20 @@ const URL_IN_WORDS = /(?:https?:\/\/|git@)\S+/g;
  * checkout whose remote names the same project; null where no URL does.
  */
 export function placedByUrl(words: string, candidates: ReadonlyArray<Placeable>) {
-  for (const [url] of words.matchAll(URL_IN_WORDS)) {
+  for (const [url] of pipe_(words, Str.matchAll(URL_IN_WORDS))) {
     const project =
-      mrRefOf(url)?.project ?? projectFromRemote(url.replace(/\/-\/.*$/, "").replace(/\/+$/, ""));
+      mrRefOf(url)?.project ??
+      projectFromRemote(pipe_(url, Str.replace(/\/-\/.*$/, ""), Str.replace(/\/+$/, "")));
     if (project === null) continue;
-    const found = candidates.find((one) => one.project?.toLowerCase() === project.toLowerCase());
+    const found = Option.getOrUndefined(
+      Arr.findFirst(
+        candidates,
+        (one) =>
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(one.project), (present) => Str.toLowerCase(present)),
+          ) === Str.toLowerCase(project),
+      ),
+    );
     if (found !== undefined) return found;
   }
   return null;
@@ -45,16 +58,19 @@ export function placedByUrl(words: string, candidates: ReadonlyArray<Placeable>)
 
 /** Everything the router is shown, and it is all data. */
 export function routePack(words: string, candidates: ReadonlyArray<Placeable>): string {
-  return [
-    "## What the person wants",
-    "",
-    oneLine(words),
-    "",
-    "## The checkouts",
-    "",
-    ...candidates.map((one) => `- ${one.path} (remote: ${one.project ?? "none"})`),
-    "",
-  ].join("\n");
+  return Arr.join(
+    [
+      "## What the person wants",
+      "",
+      oneLine(words),
+      "",
+      "## The checkouts",
+      "",
+      ...Arr.map(candidates, (one) => `- ${one.path} (remote: ${one.project ?? "none"})`),
+      "",
+    ],
+    "\n",
+  );
 }
 
 /** Routing's own prompt and a small, cheap call, as task naming has. */
@@ -79,5 +95,8 @@ export const routed = Effect.fn("Route.routed")(function* (
   const route = yield* askOnce(deps, "routing", routePack(words, candidates));
   if (route === null || !("answer" in route)) return null;
   if (route.answer !== "one" || route.checkouts.length !== 1) return null;
-  return candidates.find((one) => one.path === route.checkouts[0]) ?? null;
+  return (
+    Option.getOrUndefined(Arr.findFirst(candidates, (one) => one.path === route.checkouts[0])) ??
+    null
+  );
 });

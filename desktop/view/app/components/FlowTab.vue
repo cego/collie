@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { Flow, FlowAction, RunDetail } from "../../../../src/board-model";
 import type { InspectorPart } from "../../../src/shared/step-inspector";
 import { desktopFlowAction, nextMove, type FlowActionView } from "../../../src/shared/flow-actions";
@@ -32,14 +35,26 @@ const emit = defineEmits<{
 }>();
 const { everyTask, now } = useFlock();
 const cards = computed(() =>
-  everyTask.value.map((one) => ({ key: one.key, machine: one.machine, runs: one.task.runs })),
+  Arr.map(everyTask.value, (one) => ({
+    key: one.key,
+    machine: one.machine,
+    runs: one.task.runs,
+  })),
 );
 const away = computed(
-  () => new Set(everyTask.value.filter((one) => one.asOf !== null).map((one) => one.machine)),
+  () =>
+    new Set(
+      Arr.map(
+        Arr.filter(everyTask.value, (one) => one.asOf !== null),
+        (one) => one.machine,
+      ),
+    ),
 );
 const selected = ref<FlowSelection | null>(null);
 const first = () => {
-  const row = flowRows(props.flow).find((one) => one.nodes.length > 0);
+  const row = Option.getOrUndefined(
+    Arr.findFirst(flowRows(props.flow), (one) => one.nodes.length > 0),
+  );
   return (
     props.flow.current ?? (row === undefined ? null : { run: row.run, node: row.nodes[0]!.id })
   );
@@ -77,8 +92,16 @@ const controls = useFlowActions(
 const { asking } = controls;
 const lane = computed(
   () =>
-    props.flow.lanes.find((row) => row.run === selected.value?.run) ??
-    (selected.value?.run === "release" ? props.flow.lanes.at(-1) : undefined),
+    Option.getOrUndefined(
+      Arr.findFirst(
+        props.flow.lanes,
+        (row) =>
+          row.run ===
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(selected.value), (present) => present.run),
+          ),
+      ),
+    ) ?? (selected.value?.run === "release" ? props.flow.lanes.at(-1) : undefined),
 );
 const move = computed(() => nextMove(props.flow));
 const moveAction = computed(() =>
@@ -114,7 +137,9 @@ const press = (action: FlowActionView, spot?: FlowSpot) =>
   });
 const actNode = (kind: FlowAction, spot: FlowSpot) => {
   const node = nodeAt(props.flow, spot);
-  const row = props.flow.lanes.find((one) => one.run === spot.run) ?? props.flow.lanes.at(-1);
+  const row =
+    Option.getOrUndefined(Arr.findFirst(props.flow.lanes, (one) => one.run === spot.run)) ??
+    props.flow.lanes.at(-1);
   if (node === null || row === undefined) return;
   const action = desktopFlowAction(
     kind,
@@ -135,21 +160,25 @@ const focusedElement = () => {
   const active = document.activeElement;
   return active instanceof HTMLElement && active !== document.body ? active : null;
 };
-const focus = async (now: boolean) => {
-  if (now === focusing.value) return;
-  if (now) {
-    const work = root.value?.querySelector<HTMLElement>('[data-testid="flow-work"]') ?? null;
-    handOff.focus(
-      focusedElement(),
-      (one) => work?.contains(one) ?? false,
-      work?.querySelector<HTMLElement>('[data-testid="flow-focus"]') ?? null,
-    );
-    focusing.value = true;
-    return;
-  }
-  focusing.value = false;
-  await nextTick();
-  handOff.restore(focusedElement());
+const focus = (now: boolean) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (now === focusing.value) return;
+      if (now) {
+        const work = root.value?.querySelector<HTMLElement>('[data-testid="flow-work"]') ?? null;
+        handOff.focus(
+          focusedElement(),
+          (one) => work?.contains(one) ?? false,
+          work?.querySelector<HTMLElement>('[data-testid="flow-focus"]') ?? null,
+        );
+        focusing.value = true;
+        return;
+      }
+      focusing.value = false;
+      yield* Effect.promise(() => Promise.resolve(nextTick()));
+      handOff.restore(focusedElement());
+    }),
+  );
 };
 const close = () => {
   const spot = selected.value;
@@ -183,7 +212,9 @@ const choose = (spot: FlowSpot) => take(selectNode(props.flow, spot, selected.va
 const chooseItem = (id: string | null) =>
   selected.value !== null && take(selectEntry(props.flow, selected.value, id, cards.value));
 const origin = (run: string, machine: string) => {
-  const card = cards.value.find((one) => one.machine === machine && one.runs.includes(run));
+  const card = Option.getOrUndefined(
+    Arr.findFirst(cards.value, (one) => one.machine === machine && one.runs.includes(run)),
+  );
   if (card !== undefined) take({ kind: "open", card: card.key, run });
 };
 const key = (event: KeyboardEvent) => {
@@ -229,23 +260,31 @@ watch(
     const messages = flowAnnouncements(previous ?? null, next);
     if (messages.length > 0) {
       announcement.value = "";
-      void nextTick(() => (announcement.value = messages.join(". ")));
+      void nextTick(() => (announcement.value = Arr.join(messages, ". ")));
     }
   },
 );
-watch(selected, async (spot) => {
-  if (spot === null) return;
-  await nextTick();
-  map.value?.reveal(spot);
+watch(selected, (spot) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (spot === null) return;
+      yield* Effect.promise(() => Promise.resolve(nextTick()));
+      map.value?.reveal(spot);
+    }),
+  );
 });
 let revealed = false;
 watch(
   () => props.shown,
-  async (shown) => {
-    if (!shown || revealed) return;
-    revealed = true;
-    await nextTick();
-    if (props.flow.current !== null) map.value?.reveal(props.flow.current);
+  (shown) => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        if (!shown || revealed) return;
+        revealed = true;
+        yield* Effect.promise(() => Promise.resolve(nextTick()));
+        if (props.flow.current !== null) map.value?.reveal(props.flow.current);
+      }),
+    );
   },
   { immediate: true },
 );
@@ -316,7 +355,11 @@ watch(
           /></template>
           <template #notes>
             <FlowNotes
-              :node="lane?.nodes.find((node) => node.id === selected?.node) ?? info.node"
+              :node="
+                Option.getOrUndefined(
+                  Arr.findFirst(lane?.nodes ?? [], (node) => node.id === selected?.node),
+                ) ?? info.node
+              "
               :run="selected.run"
               :installation="placed.installation"
               :live="placed.asOf === null"

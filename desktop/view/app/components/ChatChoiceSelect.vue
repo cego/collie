@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
 import type { ChoiceSelect } from "../../../src/shared/chat-choices";
 
 const props = defineProps<{ select: ChoiceSelect }>();
@@ -7,7 +8,7 @@ const emit = defineEmits<{ choose: [value: string] }>();
 // Reka requires a nonempty option value.
 const UNSET = "(default)";
 const items = computed(() => {
-  const options = props.select.options.map((option) => ({
+  const options = Arr.map(props.select.options, (option) => ({
     ...option,
     value: option.value || UNSET,
     onSelect: () => {

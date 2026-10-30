@@ -8,7 +8,11 @@
 // Nothing here goes through a shell. The command is an executable and an argument list,
 // resolved once and recorded as an absolute path, so the check named is what ran.
 
-import { Data, Effect, FileSystem, Path, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
 import { CheckProcesses } from "./check-processes";
@@ -69,18 +73,18 @@ export const fingerprint = (cwd: string) =>
 /** The Git tree HEAD names: the same files at two commits are the same content. Empty before a first commit. */
 export const contentOf = (cwd: string) =>
   Effect.map(git(["rev-parse", "HEAD^{tree}"], cwd), (got) =>
-    got.code === 0 ? got.stdout.trim() : "",
+    got.code === 0 ? Str.trim(got.stdout) : "",
   );
 
 /** `git status --porcelain=v2 --branch -z`'s headers, and the entries after them. */
 const statusParts = (stdout: string) => {
   const headers = new Map<string, string>();
   let rest = stdout;
-  while (rest.startsWith("# ")) {
-    const end = rest.indexOf("\0");
-    const [key = "", ...value] = rest.slice(2, end).split(" ");
-    headers.set(key, value.join(" "));
-    rest = rest.slice(end + 1);
+  while (pipe(rest, Str.startsWith("# "))) {
+    const end = Option.getOrElse(pipe(rest, Str.indexOf("\0")), () => -1);
+    const [key, ...value] = Str.split(pipe(rest, Str.slice(2, end)), " ");
+    headers.set(key, Arr.join(value, " "));
+    rest = pipe(rest, Str.slice(end + 1));
   }
   return { headers, entries: rest };
 };
@@ -116,19 +120,19 @@ export const treeOf = Effect.fn("Verify.treeOf")(function* (cwd: string) {
         );
   const parts = [entries, Bun.hash(diff.stdout).toString(16)];
   let bytes = entries.length + diff.stdout.length;
-  for (const relative of others.stdout.split("\0")) {
+  for (const relative of Str.split(others.stdout, "\0")) {
     if (relative === "") continue;
     const file = path.join(cwd, relative);
     const size = yield* fs.stat(file).pipe(
       Effect.map((info) => Number(info.size)),
-      Effect.catch(() => Effect.succeed(0)),
+      Effect.orElseSucceed(() => 0),
     );
     bytes += size;
     if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
-    const content = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
+    const content = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
     parts.push(`${relative}:${Bun.hash(content).toString(16)}`);
   }
-  return { head_sha, fingerprint: Bun.hash(parts.join("\n")).toString(16), branch, dirty };
+  return { head_sha, fingerprint: Bun.hash(Arr.join(parts, "\n")).toString(16), branch, dirty };
 });
 
 /**
@@ -162,7 +166,12 @@ const identityOf = (executable: string) =>
     const real = yield* fs.realPath(executable);
     // ctime, which no extractor can set back the way npm fixes an mtime.
     const info = yield* Effect.tryPromise(() => Bun.file(real).stat());
-    const key = [real, info.dev, info.ino, info.size, info.ctimeMs, info.mtimeMs].join(":");
+    const key = Arr.join(
+      Arr.map([real, info.dev, info.ino, info.size, info.ctimeMs, info.mtimeMs], (part) =>
+        part === null || part === undefined ? "" : globalThis.String(part),
+      ),
+      ":",
+    );
     const known = digests.get(key);
     if (known !== undefined) return `${real}@${known}`;
     const digest = Bun.hash(yield* fs.readFile(real)).toString(16);
@@ -183,7 +192,7 @@ export const environmentOf = Effect.fn("Verify.environmentOf")(
       parts.push(`${runtime}=${found === null ? "" : yield* identityOf(found)}`);
     }
     for (const name of TOOLCHAIN_VARIABLES) parts.push(`${name}=${Bun.env[name] ?? ""}`);
-    return Bun.hash(parts.join("\n")).toString(16);
+    return Bun.hash(Arr.join(parts, "\n")).toString(16);
   },
   Effect.orElseSucceed(() => null),
 );
@@ -234,7 +243,7 @@ const VerifyingSchema = Schema.Struct({
 });
 export type Verifying = typeof VerifyingSchema.Type;
 const VerifyingJson = Schema.fromJsonString(VerifyingSchema);
-export const encodeVerifying = Schema.encodeSync(VerifyingJson);
+export const encodeVerifying = flow(Schema.encodeResult(VerifyingJson), Result.getOrThrow);
 
 /**
  * The check running for the Run in `dir`, or null when none is. A marker in the old
@@ -246,9 +255,9 @@ export const verifyingIn = (
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${dir}/${VERIFYING_FILE}`)),
     Effect.map((text): Verifying | null => {
-      const decoded = Schema.decodeUnknownOption(VerifyingJson)(text);
+      const decoded = Schema.decodeOption(VerifyingJson)(text);
       if (decoded._tag === "Some") return decoded.value;
-      const name = text.trim();
+      const name = Str.trim(text);
       return name === ""
         ? null
         : {
@@ -281,12 +290,12 @@ export const insideRun = Effect.fn("Verify.insideRun")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const real = (dir: string) =>
-    fs.realPath(dir).pipe(Effect.catch(() => Effect.succeed(path.resolve(dir))));
+    fs.realPath(dir).pipe(Effect.orElseSucceed(() => path.resolve(dir)));
   const here = yield* real(cwd);
   for (const root of [run.cwd, run.worktree]) {
     if (root === null) continue;
     const inside = yield* real(root);
-    if (here === inside || here.startsWith(`${inside}${path.sep}`)) return true;
+    if (here === inside || pipe(here, Str.startsWith(`${inside}${path.sep}`))) return true;
   }
   return false;
 });
@@ -297,14 +306,14 @@ export const resolveExecutable = Effect.fn("Verify.resolveExecutable")(function*
   cwd: string,
 ) {
   const path = yield* Path.Path;
-  if (executable.includes(path.sep)) return path.resolve(cwd, executable);
+  if (pipe(executable, Str.includes(path.sep))) return path.resolve(cwd, executable);
   // `Bun.which` and not a `command -v` subprocess: `command` is a shell builtin, and
   // reaching for a shell to find out what to run without a shell is the wrong shape.
   return Bun.which(executable, { PATH: Bun.env.PATH ?? "" });
 });
 
 function tail(text: string): string {
-  return text.length <= TAIL_BYTES ? text : text.slice(-TAIL_BYTES);
+  return text.length <= TAIL_BYTES ? text : pipe(text, Str.slice(-TAIL_BYTES));
 }
 
 /** Where a command's two streams are shown while it runs. */
@@ -352,7 +361,7 @@ export const collect = Effect.fn("Verify.collect")(function* (
 
   const environment = yield* environmentOf(absolute);
   const start = yield* fingerprint(what.cwd);
-  const began = yield* nowIso();
+  const began = yield* nowIso;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   let logged = 0;
@@ -417,7 +426,7 @@ export const collect = Effect.fn("Verify.collect")(function* (
     ),
   );
   const end = yield* fingerprint(what.cwd);
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   const output = `${stdout}\n${stderr}`;
   const testPassed =
     what.test === undefined ||
@@ -490,7 +499,9 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   pass?: CheckPass,
   log?: string,
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
-  const match = approved.find((entry) => entry.name === spec.name && sameCommand(entry, spec));
+  const match = Option.getOrUndefined(
+    Arr.findFirst(approved, (entry) => entry.name === spec.name && sameCommand(entry, spec)),
+  );
   if (!match)
     return yield* new VerifyRefused({
       why: `"${spec.name}" is not among this Run's checks, argument for argument`,
@@ -553,7 +564,7 @@ export const sameCommand = (one: Command, other: Command) =>
   one.executable === other.executable &&
   one.cwd === other.cwd &&
   one.argv.length === other.argv.length &&
-  one.argv.every((word, at) => word === other.argv[at]);
+  Arr.every(one.argv, (word, at) => word === other.argv[at]);
 
 /**
  * Whether two records ran the same command as it was asked, so a fail and a pass through
@@ -592,7 +603,9 @@ function latestRecord(
   now: Snapshot,
   since: string,
 ): Verification | null {
-  const latest = records.findLast((one) => sameCommand(one, wanted) && !staleAgainst(one, now));
+  const latest = Option.getOrUndefined(
+    Arr.findLast(records, (one) => sameCommand(one, wanted) && !staleAgainst(one, now)),
+  );
   if (latest === undefined || wanted.environment === null) return null;
   const holds = latest.environment === wanted.environment && epochMs(latest.at) > epochMs(since);
   return holds ? latest : null;

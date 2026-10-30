@@ -1,14 +1,7 @@
 // What the Flock chat's session needs of a harness: one driver per harness it can run on.
 
-import {
-  Schema,
-  type Crypto,
-  type Effect,
-  type FileSystem,
-  type Path,
-  type Scope,
-  type Stream,
-} from "effect";
+import { Schema, type Effect, type FileSystem, type Path, type Scope, type Stream } from "effect";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type { AguiEvent } from "../shared/agui";
 import type { Answers, ChatMessage, Earlier } from "../shared/chat-view";
 import type { ShownImage } from "../shared/attachments";
@@ -41,7 +34,7 @@ export interface DriverContext {
   readonly dir: string;
   readonly flock: FlockChat;
   readonly run: <A>(
-    effect: Effect.Effect<A, never, Crypto.Crypto | FileSystem.FileSystem>,
+    effect: Effect.Effect<A, never, SecureRandom.SecureRandom | FileSystem.FileSystem>,
   ) => Promise<A>;
   readonly ask: (toolUseID: string, signal: AbortSignal) => Promise<Answers | null>;
   readonly noticed: () => string | undefined;
@@ -50,12 +43,12 @@ export interface DriverContext {
 
 /** What a turn cost; counts a harness does not report are 0. */
 export const TurnCost = Schema.Struct({
-  duration_ms: Schema.Number,
+  duration_ms: Schema.Finite,
   usage: Schema.Struct({
-    input_tokens: Schema.Number,
-    output_tokens: Schema.Number,
-    cache_read_input_tokens: Schema.Number,
-    cache_creation_input_tokens: Schema.Number,
+    input_tokens: Schema.Finite,
+    output_tokens: Schema.Finite,
+    cache_read_input_tokens: Schema.Finite,
+    cache_creation_input_tokens: Schema.Finite,
   }),
 });
 export type TurnCost = typeof TurnCost.Type;

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { Question } from "../src/board-model";
 import { applyItem, EMPTY_FLOCK, type FlockItem, flockCards } from "../desktop/src/shared/flock";
@@ -149,7 +150,7 @@ test("a Task that leaves its Machine's board, by a Snapshot without it or a Remo
   );
   const settledOn = (state: Answering, flock: typeof start) => {
     const board = flockCards(flock);
-    return answersSettled(state, board.tasks.map(board.placedOf));
+    return answersSettled(state, Arr.map(board.tasks, board.placedOf));
   };
   const observed = settledOn(nothingAnswered, start);
   const { state, answer } = sending(draftTyped(observed, keyOf(asked), "api"), asked, "api");

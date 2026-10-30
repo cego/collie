@@ -2,6 +2,8 @@
 // Kept once by sha256: a digest held whole is answered at once, and a retried part is the
 // same part, so no request id is needed. Removed a week after it was last asked for.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem, Path, Result, Semaphore } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ATTACHMENT_BYTES, sha256Hex } from "./attachments";
@@ -34,6 +36,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if (!/^[0-9a-f]{64}$/.test(part.sha256)) return yield* refused(`${part.sha256} is not a sha256`);
+  // oxlint-disable-next-line no-control-regex -- File names must reject ASCII control bytes and DEL.
   if (["", ".", "..", ".partial"].includes(part.name) || /[/\\\u0000-\u001f\u007f]/.test(part.name))
     return yield* refused(`${part.name} is not a file's name`);
   if (part.size > ATTACHMENT_BYTES)
@@ -43,7 +46,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
   const entries = yield* fs
     .readDirectory(dir)
     .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  const held = entries.find((entry) => entry !== ".partial");
+  const held = Option.getOrUndefined(Arr.findFirst(entries, (entry) => entry !== ".partial"));
   if (held !== undefined) {
     // The same bytes asked for under another name are that name here too.
     if (!entries.includes(part.name)) yield* fs.link(path.join(dir, held), whole);

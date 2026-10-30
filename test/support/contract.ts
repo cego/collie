@@ -4,7 +4,9 @@
 // keywords herdr's own document uses and nothing else, so it stays a few
 // dependency-free lines instead of a validator to maintain.
 
-import { Effect, Option, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import { Effect, Option, Schema, flow, Result } from "effect";
 import type * as SchemaAST from "effect/SchemaAST";
 
 /** One node of herdr's schema document, in the keywords herdr actually emits. */
@@ -95,8 +97,11 @@ function contractOf(doc: Document): Contract {
   };
 
   const variant = (node: Node, key: string, value: string): Node => {
-    const found = (node.oneOf ?? node.anyOf ?? []).find(
-      (member) => member.properties?.[key]?.const === value,
+    const found = Option.getOrUndefined(
+      Arr.findFirst(
+        node.oneOf ?? node.anyOf ?? [],
+        (member) => member.properties?.[key]?.const === value,
+      ),
     );
     if (!found) throw new Error(`herdr schema has no variant with ${key} "${value}"`);
     return found;
@@ -162,9 +167,11 @@ function herdrTypes(resolve: Resolve, node: Node): ReadonlySet<string> | undefin
   const branches = resolved.oneOf ?? resolved.anyOf;
   if (branches) return unionTypes(branches, (branch) => herdrTypes(resolve, branch));
   if (resolved.type !== undefined) {
-    return new Set(Array.isArray(resolved.type) ? resolved.type : [resolved.type]);
+    return new Set(
+      Arr.isArray<typeof resolved.type>(resolved.type) ? resolved.type : [resolved.type],
+    );
   }
-  if (resolved.enum) return new Set(resolved.enum.map(jsonType));
+  if (resolved.enum) return new Set(Arr.map(resolved.enum, jsonType));
   if (resolved.const !== undefined) return new Set([jsonType(resolved.const)]);
   return undefined;
 }
@@ -182,7 +189,7 @@ function interchangeable(one: string, other: string): boolean {
 
 /** Whether any of these type names stands for `actual`. */
 function admits(names: ReadonlySet<string>, actual: string): boolean {
-  return [...names].some((name) => interchangeable(name, actual));
+  return Arr.some([...names], (name) => interchangeable(name, actual));
 }
 
 /** The JSON types a Collie schema accepts, or `undefined` when it accepts anything. */
@@ -225,7 +232,7 @@ function taggedMembers<Tag extends SchemaAST.AST["_tag"]>(
 ): ReadonlyArray<Tagged<Tag>> {
   if (tagged(ast, tag)) return [ast];
   if (ast._tag !== "Union") return [];
-  return ast.types.filter((type) => tagged(type, tag));
+  return Arr.filter(ast.types, (type) => tagged(type, tag));
 }
 
 type Tagged<Tag extends SchemaAST.AST["_tag"]> = Extract<SchemaAST.AST, { readonly _tag: Tag }>;
@@ -253,8 +260,8 @@ function branchesWith(
 ): ReadonlyArray<Node> {
   const resolved = resolve(node);
   if (resolved[keyword] !== undefined) return [resolved];
-  const branches = (resolved.oneOf ?? resolved.anyOf ?? []).map(resolve);
-  return branches.filter((branch) => branch[keyword] !== undefined);
+  const branches = Arr.map(resolved.oneOf ?? resolved.anyOf ?? [], resolve);
+  return Arr.filter(branches, (branch) => branch[keyword] !== undefined);
 }
 
 /**
@@ -332,10 +339,10 @@ function elementFindings(
   const items = listing.items;
   if (!items) return [];
   return [
-    ...array.elements.flatMap((element, index) =>
+    ...Arr.flatMap(array.elements, (element, index) =>
       walkReply(resolve, `${path}[${index}]`, element, items),
     ),
-    ...array.rest.flatMap((element) => walkReply(resolve, `${path}[]`, element, items)),
+    ...Arr.flatMap(array.rest, (element) => walkReply(resolve, `${path}[]`, element, items)),
   ];
 }
 
@@ -349,9 +356,9 @@ function typeFindings(
   decodes: ReadonlySet<string> | undefined,
 ): ReadonlyArray<string> {
   if (!sends || !decodes) return [];
-  const unhandled = [...sends].filter((type) => !admits(decodes, type));
+  const unhandled = Arr.filter([...sends], (type) => !admits(decodes, type));
   if (unhandled.length === 0) return [];
-  return [`${path} is ${[...decodes].join("|")}, but herdr sends ${unhandled.join("|")}`];
+  return [`${path} is ${Arr.join([...decodes], "|")}, but herdr sends ${Arr.join(unhandled, "|")}`];
 }
 
 function walkReply(
@@ -421,7 +428,7 @@ function walkRequest(
   const actual = jsonType(params);
   const expects = herdrTypes(resolve, resolved);
   if (expects && !admits(expects, actual)) {
-    return [`${path} is ${actual}, but herdr expects ${[...expects].join("|")}`];
+    return [`${path} is ${actual}, but herdr expects ${Arr.join([...expects], "|")}`];
   }
   if (actual === "number") {
     const problem = numberProblem(path, Number(params), resolved, expects);
@@ -442,7 +449,7 @@ function walkRequest(
         findings.push(`${path}.${key} is required by herdr, but the request omits it`);
       }
     }
-    for (const [key, value] of Object.entries(object)) {
+    for (const [key, value] of Rec.toEntries(object)) {
       const declared = resolved.properties?.[key];
       if (!declared) {
         if (resolved.additionalProperties === false) {
@@ -453,7 +460,7 @@ function walkRequest(
       findings.push(...walkRequest(resolve, `${path}.${key}`, value, declared));
     }
   }
-  if (Array.isArray(params) && resolved.items) {
+  if (Arr.isArray<typeof params>(params) && resolved.items) {
     for (const [index, value] of params.entries()) {
       findings.push(...walkRequest(resolve, `${path}[${index}]`, value, resolved.items));
     }
@@ -472,7 +479,7 @@ function walkRequest(
 const JSON_TYPES: ReadonlyArray<readonly [string, Schema.Codec<unknown, unknown, never, never>]> = [
   ["null", Schema.Null],
   ["boolean", Schema.Boolean],
-  ["number", Schema.Number],
+  ["number", Schema.Finite],
   ["string", Schema.String],
   ["array", Schema.Array(Schema.Json)],
   ["object", Schema.JsonObject],
@@ -480,7 +487,7 @@ const JSON_TYPES: ReadonlyArray<readonly [string, Schema.Codec<unknown, unknown,
 
 function jsonType(value: Schema.Json): string {
   for (const [name, schema] of JSON_TYPES) {
-    if (Option.isSome(Schema.decodeUnknownOption(schema)(value))) return name;
+    if (Option.isSome(Schema.decodeOption(schema)(value))) return name;
   }
   throw new Error(`value is not JSON: ${JSON.stringify(value)}`);
 }
@@ -492,4 +499,4 @@ const asJsonObject = Schema.decodeUnknownOption(Schema.JsonObject);
  * JSON from herdr, so such a literal could never match anything herdr sends: refusing
  * it by name beats naming it `integer` and comparing it as though it could.
  */
-const jsonLiteral = Schema.decodeUnknownSync(Schema.Json);
+const jsonLiteral = flow(Schema.decodeUnknownResult(Schema.Json), Result.getOrThrow);

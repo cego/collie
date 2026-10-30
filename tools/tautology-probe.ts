@@ -12,8 +12,12 @@
 // naming which of its items are Tautologies. It passes only when, in most runs, every
 // Tautology is raised and no honest item is.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { BunServices } from "@effect/platform-bun";
-import { Duration, Effect, FileSystem, ManagedRuntime, Option, Schema } from "effect";
+import { Duration, Effect, FileSystem, ManagedRuntime, Option, Schema, flow, Result } from "effect";
 import { decodeOutput, installedSkills, personaText, promptFor } from "../src/agents";
 import { readEnv } from "../src/env";
 import { HARNESSES, startArgs } from "../src/harness";
@@ -44,8 +48,8 @@ export interface Raised {
 
 /** Whether a finding's path and the key's name one file, however much of the path each gives. */
 const sameFile = (named: string, keyed: string) => {
-  const a = named.replace(/^\.\//, "");
-  return a === keyed || a.endsWith(`/${keyed}`) || keyed.endsWith(`/${a}`);
+  const a = pipe(named, Str.replace(/^\.\//, ""));
+  return a === keyed || pipe(a, Str.endsWith(`/${keyed}`)) || pipe(keyed, Str.endsWith(`/${a}`));
 };
 
 const hits = (finding: Raised, item: KeyItem) =>
@@ -58,11 +62,12 @@ const hits = (finding: Raised, item: KeyItem) =>
 /** Each Tautology most runs missed, and each honest item most runs raised. */
 export function scored(runs: ReadonlyArray<ReadonlyArray<Raised>>, key: ReadonlyArray<KeyItem>) {
   const raised = (item: KeyItem) =>
-    runs.filter((findings) => findings.some((finding) => hits(finding, item))).length * 2 >
+    Arr.filter(runs, (findings) => Arr.some(findings, (finding) => hits(finding, item))).length *
+      2 >
     runs.length;
   return {
-    missed: key.filter((item) => item.tautology && !raised(item)),
-    falselyRaised: key.filter((item) => !item.tautology && raised(item)),
+    missed: Arr.filter(key, (item) => item.tautology && !raised(item)),
+    falselyRaised: Arr.filter(key, (item) => !item.tautology && raised(item)),
   };
 }
 
@@ -79,7 +84,7 @@ const KeySchema = Schema.Array(
     kind: Schema.String,
     tautology: Schema.Boolean,
     file: Schema.String,
-    lines: Schema.Tuple([Schema.Number, Schema.Number]),
+    lines: Schema.Tuple([Schema.Finite, Schema.Finite]),
   }),
 );
 const JournalSchema = Schema.Array(
@@ -96,9 +101,18 @@ const AnswersSchema = Schema.Struct({
   answers: Schema.Array(Schema.Struct({ criterion: Schema.String, met: Schema.String })),
   assumptions: Schema.Array(Schema.String),
 });
-export const readKey = Schema.decodeUnknownSync(Schema.fromJsonString(KeySchema));
-const readJournal = Schema.decodeUnknownSync(Schema.fromJsonString(JournalSchema));
-const readAnswers = Schema.decodeUnknownSync(Schema.fromJsonString(AnswersSchema));
+export const readKey = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(KeySchema)),
+  Result.getOrThrow,
+);
+const readJournal = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(JournalSchema)),
+  Result.getOrThrow,
+);
+const readAnswers = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(AnswersSchema)),
+  Result.getOrThrow,
+);
 
 const git = (cwd: string, ...args: string[]) =>
   Effect.promise(() =>
@@ -126,7 +140,7 @@ const scratch = Effect.fn("probe.scratch")(function* (keep: boolean) {
   yield* git(work, "commit", "-qm", "Read hours and compound durations");
   const sha = (ref: string) =>
     Effect.promise(() => Bun.$`git rev-parse ${ref}`.cwd(work).text()).pipe(
-      Effect.map((out) => out.trim()),
+      Effect.map((out) => Str.trim(out)),
     );
   return { dir, work, trees: { head: yield* sha("HEAD"), base: yield* sha("master") } };
 });
@@ -140,7 +154,7 @@ export const journal = (
 ) => {
   const final = { head_sha: trees.head, fingerprint: "fixture" };
   const earlier = { head_sha: trees.base, fingerprint: "fixture-base" };
-  const verifications = readJournal(raw).map((one, n): Verification => ({
+  const verifications = Arr.map(readJournal(raw), (one, n): Verification => ({
     id: `fixture-${n}`,
     run: "tautology-probe",
     name: one.name,
@@ -166,8 +180,9 @@ export const journal = (
  * started from.
  */
 export const outsideAnyRun = (env: NodeJS.ProcessEnv) =>
-  Object.fromEntries(
-    Object.entries(env).filter(
+  Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries(env),
       ([name]) =>
         ![
           "HERDR_PANE_ID",
@@ -214,7 +229,7 @@ const review = Effect.fn("probe.review")(function* (
   const read = decodeOutput(SynthesisSchema, text);
   if (!read.ok) {
     const stderr = yield* Effect.promise(() => new Response(proc.stderr).text());
-    return { findings: [], problem: `no usable Output: ${read.problem} ${stderr.trim()}` };
+    return { findings: [], problem: `no usable Output: ${read.problem} ${Str.trim(stderr)}` };
   }
   return { findings: read.value.findings ?? [], problem: null };
 });
@@ -229,14 +244,14 @@ const probe = Effect.fn("probe.run")(function* (runs: number, keep: boolean) {
 
   const ticket = yield* fs.readFileString(`${plan}/issues/01-hours.md`);
   const fixed = readAnswers(
-    (yield* fs.readFileString(`${fixture}/answers.json`)).replaceAll("{run}", runDir),
+    pipe(yield* fs.readFileString(`${fixture}/answers.json`), Str.replaceAll("{run}", runDir)),
   );
   const criteria = renderAnswered([{ ...fixed, criteria: criteriaIn(ticket) }]);
   const checks = journal(
     yield* fs.readFileString(`${fixture}/journal.json`),
     work,
     trees,
-    yield* nowIso(),
+    yield* nowIso,
   );
   const input = {
     ...told(
@@ -283,26 +298,46 @@ const probe = Effect.fn("probe.run")(function* (runs: number, keep: boolean) {
 
   const { missed, falselyRaised } = scored(all, key);
   const count = (item: KeyItem) =>
-    all.filter((findings) => findings.some((one) => hits(one, item))).length;
+    Arr.filter(all, (findings) => Arr.some(findings, (one) => hits(one, item))).length;
   yield* Effect.log(
-    [
-      "",
-      `| item | kind | Tautology | raised in |`,
-      "|---|---|---|---|",
-      ...key.map(
-        (item) =>
-          `| ${item.id} | ${item.kind} | ${item.tautology ? "yes" : "no"} | ${count(item)}/${runs} |`,
+    Arr.join(
+      Arr.map(
+        [
+          "",
+          `| item | kind | Tautology | raised in |`,
+          "|---|---|---|---|",
+          ...Arr.map(
+            key,
+            (item) =>
+              `| ${item.id} | ${item.kind} | ${item.tautology ? "yes" : "no"} | ${count(item)}/${runs} |`,
+          ),
+          "",
+          ...Arr.map(
+            missed,
+            (item) =>
+              `missed: ${item.id} (${item.kind}) at ${item.file}:${Arr.join(
+                Arr.map(item.lines, (part) =>
+                  part === null || part === undefined ? "" : globalThis.String(part),
+                ),
+                "-",
+              )}`,
+          ),
+          ...Arr.map(
+            falselyRaised,
+            (item) =>
+              `raised an honest item: ${item.id} (${item.kind}) at ${item.file}:${Arr.join(
+                Arr.map(item.lines, (part) =>
+                  part === null || part === undefined ? "" : globalThis.String(part),
+                ),
+                "-",
+              )}`,
+          ),
+          keep ? `kept the scratch directory at ${dir}` : "",
+        ],
+        (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
       ),
-      "",
-      ...missed.map(
-        (item) => `missed: ${item.id} (${item.kind}) at ${item.file}:${item.lines.join("-")}`,
-      ),
-      ...falselyRaised.map(
-        (item) =>
-          `raised an honest item: ${item.id} (${item.kind}) at ${item.file}:${item.lines.join("-")}`,
-      ),
-      keep ? `kept the scratch directory at ${dir}` : "",
-    ].join("\n"),
+      "\n",
+    ),
   );
   return missed.length === 0 && falselyRaised.length === 0 ? 0 : 1;
 });

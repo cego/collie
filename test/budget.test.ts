@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { getPriority } from "node:os";
 import { Config, Deferred, Effect, Fiber, FileSystem } from "effect";
@@ -145,12 +148,12 @@ const runner = (dir: string) =>
     );
     const reader = one.stdout.getReader();
     let out = "";
-    while (!out.includes("\n")) {
+    while (!pipe_(out, Str.includes("\n"))) {
       const { value, done } = yield* Effect.promise(() => reader.read());
       if (done) throw new Error(`the runner ended before it held: ${out}`);
       out += new TextDecoder().decode(value);
     }
-    const child = Number(out.trim());
+    const child = Number(Str.trim(out));
     yield* Effect.addFinalizer(() => signalProcess(child, "SIGKILL"));
     return { runner: one, child };
   });
@@ -261,7 +264,7 @@ test(
             Effect.promise(() =>
               new Response(Bun.spawn(["pgrep", "-P", String(one.pid)]).stdout).text(),
             ),
-          (out) => out.trim() !== "",
+          (out) => Str.trim(out) !== "",
         ).pipe(Effect.map(Number));
         yield* Effect.addFinalizer(() => signalProcess(child, "SIGKILL"));
         one.kill("SIGKILL");
@@ -336,7 +339,7 @@ test("a hold whose pid now belongs to a process that started later is reclaimed"
       yield* holdOn("a start long before this process's");
       const next = yield* waiting(dir);
       expect(yield* look(dir, VM_MK, next.id)).toMatchObject({ _tag: "admit", workers: 12 });
-      expect((yield* entriesOf(dir)).map((one) => one.id)).toEqual([next.id]);
+      expect(Arr.map(yield* entriesOf(dir), (one) => one.id)).toEqual([next.id]);
     }),
   ));
 
@@ -356,7 +359,7 @@ test("an interrupted waiter leaves no ticket, and an interrupted holder leaves n
         (all) => all.length === 2,
       );
       yield* Fiber.interrupt(waiter);
-      expect((yield* entriesOf(dir)).map((one) => one.id)).toEqual([theirs.id]);
+      expect(Arr.map(yield* entriesOf(dir), (one) => one.id)).toEqual([theirs.id]);
 
       const holder = yield* Effect.forkChild(
         Effect.scoped(
@@ -365,10 +368,10 @@ test("an interrupted waiter leaves no ticket, and an interrupted holder leaves n
       );
       yield* until(
         () => entriesOf(dir),
-        (all) => all.some((one) => one.kind === "small" && one.state === "held"),
+        (all) => Arr.some(all, (one) => one.kind === "small" && one.state === "held"),
       );
       yield* Fiber.interrupt(holder);
-      expect((yield* entriesOf(dir)).map((one) => one.id)).toEqual([theirs.id]);
+      expect(Arr.map(yield* entriesOf(dir), (one) => one.id)).toEqual([theirs.id]);
     }),
   ));
 
@@ -434,7 +437,7 @@ const smallHold = (dir: string) =>
 const held = (dir: string, count: number) =>
   until(
     () => entriesOf(dir),
-    (all) => all.filter((one) => one.state === "held").length === count,
+    (all) => Arr.filter(all, (one) => one.state === "held").length === count,
   );
 
 const started = (notes: string) =>
@@ -458,7 +461,7 @@ test.skipIf(process.platform !== "linux")(
         const waiting = `test: waiting for the run in process ${process.pid}`;
         const running = yield* until(
           () => started(notes),
-          (running) => running || stderr().includes(waiting),
+          (running) => running || pipe_(stderr(), Str.includes(waiting)),
         );
         expect(running).toBe(false);
 
@@ -469,7 +472,7 @@ test.skipIf(process.platform !== "linux")(
         );
         yield* fs.writeFileString(`${notes}/release`, "");
         expect(yield* Effect.promise(() => child.exited)).toBe(0);
-        expect(stderr().split(waiting).length - 1).toBe(1);
+        expect(Str.split(stderr(), waiting).length - 1).toBe(1);
       }),
     ),
   60_000,

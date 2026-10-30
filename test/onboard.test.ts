@@ -2,6 +2,11 @@
 // carried tree on disk; every installer and system tool that would reach the network or need
 // root is a stub on PATH.
 
+import { pipe as pipe_ } from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { exec } from "./support/command";
@@ -33,8 +38,8 @@ const git = (cwd: string, ...args: string[]) =>
   }).pipe(
     Effect.flatMap((done) =>
       done.exitCode === 0
-        ? Effect.succeed(done.stdout.trim())
-        : Effect.die(new Error(`git ${args.join(" ")}: ${done.stderr}`)),
+        ? Effect.succeed(Str.trim(done.stdout))
+        : Effect.die(new Error(`git ${Arr.join(args, " ")}: ${done.stderr}`)),
     ),
   );
 
@@ -54,7 +59,7 @@ const carry = Effect.fn("test.carry")(function* () {
 
 const read = (file: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
-    fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(""))),
+    fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")),
   );
 
 /** An installer that leaves an executable named `name` in ~/.local/bin, as the real ones do. */
@@ -118,10 +123,10 @@ const onboarded = (overrides: Record<string, string> = {}, options: Partial<Onbo
   });
 
 const results = (events: OnboardEvent[]) =>
-  events.flatMap((event) => (event.event === "result" ? [event] : []));
+  Arr.flatMap(events, (event) => (event.event === "result" ? [event] : []));
 
 const statusOf = (events: OnboardEvent[], step: string) =>
-  results(events).find((event) => event.step === step)?.status;
+  Option.getOrUndefined(Arr.findFirst(results(events), (event) => event.step === step))?.status;
 
 beforeEach(() =>
   runEffect(
@@ -171,7 +176,7 @@ test("a bare Machine gets herdr, Claude Code, the release placed, the plugin and
 
       expect(result).toMatchObject({ ok: true, data: { ready: true } });
       // Every step streams a start and then its result.
-      const steps = results(events).map((event) => event.step);
+      const steps = Arr.map(results(events), (event) => event.step);
       expect(steps).toEqual([
         "system",
         "collie",
@@ -187,8 +192,14 @@ test("a bare Machine gets herdr, Claude Code, the release placed, the plugin and
         "doctor",
       ]);
       for (const step of steps) {
-        const start = events.findIndex((e) => e.event === "start" && e.step === step);
-        const end = events.findIndex((e) => e.event === "result" && e.step === step);
+        const start = Option.getOrElse(
+          Arr.findFirstIndex(events, (e) => e.event === "start" && e.step === step),
+          () => -1,
+        );
+        const end = Option.getOrElse(
+          Arr.findFirstIndex(events, (e) => e.event === "result" && e.step === step),
+          () => -1,
+        );
         expect(start).toBeGreaterThanOrEqual(0);
         expect(start).toBeLessThan(end);
       }
@@ -256,12 +267,14 @@ test("missing git stops with the exact command to run as root, and changes nothi
       const { result, events } = yield* onboarded({ PATH: `${home}/stubs:${tools}` });
 
       expect(result).toMatchObject({ ok: false, error: { details: { ready: false } } });
-      const system = results(events).find((event) => event.step === "system");
+      const system = Option.getOrUndefined(
+        Arr.findFirst(results(events), (event) => event.step === "system"),
+      );
       expect(system).toMatchObject({
         status: "needs_root",
         command: "sudo apt-get install -y git",
       });
-      expect(results(events).map((event) => event.step)).toEqual(["system"]);
+      expect(Arr.map(results(events), (event) => event.step)).toEqual(["system"]);
       expect(yield* fs.exists(root)).toBe(false);
       expect(doctorRan).toBe(0);
     }),
@@ -273,11 +286,11 @@ const systemWith = Effect.fn("onboardTest.systemWith")(function* (
   manager: string,
   env: Record<string, string> = {},
 ) {
-  for (const [tool, body] of Object.entries({ ...tools, [manager]: "exit 0" })) {
+  for (const [tool, body] of Rec.toEntries({ ...tools, [manager]: "exit 0" })) {
     yield* bin.add(tool, body);
   }
   const { events } = yield* onboarded({ PATH: `${home}/stubs`, ...env });
-  return results(events).find((event) => event.step === "system");
+  return Option.getOrUndefined(Arr.findFirst(results(events), (event) => event.step === "system"));
 });
 
 test("any openssl will do, LibreSSL among them", () =>
@@ -332,7 +345,7 @@ test("a development checkout gets the checks, and nothing installed or moved", (
 
       expect(result).toMatchObject({ ok: true, data: { ready: true, development: true } });
       expect(statusOf(events, "collie")).toBe("skipped");
-      expect(results(events).map((event) => event.step)).toEqual([
+      expect(Arr.map(results(events), (event) => event.step)).toEqual([
         "system",
         "collie",
         "claude-login",
@@ -402,7 +415,9 @@ test("without a token, the GitLab step sends the human to the token page", () =>
 
       const { result, events } = yield* onboarded();
 
-      const gitlab = results(events).find((event) => event.step === "gitlab");
+      const gitlab = Option.getOrUndefined(
+        Arr.findFirst(results(events), (event) => event.step === "gitlab"),
+      );
       expect(gitlab?.status).toBe("needs_human");
       expect(gitlab?.url).toContain(`https://${GITLAB}/-/user_settings/personal_access_tokens`);
       expect(gitlab?.url).toContain("scopes=api,write_repository");
@@ -420,19 +435,25 @@ test("the GitLab host setting moves the token page, the login, the push and doct
       const { events } = yield* onboarded({ COLLIE_USER_DIR: config });
 
       const started = (step: string) =>
-        events.find((event) => event.event === "start" && event.step === step);
+        Option.getOrUndefined(
+          Arr.findFirst(events, (event) => event.event === "start" && event.step === step),
+        );
       expect(started("gitlab")).toMatchObject({ title: "Logged in to gitlab.com" });
       expect(started("push")).toMatchObject({
         title: "git push to gitlab.com on this Machine's own credentials",
       });
-      const gitlab = results(events).find((event) => event.step === "gitlab");
+      const gitlab = Option.getOrUndefined(
+        Arr.findFirst(results(events), (event) => event.step === "gitlab"),
+      );
       expect(gitlab?.url).toStartWith("https://gitlab.com/-/user_settings/personal_access_tokens");
       expect(doctoredAs).toBe("gitlab.com");
 
       const overridden = yield* onboarded({ COLLIE_USER_DIR: config, GITLAB_HOST: GITLAB });
-      expect(results(overridden.events).find((event) => event.step === "gitlab")?.url).toContain(
-        `https://${GITLAB}/`,
-      );
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(results(overridden.events), (event) => event.step === "gitlab"),
+        )?.url,
+      ).toContain(`https://${GITLAB}/`);
       expect(doctoredAs).toBe(GITLAB);
     }),
   ));
@@ -503,7 +524,10 @@ test("Slack handed on stdin is written owner-only without appearing in onboardin
       );
       expect((yield* fs.stat(`${home}/.config/collie/slack.env`)).mode & 0o777).toBe(0o600);
       expect(
-        events.some((event) => "detail" in event && event.detail.includes("xoxb-fixture-secret")),
+        Arr.some(
+          events,
+          (event) => "detail" in event && pipe_(event.detail, Str.includes("xoxb-fixture-secret")),
+        ),
       ).toBe(false);
     }),
   ));
@@ -557,9 +581,11 @@ test("Helle without credentials is not onboarded unless it is skipped", () =>
       const skipped = yield* onboarded();
 
       expect(statusOf(asked.events, "helle")).toBe("needs_human");
-      expect(results(asked.events).find((event) => event.step === "helle")?.detail).toContain(
-        'run /helle token, press "Create new token"',
-      );
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(results(asked.events), (event) => event.step === "helle"),
+        )?.detail,
+      ).toContain('run /helle token, press "Create new token"');
       expect(asked.result).toMatchObject({ ok: false });
       expect(statusOf(skipped.events, "helle")).toBe("skipped");
       expect(skipped.result).toMatchObject({ ok: true, data: { ready: true } });
@@ -588,8 +614,14 @@ esac`,
       );
       // In a terminal of its own: on macOS too, where `script` takes other flags.
       expect(yield* read(`${home}/claude-calls`)).toContain("mcp login linear-server\ntty\n");
-      const human = events.findIndex((event) => event.event === "human" && event.step === "linear");
-      const end = events.findIndex((event) => event.event === "result" && event.step === "linear");
+      const human = Option.getOrElse(
+        Arr.findFirstIndex(events, (event) => event.event === "human" && event.step === "linear"),
+        () => -1,
+      );
+      const end = Option.getOrElse(
+        Arr.findFirstIndex(events, (event) => event.event === "result" && event.step === "linear"),
+        () => -1,
+      );
       expect(events[human]).toMatchObject({ url, port: 62074 });
       expect(human).toBeLessThan(end);
       expect(statusOf(events, "linear")).toBe("done");
@@ -612,7 +644,10 @@ esac`,
 
       const { events } = yield* onboarded({}, { skip: ["helle"] });
 
-      const human = events.filter((event) => event.event === "human" && event.step === "linear");
+      const human = Arr.filter(
+        events,
+        (event) => event.event === "human" && event.step === "linear",
+      );
       expect(human.at(-1)).toMatchObject({ url: handed, port: 62074 });
       expect(statusOf(events, "linear")).toBe("done");
     }),
@@ -630,11 +665,15 @@ esac`,
 
       const { result, events } = yield* onboarded({}, { skip: ["helle"], attended: false });
 
-      expect(results(events).find((e) => e.step === "claude-login")).toMatchObject({
+      expect(
+        Option.getOrUndefined(Arr.findFirst(results(events), (e) => e.step === "claude-login")),
+      ).toMatchObject({
         status: "needs_human",
         command: "claude auth login",
       });
-      expect(results(events).find((e) => e.step === "linear")).toMatchObject({
+      expect(
+        Option.getOrUndefined(Arr.findFirst(results(events), (e) => e.step === "linear")),
+      ).toMatchObject({
         status: "needs_human",
         command: "claude mcp login linear-server",
       });
@@ -669,13 +708,15 @@ test("attended Linear login keeps the ambient environment and onboarding's overr
       const ambient = { USER: "onboard-user", COLLIE_LINEAR_INHERITED: "kept" };
       yield* Effect.acquireRelease(
         Effect.sync(() => {
-          const was = Object.fromEntries(Object.keys(ambient).map((name) => [name, Bun.env[name]]));
+          const was = Rec.fromEntries(
+            Arr.map(Rec.keys(ambient), (name) => [name, Bun.env[name]] as const),
+          );
           Object.assign(Bun.env, ambient);
           return was;
         }),
         (was) =>
           Effect.sync(() => {
-            for (const [name, value] of Object.entries(was)) {
+            for (const [name, value] of Rec.toEntries(was)) {
               if (value === undefined) delete Bun.env[name];
               else Bun.env[name] = value;
             }

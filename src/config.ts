@@ -1,5 +1,9 @@
+import * as Cause from "effect/Cause";
 // User defaults from the plugin config dir. Optional; the baseline is neutral.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Data, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { isHostName } from "./gitlab-token";
 import { permissionsAsWritten } from "./harness";
@@ -32,14 +36,14 @@ export const readConfig = Effect.fn("Config.readConfig")(function* (userDir: str
   const path = paths.join(userDir, "config.json");
   if (!(yield* fs.exists(path))) return {};
   const text = yield* fs.readFileString(path);
-  return yield* Schema.decodeUnknownEffect(ConfigJson)(text).pipe(
-    Effect.mapError((cause) => new Error(`${path}: ${String(cause)}`)),
+  return yield* Schema.decodeEffect(ConfigJson)(text).pipe(
+    Effect.mapError((cause) => new Cause.UnknownError(cause, `${path}: ${String(cause)}`)),
   );
 });
 
 export function configValue(raw: YamlMap, dotted: string): YamlValue | undefined {
   let node: YamlValue = raw;
-  for (const key of dotted.split(".")) {
+  for (const key of Str.split(dotted, ".")) {
     if (!isYamlMap(node)) return undefined;
     const next: YamlValue | undefined = node[key];
     if (next === undefined) return undefined;
@@ -64,7 +68,7 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   const raw = yield* readConfig(userDir);
-  const keys = dotted.split(".");
+  const keys = Str.split(dotted, ".");
   let node = raw;
   for (const key of keys.slice(0, -1)) {
     const next = node[key];
@@ -79,7 +83,7 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   yield* fs.makeDirectory(userDir, { recursive: true });
   yield* fs.writeFileString(
     paths.join(userDir, "config.json"),
-    `${Schema.encodeSync(ConfigJson)(raw)}\n`,
+    `${yield* Schema.encodeEffect(ConfigJson)(raw).pipe(Effect.orDie)}\n`,
   );
 });
 
@@ -112,7 +116,7 @@ export const writeSettingsSet = Effect.fn("Config.writeSettingsSet")(function* (
   yield* fs.makeDirectory(userDir, { recursive: true });
   yield* fs.writeFileString(
     paths.join(userDir, SET_FILE),
-    `${Schema.encodeSync(SettingsSetJson)(stamps)}\n`,
+    `${yield* Schema.encodeEffect(SettingsSetJson)(stamps).pipe(Effect.orDie)}\n`,
   );
 });
 
@@ -123,7 +127,7 @@ const settingsLocked = <A, E, R>(userDir: string, effect: Effect.Effect<A, E, R>
     yield* ensureLockDir(lock);
     return yield* withLock(
       lock,
-      Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`)),
+      Effect.fail(new Cause.TimeoutError(`${lock} could not be acquired; not writing unlocked`)),
       effect,
     );
   });
@@ -155,17 +159,20 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
     Effect.map((info) => Option.getOrUndefined(info.mtime)?.toISOString()),
     Effect.orElseSucceed(() => undefined),
   );
-  const settings = SETTINGS.flatMap(({ key }): ReadonlyArray<SharedSetting> => {
+  const settings = Arr.flatMap(SETTINGS, ({ key }): ReadonlyArray<SharedSetting> => {
     const value = configValue(raw, key) ?? null;
     const at = stamps.set[key] ?? (value === null ? undefined : written);
     return at === undefined ? [] : [{ key, value, at }];
   });
   // Recorded the first time, so a later write to the file does not make them newer.
-  const unstamped = settings.filter(({ key }) => stamps.set[key] === undefined);
+  const unstamped = Arr.filter(settings, ({ key }) => stamps.set[key] === undefined);
   if (unstamped.length > 0)
     yield* writeSettingsSet(userDir, {
       ...stamps,
-      set: { ...stamps.set, ...Object.fromEntries(unstamped.map(({ key, at }) => [key, at])) },
+      set: {
+        ...stamps.set,
+        ...Rec.fromEntries(Arr.map(unstamped, ({ key, at }) => [key, at] as const)),
+      },
     });
   return { settings, flock: stamps.flock ?? null } satisfies SharedSettings;
 });
@@ -198,7 +205,7 @@ export const takeShared = (
         if ("refused" in one) return yield* new SettingRefused({ reason: one.refused });
         parsed.push({ key, value: one.value, at });
       }
-      const before = Object.entries((yield* readSettingsSet(userDir)).set).map(([key, at]) => ({
+      const before = Arr.map(Rec.toEntries((yield* readSettingsSet(userDir)).set), ([key, at]) => ({
         key,
         at,
       }));

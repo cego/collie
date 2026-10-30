@@ -3,6 +3,7 @@
 // is tested here — including the one thing a model must not be able to do, which is make
 // its own work look more important by describing it that way.
 
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path } from "effect";
 import { expect, test } from "bun:test";
 import {
@@ -157,8 +158,8 @@ test("a card computes its own readiness, so it cannot be told it is verified", (
   expect(built.verifications[0]?.result).toBe("stale");
   expect(built.readiness).toBe("inspect-ready");
   // The agent's words are claims, and they are never among the verifications.
-  expect(built.claims.map((claim) => claim.text)).toEqual(["the tests pass"]);
-  expect(built.verifications.map((entry) => entry.name)).toEqual(["tests"]);
+  expect(Arr.map(built.claims, (claim) => claim.text)).toEqual(["the tests pass"]);
+  expect(Arr.map(built.verifications, (entry) => entry.name)).toEqual(["tests"]);
   expect(built.missing).toEqual(["no verification named typecheck"]);
   expect(built.significance).toBe("try-it");
 });
@@ -197,11 +198,9 @@ test("inspect entries are suggestions, and nothing here runs them", () => {
     base: "abc",
     mr: "https://gitlab.example.com/group/app/-/merge_requests/42",
   });
-  expect(entries.map((entry) => entry.what)).toEqual(["what changed", "the merge request"]);
+  expect(Arr.map(entries, (entry) => entry.what)).toEqual(["what changed", "the merge request"]);
   expect(entries[0]?.how).toBe("git -C /repo/wt diff abc..HEAD");
-  expect(entries[1]?.how).toBe(
-    "glab mr view '42' --repo 'gitlab.example.com/group/app' --comments",
-  );
+  expect(entries[1]?.how).toBe("glab mr view 42 --repo gitlab.example.com/group/app --comments");
   // A pull request is read with gh, never told to run glab.
   const pull = inspectFor({
     worktree: null,
@@ -211,7 +210,7 @@ test("inspect entries are suggestions, and nothing here runs them", () => {
   expect(pull).toEqual([
     {
       what: "the pull request",
-      how: "gh pr view '30' --repo 'cego/collie' --comments",
+      how: "gh pr view 30 --repo cego/collie --comments",
       note: "what the reviewers will read",
     },
   ]);
@@ -269,7 +268,7 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
 
       expect(yield* readCards(dir)).toHaveLength(3);
       const shown = newest(yield* readCards(dir));
-      expect(shown.map((card) => card.id)).toEqual(["c2", "c3"]);
+      expect(Arr.map(shown, (card) => card.id)).toEqual(["c2", "c3"]);
     }),
   ));
 
@@ -288,7 +287,7 @@ test("a checkpoint is read as claims, and one nobody can decode is skipped", () 
       yield* fs.writeFileString(path.join(progress, "broken.json"), "not json");
 
       const found = yield* readCheckpoints(dir);
-      expect(found.map((entry) => entry.checkpoint.ticket)).toEqual(["001-intent.md"]);
+      expect(Arr.map(found, (entry) => entry.checkpoint.ticket)).toEqual(["001-intent.md"]);
       expect(found[0]?.checkpoint.claims).toEqual(["the schema round trips"]);
     }),
   ));

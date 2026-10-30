@@ -1,6 +1,7 @@
 // A Task and every one of its Runs are forgotten together 30 days after its last Run ended,
 // and only once nothing could still need them (ADR-0045 D5).
 
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, Effect, FileSystem } from "effect";
 import type { TaskView } from "../src/board-model";
@@ -190,7 +191,7 @@ test("one judgement of three Finished Tasks asks herdr what is open once, and ke
       const fs = yield* FileSystem.FileSystem;
       const now = yield* Clock.currentTimeMillis;
       const ids = ["open", "alive", "recent"];
-      const records = ids.map((id) => ({ ...record, id: `task-${id}`, workspace: `w-${id}` }));
+      const records = Arr.map(ids, (id) => ({ ...record, id: `task-${id}`, workspace: `w-${id}` }));
       yield* rig.addWorkspace("w-open", "Project | Open", "/project");
       yield* rig.addPane("p7", "t7", "/project", "impl", "wOther");
       yield* fs.makeDirectory(`${rig.stateDir}/agents/r-alive`, { recursive: true });
@@ -205,10 +206,10 @@ test("one judgement of three Finished Tasks asks herdr what is open once, and ke
         sessions: [new Herdr(rig.pluginEnv())],
         facts: Effect.succeed({
           tasks: records,
-          views: ids.map((id) =>
+          views: Arr.map(ids, (id) =>
             view({ id: `task-${id}`, state: "done", landed: true, ended: now - 10 * DAY_MS }),
           ),
-          runs: ids.map((id) =>
+          runs: Arr.map(ids, (id) =>
             runFacts({ id: `r-${id}`, task: `task-${id}`, state: "succeeded" }),
           ),
         }),
@@ -221,7 +222,7 @@ test("one judgement of three Finished Tasks asks herdr what is open once, and ke
         { kind: "task", target: "task-recent", reason: "its last Run ended 10 day(s) ago" },
       ]);
       const herdrAsked = (yield* rig.cmds()).slice(asked);
-      expect(herdrAsked.filter((cmd) => cmd === "workspace list")).toHaveLength(1);
-      expect(herdrAsked.filter((cmd) => cmd === "pane list")).toHaveLength(1);
+      expect(Arr.filter(herdrAsked, (cmd) => cmd === "workspace list")).toHaveLength(1);
+      expect(Arr.filter(herdrAsked, (cmd) => cmd === "pane list")).toHaveLength(1);
     }),
   ));

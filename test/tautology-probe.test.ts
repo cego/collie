@@ -1,6 +1,10 @@
 // The live probe's verdict is only as good as how it reads a reviewer's findings against
 // the fixture's key: these pin that reading, so the probe can be trusted when it is red.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { readEnv } from "../src/env";
@@ -79,17 +83,25 @@ test("each honest test in the fixture has a check seen failing on an earlier tre
       const fs = yield* FileSystem.FileSystem;
       const fixture = new URL("../tools/tautology-fixture/", import.meta.url).pathname;
       const key = readKey(yield* fs.readFileString(`${fixture}key.json`));
-      const checks = journal(
-        yield* fs.readFileString(`${fixture}journal.json`),
-        "/repo",
-        { head: "final", base: "base" },
-        "2026-10-21T00:00:00Z",
-      ).split("\n");
-      const honestTests = key.filter((item) => item.kind === "honest test").map((item) => item.id);
+      const checks = Str.split(
+        journal(
+          yield* fs.readFileString(`${fixture}journal.json`),
+          "/repo",
+          { head: "final", base: "base" },
+          "2026-10-21T00:00:00Z",
+        ),
+        "\n",
+      );
+      const honestTests = Arr.map(
+        Arr.filter(key, (item) => item.kind === "honest test"),
+        (item) => item.id,
+      );
       expect(honestTests).toHaveLength(4);
       for (const id of honestTests)
-        expect(checks.find((line) => line.startsWith(`- ${id}: pass`))).toEndWith(
-          "on this tree, at 2026-10-21T00:00:00Z; seen failing on an earlier tree",
-        );
+        expect(
+          Option.getOrUndefined(
+            Arr.findFirst(checks, (line) => pipe(line, Str.startsWith(`- ${id}: pass`))),
+          ),
+        ).toEndWith("on this tree, at 2026-10-21T00:00:00Z; seen failing on an earlier tree");
     }),
   ));

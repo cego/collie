@@ -1,6 +1,9 @@
 // A merge request's review as Collie reads it from either forge, a merge's answer, and the
 // one rule that decides which comments are external and which are answered.
 
+import * as Num from "effect/Number";
+import * as Arr from "effect/Array";
+
 import type { ForgeChecks, Mergeability } from "../board-model";
 import { epochMs } from "../time";
 
@@ -69,19 +72,23 @@ export function judgeComments(
   login: string,
   resolved: ReadonlySet<string>,
 ): ReadonlyArray<ReviewComment> {
-  const ordered = comments
-    .map((comment, at) => ({ comment, at, ms: epochMs(comment.at) }))
-    .toSorted((a, b) => a.ms - b.ms || a.at - b.at)
-    .map(({ comment }) => comment);
-  const mine = ordered.flatMap((comment, at) =>
+  const timed = Arr.map(comments, (comment, at) => ({ comment, at, ms: epochMs(comment.at) }));
+  const sorted = Arr.sortWith(
+    timed,
+    (value) => value,
+    (a, b) => Num.sign(a.ms - b.ms || a.at - b.at),
+  );
+  const ordered = Arr.map(sorted, ({ comment }) => comment);
+  const mine = Arr.flatMap(ordered, (comment, at) =>
     comment.author === login ? [{ comment, at }] : [],
   );
-  return ordered.map((comment, at) => ({
+  return Arr.map(ordered, (comment, at) => ({
     ...comment,
     external: comment.kind === "person" && comment.author !== login,
     answered:
       (comment.thread !== null && resolved.has(comment.thread)) ||
-      mine.some(
+      Arr.some(
+        mine,
         (reply) =>
           (comment.thread !== null && reply.comment.thread === comment.thread && reply.at > at) ||
           links(reply.comment.body, comment.url),
@@ -91,8 +98,5 @@ export function judgeComments(
 
 /** `body` names `url` whole: `#note_1` is not linked by `#note_12`. */
 export function links(body: string, url: string): boolean {
-  if (url === "") return false;
-  for (let at = body.indexOf(url); at !== -1; at = body.indexOf(url, at + 1))
-    if (!/\w/.test(body[at + url.length] ?? "")) return true;
-  return false;
+  return url !== "" && new RegExp(`${RegExp.escape(url)}(?!\\w)`).test(body);
 }

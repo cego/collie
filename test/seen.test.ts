@@ -1,8 +1,10 @@
 // A finished Run's report is seen once for the Flock, by whoever opens or acknowledges it,
 // and never by someone reading it (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { runDir } from "../src/engine";
 import { readSeen } from "../src/seen";
@@ -10,7 +12,7 @@ import { epochMs } from "../src/time";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Board = Schema.Struct({
   tasks: Schema.Array(
     Schema.Struct({
@@ -25,8 +27,11 @@ const taskOf = (world: World, runId: string) =>
   collie(world, ["board"]).pipe(
     Effect.map(
       (printed) =>
-        Schema.decodeUnknownSync(Board)(printed.envelope.data).tasks.find(
-          (task) => task.run === runId,
+        Option.getOrUndefined(
+          Arr.findFirst(
+            flow(Schema.decodeUnknownResult(Board), Result.getOrThrow)(printed.envelope.data).tasks,
+            (task) => task.run === runId,
+          ),
         ) ?? null,
     ),
   );
@@ -89,9 +94,9 @@ test(
       (world) =>
         Effect.gen(function* () {
           const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
-          const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
-            started.envelope.data,
-          );
+          const { runId } = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ runId: Schema.String }),
+          )(started.envelope.data).pipe(Effect.orDie);
           const finished = yield* until(
             () => taskOf(world, runId),
             (task) => task?.state === "done",

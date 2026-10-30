@@ -1,7 +1,12 @@
+import * as Cause from "effect/Cause";
 // The user Layer's files as a Flock shares them: each decided by its latest edit, a removal
 // included, with what an edit replaced kept under `replaced/`
 // (ADR-0061).
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
 import { Data, Effect, FileSystem, Option, Schema } from "effect";
 import type { SharedDefinition } from "./definitions-model";
 import { TOOLCHAIN_NAMES } from "./engine";
@@ -25,14 +30,14 @@ export const byPath = (definition: { readonly path: string }) => definition.path
  * neither the toolchain's nor a hidden or backup file an editor leaves beside one.
  */
 const shareable = (path: string) => {
-  const [kind, name, ...deeper] = path.split("/");
+  const [kind, name, ...deeper] = Str.split(path, "/");
   return (
-    KINDS.some((one) => one === kind) &&
+    Arr.some(KINDS, (one) => one === kind) &&
     name !== undefined &&
     deeper.length === 0 &&
     name !== "" &&
-    !name.startsWith(".") &&
-    !name.endsWith("~") &&
+    !pipe_(name, Str.startsWith(".")) &&
+    !pipe_(name, Str.endsWith("~")) &&
     !TOOLCHAIN_NAMES.includes(name)
   );
 };
@@ -49,9 +54,9 @@ const throughLink = Effect.fn("SharedDefinitions.throughLink")(function* (
   userDir: string,
   path: string,
 ) {
-  const parts = path.split("/");
+  const parts = Str.split(path, "/");
   for (let at = 1; at <= parts.length; at++)
-    if (yield* isLink(`${userDir}/${parts.slice(0, at).join("/")}`)) return true;
+    if (yield* isLink(`${userDir}/${Arr.join(parts.slice(0, at), "/")}`)) return true;
   return false;
 });
 
@@ -99,7 +104,10 @@ const readSeen = Effect.fn("SharedDefinitions.readSeen")(function* (userDir: str
 
 const writeSeen = Effect.fn("SharedDefinitions.writeSeen")(function* (userDir: string, seen: Seen) {
   const fs = yield* FileSystem.FileSystem;
-  yield* fs.writeFileString(`${userDir}/${SEEN_FILE}`, `${Schema.encodeSync(Seen)(seen)}\n`);
+  yield* fs.writeFileString(
+    `${userDir}/${SEEN_FILE}`,
+    `${yield* Schema.encodeEffect(Seen)(seen).pipe(Effect.orDie)}\n`,
+  );
 });
 
 const locked = <A, E, R>(userDir: string, effect: Effect.Effect<A, E, R>) =>
@@ -108,7 +116,7 @@ const locked = <A, E, R>(userDir: string, effect: Effect.Effect<A, E, R>) =>
     yield* ensureLockDir(lock);
     return yield* withLock(
       lock,
-      Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`)),
+      Effect.fail(new Cause.TimeoutError(`${lock} could not be acquired; not writing unlocked`)),
       effect,
     );
   });
@@ -117,17 +125,23 @@ const locked = <A, E, R>(userDir: string, effect: Effect.Effect<A, E, R>) =>
 const readShared = Effect.fn("SharedDefinitions.read")(function* (userDir: string, now: string) {
   const present = yield* onDisk(userDir);
   const seen = yield* readSeen(userDir);
-  const gone = Object.entries(seen).flatMap(([path, last]): SharedDefinition[] =>
-    present.some((one) => one.path === path)
+  const gone = Arr.flatMap(Rec.toEntries(seen), ([path, last]): SharedDefinition[] =>
+    Arr.some(present, (one) => one.path === path)
       ? []
       : [{ path, base64: null, at: last.removed ? last.at : now }],
   );
-  const next: Seen = Object.fromEntries(
-    [...present, ...gone].map((one) => [one.path, { at: one.at, removed: one.base64 === null }]),
+  const next: Seen = Rec.fromEntries(
+    Arr.map(
+      [...present, ...gone],
+      (one) => [one.path, { at: one.at, removed: one.base64 === null }] as const,
+    ),
   );
-  if (Schema.encodeSync(Seen)(next) !== Schema.encodeSync(Seen)(seen))
+  if (
+    (yield* Schema.encodeEffect(Seen)(next).pipe(Effect.orDie)) !==
+    (yield* Schema.encodeEffect(Seen)(seen).pipe(Effect.orDie))
+  )
     yield* writeSeen(userDir, next);
-  return [...present, ...gone].sort((a, b) => a.path.localeCompare(b.path));
+  return [...present, ...gone].sort((a, b) => pipe_(a.path, Str.localeCompare(b.path)));
 });
 
 /** This Machine's shared definitions, each with when it was last edited. */
@@ -155,13 +169,16 @@ export const takeDefinitions = (
     userDir,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const outside = given.find((one) => !shareable(one.path));
+      const outside = Option.getOrUndefined(Arr.findFirst(given, (one) => !shareable(one.path)));
       if (outside !== undefined)
         return yield* new DefinitionRefused({
           reason: `${outside.path} is not a file directly in the user Layer's workflows/ or personas/`,
         });
-      const malformed = given.find(
-        (one) => Number.isNaN(epochMs(one.at)) || (one.base64 !== null && !isBase64(one.base64)),
+      const malformed = Option.getOrUndefined(
+        Arr.findFirst(
+          given,
+          (one) => Number.isNaN(epochMs(one.at)) || (one.base64 !== null && !isBase64(one.base64)),
+        ),
       );
       if (malformed !== undefined)
         return yield* new DefinitionRefused({
@@ -171,7 +188,7 @@ export const takeDefinitions = (
       let seen = yield* readSeen(userDir);
       for (const edit of latestEdits(held, given, byPath).take) {
         const file = `${userDir}/${edit.path}`;
-        const had = held.find((one) => one.path === edit.path);
+        const had = Option.getOrUndefined(Arr.findFirst(held, (one) => one.path === edit.path));
         const content = had?.base64 ?? null;
         if (yield* throughLink(userDir, edit.path)) continue;
         // Saved by hand since it was read: left alone.
@@ -180,7 +197,16 @@ export const takeDefinitions = (
           const replaced = `replaced/${had.at}/${edit.path}`;
           if (yield* throughLink(userDir, replaced)) continue;
           const kept = `${userDir}/${replaced}`;
-          yield* fs.makeDirectory(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
+          yield* fs.makeDirectory(
+            pipe_(
+              kept,
+              Str.slice(
+                0,
+                Option.getOrElse(pipe_(kept, Str.lastIndexOf("/")), () => -1),
+              ),
+            ),
+            { recursive: true },
+          );
           yield* fs.writeFile(kept, Buffer.from(content, "base64"));
           yield* Effect.logWarning(
             `${edit.path} ${edit.base64 === null ? "removed" : "replaced"} by a later edit from ${by}; it is kept at ${kept}`,
@@ -188,7 +214,16 @@ export const takeDefinitions = (
         }
         if (edit.base64 === null) yield* fs.remove(file, { force: true });
         else {
-          yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+          yield* fs.makeDirectory(
+            pipe_(
+              file,
+              Str.slice(
+                0,
+                Option.getOrElse(pipe_(file, Str.lastIndexOf("/")), () => -1),
+              ),
+            ),
+            { recursive: true },
+          );
           yield* fs.writeFile(file, Buffer.from(edit.base64, "base64"));
           yield* fs.utimes(file, fileTime(edit.at), fileTime(edit.at));
         }
@@ -203,4 +238,5 @@ export const takeDefinitions = (
 export const landed = (
   given: ReadonlyArray<SharedDefinition>,
   held: ReadonlyArray<SharedDefinition>,
-) => given.filter((one) => held.some((has) => has.path === one.path && has.at === one.at));
+) =>
+  Arr.filter(given, (one) => Arr.some(held, (has) => has.path === one.path && has.at === one.at));

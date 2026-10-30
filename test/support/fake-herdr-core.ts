@@ -1,6 +1,10 @@
 // Fake herdr. Records every invocation and answers with canned ids so a whole
 // run can be driven without a herdr server.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
 import {
@@ -16,6 +20,8 @@ import {
   Schedule,
   Schema,
   Semaphore,
+  flow,
+  Result,
 } from "effect";
 import { recordStart } from "../../src/starts";
 import { exec } from "./command";
@@ -221,15 +227,15 @@ const TokensJson = Schema.fromJsonString(
 
 const StateJson = Schema.fromJsonString(
   Schema.Struct({
-    tabs: Schema.optionalKey(Schema.Number),
-    panes: Schema.optionalKey(Schema.Number),
-    outputs: Schema.optionalKey(Schema.Number),
-    statusReads: Schema.optionalKey(Schema.Number),
-    paneReads: Schema.optionalKey(Schema.Number),
-    failures: Schema.optionalKey(Schema.Number),
-    prompts: Schema.optionalKey(Schema.Number),
-    echoed: Schema.optionalKey(Schema.Number),
-    blocked: Schema.optionalKey(Schema.Number),
+    tabs: Schema.optionalKey(Schema.Finite),
+    panes: Schema.optionalKey(Schema.Finite),
+    outputs: Schema.optionalKey(Schema.Finite),
+    statusReads: Schema.optionalKey(Schema.Finite),
+    paneReads: Schema.optionalKey(Schema.Finite),
+    failures: Schema.optionalKey(Schema.Finite),
+    prompts: Schema.optionalKey(Schema.Finite),
+    echoed: Schema.optionalKey(Schema.Finite),
+    blocked: Schema.optionalKey(Schema.Finite),
     typed: Schema.optionalKey(Schema.String),
     tabList: Schema.optionalKey(Schema.Array(FakeTabSchema)),
     paneList: Schema.optionalKey(Schema.Array(FakePaneSchema)),
@@ -258,7 +264,7 @@ const Scripted = Schema.Struct({
   output: QueuedOutputJson,
 });
 const JsonRecord = Schema.fromJsonString(Schema.Any);
-const encodeJson = Schema.encodeSync(JsonRecord);
+const encodeJson = flow(Schema.encodeResult(JsonRecord), Result.getOrThrow);
 const emptyFailures: Record<string, string> = {};
 
 const emptyState = (): State => ({
@@ -293,8 +299,8 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
     echoed: state.echoed ?? 0,
     blocked: state.blocked ?? 0,
     typed: state.typed,
-    tabList: (state.tabList ?? []).map((tab) => ({ tab_id: tab.tab_id, label: tab.label })),
-    paneList: (state.paneList ?? []).map((pane) => ({
+    tabList: Arr.map(state.tabList ?? [], (tab) => ({ tab_id: tab.tab_id, label: tab.label })),
+    paneList: Arr.map(state.paneList ?? [], (pane) => ({
       pane_id: pane.pane_id,
       tab_id: pane.tab_id,
       label: pane.label,
@@ -306,10 +312,10 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
       terminal_id: pane.terminal_id,
       agent_session: pane.agent_session,
     })),
-    agents: (state.agents ?? []).map((agent) => ({ ...agent })),
-    workspaces: (state.workspaces ?? []).map((workspace) => ({ ...workspace })),
+    agents: Arr.map(state.agents ?? [], (agent) => ({ ...agent })),
+    workspaces: Arr.map(state.workspaces ?? [], (workspace) => ({ ...workspace })),
     closedWorkspaces: [...(state.closedWorkspaces ?? [])],
-    worktrees: (state.worktrees ?? []).map((worktree) => ({ ...worktree })),
+    worktrees: Arr.map(state.worktrees ?? [], (worktree) => ({ ...worktree })),
     worktreeSource: state.worktreeSource,
   };
 }
@@ -382,24 +388,22 @@ function handle(
     const tokensFor = Effect.fn("fake.tokensFor")(function* (on: "workspaces" | "panes") {
       const raw = yield* fs
         .readFileString(`${log}.tokens.json`, "utf8")
-        .pipe(Effect.catch(() => Effect.succeed("")));
-      const held = Schema.decodeUnknownOption(TokensJson)(raw);
+        .pipe(Effect.orElseSucceed(() => ""));
+      const held = Schema.decodeOption(TokensJson)(raw);
       return held._tag === "Some" ? (held.value[on] ?? {}) : {};
     });
 
     const readState = (file: string) =>
       fs.readFileString(file, "utf8").pipe(
         Effect.map((text) =>
-          mutableState(Option.getOrElse(Schema.decodeUnknownOption(StateJson)(text), emptyState)),
+          mutableState(Option.getOrElse(Schema.decodeOption(StateJson)(text), emptyState)),
         ),
-        Effect.catch(() => Effect.succeed(emptyState())),
+        Effect.orElseSucceed(() => emptyState()),
       );
     const readQueue = (file: string) =>
       fs.readFileString(file, "utf8").pipe(
-        Effect.map((text) =>
-          Option.getOrElse(Schema.decodeUnknownOption(QueueJson)(text), () => []),
-        ),
-        Effect.catch(() => Effect.succeed([])),
+        Effect.map((text) => Option.getOrElse(Schema.decodeOption(QueueJson)(text), () => [])),
+        Effect.orElseSucceed(() => []),
       );
     const writeJson = (file: string, value: State | FakeRecord | FakeEnvelope) =>
       fs.writeFileString(file, `${encodeJson(value)}\n`);
@@ -408,7 +412,7 @@ function handle(
       return at >= 0 ? argv[at + 1] : undefined;
     };
 
-    const cmd = argv.slice(0, 2).join(" ");
+    const cmd = Arr.join(argv.slice(0, 2), " ");
     yield* fs.makeDirectory(path.dirname(log), { recursive: true });
     yield* fs.writeFileString(
       log,
@@ -418,7 +422,7 @@ function handle(
 
     const failuresText = yield* envString("FAKE_HERDR_FAIL", "{}");
     const failures = Option.getOrElse(
-      Schema.decodeUnknownOption(FailuresJson)(failuresText),
+      Schema.decodeOption(FailuresJson)(failuresText),
       () => emptyFailures,
     );
     const failure = failures[cmd];
@@ -439,7 +443,7 @@ function handle(
     if (cmd === "machine list") {
       const saved = `${log}.machines.json`;
       const listed = (yield* fs.exists(saved)) ? yield* fs.readFileString(saved) : "[]";
-      return { code: 0, stdout: `${listed.trim()}\n`, stderr: "" };
+      return { code: 0, stdout: `${Str.trim(listed)}\n`, stderr: "" };
     }
 
     // Unset is a herdr from before `session list`, whose answer is no list at all.
@@ -449,13 +453,16 @@ function handle(
       ? yield* fs.readFileString(opened)
       : yield* envString("FAKE_HERDR_SESSIONS");
     if (cmd === "session list" && sessions !== "") {
-      const listed = Schema.decodeUnknownSync(SessionsJson)(sessions).map((one) => ({
-        name: one.name,
-        default: false,
-        running: true,
-        session_dir: path.dirname(one.socket_path),
-        socket_path: one.socket_path,
-      }));
+      const listed = Arr.map(
+        yield* Schema.decodeEffect(SessionsJson)(sessions).pipe(Effect.orDie),
+        (one) => ({
+          name: one.name,
+          default: false,
+          running: true,
+          session_dir: path.dirname(one.socket_path),
+          socket_path: one.socket_path,
+        }),
+      );
       return { code: 0, stdout: `${encodeJson({ sessions: listed })}\n`, stderr: "" };
     }
 
@@ -502,13 +509,13 @@ function handle(
         if (scripted?.sh !== undefined) {
           const ran = yield* exec(["sh", "-c", scripted.sh], {
             cwd: path.dirname(queuePath),
-            env: { ...process.env, OUTPUT_PATH: match[1]!.trim(), PROMPT_PATH: ref?.[1] ?? "" },
+            env: { ...process.env, OUTPUT_PATH: Str.trim(match[1]!), PROMPT_PATH: ref?.[1] ?? "" },
           });
           if (ran.exitCode !== 0) return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
         }
         const output = scripted === null ? next : scripted.output;
         if (output !== undefined && output !== null) {
-          const outputPath = match[1]!.trim();
+          const outputPath = Str.trim(match[1]!);
           yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
           const plain = Schema.decodeUnknownOption(Schema.String)(output);
           yield* fs.writeFileString(
@@ -520,11 +527,12 @@ function handle(
     });
 
     const tabOf = (paneId: string) =>
-      state.paneList.find((p) => p.pane_id === paneId)?.tab_id ?? "1:0";
+      Option.getOrUndefined(Arr.findFirst(state.paneList, (p) => p.pane_id === paneId))?.tab_id ??
+      "1:0";
 
     if (blockFor > 0 && cmd === "agent start" && state.blocked === 0) {
       const name = argv[2] ?? "";
-      if (!state.agents.some((agent) => agent.name === name))
+      if (!Arr.some(state.agents, (agent) => agent.name === name))
         state.agents.push({ name, pane_id: flag("--pane") ?? "" });
       state.blocked = 1;
       yield* writeJson(statePath, state);
@@ -593,7 +601,10 @@ function handle(
       const fallbackSocket = yield* envString("HERDR_SOCKET_PATH", "");
       const socket = yield* envString("FAKE_HERDR_STATUS_SOCKET", fallbackSocket);
       const client = yield* envString("FAKE_HERDR_VERSION", FAKE_CLIENT_VERSION);
-      const version = yield* envString("FAKE_HERDR_SERVER_VERSION", client.replace(/^herdr /, ""));
+      const version = yield* envString(
+        "FAKE_HERDR_SERVER_VERSION",
+        pipe(client, Str.replace(/^herdr /, "")),
+      );
       return {
         code: 0,
         stdout: `${encodeJson({
@@ -613,15 +624,20 @@ function handle(
     // than the gate. `FAKE_HERDR_RUNTIME_MISSING` names what this herdr does *not*
     // declare, which is how a test reaches the refusal.
     if (cmd === "api schema") {
-      const absent = (yield* envString("FAKE_HERDR_RUNTIME_MISSING", ""))
-        .split(",")
-        .filter((name) => name !== "");
+      const absent = Arr.filter(
+        Str.split(yield* envString("FAKE_HERDR_RUNTIME_MISSING", ""), ","),
+        (name) => name !== "",
+      );
       const declared = (name: string) => !absent.includes(name);
       const properties = (...fields: string[]) =>
-        Object.fromEntries(fields.filter(declared).map((field) => [field, {}]));
-      const methods = ["workspace.report_metadata", "pane.report_metadata", "workspace.create"]
-        .filter(declared)
-        .map((method) => ({ method }));
+        Rec.fromEntries(Arr.map(Arr.filter(fields, declared), (field) => [field, {}] as const));
+      const methods = Arr.map(
+        Arr.filter(
+          ["workspace.report_metadata", "pane.report_metadata", "workspace.create"],
+          declared,
+        ),
+        (method) => ({ method }),
+      );
       return {
         code: 0,
         stdout: `${encodeJson({
@@ -704,7 +720,7 @@ function handle(
     // way herdr cuts a preview.
     if (cmd === "agent explain") {
       const body = `\u276f\u00a0${state.typed ?? 'Try "how does <filepath> work?"'}\n`;
-      const preview = body.length > 240 ? `${body.slice(0, 240)}...` : body;
+      const preview = body.length > 240 ? `${pipe(body, Str.slice(0, 240))}...` : body;
       return {
         code: 0,
         stdout: `${encodeJson({
@@ -741,19 +757,24 @@ function handle(
       }
       case "tab close": {
         const tabId = argv[2] ?? "";
-        state.tabList = state.tabList.filter((t) => t.tab_id !== tabId);
-        state.paneList = state.paneList.filter((p) => p.tab_id !== tabId);
+        state.tabList = Arr.filter(state.tabList, (t) => t.tab_id !== tabId);
+        state.paneList = Arr.filter(state.paneList, (p) => p.tab_id !== tabId);
         break;
       }
       case "tab rename": {
-        const tab = state.tabList.find((t) => t.tab_id === argv[2]);
+        const tab = Option.getOrUndefined(
+          Arr.findFirst(state.tabList, (t) => t.tab_id === argv[2]),
+        );
         if (tab) tab.label = argv[3] ?? tab.label;
         break;
       }
       case "workspace rename": {
         const socket = yield* envString("HERDR_SOCKET_PATH");
-        const workspace = state.workspaces.find(
-          (w) => w.workspace_id === argv[2] && (w.session ?? socket) === socket,
+        const workspace = Option.getOrUndefined(
+          Arr.findFirst(
+            state.workspaces,
+            (w) => w.workspace_id === argv[2] && (w.session ?? socket) === socket,
+          ),
         );
         if (workspace) workspace.label = argv[3] ?? workspace.label;
         break;
@@ -763,12 +784,13 @@ function handle(
         const socket = yield* envString("HERDR_SOCKET_PATH");
         result = {
           type: "workspace_list",
-          workspaces: state.workspaces
-            .filter((w) => (w.session ?? socket) === socket)
-            .map((w) => ({
+          workspaces: Arr.map(
+            Arr.filter(state.workspaces, (w) => (w.session ?? socket) === socket),
+            (w) => ({
               ...w,
               tokens: { ...w.tokens, ...held[w.workspace_id] },
-            })),
+            }),
+          ),
         };
         break;
       }
@@ -790,25 +812,29 @@ function handle(
       case "tab list":
         result = {
           type: "tab_list",
-          tabs: state.tabList.map((t) => ({ ...t, workspace_id: "1" })),
+          tabs: Arr.map(state.tabList, (t) => ({ ...t, workspace_id: "1" })),
         };
         break;
       case "pane split":
         result = { type: "pane_split", pane: newPane(tabOf(argv[2]!)) };
         break;
       case "pane rename": {
-        const pane = state.paneList.find((p) => p.pane_id === argv[2]);
+        const pane = Option.getOrUndefined(
+          Arr.findFirst(state.paneList, (p) => p.pane_id === argv[2]),
+        );
         if (pane) pane.label = argv[3] ?? pane.label;
         break;
       }
       case "pane close":
-        state.paneList = state.paneList.filter((p) => p.pane_id !== argv[2]);
+        state.paneList = Arr.filter(state.paneList, (p) => p.pane_id !== argv[2]);
         // The agent in a pane goes with it.
-        state.agents = state.agents.filter((a) => a.pane_id !== argv[2]);
+        state.agents = Arr.filter(state.agents, (a) => a.pane_id !== argv[2]);
         break;
       case "pane move": {
         const tabId = flag("--tab") ?? "";
-        const pane = state.paneList.find((p) => p.pane_id === argv[2]);
+        const pane = Option.getOrUndefined(
+          Arr.findFirst(state.paneList, (p) => p.pane_id === argv[2]),
+        );
         if (pane) pane.tab_id = tabId;
         else state.paneList.push({ pane_id: argv[2]!, tab_id: tabId, label: null });
         result = { type: "pane_move", move_result: { changed: true } };
@@ -821,16 +847,17 @@ function handle(
           type: "pane_list",
           // A pane herdr made carries the workspace it was made in; one a test placed
           // may name its own.
-          panes: state.paneList
-            .filter((p) => p.session === undefined || p.session === socket)
-            .map((p) => ({
+          panes: Arr.map(
+            Arr.filter(state.paneList, (p) => p.session === undefined || p.session === socket),
+            (p) => ({
               ...p,
               workspace_id: p.workspace_id ?? "1",
               tokens: { ...p.tokens, ...held[p.pane_id] },
               // A pane herdr made has a terminal behind it; its id is the other half of
               // the Home's ownership proof, so it is as stable as the pane's own id.
               terminal_id: p.terminal_id ?? `t-${p.pane_id}`,
-            })),
+            }),
+          ),
         };
         break;
       }
@@ -852,7 +879,7 @@ function handle(
         // Real herdr keeps a name while it lists it; most tests start one again by design.
         if (
           (yield* envString("FAKE_HERDR_NAME_TAKEN")) !== "" &&
-          state.agents.some((agent) => agent.name === argv[2])
+          Arr.some(state.agents, (agent) => agent.name === argv[2])
         )
           return {
             code: 1,
@@ -883,7 +910,7 @@ function handle(
       }
       case "agent list": {
         const gone = new Set(
-          (yield* envString("FAKE_HERDR_AGENTS_GONE")).split(",").filter((n) => n),
+          Arr.filter(Str.split(yield* envString("FAKE_HERDR_AGENTS_GONE"), ","), (n) => Boolean(n)),
         );
         const status = yield* envString("FAKE_HERDR_AGENT_STATUS", "idle");
         // The one session the agents are in, where a test spreads herdr over several; a
@@ -893,15 +920,16 @@ function handle(
         const here = agentsIn === "" || socket === "" || socket === agentsIn;
         result = {
           type: "agent_list",
-          agents: (here ? state.agents : [])
-            .filter((a) => !gone.has(a.name))
-            .map((a) => ({
+          agents: Arr.map(
+            Arr.filter(here ? state.agents : [], (a) => !gone.has(a.name)),
+            (a) => ({
               ...a,
               agent_status: status,
               // herdr names every live agent's process; Collie's registry records it as
               // the incarnation, so the fake has to have one or nothing is deliverable.
               terminal_id: a.terminal_id ?? `term-${a.name}`,
-            })),
+            }),
+          ),
         };
         break;
       }
@@ -909,10 +937,9 @@ function handle(
         // A named agent herdr has been told to forget: `agent get` fails, the way it
         // does for a closed tab or a killed pane.
         if (
-          (yield* envString("FAKE_HERDR_AGENTS_GONE"))
-            .split(",")
-            .filter((n) => n)
-            .includes(argv[2] ?? "")
+          Arr.filter(Str.split(yield* envString("FAKE_HERDR_AGENTS_GONE"), ","), (n) =>
+            Boolean(n),
+          ).includes(argv[2] ?? "")
         ) {
           // herdr answers a missing target the way it really does: exit 0 with an
           // error envelope naming the code, not a failed process.
@@ -931,9 +958,10 @@ function handle(
         const statusFile = yield* envString("FAKE_HERDR_AGENT_STATUS_FILE");
         const filed =
           statusFile !== "" && (yield* fs.exists(statusFile))
-            ? (yield* fs.readFileString(statusFile)).trim()
+            ? Str.trim(yield* fs.readFileString(statusFile))
             : "";
-        const scripted = (filed || (yield* envString("FAKE_HERDR_AGENT_STATUS", "idle"))).split(
+        const scripted = Str.split(
+          filed || (yield* envString("FAKE_HERDR_AGENT_STATUS", "idle")),
           ",",
         );
         let status = scripted[Math.min(state.statusReads, scripted.length - 1)] ?? "idle";
@@ -951,7 +979,7 @@ function handle(
         // The repository's own checkout, whichever of its checkouts is asking: that is
         // what herdr answers with, and it is the only place open and create may run.
         const asked = flag("--cwd") ?? "";
-        const source = state.worktrees.some((w) => w.path === asked)
+        const source = Arr.some(state.worktrees, (w) => w.path === asked)
           ? (state.worktreeSource ?? asked)
           : asked;
         result = {
@@ -966,12 +994,12 @@ function handle(
         // herdr answers both from the repository's own checkout only: from a linked
         // worktree it refuses with `linked_worktree_source`.
         const from = flag("--cwd") ?? "";
-        if (state.worktrees.some((w) => w.path === from)) {
+        if (Arr.some(state.worktrees, (w) => w.path === from)) {
           return {
             code: 0,
             stderr: "",
             stdout: `${encodeJson({
-              id: `cli:${cmd.replace(" ", ":")}`,
+              id: `cli:${pipe(cmd, Str.replace(" ", ":"))}`,
               error: {
                 code: "linked_worktree_source",
                 message: "New and open worktree actions start from the repo parent workspace.",
@@ -981,7 +1009,9 @@ function handle(
         }
         const branch = flag("--branch") ?? "";
         const asked = flag("--path");
-        const known = state.worktrees.find((w) => (asked ? w.path === asked : w.branch === branch));
+        const known = Option.getOrUndefined(
+          Arr.findFirst(state.worktrees, (w) => (asked ? w.path === asked : w.branch === branch)),
+        );
         const worktree =
           known ??
           ({
@@ -1025,16 +1055,18 @@ function handle(
       }
       case "workspace close": {
         const id = flag("--workspace");
-        state.workspaces = state.workspaces.filter((one) => one.workspace_id !== id);
+        state.workspaces = Arr.filter(state.workspaces, (one) => one.workspace_id !== id);
         state.closedWorkspaces.push(id ?? "");
-        state.paneList = state.paneList.filter((one) => one.workspace_id !== id);
+        state.paneList = Arr.filter(state.paneList, (one) => one.workspace_id !== id);
         result = { type: "ok" };
         break;
       }
       case "worktree remove": {
         const workspace = flag("--workspace");
-        const gone = state.worktrees.find((w) => w.open_workspace_id === workspace);
-        state.worktrees = state.worktrees.filter((w) => w !== gone);
+        const gone = Option.getOrUndefined(
+          Arr.findFirst(state.worktrees, (w) => w.open_workspace_id === workspace),
+        );
+        state.worktrees = Arr.filter(state.worktrees, (w) => w !== gone);
         result = { type: "worktree_removed", path: gone?.path ?? "", forced: false };
         break;
       }

@@ -1,6 +1,9 @@
 // Each Machine's Schedules as the Machines page draws them, and what each row offers
 // (ADR-0052 D6). Pure, so the main process and the view read one thing.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Schema } from "effect";
 import { lastLine, ScheduleEntry } from "../../../src/schedule-model";
 
@@ -65,15 +68,15 @@ const NUMBER = /^\d+$/;
 /** A cron expression in words, for the shapes people write; null for the rest. */
 export const cronWords = (cron: string): string | null => {
   // ponytail: common five-field shapes only; anything else is shown as its expression.
-  const [minute, hour, day, month, weekday, ...rest] = cron.trim().split(/\s+/);
+  const [minute, hour, day, month, weekday, ...rest] = Str.split(Str.trim(cron), /\s+/);
   if (rest.length > 0 || weekday === undefined || day !== "*" || month !== "*") return null;
   const step = /^\*\/(\d+)$/.exec(minute!)?.[1];
   if (step !== undefined && hour === "*" && weekday === "*") return `every ${step} minutes`;
   if (!NUMBER.test(minute!)) return null;
-  const mm = minute!.padStart(2, "0");
+  const mm = pipe(minute!, Str.padStart(2, "0"));
   if (hour === "*" && weekday === "*") return `every hour at :${mm}`;
   if (!NUMBER.test(hour!)) return null;
-  const at = `at ${hour!.padStart(2, "0")}:${mm}`;
+  const at = `at ${pipe(hour!, Str.padStart(2, "0"))}:${mm}`;
   if (weekday === "*") return `every day ${at}`;
   if (weekday === "1-5") return `weekdays ${at}`;
   const named = NUMBER.test(weekday) ? DAYS[Number(weekday) % 7] : undefined;
@@ -114,5 +117,5 @@ export const machineSchedules = (machine: MachineSchedules): MachineSchedulesVie
       said: `No Schedules on ${machine.name}. Ask the Flock chat to add one.`,
       rows: [],
     };
-  return { state: "listed", said: null, rows: machine.schedules.map(rowOf) };
+  return { state: "listed", said: null, rows: Arr.map(machine.schedules, rowOf) };
 };

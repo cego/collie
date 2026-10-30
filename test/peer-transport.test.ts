@@ -1,6 +1,9 @@
 // ADR-draft-a-blocked-link-rides-the-machines-ssh-connection: a TLS WebSocket server stands
 // in for the peer, a resetter for a network refusing its port.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { createServer, type Server } from "node:net";
 import { Effect, FileSystem, Option, type Scope } from "effect";
@@ -52,7 +55,7 @@ const listener = (dir: string) =>
         message: (ws, message) => void ws.send(message),
       },
     });
-    yield* Effect.addFinalizer(() => Effect.sync(() => server.stop(true)));
+    yield* Effect.addFinalizer(() => Effect.promise(() => server.stop(true)));
     return { port: server.port!, certificate };
   });
 
@@ -100,7 +103,7 @@ const reached = (
   });
 
 const mux = (calls: ReadonlyArray<string>, verb: string) =>
-  calls.filter((line) => line.startsWith(`mux ${verb}`));
+  Arr.filter(calls, (line) => pipe_(line, Str.startsWith(`mux ${verb}`)));
 
 test("a peer whose port answers is opened direct, with no forward made", () =>
   runEffect(
@@ -126,10 +129,10 @@ test("a reset port is tried, then the tunnel through an open connection, which e
       const calls = yield* fake.calls;
       expect(mux(calls, "forward")).toHaveLength(1);
       expect(mux(calls, "cancel")).toHaveLength(1);
-      expect(mux(calls, "cancel")[0]!.slice("mux cancel".length)).toBe(
-        mux(calls, "forward")[0]!.slice("mux forward".length),
+      expect(pipe_(mux(calls, "cancel")[0]!, Str.slice("mux cancel".length))).toBe(
+        pipe_(mux(calls, "forward")[0]!, Str.slice("mux forward".length)),
       );
-      expect(calls.some((line) => line.startsWith("login"))).toBe(false);
+      expect(Arr.some(calls, (line) => pipe_(line, Str.startsWith("login")))).toBe(false);
     }),
   ));
 

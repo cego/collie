@@ -10,7 +10,10 @@
 // Worker terminal transcripts are never stored here. What an agent is doing reaches the
 // conversation as herdr's own status and title, and no further.
 
-import { Data, DateTime, Effect, FileSystem, Path, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import { Data, DateTime, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { readJournal } from "./journal";
 import { redact } from "./redact";
 import { ensureLockDir, withLock } from "./lock";
@@ -41,7 +44,7 @@ export type Turn = Schema.Schema.Type<typeof TurnSchema>;
 /** A turn while it is being built: the optional keys are set only where there is one. */
 type Draft = { -readonly [K in keyof Turn]: Turn[K] };
 const TurnJson = Schema.fromJsonString(TurnSchema);
-const encodeTurn = Schema.encodeSync(TurnJson);
+const encodeTurn = flow(Schema.encodeResult(TurnJson), Result.getOrThrow);
 
 /**
  * A reference the board may later render and offer to open, or `<external>`. Anything
@@ -49,7 +52,10 @@ const encodeTurn = Schema.encodeSync(TurnJson);
  * from a model, and a model's idea of an interesting file is not a reason to open one.
  */
 export function insideKnown(path: string, roots: ReadonlyArray<string>): boolean {
-  return roots.some((root) => root !== "" && (path === root || path.startsWith(`${root}/`)));
+  return Arr.some(
+    roots,
+    (root) => root !== "" && (path === root || pipe(path, Str.startsWith(`${root}/`))),
+  );
 }
 
 export const conversationPath = Effect.fn("Conversation.path")(function* (
@@ -71,12 +77,10 @@ export const read = (file: string) => readJournal(file, TurnJson);
  */
 export function keep(turns: ReadonlyArray<Turn>, nowMs: number): Turn[] {
   const oldest = nowMs - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
-  return turns
-    .filter((turn) => {
-      const at = epochMs(turn.at);
-      return Number.isNaN(at) || at >= oldest;
-    })
-    .slice(-MAX_TURNS);
+  return Arr.filter(turns, (turn) => {
+    const at = epochMs(turn.at);
+    return Number.isNaN(at) || at >= oldest;
+  }).slice(-MAX_TURNS);
 }
 
 export interface NewTurn {
@@ -95,7 +99,7 @@ export const append = Effect.fn("Conversation.append")(function* (
   roots: ReadonlyArray<string> = [],
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   const written: Draft = {
     id: `t-${Bun.hash(`${at}${turn.role}${turn.text}`).toString(16)}`,
     at,
@@ -114,7 +118,13 @@ export const append = Effect.fn("Conversation.append")(function* (
       const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
       const kept = keep([...(yield* read(file)), written], nowMs);
       const tmp = `${file}.${process.pid}.tmp`;
-      yield* fs.writeFileString(tmp, kept.map((line) => `${encodeTurn(line)}\n`).join(""));
+      yield* fs.writeFileString(
+        tmp,
+        Arr.join(
+          Arr.map(kept, (line) => `${encodeTurn(line)}\n`),
+          "",
+        ),
+      );
       yield* fs.rename(tmp, file);
     }),
   );
@@ -124,6 +134,7 @@ export const append = Effect.fn("Conversation.append")(function* (
 /** Absolute paths in a turn's text that point nowhere Collie knows, blanked. */
 function sanitise(text: string, roots: ReadonlyArray<string>): string {
   if (roots.length === 0) return text;
+  // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   return text.replace(/(^|\s)(\/[^\s'"`)]+)/g, (whole, lead: string, found: string) =>
     insideKnown(found, roots) ? whole : `${lead}<external>`,
   );
@@ -136,7 +147,7 @@ export const tail = Effect.fn("Conversation.tail")(function* (
   about?: string,
 ) {
   const turns = yield* read(file);
-  const mine = about === undefined ? turns : turns.filter((turn) => turn.target === about);
+  const mine = about === undefined ? turns : Arr.filter(turns, (turn) => turn.target === about);
   return mine.slice(-n);
 });
 

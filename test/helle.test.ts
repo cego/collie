@@ -3,8 +3,22 @@
 // that matter — someone else holding the project, a queue that moves, a 500 — are
 // exactly the ones a real Helle will not produce on demand.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, Fiber, FileSystem, Path, Result, Schedule, Schema } from "effect";
+import {
+  ConfigProvider,
+  Effect,
+  Fiber,
+  FileSystem,
+  Path,
+  Result,
+  Schedule,
+  Schema,
+  flow,
+} from "effect";
 import { runEffect } from "./support/effect";
 import { events, openHost, runDirOf, until, workspace } from "./support/host";
 import { readAudit } from "../src/audit";
@@ -72,7 +86,9 @@ function serve() {
           : Response.json({ detail: "no" }, { status: fake.listStatus });
       }
       const one = /^\/api\/v1\/projects\/([^/]+)(\/claim|\/release)?$/.exec(url.pathname);
-      const project = one ? fake.projects.find((p) => p.slug === one[1]) : undefined;
+      const project = one
+        ? Option.getOrUndefined(Arr.findFirst(fake.projects, (p) => p.slug === one[1]))
+        : undefined;
       if (!one || !project) return Response.json({ detail: "not found" }, { status: 404 });
       if (one[2] === "/claim") {
         const { taken, ...answer } = fake.claims.shift() ?? { position: 0, already_queued: false };
@@ -344,7 +360,7 @@ test("a repository whose own name is a project's shorthand resolves to that proj
 });
 
 test("a .collie/helle.json entry naming a shorthand resolves to its slug, and one neither slug nor shorthand is unknown", () => {
-  const inGroup = SHORTHANDS.filter((one) => one.group === "spilnu/frontend");
+  const inGroup = Arr.filter(SHORTHANDS, (one) => one.group === "spilnu/frontend");
   expect(resolveProjects(inGroup, release({ declared: ["sn", "playground"] }))).toEqual({
     _tag: "Projects",
     slugs: ["playground", "spilnu"],
@@ -366,11 +382,13 @@ test("a shorthand two projects answer to is unresolved, naming both", () => {
 });
 
 test("a claim an earlier release journaled reads as what it held, and holding none asks again", () => {
-  const decode = Schema.decodeUnknownSync(ClaimedSchema);
+  const decode = flow(Schema.decodeUnknownResult(ClaimedSchema), Result.getOrThrow);
   expect(decode({ slug: "spilnu" })).toEqual({ slugs: ["spilnu"] });
   expect("unresolved" in decode(null)).toBe(true);
   expect(decode({ slugs: ["happytiger", "spilnu"] })).toEqual({ slugs: ["happytiger", "spilnu"] });
-  expect(Schema.encodeSync(ClaimedSchema)({ slugs: ["spilnu"] })).toEqual({ slugs: ["spilnu"] });
+  expect(
+    flow(Schema.encodeResult(ClaimedSchema), Result.getOrThrow)({ slugs: ["spilnu"] }),
+  ).toEqual({ slugs: ["spilnu"] });
 });
 
 test("a 500 from the project list is a refusal", () =>
@@ -498,7 +516,7 @@ test("the gate claims, reports the queue as it moves, and returns once it is the
         // The queue moves up once the gate has said where it stands, and then the project
         // becomes this token's own: moved on what the gate has seen, not on the clock.
         const saidSoFar = (text: string) =>
-          Effect.sync(() => lines.some((line) => line.includes(text))).pipe(
+          Effect.sync(() => Arr.some(lines, (line) => pipe_(line, Str.includes(text)))).pipe(
             Effect.repeat({ until: (seen) => seen, schedule: Schedule.spaced("5 millis") }),
           );
         yield* saidSoFar("position 2");
@@ -513,7 +531,7 @@ test("the gate claims, reports the queue as it moves, and returns once it is the
 
         expect(yield* Fiber.join(fiber)).toEqual({ _tag: "Held", slugs: ["spilnu"] });
         expect(recorded).toEqual([{ slug: "spilnu", claim: "mine" }]);
-        const said = lines.join("\n");
+        const said = Arr.join(lines, "\n");
         expect(said).toContain("position 2");
         expect(said).toContain("position 1");
         expect(said).toContain("holds spilnu");
@@ -575,8 +593,8 @@ test("a monorepo's release holds every application's project before it answers",
         { slug: "spilnu", claim: "mine" },
       ]);
       expect(fake.calls).not.toContain("POST /api/v1/projects/playground/claim");
-      expect(lines.join("\n")).toContain("holds happytiger");
-      expect(lines.join("\n")).toContain("holds spilnu");
+      expect(Arr.join(lines, "\n")).toContain("holds happytiger");
+      expect(Arr.join(lines, "\n")).toContain("holds spilnu");
     }),
   ));
 
@@ -617,7 +635,7 @@ test("the gate claims, holds and gives back a project named by its shorthand thr
       expect(recorded).toEqual([{ slug: "spilnu", claim: "mine" }]);
       expect(lines).toContain("✓ this Run holds spilnu");
       yield* releaseClaim({ url: server.base, token: "token-abc" }, recorded[0]!.slug);
-      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      expect(Arr.filter(fake.calls, (call) => pipe_(call, Str.startsWith("POST")))).toEqual([
         "POST /api/v1/projects/spilnu/claim",
         "POST /api/v1/projects/spilnu/release",
       ]);
@@ -651,7 +669,7 @@ test("someone else's claim on one project keeps the gate waiting, and the next i
         );
 
         yield* Effect.sync(() =>
-          lines.some((line) => line.includes("waiting for happytiger")),
+          Arr.some(lines, (line) => pipe_(line, Str.includes("waiting for happytiger"))),
         ).pipe(Effect.repeat({ until: (seen) => seen, schedule: Schedule.spaced("5 millis") }));
         yield* Effect.sleep(30);
         expect(fiber.pollUnsafe()).toBeUndefined();
@@ -719,7 +737,7 @@ test("who holds: each needed project's holder is read, and no queue is joined", 
           { name: "e2e-stage", applications: [] },
         ],
       });
-      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([]);
+      expect(Arr.filter(fake.calls, (call) => pipe_(call, Str.startsWith("POST")))).toEqual([]);
     }),
   ));
 
@@ -770,7 +788,7 @@ test("what is free: only the free projects are claimed, in Helle's order, and no
         left: [{ slug: "spilnu", holder: "Dann" }],
       });
       expect(recorded).toEqual([{ slug: "happytiger", claim: "mine" }]);
-      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      expect(Arr.filter(fake.calls, (call) => pipe_(call, Str.startsWith("POST")))).toEqual([
         "POST /api/v1/projects/happytiger/claim",
       ]);
     }),
@@ -797,7 +815,7 @@ test("what is free: a project someone took before the claim came back queued is 
         slugs: [],
         left: [{ slug: "happytiger", holder: "Dann" }],
       });
-      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([
+      expect(Arr.filter(fake.calls, (call) => pipe_(call, Str.startsWith("POST")))).toEqual([
         "POST /api/v1/projects/happytiger/claim",
         "POST /api/v1/projects/happytiger/release",
       ]);
@@ -863,7 +881,7 @@ test("a claim lost while the gate waited for the next gives the later ones back 
           }),
         );
         const saidSoFar = (text: string) =>
-          Effect.sync(() => lines.some((line) => line.includes(text))).pipe(
+          Effect.sync(() => Arr.some(lines, (line) => pipe_(line, Str.includes(text)))).pipe(
             Effect.repeat({
               until: (seen) => seen,
               schedule: Schedule.spaced("5 millis"),
@@ -886,7 +904,7 @@ test("a claim lost while the gate waited for the next gives the later ones back 
           _tag: "Held",
           slugs: ["happytiger", "spilnu"],
         });
-        expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([
+        expect(Arr.filter(fake.calls, (call) => pipe_(call, Str.startsWith("POST")))).toEqual([
           "POST /api/v1/projects/happytiger/claim",
           "POST /api/v1/projects/spilnu/claim",
           "POST /api/v1/projects/spilnu/release",
@@ -909,26 +927,29 @@ const sharedHelle = Effect.fn("test.sharedHelle")(function* (
   const helle = Bun.serve({
     port: 0,
     fetch: (request) => {
-      const user = request.headers.get("authorization")!.replace("Bearer ", "");
-      const path = new URL(request.url).pathname.replace("/api/v1", "");
+      const user = pipe_(request.headers.get("authorization")!, Str.replace("Bearer ", ""));
+      const path = pipe_(new URL(request.url).pathname, Str.replace("/api/v1", ""));
       if (path === "/me") return Response.json({ user_id: user });
       if (path === "/projects") return Response.json(projects);
       const one = /^\/projects\/([^/]+)(\/claim|\/release)?$/.exec(path);
-      const project = projects.find((p) => p.slug === one?.[1]);
+      const project = Option.getOrUndefined(Arr.findFirst(projects, (p) => p.slug === one?.[1]));
       if (!one || !project) return Response.json({}, { status: 404 });
       if (one[2] === "/claim") {
         const already =
-          project.holder?.user_id === user || project.queue.some((m) => m.user_id === user);
+          project.holder?.user_id === user || Arr.some(project.queue, (m) => m.user_id === user);
         if (!already) {
           if (project.holder) project.queue.push({ user_id: user });
           else project.holder = { user_id: user };
         }
-        const at = project.queue.findIndex((m) => m.user_id === user);
+        const at = Option.getOrElse(
+          Arr.findFirstIndex(project.queue, (m) => m.user_id === user),
+          () => -1,
+        );
         return Response.json({ position: at + 1, already_queued: already });
       }
       if (one[2] === "/release") {
         if (project.holder?.user_id === user) project.holder = project.queue.shift();
-        else project.queue = project.queue.filter((m) => m.user_id !== user);
+        else project.queue = Arr.filter(project.queue, (m) => m.user_id !== user);
         return Response.json({ released: true });
       }
       return Response.json(project);
@@ -1068,7 +1089,7 @@ test("a release whose projects cannot be resolved claims nothing", () =>
       });
 
       expect(held._tag).toBe("Unresolved");
-      expect(fake.calls.filter((call) => call.startsWith("POST"))).toEqual([]);
+      expect(Arr.filter(fake.calls, (call) => pipe_(call, Str.startsWith("POST")))).toEqual([]);
     }),
   ));
 
@@ -1160,7 +1181,7 @@ test("a resumed Run does not ask again, and waits rather than assuming it holds 
         fake.projects[0]!.queue = [];
 
         expect(yield* Fiber.join(fiber)).toEqual({ _tag: "Held", slugs: ["spilnu"] });
-        expect(lines.join("\n")).toContain("position 1");
+        expect(Arr.join(lines, "\n")).toContain("position 1");
       }),
     ),
   ));
@@ -1423,7 +1444,7 @@ const claimedThroughDesktop = Effect.fn("test.claimedThroughDesktop")(function* 
     { claim: slug },
   );
   yield* host.stop;
-  return { state, dir, runId: dir.split("/").pop()!, said };
+  return { state, dir, runId: Str.split(dir, "/").pop()!, said };
 });
 
 /** The Run's give-back, as its workflow asks it, against the stand-in Helle. */
@@ -1482,7 +1503,7 @@ test(
         expect(said).toBe("Claimed docs in Helle: you hold it.");
         expect(yield* fs.readFileString(`${dir}/helle.json`)).toBe(RECORDED);
         const asked = yield* readAudit(`${state}/helle`);
-        expect(asked.map((line) => [line.operation, line.asked, line.result])).toEqual([
+        expect(Arr.map(asked, (line) => [line.operation, line.asked, line.result])).toEqual([
           ["helle_claimed", { slug: "docs" }, []],
         ]);
       }).pipe(Effect.scoped),
@@ -1505,7 +1526,10 @@ test(
           actor: { origin: "chat", conversation: "flock@mk-pc", said: SAID },
           result: [runId],
         });
-        const onRun = (yield* readAudit(dir)).filter((line) => line.operation === "helle_claimed");
+        const onRun = Arr.filter(
+          yield* readAudit(dir),
+          (line) => line.operation === "helle_claimed",
+        );
         expect(onRun).toEqual([
           {
             ...onHost!,

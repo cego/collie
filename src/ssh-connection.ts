@@ -1,6 +1,9 @@
 // How a Machine's shared SSH connection is opened, asked and ridden
 // (ADR-draft-a-blocked-link-rides-the-machines-ssh-connection).
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Clock, Duration, Effect, FileSystem, Option, Schema, type Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { HostRefused } from "./board-model";
@@ -22,10 +25,10 @@ const OPEN_BOUND = "2 minutes";
 
 /** Where this computer's connection to `machine` is held: a changed target is another. */
 export const controlPathOf = (stateDir: string, machine: SshMachine) =>
-  `${stateDir}/ssh/${new Bun.CryptoHasher("sha256")
-    .update(`${machine.label}\n${machine.target}`)
-    .digest("hex")
-    .slice(0, 16)}`;
+  `${stateDir}/ssh/${pipe_(
+    new Bun.CryptoHasher("sha256").update(`${machine.label}\n${machine.target}`).digest("hex"),
+    Str.slice(0, 16),
+  )}`;
 
 /** The control path, in a directory only this user reads, or why a socket cannot bind it. */
 export const controlPath = Effect.fn("SshConnection.controlPath")(
@@ -64,7 +67,7 @@ const ran = (argv: ReadonlyArray<string>) =>
       [child.exitCode, child.stderr.pipe(Stream.decodeText(), Stream.mkString)],
       { concurrency: "unbounded" },
     );
-    return { code: Number(code), stderr: stderr.trim() };
+    return { code: Number(code), stderr: Str.trim(stderr) };
   }).pipe(Effect.scoped);
 
 /** A host's handle on a Machine's connection: it asks an open master, and never logs in. */
@@ -244,7 +247,7 @@ const opened = Effect.fnUntraced(function* (
       Stream.decodeText(),
       Stream.runForEach((text) =>
         Effect.suspend(() => {
-          last = text.trim().split("\n").at(-1) ?? last;
+          last = Str.split(Str.trim(text), "\n").at(-1) ?? last;
           return said(text);
         }),
       ),
@@ -279,13 +282,19 @@ export const closeConnections = Effect.fn("SshConnection.closeOthers")(function*
   ssh = "ssh",
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const keep = new Set(kept.map((machine) => controlPathOf(stateDir, machine)));
-  const held = (yield* fs
-    .readDirectory(`${stateDir}/ssh`)
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => [])))
-    .filter((name) => /^[0-9a-f]{16}$/.test(name))
-    .map((name) => `${stateDir}/ssh/${name}`)
-    .filter((path) => !keep.has(path));
+  const keep = new Set(Arr.map(kept, (machine) => controlPathOf(stateDir, machine)));
+  const held = Arr.filter(
+    Arr.map(
+      Arr.filter(
+        yield* fs
+          .readDirectory(`${stateDir}/ssh`)
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => [])),
+        (name) => /^[0-9a-f]{16}$/.test(name),
+      ),
+      (name) => `${stateDir}/ssh/${name}`,
+    ),
+    (path) => !keep.has(path),
+  );
   yield* Effect.forEach(held, (path) => exitAt(ssh, path, MUX_BOUND, "collie"), {
     discard: true,
   });
@@ -302,7 +311,13 @@ export const resolvedHost = (target: string, ssh = "ssh") =>
         stderr: "ignore",
       }),
     );
-    return /^hostname (.+)$/m.exec(said)?.[1]?.trim() ?? null;
+    return (
+      Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(/^hostname (.+)$/m.exec(said)), (present) =>
+          Option.map(Option.fromNullishOr(present[1]), (present_) => Str.trim(present_)),
+        ),
+      ) ?? null
+    );
   }).pipe(Effect.orElseSucceed(() => null));
 
 /**
@@ -328,7 +343,7 @@ export const ride = (path: string, target: string, remote: string, ssh = "ssh") 
       ],
       { concurrency: "unbounded" },
     );
-    return { stdout, said: stderr.trim().split("\n").at(-1) ?? "" };
+    return { stdout, said: Str.split(Str.trim(stderr), "\n").at(-1) ?? "" };
   }).pipe(
     Effect.scoped,
     Effect.orElseSucceed(() => ({

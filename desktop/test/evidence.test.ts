@@ -1,6 +1,7 @@
 // What the record makes of a Run's evidence: terminal colours, and its files sorted into
 // a gallery of before/after pairs, videos, reports and logs.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { ansiLines, ansiSpans } from "../src/shared/ansi";
 import { attachmentsShown } from "../src/shared/attachments";
@@ -48,12 +49,13 @@ const file = (name: string) => ({ name, bytes: 10 });
 
 test("before and after shots of one view are paired, whatever side of the name says which", () => {
   const { gallery } = sortEvidence(
-    ["home.before.png", "home.after.png", "after-cart.jpg", "before-cart.jpg", "lone.webp"].map(
+    Arr.map(
+      ["home.before.png", "home.after.png", "after-cart.jpg", "before-cart.jpg", "lone.webp"],
       file,
     ),
   );
   expect(
-    gallery.map((item) => [
+    Arr.map(gallery, (item) => [
       item.before?.name ?? null,
       item.after?.name ?? null,
       item.alone?.name ?? null,
@@ -67,10 +69,10 @@ test("before and after shots of one view are paired, whatever side of the name s
 
 test("a half of a pair with no other half, or a second shot of one side, stands alone", () => {
   const { gallery } = sortEvidence(
-    ["login_before.png", "home.before.png", "home-before.png", "home.after.png"].map(file),
+    Arr.map(["login_before.png", "home.before.png", "home-before.png", "home.after.png"], file),
   );
   expect(
-    gallery.map((item) => item.alone?.name ?? `${item.before?.name}|${item.after?.name}`),
+    Arr.map(gallery, (item) => item.alone?.name ?? `${item.before?.name}|${item.after?.name}`),
   ).toEqual([
     // The first by name takes the side; the second is a shot of its own.
     "home.before.png",
@@ -81,11 +83,11 @@ test("a half of a pair with no other half, or a second shot of one side, stands 
 
 test("videos, HTML reports, and every other file are kept apart", () => {
   const sorted = sortEvidence(
-    ["run.webm", "demo.MP4", "lighthouse.html", "suite.log", "stdout", "junit.xml"].map(file),
+    Arr.map(["run.webm", "demo.MP4", "lighthouse.html", "suite.log", "stdout", "junit.xml"], file),
   );
-  expect(sorted.videos.map((one) => one.name)).toEqual(["demo.MP4", "run.webm"]);
-  expect(sorted.reports.map((one) => one.name)).toEqual(["lighthouse.html"]);
-  expect(sorted.files.map((one) => one.name)).toEqual(["junit.xml", "stdout", "suite.log"]);
+  expect(Arr.map(sorted.videos, (one) => one.name)).toEqual(["demo.MP4", "run.webm"]);
+  expect(Arr.map(sorted.reports, (one) => one.name)).toEqual(["lighthouse.html"]);
+  expect(Arr.map(sorted.files, (one) => one.name)).toEqual(["junit.xml", "stdout", "suite.log"]);
 });
 
 test("a media file's type is known by its extension", () => {

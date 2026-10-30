@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Logger } from "effect";
 import { inspect } from "node:util";
@@ -27,7 +28,7 @@ test("a bot token reads its workspace and posting user; invalid_auth refuses wit
       fake.refuse("invalid_auth");
       const refused = yield* api.auth().pipe(Effect.flip, Effect.provide(Logger.layer([logger])));
       expect(refused).toBe("Slack auth.test: invalid_auth");
-      expect(fake.calls.map((call) => call.method)).toEqual(["auth.test", "auth.test"]);
+      expect(Arr.map(fake.calls, (call) => call.method)).toEqual(["auth.test", "auth.test"]);
       expect(inspect({ logs, calls: fake.calls, refused })).not.toContain(token);
     }),
   ));
