@@ -6179,7 +6179,7 @@ const makeRegistry: (
     readonly cwd: string;
   }) {
     const rows = (yield* store.runs).filter((row) => row.run !== asked.runId);
-    const runs = (yield* Effect.forEach(rows, viewOf)).map((view) => ({
+    const runs = (yield* viewsOf(rows, 1)).map((view) => ({
       runId: view.runId,
       landing: view.landing,
       ended:
@@ -6207,7 +6207,7 @@ const makeRegistry: (
     if (!Number.isFinite(from))
       return yield* new WorkflowError({ reason: `since is not a date: ${since}` });
     const rows = (yield* store.runs).filter((row) => epochMs(row.admitted) >= from);
-    const views = yield* Effect.forEach(rows, viewOf);
+    const views = yield* viewsOf(rows, 1);
     const metrics = new Map<string, Metrics>();
     const recorded = new Map<string, Recorded>();
     for (const view of views) {
@@ -7036,27 +7036,45 @@ const makeRegistry: (
     return at === null ? null : DateTime.formatIso(DateTime.makeUnsafe(Number(at)));
   });
 
-  const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow) {
+  const directoryEntries = (at: string) =>
+    fs.readDirectory(at).pipe(
+      Effect.map((names) => new Set(names)),
+      Effect.orElseSucceed(() => null),
+    );
+  const viewOf = Effect.fn("Engine.viewOf")(function* (
+    row: RunRow,
+    knownControls?: ReadonlySet<string> | null,
+  ) {
+    const files = yield* directoryEntries(runDir(dir, row.run));
+    const controls = knownControls === undefined ? yield* directoryEntries(dir) : knownControls;
+    const hasFile = (name: string) => files === null || files.has(name);
+    const hasControl = (name: string) => controls === null || controls.has(`${name}.${row.run}`);
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
-    const report = Option.getOrUndefined(
-      Schema.decodeUnknownOption(Schema.fromJsonString(RunReport))(
-        yield* fs
-          .readFileString(`${runDir(dir, row.run)}/report.json`)
-          .pipe(Effect.orElseSucceed(() => "")),
-      ),
-    );
-    const linkNotices = yield* readLinkDeliveries(runDir(dir, row.run)).pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-    );
+    const report = hasFile("report.json")
+      ? Option.getOrUndefined(
+          Schema.decodeUnknownOption(Schema.fromJsonString(RunReport))(
+            yield* fs
+              .readFileString(`${runDir(dir, row.run)}/report.json`)
+              .pipe(Effect.orElseSucceed(() => "")),
+          ),
+        )
+      : undefined;
+    const linkNotices = hasFile("link-deliveries.jsonl")
+      ? yield* readLinkDeliveries(runDir(dir, row.run)).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+        )
+      : [];
     const admitted = {
       requestedBy: placing?.requestedBy,
       closes: placing?.closes,
       report,
       linkNotices: linkNotices.length === 0 ? undefined : linkNotices,
-      stepNotes: (yield* readStepSteering(runDir(dir, row.run)).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-      )).notes,
+      stepNotes: hasFile("step-steering.json")
+        ? (yield* readStepSteering(runDir(dir, row.run)).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+          )).notes
+        : [],
       runId: row.run,
       workflow: row.workflow,
       project: row.project,
@@ -7087,22 +7105,30 @@ const makeRegistry: (
       outcome,
       created: row.admitted,
       waiting: yield* asked(row.run),
-      controls: yield* controlsOf(row.run),
-      parked: yield* fs
-        .readFileString(controlPath(dir, PARKED, row.run))
-        .pipe(Effect.orElseSucceed(() => null)),
-      awaiting: yield* fs.readFileString(controlPath(dir, AWAITING, row.run)).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
-        Effect.orElseSucceed(() => null),
-      ),
-      usage: yield* fs.readFileString(controlPath(dir, USAGE, row.run)).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(UsageWaitJson)),
-        Effect.orElseSucceed(() => null),
-      ),
-      mr: yield* mergeRequestOf(fs, dir, row.run),
-      landing: yield* readLanding(runDir(dir, row.run)).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-      ),
+      controls: controls === null ? yield* controlsOf(row.run) : [HOLD, STOP].filter(hasControl),
+      parked: hasControl(PARKED)
+        ? yield* fs
+            .readFileString(controlPath(dir, PARKED, row.run))
+            .pipe(Effect.orElseSucceed(() => null))
+        : null,
+      awaiting: hasControl(AWAITING)
+        ? yield* fs.readFileString(controlPath(dir, AWAITING, row.run)).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
+            Effect.orElseSucceed(() => null),
+          )
+        : null,
+      usage: hasControl(USAGE)
+        ? yield* fs.readFileString(controlPath(dir, USAGE, row.run)).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(UsageWaitJson)),
+            Effect.orElseSucceed(() => null),
+          )
+        : null,
+      mr: hasFile("merge-request") ? yield* mergeRequestOf(fs, dir, row.run) : null,
+      landing: hasFile("landing.json")
+        ? yield* readLanding(runDir(dir, row.run)).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+          )
+        : null,
       measurement:
         outcome === "performance"
           ? finalMeasurementLine(
@@ -7135,6 +7161,15 @@ const makeRegistry: (
           ? null
           : `claim on ${kept} retained; recovery required: a new Run of ${row.workflow} takes it over and closes this Run's agents`,
     };
+  });
+
+  const viewsOf = Effect.fn("Engine.viewsOf")(function* (
+    rows: ReadonlyArray<RunRow>,
+    concurrency = VIEW_CONCURRENCY,
+  ) {
+    if (rows.length === 0) return [];
+    const controls = yield* directoryEntries(dir);
+    return yield* Effect.forEach(rows, (row) => viewOf(row, controls), { concurrency });
   });
 
   const setControl = Effect.fn("Engine.setControl")(function* (
@@ -7244,8 +7279,9 @@ const makeRegistry: (
   const sweep = Effect.gen(function* () {
     if (watchers === 0) return;
     let changed = false;
+    const controls = yield* directoryEntries(dir);
     for (const [runId, entry] of watched) {
-      const view = yield* viewOf(entry.row);
+      const view = yield* viewOf(entry.row, controls);
       const said = encodeView(view);
       if (said === entry.said) continue;
       entry.said = said;
@@ -7857,9 +7893,7 @@ const makeRegistry: (
     views: (task: string | null) =>
       store.runs.pipe(
         Effect.flatMap((rows) =>
-          Effect.forEach(task === null ? rows : rows.filter((row) => row.task === task), viewOf, {
-            concurrency: VIEW_CONCURRENCY,
-          }),
+          viewsOf(task === null ? rows : rows.filter((row) => row.task === task)),
         ),
       ),
     mergeRequest: (runId: string, url: string) =>

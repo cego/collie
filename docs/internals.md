@@ -2000,8 +2000,8 @@ candidate process took 10.640 seconds, so these observations do not establish a 
 beyond noise. Every observation and profile is retained under
 `handoffs/measure/fix2-placement-pairs/`.
 
-The profiles also show platform-error construction from attempts to read ordinary
-source files as directories. The source walker now checks file type before a
+The filesystem-boundary check also found attempts to read ordinary source files
+as directories. The source walker now checks file type before a
 directory read. `fix2-file-directory-red` observed one such attempt; its green check
 observes zero. Directory links remain named without traversal, and the revision
 proof retains that behavior while checking fresh reads after an external-helper edit.
@@ -2023,6 +2023,20 @@ workspace listing and renaming; both failed before the fix. Naming now checks th
 current task after those calls and preserves newer edits and metadata. The original
 board-stream assertions and timeouts are unchanged; no delay, skip or retry repairs
 the failed measurement, which remains recorded as a failure.
+
+A subsequent syscall trace of three placement cases recorded 18,140 file opens,
+including 5,912 `ENOENT` results. Individual absent Run metadata files were opened
+over 140 times. The hot platform callback is the file reader, not the directory
+reader: a separate process-local counter observed only 93 directory reads. The
+earlier directory attribution does not explain the remaining suite cost.
+
+Run views now list the Run directory and control directory once per read, skipping
+optional files absent from those listings. A batch shares its control-directory
+listing. Each later read lists afresh; there is no persistent absence cache. A failed
+listing falls back to the original file reads. The failing-first view proof observes
+eight absent-file reads before the change and zero after it, then checks newly
+created and removed metadata and controls, the listing-failure fallback, and one
+control listing for a two-Run batch. Whole-suite qualification is still required.
 
 ### Test-suite measurements, 12 October 2026
 
