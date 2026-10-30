@@ -54,6 +54,11 @@ against merge base `cb8edab0`, including the merged runtime and child-order fix.
 **Verdict: not proved improved; leave unmerged.** Peak host RSS exceeds the 10%
 allowance. Correctness and all other declared guardrails held in this study.
 
+Later `origin/master` merges moved this branch's base past `cb8edab0`, including runtime
+files. The branch still adds and removes exactly the measured lines, and the harness is
+unchanged, but this study measured the change on `cb8edab0` only. It establishes nothing
+about the change on any later base, and no later tree was measured.
+
 | Metric                        | Baseline mean | Candidate mean | Paired ratio, 95% CI | Guardrail |
 | ----------------------------- | ------------: | -------------: | -------------------- | --------- |
 | Warm read, ms                 |       1,775.2 |        1,017.7 | 0.568 [0.485, 0.665] | Held      |
