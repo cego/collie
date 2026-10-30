@@ -23,7 +23,9 @@
     // Workflow modules an author would write, checked by the provisioned toolchain.
     "test/fixtures/workflows/**",
     // Vendored upstream lint rules keep their upstream source unchanged.
-    "tools/oxlint/anti-slop/**"
+    "tools/oxlint/anti-slop/**",
+    // A browser script the benchmark injects over CDP, as it is.
+    "bench/record-open/probe.js"
   ],
   "jsPlugins": [
     {
@@ -112,6 +114,35 @@
     ]
   },
   "overrides": [
+    {
+      // The benchmark's drivers speak to Chrome, processes and sockets on their own terms.
+      "files": [
+        "bench/record-open/cdp.ts",
+        "bench/record-open/desktop.ts",
+        "bench/record-open/electrobun-bun.ts",
+        "bench/record-open/fixture.ts",
+        "bench/record-open/run.ts",
+        "bench/record-open/view/electrobun-view.ts",
+        "bench/record-open/world.ts"
+      ],
+      "rules": {
+        "effecttsgo/async-function": "off",
+        "effecttsgo/global-console": "off",
+        "effecttsgo/global-console-in-effect": "off",
+        "effecttsgo/global-date": "off",
+        "effecttsgo/global-date-in-effect": "off",
+        "effecttsgo/global-fetch": "off",
+        "effecttsgo/global-fetch-in-effect": "off",
+        "effecttsgo/new-promise": "off",
+        "effecttsgo/node-builtin-import": "off",
+        "effecttsgo/prefer-effect-array": "off",
+        "effecttsgo/prefer-effect-record": "off",
+        "effecttsgo/prefer-effect-string": "off",
+        "effecttsgo/prefer-schema-over-json": "off",
+        "no-restricted-globals": "off",
+        "no-restricted-properties": "off"
+      }
+    },
     {
       // Effect's `Crypto` has digest and random, but no Ed25519 sign, verify or keypair.
       "files": [
