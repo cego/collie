@@ -28,10 +28,8 @@ import {
   endCheck,
   hostCheckProcesses,
   KILL_CEILING,
-  recordsIn,
   runningChecksDir,
 } from "../src/check-processes";
-import { markersOf } from "../src/checks";
 import {
   bindingsOf,
   commandOf,
@@ -48,7 +46,7 @@ import {
   type Verification,
 } from "../src/verify";
 import { runEffect } from "./support/effect";
-import { startDetached } from "./support/command";
+import { exec, startDetached } from "./support/command";
 import { until } from "./support/host";
 
 const held = new URL("./fixtures/checks/held.sh", import.meta.url).pathname;
@@ -1363,37 +1361,101 @@ test.skipIf(process.platform !== "linux")(
   30_000,
 );
 
-test("a record written before a check kept what finishing it needs is still read, and is a leftover", () =>
+/** `script` collected as a check of the host `checks`, its Verification in `${root}/evidence`. */
+const collected = (
+  {
+    root,
+    checks,
+  }: { readonly root: string; readonly checks: Effect.Success<typeof world>["checks"] },
+  script: string,
+  options: { readonly cwd: string; readonly log?: string; readonly argv?: ReadonlyArray<string> },
+) =>
+  collect(`${root}/evidence`, {
+    ...check,
+    name: "streams",
+    executable: "sh",
+    argv: ["-c", script, ...(options.argv ?? [])],
+    cwd: options.cwd,
+    ...(options.log !== undefined && { log: options.log }),
+  }).pipe(Effect.provideService(CheckProcesses, checks));
+
+test("a check's two streams reach its log in the order they were written", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const { state, checks } = yield* worldWith({ sweep: false });
-      yield* fs.makeDirectory(runningChecksDir(state), { recursive: true });
-      yield* fs.writeFileString(
-        `${runningChecksDir(state)}/run-old@1-a.json`,
-        encodeCheckRecord({
-          id: "run-old@1-a",
-          run: "run-old",
-          name: "unit",
-          pass: "gate",
-          round: 2,
-          by: "collie",
-          leader: { pid: 4242, started: "", group: 4242 },
-          host: { pid: 4241, started: "Mon Oct 19 00:00:00 2026" },
-          started: "2026-10-19T00:00:00.000Z",
-        }),
+      const one = yield* world;
+      const log = `${one.root}/check.log`;
+      yield* collected(
+        one,
+        "i=0; while [ $i -lt 8 ]; do if [ $((i % 2)) -eq 0 ]; then echo $i; else echo $i >&2; fi; i=$((i + 1)); sleep 0.01; done",
+        { cwd: one.notes, log },
       );
+      expect(yield* fs.readFileString(log)).toBe("0\n1\n2\n3\n4\n5\n6\n7\n");
+    }),
+  ));
 
-      const read = yield* recordsIn(state);
-      expect(Arr.map(read, (one) => one.id)).toEqual(["run-old@1-a"]);
-      expect((yield* markersOf([], read)).get("run-old")).toMatchObject({
-        name: "unit",
-        pass: "gate",
-        round: 2,
-        started: "2026-10-19T00:00:00.000Z",
+test("a background child that sent both its streams elsewhere holds back no check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const one = yield* world;
+      const began = yield* Clock.currentTimeMillis;
+      const kept = yield* collected(one, "sleep 5 >/dev/null 2>&1 & echo done", {
+        cwd: one.notes,
       });
-      expect(Arr.map(yield* checks.left, (one) => [one.id, one.recorded])).toEqual([
-        ["run-old@1-a", true],
-      ]);
+      expect(kept.tail.stdout).toBe("done\n");
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(2_000);
+    }),
+  ));
+
+test.skipIf(process.platform !== "linux")(
+  "a check's output is read until a child that left its group stops writing it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const one = yield* world;
+        const kept = yield* collected(one, "echo early; setsid sh -c 'sleep 0.5; echo late' &", {
+          cwd: one.notes,
+        });
+        expect(kept.tail.stdout).toBe("early\nlate\n");
+      }),
+    ),
+  30_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a check's last fingerprint is taken once what is left of it has been ended",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const one = yield* world;
+        expect(
+          yield* exec(["git", "init", "-q"], { cwd: one.notes }).pipe(
+            Effect.map((done) => done.exitCode),
+          ),
+        ).toBe(0);
+        const ready = `${one.root}/ready`;
+        const kept = yield* collected(
+          one,
+          `setsid sh -c 'trap "echo x > cleaned; exit 0" TERM; touch "$0"; while :; do sleep 0.1; done' "$0" >/dev/null 2>&1 &
+while [ ! -f "$0" ]; do sleep 0.05; done`,
+          { cwd: one.notes, argv: [ready] },
+        );
+        expect(yield* fs.exists(`${one.notes}/cleaned`)).toBe(true);
+        expect(kept.result).toBe("unstable");
+      }),
+    ),
+  30_000,
+);
+
+test("what finishing a check needs is written before it is spawned", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const one = yield* world;
+      const kept = yield* collected(one, `test -s "$0/check-output/$${CHECK_ID}.json"`, {
+        cwd: one.notes,
+        argv: [one.state],
+      });
+      expect(kept.exit).toBe(0);
     }),
   ));

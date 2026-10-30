@@ -462,16 +462,23 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
  * The Verification of a check that exited with `exit`, from its record and output alone, so
  * any host on its state directory can finish it; appended to its Run's evidence.
  */
-export const finishCheck = Effect.fn("Verify.finishCheck")(function* (
-  id: string,
-  exit: number,
-): Effect.fn.Return<Verification, never, Services> {
+export const finishCheck = (id: string, exit: number) =>
+  Effect.flatMap(readCheck(id), (read) => settleCheck(read, exit));
+
+/** What a check is finished from, read while its record and output are still there. */
+const readCheck = Effect.fn("Verify.readCheck")(function* (id: string) {
   const found = yield* (yield* CheckProcesses).finished(id);
   if (found === null) return yield* Effect.die(`check ${id} has no record to finish it from`);
-  const { check, command } = found;
+  const [stdout, stderr] = yield* Effect.all([tailOf(found.stdout), tailOf(found.stderr)]);
+  return { ...found, tail: { stdout, stderr } };
+});
+
+const settleCheck = Effect.fn("Verify.settleCheck")(function* (
+  { check, command, tail: { stdout, stderr } }: Effect.Success<ReturnType<typeof readCheck>>,
+  exit: number,
+): Effect.fn.Return<Verification, never, Services> {
   const { spec } = command;
   const fs = yield* FileSystem.FileSystem;
-  const [stdout, stderr] = yield* Effect.all([tailOf(found.stdout), tailOf(found.stderr)]);
   const end = yield* fingerprint(command.cwd);
   const at = yield* nowIso;
   const output = `${stdout}\n${stderr}`;
@@ -531,9 +538,13 @@ export const collect = (
 ): Effect.Effect<Verification, VerifyRefused, Services> =>
   startCheck(runDir, what, echo).pipe(
     Effect.flatMap((started) =>
-      Effect.flatMap(started.exit, (exit) => finishCheck(started.id, exit)),
+      Effect.flatMap(started.exit, (exit) =>
+        Effect.map(readCheck(started.id), (read) => [read, exit] as const),
+      ),
     ),
+    // Its Scope ends what is left of it before the tree is looked at again.
     Effect.scoped,
+    Effect.flatMap(([read, exit]) => settleCheck(read, exit)),
     Effect.withSpan("Verify.collect"),
   );
 

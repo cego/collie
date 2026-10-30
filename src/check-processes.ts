@@ -25,9 +25,7 @@ import {
 } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { Scope } from "effect";
-// oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's File keeps its descriptor private, and a child's stdio needs it.
-import { closeSync, openSync } from "node:fs";
+import type { Scope } from "effect";
 import { boundProcesses, groupOf, startedOf, stillRunning } from "./processes";
 import { StepPlace } from "./steps";
 import { epochMs, nowIso } from "./time";
@@ -37,8 +35,6 @@ export const CHECK_INSTALLATION = "COLLIE_CHECK_INSTALLATION";
 export const CHECK_ID = "COLLIE_CHECK_ID";
 const KILL_AFTER = "2 seconds";
 const KILL_WAIT = 1_000;
-const FOLLOW_EVERY = "50 millis";
-const READ_BYTES = 64 * 1024;
 
 /** Which check of which Run, as its record and the host's log name it. */
 export interface CheckOf {
@@ -63,6 +59,29 @@ const SpecSchema = Schema.Struct({
 });
 type CheckSpec = typeof SpecSchema.Type;
 
+/** A check's facts and command, written before it is spawned. */
+const FinishingSchema = Schema.Struct({
+  check: Schema.Struct({
+    run: Schema.String,
+    name: Schema.String,
+    pass: Schema.optionalKey(
+      Schema.Struct({ pass: Schema.String, round: Schema.optionalKey(Schema.Finite) }),
+    ),
+    by: Schema.Literals(["agent", "collie"]),
+  }),
+  command: Schema.Struct({
+    executable: Schema.String,
+    argv: Schema.Array(Schema.String),
+    cwd: Schema.String,
+    spec: SpecSchema,
+  }),
+});
+const encodeFinishing = flow(
+  Schema.encodeResult(Schema.fromJsonString(FinishingSchema)),
+  Result.getOrThrow,
+);
+const decodeFinishing = Schema.decodeUnknownOption(Schema.fromJsonString(FinishingSchema));
+
 export interface CheckCommand {
   readonly executable: string;
   readonly argv: ReadonlyArray<string>;
@@ -70,10 +89,8 @@ export interface CheckCommand {
   readonly spec?: CheckSpec;
 }
 
-/** What a check that exited is finished from: its record's facts, and where its two streams were written. */
-export interface FinishedCheck {
-  readonly check: CheckOf;
-  readonly command: Required<CheckCommand>;
+/** What a check that exited is finished from: its facts, and where its two streams were written. */
+export interface FinishedCheck extends Schema.Schema.Type<typeof FinishingSchema> {
   readonly stdout: string;
   readonly stderr: string;
 }
@@ -130,7 +147,7 @@ export interface CheckProcessesApi {
     PlatformError | CheckRefused,
     Scope.Scope | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
   >;
-  /** A check still recorded, with a spec, for its Verification; null where it is not. */
+  /** A check still recorded with what its Verification needs; null where it is not. */
   readonly finished: (id: string) => Effect.Effect<FinishedCheck | null>;
   /**
    * As `run`, for a process the caller spawns itself, with `markers` in its environment, and
@@ -163,15 +180,6 @@ const RecordSchema = Schema.Struct({
   leader: Schema.Struct({ pid: Schema.Finite, started: Schema.String, group: Schema.Finite }),
   host: Schema.Struct({ pid: Schema.Finite, started: Schema.String }),
   started: Schema.String,
-  /** Absent from a record written before a check kept it. */
-  spec: Schema.optionalKey(
-    Schema.Struct({
-      ...SpecSchema.fields,
-      executable: Schema.String,
-      argv: Schema.Array(Schema.String),
-      cwd: Schema.String,
-    }),
-  ),
 });
 export type CheckRecord = Schema.Schema.Type<typeof RecordSchema>;
 export const encodeCheckRecord = flow(
@@ -188,31 +196,39 @@ const outputsOf = (stateDir: string, id: string) => ({
   stderr: `${checkOutputDir(stateDir)}/${id}.stderr`,
 });
 
+const finishingPath = (stateDir: string, id: string) => `${checkOutputDir(stateDir)}/${id}.json`;
+
 const removeRecord = (fs: FileSystem.FileSystem, stateDir: string, id: string) => {
   const outputs = outputsOf(stateDir, id);
   return Effect.forEach(
-    [recordPath(stateDir, id), outputs.stdout, outputs.stderr],
+    [recordPath(stateDir, id), finishingPath(stateDir, id), outputs.stdout, outputs.stderr],
     (path) => fs.remove(path, { force: true }).pipe(Effect.ignore),
     { discard: true },
   );
 };
 
-const finishedOf = (record: CheckRecord, stateDir: string): FinishedCheck | null => {
-  if (record.spec === undefined) return null;
-  const { executable, argv, cwd, ...spec } = record.spec;
-  return {
-    check: {
-      run: record.run,
-      name: record.name,
-      ...(record.pass !== undefined && {
-        pass: { pass: record.pass, ...(record.round !== undefined && { round: record.round }) },
+const writeFinishing = (
+  fs: FileSystem.FileSystem,
+  stateDir: string,
+  id: string,
+  finishing: Schema.Schema.Type<typeof FinishingSchema>,
+) =>
+  fs
+    .writeFileString(`${finishingPath(stateDir, id)}.new`, encodeFinishing(finishing))
+    .pipe(
+      Effect.andThen(fs.rename(`${finishingPath(stateDir, id)}.new`, finishingPath(stateDir, id))),
+    );
+
+const readFinishing = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
+  fs.readFileString(finishingPath(stateDir, id)).pipe(
+    Effect.map((text) =>
+      Option.match(decodeFinishing(text), {
+        onNone: () => null,
+        onSome: (finishing): FinishedCheck => ({ ...finishing, ...outputsOf(stateDir, id) }),
       }),
-      by: record.by === "agent" ? "agent" : "collie",
-    },
-    command: { executable, argv, cwd, spec },
-    ...outputsOf(stateDir, record.id),
-  };
-};
+    ),
+    Effect.orElseSucceed(() => null),
+  );
 
 /** The records of the checks running in this state directory, as their hosts wrote them. */
 export const recordsIn = Effect.fn("CheckProcesses.recordsIn")(function* (stateDir: string) {
@@ -228,91 +244,31 @@ export const recordsIn = Effect.fn("CheckProcesses.recordsIn")(function* (stateD
   return found;
 });
 
-/** Where a stream goes: its file's descriptor, open until the Scope closes, or nowhere where it cannot be opened. */
-const outputTo = (path: string) =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      try {
-        return openSync(path, "w");
-      } catch {
-        return null;
-      }
-    }),
-    (fd) => Effect.sync(() => fd !== null && closeSync(fd)),
-  ).pipe(
-    Effect.map((fd) =>
-      fd === null
-        ? ("ignore" as const)
-        : // SAFETY: Node's stdio takes a descriptor, and Effect hands `stream` to it unchanged.
-          { stream: fd as never },
+const spawnCheck = (command: CheckCommand, env?: Readonly<Record<string, string>>) =>
+  Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
+    spawner.spawn(
+      ChildProcess.make(command.executable, [...command.argv], {
+        cwd: command.cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+        extendEnv: true,
+        ...(env !== undefined && { env }),
+        forceKillAfter: KILL_AFTER,
+      }),
     ),
   );
 
-/** Its streams written to `outputs`, which no pipe of this process stands between. */
-const spawnCheck = (
-  command: CheckCommand,
-  outputs: { readonly stdout: string; readonly stderr: string },
-  env?: Readonly<Record<string, string>>,
-) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const outer = yield* Effect.scope;
-    // This process's descriptors close once it is spawned: the check holds its own.
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const [stdout, stderr] = yield* Effect.all([
-          outputTo(outputs.stdout),
-          outputTo(outputs.stderr),
-        ]);
-        return yield* spawner
-          .spawn(
-            ChildProcess.make(command.executable, [...command.argv], {
-              cwd: command.cwd,
-              stdout,
-              stderr,
-              extendEnv: true,
-              ...(env !== undefined && { env }),
-              forceKillAfter: KILL_AFTER,
-            }),
-          )
-          .pipe(Effect.provideService(Scope.Scope, outer));
-      }),
-    );
-  });
-
-const groupLeft = (group: number) => {
-  try {
-    process.kill(-group, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-/**
- * The file's bytes as they are written, until its check's leader has exited and nothing of
- * its group is left to write more, as a pipe would close.
- */
-const followed = (
+/** `stream` as it is read, each chunk also written to `path` where that can be opened. */
+const teed = (
   fs: FileSystem.FileSystem,
+  stream: Stream.Stream<Uint8Array, PlatformError>,
   path: string,
-  handle: ChildProcessSpawner.ChildProcessHandle,
 ) =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const file = yield* fs.open(path);
-      const next = Effect.gen(function* () {
-        for (;;) {
-          const settled = !(yield* handle.isRunning) && !groupLeft(handle.pid);
-          const read = yield* file.readAlloc(READ_BYTES);
-          if (Option.isSome(read)) return [read.value, undefined] as const;
-          if (settled) return undefined;
-          yield* Effect.sleep(FOLLOW_EVERY);
-        }
-      });
-      return Stream.unfold(undefined, () => next);
-    }),
-  );
+  Effect.match(fs.open(path, { flag: "w" }), {
+    onFailure: () => stream,
+    onSuccess: (file) =>
+      stream.pipe(Stream.tap((chunk) => file.writeAll(chunk).pipe(Effect.ignore))),
+  });
 
 const runningOf = (
   fs: FileSystem.FileSystem,
@@ -320,14 +276,17 @@ const runningOf = (
   handle: ChildProcessSpawner.ChildProcessHandle,
   outputs: { readonly stdout: string; readonly stderr: string },
   collected: RunningCheck["collected"],
-): RunningCheck => ({
-  id,
-  pid: handle.pid,
-  stdout: followed(fs, outputs.stdout, handle),
-  stderr: followed(fs, outputs.stderr, handle),
-  exit: Effect.map(handle.exitCode, Number),
-  collected,
-});
+) =>
+  Effect.gen(function* () {
+    return {
+      id,
+      pid: handle.pid,
+      stdout: yield* teed(fs, handle.stdout, outputs.stdout),
+      stderr: yield* teed(fs, handle.stderr, outputs.stderr),
+      exit: Effect.map(handle.exitCode, Number),
+      collected,
+    } satisfies RunningCheck;
+  });
 
 const newId = (run: string, began: string) =>
   Effect.map(
@@ -347,7 +306,7 @@ const unrecorded: CheckProcessesApi = {
       const id = yield* newId(check.run, yield* nowIso);
       const outputs = outputsOf(dir, id);
       yield* fs.makeDirectory(checkOutputDir(dir));
-      const handle = yield* spawnCheck(command, outputs);
+      const handle = yield* spawnCheck(command);
       if (command.spec !== undefined) {
         const { spec } = command;
         yield* Effect.acquireRelease(
@@ -357,7 +316,7 @@ const unrecorded: CheckProcessesApi = {
           () => Effect.sync(() => unrecordedChecks.delete(id)),
         );
       }
-      return runningOf(fs, id, handle, outputs, (collecting) => collecting);
+      return yield* runningOf(fs, id, handle, outputs, (collecting) => collecting);
     }),
   finished: (id) => Effect.sync(() => unrecordedChecks.get(id) ?? null),
   adopt: (_check, spawn) =>
@@ -711,7 +670,6 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       id: string,
     ) => Effect.Effect<H, E, Scope.Scope>,
     say: (line: string) => Effect.Effect<void>,
-    spec?: NonNullable<CheckRecord["spec"]>,
   ) =>
     Effect.gen(function* () {
       if (stopping) return null;
@@ -747,12 +705,14 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
               },
               host,
               started: began,
-              ...(spec !== undefined && { spec }),
             };
             const entry: Collecting = { check, record, ended: stopping, settled: false };
             collecting.set(id, entry);
             return { handle, record, entry };
-          }).pipe(Effect.ensuring(Effect.sync(() => spawning.delete(id))));
+          }).pipe(
+            Effect.onError(() => removeRecord(fs, dir, id)),
+            Effect.ensuring(Effect.sync(() => spawning.delete(id))),
+          );
           yield* Effect.addFinalizer(() =>
             endCheck(record, installation, kill).pipe(
               // Its record is its only proof where /proc cannot be read, so it stays until it is gone.
@@ -789,25 +749,23 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     begin(
       check,
       (markers, id) =>
-        fs
-          .makeDirectory(checkOutputDir(dir), { recursive: true })
-          .pipe(
-            Effect.ignore,
-            Effect.andThen(spawnCheck(command, outputsOf(dir, id), markers)),
-            Effect.provideContext(services),
+        fs.makeDirectory(checkOutputDir(dir), { recursive: true }).pipe(
+          Effect.ignore,
+          Effect.andThen(
+            command.spec === undefined
+              ? Effect.void
+              : writeFinishing(fs, dir, id, {
+                  check,
+                  command: { ...command, argv: [...command.argv], spec: command.spec },
+                }),
           ),
+          Effect.andThen(spawnCheck(command, markers)),
+          Effect.provideContext(services),
+        ),
       say,
-      command.spec === undefined
-        ? undefined
-        : {
-            ...command.spec,
-            executable: command.executable,
-            argv: [...command.argv],
-            cwd: command.cwd,
-          },
     ).pipe(
-      Effect.map((begun): RunningCheck => {
-        if (begun === null) return endedCheck;
+      Effect.flatMap((begun) => {
+        if (begun === null) return Effect.succeed(endedCheck);
         const { handle, entry } = begun;
         return runningOf(
           fs,
@@ -819,16 +777,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       }),
     );
 
-  const finished: CheckProcessesApi["finished"] = (id) =>
-    fs.readFileString(recordPath(dir, id)).pipe(
-      Effect.map((text) =>
-        Option.match(decodeRecord(text), {
-          onNone: () => null,
-          onSome: (record) => finishedOf(record, dir),
-        }),
-      ),
-      Effect.orElseSucceed(() => null),
-    );
+  const finished: CheckProcessesApi["finished"] = (id) => readFinishing(fs, dir, id);
 
   const adopt: CheckProcessesApi["adopt"] = (check, spawn, say = () => Effect.void) =>
     begin(check, spawn, say).pipe(
