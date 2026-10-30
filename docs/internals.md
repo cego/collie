@@ -2006,6 +2006,24 @@ directory read. `fix2-file-directory-red` observed one such attempt; its green c
 observes zero. Directory links remain named without traversal, and the revision
 proof retains that behavior while checking fresh reads after an external-helper edit.
 
+Qualification `fix2a` completed on `b193bbe9840fb29e4da277a9cc7cecb2e0ff4827` without
+a host interruption. Its 300 idle probes had no whole suite held or waiting and a
+p95 of 8.957 ms. The whole suite took 592.60 seconds including builds, used 5,676.67
+CPU-s in its cgroup, and reported 5,213 pass, 11 skip and one failure. Its 592 owned
+samples had no second whole suite held and no waiter; overall probe p95 was 9.86 ms.
+There were zero qualifying four-suite samples. Both targets remain unmet or unproved;
+these different revisions and workloads do not establish a causal suite gain. Raw
+logs, samples, integrity checks and the result remain under `handoffs/measure/fix2a-*`.
+
+The board-stream failure was reproduced with diagnostics: generic-title naming
+overwrote the test's external `Renamed` task label with `Hi`, so its first subscriber
+correctly received the wrong title. Naming had checked the task before a herdr call
+and later written that stale record. Two deterministic tests change the task during
+workspace listing and renaming; both failed before the fix. Naming now checks the
+current task after those calls and preserves newer edits and metadata. The original
+board-stream assertions and timeouts are unchanged; no delay, skip or retry repairs
+the failed measurement, which remains recorded as a failure.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.

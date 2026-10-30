@@ -385,13 +385,19 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
         if (listed._tag === "None") return;
         const showing = listed.value.find((one) => one.workspaceId === now.workspace)?.label;
         if (showing !== undefined && showing !== now.label) return;
+        const current = yield* readTask(env.stateDir, task.id);
+        if (current === null || current.label !== now.label || current.workspace !== now.workspace)
+          return;
         if (showing !== undefined) {
           const renamed = yield* herd.herdr
             .workspaceRename(now.workspace, label)
             .pipe(Effect.option);
           if (renamed._tag === "None") return;
         }
-        yield* writeTask(env.stateDir, { ...now, label });
+        const latest = yield* readTask(env.stateDir, task.id);
+        if (latest === null || latest.label !== now.label || latest.workspace !== now.workspace)
+          return;
+        yield* writeTask(env.stateDir, { ...latest, label });
       }),
     ).pipe(Effect.catchTag("TaskBusy", () => Effect.void));
   }

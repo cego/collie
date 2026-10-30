@@ -5059,6 +5059,64 @@ test("a Task's workspace is looked for in its own Herd, where a workspace of the
     }),
   ));
 
+test.each(["listing", "renaming"] as const)(
+  "a Task edited during workspace %s keeps the external edit",
+  (during) =>
+    runEffect(
+      Effect.gen(function* () {
+        const env = rig.pluginEnv();
+        const task = {
+          id: "task-edit",
+          workspace: "wEdit",
+          label: "Collie | Plan new work",
+          cwd: rig.projectDir,
+          created_at: "2026-10-26T00:00:00.000Z",
+        };
+        const edited = { ...task, label: "Collie | Renamed by hand", root_pane: "human-pane" };
+        yield* rig.addWorkspace(task.workspace, task.label, task.cwd);
+        yield* writeTask(env.stateDir, task);
+        class EditingHerdr extends FakeHerdr {
+          override sessionList() {
+            return Effect.succeed([]);
+          }
+          override workspaceList() {
+            return super
+              .workspaceList()
+              .pipe(
+                Effect.tap(() =>
+                  during === "listing"
+                    ? writeTask(env.stateDir, edited).pipe(Effect.orDie)
+                    : Effect.void,
+                ),
+              );
+          }
+          override workspaceRename(id: string, label: string) {
+            return super
+              .workspaceRename(id, label)
+              .pipe(
+                Effect.tap(() =>
+                  during === "renaming"
+                    ? writeTask(env.stateDir, edited).pipe(Effect.orDie)
+                    : Effect.void,
+                ),
+              );
+          }
+        }
+        yield* retitleGenericTasks(env, new EditingHerdr(env), [
+          runFacts({
+            id: "run-edit",
+            workflow: "plan",
+            task: task.id,
+            settled: { inputs: { goal: "Design the banner" } },
+          }),
+        ]);
+        expect(yield* readTask(env.stateDir, task.id)).toEqual(edited);
+        if (during === "listing")
+          expect((yield* new FakeHerdr(env).workspaceList())[0]?.label).toBe(task.label);
+      }),
+    ),
+);
+
 test(
   "a Task's label is renamed under its lock, never over a Run holding it",
   () =>
