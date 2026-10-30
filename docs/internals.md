@@ -1682,6 +1682,9 @@ its time.
   invalidate before and after the write; external file events invalidate before the
   board's debounce. A read overtaken by invalidation retries. If the recursive watch
   fails, reuse is disabled. Engine status and clock-derived fields remain live.
+  It keeps settled values only, and a missing file as its error's fields. The host runs a
+  full collection after each board build: with reads cached, builds otherwise allocate
+  faster than the collector's own schedule frees, and peak RSS grows.
   A host's `collie_run` answer uses one local Run listing for its facts and Flow, with
   local offers and the same write-covered readiness as `progress`. Flow relationship
   indexes, installation identity and usual Step times are shared across a board build.

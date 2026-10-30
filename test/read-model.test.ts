@@ -92,3 +92,27 @@ test("external creation, rename and deletion invalidate negative reads and direc
       expect(yield* model.reading.readFileString(`${run}/stop`)).toBe("restored");
     }),
   ));
+
+test("a cached missing file fails again as not found, without keeping the native error", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      let reads = 0;
+      const model = yield* makeReadModel(dir).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: (path, encoding) =>
+            Effect.sync(() => reads++).pipe(Effect.andThen(fs.readFileString(path, encoding))),
+        }),
+      );
+      const missing = `${dir}/runs/a/report.json`;
+      expect(
+        (yield* Effect.flip(model.reading.readFileString(missing))).reason.cause,
+      ).toBeDefined();
+      const replayed = yield* Effect.flip(model.reading.readFileString(missing));
+      expect(reads).toBe(1);
+      expect(replayed.reason._tag).toBe("NotFound");
+      expect(replayed.reason.cause).toBeUndefined();
+    }),
+  ));

@@ -25,6 +25,12 @@ test(
             () => client.run({ runId }),
             (view) => view !== null && isSettled(view),
           );
+          // Both answers read readiness off the board, which sees the settling write after its debounce.
+          yield* until(
+            () => client.progress({ runId }),
+            (progress) =>
+              progress !== null && !progress.ready.missing.some((one) => one.fact === "succeeded"),
+          );
           const local = yield* client.read({ tool: "collie_run", input: { run: runId } });
           const native = yield* toolNamed("collie_run")!.call(env, { run: runId });
           expect(local).toBe(native);

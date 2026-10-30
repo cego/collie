@@ -1,4 +1,4 @@
-import { Cache, Context, Effect, FileSystem, Layer } from "effect";
+import { Context, Effect, FileSystem, Layer, PlatformError } from "effect";
 
 /** Disk inputs only: clocks, engine status and rendered views are never memoized here. */
 export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string) {
@@ -19,20 +19,77 @@ export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string)
       ? "shared"
       : null;
   };
-  const memo = <A, E>(read: (path: string) => Effect.Effect<A, E>) =>
-    Cache.make({ capacity: 128, lookup: read });
-  const groups = yield* Cache.make({
-    capacity: 2_048,
-    lookup: (_group: string) =>
-      Effect.gen(function* () {
-        return {
-          text: yield* memo(fs.readFileString),
-          names: yield* memo(fs.readDirectory),
-          exists: yield* memo(fs.exists),
-          stat: yield* memo(fs.stat),
-        };
-      }),
+  // Plain maps: an Effect Cache entry keeps the fiber that filled it.
+  const recent = <A>(capacity: number) => {
+    const kept = new Map<string, A>();
+    return {
+      get: (key: string) => {
+        const found = kept.get(key);
+        if (found === undefined) return undefined;
+        kept.delete(key);
+        kept.set(key, found);
+        return found;
+      },
+      set: (key: string, value: A) => {
+        kept.delete(key);
+        kept.set(key, value);
+        if (kept.size > capacity) kept.delete(kept.keys().next().value!);
+      },
+      delete: (key: string) => kept.delete(key),
+      clear: () => kept.clear(),
+    };
+  };
+  // A failed read keeps its fields, not the error: that carries the stack of the native one.
+  const stackless = (failed: Parameters<typeof PlatformError.systemError>[0]) => {
+    const limit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 0;
+    try {
+      return PlatformError.systemError(failed);
+    } finally {
+      Error.stackTraceLimit = limit;
+    }
+  };
+  const memo = <A>(read: (path: string) => Effect.Effect<A, PlatformError.PlatformError>) => {
+    const kept = recent<
+      { readonly value: A } | { readonly failed: Parameters<typeof PlatformError.systemError>[0] }
+    >(128);
+    return {
+      hit: (path: string): Effect.Effect<A, PlatformError.PlatformError> | undefined => {
+        const found = kept.get(path);
+        if (found === undefined) return undefined;
+        return "value" in found
+          ? Effect.succeed(found.value)
+          : Effect.fail(stackless(found.failed));
+      },
+      fill: (path: string) =>
+        read(path).pipe(
+          Effect.tap((value) => Effect.sync(() => kept.set(path, { value }))),
+          Effect.tapError((error) =>
+            Effect.sync(() => {
+              if (error.reason._tag === "BadArgument") return;
+              const { _tag, module, method, description, syscall, pathOrDescriptor } = error.reason;
+              kept.set(path, {
+                failed: { _tag, module, method, description, syscall, pathOrDescriptor },
+              });
+            }),
+          ),
+        ),
+    };
+  };
+  const groupFor = () => ({
+    text: memo(fs.readFileString),
+    names: memo(fs.readDirectory),
+    exists: memo(fs.exists),
+    stat: memo(fs.stat),
   });
+  const groups = recent<ReturnType<typeof groupFor>>(2_048);
+  const groupOfKey = (group: string) => {
+    const found = groups.get(group);
+    if (found !== undefined) return found;
+    const made = groupFor();
+    groups.set(group, made);
+    return made;
+  };
   const invalidate = (path: string) =>
     Effect.gen(function* () {
       const group = path === dir ? "shared" : groupOf(path);
@@ -44,31 +101,36 @@ export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string)
         path === `${dir}/agents` ||
         path === `${dir}/evidence`
       )
-        yield* Cache.invalidateAll(groups);
+        groups.clear();
       else {
-        yield* Cache.invalidate(groups, group);
-        if (group !== "shared") yield* Cache.invalidate(groups, "shared");
+        groups.delete(group);
+        if (group !== "shared") groups.delete("shared");
       }
     });
   const disable = Effect.gen(function* () {
     enabled = false;
     revision++;
-    yield* Cache.invalidateAll(groups);
+    groups.clear();
   });
-  const read = <A, E>(
+  const read = <A>(
     path: string,
-    direct: Effect.Effect<A, E>,
-    cached: (group: Effect.Success<ReturnType<typeof groups.lookup>>) => Effect.Effect<A, E>,
-  ) =>
-    Effect.gen(function* () {
-      const group = groupOf(path);
-      if (!enabled || group === null) return yield* direct;
-      for (;;) {
-        const before = revision;
-        const found = yield* cached(yield* Cache.get(groups, group)).pipe(Effect.result);
-        if (before === revision) return yield* Effect.fromResult(found);
-        if (!enabled) return yield* direct;
-      }
+    direct: Effect.Effect<A, PlatformError.PlatformError>,
+    kind: (group: ReturnType<typeof groupFor>) => ReturnType<typeof memo<A>>,
+  ): Effect.Effect<A, PlatformError.PlatformError> =>
+    Effect.suspend(() => {
+      const group = enabled ? groupOf(path) : null;
+      if (group === null) return direct;
+      const memo = kind(groupOfKey(group));
+      const before = revision;
+      return (
+        memo.hit(path) ??
+        memo.fill(path).pipe(
+          Effect.result,
+          Effect.flatMap((found) =>
+            before === revision ? Effect.fromResult(found) : read(path, direct, kind),
+          ),
+        )
+      );
     });
   const changed = <A, E, R>(effect: Effect.Effect<A, E, R>, ...paths: ReadonlyArray<string>) => {
     const forget = Effect.forEach(paths, invalidate, { discard: true });
@@ -99,14 +161,14 @@ export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string)
     ...writing,
     readFileString: (path, encoding) =>
       encoding === undefined
-        ? read(path, fs.readFileString(path), (group) => Cache.get(group.text, path))
+        ? read(path, fs.readFileString(path), (group) => group.text)
         : fs.readFileString(path, encoding),
     readDirectory: (path, options) =>
       options === undefined
-        ? read(path, fs.readDirectory(path), (group) => Cache.get(group.names, path))
+        ? read(path, fs.readDirectory(path), (group) => group.names)
         : fs.readDirectory(path, options),
-    exists: (path) => read(path, fs.exists(path), (group) => Cache.get(group.exists, path)),
-    stat: (path) => read(path, fs.stat(path), (group) => Cache.get(group.stat, path)),
+    exists: (path) => read(path, fs.exists(path), (group) => group.exists),
+    stat: (path) => read(path, fs.stat(path), (group) => group.stat),
   };
   return { reading, writing, invalidate, disable };
 });

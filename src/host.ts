@@ -1236,7 +1236,8 @@ const sharedBoardLayer = (dir: string) =>
       );
       const changed = Stream.merge(writes, refresh);
       const { boards, latest } = yield* shareBoard({
-        build: listing,
+        // Cached reads let builds outpace the collector's own schedule, which grew peak RSS.
+        build: listing.pipe(Effect.ensuring(Effect.sync(() => Bun.gc(true)))),
         changed: writes,
         refresh,
       });
