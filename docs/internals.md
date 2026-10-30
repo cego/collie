@@ -1941,6 +1941,39 @@ cache ends with each calculation; dependency resolution and edit detection remai
 fresh. These cuts need a new measured qualification, coordinated after the other
 Run's next announced final-tree study; no further window was taken ahead of it.
 
+On 30 October, the other Run's actual final-tree completion notice opened the next
+qualification on `aedcd26dd6821134d1887e7c06780a8f0532dd71`. Both new attempts failed
+to obtain an idle baseline while ordinary work continued on the shared Machine:
+
+| Attempt | UTC window        | Probes | Probe p95 | Samples with a whole suite held | Samples with one waiting |
+| ------- | ----------------- | -----: | --------: | ------------------------------: | -----------------------: |
+| `fix1b` | 07:12:27–07:17:27 |    300 |  10.80 ms |                             199 |                      191 |
+| `fix1c` | 07:32:13–07:37:13 |    300 |   9.14 ms |                              78 |                        0 |
+
+These are contention observations, not qualifying idle measurements. `fix1b` was
+interrupted after its control entered its initial phase; it completed no suite and
+never started the candidate. The collector's new guard rejected `fix1c` before either
+suite started. All 600 probes, the partial control log, and the rejection record are
+retained in the Run's handoffs. No completed observation was repeated or discarded,
+and no other Run was stopped or reprioritized. No measurement job remains running
+from this fix step.
+
+The collector now waits for live whole-suite requests to clear and rejects an idle
+window if a whole suite runs or queues during it. Four-suite evidence additionally
+requires the candidate's held budget entry to name a PID in its measured cgroup;
+a candidate waiting behind another branch cannot prove its own scheduling policy.
+Both guards have failing-first self-checks. The raw sampler retains this ownership
+as an additive field; older observations are unchanged.
+
+The latest source has targeted cost and preservation proofs, but no qualifying
+whole-suite measurement. The 360-second target remains unproved on that revision;
+the last completed pristine candidate measurement was 663.71 seconds on `0716a737`.
+No required four-suite responsiveness window has been observed. Both remain blocking
+findings, with no claimed performance gain or issue closure. A permitted quiet window
+and naturally queued suites are still needed. The supplied plan forbids starting load
+solely to create contention; a controlled-load exception or different infrastructure
+requires the human's decision. The CI correctness gate remains the `test` job.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
