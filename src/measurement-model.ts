@@ -3,7 +3,7 @@
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, flow } from "effect";
 import { Judgement } from "./measurement-verdict";
 
 const Command = Schema.Struct({ executable: Schema.String, argv: Schema.Array(Schema.String) });
@@ -45,6 +45,18 @@ export const BenchmarkPlan = Schema.Struct({
   tolerance: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(2))),
 });
 export type BenchmarkPlan = typeof BenchmarkPlan.Type;
+
+/** The plan, or the reason it is not one, in `collie measure`'s words. */
+export const decodeBenchmarkPlan = flow(
+  Schema.decodeUnknownEffect(BenchmarkPlan),
+  Effect.mapError((cause) => `the plan is not one: ${cause.message}`),
+  Effect.flatMap((plan) => {
+    const primaries = Arr.filter(plan.metrics, (one) => one.role === "primary").length;
+    return primaries === 1
+      ? Effect.succeed(plan)
+      : Effect.fail(`a plan declares exactly one primary metric, not ${primaries}`);
+  }),
+);
 
 export const PASS_LABEL = /^(?:calibration|final|cycle [1-9]\d*)$/;
 

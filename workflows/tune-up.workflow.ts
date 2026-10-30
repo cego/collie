@@ -6,8 +6,10 @@ import * as Num from "effect/Number";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
+import * as Struct from "effect/Struct";
 import {
   Agents,
+  BenchmarkPlan,
   ConnectionReading,
   FindingSchema,
   FixOutputSchema,
@@ -268,16 +270,10 @@ const Harnessed = Schema.Struct({
 
 /** A benchmark plan as the host measures by it, and why it is the plan now. */
 const Planned = Schema.Struct({
-  plan: Schema.Struct({
-    harness: Harness,
-    prepare: Schema.NullOr(Command),
-    commands: Harnessed.fields.commands,
-    metrics: Schema.NonEmptyArray(Metric),
-    warmup: Schema.Int,
-    samples: Schema.Int,
-    threshold: Schema.Finite,
-    tolerance: Schema.Finite,
-  }),
+  // measure judges the plan, so warmup stays as Harness wrote it.
+  plan: BenchmarkPlan.mapFields(
+    flow(Struct.omit(["limit"]), (fields) => ({ ...fields, harness: Harness, warmup: Schema.Int })),
+  ),
   reason: text,
 });
 type Plan = typeof Planned.Type.plan;

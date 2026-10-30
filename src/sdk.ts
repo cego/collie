@@ -106,7 +106,8 @@ export { IntegrationSchema, type Integration } from "./integrate";
 /** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */
 export {
   MeasurementJson as MeasurementSchema,
-  type BenchmarkPlan,
+  BenchmarkPlan,
+  decodeBenchmarkPlan,
   type Measurement,
 } from "./measurement-model";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";

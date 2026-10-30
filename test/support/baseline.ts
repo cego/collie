@@ -15476,6 +15476,49 @@ scenario(
 );
 
 scenario(
+  "a tune-up plan with a warmup below 0 is recorded, then refused by the host's measure",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-cold";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          { ...tunePlan(commit, [STEADY_PRIMARY]), warmup: -1 },
+        ]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("the plan is not one: ");
+        expect(yield* runLog(runId)).toContain("benchmark plan 1: written by Harness");
+        expect(yield* calibrations(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up plan with an empty harness is refused as Harness wrote it, and nothing is measured",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-unharnessed";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          { ...tunePlan(commit, [STEADY_PRIMARY]), harness: { commits: [], paths: [] } },
+        ]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("harness.json again: Missing key");
+        expect(reasonOf(result)).toContain(`at ["harness"]["commits"][0]`);
+        expect(yield* runLog(runId)).not.toContain("benchmark plan 1");
+        expect(yield* calibrations(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a tune-up whose base cannot be built fails the Run, naming the tree",
   () =>
     runEffect(
