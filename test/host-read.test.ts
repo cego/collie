@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { Effect, Option } from "effect";
+import * as Arr from "effect/Array";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Str from "effect/String";
 import { connect } from "../src/host";
@@ -26,6 +27,13 @@ test(
           yield* until(
             () => client.run({ runId }),
             (view) => view !== null && isSettled(view),
+          );
+          // Both answers read Ready to release from the board, which is rebuilt after the engine settles.
+          yield* until(
+            () => client.progress({ runId }),
+            (progress) =>
+              progress !== null &&
+              !Arr.some(progress.ready.missing, (one) => one.fact === "succeeded"),
           );
           const local = yield* client.read({ tool: "collie_run", input: { run: runId } });
           const native = yield* toolNamed("collie_run")!.call(env, { run: runId });
