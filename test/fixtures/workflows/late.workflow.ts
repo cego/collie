@@ -5,7 +5,8 @@ import { Host, Run, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 
-if (import.meta.path.includes("/late@1/")) await new Promise((resolve) => setTimeout(resolve, 3_000));
+if (import.meta.path.includes("/late@1/"))
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
 
 export default defineWorkflow({
   id: "late",
