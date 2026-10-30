@@ -27,15 +27,16 @@ stdout, stderr and surrounding load/process readings. Cold means a fresh host wi
 OS caches; the driver never evicts system caches or stops other work.
 
 The fixed protocol is ten alternating AB/BA pairs, with no discarded samples, retries
-or optional stopping. A process's mean warm `collie_run` latency is the primary endpoint;
-its twelve RPCs are repeated observations, not twelve independent experiments. The
-driver reports paired log-ratio effect sizes and two-sided 95% Student t intervals
-with nine degrees of freedom. This assumes approximately normal paired log ratios.
+or optional stopping. Since 0.109.0 released the read optimization, the base already
+has it and the study measures the memory fix: a process's peak host RSS is the primary
+endpoint. A latency's twelve RPCs are repeated observations, not twelve independent
+experiments. The driver reports paired log-ratio effect sizes and two-sided 95% Student
+t intervals with nine degrees of freedom. This assumes approximately normal paired log
+ratios.
 
-The verdict requires an upper interval below 1 for primary latency and idle CPU,
-below 1.10 for latency guardrails and peak RSS, and candidate warm p95 at most five
-seconds in every sample. It also requires zero correctness failures and matching
-settled answer text. An inconclusive interval or failed guardrail means performance
+The verdict requires an upper interval below 1 for peak RSS, below 1.10 for every
+latency and idle CPU, and candidate warm p95 at most five seconds in every sample. It
+also requires zero correctness failures and matching settled answer text. An inconclusive interval or failed guardrail means performance
 is not proved improved. Raw data remains available even when a process fails.
 
 `bun bench/paired.ts --self-check` checks the ratio/interval calculation against a

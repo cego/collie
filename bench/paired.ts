@@ -138,13 +138,14 @@ const study = Effect.gen(function* () {
     harness_sha256: new Bun.CryptoHasher("sha256").update(source).digest("hex"),
     pairs: PAIRS,
     order: "AB/BA alternating, sequential fresh processes; no discarded samples or retries",
-    endpoint: "process-level mean of 12 warm collie_run RPC latencies, 487 settled Runs",
+    endpoint:
+      "host peak RSS (VmHWM) per process, 487 settled Runs; the base already has the read optimization",
     statistics:
       "paired log ratios, two-sided 95% Student t CI, df=9; processes are the sampling units",
     conditions:
       "fresh host per sample; warm OS cache, no drop_caches; 10 s warm-up, 20 s idle CPU window, then warm and concurrent mutation workloads",
     guardrails:
-      "upper CI ratio <=1.10 for latency and peak RSS; idle CPU upper ratio <1; every candidate warm p95 <=5000 ms; zero correctness failures and identical settled answer text",
+      "peak RSS upper CI ratio <1; upper CI ratio <=1.10 for every latency and idle CPU; every candidate warm p95 <=5000 ms; zero correctness failures and identical settled answer text",
     cpu_count: cpus().length,
     bun: Bun.version,
     fixture: env.COLLIE_BENCH_FIXTURE,
@@ -232,13 +233,13 @@ const study = Effect.gen(function* () {
       pairs.push({ base: before, candidate: after });
     }
     const limits = [
-      ["read_mean_ms", 1],
+      ["read_mean_ms", 1.1],
       ["read_p95_ms", 1.1],
       ["cold_read_ms", 1.1],
       ["shown_mean_ms", 1.1],
       ["runs_mean_ms", 1.1],
-      ["idle_cpu_ms_per_s", 1],
-      ["host_peak_kb", 1.1],
+      ["idle_cpu_ms_per_s", 1.1],
+      ["host_peak_kb", 1],
       ["mutation_mean_ms", 1.1],
       ["mixed_read_mean_ms", 1.1],
     ] as const;
