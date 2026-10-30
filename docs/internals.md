@@ -2148,6 +2148,54 @@ reverted in `207c823d`. Every observation remains under
 `handoffs/measure/fix3-shutdown-pairs/`; no replacement pair or candidate suite was run.
 Both original performance blockers remain accepted and unresolved.
 
+Fix round 4 revalidated #246 and #253 on fetched master `e8d02a5d` and used the
+merged runtime `90ca541f`. A direct-entry loading experiment reused the source
+traversal already needed for its revision. Its failing-first regression observed
+two reads instead of one; the changed loader read once and imported an edited
+outside helper freshly. The complete discovery file passed all 14 tests.
+
+Three fixed AB/BA pairs compared `90ca541f` with `0af9f7a9` on the full
+`baseline-unrelated-03` scenario file. Each of the six processes passed 35 tests
+and 379 assertions. Control CPU times were 86.36, 89.88, and 86.72 seconds;
+candidate times were 91.25, 89.34, and 86.76 seconds. Median wall time was
+73.160 versus 78.037 seconds. The recorded retention rule failed, so the
+experiment and its added regression were reverted in `f720b8a4`. No replacement
+pair was run. `dc7acd15` replaces four native array calls in an existing revision
+regression to satisfy Effect 4.1 lint. Its runtime matches `90ca541f`.
+
+The final qualification attempt used frozen revision
+`dc7acd1553660a3e395a28fa7d0ab977b7a5b5f7`.
+All 300 idle probes remain recorded, but the entire baseline is unqualified:
+another Run reported targeted checks from 12:42:34 to 12:43:00 UTC within that
+window. Its descriptive p95 of 10.578 ms is not used for acceptance. No sample
+was selected out, and no replacement idle window was collected.
+
+The whole-suite attempt began at 12:47:17 UTC. Its last retained sample was at
+12:59:46 UTC, and the host log records version 0.109.1 starting at 12:59:52 UTC.
+The command ended with exit 130 and four files still running. Its 749 samples
+span 749.119 seconds; this exceeds the target but is not a completed suite time.
+There is no final test summary. Before interruption, two stage claim give-back
+cases expected suspension but observed completion; their cause remains unresolved.
+The attempt was not retried or labeled green.
+
+The 748 owned samples contained no whole-suite waiter or qualifying four-suite
+sample. Their descriptive probe p95 was 14.172 ms. Mean Machine and suite use
+were 20.80 and 9.72 cores; CPU, I/O, and memory stalls averaged 50.588%, 0.327%,
+and 0.002%. These observations establish no exclusive external cause or timing
+acceptance. A later report of prototype work from 13:15 onward does not overlap
+the retained samples and does not invalidate them.
+
+The passive phase could not start before the host interruption. Collected
+separately from 13:41:58 to 14:11:58 UTC, it retained 1,799 observations with no
+whole suite running or waiting. The gap is explicit; this was neither a whole-suite
+retry nor a replacement idle window. No four-suite condition was manufactured.
+
+All protocols, raw observations, dependency-integrity guards, the idle
+invalidation, and the interruption assessment remain under
+`handoffs/measure/fix4*` in Run `run-af99447d`. No completed observation was
+retried or discarded. Both original performance requirements remain unmet or
+unproved; the full correctness gate remains CI job `test`.
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
