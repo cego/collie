@@ -239,15 +239,15 @@ test("one revision reads each source once and the next revision reads an edited 
       };
       const revision = revisionOf(dir).pipe(Effect.provideService(FileSystem.FileSystem, counted));
       const before = yield* revision;
-      expect(reads.filter((one) => one === file)).toHaveLength(1);
-      expect(reads.filter((one) => one === helper)).toHaveLength(1);
+      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
+      expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
       yield* fs.writeFileString(`${linked}/note.md`, "After");
       expect(yield* revision).toBe(before);
       reads.length = 0;
       yield* fs.writeFileString(helper, "export const n = 2;");
       expect(yield* revision).not.toBe(before);
-      expect(reads.filter((one) => one === file)).toHaveLength(1);
-      expect(reads.filter((one) => one === helper)).toHaveLength(1);
+      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
+      expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
     }),
   ));
 
