@@ -195,9 +195,9 @@ const finished = (runId: string) =>
   Registry.pipe(
     Effect.flatMap((registry) =>
       until(
-        () => registry.view(runId),
-        (view) => view !== null && isOver(view.status.status),
-      ),
+        () => registry.status(runId),
+        (status) => isOver(status.status),
+      ).pipe(Effect.andThen(registry.view(runId))),
     ),
   );
 
