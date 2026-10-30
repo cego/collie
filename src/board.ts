@@ -56,7 +56,7 @@ import type {
   RunningCheck,
 } from "./board-model";
 import { laneWaitOf, stripOf } from "./flow";
-import { taskFlowFor } from "./flow-read";
+import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName } from "./peers";
 import { everyDelivery, SENT_STATES, toldIn, type Delivery } from "./steering";
 import { readCards } from "./cards";
@@ -994,6 +994,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     groups.set(key, [...(groups.get(key) ?? []), run]);
   }
 
+  const flowInputs = yield* flowInputsFor(opts.env, all);
   const views = yield* Effect.forEach(
     groups,
     ([id, runs]) =>
@@ -1232,46 +1233,50 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             run.id,
             run === checkOf ? check : yield* runningCheck(run, all, markers, now),
           );
-        const flow = yield* taskFlowFor(opts.env, {
-          rows: runs,
-          all,
-          repoRunsOf,
-          waves: fan?.waves ?? [],
-          leader,
-          settled: settledNow,
-          waitOf: (run) => {
-            const waits = waitsOf(run);
-            const running = checksOf.get(run.id) ?? null;
-            return laneWaitOf({
-              proposals: waits.proposals.length,
-              blocked: waits.blocked !== null,
-              parked: waits.parked,
-              heldBy: waits.held ? (holders.get(run.id) ?? "someone") : null,
-              memory: waits.memory !== null,
-              usage: waits.usage,
-              check: running,
-              awaiting: waits.awaiting !== null,
-              machine: opts.env.machine ?? machineName(),
-              sleeping:
-                (run.engine?.wakes ?? null) !== null ||
-                Arr.some(all, (one) => one.parent === run.id && !ended(one)),
-            });
+        const flow = yield* taskFlowFor(
+          opts.env,
+          {
+            rows: runs,
+            all,
+            repoRunsOf,
+            waves: fan?.waves ?? [],
+            leader,
+            settled: settledNow,
+            waitOf: (run) => {
+              const waits = waitsOf(run);
+              const running = checksOf.get(run.id) ?? null;
+              return laneWaitOf({
+                proposals: waits.proposals.length,
+                blocked: waits.blocked !== null,
+                parked: waits.parked,
+                heldBy: waits.held ? (holders.get(run.id) ?? "someone") : null,
+                memory: waits.memory !== null,
+                usage: waits.usage,
+                check: running,
+                awaiting: waits.awaiting !== null,
+                machine: opts.env.machine ?? machineName(),
+                sleeping:
+                  (run.engine?.wakes ?? null) !== null ||
+                  Arr.some(flowInputs.children.get(run.id) ?? [], (one) => !ended(one)),
+              });
+            },
+            offer,
+            mr,
+            merging: merging.id,
+            mrState,
+            mrStates,
+            ci: forged?.checks ?? null,
+            readiness:
+              mr !== null && (mrState === null || mrState === "open")
+                ? readiness.ready
+                  ? "Ready to release"
+                  : (readiness.missing[0]?.said ?? null)
+                : null,
+            mrOf,
+            mrLabel: (one) => mrLabel(one),
           },
-          offer,
-          mr,
-          merging: merging.id,
-          mrState,
-          mrStates,
-          ci: forged?.checks ?? null,
-          readiness:
-            mr !== null && (mrState === null || mrState === "open")
-              ? readiness.ready
-                ? "Ready to release"
-                : (readiness.missing[0]?.said ?? null)
-              : null,
-          mrOf,
-          mrLabel: (one) => mrLabel(one),
-        });
+          flowInputs,
+        );
         const view: TaskView = {
           id,
           name,
