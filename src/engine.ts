@@ -2150,6 +2150,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
   export const TOO_LARGE: "unstable:too-large";
+  /** Whether two snapshots are the same bytes, whatever commit each was on. A tree too large to look at is never the same as another. */
+  export function sameTree(
+    one: { readonly fingerprint: string },
+    other: { readonly fingerprint: string },
+  ): boolean;
 
   /** A Run's checks read against its journal, for which tests failed and how each rerun went. */
   type FailedChecks = CheckEvidence & { readonly approved: ReadonlyArray<VerifySpec> };

@@ -58,7 +58,9 @@ declarations an author is actually given.
 `host.evidence(runId, cwd)`: a check the fix names with no verification record refuses the
 fix, and one that passed before the tree moved refuses it too. The fix's own `verdict:
 "clean"` buys nothing. This is the existing evidence rule, not a new one — what is new is
-that a Run with no steps can be held to it.
+that a Run with no steps can be held to it. _(Amended 2026-10-30: a check the last fix names
+that passed only on an earlier tree, or a Run's Check with no record yet, is left to the gate
+on the final tree rather than halting the rally.)_
 
 **D5. One collector, two kinds of Run.** `collie verify --run <id>` records for a Run the
 host owns exactly as it does for one with steps: the same `collect`, the same journal

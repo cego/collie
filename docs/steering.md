@@ -279,9 +279,9 @@ the agent that made it, and never as evidence.
 A **verification** is a command whose exit Collie watched, bound to the tree it ran on:
 `collie verify -- <command>` from the Run's agent pane, or with `--run <id>` from anywhere
 else ([CLI](cli.md#verify)). The tree is fingerprinted
-before and after — the commit, the porcelain status, the diff against HEAD, and the
-content of every untracked file git is not ignoring — and a result whose two snapshots
-differ is `unstable`, never `pass`. So is one where either snapshot says the tree was too
+before and after as its content — the Git tree the working tree would commit as, untracked
+files git is not ignoring included — so a commit of the same bytes keeps the result, and a
+result whose two snapshots differ is `unstable`, never `pass`. So is one where either snapshot says the tree was too
 large to look at: two unmeasured trees are not one tree.
 
 Collie will also run a verification itself, but only one of the run's checks, matched

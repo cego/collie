@@ -519,12 +519,13 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
       final: FINAL,
     }),
   ).toBe("fix_unverified: check failed: bun test (all green)");
+  // The gate runs a check that passed only earlier on the final tree, so it does not halt here.
   expect(
     halt(claimed, {
       verifications: [record({ name: "bun test", end: EARLIER })],
       final: FINAL,
     }),
-  ).toBe('fix_unverified: check "bun test" last passed on an earlier tree (all green)');
+  ).toBe("(ok)");
   expect(
     halt(claimed, {
       verifications: [record({ name: "bun test", result: "unstable", end: EARLIER })],
@@ -659,21 +660,41 @@ test("the last fix's check is proved by the latest record of the check's command
   );
 });
 
-test("a last fix naming one of the Run's Checks with no record on the tree is told the gate runs it", () => {
+test("a last fix naming one of the Run's Checks with no record on the tree stands, and leaves it to the gate", () => {
+  const check = { name: "check", executable: "/usr/bin/bun", argv: ["run", "check"], cwd: "/repo" };
+  const settle = (checks: ReadonlyArray<{ name: string }>) =>
+    settleFinalFix(
+      [],
+      { verdict: "clean", findings: [], fixed: [], disputed: [], checks },
+      { verifications: [], final: FINAL, commands: [check] },
+    );
+  const settled = settle([{ name: "check" }]);
+  expect(settled.ok ? settled.attestation : settled.reasons).toBe(
+    "last fix: 0 blocking finding(s) reported fixed, 0 check(s) verified on this tree, 1 left to the gate on the final tree (check) — implementer-reported, not re-reviewed",
+  );
+  // A check that is not one of the Run's Checks is not the gate's to run.
+  const other = settle([{ name: "check" }, { name: "lint" }]);
+  expect(other.ok ? other.attestation : other.reasons).toEqual([
+    'check "lint" has no verification record — run it through collie verify',
+  ]);
+});
+
+test("an attestation counts as verified on this tree only the checks that passed on it", () => {
   const settled = settleFinalFix(
     [],
-    { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [{ name: "check" }] },
     {
-      verifications: [],
+      verdict: "clean",
+      findings: [],
+      fixed: [],
+      disputed: [],
+      checks: [{ name: "bun test" }, { name: "lint" }],
+    },
+    {
+      verifications: [record({ name: "bun test" }), record({ name: "lint", end: EARLIER })],
       final: FINAL,
-      commands: [
-        { name: "check", executable: "/usr/bin/bun", argv: ["run", "check"], cwd: "/repo" },
-      ],
     },
   );
-  const reasons = settled.ok ? [] : settled.reasons;
-  expect(reasons).toEqual([
-    'check "check" has no verification record on this tree — Collie\'s gate runs it itself, on the final tree',
-  ]);
-  expect(Arr.join(reasons, "\n")).not.toContain("run it through collie verify");
+  expect(settled.ok ? settled.attestation : settled.reasons).toContain(
+    "1 check(s) verified on this tree, 1 left to the gate on the final tree (lint)",
+  );
 });

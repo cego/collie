@@ -48,8 +48,8 @@ import {
   renderApproved,
   renderProgress,
   forecast,
+  sameTree,
   step,
-  TOO_LARGE,
   unmetCriteria,
   type Criterion,
   type Finding,
@@ -715,12 +715,9 @@ export default defineWorkflow({
               answers = [...answers, ...boundTo(criteria, answered.criteria ?? [])];
               assumptions.push(...(answered.assumptions ?? []));
               commits.push(...(answered.commits ?? []));
-              blockers =
-                after.head === before.head &&
-                after.fingerprint === before.fingerprint &&
-                after.fingerprint !== TOO_LARGE
-                  ? Arr.filter(answered.findings ?? [], isBlocking)
-                  : [];
+              blockers = sameTree(after, before)
+                ? Arr.filter(answered.findings ?? [], isBlocking)
+                : [];
               tries += 1;
               turn += 1;
             }

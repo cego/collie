@@ -58,14 +58,13 @@ test("a run on a tree that moved under it is unstable", () => {
   expect(proofOf([record({ result: "unstable", start: moved })]).state).toBe("unstable");
 });
 
-test("a pass on an earlier head or an earlier fingerprint passed only on an earlier tree", () => {
-  for (const end of [
-    { head_sha: "abc000", fingerprint: "tree-1" },
-    { head_sha: "abc123", fingerprint: "tree-0" },
-  ]) {
-    const earlier = record({ start: end, end });
-    expect(proofOf([earlier])).toEqual({ state: "earlier", runs: [earlier], last: undefined });
-  }
+test("a pass on an earlier fingerprint passed only on an earlier tree, and one on an earlier head of the same bytes passed here", () => {
+  const end = { head_sha: "abc123", fingerprint: "tree-0" };
+  const earlier = record({ start: end, end });
+  expect(proofOf([earlier])).toEqual({ state: "earlier", runs: [earlier], last: undefined });
+  const committed = { head_sha: "abc000", fingerprint: "tree-1" };
+  const same = record({ start: committed, end: committed });
+  expect(proofOf([same])).toEqual({ state: "passed", runs: [same], last: same });
 });
 
 test("on a tree too large to fingerprint, every record is unstable, and its sentences are as they were", () => {
@@ -145,6 +144,14 @@ test("a check left to CI waits on its job until its pass on this commit is recor
   expect(nuxi([jobPass({ pass: "gate", job: undefined })]).state).toBe("waiting");
   const earlier = { head_sha: "abc000", fingerprint: "tree-0" };
   expect(nuxi([jobPass({ start: earlier, end: earlier })]).state).toBe("waiting");
+  // A job ran on its commit, so another commit of the same bytes still waits on its own.
+  const sameBytes = { head_sha: "abc000", fingerprint: FINAL.fingerprint };
+  const onAnotherCommit = jobPass({ start: sameBytes, end: sameBytes });
+  expect(nuxi([onAnotherCommit]).state).toBe("waiting");
+  expect(
+    checkProof({ verifications: [onAnotherCommit], final: FINAL, commands: [NUXI_COMMAND] }, "nuxi")
+      .state,
+  ).toBe("waiting");
   const proved = jobPass();
   expect(nuxi([proved])).toEqual({ state: "proved", runs: [proved], last: proved });
   expect(

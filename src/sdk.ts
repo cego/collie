@@ -242,7 +242,7 @@ export { checkProof, owedLocally, type CheckProof, type Unmatched } from "./chec
 export { redact } from "./redact";
 
 /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
-export { TOO_LARGE } from "./verify";
+export { TOO_LARGE, sameTree } from "./verify";
 
 /**
  * Which of the five kinds of work a work source is. A workflow that reads a plan

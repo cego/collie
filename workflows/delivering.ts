@@ -32,6 +32,7 @@ import {
   renderApproved,
   renderEvidence,
   rerunsOwed,
+  sameTree,
   reviewGapsOf,
   settledChecks,
   settleFinalFix,
@@ -197,8 +198,8 @@ const stalledFix = (
   const disputed = new Set(Arr.map(fixed.disputed ?? [], findingKey));
   return (
     before !== undefined &&
-    after?.head === before.head &&
-    after.fingerprint === before.fingerprint &&
+    after !== undefined &&
+    sameTree(after, before) &&
     (fixed.fixed ?? []).length === 0 &&
     Arr.every(findings, (one) => disputed.has(findingKey(one)))
   );
@@ -294,9 +295,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           const now = [...passed];
           const journal = { ...(yield* host.evidence(runId, cwd)), approved: checks };
           // On a tree a fix left as it was, its records stand: only a check with none runs.
-          const unmoved =
-            since?.head === journal.final.head_sha &&
-            since.fingerprint === journal.final.fingerprint;
+          const unmoved = since !== undefined && sameTree(since, journal.final);
           // A failure that named its tests had them run again alone instead.
           const whole = why.pass === "recheck" ? wholeRunsOwed(journal) : null;
           for (const spec of owedLocally(checks)) {
@@ -415,7 +414,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               success: Tree,
               execute: treeNow,
             });
-            if (after.head !== before?.head || after.fingerprint !== before.fingerprint) {
+            if (before === undefined || !sameTree(after, before)) {
               latest = yield* ask.moved({ pass: "gate", round: at });
               reviewedAgain = true;
             }
@@ -521,8 +520,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               const checked = (yield* host.evidence(runId, cwd)).final;
               yield* ask.integrate("merge-proof");
               const now = (yield* host.evidence(runId, cwd)).final;
-              if (now.head_sha !== checked.head_sha || now.fingerprint !== checked.fingerprint)
-                yield* rely(false);
+              if (!sameTree(now, checked)) yield* rely(false);
               reviewed = {
                 on: (yield* host.evidence(runId, cwd)).final,
                 reviewed: yield* review(

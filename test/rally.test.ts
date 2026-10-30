@@ -240,7 +240,7 @@ test("a check that passed on this tree is what lets the last fix stand", () =>
     }),
   ));
 
-test("a verification that passed before the tree moved is not proof of the tree it is on", () =>
+test("a verification that passed before the tree moved is left to the gate, not counted as proof of the tree it is on", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -264,8 +264,10 @@ test("a verification that passed before the tree moved is not proof of the tree 
         },
       ]);
       const result = yield* rally(runId, 1);
-      expect(said(result)).toContain("fix_unverified");
-      expect(said(result)).toContain(`check "unit" last passed on an earlier tree`);
+      expect(said(result)).toContain("exhausted after 1 round(s)");
+      expect(said(result)).toContain(
+        "0 check(s) verified on this tree, 1 left to the gate on the final tree (unit)",
+      );
     }),
   ));
 
