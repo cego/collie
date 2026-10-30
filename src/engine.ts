@@ -2469,8 +2469,10 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
   const body = workflow.toLayer((envelope) => {
     const hold = heldAtEntry.get(readEnvelope(envelope).runId);
     return hold === undefined
-      ? enter(envelope)
-      : Deferred.await(hold).pipe(Effect.andThen(Effect.suspend(() => enter(envelope))));
+      ? // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded author error schemas are erased; the workflow's codec retains their actual values.
+        enter(envelope)
+      : // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- The same erased author error, entered once the hold is released.
+        Deferred.await(hold).pipe(Effect.andThen(Effect.suspend(() => enter(envelope))));
   });
   const layer = definition.layer === undefined ? body : body.pipe(Layer.provide(definition.layer));
   return { workflow, layer };
@@ -7920,7 +7922,12 @@ const makeRegistry: (
       const used =
         reach === undefined
           ? undefined
-          : new Set(rows.filter((row) => reach.has(row.run)).map((row) => row.generation));
+          : new Set(
+              Arr.map(
+                Arr.filter(rows, (row) => reach.has(row.run)),
+                (row) => row.generation,
+              ),
+            );
       yield* registering.withPermits(1)(
         Effect.gen(function* () {
           yield* Effect.forEach(known, (route) =>

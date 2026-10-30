@@ -289,7 +289,9 @@ for (const { target, stopped } of [
           if (!target) {
             expect(resumed.detail).toContain("finished");
             const untouched = yield* client.run({ runId: pending.runId }).pipe(Effect.orDie);
-            expect(untouched?.waiting.some((one) => one.name === "decision")).toBe(false);
+            expect(Arr.some(untouched?.waiting ?? [], (one) => one.name === "decision")).toBe(
+              false,
+            );
             expect(launches(yield* events(state, pending.runId))).toBe(0);
             const taken = yield* client
               .resume({ runId: pending.runId, request: "taken" })
@@ -356,7 +358,14 @@ const stranded = (
     for (const runId of unaccepted) yield* host.ask({ op: "poll", id: "held-wake", runId });
     const client = yield* connect(state).pipe(Effect.orDie);
     const idOf = (name: string) =>
-      runDirOf(state, name).pipe(Effect.map((trail) => trail.slice(trail.lastIndexOf("/") + 1)));
+      runDirOf(state, name).pipe(
+        Effect.map((trail) =>
+          pipe_(
+            trail,
+            Str.slice(Option.getOrElse(pipe_(trail, Str.lastIndexOf("/")), () => -1) + 1),
+          ),
+        ),
+      );
     const waiting = (name: string) =>
       until(
         () => events(state, name),
@@ -419,7 +428,7 @@ test(
             ),
           { concurrency: "unbounded" },
         );
-        expect(replies.map((reply) => reply.applied)).toEqual([true, true]);
+        expect(Arr.map(replies, (reply) => reply.applied)).toEqual([true, true]);
         yield* waiting("one");
         yield* waiting("two");
         yield* host.stop;
@@ -448,7 +457,7 @@ test(
         const resumed = yield* client.resume({ runId, request: "resume-held" }).pipe(Effect.orDie);
         expect(resumed.applied).toBe(true);
         const view = yield* client.run({ runId }).pipe(Effect.orDie);
-        expect(view?.waiting.map((asked) => asked.name)).toEqual(["decision"]);
+        expect(Arr.map(view?.waiting ?? [], (asked) => asked.name)).toEqual(["decision"]);
         yield* host.stop;
       }).pipe(Effect.scoped),
     ),

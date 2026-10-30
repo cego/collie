@@ -12,6 +12,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem } from "effect";
 import { readAudit } from "../src/audit";
@@ -478,7 +479,10 @@ const heldAtNextEntry = Effect.fn("test.heldAtNextEntry")(function* (prefix: str
   });
   yield* host.until({ op: "waiting", runId: "r1" }, asking("decision"));
   const trail = yield* runDirOf(state, "r1");
-  const runId = trail.slice(trail.lastIndexOf("/") + 1);
+  const runId = pipe_(
+    trail,
+    Str.slice(Option.getOrElse(pipe_(trail, Str.lastIndexOf("/")), () => -1) + 1),
+  );
   const shut = fs.writeFileString(gate, "");
   const open = fs.remove(gate);
   const held = until(
@@ -491,8 +495,8 @@ const heldAtNextEntry = Effect.fn("test.heldAtNextEntry")(function* (prefix: str
 const recorded = (trail: string, request: string) =>
   until(
     () => readAudit(trail),
-    (lines) => lines.some((line) => line.request === request),
-  ).pipe(Effect.map((lines) => lines.filter((line) => line.request === request)));
+    (lines) => Arr.some(lines, (line) => line.request === request),
+  ).pipe(Effect.map((lines) => Arr.filter(lines, (line) => line.request === request)));
 
 test(
   "a resume whose caller hangs up before the host answers still takes the Run up and is recorded",

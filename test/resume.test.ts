@@ -427,7 +427,7 @@ test(
                     .pipe(Effect.orDie);
                   yield* until(
                     () => client.run({ runId }).pipe(Effect.orDie),
-                    (one) => one?.waiting.some((asked) => asked.name === "q1") === true,
+                    (one) => Arr.some(one?.waiting ?? [], (asked) => asked.name === "q1"),
                   );
                   yield* client
                     .answer({ runId, decision: "q1", value: "yes", request: `${name}-q1` })
@@ -436,7 +436,7 @@ test(
                     () => client.run({ runId }).pipe(Effect.orDie),
                     (one) =>
                       one?.status.status === "suspended" &&
-                      one.waiting.some((asked) => asked.name === "q2"),
+                      Arr.some(one.waiting, (asked) => asked.name === "q2"),
                   );
                   return { runId, parked: view?.parked ?? null };
                 }),
@@ -453,7 +453,7 @@ test(
                 () => client.run({ runId }).pipe(Effect.orDie),
                 (one) =>
                   one?.status.status === "suspended" &&
-                  one.waiting.some((asked) => asked.name === "decision"),
+                  Arr.some(one.waiting, (asked) => asked.name === "decision"),
               );
               yield* client
                 .control({ runId, control: "stop", set: true, request: "stop" })
@@ -462,7 +462,7 @@ test(
               const fs = yield* FileSystem.FileSystem;
               yield* until(
                 () => fs.readFileString(log).pipe(Effect.orDie),
-                (text) => text.trimEnd().endsWith("stopped"),
+                (text) => Str.endsWith("stopped")(Str.trimEnd(text)),
               );
               const [took, resumed] = yield* Effect.timed(
                 client.resume({ runId, request: "resume" }).pipe(Effect.orDie),
