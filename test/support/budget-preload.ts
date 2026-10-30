@@ -4,6 +4,7 @@
 // `--parallel`'s workers are, so each run of it takes one worker and gives it back once its
 // files end. Its wait is no test's: a test's timeout starts after it.
 
+import * as Arr from "effect/Array";
 import { afterAll } from "bun:test";
 import { availableParallelism } from "node:os";
 import { BunServices } from "@effect/platform-bun";
@@ -19,9 +20,14 @@ await Effect.runPromise(
     const budget = budgetOf(availableParallelism(), Option.getOrUndefined(override));
     const share = shareOf(budget, "small");
     const hold = yield* admitted(STORE, budget, "small", 1, Console.error);
-    const holding = (yield* entriesOf(STORE))
-      .filter((one) => one.state === "held" && (share === budget.total || one.kind === "small"))
-      .reduce((sum, one) => sum + one.workers, 0);
+    const holding = Arr.reduce(
+      Arr.filter(
+        yield* entriesOf(STORE),
+        (one) => one.state === "held" && (share === budget.total || one.kind === "small"),
+      ),
+      0,
+      (sum, one) => sum + one.workers,
+    );
     yield* Console.error(
       `test: admitted after ${(hold.waited / 1_000).toFixed(2)} s queued; small runs hold ${holding} of their ${share} workers`,
     );

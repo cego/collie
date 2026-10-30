@@ -1,8 +1,12 @@
 // ADR-draft-a-blocked-link-rides-the-machines-ssh-connection: a resetter holds the port the
 // second advertised, and the first's fake ssh forwards to where it moved.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Clock, Effect, Exit, FileSystem, Schema, Scope } from "effect";
+import { Clock, Effect, Exit, FileSystem, Schema, Scope, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { PeerView } from "../src/peers-model";
 import { peersOf } from "../src/peers";
@@ -11,7 +15,7 @@ import { freePort, resetter } from "./support/fake-ssh";
 import { stopHost, until } from "./support/host";
 import { listenerPort, twoMachines, type Side } from "./support/peers";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Listed = Schema.Struct({ machines: Schema.Array(PeerView) });
 const Connected = Schema.Struct({
   machine: Schema.String,
@@ -28,8 +32,11 @@ const listed = (side: Side, name: string) =>
   side.cli(["machine", "list"]).pipe(
     Effect.tap(() => Effect.sync(() => reads.set(side.name, (reads.get(side.name) ?? 0) + 1))),
     Effect.map((read) => {
-      const found = Schema.decodeUnknownSync(Listed)(read.envelope.data).machines.find(
-        (one) => one.name === name,
+      const found = Option.getOrUndefined(
+        Arr.findFirst(
+          flow(Schema.decodeUnknownResult(Listed), Result.getOrThrow)(read.envelope.data).machines,
+          (one) => one.name === name,
+        ),
       );
       if (found === undefined)
         throw new Error(`${side.name} does not list ${name}: ${encode(read.envelope)}`);
@@ -50,7 +57,7 @@ test("an older Machine's list, without a link's way, still decodes", () => {
     since: null,
     failure: null,
   };
-  expect(Schema.decodeUnknownSync(PeerView)(older)).toMatchObject({
+  expect(flow(Schema.decodeUnknownResult(PeerView), Result.getOrThrow)(older)).toMatchObject({
     transport: null,
     direct: null,
     ssh: null,
@@ -109,7 +116,7 @@ test(
             const checks = (from: number) =>
               since(first, from).pipe(
                 Effect.map((calls) => {
-                  expect(calls.every((line) => line === "mux check mk@second")).toBe(true);
+                  expect(Arr.every(calls, (line) => line === "mux check mk@second")).toBe(true);
                   return calls.length;
                 }),
               );
@@ -121,7 +128,9 @@ test(
             const at = yield* Clock.currentTimeMillis;
             const connected = yield* first.cli(["machine", "connect", "second"]);
             expect(connected.envelope.error).toBeUndefined();
-            const opened = Schema.decodeUnknownSync(Connected)(connected.envelope.data);
+            const opened = yield* Schema.decodeUnknownEffect(Connected)(
+              connected.envelope.data,
+            ).pipe(Effect.orDie);
             expect(opened).toMatchObject({ machine: "second", opened: true });
             const live = yield* until(
               () => listed(first, "second"),
@@ -138,12 +147,16 @@ test(
             expect(theirs.direct).toBe(live.direct);
 
             const again = yield* first.cli(["machine", "connect", "second"]);
-            expect(Schema.decodeUnknownSync(Connected)(again.envelope.data)).toEqual({
+            expect(
+              yield* Schema.decodeUnknownEffect(Connected)(again.envelope.data).pipe(Effect.orDie),
+            ).toEqual({
               ...opened,
               opened: false,
             });
-            const once = (yield* since(first, paired)).filter(
-              (line) => line.startsWith("master") || line.startsWith("login"),
+            const once = Arr.filter(
+              yield* since(first, paired),
+              (line) =>
+                pipe_(line, Str.startsWith("master")) || pipe_(line, Str.startsWith("login")),
             );
             expect(once).toEqual(["master mk@second"]);
 
@@ -153,11 +166,13 @@ test(
               extra,
             );
             expect(started.envelope.error).toBeUndefined();
-            const { runId } = Schema.decodeUnknownSync(Started)(started.envelope.data);
+            const { runId } = yield* Schema.decodeUnknownEffect(Started)(
+              started.envelope.data,
+            ).pipe(Effect.orDie);
             const there = yield* connect(second.world.state).pipe(Effect.orDie);
             yield* until(
               () => there.run({ runId }).pipe(Effect.orDie),
-              (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+              (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
             );
             const steered = yield* first.cli(["run", "steer", runId, "hello over ssh"]);
             expect(steered.envelope.error).toBeUndefined();
@@ -173,8 +188,10 @@ test(
               (view) => view.waits === "ssh_connection",
             );
             expect(
-              (yield* since(first, before)).filter(
-                (line) => line.startsWith("master") || line.startsWith("login"),
+              Arr.filter(
+                yield* since(first, before),
+                (line) =>
+                  pipe_(line, Str.startsWith("master")) || pipe_(line, Str.startsWith("login")),
               ),
             ).toEqual([]);
 

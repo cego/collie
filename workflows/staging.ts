@@ -2,6 +2,9 @@
 // and `stage` so a merge request is claimed, staged and rolled back the same way either way.
 // Each caller asks in its own words.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import {
   ClaimedSchema,
   FindingSchema,
@@ -12,18 +15,37 @@ import {
   ask,
   type JobLink,
 } from "collie";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Option } from "effect";
 import * as Activity from "effect/workflow/Activity";
 
-export const short = (sha: string) => sha.slice(0, 8);
+export const short = (sha: string) => pipe_(sha, Str.slice(0, 8));
 
 /** A step or question a Run may take more than once: the first by its name, then numbered. */
 export const nth = (name: string, n: number) => (n === 1 ? name : `${name}-${n}`);
 
-export const quoted = (jobs: ReadonlyArray<string>) => jobs.map((job) => `\`${job}\``).join(", ");
+export const quoted = (jobs: ReadonlyArray<string>) =>
+  Arr.join(
+    Arr.map(jobs, (job) => `\`${job}\``),
+    ", ",
+  );
 
 export const plays = (jobs: ReadonlyArray<JobLink>) =>
-  jobs.map((job) => `\`${job.name}\` at ${job.url}`).join(", ");
+  Arr.join(
+    Arr.map(jobs, (job) => `\`${job.name}\` at ${job.url}`),
+    ", ",
+  );
+
+/** The step gate's limit on a joined Clearance, counted as it counts. */
+const CLEARANCE_CHARS = 400;
+
+export const fitting = (...forms: Arr.NonEmptyReadonlyArray<ReadonlyArray<string>>) =>
+  Option.getOrElse(
+    Arr.findFirst(
+      forms,
+      (form) => Arr.fromIterable(Arr.join(form, "; ")).length <= CLEARANCE_CHARS,
+    ),
+    () => Arr.lastNonEmpty(forms),
+  );
 
 const verdict = {
   verdict: Schema.Literals(["clean", "findings"]),
@@ -155,7 +177,7 @@ export const claiming =
               kept.length === 0
                 ? Effect.void
                 : options.park(
-                    `Helle would not take back ${kept.join(", ")}, which this Run still holds, so it neither finishes nor goes on without its claims`,
+                    `Helle would not take back ${Arr.join(kept, ", ")}, which this Run still holds, so it neither finishes nor goes on without its claims`,
                   ),
             ),
           });

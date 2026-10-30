@@ -3,7 +3,10 @@
 // here — the argv exactly as it goes out, and what happens when the model answers with
 // something that is not the shape it was given.
 
-import { Effect, FileSystem, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { expect, test } from "bun:test";
 import {
   JudgementSchema,
@@ -63,7 +66,7 @@ test("a CLI missing any of those flags is not one Collie will call", () =>
   runEffect(
     Effect.gen(function* () {
       const deps = {
-        help: Effect.succeed(REQUIRED_FLAGS.join(" ")),
+        help: Effect.succeed(Arr.join(REQUIRED_FLAGS, " ")),
         systemPromptFile: "/repo/prompts/steward.md",
         limits,
       };
@@ -73,7 +76,10 @@ test("a CLI missing any of those flags is not one Collie will call", () =>
       const folded = {
         ...deps,
         help: Effect.succeed(
-          `${REQUIRED_FLAGS.filter((flag) => flag !== "--append-system-prompt-file").join(" ")} via: --system-prompt[-file], --append-system-prompt[-file]`,
+          `${Arr.join(
+            Arr.filter(REQUIRED_FLAGS, (flag) => flag !== "--append-system-prompt-file"),
+            " ",
+          )} via: --system-prompt[-file], --append-system-prompt[-file]`,
         ),
       };
       expect(yield* flagsPresent(folded)).toEqual([]);
@@ -242,7 +248,7 @@ test("a decision is never granted, however much authority a Run has", () => {
     { kind: "resume", run: "r1" },
     { kind: "clear_override", run: "r1", agent: "impl-1" },
   ]);
-  expect(validate(decisions, ctx({}, everything)).map((v) => v.state)).toEqual([
+  expect(Arr.map(validate(decisions, ctx({}, everything)), (v) => v.state)).toEqual([
     "pending",
     "pending",
     "pending",
@@ -269,7 +275,13 @@ test("an action about something the model was not shown becomes a question, not 
   });
 
   const tooLong = proposal([
-    { kind: "deliver", run: "r1", agent: "impl-1", text: "x".repeat(9000), mode: "boundary" },
+    {
+      kind: "deliver",
+      run: "r1",
+      agent: "impl-1",
+      text: pipe_("x", Str.repeat(9000)),
+      mode: "boundary",
+    },
   ]);
   expect(validate(tooLong, ctx())[0]?.action).toMatchObject({ kind: "ask_human" });
 
@@ -309,29 +321,37 @@ test("a proposal decodes as a whole, or not at all", () => {
 
 test("the probe reads a transcript by event: the structured-output channel is not a tool leak", () => {
   const line = (event: Record<string, Schema.Json>) => JSON.stringify(event);
-  const clean = [
-    line({ type: "system", subtype: "init", tools: ["StructuredOutput"], mcp_servers: [] }),
-    line({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", name: "StructuredOutput", input: { text: "x" } }] },
-    }),
-    line({ type: "result", subtype: "success" }),
-  ].join("\n");
+  const clean = Arr.join(
+    [
+      line({ type: "system", subtype: "init", tools: ["StructuredOutput"], mcp_servers: [] }),
+      line({
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", name: "StructuredOutput", input: { text: "x" } }],
+        },
+      }),
+      line({ type: "result", subtype: "success" }),
+    ],
+    "\n",
+  );
   expect(leaks(clean)).toEqual([]);
   // A real tool offered, a real tool used, a hook that ran, an MCP server connected:
   // each is named, so the record says what leaked rather than that something did.
-  const leaky = [
-    line({
-      type: "system",
-      subtype: "init",
-      tools: ["StructuredOutput", "Bash"],
-      mcp_servers: [{}],
-    }),
-    line({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } }),
-    line({ type: "hook_started" }),
-    // The words alone are not a leak: a clean init line names its tool list too.
-    line({ type: "user", message: { content: [{ type: "text", text: "tool_use mcp hook" }] } }),
-  ].join("\n");
+  const leaky = Arr.join(
+    [
+      line({
+        type: "system",
+        subtype: "init",
+        tools: ["StructuredOutput", "Bash"],
+        mcp_servers: [{}],
+      }),
+      line({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } }),
+      line({ type: "hook_started" }),
+      // The words alone are not a leak: a clean init line names its tool list too.
+      line({ type: "user", message: { content: [{ type: "text", text: "tool_use mcp hook" }] } }),
+    ],
+    "\n",
+  );
   expect(leaks(leaky)).toEqual([
     "tool(s) offered: Bash",
     "1 MCP server(s)",
@@ -345,7 +365,10 @@ test("the routing answer is one, several or none, and any other shape is no answ
   expect(drawn).toMatchObject({ type: "object" });
   expect(jsonSchemaFor("routing")).toContain("several");
 
-  const envelope = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+  const envelope = flow(
+    Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+    Result.getOrThrow,
+  );
   for (const answer of [
     { answer: "one", checkouts: ["/p/app"] },
     { answer: "several", checkouts: ["/p/app", "/p/api"] },

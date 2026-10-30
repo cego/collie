@@ -6,6 +6,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | File                   | What it owns                                                                                                                |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `main.ts`              | Entry: the `collie` CLI, or the actions and pane entrypoints under `herdr`                                                  |
+| `platform.ts`          | The platform services every program runs on: Bun's, plus the ids and hashes Effect 4.1 took out of them                     |
 | `collie.ts`            | CLI assembly, help behavior, and process exit handling                                                                      |
 | `commands/`            | Workflow, Persona, and Run command handlers plus their shared resolution context                                            |
 | `envelope.ts`          | CLI envelopes, stdout, exit statuses, request receipts, and mutation locks                                                  |
@@ -143,6 +144,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `compactors.ts`        | Each harness's official compaction interface, generated per agent and bundled in Collie                                     |
 | `codex.ts`             | Codex's App Server as a client: thread identity, its context, its compactions and its turns                                 |
 | `collecting.ts`        | Which agents Collie is collecting an Output from now, by Run and agent                                                      |
+| `controls.ts`          | The Hold and Stop an operator sets over a Run, one file each, and whether one is set                                        |
 | `processes.ts`         | Where a process's command, start time and session are read, and proven before anything signals it                           |
 | `check-processes.ts`   | A check's processes from spawn to gone: marked, recorded, and ended with the host that runs them                            |
 | `usage-model.ts`       | A Subscription's Usage reading: Schemas, parsing, Exhausted; pure, so Desktop and a module share it                         |

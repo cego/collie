@@ -5,6 +5,10 @@
 // an id, what an unreadable override does to the one below it, and what counts as an
 // edit — so the answers are read off a directory rather than a running process.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { discover, searchPath, type EntryLayer } from "../src/discovery";
@@ -20,7 +24,7 @@ import { Effect, Layer, Schema } from "effect";
 
 export default defineWorkflow({
   id: "${id}",
-  title: ${title.startsWith("@") ? title.slice(1) : `"${title}"`},
+  title: ${pipe_(title, Str.startsWith("@")) ? pipe_(title, Str.slice(1)) : `"${title}"`},
   description: "An entry written for a test.",${declared}
   run: () => Effect.void,
 });
@@ -36,7 +40,8 @@ const layers = Effect.fn("DiscoveryTest.layers")(function* (prefix: string) {
     project: `${dir}/project`,
   });
   for (const layer of roots) yield* fs.makeDirectory(layer.dir, { recursive: true });
-  const dirOf = (layer: EntryLayer) => roots.find((root) => root.layer === layer)!.dir;
+  const dirOf = (layer: EntryLayer) =>
+    Option.getOrUndefined(Arr.findFirst(roots, (root) => root.layer === layer))!.dir;
   return {
     roots,
     dirOf,
@@ -72,7 +77,7 @@ test("the nearest layer that claims an id is the one a run would get", () =>
 
       const found = yield* discover(where.roots);
       expect(found.problems).toEqual([]);
-      expect(found.entries.map((one) => [one.id, one.layer, one.title])).toEqual([
+      expect(Arr.map(found.entries, (one) => [one.id, one.layer, one.title])).toEqual([
         ["plain", "shipped", "The plain workflow"],
         ["proof", "project", "Ours"],
       ]);
@@ -81,7 +86,7 @@ test("the nearest layer that claims an id is the one a run would get", () =>
       // Deleting an override is not a broken one: the layer below claims the id again.
       yield* where.remove("project", "proof.workflow.ts");
       const after = yield* discover(where.roots);
-      expect(after.entries.map((one) => [one.id, one.layer])).toEqual([
+      expect(Arr.map(after.entries, (one) => [one.id, one.layer])).toEqual([
         ["plain", "shipped"],
         ["proof", "user"],
       ]);
@@ -98,8 +103,8 @@ test("an override that cannot be read refuses its own id rather than running the
 
       const found = yield* discover(where.roots);
       // The id is refused, and the file that refused it is named.
-      expect(found.entries.map((one) => one.id)).toEqual(["plain"]);
-      expect(found.problems.map((one) => [one.id, one.layer, one.path])).toEqual([
+      expect(Arr.map(found.entries, (one) => one.id)).toEqual(["plain"]);
+      expect(Arr.map(found.problems, (one) => [one.id, one.layer, one.path])).toEqual([
         ["proof", "project", broken],
       ]);
       expect(found.problems[0]?.message).not.toBe("");
@@ -118,8 +123,8 @@ test("an input that is not a struct is that entry's problem, and the rest are st
       yield* where.save("user", "plain.workflow.ts", entry("plain"));
 
       const found = yield* discover(where.roots);
-      expect(found.entries.map((one) => one.id)).toEqual(["plain"]);
-      expect(found.problems.map((one) => [one.id, one.path])).toEqual([["odd", odd]]);
+      expect(Arr.map(found.entries, (one) => one.id)).toEqual(["plain"]);
+      expect(Arr.map(found.problems, (one) => [one.id, one.path])).toEqual([["odd", odd]]);
       expect(found.problems[0]?.message).toContain("input");
     }).pipe(Effect.scoped),
   ));
@@ -136,8 +141,8 @@ test("metadata that is not what a workflow declares is that entry's problem, and
       yield* where.save("user", "plain.workflow.ts", entry("plain"));
 
       const found = yield* discover(where.roots);
-      expect(found.entries.map((one) => one.id)).toEqual(["plain"]);
-      expect(found.problems.map((one) => [one.id, one.path])).toEqual([["odd", odd]]);
+      expect(Arr.map(found.entries, (one) => one.id)).toEqual(["plain"]);
+      expect(Arr.map(found.problems, (one) => [one.id, one.path])).toEqual([["odd", odd]]);
       expect(found.problems[0]?.message).toContain("metadata");
     }).pipe(Effect.scoped),
   ));
@@ -154,8 +159,8 @@ test("two entries in one layer claiming one id are an error that names the other
       yield* where.save("shipped", "proof.workflow.ts", entry("proof"));
 
       const found = yield* discover(where.roots);
-      expect(found.entries.map((one) => one.id)).toEqual(["plain"]);
-      expect(found.problems.map((one) => one.path)).toEqual([first, second]);
+      expect(Arr.map(found.entries, (one) => one.id)).toEqual(["plain"]);
+      expect(Arr.map(found.problems, (one) => one.path)).toEqual([first, second]);
       expect(found.problems[0]?.message).toContain(second);
       expect(found.problems[1]?.message).toContain(first);
     }).pipe(Effect.scoped),
@@ -182,7 +187,7 @@ test("only entry files are looked at, and an entry is read without being built",
 
       const found = yield* discover(where.roots);
       expect(found.problems).toEqual([]);
-      expect(found.entries.map((one) => one.id)).toEqual(["plain"]);
+      expect(Arr.map(found.entries, (one) => one.id)).toEqual(["plain"]);
     }).pipe(Effect.scoped),
   ));
 
@@ -260,7 +265,7 @@ test("the user's workflows are not something the installation's own checkout can
       );
       expect(ignored.exitCode).toBe(0);
       const tracked = yield* Effect.promise(() => Bun.$`git ls-files user`.cwd(repo).text());
-      expect(tracked.trim()).toBe("");
+      expect(Str.trim(tracked)).toBe("");
     }),
   ));
 
@@ -284,8 +289,12 @@ test("a module still hinting gitlab-repository loads, its Input read as reposito
       expect(found.problems).toEqual([]);
       const [loaded] = found.entries;
       expect(loaded?.id).toBe("roams-old");
-      expect(loaded?.inputs.map((one) => [one.name, one.strategy])).toEqual([
-        ["repository", "repository"],
-      ]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(loaded), (present) =>
+            Arr.map(present.inputs, (one) => [one.name, one.strategy]),
+          ),
+        ),
+      ).toEqual([["repository", "repository"]]);
     }).pipe(Effect.scoped),
   ));

@@ -1,5 +1,9 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { machineName } from "../src/peers";
 import { connect } from "../src/host";
 import { readAudit } from "../src/audit";
@@ -10,7 +14,10 @@ import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { type Side, twoMachines } from "./support/peers";
 
-const encodeValue = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeValue = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** An attended Run held at its question, and the agent its build step left in a pane. */
 const attendedAgent = Effect.fn("attendedAgent")(function* (side: Side) {
@@ -20,15 +27,17 @@ const attendedAgent = Effect.fn("attendedAgent")(function* (side: Side) {
   const start = yield* side.cli(["run", "start", "attended", "--input", "work=identity"], {
     FAKE_HERDR_OUTPUTS: outputs,
   });
-  const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
+  const { runId } = yield* Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(
     start.envelope.data,
-  );
+  ).pipe(Effect.orDie);
   const host = yield* connect(side.world.state);
   yield* until(
     () => host.run({ runId }),
-    (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+    (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
   );
-  const agent = (yield* everyRegistered(side.world.state)).find((entry) => entry.runId === runId)!;
+  const agent = Option.getOrUndefined(
+    Arr.findFirst(yield* everyRegistered(side.world.state), (entry) => entry.runId === runId),
+  )!;
   return { runId, agent };
 });
 
@@ -98,7 +107,10 @@ test(
               )).envelope.ok,
             ).toBe(true);
             const trail = yield* readAudit(runDir(first.world.state, runId));
-            expect(trail.find((line) => line.request === "from-agent")?.actor).toMatchObject({
+            expect(
+              Option.getOrUndefined(Arr.findFirst(trail, (line) => line.request === "from-agent"))
+                ?.actor,
+            ).toMatchObject({
               origin: "agent",
               from: {
                 run: runId,
@@ -106,11 +118,14 @@ test(
                 machine: { installation: expect.any(String) },
               },
             });
-            expect(trail.find((line) => line.request === "from-cli")?.actor.origin).toBe("cli");
+            expect(
+              Option.getOrUndefined(Arr.findFirst(trail, (line) => line.request === "from-cli"))
+                ?.actor.origin,
+            ).toBe("cli");
             expect(yield* fs.readFileString(first.herdrLog)).toContain(
               `From ${agent.agent} of ${runId} on `,
             );
-            const atCap = "x".repeat(8 * 1024);
+            const atCap = Str.repeat(8 * 1024)("x");
             expect(
               (yield* first.cli(
                 [
@@ -126,21 +141,28 @@ test(
                 { HERDR_PANE_ID: agent.paneId },
               )).envelope.ok,
             ).toBe(true);
-            const message = `${runDir(first.world.state, runId)}/attachments/message-${new Bun.CryptoHasher("sha256").update(atCap).digest("hex").slice(0, 8)}.md`;
+            const message = `${runDir(first.world.state, runId)}/attachments/message-${pipe(new Bun.CryptoHasher("sha256").update(atCap).digest("hex"), Str.slice(0, 8))}.md`;
             expect(yield* fs.readFileString(message)).toBe(atCap);
-            const said = (yield* fs.readFileString(first.herdrLog))
-              .split("\n")
-              .filter((line) => line !== "")
-              .map((line) =>
-                Schema.decodeUnknownSync(Schema.Struct({ argv: Schema.Array(Schema.String) }))(
-                  JSON.parse(line),
-                ),
-              )
-              .flatMap((call) => call.argv)
-              .find((words) => words.includes(`Their message is in ${message}.`));
+            const calls = Arr.map(
+              Arr.filter(
+                Str.split(yield* fs.readFileString(first.herdrLog), "\n"),
+                (line) => line !== "",
+              ),
+              (line) =>
+                flow(
+                  Schema.decodeUnknownResult(Schema.Struct({ argv: Schema.Array(Schema.String) })),
+                  Result.getOrThrow,
+                )(JSON.parse(line)),
+            );
+            const sentWords = Arr.flatMap(calls, (call) => call.argv);
+            const said = Option.getOrUndefined(
+              Arr.findFirst(sentWords, (word) =>
+                pipe(word, Str.includes(`Their message is in ${message}.`)),
+              ),
+            );
             expect(said).toContain(`From ${agent.agent} of ${runId} on `);
             expect(said).toContain("Read it whole and act on it as that agent's.");
-            const humanAtCap = "y".repeat(8 * 1024);
+            const humanAtCap = Str.repeat(8 * 1024)("y");
             expect(
               (yield* first.cli(
                 [
@@ -156,7 +178,7 @@ test(
                 { HERDR_PANE_ID: "not-an-agent" },
               )).envelope.ok,
             ).toBe(true);
-            const humanMessage = `${runDir(first.world.state, runId)}/attachments/message-${new Bun.CryptoHasher("sha256").update(humanAtCap).digest("hex").slice(0, 8)}.md`;
+            const humanMessage = `${runDir(first.world.state, runId)}/attachments/message-${pipe(new Bun.CryptoHasher("sha256").update(humanAtCap).digest("hex"), Str.slice(0, 8))}.md`;
             expect(yield* fs.readFileString(humanMessage)).toBe(humanAtCap);
             expect(yield* fs.readFileString(first.herdrLog)).toContain(
               `Their message is in ${humanMessage}. Read it whole and act on it as theirs.`,
@@ -180,7 +202,7 @@ test(
             const startOn = (side: typeof first) =>
               Effect.gen(function* () {
                 yield* fs.writeFileString(
-                  `${side.env.PATH!.split(":")[0]}/claude`,
+                  `${Str.split(side.env.PATH!, ":")[0]}/claude`,
                   "#!/bin/sh\necho 2.1.300\n",
                   { mode: 0o755 },
                 );
@@ -190,16 +212,19 @@ test(
                   ["run", "start", "attended", "--input", "work=conversation"],
                   { FAKE_HERDR_OUTPUTS: outputs },
                 );
-                const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
-                  start.envelope.data,
-                );
+                const { runId } = yield* Schema.decodeUnknownEffect(
+                  Schema.Struct({ runId: Schema.String }),
+                )(start.envelope.data).pipe(Effect.orDie);
                 const host = yield* connect(side.world.state);
                 yield* until(
                   () => host.run({ runId }),
-                  (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+                  (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
                 );
-                const entry = (yield* everyRegistered(side.world.state)).find(
-                  (one) => one.runId === runId,
+                const entry = Option.getOrUndefined(
+                  Arr.findFirst(
+                    yield* everyRegistered(side.world.state),
+                    (one) => one.runId === runId,
+                  ),
                 )!;
                 return { runId, agent: entry.agent, pane: entry.paneId };
               });
@@ -223,11 +248,15 @@ test(
               { COLLIE_RUN: here.runId, COLLIE_AGENT: here.agent },
             );
             expect(
-              Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(told.envelope.data)
-                .text,
+              (yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
+                told.envelope.data,
+              ).pipe(Effect.orDie)).text,
             ).toContain("deliver: applied");
             const remote = yield* readAudit(runDir(second.world.state, there.runId));
-            expect(remote.find((one) => one.operation === "deliver")?.actor).toMatchObject({
+            expect(
+              Option.getOrUndefined(Arr.findFirst(remote, (one) => one.operation === "deliver"))
+                ?.actor,
+            ).toMatchObject({
               origin: "agent",
               from: { run: here.runId, agent: here.agent, machine: { name: machineName() } },
             });
@@ -255,8 +284,9 @@ test(
                 encodeValue({ run: there.runId }),
               ]);
               expect(
-                Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(read.envelope.data)
-                  .text,
+                (yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
+                  read.envelope.data,
+                ).pipe(Effect.orDie)).text,
               ).toContain(there.runId);
             }
             const delivered = Schema.Struct({
@@ -272,11 +302,12 @@ test(
                 there.runId,
               ]);
               expect(listedReceipts.envelope.ok).toBe(true);
-              const rows = Schema.decodeUnknownSync(delivered)(
+              const rows = (yield* Schema.decodeUnknownEffect(delivered)(
                 listedReceipts.envelope.data,
-              ).deliveries;
-              expect(rows.map((one) => one.id)).toEqual(
-                (yield* deliveriesOf(second.world.state, there.runId)).map(
+              ).pipe(Effect.orDie)).deliveries;
+              expect(Arr.map(rows, (one) => one.id)).toEqual(
+                Arr.map(
+                  yield* deliveriesOf(second.world.state, there.runId),
                   (one) => one.delivery.id,
                 ),
               );
@@ -295,8 +326,11 @@ test(
               ]);
               expect(settled.envelope.ok).toBe(true);
               expect(
-                (yield* deliveriesOf(second.world.state, there.runId)).find(
-                  (one) => one.delivery.id === id,
+                Option.getOrUndefined(
+                  Arr.findFirst(
+                    yield* deliveriesOf(second.world.state, there.runId),
+                    (one) => one.delivery.id === id,
+                  ),
                 )?.delivery.note,
               ).toContain("reconciled as sent");
             }
@@ -316,8 +350,9 @@ test(
               encodeValue({ sender: "somebody", actions: [{ kind: "stop", run: there.runId }] }),
             ]);
             expect(
-              Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(forged.envelope.data)
-                .text,
+              (yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
+                forged.envelope.data,
+              ).pipe(Effect.orDie)).text,
             ).toContain("refus");
             const stopped = yield* first.cli([
               "tools",
@@ -327,9 +362,9 @@ test(
               encodeValue({ actions: [{ kind: "stop", run: there.runId }] }),
             ]);
             expect(
-              Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(
+              (yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
                 stopped.envelope.data,
-              ).text,
+              ).pipe(Effect.orDie)).text,
             ).toContain("stop: applied");
             const disposed = yield* first.cli([
               "tools",
@@ -341,9 +376,9 @@ test(
               }),
             ]);
             expect(
-              Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(
+              (yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
                 disposed.envelope.data,
-              ).text,
+              ).pipe(Effect.orDie)).text,
             ).toContain("disposition: applied");
             const beforeSsh = yield* fs.readFileString(first.sshLog);
             yield* stopHost(second.world.state);
@@ -353,10 +388,14 @@ test(
             });
             // The host only asks whether an SSH connection is open; it never logs in.
             expect(
-              (yield* fs.readFileString(first.sshLog))
-                .slice(beforeSsh.length)
-                .split("\n")
-                .filter((line) => line.startsWith("login") || line.startsWith("master")),
+              Arr.filter(
+                Str.split(
+                  pipe(yield* fs.readFileString(first.sshLog), Str.slice(beforeSsh.length)),
+                  "\n",
+                ),
+                (line) =>
+                  pipe(line, Str.startsWith("login")) || pipe(line, Str.startsWith("master")),
+              ),
             ).toEqual([]);
           }),
         ["attended.workflow.ts"],

@@ -3,8 +3,10 @@
 // may not complete an attempt. The payloads are the documented ones; the version and
 // launch-flag checks run against the installed harness.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
@@ -51,22 +53,25 @@ const StatusLine = Schema.Struct({
   session_id: Schema.String,
   context_window: Schema.NullOr(
     Schema.Struct({
-      total_input_tokens: Schema.Number,
-      total_output_tokens: Schema.Number,
-      used_percentage: Schema.NullOr(Schema.Number),
+      total_input_tokens: Schema.Finite,
+      total_output_tokens: Schema.Finite,
+      used_percentage: Schema.NullOr(Schema.Finite),
       current_usage: Schema.NullOr(
         Schema.Struct({
-          input_tokens: Schema.Number,
-          output_tokens: Schema.Number,
-          cache_creation_input_tokens: Schema.Number,
-          cache_read_input_tokens: Schema.Number,
+          input_tokens: Schema.Finite,
+          output_tokens: Schema.Finite,
+          cache_creation_input_tokens: Schema.Finite,
+          cache_read_input_tokens: Schema.Finite,
         }),
       ),
     }),
   ),
-  cost: Schema.optionalKey(Schema.Struct({ total_cost_usd: Schema.Number })),
+  cost: Schema.optionalKey(Schema.Struct({ total_cost_usd: Schema.Finite })),
 });
-const encodeStatusLine = Schema.encodeSync(Schema.fromJsonString(StatusLine));
+const encodeStatusLine = flow(
+  Schema.encodeResult(Schema.fromJsonString(StatusLine)),
+  Result.getOrThrow,
+);
 
 /**
  * The two hook payloads as the installed release builds them:
@@ -87,8 +92,8 @@ const Post = Schema.Struct({
   trigger: Schema.String,
   compact_summary: Schema.String,
 });
-const encodePre = Schema.encodeSync(Schema.fromJsonString(Pre));
-const encodePost = Schema.encodeSync(Schema.fromJsonString(Post));
+const encodePre = flow(Schema.encodeResult(Schema.fromJsonString(Pre)), Result.getOrThrow);
+const encodePost = flow(Schema.encodeResult(Schema.fromJsonString(Post)), Result.getOrThrow);
 
 /** One compaction's pair of hooks, as Claude fires them. */
 const pre = (session: string, trigger: string, instructions: string | null) =>
@@ -112,7 +117,7 @@ const Submit = Schema.Struct({
   hook_event_name: Schema.tag("UserPromptSubmit"),
   prompt: Schema.String,
 });
-const encodeSubmit = Schema.encodeSync(Schema.fromJsonString(Submit));
+const encodeSubmit = flow(Schema.encodeResult(Schema.fromJsonString(Submit)), Result.getOrThrow);
 const submit = (prompt: string) =>
   encodeSubmit({ session_id: "s-1", hook_event_name: "UserPromptSubmit", prompt });
 
@@ -200,7 +205,7 @@ test("the marked PreCompact is the start, and the PostCompact after it the succe
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1_000, 99));
       yield* claude.request(ctx(), "req-1");
-      const instructions = prompted[0]!.replace(/^\/compact /, "");
+      const instructions = pipe_(prompted[0]!, Str.replace(/^\/compact /, ""));
       expect(prompted[0]).toStartWith("/compact ");
       expect(instructions).toContain("(collie:req-1)");
 
@@ -326,8 +331,14 @@ test("a payload Collie cannot decode records nothing and prints nothing", () =>
     }),
   ));
 
-const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
-const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
+const encodeJsonText = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Json)),
+  Result.getOrThrow,
+);
+const decodeJsonText = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json)),
+  Result.getOrThrow,
+);
 
 /** An `AskUserQuestion` call as `PreToolUse` hands it to the hook. */
 const asking = (tool: string, questions: Schema.Json) =>
@@ -446,7 +457,7 @@ test("install writes run-scoped settings and passes them with Claude's own flag"
       expect(written).toContain(`"PreCompact"`);
       expect(written).toContain(`"PostCompact"`);
       expect(written).toContain(`"manual|auto"`);
-      expect(written).toContain(`'herdr' 'compaction' '${dir}'`);
+      expect(written).toContain(`herdr compaction ${dir}`);
       // An agent's question goes to its Run, through the same helper.
       expect(written).toContain(`"PreToolUse"`);
       expect(written).toContain(`"AskUserQuestion"`);
@@ -466,8 +477,11 @@ onMachineWith("claude")(
         // controls were traced in, and every release after it is covered by the gate.
         // Asserting the exact version made this test fail on the day Claude updated,
         // which says nothing about whether the interface still holds.
-        expect([installed.trim(), atLeast(installed, wanted)]).toEqual([installed.trim(), true]);
-        yield* claude.gate();
+        expect([Str.trim(installed), atLeast(installed, wanted)]).toEqual([
+          Str.trim(installed),
+          true,
+        ]);
+        yield* claude.gate;
       }),
     ),
   { timeout: 30_000 },
@@ -493,10 +507,13 @@ onMachineWith("claude")(
 );
 
 /** A measured status line that also carries `rate_limits`, as it may be malformed. */
-const encodeLimited = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ ...StatusLine.fields, rate_limits: Schema.Json })),
+const encodeLimited = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(Schema.Struct({ ...StatusLine.fields, rate_limits: Schema.Json })),
+  ),
+  Result.getOrThrow,
 );
-const limited = (rateLimits: typeof Schema.Json.Type) =>
+const limited = (rateLimits: Schema.Json) =>
   encodeLimited({
     session_id: "s-1",
     context_window: {
@@ -544,7 +561,7 @@ test("rate_limits Collie cannot read leave the context line alone", () =>
     }),
   ));
 
-const encodeStop = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const encodeStop = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 const stopFailure = (error: string) =>
   encodeStop({
     session_id: "s-1",

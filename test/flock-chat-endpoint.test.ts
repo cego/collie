@@ -1,6 +1,8 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
-import { Crypto, Deferred, Effect, Fiber, FileSystem } from "effect";
+import { platformLayer } from "../src/platform";
+import { Deferred, Effect, Fiber, FileSystem } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
@@ -33,15 +35,15 @@ test("the loopback tools require their token, list the chat's tools and match a 
         chatChoices: Effect.die("not asked"),
         setChatHarness: () => Effect.succeed(null),
       };
-      const services = yield* Effect.context<Crypto.Crypto | FileSystem.FileSystem>();
+      const services = yield* Effect.context<SecureRandom.SecureRandom | FileSystem.FileSystem>();
       const clicked = yield* Deferred.make<{ readonly Where: string }>();
       const asked = yield* Deferred.make<string>();
       const endpoint = yield* loopbackTools({
         dir,
         flock,
-        run: (effect) => Effect.runPromise(effect.pipe(Effect.provideContext(services))),
+        run: Effect.runPromiseWith(services),
         ask: (id, signal) =>
-          Effect.runPromise(
+          Effect.runPromiseWith(services)(
             Deferred.succeed(asked, id).pipe(Effect.andThen(Deferred.await(clicked))),
             { signal },
           ),
@@ -65,8 +67,8 @@ test("the loopback tools require their token, list the chat's tools and match a 
         ),
       );
       const tools = yield* Effect.promise(() => client.listTools());
-      expect(tools.tools.map(({ name }) => name)).toEqual(
-        [...FLOCK_TOOLS, ...FILE_TOOLS].map(({ name }) => name).concat("AskUserQuestion"),
+      expect(Arr.map(tools.tools, ({ name }) => name)).toEqual(
+        Arr.map([...FLOCK_TOOLS, ...FILE_TOOLS], ({ name }) => name).concat("AskUserQuestion"),
       );
       expect(
         yield* Effect.promise(() =>
@@ -91,5 +93,5 @@ test("the loopback tools require their token, list the chat's tools and match a 
         ),
       ).toMatchObject({ content: [{ type: "text", text: NO_HUMAN }] });
       expect(yield* endpoint.start).toEqual({ url, token });
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));

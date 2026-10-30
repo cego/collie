@@ -2,12 +2,15 @@
 // port is: a resetter that drops each connection at its first bytes, as Cloudflare WARP
 // resets the TLS ClientHello on a peer's port.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { Effect, FileSystem, Schema, type Scope } from "effect";
-import { root } from "./host";
+import { Effect, FileSystem, Result, Schema, type Scope, flow } from "effect";
+import { CommandLine } from "effect/process";
 import { SOCKET_BASE } from "./sweep";
+import { fixtureBinary } from "./bin";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 /**
  * A directory for the scope, short enough for a control socket under it to bind: macOS's
@@ -40,7 +43,7 @@ export interface FakeSsh {
   readonly dropsBeforeRide: (dropping: boolean) => Effect.Effect<void>;
 }
 
-const Bound = Schema.Struct({ port: Schema.Number });
+const Bound = Schema.Struct({ port: Schema.Finite });
 
 /** The port a server listens on. */
 export const portOf = (server: Server) => {
@@ -78,10 +81,11 @@ export const writeFakeSsh = Effect.fn("FakeSsh.write")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const log = `${dir}/ssh-calls.log`;
-  const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
+  const quote = (word: string) => Result.getOrThrow(CommandLine.quote(word));
+  const executable = yield* fixtureBinary("ssh");
   yield* fs.writeFileString(
     bin,
-    `#!/bin/sh\nFAKE_SSH_LOG=${quote(log)} FAKE_SSH_DIR=${quote(dir)} FAKE_SSH_ENV=${quote(encode(env))} exec ${quote(process.execPath)} ${quote(`${root}test/support/fake-ssh-main.ts`)} "$@"\n`,
+    `#!/bin/sh\nFAKE_SSH_LOG=${quote(log)} FAKE_SSH_DIR=${quote(dir)} FAKE_SSH_ENV=${quote(encode(env))} exec ${quote(executable)} "$@"\n`,
     { mode: 0o755 },
   );
   yield* fs.writeFileString(log, "");
@@ -89,7 +93,7 @@ export const writeFakeSsh = Effect.fn("FakeSsh.write")(function* (
     Effect.orElseSucceed(() => ""),
     Effect.flatMap((paths) =>
       Effect.forEach(
-        paths.split("\n").filter((path) => path !== ""),
+        Arr.filter(Str.split(paths, "\n"), (path) => path !== ""),
         (path) => tell(path, "drop"),
         { discard: true },
       ),
@@ -104,7 +108,7 @@ export const writeFakeSsh = Effect.fn("FakeSsh.write")(function* (
   const fake: FakeSsh = {
     log,
     calls: fs.readFileString(log).pipe(
-      Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+      Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
       Effect.orDie,
     ),
     maps: (ports) => fs.writeFileString(`${dir}/ports.json`, encode(ports)).pipe(Effect.orDie),

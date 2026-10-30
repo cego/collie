@@ -1,3 +1,4 @@
+import * as Str from "effect/String";
 import { Effect } from "effect";
 import { slackApi } from "../../../src/slack";
 import type { Keyring } from "./credentials";
@@ -11,7 +12,7 @@ export const saveSlackConnection = (
   api = slackApi,
 ) =>
   Effect.gen(function* () {
-    const token = text.trim();
+    const token = Str.trim(text);
     if (!/^xoxb-[^\s]+$/.test(token))
       return yield* Effect.fail("Paste the xoxb- Bot User OAuth Token from OAuth & Permissions");
     const identity = yield* api(token).auth();

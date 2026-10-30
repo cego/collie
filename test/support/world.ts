@@ -4,8 +4,21 @@
 // saved, a Run belongs to a project, and the host that serves both owns a directory of
 // its own. Building that is the same work for every one of them, so it is here.
 
-import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope, Stream } from "effect";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import {
+  Config,
+  ConfigProvider,
+  Effect,
+  FileSystem,
+  Option,
+  Schema,
+  Scope,
+  Stream,
+  flow,
+  Result,
+} from "effect";
+import type { PlatformServices } from "../../src/platform";
 import { exec } from "./command";
 import { runEffect, suiteEnv } from "./effect";
 import { writeFakeHerdrShim } from "./fake-herdr-core";
@@ -23,7 +36,10 @@ export interface World {
   readonly project: string;
 }
 
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const asCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
 
 const Envelope = Schema.fromJsonString(
   Schema.Struct({
@@ -100,7 +116,7 @@ export const collie = Effect.fn("World.collie")(function* (
       Effect.mapError(
         (cause) =>
           new Error(
-            `collie ${args.join(" ")} exited ${exit}: ${String(cause)}; stdout=${stdout}; stderr=${stderr}`,
+            `collie ${Arr.join(args, " ")} exited ${exit}: ${String(cause)}; stdout=${stdout}; stderr=${stderr}`,
           ),
       ),
       Effect.orDie,
@@ -155,7 +171,7 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
     }),
     (before) =>
       Effect.sync(() => {
-        for (const [key, value] of Object.entries(before))
+        for (const [key, value] of Rec.toEntries(before))
           if (value === undefined) delete Bun.env[key];
           else Bun.env[key] = value;
       }),
@@ -170,7 +186,7 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
  */
 export const proves = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string>,
 ) =>
   runEffect(

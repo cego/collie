@@ -8,6 +8,10 @@
 // A plan that cannot be fanned out at all is refused at the parent, where there is
 // nothing to clean up: no child, no row, no execution.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
@@ -17,7 +21,7 @@ import { proves, save, type World } from "./support/world";
 const MODULES = ["spread.workflow.ts", "share.workflow.ts"] as const;
 
 const sorted = <A>(values: ReadonlyArray<A>) =>
-  [...values].sort((one, other) => String(one).localeCompare(String(other)));
+  [...values].sort((one, other) => pipe_(String(one), Str.localeCompare(String(other))));
 
 /** One ticket, as the planning step writes them. */
 const ticket = (into: string, file: string, repo: string, over?: { readonly blockedBy?: string }) =>
@@ -25,16 +29,19 @@ const ticket = (into: string, file: string, repo: string, over?: { readonly bloc
     Effect.flatMap((fs) =>
       fs.writeFileString(
         `${into}/issues/${file}`,
-        [
-          `# ${file}`,
-          "",
-          `**Blocked by:** ${over?.blockedBy ?? "None"}`,
-          "",
-          `**Repo:** ${repo}`,
-          "",
-          "**Checks:** test",
-          "",
-        ].join("\n"),
+        Arr.join(
+          [
+            `# ${file}`,
+            "",
+            `**Blocked by:** ${over?.blockedBy ?? "None"}`,
+            "",
+            `**Repo:** ${repo}`,
+            "",
+            "**Checks:** test",
+            "",
+          ],
+          "\n",
+        ),
       ),
     ),
     Effect.orDie,
@@ -90,14 +97,17 @@ test(
             value: "api(01-serve.md,03-more.md) then ui(02-show.md)",
           });
 
-          const children = (yield* client.runs({ task: "task-1" }).pipe(Effect.orDie)).filter(
+          const children = Arr.filter(
+            yield* client.runs({ task: "task-1" }).pipe(Effect.orDie),
             (one) => one.parent === started.runId,
           );
-          expect(sorted(children.map((one) => one.runId))).toEqual([
+          expect(sorted(Arr.map(children, (one) => one.runId))).toEqual([
             `${started.runId}.repo-api`,
             `${started.runId}.repo-ui`,
           ]);
-          const api = children.find((one) => one.runId === `${started.runId}.repo-api`);
+          const api = Option.getOrUndefined(
+            Arr.findFirst(children, (one) => one.runId === `${started.runId}.repo-api`),
+          );
           // Its own share of the work source, decoded by its own schema before it existed.
           expect(api?.input.tickets).toEqual(["01-serve.md", "03-more.md"]);
           // The host's own options: which repository this Run is for, and where it works.
@@ -142,7 +152,7 @@ test(
           // Not one repository was started: a plan that cannot be fanned out is refused
           // where there is nothing yet to clean up.
           expect(
-            (yield* client.runs({ task: null }).pipe(Effect.orDie)).map((one) => one.runId),
+            Arr.map(yield* client.runs({ task: null }).pipe(Effect.orDie), (one) => one.runId),
           ).toEqual([started.runId]);
           yield* stopHost(world.state);
         }),

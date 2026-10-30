@@ -1,6 +1,10 @@
 // A Subscription's Usage reading and every judgement made from it (ADR-0049). Pure, so
 // Desktop's view and a workflow module reach the same rules as the host.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { DateTime, Schema } from "effect";
 import { epochMs } from "./time";
 
@@ -13,7 +17,7 @@ export const UsageWindow = Schema.Struct({
   /** The model a `weekly-model` window applies to. */
   model: Schema.NullOr(Schema.String),
   /** 0–100. */
-  usedPercent: Schema.Number,
+  usedPercent: Schema.Finite,
   resetsAt: Schema.NullOr(Schema.String),
   /** The source said this window is reached, whatever its percent. */
   reached: Schema.Boolean,
@@ -50,10 +54,10 @@ export function subscriptionOf(choice: ChoiceLike): Subscription | null {
   if (choice.harness === "claude") return "claude";
   if (choice.harness === "codex") return "chatgpt";
   if (choice.harness !== "pi" && choice.harness !== "opencode") return null;
-  return PROVIDERS.get(choice.model.split("/")[0] ?? "") ?? null;
+  return PROVIDERS.get(Str.split(choice.model, "/")[0] ?? "") ?? null;
 }
 
-const squeezed = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
+const squeezed = (text: string) => pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]/g, ""));
 
 /**
  * A model window applies to a model that names the window's model, in any case and
@@ -63,7 +67,7 @@ const squeezed = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
 export function appliesTo(window: UsageWindow, model: string | null): boolean {
   if (window.model === null) return true;
   if (model === null) return false;
-  return squeezed(model).includes(squeezed(window.model.split(" ")[0] ?? ""));
+  return pipe(squeezed(model), Str.includes(squeezed(Str.split(window.model, " ")[0] ?? "")));
 }
 
 /** A window as it stands at `now`: once its reset has passed it is unused, whatever was read. */
@@ -108,11 +112,13 @@ export function usedFor(
   const subscription = subscriptionOf(choice);
   const model = choice.model;
   return busiest(
-    readings
-      .filter((reading) => reading.subscription === subscription)
-      .flatMap((reading) => reading.windows)
-      .filter((window) => appliesTo(window, model))
-      .map((window) => current(window, now)),
+    pipe(
+      readings,
+      Arr.filter((reading) => reading.subscription === subscription),
+      Arr.flatMap((reading) => reading.windows),
+      Arr.filter((window) => Boolean(appliesTo(window, model))),
+      Arr.map((window) => current(window, now)),
+    ),
   );
 }
 
@@ -127,7 +133,7 @@ export interface UsagePhrase {
 
 /** A reading's busiest window at `now`. */
 export function busiestWindow(reading: UsageReading, now: number): Used | null {
-  return busiest(reading.windows.map((window) => current(window, now)));
+  return busiest(Arr.map(reading.windows, (window) => current(window, now)));
 }
 
 /** `31%`, `out`, or `Opus out` where a model's own window is the busiest. */
@@ -146,14 +152,14 @@ export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number):
     warn ||= used.usedPercent >= WARN_PERCENT;
     parts.push(`${reading.subscription} ${usedPhrase(used)}`);
   }
-  return { text: parts.join(" · "), warn };
+  return { text: Arr.join(parts, " · "), warn };
 }
 
 // The sources, as they answer. Every field optional: two of the three are undocumented.
 
 const ClaudeRow = Schema.Struct({
-  utilization: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-  percent: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  utilization: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  percent: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   resets_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
   locked_reason: Schema.optionalKey(Schema.NullOr(Schema.String)),
   kind: Schema.optionalKey(Schema.String),
@@ -220,7 +226,7 @@ function claudeLimit(row: ClaudeRow): UsageWindow {
 
 /** `GET /api/oauth/usage`'s answer as windows: by `limits[].kind`, else the older two rows. */
 export function claudeWindows(usage: ClaudeUsage): ReadonlyArray<UsageWindow> {
-  if (usage.limits) return usage.limits.map(claudeLimit);
+  if (usage.limits) return Arr.map(usage.limits, claudeLimit);
   return [
     ...(usage.five_hour ? [claudeWindow(usage.five_hour, "session", "Session", null)] : []),
     ...(usage.seven_day ? [claudeWindow(usage.seven_day, "weekly", "Weekly", null)] : []),
@@ -245,20 +251,20 @@ const TEAM_PLANS = new Set(["team", "enterprise"]);
 /** Claude Code's `~/.claude.json` account, with the plan its login says. */
 export function claudeLogin(claudeJson: ClaudeJson | null, plan: string | null): Login {
   const found = claudeJson?.oauthAccount ?? null;
-  const ids = [found?.organizationUuid, found?.accountUuid].filter((id) => id != null);
+  const ids = Arr.filter([found?.organizationUuid, found?.accountUuid], (id) => id != null);
   const email = found?.emailAddress ?? null;
   const team = plan !== null && TEAM_PLANS.has(plan) ? (found?.organizationName ?? null) : null;
   return {
-    account: ids.length === 0 ? null : ids.join(":"),
+    account: ids.length === 0 ? null : Arr.join(ids, ":"),
     accountLabel: email === null ? null : team === null ? email : `${email} (${team})`,
     plan,
   };
 }
 
 const StatusWindow = Schema.Struct({
-  used_percentage: Schema.Number,
+  used_percentage: Schema.Finite,
   /** Epoch seconds. */
-  resets_at: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  resets_at: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 });
 export const StatusLineLimits = Schema.Struct({
   five_hour: Schema.optionalKey(Schema.NullOr(StatusWindow)),
@@ -301,10 +307,10 @@ export function statusLineWindows(limits: StatusLineLimits): ReadonlyArray<Usage
 }
 
 const CodexWindow = Schema.Struct({
-  usedPercent: Schema.Number,
-  windowDurationMins: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  usedPercent: Schema.Finite,
+  windowDurationMins: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   /** Epoch seconds. */
-  resetsAt: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  resetsAt: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 });
 const CodexLimit = Schema.Struct({
   limitName: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -360,11 +366,11 @@ function codexWindows(
   model: string | null,
   blocked: boolean,
 ): ReadonlyArray<UsageWindow> {
-  const rows = [limit.primary, limit.secondary].filter((row) => row != null);
+  const rows = Arr.filter([limit.primary, limit.secondary], (row) => row != null);
   const reached =
     blocked || (limit.rateLimitReachedType ?? null) !== null || limit.spendControlReached === true;
-  const full = rows.some((row) => row.usedPercent >= 100);
-  return rows.map((row) => {
+  const full = Arr.some(rows, (row) => row.usedPercent >= 100);
+  return Arr.map(rows, (row) => {
     const length = row.windowDurationMins ?? null;
     const kind = kindOfLength(length);
     const label =
@@ -389,9 +395,10 @@ export function codexUsage(usage: CodexRateLimits) {
   return {
     windows: [
       ...codexWindows(usage.rateLimits, null, usage.ordinaryUsageAllowed === false),
-      ...Object.entries(usage.rateLimitsByLimitId ?? {})
-        .filter(([id]) => id !== "codex")
-        .flatMap(([id, limit]) => codexWindows(limit, limit.limitName ?? id, false)),
+      ...Arr.flatMap(
+        Arr.filter(Rec.toEntries(usage.rateLimitsByLimitId ?? {}), ([id]) => id !== "codex"),
+        ([id, limit]) => codexWindows(limit, limit.limitName ?? id, false),
+      ),
     ],
     plan: usage.rateLimits.planType ?? null,
   };
@@ -435,10 +442,10 @@ export function roomFor(readings: ReadonlyArray<UsageReading>, now: number) {
     const over = upTo !== undefined && used.usedPercent >= upTo;
     if (!used.exhausted && !over) return { room: true };
     const parts = [
-      `${used.window.label.toLowerCase()} ${Math.round(used.usedPercent)}%`,
+      `${Str.toLowerCase(used.window.label)} ${Math.round(used.usedPercent)}%`,
       ...(used.exhausted ? [] : [`over its ${upTo}%`]),
       ...(used.resetsAt === null ? [] : [`resets ${resetClock(used.resetsAt, now)}`]),
     ];
-    return { room: false, why: parts.join(", ") };
+    return { room: false, why: Arr.join(parts, ", ") };
   };
 }

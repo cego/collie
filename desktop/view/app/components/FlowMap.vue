@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
 import type { ComponentPublicInstance } from "vue";
 import type { Flow, FlowRun } from "../../../../src/board-model";
 import { stepSteering } from "../../../src/shared/step-steering";
@@ -43,7 +47,8 @@ const remember = (spot: FlowSpot, element: Element | ComponentPublicInstance | n
   else buttons.delete(keyOf(spot));
 };
 const rowFor = (run: string) =>
-  props.flow.lanes.find((row) => row.run === run) ?? props.flow.lanes.at(-1);
+  Option.getOrUndefined(Arr.findFirst(props.flow.lanes, (row) => row.run === run)) ??
+  props.flow.lanes.at(-1);
 const primary = (run: string, node: FlowRun) => {
   const row = rowFor(run);
   return row === undefined || node.primary == null
@@ -53,7 +58,7 @@ const primary = (run: string, node: FlowRun) => {
 const menu = (run: string, node: FlowRun) => {
   const row = rowFor(run);
   if (row === undefined) return [];
-  return [node.primary, ...(node.actions ?? [])].flatMap((kind) => {
+  return Arr.flatMap([node.primary, ...(node.actions ?? [])], (kind) => {
     if (kind == null) return [];
     const one = desktopFlowAction(kind, node, row, props.installation, props.live);
     return one === null
@@ -62,40 +67,67 @@ const menu = (run: string, node: FlowRun) => {
           {
             label: one.label,
             icon: one.icon,
-            onSelect: () => emit("act", one, { run, node: node.id }),
+            onSelect: () =>
+              emit("act", one, {
+                run,
+                node: node.id,
+              }),
           },
         ];
   });
 };
 const laneMenu = (run: string) => {
-  const row = props.flow.lanes.find((one) => one.run === run);
-  return (row?.actions ?? []).flatMap((kind) => {
-    const one =
-      row === undefined ? null : desktopLaneAction(kind, row, props.installation, props.live);
-    return one === null
-      ? []
-      : [{ label: one.label, icon: one.icon, onSelect: () => emit("act", one) }];
-  });
+  const row = Option.getOrUndefined(Arr.findFirst(props.flow.lanes, (one) => one.run === run));
+  return Arr.flatMap(
+    Option.getOrUndefined(Option.map(Option.fromNullishOr(row), (present) => present.actions)) ??
+      [],
+    (kind) => {
+      const one =
+        row === undefined ? null : desktopLaneAction(kind, row, props.installation, props.live);
+      return one === null
+        ? []
+        : [
+            {
+              label: one.label,
+              icon: one.icon,
+              onSelect: () => emit("act", one),
+            },
+          ];
+    },
+  );
 };
 const name = (run: string, node: FlowRun) =>
-  [
-    nodeName(node, {
-      missing: node.link !== undefined && cardForLink(node, props.cards) === undefined,
-      notLive: node.link?.machine != null && props.away.has(node.link.machine),
-      action: primary(run, node)?.label,
-    }),
-    stepSteering(node).pause,
-    stepSteering(node).badge,
-  ]
-    .filter(Boolean)
-    .join(". ");
+  Arr.join(
+    Arr.filter(
+      [
+        nodeName(node, {
+          missing: node.link !== undefined && cardForLink(node, props.cards) === undefined,
+          notLive: Option.exists(
+            Option.fromNullishOr(node.link),
+            ({ machine }) => machine != null && props.away.has(machine),
+          ),
+          action: Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(primary(run, node)), (present__) => present__.label),
+          ),
+        }),
+        stepSteering(node).pause,
+        stepSteering(node).badge,
+      ],
+      (part): part is string => Boolean(part),
+    ),
+    ". ",
+  );
 const hover = (run: string, node: string) => {
   const info = inspectorOf(props.flow, { run, node, item: null }, props.now);
   return info === null
     ? ""
-    : [info.title, info.state.replaceAll("-", " "), info.said, ...info.lines]
-        .filter(Boolean)
-        .join("\n");
+    : Arr.join(
+        Arr.filter(
+          [info.title, pipe(info.state, Str.replaceAll("-", " ")), info.said, ...info.lines],
+          (part): part is string => Boolean(part),
+        ),
+        "\n",
+      );
 };
 const matches = (spot: FlowSpot | null, run: string, node: string) =>
   spot?.run === run && spot.node === node;

@@ -1,6 +1,8 @@
 // `setup.sh`, the one line that installs Collie: it runs the release's runner only once the
 // download verifies against Collie's release key, and that runner places the release.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { Effect, FileSystem } from "effect";
@@ -27,7 +29,7 @@ test("the installer checks with the key release-p256.pub holds", () =>
       const fs = yield* FileSystem.FileSystem;
       const script = yield* fs.readFileString(SCRIPT);
       const key = yield* fs.readFileString(`${root}release-p256.pub`);
-      expect(KEY_BLOCK.exec(script)?.[0]).toBe(key.trim());
+      expect(KEY_BLOCK.exec(script)?.[0]).toBe(Str.trim(key));
     }),
   ));
 
@@ -65,7 +67,10 @@ chmod +x "$COLLIE_DIR/release/bin/collie"`,
 const install = (dir: string, publicKey: string, extra: Record<string, string> = {}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const script = (yield* fs.readFileString(SCRIPT)).replace(KEY_BLOCK, publicKey.trim());
+    const script = pipe_(
+      yield* fs.readFileString(SCRIPT),
+      Str.replace(KEY_BLOCK, Str.trim(publicKey)),
+    );
     const home = `${dir}/home`;
     yield* fs.makeDirectory(home, { recursive: true });
     yield* fs.writeFileString(`${dir}/setup.sh`, script);
@@ -109,10 +114,10 @@ test("a signed runner places the release, and setup ends in doctor", () =>
       expect(again.placed).toBe(
         `${again.collieDir}/release upgrade\n${again.collieDir}/release upgrade\n`,
       );
-      expect(again.config.split("cego.collie.pick").length - 1).toBe(1);
+      expect(Str.split(again.config, "cego.collie.pick").length - 1).toBe(1);
       expect(again.said).toContain("Keybinding for pick already present");
       expect(again.calls).toContain("chat status-line --install");
-      expect(again.calls.trim().split("\n").at(-1)).toBe("doctor");
+      expect(Str.split(Str.trim(again.calls), "\n").at(-1)).toBe("doctor");
     }).pipe(Effect.scoped),
   ));
 

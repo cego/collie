@@ -1,15 +1,20 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { hostname } from "node:os";
 import {
   type Cause,
   Clock,
-  Crypto,
   Effect,
   FileSystem,
   Option,
   Queue,
   Schema,
   Stream,
+  flow,
+  Result,
 } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { AguiEvent } from "../shared/agui";
 import { ends } from "../shared/agui";
 import type { ChatDriver, DriverContext, DriverSession, TurnCost } from "./driver";
@@ -35,13 +40,14 @@ export const piDriver = (
     open: Effect.fnUntraced(function* (id, model, effort) {
       const { url, token } = yield* endpoint.start;
       // A short private name avoids user overrides and Pi hashing provider tool names.
-      const server = `cf-${(yield* Effect.promise(() =>
-        context.run(
-          Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4).pipe(Effect.orDie),
+      const server = `cf-${pipe_(
+        yield* Effect.promise(() =>
+          context.run(Effect.flatMap(SecureRandom.SecureRandom, (random) => random.uuidV4())),
         ),
-      )).replaceAll("-", "")}`;
+        Str.replaceAll("-", ""),
+      )}`;
       const extension = `${context.dir}/pi-collie.ts`;
-      const source = `export default function(pi) { pi.registerMcpServer("${server}", { url: ${Schema.encodeSync(Schema.fromJsonString(Schema.String))(url)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } }); }\n`;
+      const source = `export default function(pi) { pi.registerMcpServer("${server}", { url: ${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(url).pipe(Effect.orDie)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } }); }\n`;
       yield* Effect.promise(() =>
         context.run(
           Effect.gen(function* () {
@@ -72,7 +78,7 @@ export const piDriver = (
         "--no-prompt-templates",
         "--no-context-files",
         "--tools",
-        `read,bash,edit,write,grep,find,ls,mcp__${server.replaceAll("-", "_")}__*`,
+        `read,bash,edit,write,grep,find,ls,mcp__${pipe_(server, Str.replaceAll("-", "_"))}__*`,
       ];
       if (model !== "default") args.push("--model", model);
       if (effort !== null) args.push("--thinking", effort);
@@ -88,7 +94,7 @@ export const piDriver = (
         Stream.decodeText,
         Stream.runForEach((text) =>
           Effect.sync(() => {
-            diagnostics = (diagnostics + text).slice(-8000);
+            diagnostics = pipe_(diagnostics + text, Str.slice(-8000));
           }),
         ),
         Effect.forkScoped,
@@ -102,7 +108,7 @@ export const piDriver = (
           yield* Effect.promise(() =>
             Promise.resolve(
               child.stdin.write(
-                `${Schema.encodeSync(Schema.fromJsonString(Schema.Json))(record)}\n`,
+                `${flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow)(record)}\n`,
               ),
             ),
           );
@@ -115,12 +121,16 @@ export const piDriver = (
           yield* Queue.offer(output, state.begin());
           const placement = context.placement();
           const noticed = context.noticed();
-          const note = [
-            placement === undefined ? "" : placementContext(placement),
-            noticed === undefined ? "" : noticedContext(noticed),
-          ]
-            .filter((text) => text !== "")
-            .join("\n\n");
+          const note = Arr.join(
+            Arr.filter(
+              [
+                placement === undefined ? "" : placementContext(placement),
+                noticed === undefined ? "" : noticedContext(noticed),
+              ],
+              (text) => text !== "",
+            ),
+            "\n\n",
+          );
           yield* write({ type: "prompt", ...piPrompt(content, note) });
         });
       let pending = "";
@@ -130,9 +140,9 @@ export const piDriver = (
           Effect.gen(function* () {
             pending += chunk;
             let at: number;
-            while ((at = pending.indexOf("\n")) >= 0) {
-              const record = decodePiRecord(pending.slice(0, at));
-              pending = pending.slice(at + 1);
+            while ((at = Option.getOrElse(pipe_(pending, Str.indexOf("\n")), () => -1)) >= 0) {
+              const record = decodePiRecord(pipe_(pending, Str.slice(0, at)));
+              pending = pipe_(pending, Str.slice(at + 1));
               if (Option.isNone(record)) continue;
               const read = record.value;
               if (
@@ -142,7 +152,7 @@ export const piDriver = (
                 yield* endpoint.question(read.toolCallId, read.args);
               }
               const events = state.step(read);
-              if (events.some(ends)) {
+              if (Arr.some(events, ends)) {
                 lastTurn = {
                   duration_ms: (yield* Clock.currentTimeMillis) - started,
                   usage: state.usage(),
@@ -160,7 +170,7 @@ export const piDriver = (
             yield* Queue.offer(output, {
               type: "RUN_ERROR",
               runId: id,
-              message: diagnostics.trim() || `Pi ended its session (exit ${code}).`,
+              message: Str.trim(diagnostics) || `Pi ended its session (exit ${code}).`,
             });
             yield* Queue.end(output);
           }),
@@ -183,15 +193,25 @@ export const piDriver = (
     }),
     transcript: (id) =>
       read.pipe(
-        Effect.map((all) => all.find((session) => session.session === id)?.transcript ?? []),
+        Effect.map(
+          (all) =>
+            Option.getOrUndefined(Arr.findFirst(all, (session) => session.session === id))
+              ?.transcript ?? [],
+        ),
       ),
     earlier: (limit) =>
       read.pipe(
         Effect.map((all) =>
-          all.slice(0, limit).map(({ session, title, at }) => ({ session, title, at })),
+          Arr.map(all.slice(0, limit), ({ session, title, at }) => ({ session, title, at })),
         ),
       ),
     transcriptPath: (id) =>
-      read.pipe(Effect.map((all) => all.find((session) => session.session === id)?.path ?? null)),
+      read.pipe(
+        Effect.map(
+          (all) =>
+            Option.getOrUndefined(Arr.findFirst(all, (session) => session.session === id))?.path ??
+            null,
+        ),
+      ),
   };
 };

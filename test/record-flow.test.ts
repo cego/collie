@@ -2,6 +2,7 @@
 // only what its Task needs: every agent's delivery ledger only where a Run may be Reopened.
 
 import { expect, test } from "bun:test";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Tracer } from "effect";
 import { buildBoard, taskFlowOf } from "../src/board";
 import { readEnv } from "../src/env";
@@ -71,7 +72,7 @@ test("two Tasks share one reading of the installation and step duration index", 
         }),
       );
       expect(views).toHaveLength(2);
-      expect(reads.filter((path) => path === `${dir}/installation`)).toHaveLength(1);
-      expect(reads.filter((path) => path === `${dir}/step-durations.json`)).toHaveLength(1);
+      expect(Arr.filter(reads, (path) => path === `${dir}/installation`)).toHaveLength(1);
+      expect(Arr.filter(reads, (path) => path === `${dir}/step-durations.json`)).toHaveLength(1);
     }),
   ));

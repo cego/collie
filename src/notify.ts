@@ -3,6 +3,8 @@
 // to the person who started it — and the corollary is that anything not worth
 // interrupting for must not be sent, or the ones that matter get muted.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Context, type Effect } from "effect";
 import { mrWords, parseMrUrl } from "./board-model";
 
@@ -85,7 +87,7 @@ const HEADLINE = {
 
 /** One herdr session runs several checkouts, so the repo is part of every title. */
 function repoOf(cwd: string): string {
-  return cwd.replace(/\/+$/, "").split("/").pop() ?? cwd;
+  return Str.split(pipe(cwd, Str.replace(/\/+$/, "")), "/").pop() ?? cwd;
 }
 
 export function notificationTitle(

@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch --oxlint",
-    "lint": "oxlint",
-    "lint:fix": "oxlint --fix",
+    "lint": "bun run lint:ts && bun run lint:vue",
+    "lint:ts": "effect-tsgo oxlint --vue-plugin",
+    "lint:vue": "bun tools/lint-vue.ts",
+    "lint:fix": "effect-tsgo oxlint --vue-plugin --fix && bun run lint:vue",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun run tools/test.ts",
@@ -21,23 +23,23 @@
   },
   "dependencies": {
     "@comark/ansi": "0.7.0",
-    "@effect/platform-bun": "4.0.1",
-    "@effect/sql-sqlite-bun": "4.0.1",
+    "@effect/platform-bun": "4.1.0",
+    "@effect/sql-sqlite-bun": "4.1.0",
     "@opentui/core": "^0.5.14",
     "@opentui/solid": "^0.5.14",
     "comark": "0.7.0",
-    "effect": "4.0.1",
+    "effect": "4.1.0",
     "forges": "0.2.0",
     "solid-js": "^1.9.16"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.50.0",
+    "@effect/tsgo": "0.63.0",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "@oxlint/plugins": "1.87.0",
+    "@oxlint/plugins": "1.90.0",
     "@types/bun": "1.4.2",
     "oxfmt": "0.72.0",
-    "oxlint": "1.87.0",
-    "oxlint-tsgolint": "7.0.2003",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
     "typescript": "7.0.2"
   },
   "engines": {

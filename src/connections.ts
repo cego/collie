@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { Cause, Effect, type FileSystem, type Path, type PlatformError } from "effect";
 import type { Connection, ConnectionId, ConnectionReading } from "./connection-model";
 import type { PluginEnv } from "./env";
@@ -72,7 +73,7 @@ export const connectionsOnMachine = (
 ) => readConnections(connectionProbes(env, run));
 
 export const connectionOnMachine = (env: PluginEnv, id: ConnectionId, slack = slackApi) =>
-  readConnections(connectionProbes(env, shell, slack).filter((probe) => probe.id === id)).pipe(
+  readConnections(Arr.filter(connectionProbes(env, shell, slack), (probe) => probe.id === id)).pipe(
     Effect.map(
       (read) =>
         read[0]?.reading ?? {

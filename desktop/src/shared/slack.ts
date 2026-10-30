@@ -1,3 +1,5 @@
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import type { SlackChoices } from "../../../src/slack";
 
 export const SLACK_MANIFEST_URL = `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(
@@ -17,12 +19,24 @@ export const slackDestinationRow = (key: string, value: string, choices: SlackCh
   const notification = key === "slack.notification_channel";
   const options = [
     { value: "", label: notification ? "Nowhere: toasts only" : "Nowhere: shares nothing" },
-    ...(choices?.channels.map((channel) => ({ value: channel.id, label: `#${channel.name}` })) ??
-      []),
+    ...(Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(choices), (present) =>
+        Arr.map(present.channels, (channel) => ({
+          value: channel.id,
+          label: `#${channel.name}`,
+        })),
+      ),
+    ) ?? []),
   ];
   if (notification) options.push({ value: "dm", label: "A direct message to you" });
-  if (value && !options.some((option) => option.value === value)) {
-    const person = notification ? choices?.people.find((person) => person.id === value) : undefined;
+  if (value && !Arr.some(options, (option) => option.value === value)) {
+    const person = notification
+      ? Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(choices), (present_) =>
+            Option.getOrUndefined(Arr.findFirst(present_.people, (person) => person.id === value)),
+          ),
+        )
+      : undefined;
     options.push({
       value,
       label: person === undefined ? `${value} (not checked)` : `A direct message to ${person.name}`,
@@ -50,10 +64,12 @@ export const pickSlackDestination = (
   if (choices === null) return { refused: "Connect Slack before picking a destination" };
   if (key === "slack.notification_channel") {
     if (value === "dm")
-      return { people: choices.people.map((person) => ({ value: person.id, label: person.name })) };
-    if (choices.people.some((person) => person.id === value)) return { value };
+      return {
+        people: Arr.map(choices.people, (person) => ({ value: person.id, label: person.name })),
+      };
+    if (Arr.some(choices.people, (person) => person.id === value)) return { value };
   }
-  return value === "" || choices.channels.some((channel) => channel.id === value)
+  return value === "" || Arr.some(choices.channels, (channel) => channel.id === value)
     ? { value }
     : { refused: "Pick a channel Collie is in, or refresh Slack" };
 };

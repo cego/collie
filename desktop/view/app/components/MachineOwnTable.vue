@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
 import type { MachineOwnRow } from "../../../src/shared/machine-own";
 defineProps<{ rows: ReadonlyArray<MachineOwnRow> }>();
 </script>
@@ -53,7 +54,7 @@ defineProps<{ rows: ReadonlyArray<MachineOwnRow> }>();
           <td class="px-4 py-3 align-top">
             <code>{{ row.chatHarness ?? "—" }}</code>
           </td>
-          <td class="px-4 py-3 align-top text-muted">{{ row.harnesses.join(", ") || "—" }}</td>
+          <td class="px-4 py-3 align-top text-muted">{{ Arr.join(row.harnesses, ", ") || "—" }}</td>
           <td class="px-4 py-3 align-top text-muted">
             <div v-for="answer in row.remembered" :key="answer.key">
               <code>{{ answer.key }}</code> = {{ answer.value }}

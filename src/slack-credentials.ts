@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { Effect, FileSystem } from "effect";
 import type { PluginEnv } from "./env";
 import type { ConnectionReading } from "./connection-model";
@@ -18,7 +21,13 @@ export const slackToken = (env: Pick<PluginEnv, "home" | "raw">) =>
     const text = yield* fs
       .readFileString(file)
       .pipe(Effect.mapError(() => "Slack's credential file could not be read"));
-    return /^SLACK_BOT_TOKEN=(.+)$/m.exec(text)?.[1]?.trim() || null;
+    return (
+      Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(/^SLACK_BOT_TOKEN=(.+)$/m.exec(text)), (present) =>
+          Option.map(Option.fromNullishOr(present[1]), (present_) => Str.trim(present_)),
+        ),
+      ) || null
+    );
   });
 
 export const writeSlackToken = (env: Pick<PluginEnv, "home" | "raw">, token: string | null) =>
@@ -28,7 +37,13 @@ export const writeSlackToken = (env: Pick<PluginEnv, "home" | "raw">, token: str
     if (token === null) return yield* fs.remove(file, { force: true });
     if (!/^xoxb-[^\s]+$/.test(token))
       return yield* Effect.fail("Paste the xoxb- Bot User OAuth Token from OAuth & Permissions");
-    const dir = file.slice(0, file.lastIndexOf("/"));
+    const dir = pipe_(
+      file,
+      Str.slice(
+        0,
+        Option.getOrElse(pipe_(file, Str.lastIndexOf("/")), () => -1),
+      ),
+    );
     yield* fs.makeDirectory(dir, { recursive: true, mode: 0o700 });
     yield* fs.remove(`${file}.new`, { force: true });
     yield* fs.writeFileString(`${file}.new`, `SLACK_BOT_TOKEN=${token}\n`, { mode: 0o600 });

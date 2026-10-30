@@ -7,9 +7,11 @@
 // their editor rather than Collie's: a status line somebody else put there is reported and
 // left alone, and everything else in the file survives being written to.
 
-import { Effect, FileSystem, Path, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { Effect, FileSystem, Path, Result, Schema, flow } from "effect";
+import { CommandLine } from "effect/process";
 import { selfCommand, type PluginEnv } from "./env";
-import { shellQuote } from "./naming";
 import { isString } from "./schema";
 import { promptLine, readSelection, selectionLine, selectionPath } from "./selection";
 import { herdOf } from "./steering";
@@ -20,7 +22,7 @@ export const STATUS_LINE_ARGS = ["chat", "status-line"] as const;
 
 // Indented, because this is a file the human opens and edits by hand.
 const SettingsJson = Schema.fromJsonString(YamlMapSchema, { space: 2 });
-const encode = Schema.encodeSync(SettingsJson);
+const encode = flow(Schema.encodeResult(SettingsJson), Result.getOrThrow);
 const decode = Schema.decodeUnknownOption(SettingsJson);
 
 export const claudeSettingsPath = Effect.fn("StatusLine.settingsPath")(function* (env: PluginEnv) {
@@ -34,7 +36,7 @@ export const claudeSettingsPath = Effect.fn("StatusLine.settingsPath")(function*
  * on PATH: the line has to keep working in a pane whose PATH is not the installer's.
  */
 export function statusLineCommand(self: ReadonlyArray<string> = selfCommand()): string {
-  return [self.map(shellQuote).join(" "), ...STATUS_LINE_ARGS].join(" ");
+  return Result.getOrThrow(CommandLine.join([...self, ...STATUS_LINE_ARGS]));
 }
 
 /**
@@ -43,7 +45,7 @@ export function statusLineCommand(self: ReadonlyArray<string> = selfCommand()): 
  * carry a line about one.
  */
 export const statusLineFor = Effect.fn("StatusLine.for")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "";
   return selectionLine(yield* readSelection(yield* selectionPath(env.stateDir, key)));
 });
@@ -57,7 +59,7 @@ export const statusLineFor = Effect.fn("StatusLine.for")(function* (env: PluginE
  * said once and never again.
  */
 export const promptLineFor = Effect.fn("StatusLine.prompt")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "";
   const fs = yield* FileSystem.FileSystem;
   const file = yield* selectionPath(env.stateDir, key);
@@ -67,7 +69,7 @@ export const promptLineFor = Effect.fn("StatusLine.prompt")(function* (env: Plug
     yield* fs.writeFileString(told, "").pipe(Effect.ignore);
     return promptLine(on);
   }
-  if (!(yield* fs.exists(told).pipe(Effect.catch(() => Effect.succeed(false))))) return "";
+  if (!(yield* fs.exists(told).pipe(Effect.orElseSucceed(() => false)))) return "";
   yield* fs.remove(told, { force: true }).pipe(Effect.ignore);
   return "Board: no card open now; questions are about the whole Herd unless one is named.";
 });
@@ -88,7 +90,7 @@ export const readStatusLine = Effect.fn("StatusLine.read")(function* (env: Plugi
   if (!isYamlMap(line)) return NONE;
   const command = line["command"];
   if (!isString(command)) return NONE;
-  return command.includes(STATUS_LINE_ARGS.join(" "))
+  return command.includes(Arr.join(STATUS_LINE_ARGS, " "))
     ? ({ kind: "ours", command } satisfies StatusLine)
     : ({ kind: "theirs", command } satisfies StatusLine);
 });
@@ -125,8 +127,8 @@ export const installStatusLine = Effect.fn("StatusLine.install")(function* (env:
  */
 const readSettings = Effect.fn("StatusLine.readSettings")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  const raw = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
-  if (raw.trim() === "") return {};
+  const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  if (Str.trim(raw) === "") return {};
   const found = decode(raw);
   return found._tag === "Some" ? { ...found.value } : null;
 });

@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Schema, Semaphore, Struct } from "effect";
+import { Array as Arr, Effect, FileSystem, Option, Schema, Semaphore, Struct } from "effect";
 import { AuditLine } from "./audit";
 
 export const Steered = Schema.Struct({
@@ -36,7 +36,7 @@ export const readQueue = Effect.fn("DeliveryQueue.read")(function* (dir: string)
   const fs = yield* FileSystem.FileSystem;
   const file = `${dir}/delivery-queue.json`;
   if (!(yield* fs.exists(file))) return [];
-  return yield* fs.readFileString(file).pipe(Effect.flatMap(Schema.decodeUnknownEffect(json)));
+  return yield* fs.readFileString(file).pipe(Effect.flatMap(Schema.decodeEffect(json)));
 });
 
 export const keepQueued = (dir: string, queued: Queued) =>
@@ -44,16 +44,19 @@ export const keepQueued = (dir: string, queued: Queued) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const before = yield* readQueue(dir);
-      const old = before.find((one) => one.request === queued.request);
+      const old = Option.getOrUndefined(
+        Arr.findFirst(before, (one) => one.request === queued.request),
+      );
       if (old !== undefined && (old.result !== null || queued.result === null)) return;
       const next =
         old === undefined
           ? [...before, queued]
-          : before.map((one) =>
+          : Arr.map(before, (one) =>
               one.request === queued.request ? { ...one, result: queued.result } : one,
             );
       yield* fs.makeDirectory(dir, { recursive: true });
-      yield* fs.writeFileString(`${dir}/delivery-queue.json.tmp`, Schema.encodeSync(json)(next));
+      const encoded = yield* Schema.encodeEffect(json)(next).pipe(Effect.orDie);
+      yield* fs.writeFileString(`${dir}/delivery-queue.json.tmp`, encoded);
       yield* fs.rename(`${dir}/delivery-queue.json.tmp`, `${dir}/delivery-queue.json`);
     }),
   );

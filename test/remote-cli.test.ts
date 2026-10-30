@@ -1,5 +1,9 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, Exit, FileSystem, Fiber, Schema, Stream } from "effect";
+import { Effect, Exit, FileSystem, Fiber, Schema, Stream, flow, Result } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { connect } from "../src/host";
 import { evidenceDir, runDir } from "../src/engine";
@@ -17,8 +21,11 @@ import { until } from "./support/host";
 import { twoMachines } from "./support/peers";
 import { collieCommand } from "./support/world";
 
-const started = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }));
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const started = flow(
+  Schema.decodeUnknownResult(Schema.Struct({ runId: Schema.String })),
+  Result.getOrThrow,
+);
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 test(
   "every Run record and Intent mutation reaches its owning Machine from an empty caller",
@@ -117,7 +124,11 @@ test(
             expect((yield* first.cli(change)).envelope.ok).toBe(true);
             expect((yield* first.cli(change)).envelope.ok).toBe(true);
             expect(
-              (yield* readIntent(dir))?.history.filter((one) => one.change.includes("goal")),
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(yield* readIntent(dir)), (present) =>
+                  Arr.filter(present.history, (one) => pipe_(one.change, Str.includes("goal"))),
+                ),
+              ),
             ).toHaveLength(1);
             expect(
               (yield* first.cli(["run", "intent", "authority", runId, "auto_correct=false"]))
@@ -127,8 +138,11 @@ test(
               (yield* first.cli(["run", "intent", "add-constraint", runId, "keep the evidence"]))
                 .envelope.ok,
             ).toBe(true);
-            const added = (yield* readIntent(dir))!.constraints.find(
-              (one) => one.text === "keep the evidence",
+            const added = Option.getOrUndefined(
+              Arr.findFirst(
+                (yield* readIntent(dir))!.constraints,
+                (one) => one.text === "keep the evidence",
+              ),
             )!;
             expect(
               (yield* first.cli(["run", "intent", "remove-constraint", runId, added.id])).envelope
@@ -179,7 +193,7 @@ test(
             const withdrawn = (yield* readIntent(dir))!;
             yield* owner.changeIntent(replay);
             expect(yield* readIntent(dir)).toEqual(withdrawn);
-            expect(withdrawn.authority.run_verification.map((one) => one.name)).not.toContain(
+            expect(Arr.map(withdrawn.authority.run_verification, (one) => one.name)).not.toContain(
               "replay",
             );
             yield* owner.grant({
@@ -231,7 +245,7 @@ test(
                 },
               },
             });
-            expect((yield* readVerifications(evidence)).map((one) => one.name)).toContain(
+            expect(Arr.map(yield* readVerifications(evidence), (one) => one.name)).toContain(
               "remote-check",
             );
             expect(yield* readVerifications(evidenceDir(first.world.state, runId))).toEqual([]);
@@ -246,7 +260,10 @@ test(
               },
             });
             const audit = yield* readAudit(dir);
-            expect(audit.find((one) => one.request === "remote-intent")?.actor.origin).toBe("cli");
+            expect(
+              Option.getOrUndefined(Arr.findFirst(audit, (one) => one.request === "remote-intent"))
+                ?.actor.origin,
+            ).toBe("cli");
             expect(
               (yield* first.cli([
                 "run",
@@ -276,8 +293,11 @@ test(
               () => owner.run({ runId: built.runId }),
               (view) => view?.status.status === "complete",
             );
-            const agent = (yield* everyRegistered(second.world.state)).find(
-              (one) => one.runId === built.runId,
+            const agent = Option.getOrUndefined(
+              Arr.findFirst(
+                yield* everyRegistered(second.world.state),
+                (one) => one.runId === built.runId,
+              ),
             )!;
             const terminal = agent.incarnation!.terminalId;
             const ledger = yield* ledgerPath(second.world.state, terminal);
@@ -377,7 +397,7 @@ test(
             yield* fs.writeFileString(log, "the remote line arrives\n");
             yield* until(
               () => fs.readFileString(stderr),
-              (text) => text.includes("the remote line arrives"),
+              (text) => pipe_(text, Str.includes("the remote line arrives")),
             );
             expect(yield* fs.exists(`${dir}/${VERIFYING_FILE}`)).toBe(true);
             yield* fs.remove(`${dir}/${VERIFYING_FILE}`);

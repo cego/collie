@@ -12,8 +12,13 @@
 // expired: creating one where one already exists is how a Herd ends up with two boards
 // disagreeing about the same Runs.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Data, Effect, FileSystem, Path, Schema } from "effect";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
+import type { PlatformServices } from "./platform";
+import { Clock, Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir, herdKey } from "./steering";
 import { nowIso, epochMs } from "./time";
@@ -56,7 +61,7 @@ const RecordSchema = Schema.Struct({
 });
 export type HomeRecord = Schema.Schema.Type<typeof RecordSchema>;
 const RecordJson = Schema.fromJsonString(RecordSchema);
-const encodeRecord = Schema.encodeSync(RecordJson);
+const encodeRecord = flow(Schema.encodeResult(RecordJson), Result.getOrThrow);
 
 const ServerSchema = Schema.Struct({
   socket: Schema.String,
@@ -65,7 +70,7 @@ const ServerSchema = Schema.Struct({
   at: Schema.String,
 });
 const ServerJson = Schema.fromJsonString(ServerSchema);
-const encodeServer = Schema.encodeSync(ServerJson);
+const encodeServer = flow(Schema.encodeResult(ServerJson), Result.getOrThrow);
 
 export const homePath = Effect.fn("Home.path")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;
@@ -84,9 +89,9 @@ export const serverPath = Effect.fn("Home.serverPath")(function* (stateDir: stri
  */
 export const readHome = Effect.fn("Home.read")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  const raw = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
-  if (raw.trim() === "") return null;
-  const decoded = Schema.decodeUnknownOption(RecordJson)(raw);
+  const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  if (Str.trim(raw) === "") return null;
+  const decoded = Schema.decodeOption(RecordJson)(raw);
   return decoded._tag === "Some" ? decoded.value : UNREADABLE;
 });
 
@@ -113,10 +118,10 @@ export const writeServer = Effect.fn("Home.writeServer")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const before = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
+  const before = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-  yield* fs.writeFileString(file, `${encodeServer({ ...server, at: yield* nowIso() })}\n`);
-  const previous = Schema.decodeUnknownOption(ServerJson)(before);
+  yield* fs.writeFileString(file, `${encodeServer({ ...server, at: yield* nowIso })}\n`);
+  const previous = Schema.decodeOption(ServerJson)(before);
   if (previous._tag === "None") return null;
   const moved =
     previous.value.version !== server.version || previous.value.protocol !== server.protocol;
@@ -143,7 +148,7 @@ export type Origin = Schema.Schema.Type<typeof OriginSchema>;
 const OriginJson = Schema.fromJsonString(
   Schema.Struct({ ...OriginSchema.fields, at: Schema.String }),
 );
-const encodeOrigin = Schema.encodeSync(OriginJson);
+const encodeOrigin = flow(Schema.encodeResult(OriginJson), Result.getOrThrow);
 const decodeOrigin = Schema.decodeUnknownOption(OriginJson);
 
 export const originPath = Effect.fn("Home.originPath")(function* (stateDir: string, key: string) {
@@ -155,7 +160,7 @@ export const writeOrigin = Effect.fn("Home.writeOrigin")(function* (file: string
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-  yield* fs.writeFileString(file, `${encodeOrigin({ ...origin, at: yield* nowIso() })}\n`);
+  yield* fs.writeFileString(file, `${encodeOrigin({ ...origin, at: yield* nowIso })}\n`);
 });
 
 /**
@@ -165,7 +170,7 @@ export const writeOrigin = Effect.fn("Home.writeOrigin")(function* (file: string
  */
 export const readOrigin = Effect.fn("Home.readOrigin")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  const raw = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
+  const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   const decoded = decodeOrigin(raw);
   if (decoded._tag === "None") return null;
   const { at, ...origin } = decoded.value;
@@ -195,12 +200,17 @@ export function ownershipProof(
   panes: ReadonlyArray<PaneInfo>,
   key: string,
 ): "token" | "pane" | null {
-  const workspace = workspaces.find((entry) => entry.workspaceId === record.workspaceId);
+  const workspace = Option.getOrUndefined(
+    Arr.findFirst(workspaces, (entry) => entry.workspaceId === record.workspaceId),
+  );
   if (!workspace) return null;
   if (workspace.tokens[HOME_TOKEN] === key) return "token";
   if (record.paneId !== null && record.terminalId !== null) {
-    const pane = panes.find(
-      (entry) => entry.paneId === record.paneId && entry.workspaceId === record.workspaceId,
+    const pane = Option.getOrUndefined(
+      Arr.findFirst(
+        panes,
+        (entry) => entry.paneId === record.paneId && entry.workspaceId === record.workspaceId,
+      ),
     );
     if (pane?.terminalId === record.terminalId) return "pane";
   }
@@ -209,7 +219,7 @@ export function ownershipProof(
 
 /** Workspaces carrying this Herd's token, whoever put it there. */
 export function tokened(workspaces: ReadonlyArray<WorkspaceInfo>, key: string): WorkspaceInfo[] {
-  return workspaces.filter((entry) => entry.tokens[HOME_TOKEN] === key);
+  return Arr.filter(workspaces, (entry) => entry.tokens[HOME_TOKEN] === key);
 }
 
 export type Decision =
@@ -255,7 +265,7 @@ export function missingPanes(
   const there = (paneId: string | null | undefined) =>
     paneId !== null &&
     paneId !== undefined &&
-    panes.some((entry) => entry.paneId === paneId && entry.workspaceId === record.workspaceId);
+    Arr.some(panes, (entry) => entry.paneId === paneId && entry.workspaceId === record.workspaceId);
   const missing: Array<"board" | "chat"> = [];
   if (!there(record.paneId)) missing.push("board");
   if (!there(record.chatPaneId)) missing.push("chat");
@@ -269,7 +279,7 @@ export function decide(
   key: string,
 ): Decision {
   const claimed = tokened(workspaces, key);
-  const claimedIds = claimed.map((entry) => entry.workspaceId);
+  const claimedIds = Arr.map(claimed, (entry) => entry.workspaceId);
   const unknown = (why: string, candidates: ReadonlyArray<string>): Decision => ({
     kind: "ownership_unknown",
     why,
@@ -290,11 +300,12 @@ export function decide(
   }
 
   /** Workspaces other than the recorded one that carry this Herd's token. */
-  const elsewhere = claimed
-    .filter((entry) => entry.workspaceId !== record.workspaceId)
-    .map((entry) => entry.workspaceId);
+  const elsewhere = Arr.map(
+    Arr.filter(claimed, (entry) => entry.workspaceId !== record.workspaceId),
+    (entry) => entry.workspaceId,
+  );
 
-  const live = workspaces.some((entry) => entry.workspaceId === record.workspaceId);
+  const live = Arr.some(workspaces, (entry) => entry.workspaceId === record.workspaceId);
   // The recorded workspace is gone. Creating another is only right if nothing else claims
   // this Herd: a workspace still carrying the token is either one a human adopted or one
   // whose record is behind, and a second board is what SPEC §7.12 refuses to guess into.
@@ -333,17 +344,21 @@ export function decide(
       "the recorded workspace has lost its proof and another carries this Herd's token",
       [record.workspaceId, ...elsewhere],
     );
-  const theirs = workspaces.find((entry) => entry.workspaceId === record.workspaceId)?.tokens[
-    HOME_TOKEN
-  ];
+  const theirs = Option.getOrUndefined(
+    Arr.findFirst(workspaces, (entry) => entry.workspaceId === record.workspaceId),
+  )?.tokens[HOME_TOKEN];
   if (theirs !== undefined)
     return unknown("the recorded workspace carries another Herd's token", [record.workspaceId]);
 
   // herdr keeps workspace and pane ids across a restart but not their tokens, and gives
   // each restored pane a new terminal.
   const terminalOf = (paneId: string | null | undefined) =>
-    panes.find((entry) => entry.paneId === paneId && entry.workspaceId === record.workspaceId)
-      ?.terminalId ?? null;
+    Option.getOrUndefined(
+      Arr.findFirst(
+        panes,
+        (entry) => entry.paneId === paneId && entry.workspaceId === record.workspaceId,
+      ),
+    )?.terminalId ?? null;
   return {
     kind: "reopen",
     record: {
@@ -396,13 +411,16 @@ export const REQUIRED_RUNTIME = [
  * us. There is no label-only path to fall back to, deliberately.
  */
 export function missingRuntime(schema: string): string[] {
-  const missing: string[] = REQUIRED_RUNTIME.filter((name) => !schema.includes(name));
+  const missing: string[] = Arr.filter(
+    REQUIRED_RUNTIME,
+    (name) => !pipe_(schema, Str.includes(name)),
+  );
   // On the type that carries them, not anywhere in the document: `tokens` on some
   // other type is nothing the ownership proof can read. Undecodable declares nothing.
   const decoded = decodeRuntime(schema);
-  const apis = decoded._tag === "None" ? [] : Object.values(decoded.value.schemas);
+  const apis = decoded._tag === "None" ? [] : Rec.values(decoded.value.schemas);
   for (const [type, field] of REQUIRED_FIELDS)
-    if (!apis.some((api) => field in (api.$defs?.[type]?.properties ?? {})))
+    if (!Arr.some(apis, (api) => field in (api.$defs?.[type]?.properties ?? {})))
       missing.push(`${type}.${field}`);
   return missing;
 }
@@ -493,7 +511,7 @@ export interface HomeDeps {
  * than an error path of its own. Bun's services because the real boundary shells out; a
  * test's fake needs none and satisfies this all the same.
  */
-type HomeAnswer<A> = Effect.Effect<A, never, BunServices>;
+type HomeAnswer<A> = Effect.Effect<A, never, PlatformServices>;
 
 function ready(record: HomeRecord): Ensured {
   return { kind: "ready", record };
@@ -538,10 +556,10 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
       const workspaces = yield* deps.workspaces;
       const panes = yield* deps.panes;
       const decision = decide(record, workspaces, panes, key);
-      const at = yield* nowIso();
+      const at = yield* nowIso;
 
       if (decision.kind === "ownership_unknown") {
-        yield* deps.log(`home: ${decision.why} (${decision.candidates.join(", ")})`);
+        yield* deps.log(`home: ${decision.why} (${Arr.join(decision.candidates, ", ")})`);
         return decision;
       }
 
@@ -563,7 +581,9 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
           const opened = yield* deps.openPane(next.workspaceId, namespaceDir, beside);
           // Re-read: `panes` predates this pane, and a null terminalId loses ownership
           // proof (ii) as soon as the token expires.
-          const pane = (yield* deps.panes).find((entry) => entry.paneId === opened.paneId);
+          const pane = Option.getOrUndefined(
+            Arr.findFirst(yield* deps.panes, (entry) => entry.paneId === opened.paneId),
+          );
           next = {
             ...next,
             tabId: opened.tabId,
@@ -583,7 +603,7 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
           yield* deps.log(`home: healed ${next.workspaceId}: ${decision.healed}`);
         if (decision.missing.length > 0)
           yield* deps.log(
-            `home: reopened the ${decision.missing.join(" and ")} pane in ${next.workspaceId}`,
+            `home: reopened the ${Arr.join(decision.missing, " and ")} pane in ${next.workspaceId}`,
           );
         return ready(next);
       }
@@ -624,9 +644,10 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
       // exists. A normal Home is one tab, and the shell that comes with a new workspace
       // is a second one nobody asked for — closed below, once there is something to
       // close it in favour of. Only these: a tab a human makes later is theirs.
-      const generated = (yield* deps.panes)
-        .filter((entry) => entry.workspaceId === workspaceId)
-        .map((entry) => entry.paneId);
+      const generated = Arr.map(
+        Arr.filter(yield* deps.panes, (entry) => entry.workspaceId === workspaceId),
+        (entry) => entry.paneId,
+      );
 
       const opened = yield* deps.openPane(workspaceId, namespaceDir);
       // No pane is not a Home. Written `ready` with null ids it would send every question
@@ -639,7 +660,9 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
         return { kind: "incomplete", why, record: creating } satisfies Ensured;
       }
       const after = yield* deps.panes;
-      const pane = after.find((entry) => entry.paneId === opened.paneId);
+      const pane = Option.getOrUndefined(
+        Arr.findFirst(after, (entry) => entry.paneId === opened.paneId),
+      );
       const settled: HomeRecord = yield* withChat(
         {
           ...creating,
@@ -712,7 +735,9 @@ const withChat = Effect.fn("Home.withChat")(function* (
     yield* deps.log("home: herdr would not split the board for native chat");
     return { ...record, chatPaneId: null, chatTerminalId: null };
   }
-  const pane = (yield* deps.panes).find((entry) => entry.paneId === paneId);
+  const pane = Option.getOrUndefined(
+    Arr.findFirst(yield* deps.panes, (entry) => entry.paneId === paneId),
+  );
   // Both tokens: the Home's, so ownership proof reads it, and chat's, so recovery can
   // tell which of the tab's two panes went.
   yield* deps.markPane(paneId, { [HOME_TOKEN]: record.token, [CHAT_PANE_TOKEN]: record.token });
@@ -732,11 +757,11 @@ export interface Cleanup {
 }
 
 export function closable(panes: ReadonlyArray<PaneInfo>): Cleanup {
-  const legacy = panes.filter((pane) => pane.tokens[LEGACY_PANE_TOKEN] === "legacy");
+  const legacy = Arr.filter(panes, (pane) => pane.tokens[LEGACY_PANE_TOKEN] === "legacy");
   const close: string[] = [];
   const listed: string[] = [];
   for (const pane of legacy) {
-    const alone = panes.filter((other) => other.tabId === pane.tabId).length === 1;
+    const alone = Arr.filter(panes, (other) => other.tabId === pane.tabId).length === 1;
     (alone ? close : listed).push(pane.paneId);
   }
   return { close, listed };
@@ -766,21 +791,21 @@ export const ensureHomeFor = Effect.fn("Home.ensureFor")(function* (
   // listening, which is the probe SPEC §7.12 names; neither is `herdr_unreachable`, and
   // there is deliberately no cwd fallback.
   const key = yield* herdKey(env.socketPath, () => serverSocket(herdr));
-  const schema = yield* herdr.apiSchema().pipe(Effect.catch(() => Effect.succeed("")));
+  const schema = yield* herdr.apiSchema().pipe(Effect.orElseSucceed(() => ""));
   const missing = missingRuntime(schema);
   if (missing.length > 0) {
-    yield* log(`herdr_capability_missing:${missing.join(",")}`);
+    yield* log(`herdr_capability_missing:${Arr.join(missing, ",")}`);
     return null;
   }
   const moved = yield* writeServer(
     yield* serverPath(env.stateDir, key),
-    yield* herdr
-      .serverInfo()
-      .pipe(
-        Effect.catch(() =>
-          Effect.succeed({ socket: env.socketPath ?? "", version: "unknown", protocol: 0 }),
-        ),
-      ),
+    yield* herdr.serverInfo().pipe(
+      Effect.orElseSucceed(() => ({
+        socket: env.socketPath ?? "",
+        version: "unknown",
+        protocol: 0,
+      })),
+    ),
   );
   if (moved !== null) yield* log(moved);
   return yield* ensureHome(
@@ -795,7 +820,7 @@ export const ensureHomeFor = Effect.fn("Home.ensureFor")(function* (
 export const serverSocket = (herdr: Herdr) =>
   herdr.serverInfo().pipe(
     Effect.map((server) => (server.socket === "" ? null : server.socket)),
-    Effect.catch(() => Effect.succeed(null)),
+    Effect.orElseSucceed(() => null),
   );
 
 /** What `ensureHome` needs of herdr. A failed call is "nothing there", never a crash. */

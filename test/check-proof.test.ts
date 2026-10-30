@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { checkProof, owedLocally } from "../src/check-proof";
 import { evidenceGaps, type Collected } from "../src/outcome";
@@ -176,15 +179,18 @@ test("no gap decider counts a check left to CI's missing local pass", () => {
     [],
   );
   expect(
-    evidenceGaps(
-      "feature",
-      collected([passing], {
-        approved: [TESTS, NUXI],
-        tickets: [{ file: "01.md", checks: ["tests", "nuxi"] }],
-        outputs: new Map<string, YamlValue>([["build", { tickets_done: ["one"] }]]),
-        reviewed: new Set(["synthesize"]),
-      }),
-    ).filter((gap) => gap.includes("nuxi")),
+    Arr.filter(
+      evidenceGaps(
+        "feature",
+        collected([passing], {
+          approved: [TESTS, NUXI],
+          tickets: [{ file: "01.md", checks: ["tests", "nuxi"] }],
+          outputs: new Map<string, YamlValue>([["build", { tickets_done: ["one"] }]]),
+          reviewed: new Set(["synthesize"]),
+        }),
+      ),
+      (gap) => pipe(gap, Str.includes("nuxi")),
+    ),
   ).toEqual([]);
   const settled = settleFinalFix(
     [],

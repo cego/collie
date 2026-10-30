@@ -6,7 +6,13 @@
 // Authority is never read from text. Plan bullets and repository files are evidence:
 // `extractRequirements` returns constraints and a goal and has no way to return a grant.
 
-import { Data, Effect, FileSystem, Path, Schema } from "effect";
+import * as Struct from "effect/Struct";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+
+import * as Option from "effect/Option";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { withDirLock } from "./lock";
 import type { Voice } from "./proposals";
 import {
@@ -69,7 +75,7 @@ export const DefaultsJson = Schema.fromJsonString(DefaultsSchema);
 export type IntentSeed = typeof IntentSeedSchema.Type;
 
 const IntentJson = Schema.fromJsonString(IntentSchema);
-const encodeIntent = Schema.encodeSync(IntentJson);
+const encodeIntent = flow(Schema.encodeResult(IntentJson), Result.getOrThrow);
 
 /** An `intent.json` that exists but is not an Intent. Never a default: see §7.1. */
 export class IntentUnreadable extends Data.TaggedError("IntentUnreadable")<{
@@ -83,11 +89,11 @@ export const readIntent = Effect.fn("Intent.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(dir, INTENT_FILE);
-  if (!(yield* fs.exists(file).pipe(Effect.catch(() => Effect.succeed(false))))) return null;
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return null;
   const raw = yield* fs
     .readFileString(file)
     .pipe(Effect.mapError((cause) => new IntentUnreadable({ dir, cause: String(cause) })));
-  return yield* Schema.decodeUnknownEffect(IntentJson)(raw).pipe(
+  return yield* Schema.decodeEffect(IntentJson)(raw).pipe(
     Effect.mapError((cause) => new IntentUnreadable({ dir, cause: String(cause) })),
   );
 });
@@ -116,7 +122,7 @@ export const writeIntent = Effect.fn("Intent.write")(function* (dir: string, int
 
 /** A constraint is identified by what it says, so the same text is the same entry. */
 export function constraintId(text: string): string {
-  return Bun.hash(text).toString(16).slice(0, 8);
+  return pipe(Bun.hash(text).toString(16), Str.slice(0, 8));
 }
 
 export type Change =
@@ -137,7 +143,7 @@ export function verificationGrant(
   name: string,
   command: Omit<VerifySpec, "name"> | null,
 ): Change {
-  const kept = intent.authority.run_verification.filter((spec) => spec.name !== name);
+  const kept = Arr.filter(intent.authority.run_verification, (spec) => spec.name !== name);
   return {
     kind: "authority",
     patch: { run_verification: command === null ? kept : [...kept, { name, ...command }] },
@@ -155,9 +161,13 @@ function describe(change: Change): string {
     case "remove-constraint":
       return `constraint ${change.id} removed`;
     case "authority":
-      return `authority ${Object.entries(change.patch)
-        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-        .join(", ")}`;
+      return `authority ${Arr.join(
+        Arr.map(
+          Arr.map(Struct.keys(change.patch), (key) => [key, change.patch[key]] as const),
+          ([k, v]) => `${k}=${JSON.stringify(v)}`,
+        ),
+        ", ",
+      )}`;
   }
 }
 
@@ -169,11 +179,11 @@ function applied(intent: Intent, change: Change, version: number): Intent | null
       return intent.outcome === change.outcome ? null : { ...intent, outcome: change.outcome };
     case "add-constraint": {
       const constraint = { ...change.constraint, since: version };
-      const without = intent.constraints.filter((c) => c.id !== constraint.id);
+      const without = Arr.filter(intent.constraints, (c) => c.id !== constraint.id);
       return { ...intent, constraints: [...without, constraint] };
     }
     case "remove-constraint": {
-      const kept = intent.constraints.filter((c) => c.id !== change.id);
+      const kept = Arr.filter(intent.constraints, (c) => c.id !== change.id);
       return kept.length === intent.constraints.length ? null : { ...intent, constraints: kept };
     }
     case "authority":
@@ -227,27 +237,29 @@ export function followPlan(
   at: string,
 ): Intent {
   const removedByOthers = new Set(
-    intent.history.filter((entry) => entry.by !== PLAN_AUTHOR).map((entry) => entry.change),
+    Arr.map(
+      Arr.filter(intent.history, (entry) => entry.by !== PLAN_AUTHOR),
+      (entry) => entry.change,
+    ),
   );
-  const held = new Set(intent.constraints.map((c) => c.id));
-  const wanted = new Set(found.map((c) => c.id));
-  const added = found
-    .filter((c) => !held.has(c.id) && !removedByOthers.has(`constraint ${c.id} removed`))
-    .reduce(
-      (next, constraint) =>
-        next.constraints.some((c) => c.id === constraint.id)
-          ? next
-          : amend(next, { kind: "add-constraint", constraint }, PLAN_AUTHOR, at),
-      intent,
-    );
-  return intent.constraints
-    .filter(
+  const held = new Set(Arr.map(intent.constraints, (c) => c.id));
+  const wanted = new Set(Arr.map(found, (c) => c.id));
+  const added = Arr.reduce(
+    Arr.filter(found, (c) => !held.has(c.id) && !removedByOthers.has(`constraint ${c.id} removed`)),
+    intent,
+    (next, constraint) =>
+      Arr.some(next.constraints, (c) => c.id === constraint.id)
+        ? next
+        : amend(next, { kind: "add-constraint", constraint }, PLAN_AUTHOR, at),
+  );
+  return Arr.reduce(
+    Arr.filter(
+      intent.constraints,
       (c) => c.source === "plan" && c.provenance?.file === "plan/SPEC.md" && !wanted.has(c.id),
-    )
-    .reduce(
-      (next, c) => amend(next, { kind: "remove-constraint", id: c.id }, PLAN_AUTHOR, at),
-      added,
-    );
+    ),
+    added,
+    (next, c) => amend(next, { kind: "remove-constraint", id: c.id }, PLAN_AUTHOR, at),
+  );
 }
 
 export interface SeedOptions {
@@ -296,11 +308,12 @@ export function seedIntent(run: string, options: SeedOptions): Intent {
  * it decided without having to run it again to find out.
  */
 export function propagate(parent: Intent, child: Intent) {
-  const own = child.constraints.filter((c) => c.source !== "parent");
-  const ownIds = new Set(own.map((c) => c.id));
-  const inherited = parent.constraints
-    .filter((c) => !ownIds.has(c.id))
-    .map((c) => ({ ...c, source: "parent" as const }));
+  const own = Arr.filter(child.constraints, (c) => c.source !== "parent");
+  const ownIds = new Set(Arr.map(own, (c) => c.id));
+  const inherited = Arr.map(
+    Arr.filter(parent.constraints, (c) => !ownIds.has(c.id)),
+    (c) => ({ ...c, source: "parent" as const }),
+  );
   const conflicts: string[] = [];
   for (const c of parent.constraints)
     if (ownIds.has(c.id)) conflicts.push(`constraint ${c.id}: the child's own entry is kept`);
@@ -342,13 +355,13 @@ const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
  * how that is enforced: there is nowhere here to put a grant.
  */
 export function extractRequirements(text: string, file: string) {
-  const lines = text.split("\n");
+  const lines = Str.split(text, "\n");
   const constraints: Array<Omit<Constraint, "since">> = [];
   let heading: string | null = null;
   let bullet: { indent: number; parts: string[]; line: number } | null = null;
   const flush = () => {
     if (bullet === null || heading === null) return;
-    const body = bullet.parts.join(" ");
+    const body = Arr.join(bullet.parts, " ");
     const text = /^out of scope$/i.test(heading) ? `Out of scope: ${body}` : body;
     constraints.push({
       id: constraintId(text),
@@ -361,18 +374,18 @@ export function extractRequirements(text: string, file: string) {
     bullet = null;
   };
   for (const [index, line] of lines.entries()) {
-    if (HEADING.test(line) || line.trim() === "") flush();
+    if (HEADING.test(line) || Str.trim(line) === "") flush();
     if (HEADING.test(line)) {
       const match = REQUIREMENT_HEADING.exec(line);
       heading = match ? match[1]! : null;
       continue;
     }
-    if (heading === null || line.trim() === "") continue;
+    if (heading === null || Str.trim(line) === "") continue;
     const item = BULLET.exec(line);
     const numbered = item === null ? NUMBERED.exec(line) : null;
     const listed = item ?? numbered;
     if (listed === null) {
-      bullet?.parts.push(line.trim());
+      bullet?.parts.push(Str.trim(line));
       continue;
     }
     const indent = listed[1]!.length;
@@ -391,14 +404,17 @@ export function extractRequirements(text: string, file: string) {
 }
 
 function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp): string | null {
-  const start = lines.findIndex((line) => heading.test(line));
+  const start = Option.getOrElse(
+    Arr.findFirstIndex(lines, (line) => heading.test(line)),
+    () => -1,
+  );
   if (start < 0) return null;
   const paragraph: string[] = [];
   for (const line of lines.slice(start + 1)) {
-    if (HEADING.test(line) || (line.trim() === "" && paragraph.length > 0)) break;
-    if (line.trim() !== "") paragraph.push(line.trim());
+    if (HEADING.test(line) || (Str.trim(line) === "" && paragraph.length > 0)) break;
+    if (Str.trim(line) !== "") paragraph.push(Str.trim(line));
   }
-  return paragraph.length > 0 ? paragraph.join(" ") : null;
+  return paragraph.length > 0 ? Arr.join(paragraph, " ") : null;
 }
 
 /** Where a workspace keeps what every Run it starts begins with. */
@@ -412,11 +428,11 @@ export const defaultsPath = Effect.fn("Intent.defaultsPath")(function* (
 
 export const readDefaults = Effect.fn("Intent.readDefaults")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(file).pipe(Effect.catch(() => Effect.succeed(false))))) return null;
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return null;
   const raw = yield* fs
     .readFileString(file)
     .pipe(Effect.mapError((cause) => new IntentUnreadable({ dir: file, cause: String(cause) })));
-  return yield* Schema.decodeUnknownEffect(DefaultsJson)(raw).pipe(
+  return yield* Schema.decodeEffect(DefaultsJson)(raw).pipe(
     Effect.mapError((cause) => new IntentUnreadable({ dir: file, cause: String(cause) })),
   );
 });
@@ -429,7 +445,10 @@ export const writeDefaults = Effect.fn("Intent.writeDefaults")(function* (
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  yield* fs.writeFileString(tmp, `${Schema.encodeSync(DefaultsJson)(defaults)}\n`);
+  yield* fs.writeFileString(
+    tmp,
+    `${yield* Schema.encodeEffect(DefaultsJson)(defaults).pipe(Effect.orDie)}\n`,
+  );
   yield* fs.rename(tmp, file);
 });
 
@@ -437,10 +456,16 @@ export const EMPTY_DEFAULTS: Defaults = { constraints: [], authority: DEFAULT_AU
 
 /** The defaults as a human reads them: what every Run started here begins with. */
 export function describeDefaults(defaults: Defaults): string {
-  return [
-    ...defaults.constraints.map((c) => `${c.id}\t${c.severity}\t${c.kind}\t${c.text}`),
-    ...Object.entries(defaults.authority).map(([k, v]) => `authority ${k}=${JSON.stringify(v)}`),
-  ].join("\n");
+  return Arr.join(
+    [
+      ...Arr.map(defaults.constraints, (c) => `${c.id}\t${c.severity}\t${c.kind}\t${c.text}`),
+      ...Arr.map(
+        Arr.map(Struct.keys(defaults.authority), (key) => [key, defaults.authority[key]] as const),
+        ([k, v]) => `authority ${k}=${JSON.stringify(v)}`,
+      ),
+    ],
+    "\n",
+  );
 }
 
 /**
@@ -458,9 +483,9 @@ export const fromWorkSource = Effect.fn("Intent.fromWorkSource")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const spec = path.join(value, "SPEC.md");
-  if (!(yield* fs.exists(spec).pipe(Effect.catch(() => Effect.succeed(false)))))
+  if (!(yield* fs.exists(spec).pipe(Effect.orElseSucceed(() => false))))
     return { goal: null, constraints: none };
-  const text = yield* fs.readFileString(spec).pipe(Effect.catch(() => Effect.succeed("")));
+  const text = yield* fs.readFileString(spec).pipe(Effect.orElseSucceed(() => ""));
   return extractRequirements(text, "SPEC.md");
 });
 
@@ -480,8 +505,8 @@ export function parseConstraint(
     severity,
     source: "human" as const,
   };
-  if (!text.startsWith("rule:")) return { ...base, kind: "semantic" as const };
-  const [, kind, ...rest] = text.split(":");
+  if (!pipe(text, Str.startsWith("rule:"))) return { ...base, kind: "semantic" as const };
+  const [, kind, ...rest] = Str.split(text, ":");
   const rule = parseRule(kind ?? "", rest);
   return "error" in rule ? rule : { ...base, kind: "rule" as const, rule };
 }
@@ -493,7 +518,7 @@ function parseRule(kind: string, args: string[]): RuleSpec | { readonly error: s
   switch (kind) {
     case "protected_paths":
       return args[0]
-        ? { kind, globs: args[0].split(",").filter((g) => g !== "") }
+        ? { kind, globs: Arr.filter(Str.split(args[0], ","), (g) => g !== "") }
         : wrong("<glob>[,<glob>…]");
     case "branch_is":
       return args[0] ? { kind, name: args[0] } : wrong("<branch>");
@@ -539,10 +564,10 @@ export function authorityPatch(pairs: ReadonlyArray<string>) {
     -readonly [K in keyof Authority]?: Authority[K];
   } = {};
   for (const pair of pairs) {
-    const at = pair.indexOf("=");
+    const at = Option.getOrElse(pipe(pair, Str.indexOf("=")), () => -1);
     if (at <= 0) return { error: `"${pair}" is not k=v.` };
-    const key = pair.slice(0, at);
-    const value = pair.slice(at + 1);
+    const key = pipe(pair, Str.slice(0, at));
+    const value = pipe(pair, Str.slice(at + 1));
     if (BOOLEAN_AUTHORITIES.has(key)) {
       if (value !== "true" && value !== "false") return { error: `"${key}" is true or false.` };
       // SAFETY: `key` is in BOOLEAN_AUTHORITIES, so it names one of the boolean grants;

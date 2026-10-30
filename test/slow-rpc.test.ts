@@ -8,14 +8,12 @@ import { SlowRpcs, slowRpcsLayer } from "../src/host";
 import { fastForward, runEffect } from "./support/effect";
 
 const Probe = RpcGroup.make(
-  Rpc.make("answer", { payload: { ms: Schema.Number } }),
-  Rpc.make("follow", { success: Schema.Number, stream: true }),
+  Rpc.make("answer", { payload: { ms: Schema.Finite } }),
+  Rpc.make("follow", { success: Schema.Finite, stream: true }),
 ).middleware(SlowRpcs);
 
-const warnedAsking = (
-  ask: (
-    client: RpcClient.RpcClient<RpcGroup.Rpcs<typeof Probe>>,
-  ) => Effect.Effect<unknown, unknown>,
+const warnedAsking = <E>(
+  ask: (client: RpcClient.RpcClient<RpcGroup.Rpcs<typeof Probe>>) => Effect.Effect<unknown, E>,
 ) =>
   Effect.gen(function* () {
     const warned: string[] = [];

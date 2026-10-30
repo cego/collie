@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Stream } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
@@ -64,7 +65,7 @@ test("an older host is not known and names its release instead of showing empty 
     machine,
     reading: { values: null, at, problem: null, unsupported: true },
   });
-  const rows = machineRows(flock).map((row) => ({
+  const rows = Arr.map(machineRows(flock), (row) => ({
     ...row,
     state: "live" as const,
     build: "0.105.0",
@@ -88,7 +89,7 @@ test("a live Machine's table row reports sync and keeps unset separate from an u
     part: "settings",
     failed: "permission denied",
   });
-  const rows = machineRows(flock).map((row) => ({ ...row, state: "live" as const }));
+  const rows = Arr.map(machineRows(flock), (row) => ({ ...row, state: "live" as const }));
   expect(machineOwnRows(rows, flock.own, at)[0]).toMatchObject({
     projectsRoot: "Not set",
     chatHarness: "Not set",
@@ -130,7 +131,7 @@ test("a saved reading survives reopening Desktop with that Machine out of reach"
         reading: { values, at, problem: null, unsupported: false },
       });
       const saved = yield* savedOwn(dir);
-      const flock = saved.reduce(applyItem, routed());
+      const flock = Arr.reduce(saved, routed(), applyItem);
       expect(rowsOf(flock)[0]).toMatchObject({
         projectsRoot: "/work",
         at,
@@ -177,14 +178,14 @@ test("a paired base host still draws its board after refusing the additive RPC",
           [
             {
               machine,
-              open: () => Effect.succeed({ board: () => client.client.board() }),
+              open: () => Effect.succeed({ board: client.client.board() }),
               collie: () => Effect.die("the paired base host must not need a new protocol"),
             },
           ],
           new Map(),
           "0.105.0",
         ).pipe(Stream.take(1), Stream.runCollect);
-        const flock = [...board, read].reduce(applyItem, routed());
+        const flock = Arr.reduce([...board, read], routed(), applyItem);
         expect(flock.machines.get("i-vm")).toMatchObject({
           asOf: null,
           build: "0.105.0",

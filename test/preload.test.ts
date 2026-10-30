@@ -1,3 +1,7 @@
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { signalProcess } from "../src/lock";
@@ -15,10 +19,10 @@ import {
 const preload = `${import.meta.dir}/support/hosts.ts`;
 
 const Recorded = Schema.Struct({
-  pid: Schema.optional(Schema.Number),
+  pid: Schema.optional(Schema.Finite),
   dir: Schema.optional(Schema.String),
   runs: Schema.optional(
-    Schema.Array(Schema.Struct({ pid: Schema.Number, root: Schema.String, home: Schema.String })),
+    Schema.Array(Schema.Struct({ pid: Schema.Finite, root: Schema.String, home: Schema.String })),
   ),
 });
 
@@ -45,9 +49,7 @@ const suite = (fixture: string, args: ReadonlyArray<string> = [], memory = false
       },
     });
     const recorded = (yield* fs.exists(out))
-      ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Recorded))(
-          yield* fs.readFileString(out),
-        )
+      ? yield* Schema.decodeEffect(Schema.fromJsonString(Recorded))(yield* fs.readFileString(out))
       : {};
     return {
       output: ran.stdout + ran.stderr,
@@ -150,12 +152,16 @@ test("sees its root", () => {
           const runs = run.recorded.runs ?? [];
           expect(runs).toHaveLength(3);
           for (const one of runs) {
-            expect(one.root.startsWith(`${run.base}/collie-test-${one.pid}-`)).toBe(true);
-            expect(one.home.startsWith(`${one.root}/`)).toBe(true);
+            expect(pipe_(one.root, Str.startsWith(`${run.base}/collie-test-${one.pid}-`))).toBe(
+              true,
+            );
+            expect(pipe_(one.home, Str.startsWith(`${one.root}/`))).toBe(true);
             expect(marked(one.root)).toEqual([]);
           }
-          expect(new Set(runs.map((one) => one.root)).size).toBe(3);
-          expect(run.left.filter((name) => name.startsWith("collie-test-"))).toEqual([]);
+          expect(new Set(Arr.map(runs, (one) => one.root)).size).toBe(3);
+          expect(
+            Arr.filter(run.left, (name) => pipe_(name, Str.startsWith("collie-test-"))),
+          ).toEqual([]);
         }),
       ),
     30_000,
@@ -197,7 +203,13 @@ test("sees its root", () => record({ dir: tmpdir() }));
           true,
         );
         expect(run.output).toContain("1 pass");
-        expect(run.recorded.dir?.startsWith(`${run.base}/collie-test-`)).toBe(true);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(run.recorded.dir), (present) =>
+              pipe_(present, Str.startsWith(`${run.base}/collie-test-`)),
+            ),
+          ),
+        ).toBe(true);
       }),
     ));
 
@@ -269,7 +281,7 @@ describe("the start-of-suite sweep", () => {
         const pid = `${proc}/4242`;
         // proc(5) fields 3 on; 51, env_end, is 0 until execve has written the environment.
         const stat = (envEnd: string) =>
-          `4242 (sh) R 1 4242 4242 0 -1 4194304${" 0".repeat(41)} ${envEnd} 0\n`;
+          `4242 (sh) R 1 4242 4242 0 -1 4194304${pipe_(" 0", Str.repeat(41))} ${envEnd} 0\n`;
         yield* fs.makeDirectory(pid);
         yield* fs.writeFileString(`${pid}/stat`, stat("0"));
         yield* fs.writeFileString(`${pid}/environ`, "");
@@ -300,7 +312,7 @@ describe("the start-of-suite sweep", () => {
         yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
         yield* fs.writeFileString(
           `${pid}/stat.next`,
-          `4242 (sleep) S 1 4242 4242 0 -1 4194304${" 0".repeat(41)} 140730872492009 0\n`,
+          `4242 (sleep) S 1 4242 4242 0 -1 4194304${pipe_(" 0", Str.repeat(41))} 140730872492009 0\n`,
         );
         // FIFOs order the reads: environ reads empty, the exec finishes, then stat is read.
         yield* exec(["mkfifo", `${pid}/environ`, `${pid}/stat`]);

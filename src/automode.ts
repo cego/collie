@@ -1,6 +1,10 @@
 // The `autoMode` block a Claude agent's settings carry: what its Run authorises, as facts
 // Collie holds and the human's own words (ADR-draft-what-a-run-authorises-reaches-auto-mode, D3).
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Effect, Schema } from "effect";
 import { FORGES, forgeOfHost } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
@@ -29,8 +33,8 @@ export function startedOf(
 ): Started | undefined {
   if (origin === "chat") return said === undefined ? undefined : { door: "chat", words: said };
   if (!isHumanDoor(origin)) return undefined;
-  const words = [...Object.values(text ?? {}), ...Object.values(input).filter(isText)];
-  return { door: origin, words: words.join("\n") };
+  const words = [...Rec.values(text ?? {}), ...Arr.filter(Rec.values(input), isText)];
+  return { door: origin, words: Arr.join(words, "\n") };
 }
 
 /** A branch a Run made: in which checkout, and on which origin, credentials removed. */
@@ -89,9 +93,9 @@ export const autoModeFacts = <R>(
 ): Effect.Effect<AutoModeFacts, never, R | ForgeHttp> =>
   Effect.gen(function* () {
     const remote = yield* run("git", ["remote", "get-url", "origin"], session.cwd);
-    const url = remote.code === 0 ? remote.stdout.trim() || null : null;
+    const url = remote.code === 0 ? Str.trim(remote.stdout) || null : null;
     const head = yield* run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], session.cwd);
-    const branch = head.code === 0 ? head.stdout.trim() || null : null;
+    const branch = head.code === 0 ? Str.trim(head.stdout) || null : null;
     const created =
       !own.roaming &&
       own.created !== null &&
@@ -100,7 +104,7 @@ export const autoModeFacts = <R>(
       withoutCredentials(url) === own.created.origin &&
       (yield* sameRepository(session.cwd, own.created.checkout, run));
     const project = url === null ? null : projectFromRemote(url);
-    const forge = project === null ? null : forgeOfHost(project.split("/")[0]!, gitlabHost);
+    const forge = project === null ? null : forgeOfHost(Str.split(project, "/")[0]!, gitlabHost);
     const protects =
       created && project !== null && forge !== null
         ? yield* FORGES[forge].protects(project, branch, session.cwd, run)
@@ -120,20 +124,20 @@ const sameRepository = <R>(cwd: string, checkout: string, run: Runner<R>) =>
   Effect.gen(function* () {
     const top = (dir: string) =>
       Effect.map(run("git", ["rev-parse", "--show-toplevel"], dir), (said) =>
-        said.code === 0 ? said.stdout.trim() : null,
+        said.code === 0 ? Str.trim(said.stdout) : null,
       );
     const here = yield* top(cwd);
     return here !== null && here === (yield* top(checkout));
   });
 
 export const withoutCredentials = (url: string) =>
-  redact(url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1"));
+  redact(pipe(url, Str.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1")));
 
 const quoted = (words: string) => {
   const { text } = scrub(words);
   return text.length <= WORDS_MAX
     ? `"${text}"`
-    : `"${text.slice(0, WORDS_MAX)}" (cut at 2,000 characters)`;
+    : `"${pipe(text, Str.slice(0, WORDS_MAX))}" (cut at 2,000 characters)`;
 };
 
 export function autoModeBlock(facts: AutoModeFacts): AutoModeBlock {

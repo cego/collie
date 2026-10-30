@@ -1,5 +1,9 @@
 // The files a Flock chat action carries, as paths on the Machine it goes to (ADR-0046).
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { Clock, Effect, FileSystem, Result } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ATTACHMENT_BYTES, sha256Hex } from "../../../src/attachments";
@@ -74,7 +78,13 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
   machine: Reached,
   given: ReadonlyArray<string> | undefined,
 ) {
-  const named = given ?? flock.attachments()?.map(({ path }) => path);
+  const named =
+    given ??
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(flock.attachments()), (present) =>
+        Arr.map(present, ({ path }) => path),
+      ),
+    );
   if (named === undefined || named.length === 0) return given;
   if (!machine.board.files)
     return yield* new HostRefused({
@@ -83,11 +93,15 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
   const fs = yield* FileSystem.FileSystem;
   const paths: string[] = [];
   for (const one of named) {
-    const colon = one.indexOf(":");
+    const colon = Option.getOrElse(pipe_(one, Str.indexOf(":")), () => -1);
     const on =
-      colon > 0 ? flock.machines().find(({ name }) => name === one.slice(0, colon)) : undefined;
-    const path = on === undefined ? one : one.slice(colon + 1);
-    const name = path.split("/").at(-1) ?? path;
+      colon > 0
+        ? Option.getOrUndefined(
+            Arr.findFirst(flock.machines(), ({ name }) => name === pipe_(one, Str.slice(0, colon))),
+          )
+        : undefined;
+    const path = on === undefined ? one : pipe_(one, Str.slice(colon + 1));
+    const name = Str.split(path, "/").at(-1) ?? path;
     if (on?.name === machine.name) paths.push(path);
     else if (on !== undefined)
       paths.push(
@@ -98,7 +112,7 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
           (yield* readWhole(yield* reach(on), path, undefined, ATTACHMENT_BYTES)).bytes,
         ),
       );
-    else if (path.startsWith("/")) {
+    else if (pipe_(path, Str.startsWith("/"))) {
       const unreadable = () =>
         new HostRefused({ reason: `${path} cannot be read on this computer` });
       const info = yield* fs.stat(path).pipe(Effect.mapError(unreadable));

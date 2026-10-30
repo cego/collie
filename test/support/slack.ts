@@ -1,5 +1,9 @@
 // Slack's documented Web API envelopes; requests are recorded without their authorization header.
-import { Effect } from "effect";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
+import { Effect, Redacted } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 export const fakeSlack = () => {
@@ -90,7 +94,7 @@ export const fakeSlack = () => {
     return Response.json({ ok: false, error: "unknown_method" });
   };
   const client = HttpClient.make((request) => {
-    const method = new URL(request.url).pathname.split("/").at(-1)!;
+    const method = Str.split(new URL(request.url).pathname, "/").at(-1)!;
     const verb = ["conversations.list", "users.list", "chat.getPermalink"].includes(method)
       ? "GET"
       : "POST";
@@ -102,8 +106,9 @@ export const fakeSlack = () => {
       request.body._tag === "Uint8Array"
         ? (request.body.text ?? new TextDecoder().decode(request.body.body))
         : "";
-    const parameters = Object.fromEntries(
-      request.method === "GET" ? request.urlParams : new URLSearchParams(body),
+    const parameters = Rec.map(
+      Rec.fromEntries(request.method === "GET" ? request.urlParams : new URLSearchParams(body)),
+      (value) => (Redacted.isRedacted(value) ? Redacted.value(value) : value),
     );
     return Effect.succeed(
       HttpClientResponse.fromWeb(
@@ -111,7 +116,11 @@ export const fakeSlack = () => {
         answer(
           method,
           parameters,
-          request.headers.authorization?.startsWith("Bearer xoxb-") ?? false,
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(request.headers.authorization), (present) =>
+              pipe(present, Str.startsWith("Bearer xoxb-")),
+            ),
+          ) ?? false,
         ),
       ),
     );

@@ -40,7 +40,7 @@ test("collie connections --json reads the host's envelope, including the account
         });
       const printed = yield* cli("connections", "--json");
       expect(printed.exitCode).toBe(0);
-      expect(Schema.decodeUnknownSync(Envelope)(printed.stdout)).toEqual({
+      expect(yield* Schema.decodeEffect(Envelope)(printed.stdout).pipe(Effect.orDie)).toEqual({
         ok: true,
         data: {
           machine: null,

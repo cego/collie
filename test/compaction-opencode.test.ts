@@ -3,6 +3,9 @@
 // the correlation can be put in states a real OpenCode will not produce on demand; and
 // the contract, against the installed OpenCode's own OpenAPI document and CLI.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Result } from "effect";
 import { Rig } from "./support/recorder";
@@ -85,7 +88,7 @@ function serve(): FakeServer {
         return json({ id: fake.session, directory: fake.directory });
       }
       if (url.pathname === `/session/${fake.session}/message` && request.method === "GET") {
-        return json(fake.messages.map((info) => ({ info })));
+        return json(Arr.map(fake.messages, (info) => ({ info })));
       }
       if (url.pathname === `/session/${fake.session}/summarize` && request.method === "POST") {
         if (fake.summarizeStatus >= 300) {
@@ -168,9 +171,10 @@ test("binding a session records it once, not twice", () =>
       // reads twice for nothing.
       yield* bind();
 
-      const lines = (yield* fs.readFileString(path.join(dir, "events.jsonl")))
-        .split("\n")
-        .filter((line) => line.trim() !== "");
+      const lines = Arr.filter(
+        Str.split(yield* fs.readFileString(path.join(dir, "events.jsonl")), "\n"),
+        (line) => Str.trim(line) !== "",
+      );
       expect(lines).toHaveLength(1);
       expect(lines[0]).toContain(`"kind":"session"`);
     }),
@@ -583,8 +587,8 @@ onMachineWith("opencode")(
           new URL("../src/opencode.ts", import.meta.url).pathname,
         );
         const endpoints = new Set(
-          Array.from(adapter.matchAll(/`\$\{base\}(\/[^`?]*)`/g), (m) =>
-            (m[1] ?? "").replaceAll("${session}", "{sessionID}"),
+          Array.from(pipe_(adapter, Str.matchAll(/`\$\{base\}(\/[^`?]*)`/g)), (m) =>
+            pipe_(m[1] ?? "", Str.replaceAll("${session}", "{sessionID}")),
           ),
         );
         expect(endpoints.size).toBeGreaterThan(3);
@@ -614,9 +618,9 @@ onMachineWith("opencode")(
         // The contract is "at least the release these controls were verified against":
         // a newer patch (1.18.29 against the pinned 1.18.9) is the gate's business to
         // accept, and asserting the exact string here made a patch bump a red suite.
-        expect(version.trim()).not.toBe("");
+        expect(Str.trim(version)).not.toBe("");
         expect(wanted).not.toBe("");
-        yield* opencode.gate();
+        yield* opencode.gate;
 
         // The launch: the ordinary TUI hosting its own loopback server, on the session
         // Collie made, with the model and the unattended switch it would have had

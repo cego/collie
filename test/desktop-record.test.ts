@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { describe, expect, test } from "bun:test";
 import { inField } from "../desktop/src/shared/board-clicks";
 import {
@@ -32,7 +36,7 @@ const everything: TabFacts = {
 };
 
 const values = (facts: Partial<TabFacts>) =>
-  recordTabs({ ...everything, ...facts }).map(({ value }) => value);
+  Arr.map(recordTabs({ ...everything, ...facts }), ({ value }) => value);
 
 describe("the record's tabs", () => {
   test("Flow comes before Summary when the host supplies it", () => {
@@ -170,14 +174,17 @@ describe("what the Summary shows", () => {
   });
 
   test("leave out attention whose category is none", () => {
-    expect(summaryOf({ ...full, attention: bare.attention }).map(({ section }) => section)).toEqual(
-      ["status", "outcome", "inputs"],
-    );
+    expect(
+      Arr.map(summaryOf({ ...full, attention: bare.attention }), ({ section }) => section),
+    ).toEqual(["status", "outcome", "inputs"]);
   });
 
   test("keep an outcome with no gaps, with nothing to list", () => {
-    const outcome = summaryOf({ ...full, outcome: { ...full.outcome, gaps: [] } }).find(
-      ({ section }) => section === "outcome",
+    const outcome = Option.getOrUndefined(
+      Arr.findFirst(
+        summaryOf({ ...full, outcome: { ...full.outcome, gaps: [] } }),
+        ({ section }) => section === "outcome",
+      ),
     );
     expect(outcome).toEqual({
       section: "outcome",
@@ -372,7 +379,7 @@ describe("a key in the record", () => {
 describe("the element a key was typed in", () => {
   const found = { getAttribute: () => null, hasAttribute: () => false };
   const field = {
-    closest: (selectors: string) => (selectors.includes("textarea") ? found : null),
+    closest: (selectors: string) => (pipe(selectors, Str.includes("textarea")) ? found : null),
   };
   const shadowHost = { closest: () => null };
 

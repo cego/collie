@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Schema } from "effect";
 
 export const ConnectionId = Schema.Literals(["gitlab", "github", "linear", "helle", "slack"]);
@@ -39,9 +42,11 @@ export const HOST_CONNECTION_USES: ReadonlyArray<typeof ConnectionUse.Type> = [
 ];
 
 export const connectionsLines = (connections: ReadonlyArray<Connection>): string =>
-  connections
-    .map(
+  Arr.join(
+    Arr.map(
+      connections,
       ({ id, reading }) =>
-        `${id.padEnd(10)}${reading.state}${reading.state === "ok" ? ` · ${reading.account}` : ""}: ${reading.detail}${reading.state === "ok" ? "" : `\n          Fix: ${reading.fix}`}`,
-    )
-    .join("\n");
+        `${pipe(id, Str.padEnd(10))}${reading.state}${reading.state === "ok" ? ` · ${reading.account}` : ""}: ${reading.detail}${reading.state === "ok" ? "" : `\n          Fix: ${reading.fix}`}`,
+    ),
+    "\n",
+  );

@@ -10,12 +10,16 @@
 // from `operations.ts`. One direction each way is a cycle; one module downstream of both
 // is not.
 
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { withNotice } from "./redact";
 import { Effect, Option, Schema } from "effect";
 import { hostname } from "node:os";
 import type { PlatformError } from "effect/PlatformError";
 import { reason } from "./naming";
-import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformServices } from "./platform";
 import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } from "./executors";
 import type { PluginEnv } from "./env";
 import {
@@ -108,11 +112,11 @@ const takesFields = Schema.decodeUnknownOption(
  */
 export function followUpField(drawn: Schema.Json | null): { field: string } | { refused: string } {
   const takes = Option.getOrUndefined(takesFields(drawn));
-  const open = Object.keys(takes?.properties ?? {});
+  const open = Rec.keys(takes?.properties ?? {});
   const required = takes?.required ?? [];
   const field = required.length === 1 ? required[0] : open.length === 1 ? open[0] : undefined;
   return field === undefined
-    ? { refused: `takes ${open.join(", ") || "nothing"} rather than one piece of text` }
+    ? { refused: `takes ${Arr.join(open, ", ") || "nothing"} rather than one piece of text` }
     : { field };
 }
 
@@ -127,7 +131,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   const failed = (note: string): ExecutionResult => ({ state: "failed", note });
   const settled = (result: OpResult | Failure): ExecutionResult =>
     result.ok ? { state: "applied", note: result.human } : failed(result.error.message);
-  const carry = (what: Effect.Effect<OpResult | Failure, PlatformError, BunServices>) =>
+  const carry = (what: Effect.Effect<OpResult | Failure, PlatformError, PlatformServices>) =>
     what.pipe(
       Effect.map(settled),
       Effect.catch((cause) => Effect.succeed(failed(reason(cause)))),
@@ -159,8 +163,8 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("answer", (action, by, env) =>
     carry(
-      Effect.gen(function* () {
-        return yield* answerRun(env, {
+      Effect.suspend(() =>
+        answerRun(env, {
           door: by,
           runId: action.run,
           // The question as the board named it, so an answer that arrives after it was
@@ -168,8 +172,8 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           decision: action.choiceId === "" ? null : action.choiceId,
           value: action.answer,
           request: by.requestId,
-        });
-      }),
+        }),
+      ),
     ),
   );
   registerExecutor("hold", (action, by, env) =>
@@ -192,8 +196,8 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("deliver", (action, by, env) =>
     carry(
-      Effect.gen(function* () {
-        return yield* steerRun(env, {
+      Effect.suspend(() =>
+        steerRun(env, {
           runId: action.run,
           agent: action.agent,
           to: action.to,
@@ -203,8 +207,8 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           step: action.step,
           attachments: action.attachments,
           door: by,
-        });
-      }),
+        }),
+      ),
     ),
   );
   registerExecutor("withdraw_note", (action, by, env) =>
@@ -219,7 +223,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("navigate", (action) =>
     Effect.sync(() => {
-      const where = [action.run, action.agent].filter((part) => part !== undefined).join(" · ");
+      const where = Arr.join(
+        Arr.filter([action.run, action.agent], (part) => part !== undefined),
+        " · ",
+      );
       return { state: "applied" as const, note: where };
     }),
   );
@@ -244,7 +251,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         dir,
         Effect.gen(function* () {
           const intent: Intent | null = yield* readIntent(dir).pipe(
-            Effect.catch(() => Effect.succeed(null)),
+            Effect.orElseSucceed(() => null),
           );
           if (intent === null)
             return { ok: false, why: `Run "${action.run}" has no Intent to amend` } as const;
@@ -273,7 +280,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
                     },
                   },
             actorName(by),
-            yield* nowIso(),
+            yield* nowIso,
             voiceOf(by),
           );
           yield* writeIntentHeld(dir, amended);
@@ -306,13 +313,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         dir,
         Effect.gen(function* () {
           const intent: Intent | null = yield* readIntent(dir).pipe(
-            Effect.catch(() => Effect.succeed(null)),
+            Effect.orElseSucceed(() => null),
           );
           if (intent === null) return;
           const change = verificationGrant(intent, action.name, command);
           yield* writeIntentHeld(
             dir,
-            amendIntent(intent, change, actorName(by), yield* nowIso(), voiceOf(by)),
+            amendIntent(intent, change, actorName(by), yield* nowIso, voiceOf(by)),
           );
         }),
       ).pipe(
@@ -327,7 +334,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
             ? done
             : `${done}; the check change stands, but intent show will not reflect it: ${unlisted}`,
       };
-    }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+    }),
   );
   // A finished Run is the usual one: its checks were named while it ran.
   registerExecutor("remember_verification", (action, _by, env) =>
@@ -373,7 +380,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("start", (action, by, env) =>
     Effect.gen(function* () {
       const named = action.workspace ?? action.inputs.workspace;
-      const atRoot = named?.trim() === PROJECTS_ROOT_OPTION;
+      const atRoot =
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(named), (present) => Str.trim(present)),
+        ) === PROJECTS_ROOT_OPTION;
       const repository =
         named === undefined || atRoot ? null : yield* repositoryCheckout(env, named);
       const where = atRoot
@@ -391,12 +401,12 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         where === null
           ? env
           : { ...env, cwd: where.found.cwd, workspaceId: where.found.workspaceId };
-      const fields = Object.entries(action.inputs);
+      const fields = Rec.toEntries(action.inputs);
       const input = {
-        text: Object.fromEntries(fields.filter(([name]) => !(name in RESERVED_INPUTS))),
+        text: Rec.fromEntries(Arr.filter(fields, ([name]) => !(name in RESERVED_INPUTS))),
         json: {},
       };
-      const launch = Object.fromEntries(fields.filter(([name]) => name in RESERVED_INPUTS));
+      const launch = Rec.fromEntries(Arr.filter(fields, ([name]) => name in RESERVED_INPUTS));
       if (atRoot) launch.workspace = PROJECTS_ROOT_OPTION;
       else if (repository !== null && named !== undefined) launch.workspace = named;
       const saved = yield* moduleFor(rooted, action.workflow);
@@ -447,13 +457,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         // By id, and refused when nothing has it: ids are a hash of the text, so a
         // constraint named in prose matches none — and reporting that as applied would
         // tell the human a standing constraint was dropped that is still there.
-        if (!current.constraints.some((c) => c.id === action.text))
+        if (!Arr.some(current.constraints, (c) => c.id === action.text))
           return failed(
             `no default constraint "${action.text}" in ${where.found.workspaceId}; remove one by the id \`collie_installation\` lists`,
           );
         const next = {
           ...current,
-          constraints: current.constraints.filter((c) => c.id !== action.text),
+          constraints: Arr.filter(current.constraints, (c) => c.id !== action.text),
         };
         yield* writeDefaults(file, next);
         return { state: "applied" as const, note: describeDefaults(next) };
@@ -464,7 +474,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const constraint = { ...parsed, source: "workspace-default" as const, since: 1 };
       const next = {
         ...current,
-        constraints: [...current.constraints.filter((c) => c.id !== constraint.id), constraint],
+        constraints: [
+          ...Arr.filter(current.constraints, (c) => c.id !== constraint.id),
+          constraint,
+        ],
       };
       yield* writeDefaults(file, next);
       return { state: "applied" as const, note: describeDefaults(next) };
@@ -509,16 +522,16 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         // Only the panes that are Collie's alone: a legacy pane sharing a tab with
         // something else is left, because taking somebody's window away is not cleanup.
         const { close, listed } = closable(panes);
-        for (const paneId of close)
-          yield* herdr.paneClose(paneId).pipe(Effect.catch(() => Effect.void));
+        for (const paneId of close) yield* herdr.paneClose(paneId).pipe(Effect.ignore);
         // A Task whose workspace herdr no longer has, and that no Run belongs to, is work
         // nobody can reach. A listing that could not be read keeps every Task.
-        const open = new Set((yield* herdr.workspaceList()).map((one) => one.workspaceId));
+        const open = new Set(Arr.map(yield* herdr.workspaceList(), (one) => one.workspaceId));
         const listing = yield* runViews(env, null);
-        const owned = new Set(listing.runs.map((run) => run.task));
+        const owned = new Set(Arr.map(listing.runs, (run) => run.task));
         const gone =
           listing.unreadable === null
-            ? (yield* listTasks(env.stateDir)).filter(
+            ? Arr.filter(
+                yield* listTasks(env.stateDir),
                 (task) => !open.has(task.workspace) && !owned.has(task.id),
               )
             : [];
@@ -549,7 +562,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     Effect.gen(function* () {
       const named = action.start.workspace ?? "";
       let workspace = named;
-      if (named !== "" && named !== PROJECTS_ROOT_OPTION && !named.startsWith("/")) {
+      if (named !== "" && named !== PROJECTS_ROOT_OPTION && !pipe_(named, Str.startsWith("/"))) {
         const repository = yield* repositoryCheckout(env, named);
         if (repository !== null && "error" in repository) return failed(repository.error);
         if (repository !== null) workspace = repository.path;
@@ -641,13 +654,16 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       refused: "not_found",
       detail: `no proposal "${proposalId}"`,
     });
-  const proposal = (yield* readProposals(file)).find(
-    (line): line is ProposalRecord => line.kind === "proposal" && line.id === proposalId,
+  const proposal = Option.getOrUndefined(
+    Arr.findFirst(
+      yield* readProposals(file),
+      (line): line is ProposalRecord => line.kind === "proposal" && line.id === proposalId,
+    ),
   );
   const versions = new Map<string, number>();
   for (const target of proposal?.targets ?? []) {
     const intent = yield* readIntent(runDir(env.stateDir, target.run)).pipe(
-      Effect.catch(() => Effect.succeed(null)),
+      Effect.orElseSucceed(() => null),
     );
     if (intent !== null) versions.set(target.run, intent.version);
   }
@@ -806,13 +822,11 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   const id = "run" in action ? action.run : null;
   const run = id === null ? null : yield* findRun(env, id);
   if (run === null) return admit(action, emptyAdmission());
-  const live = yield* new Herdr(env).agentList().pipe(Effect.catch(() => Effect.succeed([])));
+  const live = yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => []));
   const agent = "agent" in action ? (action.agent ?? null) : null;
   // An Intent nobody can decode is not an Intent with no constraints. Refusing here is
   // what stops a corrupt file reading as "no version to disagree with".
-  const intent = yield* readIntent(run.dir).pipe(
-    Effect.catch(() => Effect.succeed<Intent | "unreadable">("unreadable")),
-  );
+  const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => "unreadable" as const));
   if (intent === "unreadable") return `${run.id}'s Intent cannot be read`;
   const bound = proposal?.card;
   const here = bound === undefined ? null : yield* fingerprint(run.cwd);
@@ -820,7 +834,10 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   return admit(action, {
     run: { id: run.id, status: run.state },
     pendingChoice: run.asking[0]?.name ?? null,
-    incarnation: agent === null ? null : (live.find((a) => a.name === agent)?.terminalId ?? null),
+    incarnation:
+      agent === null
+        ? null
+        : (Option.getOrUndefined(Arr.findFirst(live, (a) => a.name === agent))?.terminalId ?? null),
     proposedIncarnation: agent === null ? null : (proposal?.incarnations?.[agent] ?? null),
     intentVersion: intent?.version ?? null,
     proposedIntentVersion: proposal?.intent_versions[run.id] ?? null,

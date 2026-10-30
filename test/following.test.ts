@@ -1,5 +1,6 @@
 // What `collie run wait` stops at, and what `--follow` prints, from two looks at a Run.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { MissingFact, RunProgress } from "../src/board-model";
 import type { RunView } from "../src/engine";
@@ -108,7 +109,7 @@ test("follow says each operation started and finished, each agent once, a park, 
     { type: "parked", reason: "the gate's checks failed" },
     { type: "mr", mr: "mr:github.com/cego/collie#30" },
   ]);
-  expect(events.map((event) => followLine("r1", event))).toEqual([
+  expect(Arr.map(events, (event) => followLine("r1", event))).toEqual([
     "r1: operation 01-a.md finished",
     "r1: operation 02-b.md started",
     "r1: CI running",

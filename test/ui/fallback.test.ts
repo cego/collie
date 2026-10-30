@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, Schedule } from "effect";
 import { recordDisposition } from "../../src/disposition";
@@ -28,7 +31,7 @@ const printed = Effect.gen(function* () {
       process.stdout.write = write;
     }),
   );
-  return { code, board: written.join(""), env };
+  return { code, board: Arr.join(written, ""), env };
 });
 
 /**
@@ -46,7 +49,7 @@ test(
           const { code, board, env } = yield* printed;
           yield* stopHost(world.state);
           expect(code).toBe(0);
-          expect(board).toContain(`${COLLIE_TAB} — ${env.cwd.split("/").at(-1)}`);
+          expect(board).toContain(`${COLLIE_TAB} — ${Str.split(env.cwd, "/").at(-1)}`);
           // The reason is on screen too: a pane that fell back says why it did.
           expect(board).toContain("no terminal on this pane");
           expect(board).toContain("p run a workflow");
@@ -105,7 +108,7 @@ test(
           expect(started.envelope.ok).toBe(true);
           const shown = yield* until(
             () => printed.pipe(Effect.map(({ board }) => board)),
-            (board) => board.includes("Waiting for you in"),
+            (board) => pipe_(board, Str.includes("Waiting for you in")),
           );
           yield* stopHost(world.state);
           expect(shown).toContain("Needs you");
@@ -142,7 +145,7 @@ test(
                 env,
               );
               const before = yield* app.load(focus());
-              expect(before.tasks.map((task) => task.name)).toEqual(["Plain"]);
+              expect(Arr.map(before.tasks, (task) => task.name)).toEqual(["Plain"]);
 
               yield* recordDisposition(`${world.state}/runs/${before.tasks[0]!.run}`, {
                 kind: "merged",

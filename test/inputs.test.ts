@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runOnPath } from "./support/forge";
@@ -26,7 +30,7 @@ let bin: FakeBin;
 /** The Runs this test has made, which is what inference is given to look back at. */
 let planned: RunFacts[];
 
-const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
 const mkdir = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(path, { recursive: true }));
 const writeFile = (path: string, text: string) =>
@@ -72,7 +76,13 @@ const glabListing = (lists: {
     esac`;
 
 const branchMrs = (iids: ReadonlyArray<number>) =>
-  `[${iids.map((iid) => `{"iid": ${iid}, "state": "opened", "created_at": "2026-10-20T12:00:00Z"}`).join(",")}]`;
+  `[${Arr.join(
+    Arr.map(
+      iids,
+      (iid) => `{"iid": ${iid}, "state": "opened", "created_at": "2026-10-20T12:00:00Z"}`,
+    ),
+    ",",
+  )}]`;
 
 test("diff-target prefers the open merge request", () =>
   runOnPath(
@@ -316,7 +326,13 @@ test("a work-source with several candidates offers all of them, newest plans fir
 
       expect(resolved.needsAsking).toBe(true);
       // Three newest plans at most, so an old run cannot bury the branch's ticket.
-      expect(resolved.candidates?.map((c) => [c.kind, c.label ?? c.value])).toEqual([
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(resolved.candidates), (present) =>
+            Arr.map(present, (c) => [c.kind, c.label ?? c.value]),
+          ),
+        ),
+      ).toEqual([
         ["plan-dir", "first"],
         ["plan-dir", "second"],
         ["plan-dir", "third"],
@@ -403,8 +419,10 @@ test("the menu always offers Type it…, and classifies what comes back", () =>
       const titles: string[] = [];
       const ok = yield* resolveCandidates(resolved, {
         menu: (items) => {
-          titles.push(...items.map((i) => i.title));
-          return Effect.succeed(items.find((i) => i.id === "type")!);
+          titles.push(...Arr.map(items, (i) => i.title));
+          return Effect.succeed(
+            Option.getOrUndefined(Arr.findFirst(items, (i) => i.id === "type"))!,
+          );
         },
         ask: () => Effect.succeed("https://linear.app/cego/issue/FRO-149/prmpt-modal"),
       });
@@ -422,7 +440,8 @@ test("free text typed into the menu is kept as the work source", () =>
       const resolved = yield* inferInput("plan", "work-source", withState());
 
       yield* resolveCandidates(resolved, {
-        menu: (items) => Effect.succeed(items.find((i) => i.id === "type")!),
+        menu: (items) =>
+          Effect.succeed(Option.getOrUndefined(Arr.findFirst(items, (i) => i.id === "type"))!),
         ask: () => Effect.succeed("teach the picker to remember the last workflow"),
       });
 
@@ -451,7 +470,8 @@ test("escaping the menu or the question leaves the work-source unresolved", () =
       const blank = yield* inferInput("plan", "work-source", withState());
       expect(
         yield* resolveCandidates(blank, {
-          menu: (items) => Effect.succeed(items.find((i) => i.id === "type")!),
+          menu: (items) =>
+            Effect.succeed(Option.getOrUndefined(Arr.findFirst(items, (i) => i.id === "type"))!),
           ask: () => Effect.succeed("   "),
         }),
       ).toBe(false);
@@ -506,7 +526,7 @@ function makePlanRun(
       yield* writeFile(join(dir, "plan", "SPEC.md"), "# spec\n");
     }
     // Newest first, as the host lists them.
-    planned = [...planned, run].sort((a, b) => b.created.localeCompare(a.created));
+    planned = [...planned, run].sort((a, b) => pipe(b.created, Str.localeCompare(a.created)));
     return run;
   });
 }
@@ -536,7 +556,13 @@ test("diff-target offers the MR, the branch and the working tree, inference firs
       // The head of the list is what inference alone would have picked, so Enter keeps it.
       expect(resolved.value).toBe("mr:gitlab.example.com/g/p!42");
       expect(resolved.kind).toBe("mr");
-      expect(resolved.candidates?.map((c) => [c.kind, c.value])).toEqual([
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(resolved.candidates), (present_) =>
+            Arr.map(present_, (c) => [c.kind, c.value]),
+          ),
+        ),
+      ).toEqual([
         ["mr", "mr:gitlab.example.com/g/p!42"],
         ["branch", "branch:main...add-picker"],
         ["worktree", "worktree"],
@@ -559,7 +585,13 @@ test("with no MR for this branch, my own open MRs are offered instead", () =>
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
       // Deduplicated across assignee and author, and never ahead of the branch itself.
-      expect(resolved.candidates?.map((c) => [c.kind, c.value])).toEqual([
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(resolved.candidates), (present__) =>
+            Arr.map(present__, (c) => [c.kind, c.value]),
+          ),
+        ),
+      ).toEqual([
         ["mr", "mr:gitlab.example.com/g/p!7"],
         ["mr", "mr:gitlab.example.com/g/p!9"],
         ["branch", "branch:main...add-picker"],
@@ -585,11 +617,13 @@ test("my own open MRs are never what inference lands on by itself", () =>
 
       // Both are on the menu, in iid order, and the working tree is there to be
       // inferred rather than !41.
-      expect(resolved.candidates?.map((c) => c.value)).toEqual([
-        "mr:gitlab.example.com/g/p!41",
-        "mr:gitlab.example.com/g/p!314",
-        "worktree",
-      ]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(resolved.candidates), (present___) =>
+            Arr.map(present___, (c) => c.value),
+          ),
+        ),
+      ).toEqual(["mr:gitlab.example.com/g/p!41", "mr:gitlab.example.com/g/p!314", "worktree"]);
       expect(resolved.value).toBe("worktree");
       expect(resolved.needsAsking).toBeFalsy();
     }),
@@ -603,7 +637,13 @@ test("a clean tree on the default branch still offers the working tree", () =>
 
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
-      expect(resolved.candidates?.map((c) => c.kind)).toEqual(["worktree"]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(resolved.candidates), (present____) =>
+            Arr.map(present____, (c) => c.kind),
+          ),
+        ),
+      ).toEqual(["worktree"]);
       expect(resolved.value).toBe("worktree");
     }),
   ));
@@ -710,9 +750,11 @@ test("the target menu always shows, and Type it… classifies what comes back", 
       const titles: string[] = [];
       const ok = yield* resolveCandidates(resolved, {
         menu: (items, opts) => {
-          titles.push(...items.map((i) => i.title));
+          titles.push(...Arr.map(items, (i) => i.title));
           expect(opts.header).toContain("Review what?");
-          return Effect.succeed(items.find((i) => i.id === "type")!);
+          return Effect.succeed(
+            Option.getOrUndefined(Arr.findFirst(items, (i) => i.id === "type"))!,
+          );
         },
         ask: () => Effect.succeed("!128"),
       });
@@ -817,7 +859,7 @@ test("the targets this repo has already reviewed are offered without pasting the
 
       const remembered = yield* reviewedTargets(planned, rig.projectDir, 5);
 
-      expect(remembered.map((c) => [c.value, c.kind])).toEqual([
+      expect(Arr.map(remembered, (c) => [c.value, c.kind])).toEqual([
         ["mr:gitlab/x!7", "mr"],
         ["branch:main...feature", "branch"],
       ]);
@@ -827,9 +869,9 @@ test("the targets this repo has already reviewed are offered without pasting the
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", gitOn("add-picker"));
       const candidates = yield* targetCandidates({ cwd: rig.projectDir, runs: planned });
-      const values = candidates.map((c) => c.value);
+      const values = Arr.map(candidates, (c) => c.value);
       expect(values.indexOf("mr:gitlab/x!7")).toBeGreaterThan(values.indexOf("worktree"));
       // Already offered by inference, so not offered twice.
-      expect(values.filter((v) => v === "branch:main...feature")).toHaveLength(1);
+      expect(Arr.filter(values, (v) => v === "branch:main...feature")).toHaveLength(1);
     }),
   ));

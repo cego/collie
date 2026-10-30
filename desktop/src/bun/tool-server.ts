@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { DriverContext } from "./driver";
@@ -27,7 +28,7 @@ export const toolServer = (
     });
   server.server.setRequestHandler(ListToolsRequestSchema, () =>
     Promise.resolve({
-      tools: tools.map((tool) => ({
+      tools: Arr.map(tools, (tool) => ({
         name: tool.name,
         title: tool.title,
         description: tool.description,

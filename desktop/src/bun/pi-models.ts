@@ -1,4 +1,6 @@
-import { Effect, Fiber, Option, Queue, Schema, Stream } from "effect";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { Effect, Fiber, Option, Queue, Schema, Stream, flow, Result } from "effect";
 import type { Offered } from "../shared/chat-choices";
 import type { FlockSettings } from "../shared/flock-settings";
 import { childEnv, which } from "./login-env";
@@ -23,8 +25,9 @@ const Models = Schema.Struct({
   ),
 });
 const Levels = Schema.Struct({ levels: Schema.Array(Schema.String) });
-const encodeCommand = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+const encodeCommand = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Record(Schema.String, Schema.String))),
+  Result.getOrThrow,
 );
 
 export const readPiModels = (
@@ -71,7 +74,10 @@ export const readPiModels = (
             Effect.gen(function* () {
               const code = yield* Effect.promise(() => child.exited);
               const why = yield* Fiber.join(diagnostics);
-              yield* Queue.fail(answers, why.trim() || `Pi ended its model read (exit ${code}).`);
+              yield* Queue.fail(
+                answers,
+                Str.trim(why) || `Pi ended its model read (exit ${code}).`,
+              );
             }),
           ),
           Effect.catch((why) => Queue.fail(answers, why)),
@@ -114,7 +120,7 @@ export const readPiModels = (
                 Effect.flatMap(Schema.decodeUnknownEffect(Levels)),
                 Effect.mapError(String),
               );
-              efforts = levels.some((level) => level !== "off") ? levels : [];
+              efforts = Arr.some(levels, (level) => level !== "off") ? levels : [];
             }
             return [{ id, label: model.name, efforts }];
           }),

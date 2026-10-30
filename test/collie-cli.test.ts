@@ -1,5 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Config, Effect, FileSystem, Option, Schema } from "effect";
+import { Config, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
@@ -18,7 +21,7 @@ import { callTool } from "../src/tools";
 import { readEnv } from "../src/env";
 
 const root = new URL("../", import.meta.url).pathname;
-const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
 
 const CliEnvelope = Schema.fromJsonString(
   Schema.Struct({
@@ -71,8 +74,9 @@ const cli = Effect.fn("test.cli")(function* (
 });
 
 const parseEnvelope = Schema.decodeUnknownEffect(CliEnvelope);
-const decodeRemembered = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Array(VerifySpecSchema)),
+const decodeRemembered = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
+  Result.getOrThrow,
 );
 
 /** `workflow show` for a module: what a caller may give it, and what it gives back. */
@@ -248,8 +252,8 @@ test("a command group named with no subcommand is invalid input, not success", (
         expect(stopped.exit).toBe(2);
         // The envelope is the whole of stdout: no help document, and no blank line
         // ahead of it for a consumer reading a line at a time.
-        expect(stopped.stdout.startsWith("{")).toBe(true);
-        expect(stopped.stdout.trimEnd().split("\n")).toHaveLength(1);
+        expect(pipe_(stopped.stdout, Str.startsWith("{"))).toBe(true);
+        expect(Str.split(Str.trimEnd(stopped.stdout), "\n")).toHaveLength(1);
       }
     }),
   ));
@@ -284,10 +288,10 @@ test(
     runEffect(
       Effect.gen(function* () {
         const inputsOf = (stdout: string) =>
-          Schema.decodeUnknownSync(ShownModule)(stdout).data.workflow.inputs.map((one) => [
-            one.name,
-            one.strategy,
-          ]);
+          Arr.map(
+            flow(Schema.decodeResult(ShownModule), Result.getOrThrow)(stdout).data.workflow.inputs,
+            (one) => [one.name, one.strategy],
+          );
         expect(inputsOf((yield* cli(["--json", "workflow", "show", "plan"])).stdout)).toEqual([
           ["goal", "goal"],
           ["then", null],
@@ -373,7 +377,6 @@ test(
             },
           },
         });
-        const fs = yield* FileSystem.FileSystem;
       }),
     ),
   60_000,
@@ -390,10 +393,10 @@ test(
           ok: false,
           error: { code: "needs_input", message: expect.stringContaining('""') },
         });
-        const missing = Schema.decodeUnknownSync(
+        const missing = yield* Schema.decodeUnknownEffect(
           Schema.Array(Schema.Struct({ name: Schema.String, meaning: Schema.String })),
-        )(envelope.error?.details["inputs"]);
-        expect(missing.map((one) => one.name)).toEqual(["plan", "proves"]);
+        )(envelope.error?.details["inputs"]).pipe(Effect.orDie);
+        expect(Arr.map(missing, (one) => one.name)).toEqual(["plan", "proves"]);
         for (const one of missing) expect(one.meaning).not.toBe("");
 
         const plan = yield* cli(["--json", "run", "start", "plan", "--input", "goal=one registry"]);
@@ -521,9 +524,9 @@ const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
   const lines: string[] = [];
   for (const file of ["README.md", "docs/cli.md"]) {
     const text = yield* fs.readFileString(join(root, file));
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("collie run start ")) continue;
+    for (const line of Str.split(text, "\n")) {
+      const trimmed = Str.trim(line);
+      if (!pipe_(trimmed, Str.startsWith("collie run start "))) continue;
       if (/[<…]|\\$/.test(trimmed)) continue;
       lines.push(trimmed);
     }
@@ -533,7 +536,9 @@ const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
 
 /** A command line's words, with a double-quoted value kept whole. */
 const words = (line: string) =>
-  [...line.matchAll(/(?:[^\s"]+|"[^"]*")+/g)].map(([word]) => word.replaceAll('"', ""));
+  Arr.map([...pipe_(line, Str.matchAll(/(?:[^\s"]+|"[^"]*")+/g))], ([word]) =>
+    pipe_(word, Str.replaceAll('"', "")),
+  );
 
 test(
   "every documented start, run inside a checkout, is admitted as written",
@@ -598,9 +603,11 @@ test(
         // the one that decides which checkout the run gets. A module never declares it —
         // declaring it is refused — so it is published as the host's, with what it means.
         const implement = yield* cli(["--json", "workflow", "show", "implement"]);
-        const described = Schema.decodeUnknownSync(ShownModule)(implement.stdout).data.workflow;
-        expect(described.inputs.map((one) => one.name)).not.toContain("branch");
-        expect(described.options.map((one) => one.name)).toEqual([
+        const described = (yield* Schema.decodeEffect(ShownModule)(implement.stdout).pipe(
+          Effect.orDie,
+        )).data.workflow;
+        expect(Arr.map(described.inputs, (one) => one.name)).not.toContain("branch");
+        expect(Arr.map(described.options, (one) => one.name)).toEqual([
           "branch",
           "task",
           "workspace",
@@ -620,9 +627,11 @@ test(
 
         // `branch` is the host's, not a module's: it is never among what a module declares.
         const listed = yield* cli(["--json", "workflow", "list"]);
-        const workflows = Schema.decodeUnknownSync(WorkflowRows)(listed.stdout).data.workflows;
-        const row = workflows.find((w) => w.id === "implement")!;
-        expect(row.inputs.map((input) => input.name)).not.toContain("branch");
+        const workflows = (yield* Schema.decodeEffect(WorkflowRows)(listed.stdout).pipe(
+          Effect.orDie,
+        )).data.workflows;
+        const row = Option.getOrUndefined(Arr.findFirst(workflows, (w) => w.id === "implement"))!;
+        expect(Arr.map(row.inputs, (input) => input.name)).not.toContain("branch");
       }),
     ),
   60_000,
@@ -706,9 +715,10 @@ test(
 
         // Both are runnable, each under its own id, and the fork takes what it inherited.
         const shown = yield* cli(["--json", "workflow", "show", "ours"], scratch);
-        const described = Schema.decodeUnknownSync(ShownModule)(shown.stdout).data.workflow;
+        const described = (yield* Schema.decodeEffect(ShownModule)(shown.stdout).pipe(Effect.orDie))
+          .data.workflow;
         expect(described.layer).toBe("project");
-        expect(described.inputs.map((one) => one.name)).toEqual(["plan", "then"]);
+        expect(Arr.map(described.inputs, (one) => one.name)).toEqual(["plan", "then"]);
 
         // There is nothing to merge in a module, so the flags that merged steps say so.
         const merged = yield* cli(
@@ -762,7 +772,7 @@ test("the version the CLI reports is the one the manifest declares", () =>
       const shown = yield* cli(["--version"]);
 
       expect(declared).toBeDefined();
-      expect(shown.stdout.trim()).toContain(declared!);
+      expect(Str.trim(shown.stdout)).toContain(declared!);
     }),
   ));
 
@@ -820,9 +830,13 @@ test(
 
         const intent = yield* readIntent(run.dir);
         expect(intent?.version).toBe(2);
-        expect(intent?.constraints.map((constraint) => constraint.text)).toEqual([
-          "preserve the public --json envelope",
-        ]);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(intent), (present) =>
+              Arr.map(present.constraints, (constraint) => constraint.text),
+            ),
+          ),
+        ).toEqual(["preserve the public --json envelope"]);
       }),
     ),
   60_000,
@@ -960,7 +974,7 @@ test(
         const text = yield* cli(["run", "report"], env);
         expect(text.stdout).toContain("peak context tokens: 1 of 2 Runs recorded");
         const asked = yield* callTool(readEnv({ ...process.env, ...env }), "collie_report", {});
-        expect(asked).toBe(text.stdout.trim());
+        expect(asked).toBe(Str.trim(text.stdout));
 
         const later = yield* cli(["--json", "run", "report", "--since", "2999-01-01"], env);
         expect(later.exit).toBe(0);
@@ -982,9 +996,9 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const claudeDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-claude-" });
-        const login = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+        const login = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
           claudeAiOauth: { accessToken: "t", expiresAt: 1, subscriptionType: "max" },
-        });
+        }).pipe(Effect.orDie);
         yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
         const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
         yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
@@ -1016,12 +1030,12 @@ test(
 
         const human = yield* cli(["usage"], env);
         expect(human.exit).toBe(0);
-        expect(human.stdout.trim().split("\n")).toEqual([
+        expect(Str.split(Str.trim(human.stdout), "\n")).toEqual([
           "claude  Claude Code's login expired; it refreshes when Claude Code next runs",
           "chatgpt Codex is not installed on this Machine",
         ]);
         const trail = yield* readAudit(join(state, "usage"));
-        expect(trail.map(({ operation, actor }) => [operation, actor.origin])).toEqual([
+        expect(Arr.map(trail, ({ operation, actor }) => [operation, actor.origin])).toEqual([
           ["usage", "cli"],
           ["usage", "cli"],
         ]);

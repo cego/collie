@@ -1,5 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { Crypto, Effect, Queue, Schema, Scope } from "effect";
+import { Effect, Queue, Schema, Scope } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { Answers, Questions } from "../shared/chat-view";
 import type { DriverContext } from "./driver";
 import type { JsonObject } from "../../../src/schema";
@@ -9,7 +10,7 @@ import { toolServer } from "./tool-server";
 /** One authenticated endpoint, started lazily and held for Desktop's lifetime. */
 export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context: DriverContext) {
   const scope = yield* Effect.scope;
-  const token = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const token = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const calls = new Map<string, Queue.Queue<string>>();
   // The foreign MCP handler needs an AbortSignal for the human's pending click.
   // oxlint-disable-next-line effecttsgo/abort-controller-in-effect
@@ -17,7 +18,9 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
   const matching = (input: JsonObject) =>
     Effect.gen(function* () {
       const questions = yield* Schema.decodeUnknownEffect(Questions)(input);
-      const key = Schema.encodeSync(Schema.fromJsonString(Questions))(questions);
+      const key = yield* Schema.encodeEffect(Schema.fromJsonString(Questions))(questions).pipe(
+        Effect.orDie,
+      );
       let queue = calls.get(key);
       if (queue === undefined) {
         queue = yield* Queue.unbounded<string>();
@@ -40,9 +43,9 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
         const answers = yield* Effect.tryPromise(() => context.ask(id, signal));
         return answers === null
           ? NO_HUMAN
-          : Schema.encodeSync(Schema.fromJsonString(Schema.Struct({ answers: Answers })))({
+          : yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Struct({ answers: Answers })))({
               answers,
-            });
+            }).pipe(Effect.orDie);
       }).pipe(Effect.catchCause(() => Effect.succeed("The question ended with its turn."))),
     );
   };

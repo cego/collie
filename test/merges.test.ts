@@ -1,6 +1,9 @@
+import * as Order from "effect/Order";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
+import type { PlatformServices } from "../src/platform";
+import { Effect, FileSystem, Layer, Schema, type Scope, flow, Result } from "effect";
 import type { FetchLike } from "forges";
 import { forgeHttpTest, type ForgeHttp } from "../src/forge/http";
 import { recordAudit } from "../src/audit";
@@ -32,7 +35,7 @@ import { readLanding, writeLanding, type Landing } from "../src/landing";
 import { fakeForge, type Check, type FakeMr, type ForgeModel } from "./support/forge";
 
 const GITLAB = "gitlab.cego.dk/mk/collie";
-const asLaunch = Schema.encodeSync(Schema.fromJsonString(Launched));
+const asLaunch = flow(Schema.encodeResult(Schema.fromJsonString(Launched)), Result.getOrThrow);
 
 /** The fake of each forge `forge` made last, which ForgeHttp asks. */
 const latest = new Map<"gitlab" | "github", { readonly run: Runner; readonly fetch: FetchLike }>();
@@ -66,8 +69,9 @@ const forgeHttp = forgeHttpTest(
 );
 
 /** `runEffect`, with ForgeHttp asking the fake of each forge made last. */
-const runWithForge = <A, E>(effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | BunServices>) =>
-  runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttp))));
+const runWithForge = <A, E>(
+  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices>,
+) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttp))));
 
 const mr65 = (over: Partial<FakeMr>): FakeMr => ({
   project: GITLAB,
@@ -125,7 +129,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
       });
 
       const recorded = yield* readDispositions(run.dir);
-      expect(recorded.map((line) => [line.by, line.kind, line.ref])).toEqual([
+      expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
         ["gitlab", "merged", "mk/collie!65"],
       ]);
       expect(yield* readMrStates(stateDir)).toEqual(new Map([["mk/collie!65", "merged"]]));
@@ -233,7 +237,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       // Stage has a child of the merge commit; prod still runs something older.
       yield* settle(deployed({ stage: "child", prod: "0000000" }));
       expect(states.get("mk/collie!65")).toBe("on-stage");
-      expect((yield* readDispositions(run.dir)).map((line) => line.kind)).toEqual(["merged"]);
+      expect(Arr.map(yield* readDispositions(run.dir), (line) => line.kind)).toEqual(["merged"]);
       let board = yield* boardOf({ now });
       expect(board[0]!.landed).toBe(true);
       expect(board[0]!.sentence).toBe("Merged as mk/collie!65. On stage.");
@@ -245,7 +249,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       board = yield* boardOf({ now });
       expect(board[0]!.sentence).toBe("Merged as mk/collie!65. In production.");
       // One merged disposition, not one per round.
-      expect((yield* readDispositions(run.dir)).map((line) => line.kind)).toEqual(["merged"]);
+      expect(Arr.map(yield* readDispositions(run.dir), (line) => line.kind)).toEqual(["merged"]);
 
       // In production is as far as it goes: GitLab is not asked about it again.
       now += 6 * 60_000;
@@ -293,9 +297,9 @@ test("what is working is asked about, and what is already disposed of is not", (
         ["r-needs-you", "mk/collie!67"],
       ] as const)
         expect(
-          (yield* readDispositions(runDir(stateDir, run))).map((line) => [line.by, line.ref]),
+          Arr.map(yield* readDispositions(runDir(stateDir, run)), (line) => [line.by, line.ref]),
         ).toEqual([["gitlab", label]]);
-      expect(log.filter((call) => /[ /]66\b/.test(call))).toEqual([]);
+      expect(Arr.filter(log, (call) => /[ /]66\b/.test(call))).toEqual([]);
     }),
   ));
 
@@ -381,7 +385,7 @@ test("a merge request opened from a Task's branch by anyone is found, recorded a
         yield* round(TEN);
         expect(recorded).toEqual(new Map([["r-implement", URL115[name]]]));
         expect(
-          (yield* readDispositions(run.dir)).map((line) => [line.by, line.kind, line.ref]),
+          Arr.map(yield* readDispositions(run.dir), (line) => [line.by, line.kind, line.ref]),
         ).toEqual([[name, "merged", LABEL[name]]]);
         const after = yield* card(TEN);
         expect(after.mr).not.toBeNull();
@@ -527,8 +531,8 @@ const merging = Effect.fn("merges.merging")(function* (
   });
   /** The Runs as the host reads them once each stop it was handed took. */
   const stopped = () => {
-    const ids = new Set(stops.map(([run]) => run));
-    runs = runs.map((run) => (ids.has(run.id) ? { ...run, state: "stopped" as const } : run));
+    const ids = new Set(Arr.map(stops, ([run]) => run));
+    runs = Arr.map(runs, (run) => (ids.has(run.id) ? { ...run, state: "stopped" as const } : run));
   };
   const join = (over: Partial<RunFacts>) => Effect.map(of(over), (run) => void runs.push(run));
   return { stateDir, env, stops, round, stopped, join, runs: () => runs };
@@ -543,13 +547,18 @@ test("a merge stops what in its Task is still going: the parked builder and the 
       ]);
       yield* round(TEN);
       expect(
-        (yield* readDispositions(runDir(stateDir, "r-plan.implement"))).map((line) => [
+        Arr.map(yield* readDispositions(runDir(stateDir, "r-plan.implement")), (line) => [
           line.by,
           line.kind,
           line.ref,
         ]),
       ).toEqual([["gitlab", "merged", "mk/collie!65"]]);
-      expect([...stops].sort()).toEqual([
+      expect(
+        Arr.sort(
+          stops,
+          Order.mapInput(Order.String, ([run]: readonly [string, string]) => run),
+        ),
+      ).toEqual([
         ["r-plan", "mk/collie!65 merged"],
         ["r-plan.implement", "mk/collie!65 merged"],
       ]);
@@ -568,7 +577,7 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
       yield* rig.addPane("p0", "t0", "/project", null, "w1");
       yield* rig.addPane("p1", "t1", "/project", "claude", "w1");
       yield* rig.addAgent("impl", "p1");
-      const services = yield* Effect.context<BunServices>();
+      const services = yield* Effect.context<PlatformServices>();
       const halting = (stateDir: string, run: string, reason: string) =>
         Agents.pipe(
           Effect.flatMap((agents) => agents.halt(run, reason)),
@@ -582,9 +591,14 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
               permissions: "auto",
               compactAtTokens: 0,
               help: () => Effect.succeed(""),
-            }),
+            }).pipe(
+              Layer.provideMerge(
+                foundationLayer({
+                  dir: stateDir,
+                }),
+              ),
+            ),
           ),
-          Effect.provide(foundationLayer({ dir: stateDir })),
           Effect.scoped,
           Effect.orDie,
           Effect.asVoid,
@@ -609,8 +623,8 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
         }),
       );
       yield* round(TEN);
-      const closed = (yield* rig.calls()).filter((call) => call.cmd === "pane close");
-      expect(closed.map((call) => call.argv?.at(2))).toEqual(["p1"]);
+      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "pane close");
+      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["p1"]);
       expect(yield* fs.readFileString(`${agents}/agents.log`)).toContain(
         "impl ended: mk/collie!65 merged",
       );
@@ -630,7 +644,7 @@ test("a Run of the Task started after the merge is not stopped by it", () =>
         },
       ]);
       yield* round(TEN);
-      expect(stops.map(([run]) => run).sort()).toEqual(["r-plan", "r-plan.implement"]);
+      expect(Arr.map(stops, ([run]) => run).sort()).toEqual(["r-plan", "r-plan.implement"]);
     }),
   ));
 
@@ -645,7 +659,11 @@ test("where the forge gives no merge time, the time the watch first read it merg
         null,
       );
       yield* round(TEN);
-      expect(stops.map(([run]) => run).sort()).toEqual(["r-before", "r-plan", "r-plan.implement"]);
+      expect(Arr.map(stops, ([run]) => run).sort()).toEqual([
+        "r-before",
+        "r-plan",
+        "r-plan.implement",
+      ]);
     }),
   ));
 
@@ -657,7 +675,7 @@ test("a Run that follows the merge is not stopped when it leads the Task, howeve
       stopped();
       yield* join({ id: "r-follow-up", workflow: "implement", created: "2026-10-15T10:01:00Z" });
       yield* round(TEN + MERGE_POLL_MS);
-      expect(stops.map(([run]) => run).sort()).toEqual(["r-plan", "r-plan.implement"]);
+      expect(Arr.map(stops, ([run]) => run).sort()).toEqual(["r-plan", "r-plan.implement"]);
     }),
   ));
 
@@ -681,7 +699,7 @@ test("the forge's merge time is the cutoff, not when a merge was recorded by han
       });
       yield* round(TEN);
       yield* round(TEN + 60_000);
-      expect([...new Set(stops.map(([run]) => run))].sort()).toEqual([
+      expect([...new Set(Arr.map(stops, ([run]) => run))].sort()).toEqual([
         "r-plan",
         "r-plan.implement",
       ]);
@@ -694,7 +712,7 @@ test("a stop that did not take is asked again next round, before the forge is du
       const { stops, round } = yield* merging();
       yield* round(TEN);
       yield* round(TEN + 60_000);
-      expect(stops.map(([run]) => run).sort()).toEqual([
+      expect(Arr.map(stops, ([run]) => run).sort()).toEqual([
         "r-plan",
         "r-plan",
         "r-plan.implement",
@@ -711,7 +729,10 @@ test("a stop that did not take is asked again next round, before the forge is du
         note: null,
       });
       yield* restored.round(TEN);
-      expect(restored.stops.map(([run]) => run).sort()).toEqual(["r-plan", "r-plan.implement"]);
+      expect(Arr.map(restored.stops, ([run]) => run).sort()).toEqual([
+        "r-plan",
+        "r-plan.implement",
+      ]);
     }),
   ));
 
@@ -737,7 +758,7 @@ const attempt = (over: Partial<Landing> = {}): Landing => ({
   ...over,
 });
 const stoppedIds = (stops: ReadonlyArray<readonly [string, string]>) =>
-  [...new Set(stops.map(([run]) => run))].sort();
+  [...new Set(Arr.map(stops, ([run]) => run))].sort();
 const EVERY_RUN = ["r-plan", "r-plan.implement", "r-release", "r-review"];
 
 test("a landed Run, its parent and its grandparent are spared by the merge; a sibling is stopped", () =>
@@ -1038,7 +1059,13 @@ test("a draft, and what the forge says of merging, reach the card's readiness", 
         HEAD,
       )).card;
       expect(draft.ready).toBe(false);
-      expect(draft.readiness?.missing.map((one) => one.fact)).toEqual(["not-draft"]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(draft.readiness), (present) =>
+            Arr.map(present.missing, (one) => one.fact),
+          ),
+        ),
+      ).toEqual(["not-draft"]);
 
       const conflicted = (yield* cardAfter(
         PR,
@@ -1071,7 +1098,7 @@ test("a merged GitHub pull request lands its card, by github's word", () =>
     Effect.gen(function* () {
       const { card, run } = yield* cardAfter(PR, github("merged", []));
       const recorded = yield* readDispositions(run.dir);
-      expect(recorded.map((line) => [line.by, line.kind, line.ref])).toEqual([
+      expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
         ["github", "merged", "cego/collie#30"],
       ]);
       expect(sectionOf(card)).toBe("finished");
@@ -1307,7 +1334,7 @@ test("a fan-out's Repo run's merge request is watched: its facts recorded, its m
       });
 
       expect(
-        (yield* readDispositions(runDir(stateDir, "r-fan.api"))).map((line) => [
+        Arr.map(yield* readDispositions(runDir(stateDir, "r-fan.api")), (line) => [
           line.by,
           line.kind,
           line.ref,
@@ -1342,7 +1369,7 @@ const singleRepo = Effect.fn("merges.singleRepo")(function* () {
     `${made[0]!.dir}/plan/issues/01-api.md`,
     "# api\n\n**Blocked by:** None\n\n**Repo:** api\n",
   );
-  const runs = made.map((run) => ({
+  const runs = Arr.map(made, (run) => ({
     ...run,
     state: "succeeded" as const,
     cwd: run.repo === null ? root : run.cwd,
@@ -1383,7 +1410,13 @@ test("a single-repository fan-out's card is its one merge request's, watched, an
       expect(card!.planReady).toBe(false);
       expect(card!.sentence).toBe("mk/collie!65 is open; nothing has checked it.");
       // Only Collie's own checks are missing: nothing has checked the Repo run's head.
-      expect(card!.readiness?.missing.map((one) => one.fact)).toEqual(["checks"]);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(card!.readiness), (present_) =>
+            Arr.map(present_.missing, (one) => one.fact),
+          ),
+        ),
+      ).toEqual(["checks"]);
     }),
   ));
 

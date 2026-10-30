@@ -1,3 +1,8 @@
+import * as Struct from "effect/Struct";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import type { Asker } from "./proposals";
 import { Config, Effect, Option, Schema } from "effect";
 
@@ -80,9 +85,9 @@ export function ownRoot(
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
 ): string | null {
-  if (!modulePath.startsWith("/$bunfs/")) return null;
-  const at = execPath.lastIndexOf("/bin/");
-  return at > 0 ? execPath.slice(0, at) : null;
+  if (!pipe(modulePath, Str.startsWith("/$bunfs/"))) return null;
+  const at = Option.getOrElse(pipe(execPath, Str.lastIndexOf("/bin/")), () => -1);
+  return at > 0 ? pipe(execPath, Str.slice(0, at)) : null;
 }
 
 /**
@@ -98,7 +103,7 @@ export function selfCommand(
   execPath: string = process.execPath,
   script: string = Bun.argv[1] ?? "",
 ): string[] {
-  return modulePath.startsWith("/$bunfs/") ? [execPath] : [execPath, script];
+  return pipe(modulePath, Str.startsWith("/$bunfs/")) ? [execPath] : [execPath, script];
 }
 
 export function readEnv(
@@ -118,7 +123,7 @@ export function readEnv(
   const cwd = explicitCwd ?? context.workspace_cwd ?? process.cwd();
 
   const raw: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
+  for (const [key, value] of Rec.toEntries(env)) {
     if (value !== undefined) raw[key] = value;
   }
 
@@ -246,10 +251,10 @@ export const withoutLauncher = (
   } = env;
   const kept = { ...inherited };
   const without = (list: string | undefined, launcher: (entry: string) => boolean) =>
-    (list ?? "")
-      .split(":")
-      .filter((entry) => !launcher(entry))
-      .join(":");
+    Arr.join(
+      Arr.filter(Str.split(list ?? "", ":"), (entry) => !launcher(entry)),
+      ":",
+    );
   const preload = without(LD_PRELOAD, (entry) => LAUNCHER_PRELOADS.has(entry));
   const libraries = without(LD_LIBRARY_PATH, (entry) => entry === bin);
   if (preload !== "") kept.LD_PRELOAD = preload;
@@ -264,6 +269,6 @@ export const leaveLauncher = () => {
   // oxlint-disable-next-line effecttsgo/process-env
   const env = process.env;
   const kept = withoutLauncher(env);
-  for (const name of Object.keys(env)) if (!(name in kept)) delete env[name];
+  for (const name of Struct.keys(env)) if (!(name in kept)) delete env[name];
   Object.assign(env, kept);
 };

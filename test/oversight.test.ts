@@ -1,6 +1,11 @@
 // What a human reads a Run's progress from while nobody is watching its panes: the cards
 // the host writes as the work reaches its moments, and the toast when one is worth it.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Option from "effect/Option";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Layer, Path, Schema } from "effect";
@@ -101,11 +106,28 @@ const session = <A, E>(
         model: "opus",
         permissions: "auto",
         compactAtTokens: 0,
-      }),
-    ),
-    Effect.provide(Layer.succeed(Children)(Children.of({ start: nothing, result: nothing }))),
-    Effect.provide(
-      herd === undefined ? foundationLayer({ dir, toast }) : foundationLayer({ dir, toast, herd }),
+      }).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(
+            Children.of({
+              start: nothing,
+              result: nothing,
+            }),
+          ),
+        ),
+        Layer.provideMerge(
+          herd === undefined
+            ? foundationLayer({
+                dir,
+                toast,
+              })
+            : foundationLayer({
+                dir,
+                toast,
+                herd,
+              }),
+        ),
+      ),
     ),
     Effect.scoped,
     Effect.orDie,
@@ -124,6 +146,7 @@ const executed = (
     Effect.gen(function* () {
       const described = yield* loadEntry(`${fixtures}/${entry}`).pipe(Effect.orDie);
       const made = described.make(`${described.id}@${runId}`);
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       return yield* made.workflow
         .execute({ runId, input })
         .pipe(Effect.result, Effect.provide(made.layer));
@@ -136,7 +159,7 @@ test("a Run that ends leaves the card that closes it", () =>
     Effect.gen(function* () {
       yield* executed("hello.workflow.ts", "r1", { name: "you" });
       const cards = yield* cardsOf("r1");
-      expect(cards.map((card) => `${card.kind}:${card.step}`)).toEqual(["final:finish"]);
+      expect(Arr.map(cards, (card) => `${card.kind}:${card.step}`)).toEqual(["final:finish"]);
       expect(cards[0]!.aligned).toBe("unverified");
     }),
   ));
@@ -157,7 +180,7 @@ test("a card a human could go and try says so, and a routine one does not", () =
         }),
       );
       const cards = yield* cardsOf("r1");
-      expect(cards.map((card) => `${card.readiness}/${card.significance}`)).toEqual([
+      expect(Arr.map(cards, (card) => `${card.readiness}/${card.significance}`)).toEqual([
         "claimed/routine",
         "inspect-ready/try-it",
       ]);
@@ -190,7 +213,7 @@ test("a Run whose own plan moved its Intent still has a slice to try", () =>
         }),
       );
       const cards = yield* cardsOf("r1");
-      expect(cards.map((card) => `${card.readiness}/${card.significance}`)).toEqual([
+      expect(Arr.map(cards, (card) => `${card.readiness}/${card.significance}`)).toEqual([
         "inspect-ready/try-it",
       ]);
     }),
@@ -218,7 +241,7 @@ test("a Run whose Intent a human moved says so on its card", () =>
         }),
       );
       const cards = yield* cardsOf("r1");
-      expect(cards.map((card) => card.significance)).toEqual(["consequential"]);
+      expect(Arr.map(cards, (card) => card.significance)).toEqual(["consequential"]);
     }),
   ));
 
@@ -246,7 +269,7 @@ test("a ticket an agent says it finished is carded once, with its own words as c
       // A second host looks again and finds nothing new.
       yield* session(Oversight.pipe(Effect.flatMap((one) => one.checkpoints("r1", "build"))));
       const cards = yield* cardsOf("r1");
-      expect(cards.map((card) => card.claims.map((claim) => claim.text))).toEqual([
+      expect(Arr.map(cards, (card) => Arr.map(card.claims, (claim) => claim.text))).toEqual([
         ["parses the file"],
       ]);
       expect(cards[0]!.step).toBe("build");
@@ -316,8 +339,10 @@ test("a rule the work breaks is reported where it was collected, and cleared onc
       );
       yield* session(checked);
       const found = currentReports(yield* readDrift(runDir(dir, "r1")));
-      expect(found.map((one) => `${one.constraint}:${one.resolution}`)).toEqual(["src-only:open"]);
-      expect(found[0]!.evidence.map((ref) => ref.path)).toContain("notes.txt");
+      expect(Arr.map(found, (one) => `${one.constraint}:${one.resolution}`)).toEqual([
+        "src-only:open",
+      ]);
+      expect(Arr.map(found[0]!.evidence, (ref) => ref.path)).toContain("notes.txt");
 
       // The same tree again is the same finding, not a second one.
       yield* session(checked);
@@ -326,7 +351,7 @@ test("a rule the work breaks is reported where it was collected, and cleared onc
       yield* fs.remove(`${dir}/notes.txt`);
       yield* session(checked);
       expect(
-        currentReports(yield* readDrift(runDir(dir, "r1"))).map((one) => one.resolution),
+        Arr.map(currentReports(yield* readDrift(runDir(dir, "r1"))), (one) => one.resolution),
       ).toEqual(["verified"]);
     }),
   ));
@@ -356,7 +381,7 @@ test("a rule check git cannot answer is skipped in git's words, and clears nothi
       yield* fs.remove(`${dir}/.git`, { recursive: true });
       yield* session(checked);
       expect(
-        currentReports(yield* readDrift(runDir(dir, "r1"))).map((one) => one.resolution),
+        Arr.map(currentReports(yield* readDrift(runDir(dir, "r1"))), (one) => one.resolution),
       ).toEqual(["open"]);
       const log = yield* fs.readFileString(`${runDir(dir, "r1")}/log.txt`);
       expect(log).toContain("rule check skipped at build collected: git diff");
@@ -373,7 +398,7 @@ test("a rule check git cannot answer leaves the Run unverified, never aligned", 
         Oversight.pipe(Effect.flatMap((one) => one.drift("r1", "build collected", "none"))),
       );
       const lines = yield* readDrift(runDir(dir, "r1"));
-      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
+      expect(Arr.map(lines, (line) => (line.kind === "skipped" ? line.reason : ""))).toEqual([
         expect.stringContaining("rule check skipped at build collected: git diff"),
       ]);
       const intent = yield* readIntent(runDir(dir, "r1"));
@@ -403,9 +428,9 @@ test("a judgement no Herd can be charged for is recorded as skipped, and the car
         }),
       );
       const lines = yield* readDrift(runDir(dir, "r1"));
-      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual([
-        "there is no Herd to charge a judgement to",
-      ]);
+      expect(Arr.map(lines, (line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual(
+        ["there is no Herd to charge a judgement to"],
+      );
       const [card] = yield* cardsOf("r1");
       expect(card!.missing).toContain(
         "a judgement was skipped: there is no Herd to charge a judgement to",
@@ -428,18 +453,21 @@ const evaluatorOnPath = Effect.suspend(() =>
   evaluatorAnswering(`cat > /dev/null\necho '{"result":{"reports":[]}}'`),
 );
 
-const EVALUATOR_FLAGS = [
-  "--print",
-  "--output-format",
-  "--json-schema",
-  "--tools",
-  "--restricted",
-  "--strict-mcp-config",
-  "--setting-sources",
-  "--no-session-persistence",
-  "--max-budget-usd",
-  "--append-system-prompt-file",
-].join(" ");
+const EVALUATOR_FLAGS = Arr.join(
+  [
+    "--print",
+    "--output-format",
+    "--json-schema",
+    "--tools",
+    "--restricted",
+    "--strict-mcp-config",
+    "--setting-sources",
+    "--no-session-persistence",
+    "--max-budget-usd",
+    "--append-system-prompt-file",
+  ],
+  " ",
+);
 
 const evaluatorAnswering = Effect.fnUntraced(function* (answer: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -650,7 +678,7 @@ const judgementsAtFinish = (intent: { constraints: Constraint[]; goal: string })
       pluginRoot: rig.root,
     });
     const asked = yield* fs.readFileString(calls).pipe(Effect.orElseSucceed(() => ""));
-    return asked.split("\n").filter((line) => line === "asked").length;
+    return Arr.filter(Str.split(asked, "\n"), (line) => line === "asked").length;
   });
 
 test("a Run that finishes with a goal and no semantic constraint asks for no judgement", () =>
@@ -694,7 +722,7 @@ test("a branch past the cap is judged once, at the finish, and each boundary say
         { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root },
       );
       const asked = yield* fs.readFileString(calls).pipe(Effect.orElseSucceed(() => ""));
-      expect(asked.split("\n").filter((line) => line === "asked")).toHaveLength(1);
+      expect(Arr.filter(Str.split(asked, "\n"), (line) => line === "asked")).toHaveLength(1);
       const log = yield* fs.readFileString(`${runDir(dir, "r1")}/log.txt`);
       expect(log).toContain("not judged at build-2: evidence past the cap; judged at the finish");
     }),
@@ -877,23 +905,29 @@ test("a finishing Run runs what it was granted, and offers what is still blockin
       yield* fs.makeDirectory(`${dir}/evidence/r1`, { recursive: true });
       yield* fs.writeFileString(
         `${dir}/evidence/r1/approved.json`,
-        Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([tests]),
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
+          tests,
+        ]).pipe(Effect.orDie),
       );
       const herd = { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root };
 
       yield* executed("hello.workflow.ts", "r1", { name: "you" }, herd);
 
-      expect((yield* readVerifications(`${dir}/evidence/r1`)).map((one) => one.name)).toEqual([
+      expect(Arr.map(yield* readVerifications(`${dir}/evidence/r1`), (one) => one.name)).toEqual([
         "tests",
       ]);
       const open = currentReports(yield* readDrift(runDir(dir, "r1")));
-      expect(open.map((one) => `${one.constraint}:${one.resolution}`)).toEqual(["src-only:open"]);
+      expect(Arr.map(open, (one) => `${one.constraint}:${one.resolution}`)).toEqual([
+        "src-only:open",
+      ]);
       const key = yield* herdOf(herd.socketPath);
       const proposed = yield* readProposals(yield* proposalsPath(dir, key!));
       expect(
-        proposed.map((one) => (one.kind === "proposal" ? one.interpretation : one.kind)),
+        Arr.map(proposed, (one) => (one.kind === "proposal" ? one.interpretation : one.kind)),
       ).toEqual(["r1 finished with 1 blocking constraint(s) still open"]);
-      expect(toasts.filter((one) => one.includes("waiting for your yes or no"))).toHaveLength(1);
+      expect(
+        Arr.filter(toasts, (one) => pipe_(one, Str.includes("waiting for your yes or no"))),
+      ).toHaveLength(1);
       const [card] = yield* cardsOf("r1");
       expect(card!.significance).toBe("decision");
       // What the host saw is the Run's own log, the one its record shows.
@@ -930,7 +964,9 @@ test("a host that finds its Herd while a Run finishes offers that Run's blocking
       yield* fs.makeDirectory(`${dir}/evidence/r1`, { recursive: true });
       yield* fs.writeFileString(
         `${dir}/evidence/r1/approved.json`,
-        Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([started]),
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
+          started,
+        ]).pipe(Effect.orDie),
       );
       const socketPath = `${rig.root}/herd.sock`;
       // A minute passes at each ask that finds no Herd, so the host asks again, and never
@@ -954,7 +990,7 @@ test("a host that finds its Herd while a Run finishes offers that Run's blocking
       const key = yield* herdOf(socketPath);
       const proposed = yield* readProposals(yield* proposalsPath(dir, key!));
       expect(
-        proposed.map((one) => (one.kind === "proposal" ? one.interpretation : one.kind)),
+        Arr.map(proposed, (one) => (one.kind === "proposal" ? one.interpretation : one.kind)),
       ).toEqual(["r1 finished with 1 blocking constraint(s) still open"]);
     }),
   ));
@@ -968,9 +1004,9 @@ test("a Run with relatives stands for the cross-run check, and one leaving unans
       const said = () =>
         readElections(elections).pipe(
           Effect.map((lines) =>
-            lines.map((line) =>
+            Arr.map(lines, (line) =>
               line.kind === "pending" || line.kind === "evaluated"
-                ? `${line.kind}:${line.runs.join(",")}`
+                ? `${line.kind}:${Arr.join(line.runs, ",")}`
                 : `${line.kind}:${line.run}`,
             ),
           ),
@@ -1035,9 +1071,11 @@ test("a card reads its branch, head and dirtiness from the one status its finger
       expect(card.revision).toMatchObject({ branch: "feat/picker", dirty: true });
       expect(card.revision.head_sha).toHaveLength(40);
       expect(
-        (yield* starts).filter((line) => /^(rev-parse|status --porcelain$)/.test(line)),
+        Arr.filter(yield* starts, (line) => /^(rev-parse|status --porcelain$)/.test(line)),
       ).toEqual([]);
-      expect((yield* starts).filter((line) => line.startsWith("status"))).toHaveLength(1);
+      expect(
+        Arr.filter(yield* starts, (line) => pipe_(line, Str.startsWith("status"))),
+      ).toHaveLength(1);
 
       yield* git(["checkout", "-q", "--detach"], repo);
       yield* fs.remove(`${repo}/new.txt`);
@@ -1074,9 +1112,9 @@ const cardedWork = (runId: string, files: Readonly<Record<string, string>>) =>
     const fs = yield* FileSystem.FileSystem;
     yield* git(["checkout", "-q", "-b", `${runId}-work`]);
     yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
-    for (const [name, text] of Object.entries(files))
+    for (const [name, text] of Rec.toEntries(files))
       yield* fs.writeFileString(`${dir}/${name}`, text);
-    yield* git(["add", ...Object.keys(files)]);
+    yield* git(["add", ...Rec.keys(files)]);
     yield* git(["commit", "-qm", `${runId}'s work`]);
     yield* writeCard(watchedAt(runId), { kind: "slice", step: "build", claims: [] });
     yield* git(["checkout", "-q", "-"]);
@@ -1095,13 +1133,16 @@ const repositoryAt = (path: string, files: Readonly<Record<string, string>>) =>
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ])
       yield* git(args, path);
-    for (const [name, text] of Object.entries(files)) {
-      yield* fs.makeDirectory(`${path}/${name.slice(0, name.lastIndexOf("/") + 1)}`, {
-        recursive: true,
-      });
+    for (const [name, text] of Rec.toEntries(files)) {
+      yield* fs.makeDirectory(
+        `${path}/${pipe_(name, Str.slice(0, Option.getOrElse(pipe_(name, Str.lastIndexOf("/")), () => -1) + 1))}`,
+        {
+          recursive: true,
+        },
+      );
       yield* fs.writeFileString(`${path}/${name}`, text);
     }
-    yield* git(["add", ...Object.keys(files)], path);
+    yield* git(["add", ...Rec.keys(files)], path);
     yield* git(["commit", "-qm", "work"], path);
   });
 
@@ -1112,7 +1153,9 @@ const crossRunJudge = (reports: ReadonlyArray<object>) =>
     const reply = `${rig.root}/cross-run-reply.json`;
     yield* fs.writeFileString(
       reply,
-      Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ result: { reports } }),
+      yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+        result: { reports },
+      }).pipe(Effect.orDie),
     );
     yield* evaluatorAnswering(`cat > ${rig.root}/pack.txt\ncat ${reply}`);
     const limits = { maxSeconds: 5, maxOutputBytes: 262_144, model: "sonnet", effort: "low" };
@@ -1145,7 +1188,11 @@ const reportOn = (run: string, constraint: string, evidence: ReadonlyArray<objec
 
 /** What the pack says under one Run, up to the next. */
 const under = (pack: string, runId: string) =>
-  pack.split(/^(?=run: )/m).find((section) => section.startsWith(`run: ${runId}\n`)) ?? "";
+  Option.getOrUndefined(
+    Arr.findFirst(Str.split(pack, /^(?=run: )/m), (section) =>
+      pipe_(section, Str.startsWith(`run: ${runId}\n`)),
+    ),
+  ) ?? "";
 
 /** `r1` judging `family`, each Run read in its entry of `checkouts`, else the host's directory. */
 const judgedAcross = (
@@ -1236,7 +1283,9 @@ test("the cross-run judge reads each related Run's work, and files only what cit
         expect(r2).toContain('"verdict": "clean"');
         expect(pack).not.toContain("LAUNCHED");
         expect(pack).not.toContain("MCP-CONFIG");
-        expect(r2.indexOf("constraint: small")).toBeLessThan(r2.indexOf("--- src/a.ts"));
+        expect(
+          Option.getOrElse(pipe_(r2, Str.indexOf("constraint: small")), () => -1),
+        ).toBeLessThan(Option.getOrElse(pipe_(r2, Str.indexOf("--- src/a.ts")), () => -1));
         const r3 = under(pack, "r3");
         expect(r3).toContain("work: none yet (no card)");
         expect(r3).toContain("--- output plan");
@@ -1244,7 +1293,7 @@ test("the cross-run judge reads each related Run's work, and files only what cit
         expect(under(pack, "r4")).toContain("+r4's own");
 
         const filed = currentReports(yield* readDrift(runDir(dir, "r2")));
-        expect(filed.map((report) => report.evidence)).toEqual([
+        expect(Arr.map(filed, (report) => report.evidence)).toEqual([
           cited,
           [{ kind: "output", path: "build" }],
         ]);
@@ -1283,7 +1332,7 @@ test("a related Run in another repository is read in its own, wherever the judgi
         expect(under(pack, "r2")).toContain("--- src/b.ts\n");
         expect(under(pack, "r2")).toContain("+export const b = 2;");
         expect(
-          currentReports(yield* readDrift(runDir(dir, "r2"))).map((report) => report.evidence),
+          Arr.map(currentReports(yield* readDrift(runDir(dir, "r2"))), (report) => report.evidence),
         ).toEqual([[{ kind: "diff", path: "src/b.ts" }]]);
       }),
     ),
@@ -1333,7 +1382,8 @@ test("when no related Run's work can be shown, the judge is not asked and nothin
 
         expect(yield* fs.exists(`${rig.root}/pack.txt`)).toBe(false);
         expect(yield* fs.exists(`${dir}/budget.jsonl`)).toBe(false);
-        const kinds = (yield* readElections(yield* electionsPath(dir, key))).map(
+        const kinds = Arr.map(
+          yield* readElections(yield* electionsPath(dir, key)),
           (line) => line.kind,
         );
         expect(kinds).not.toContain("pending");
@@ -1355,7 +1405,7 @@ test("a related Run's work cut to the cap is said to be, and so is what is filed
         yield* intended("r2", [SMALL]);
         const files: Record<string, string> = {};
         for (let n = 0; n <= MAX_FILES; n += 1)
-          files[`src/f${String(n).padStart(2, "0")}.ts`] = `${n}\n`;
+          files[`src/f${pipe_(String(n), Str.padStart(2, "0"))}.ts`] = `${n}\n`;
         yield* cardedWork("r2", files);
         const cited = [{ kind: "diff" as const, path: "src/f00.ts" }];
         const deps = yield* crossRunJudge([reportOn("r2", "small", cited)]);
@@ -1407,7 +1457,7 @@ const familiesOf = (runIds: ReadonlyArray<string>) =>
       families[id] = [
         ...(yield* familyOf(
           rows,
-          rows.find((row) => row.run === id)!,
+          Option.getOrUndefined(Arr.findFirst(rows, (row) => row.run === id))!,
           (one) => runDir(dir, one),
         )),
       ].sort();
@@ -1461,9 +1511,9 @@ test("a Run about another merge request, or about none, is not judged with them"
         Effect.gen(function* () {
           yield* admitted("r1", null, MR_223);
           yield* admitted("r2", `Fix ${MR_223}`, null);
-          yield* admitted("r3", null, MR_223.replace("/223", "/224"));
+          yield* admitted("r3", null, pipe_(MR_223, Str.replace("/223", "/224")));
           yield* admitted("r4", "Move the backoffice work into core", null);
-          yield* admitted("r5", `Fix ${MR_223.replace("/223", "/224")}`, null);
+          yield* admitted("r5", `Fix ${pipe_(MR_223, Str.replace("/223", "/224"))}`, null);
           return yield* familiesOf(["r1", "r3", "r4", "r5"]);
         }),
       );
@@ -1487,7 +1537,7 @@ test("the cross-run judge is told a Run contradicting what another posted on the
         yield* cardedWork("r2", { "src/a.ts": "export const a = 1;\n" });
         const { pack } = yield* judgedAcross(["r1", "r2"], yield* crossRunJudge([]));
 
-        expect(pack.replace(/\s+/g, " ")).toContain(
+        expect(pipe_(pack, Str.replace(/\s+/g, " "))).toContain(
           "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work, or, where it has none yet, the reply as a record whose path is the comment it replied to.",
         );
       }),
@@ -1537,14 +1587,14 @@ const midMerge = () =>
     yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
     const commitFiles = (files: Readonly<Record<string, string>>) =>
       Effect.gen(function* () {
-        for (const [name, text] of Object.entries(files))
+        for (const [name, text] of Rec.toEntries(files))
           yield* fs.writeFileString(`${dir}/${name}`, text);
-        yield* git(["add", ...Object.keys(files)]);
-        yield* git(["commit", "-qm", Object.keys(files).join(" ")]);
+        yield* git(["add", ...Rec.keys(files)]);
+        yield* git(["commit", "-qm", Arr.join(Rec.keys(files), " ")]);
       });
     yield* git(["checkout", "-q", "-b", "trunk"]);
     yield* commitFiles({ "src/shared.ts": "one\n" });
-    const base = (yield* git(["rev-parse", "HEAD"])).stdout.trim();
+    const base = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
     yield* git(["checkout", "-q", "-b", "work"]);
     yield* commitFiles({ "src/own.ts": "mine\n", "src/shared.ts": "ours\n" });
     yield* git(["checkout", "-q", "trunk"]);
@@ -1561,7 +1611,10 @@ test("mid-merge, drift's evidence is the Run's side only, never the default bran
     Effect.gen(function* () {
       const base = yield* midMerge();
       const evidence = yield* evidenceFor(dir, [], base);
-      expect(evidence.blocks.map((block) => block.path)).toEqual(["src/own.ts", "src/shared.ts"]);
+      expect(Arr.map(evidence.blocks, (block) => block.path)).toEqual([
+        "src/own.ts",
+        "src/shared.ts",
+      ]);
       const facts = yield* ruleFacts(watchedAt("r1"));
       expect(facts.changedFiles).toContain("src/own.ts");
       expect(facts.changedFiles).toContain("src/shared.ts");
@@ -1574,7 +1627,7 @@ test("with no merge under way, drift's evidence is what was committed and what i
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* repository();
-      const base = (yield* git(["rev-parse", "HEAD"])).stdout.trim();
+      const base = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
       yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
       yield* fs.writeFileString(`${dir}/src/kept.ts`, "one\n");
       yield* git(["add", "src/kept.ts"]);
@@ -1583,7 +1636,10 @@ test("with no merge under way, drift's evidence is what was committed and what i
       yield* fs.writeFileString(`${dir}/notes.txt`, "new\n");
 
       const evidence = yield* evidenceFor(dir, [], base);
-      expect(evidence.blocks.map((block) => block.path)).toEqual(["src/kept.ts", "src/kept.ts"]);
+      expect(Arr.map(evidence.blocks, (block) => block.path)).toEqual([
+        "src/kept.ts",
+        "src/kept.ts",
+      ]);
       expect(evidence.blocks[0]?.diff).toContain("+one");
       expect(evidence.blocks[1]?.diff).toContain("+two");
       expect((yield* ruleFacts(watchedAt("r1"))).changedFiles).toEqual([

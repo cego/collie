@@ -1,5 +1,6 @@
 // What holds one Run up, read for that Run alone.
 
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -38,14 +39,14 @@ test("a memory wait belongs only to the Run whose directory records it", () =>
       yield* fs.makeDirectory(b.dir);
       yield* fs.writeFileString(
         `${a.dir}/memory-waits/0-1.json`,
-        Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
           what: "build's agent",
           sentence: "waiting for memory on vm-mk: 2.0 of 100.0 GB available",
           since: 0,
           read: 0,
           every: 15_000,
           asker: "a-build",
-        }),
+        }).pipe(Effect.orDie),
       );
 
       const waiting = yield* runWaits(a, [], [], now);
@@ -166,6 +167,6 @@ test("only a proposal on this Run that is unanswered and unexpired is pending on
 
       const waits = yield* runWaits(runFacts({ dir: "/nowhere/r1" }), lines, [], now);
 
-      expect(waits.proposals.map((one) => one.id)).toEqual(["p-mine"]);
+      expect(Arr.map(waits.proposals, (one) => one.id)).toEqual(["p-mine"]);
     }),
   ));

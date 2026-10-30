@@ -2,6 +2,11 @@
 // started and which session it is in. A pid alone is not an identity — numbers come round
 // again — so nothing is signalled that these do not prove.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Effect, FileSystem, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -21,7 +26,12 @@ const PROC = "/proc";
 const statFields = (pid: number) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${PROC}/${pid}/stat`)),
-    Effect.map((stat) => stat.slice(stat.lastIndexOf(")") + 2).split(" ")),
+    Effect.map((stat) =>
+      Str.split(
+        pipe_(stat, Str.slice(Option.getOrElse(pipe_(stat, Str.lastIndexOf(")")), () => -1) + 2)),
+        " ",
+      ),
+    ),
   );
 const STARTED = 19;
 const procStarted = (pid: number) =>
@@ -34,7 +44,7 @@ const procStarted = (pid: number) =>
 const procCommand = (pid: number, proc: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${proc}/${pid}/cmdline`)),
-    Effect.map((argv) => argv.replaceAll("\0", " ")),
+    Effect.map((argv) => pipe_(argv, Str.replaceAll("\0", " "))),
   );
 
 const fromProc = (pid: number) =>
@@ -63,22 +73,24 @@ const ps = (args: ReadonlyArray<string>) =>
     return yield* Stream.mkString(Stream.decodeText(handle.stdout));
   }).pipe(
     Effect.scoped,
-    Effect.catch(() => Effect.succeed("")),
+    Effect.orElseSucceed(() => ""),
   );
 
 /** `pid ppid lstart…` rows, where `lstart` is five words. */
 const psRows = (text: string): ProcessInfo[] =>
-  text
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/))
-    .filter((words) => words.length >= 7)
-    .map((words) => ({
+  Arr.map(
+    Arr.filter(
+      Arr.map(Str.split(text, "\n"), (line) => Str.split(Str.trim(line), /\s+/)),
+      (words) => words.length >= 7,
+    ),
+    (words) => ({
       pid: Number(words[0]),
       parent: Number(words[1]),
-      started: words.slice(2, 7).join(" "),
-      command: words.slice(7).join(" "),
+      started: Arr.join(words.slice(2, 7), " "),
+      command: Arr.join(words.slice(7), " "),
       session: null,
-    }));
+    }),
+  );
 
 /** Whether this platform says which session a process is in, so it can be read after its leader exits. */
 export const readsSessions = FileSystem.FileSystem.pipe(
@@ -100,7 +112,7 @@ export const commandOf = (pid: number, proc = PROC) =>
 /** When it started, as a token only compared with itself; null where that cannot be read. */
 export const startedOf = Effect.fn("Processes.startedOf")(function* (pid: number) {
   if (yield* readsSessions) return yield* procStarted(pid);
-  return (yield* ps(["-o", "lstart=", "-p", String(pid)])).trim() || null;
+  return Str.trim(yield* ps(["-o", "lstart=", "-p", String(pid)])) || null;
 });
 
 /**
@@ -130,7 +142,7 @@ export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: numbe
         grew = true;
       }
   }
-  return all.filter((one) => one.pid !== root && tree.has(one.pid));
+  return Arr.filter(all, (one) => one.pid !== root && tree.has(one.pid));
 });
 
 /** Its process group, from `proc` or else `ps`; null where it is not running. */
@@ -140,7 +152,7 @@ export const groupOf = Effect.fn("Processes.groupOf")(function* (pid: number) {
         Effect.map((fields) => (fields[0] === "Z" ? "" : (fields[2] ?? ""))),
         Effect.orElseSucceed(() => ""),
       )
-    : (yield* ps(["-o", "pgid=", "-p", String(pid)])).trim();
+    : Str.trim(yield* ps(["-o", "pgid=", "-p", String(pid)]));
   return group === "" ? null : Number(group);
 });
 
@@ -160,10 +172,10 @@ export const bindingsOf = Effect.fn("Processes.bindingsOf")(function* (
   // Empty while it is mid-exec or exiting, so it says nothing of what it binds.
   if (environ === null || environ === "") return null;
   const found: Record<string, string> = {};
-  for (const entry of environ.split("\0")) {
-    const at = entry.indexOf("=");
-    const name = entry.slice(0, at);
-    if (at > 0 && names.includes(name)) found[name] = entry.slice(at + 1);
+  for (const entry of Str.split(environ, "\0")) {
+    const at = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
+    const name = pipe_(entry, Str.slice(0, at));
+    if (at > 0 && names.includes(name)) found[name] = pipe_(entry, Str.slice(at + 1));
   }
   return found;
 });
@@ -186,12 +198,12 @@ export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
         const started = yield* procStarted(pid);
         if (started === null) return null;
         const bound = yield* bindingsOf(pid, names);
-        return bound !== null && Object.keys(bound).length > 0 ? { pid, started, bound } : null;
+        return bound !== null && Rec.keys(bound).length > 0 ? { pid, started, bound } : null;
       }),
     // One at a time, a busy machine's thousands of processes take seconds to read.
     { concurrency: 32 },
   );
-  return looked.filter((one) => one !== null);
+  return Arr.filter(looked, (one) => one !== null);
 });
 
 /** Whether this process is still the one that was looked at. */

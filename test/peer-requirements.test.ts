@@ -1,6 +1,10 @@
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { createServer } from "node:net";
-import { Clock, Effect, Fiber, FileSystem, Schema } from "effect";
+import { Clock, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { certificateFor, pairWith, peersOf, relayOf } from "../src/peers";
 import { connect, ownerOf } from "../src/host";
@@ -40,20 +44,21 @@ read -r approval < '${fifo}'`,
         yield* clock.adjust("2 minutes");
         const answer = yield* Fiber.join(pairing);
         expect(
-          yield* signalProcess(Number((yield* fs.readFileString(`${dir}/started`)).trim())),
+          yield* signalProcess(Number(Str.trim(yield* fs.readFileString(`${dir}/started`)))),
         ).toBe(false);
         expect(answer._tag).toBe("Failure");
         if (answer._tag === "Failure")
           expect(
-            Schema.decodeUnknownSync(Schema.Struct({ reason: Schema.String }))(answer.failure)
-              .reason,
+            (yield* Schema.decodeEffect(Schema.Struct({ reason: Schema.String }))(
+              answer.failure,
+            ).pipe(Effect.orDie)).reason,
           ).toContain("within two minutes");
       }),
     ),
   30_000,
 );
 
-const Bound = Schema.Struct({ port: Schema.Number });
+const Bound = Schema.Struct({ port: Schema.Finite });
 
 test(
   "a paired listener's occupied port is reported by machine list and doctor",
@@ -63,7 +68,11 @@ test(
         const server = createServer();
         const port = yield* Effect.callback<number>((resume) => {
           server.listen(0, "0.0.0.0", () =>
-            resume(Effect.succeed(Schema.decodeUnknownSync(Bound)(server.address()).port)),
+            resume(
+              Effect.succeed(
+                flow(Schema.decodeUnknownResult(Bound), Result.getOrThrow)(server.address()).port,
+              ),
+            ),
           );
         });
         yield* Effect.addFinalizer(() =>
@@ -79,17 +88,25 @@ test(
               const pair = yield* first.cli(["--machine", "second", "board"]);
               expect(pair.envelope.ok).toBe(false);
               const listed = yield* second.cli(["machine", "list"]);
-              const views = Schema.decodeUnknownSync(
+              const views = (yield* Schema.decodeUnknownEffect(
                 Schema.Struct({
                   machines: Schema.Array(Schema.Struct({ failure: Schema.NullOr(Schema.String) })),
                 }),
-              )(listed.envelope.data).machines;
+              )(listed.envelope.data).pipe(Effect.orDie)).machines;
               expect(
-                views.some((one) => one.failure?.includes(`could not listen on port ${port}`)),
+                Arr.some(views, (one) =>
+                  Boolean(
+                    Option.getOrUndefined(
+                      Option.map(Option.fromNullishOr(one.failure), (present) =>
+                        pipe(present, Str.includes(`could not listen on port ${port}`)),
+                      ),
+                    ),
+                  ),
+                ),
               ).toBe(true);
               const owner = yield* ownerOf(second.world.state);
               const checked = yield* second.cli(["doctor"]);
-              const checks = Schema.decodeUnknownSync(
+              const checks = (yield* Schema.decodeUnknownEffect(
                 Schema.Struct({
                   checks: Schema.Array(
                     Schema.Struct({
@@ -99,8 +116,11 @@ test(
                     }),
                   ),
                 }),
-              )(checked.envelope.data ?? checked.envelope.error?.details).checks;
-              expect(checks.find((one) => one.name === "paired links")).toMatchObject({
+              )(checked.envelope.data ?? checked.envelope.error?.details).pipe(Effect.orDie))
+                .checks;
+              expect(
+                Option.getOrUndefined(Arr.findFirst(checks, (one) => one.name === "paired links")),
+              ).toMatchObject({
                 ok: false,
                 detail: expect.stringContaining(`could not listen on port ${port}`),
               });
@@ -155,7 +175,7 @@ test(
             expect((yield* first.cli(["--machine", renamed.name, "board"])).envelope.ok).toBe(true);
             yield* until(
               () => remote.peers(),
-              (peers) => peers.some((one) => one.state === "live"),
+              (peers) => Arr.some(peers, (one) => one.state === "live"),
             );
             expect((yield* second.cli(["--machine", inward.name, "board"])).envelope.ok).toBe(true);
             expect((yield* ownerOf(first.world.state))?.pid).toBe(owner?.pid);
@@ -191,11 +211,11 @@ test(
                 }),
               { concurrency: "unbounded" },
             );
-            expect(invitations.map((one) => one.secret)).toEqual([
+            expect(Arr.map(invitations, (one) => one.secret)).toEqual([
               original.secret,
               original.secret,
             ]);
-            for (const invitation of invitations.toReversed())
+            for (const invitation of Arr.reverse(invitations))
               yield* caller.pair({ peer: { ...original, secret: invitation.secret } });
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
           }),
@@ -228,7 +248,10 @@ test(
             expect(aliased.certificate).toBe(original.certificate!);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             yield* caller.pair({
-              peer: { ...original, url: original.url!.replace("127.0.0.1", "127.0.0.2") },
+              peer: {
+                ...original,
+                url: pipe(original.url!, Str.replace("127.0.0.1", "127.0.0.2")),
+              },
             });
             const reached = yield* first.cli(["--machine", "second", "board"]);
             expect(reached.envelope.error).toBeUndefined();
@@ -362,7 +385,7 @@ test(
             });
             yield* until(
               () => high.peers(),
-              (peers) => peers.some((peer) => peer.state === "live"),
+              (peers) => Arr.some(peers, (peer) => peer.state === "live"),
             );
             const opposite = yield* low.invite({
               for: ai < bi ? bi : ai,
@@ -412,12 +435,14 @@ test(
                 receiver.invite({ for: name, name, address: "127.0.0.1" }).pipe(Effect.result),
               { concurrency: "unbounded" },
             );
-            expect(invited.map((result) => result._tag)).toEqual(names.map(() => "Success"));
-            expect((yield* receiver.peers()).map((peer) => peer.installation).sort()).toEqual(
+            expect(Arr.map(invited, (result) => result._tag)).toEqual(
+              Arr.map(names, () => "Success"),
+            );
+            expect(Arr.map(yield* receiver.peers(), (peer) => peer.installation).sort()).toEqual(
               [...names].sort(),
             );
             expect(
-              (yield* peersOf(second.world.state)).map((peer) => peer.installation).sort(),
+              Arr.map(yield* peersOf(second.world.state), (peer) => peer.installation).sort(),
             ).toEqual([...names].sort());
             const additions = yield* Effect.forEach(
               names,
@@ -434,12 +459,14 @@ test(
                   .pipe(Effect.result),
               { concurrency: "unbounded" },
             );
-            expect(additions.map((result) => result._tag)).toEqual(names.map(() => "Success"));
-            expect((yield* caller.peers()).map((peer) => peer.installation).sort()).toEqual(
+            expect(Arr.map(additions, (result) => result._tag)).toEqual(
+              Arr.map(names, () => "Success"),
+            );
+            expect(Arr.map(yield* caller.peers(), (peer) => peer.installation).sort()).toEqual(
               [...names].sort(),
             );
             expect(
-              (yield* peersOf(first.world.state)).map((peer) => peer.installation).sort(),
+              Arr.map(yield* peersOf(first.world.state), (peer) => peer.installation).sort(),
             ).toEqual([...names].sort());
           }),
         [],

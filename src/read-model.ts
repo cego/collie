@@ -1,4 +1,5 @@
 import { Cache, Context, Effect, FileSystem, Layer } from "effect";
+import * as Str from "effect/String";
 
 /** Disk inputs only: clocks, engine status and rendered views are never memoized here. */
 export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string) {
@@ -6,8 +7,8 @@ export const makeReadModel = Effect.fn("ReadModel.make")(function* (dir: string)
   let revision = 0;
   let enabled = true;
   const groupOf = (path: string) => {
-    if (!path.startsWith(`${dir}/`)) return null;
-    const [top, run] = path.slice(dir.length + 1).split("/");
+    if (!Str.startsWith(`${dir}/`)(path)) return null;
+    const [top, run] = Str.split(Str.slice(dir.length + 1)(path), "/");
     if (top === "runs" || top === "agents" || top === "evidence")
       return run === undefined ? "shared" : `run/${run}`;
     return top === "tasks" ||

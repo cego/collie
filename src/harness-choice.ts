@@ -1,5 +1,11 @@
 // Harness, model and effort choices shared by the host and Desktop, without host IO.
 
+import * as Struct from "effect/Struct";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
 import { Effect } from "effect";
 import type { CatalogueEntry } from "./catalogue-model";
 import { decodeSubagents, readSubagents, type ClaudeSubagents } from "./subagents";
@@ -47,7 +53,7 @@ export const HARNESS_MODELS: ModelCatalogue = {
 };
 
 export function harnessNames(): string[] {
-  return Object.keys(HARNESS_MODELS).sort();
+  return Arr.sort(Struct.keys(HARNESS_MODELS), Str.Order);
 }
 
 export function knownModel(
@@ -56,16 +62,16 @@ export function knownModel(
   extra: ReadonlyArray<string> = [],
 ): boolean {
   if (model === DEFAULT_MODEL) return true;
-  if (harness.models.includes(model) || extra.includes(model)) return true;
+  if (Arr.contains(harness.models, model) || Arr.contains(extra, model)) return true;
   return harness.modelPattern?.test(model) ?? false;
 }
 
 export function modelHint(harness: HarnessModels, extra: ReadonlyArray<string> = []): string {
   const known = [DEFAULT_MODEL, ...harness.models, ...extra];
   const parts: string[] = [];
-  if (known.length > 0) parts.push(known.join(", "));
+  if (known.length > 0) parts.push(Arr.join(known, ", "));
   if (harness.modelPattern) parts.push(`or anything matching ${harness.modelPattern.source}`);
-  return parts.join(" ");
+  return Arr.join(parts, " ");
 }
 
 /** What a layer of configuration or code says about the agent; each field it leaves out is inherited. */
@@ -87,13 +93,16 @@ export const preferencesIn = (options: {
   readonly effort?: string | undefined;
   readonly claudeSubagents?: ClaudeSubagents | undefined;
 }): Preferences =>
-  Object.fromEntries(
-    Object.entries({
-      harness: options.harness,
-      model: options.model,
-      effort: options.effort,
-      claudeSubagents: options.claudeSubagents,
-    }).filter(([, value]) => value !== undefined),
+  Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries({
+        harness: options.harness,
+        model: options.model,
+        effort: options.effort,
+        claudeSubagents: options.claudeSubagents,
+      }),
+      ([, value]) => value !== undefined,
+    ),
   );
 
 /** Agent preferences carried across a child Run's serialized options. */
@@ -154,16 +163,21 @@ export function foldPreferences(
     }
     model = layer.model ?? model;
     effort = layer.effort ?? effort;
-    if (layer.claudeSubagents !== undefined)
+    const subagents = layer.claudeSubagents;
+    if (subagents !== undefined)
       claudeSubagents = {
         ...claudeSubagents,
-        ...Object.fromEntries(
-          Object.entries(layer.claudeSubagents).filter(([, value]) => value !== undefined),
+        ...Rec.fromEntries(
+          Arr.filter(
+            Arr.map(Struct.keys(subagents), (key) => [key, subagents[key]] as const),
+            ([, value]) => value !== undefined,
+          ),
         ),
       };
   }
-  return Object.fromEntries(
-    Object.entries({ harness, model, effort, claudeSubagents }).filter(
+  return Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries({ harness, model, effort, claudeSubagents }),
       ([, value]) => value !== undefined,
     ),
   );
@@ -184,20 +198,35 @@ export function resolveChoice(
   const { harness = "", model = DEFAULT_MODEL, effort, claudeSubagents } = foldPreferences(layers);
   const adapter = HARNESS_MODELS[harness];
   if (adapter === undefined) {
-    return { ok: false, problem: `no harness called "${harness}" (${harnessNames().join(", ")})` };
+    return {
+      ok: false,
+      problem: `no harness called "${harness}" (${Arr.join(harnessNames(), ", ")})`,
+    };
   }
   const extra = extraModels[harness] ?? [];
-  const reported = catalogue?.harnesses.find((one) => one.harness === harness);
+  const reported = Option.getOrUndefined(
+    Option.flatMap(Option.fromNullishOr(catalogue), (current) =>
+      Arr.findFirst(current.harnesses, (one) => one.harness === harness),
+    ),
+  );
   if (catalogue !== undefined && reported === undefined)
     return { ok: false, problem: `${catalogue.machine} has no ${harness} installed` };
   const selected =
     model === DEFAULT_MODEL
-      ? (adapter.defaultModel ?? reported?.entries.find((entry) => entry.isDefault)?.model)
+      ? (adapter.defaultModel ??
+        Option.getOrUndefined(
+          Option.flatMap(Option.fromNullishOr(reported), (current) =>
+            Option.map(
+              Arr.findFirst(current.entries, (entry) => entry.isDefault === true),
+              (entry) => entry.model,
+            ),
+          ),
+        ))
       : model;
   const lists = reported !== undefined && reported.table === null;
   const known = (id: string) =>
     lists
-      ? reported.entries.some((entry) => entry.model === id) || extra.includes(id)
+      ? Arr.some(reported.entries, (entry) => entry.model === id) || Arr.contains(extra, id)
       : knownModel(adapter, id, extra);
   const source = reported?.table == null ? "" : `; from Collie's table: ${reported.table}`;
   if (selected !== undefined && !known(selected)) {
@@ -208,24 +237,25 @@ export function resolveChoice(
           ? `"${model}" is not a model ${harness} takes (${modelHint(adapter, extra)}): name one of those, or the harness it belongs to`
           : `${catalogue.machine}'s ${harness} has no model "${selected}" (${
               lists
-                ? reported.entries
-                    .map((entry) => entry.model)
-                    .concat(extra)
-                    .join(", ")
+                ? Arr.join([...Arr.map(reported.entries, (entry) => entry.model), ...extra], ", ")
                 : modelHint(adapter, extra)
             })${source}`,
     };
   }
   const efforts = lists
     ? selected === undefined
-      ? [...new Set(reported.entries.flatMap((entry) => entry.efforts))]
-      : (reported.entries.find((entry) => entry.model === selected)?.efforts ??
-        (extra.includes(selected ?? "") ? adapter.efforts : []))
+      ? [...new Set(Arr.flatMap(reported.entries, (entry) => entry.efforts))]
+      : (Option.getOrUndefined(Arr.findFirst(reported.entries, (entry) => entry.model === selected))
+          ?.efforts ?? (Arr.contains(extra, selected ?? "") ? adapter.efforts : []))
     : adapter.efforts;
-  if (effort !== undefined && catalogue !== undefined && !efforts?.includes(effort))
+  if (
+    effort !== undefined &&
+    catalogue !== undefined &&
+    !Option.exists(Option.fromNullishOr(efforts), (available) => Arr.contains(available, effort))
+  )
     return {
       ok: false,
-      problem: `"${effort}" is not an effort ${catalogue.machine}'s ${harness}/${selected ?? DEFAULT_MODEL} takes (${efforts?.join(", ") || "none"})${source}`,
+      problem: `"${effort}" is not an effort ${catalogue.machine}'s ${harness}/${selected ?? DEFAULT_MODEL} takes (${Option.getOrUndefined(Option.map(Option.fromNullishOr(efforts), (available) => Arr.join(available, ", "))) || "none"})${source}`,
     };
   if (effort !== undefined && efforts === undefined) {
     return {
@@ -233,10 +263,13 @@ export function resolveChoice(
       problem: `${harness} takes no effort, so "${effort}" cannot be asked of it`,
     };
   }
-  if (effort !== undefined && !efforts?.includes(effort)) {
+  if (
+    effort !== undefined &&
+    !Option.exists(Option.fromNullishOr(efforts), (available) => Arr.contains(available, effort))
+  ) {
     return {
       ok: false,
-      problem: `"${effort}" is not an effort ${harness} takes (${efforts?.join(", ")})`,
+      problem: `"${effort}" is not an effort ${harness} takes (${Option.getOrUndefined(Option.map(Option.fromNullishOr(efforts), (present) => Arr.join(present, ", ")))})`,
     };
   }
   if (harness === "claude" && claudeSubagents !== undefined) {
@@ -300,8 +333,10 @@ export function foldCeiling(layers: ReadonlyArray<Preferences | undefined>): Pre
 
 /** A `fallbacks` entry: `harness`, or `harness/model` split at the first `/`. */
 export function chainEntry(text: string): Preferences {
-  const at = text.indexOf("/");
-  return at === -1 ? { harness: text } : { harness: text.slice(0, at), model: text.slice(at + 1) };
+  const at = Option.getOrElse(pipe(text, Str.indexOf("/")), () => -1);
+  return at === -1
+    ? { harness: text }
+    : { harness: pipe(text, Str.slice(0, at)), model: pipe(text, Str.slice(at + 1)) };
 }
 
 /** Whether a choice has room under a ceiling, and why not where it has none. */
@@ -340,8 +375,11 @@ export function resolveWithRoom(
   if (!primary.ok) return primary;
   const folded = primary.choice;
   const ceiling = foldCeiling(layers);
-  const outOfRange = [ceiling.upTo, ...(ceiling.otherwise ?? []).map(({ upTo }) => upTo)].find(
-    (upTo) => upTo !== undefined && !(upTo >= 1 && upTo <= 100),
+  const outOfRange = Option.getOrUndefined(
+    Arr.findFirst(
+      [ceiling.upTo, ...Arr.map(ceiling.otherwise ?? [], ({ upTo }) => upTo)],
+      (upTo) => upTo !== undefined && !(upTo >= 1 && upTo <= 100),
+    ),
   );
   if (outOfRange !== undefined)
     return { ok: false, problem: `upTo is a percentage from 1 to 100, not ${outOfRange}` };
@@ -359,18 +397,33 @@ export function resolveWithRoom(
     const entry = chainEntry(text);
     const harness = entry.harness ?? "";
     const adapter = HARNESS_MODELS[harness];
-    const reported = catalogue?.harnesses.find((one) => one.harness === harness);
+    const reported = Option.getOrUndefined(
+      Option.flatMap(Option.fromNullishOr(catalogue), (current) =>
+        Arr.findFirst(current.harnesses, (one) => one.harness === harness),
+      ),
+    );
     const model =
       entry.model === undefined || entry.model === DEFAULT_MODEL
-        ? (adapter?.defaultModel ?? reported?.entries.find((one) => one.isDefault)?.model)
+        ? (adapter?.defaultModel ??
+          Option.getOrUndefined(
+            Option.flatMap(Option.fromNullishOr(reported), (current) =>
+              Option.map(
+                Arr.findFirst(current.entries, (one) => one.isDefault === true),
+                (one) => one.model,
+              ),
+            ),
+          ))
         : entry.model;
     const efforts =
       reported?.table === null
         ? model === undefined
-          ? reported.entries.flatMap((one) => one.efforts)
-          : reported.entries.find((one) => one.model === model)?.efforts
+          ? Arr.flatMap(reported.entries, (one) => one.efforts)
+          : Option.getOrUndefined(Arr.findFirst(reported.entries, (one) => one.model === model))
+              ?.efforts
         : adapter?.efforts;
-    const takes = efforts?.includes(folded.effort ?? "") ?? false;
+    const takes = Option.exists(Option.fromNullishOr(efforts), (available) =>
+      Arr.contains(available, folded.effort ?? ""),
+    );
     const next = resolveChoice(
       [
         entry,
@@ -404,7 +457,7 @@ export function resolveWithRoom(
     chosen: {
       choice: folded,
       from: null,
-      why: `nothing has room; ${[...new Set(whys)].join("; ")}`,
+      why: `nothing has room; ${Arr.join([...new Set(whys)], "; ")}`,
       skipped,
     },
   };

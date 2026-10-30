@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import * as Effect from "effect/Effect";
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import type { DropdownMenuItem } from "@nuxt/ui";
 import type { QueuedMessage } from "@tanstack/ai-client";
 import { DateTime, Option, type Schema } from "effect";
@@ -54,8 +58,10 @@ type Message = (typeof messages.value)[number];
 /** What Desktop said of its own about News, after its first line, or null for anyone else's message. */
 const desktopSaid = (message: Message) => {
   const first = message.parts[0];
-  return message.role === "user" && first?.type === "text" && first.content.startsWith(DESKTOP_SAID)
-    ? first.content.slice(DESKTOP_SAID.length).trim()
+  return message.role === "user" &&
+    first?.type === "text" &&
+    pipe(first.content, Str.startsWith(DESKTOP_SAID))
+    ? Str.trim(pipe(first.content, Str.slice(DESKTOP_SAID.length)))
     : null;
 };
 /** A message's markdown, with no margin above its first block or below its last. */
@@ -92,14 +98,28 @@ const files = useAttachments();
 const submit = computed(() => replyButton(status.value, desktopSpeaking.value));
 const liveStatus = computed(() => ({
   replying: submit.value.status !== "ready",
-  notices: [notices.value.waiting?.text, notices.value.reply?.text].filter(isString),
+  notices: Arr.filter(
+    [
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(notices.value.waiting), (present) => present.text),
+      ),
+      Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(notices.value.reply), (present_) => present_.text),
+      ),
+    ],
+    isString,
+  ),
 }));
 const announcement = ref("");
-const announce = async (text: string) => {
-  if (text === "") return;
-  announcement.value = "";
-  await nextTick();
-  announcement.value = text;
+const announce = (text: string) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (text === "") return;
+      announcement.value = "";
+      yield* Effect.promise(() => Promise.resolve(nextTick()));
+      announcement.value = text;
+    }),
+  );
 };
 watch(
   liveStatus,
@@ -132,7 +152,7 @@ const stopReply = () => {
  * turn under way. Files need no words.
  */
 const send = (now = false) => {
-  const text = draft.value.trim();
+  const text = Str.trim(draft.value);
   if (text === "" && files.pending.value.length === 0) return;
   draft.value = "";
   void say(text, chip.value, now, files.pending.value);
@@ -155,7 +175,11 @@ const pasted = (event: ClipboardEvent) => {
     return;
   }
   const items = [...data.items];
-  const images = pastedImages(items).flatMap((at) => [items[at]?.getAsFile() ?? null]);
+  const images = Arr.flatMap(pastedImages(items), (at) => [
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(items[at]), (present__) => present__.getAsFile()),
+    ) ?? null,
+  ]);
   if (images.length > 0) {
     event.preventDefault();
     for (const image of images) if (image !== null) void files.add(image, true);
@@ -178,37 +202,70 @@ const dropped = (event: DragEvent) => {
 /** The files a message part is, where it is one. */
 const attachedOf = (part: { readonly type: string }) => Option.getOrNull(attachedIn(part));
 
-const reopened = async (conversation: Parameters<typeof reopen>[0]) => {
-  const refused = await reopen(conversation);
-  if (refused !== null) toast.add({ title: refused, color: "error" });
+const reopened = (conversation: Parameters<typeof reopen>[0]) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const refused = yield* Effect.promise(() => Promise.resolve(reopen(conversation)));
+      if (refused !== null)
+        toast.add({
+          title: refused,
+          color: "error",
+        });
+    }),
+  );
 };
 
 type EarlierItem = DropdownMenuItem & { readonly harness: string; readonly slot: "earlier" };
 const earlier = ref<Array<Array<EarlierItem | DropdownMenuItem>>>([]);
-const listEarlier = async (open: boolean) => {
-  if (!open) return;
-  const listed = await conversations();
-  if (listed === null || listed.earlier.length === 0)
-    return void (earlier.value = [[{ label: "No earlier conversations", disabled: true }]]);
-  const note = earlierNote(
-    listed.earlier,
-    desktopSettings.value.chatHarness ?? DEFAULT_CHAT_HARNESS,
+const listEarlier = (open: boolean) => {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      if (!open) return;
+      const listed = yield* Effect.promise(() => Promise.resolve(conversations()));
+      if (listed === null || listed.earlier.length === 0)
+        return void (earlier.value = [
+          [
+            {
+              label: "No earlier conversations",
+              disabled: true,
+            },
+          ],
+        ]);
+      const note = earlierNote(
+        listed.earlier,
+        desktopSettings.value.chatHarness ?? DEFAULT_CHAT_HARNESS,
+      );
+      earlier.value = [
+        Arr.map(listed.earlier, ({ session, title, at, harness }) => ({
+          label: title,
+          description: DateTime.format(DateTime.makeUnsafe(at), {
+            dateStyle: "medium",
+            timeStyle: "short",
+          }),
+          harness: harnessName(harness),
+          slot: "earlier" as const,
+          onSelect: () =>
+            void reopened({
+              session,
+              harness,
+            }),
+        })),
+        ...(note === null
+          ? []
+          : [
+              [
+                {
+                  type: "label" as const,
+                  label: note,
+                  ui: {
+                    label: "font-normal text-muted",
+                  },
+                },
+              ],
+            ]),
+      ];
+    }),
   );
-  earlier.value = [
-    listed.earlier.map(({ session, title, at, harness }) => ({
-      label: title,
-      description: DateTime.format(DateTime.makeUnsafe(at), {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }),
-      harness: harnessName(harness),
-      slot: "earlier" as const,
-      onSelect: () => void reopened({ session, harness }),
-    })),
-    ...(note === null
-      ? []
-      : [[{ type: "label" as const, label: note, ui: { label: "font-normal text-muted" } }]]),
-  ];
 };
 
 const outputOf = (output: Schema.Json | undefined) =>
@@ -217,7 +274,10 @@ const queuedText = ({ content }: QueuedMessage) => {
   const said = isString(content) ? content : content.content;
   return isString(said)
     ? said
-    : said.flatMap((part) => (part.type === "text" ? [part.content] : [])).join(" ") || "files";
+    : Arr.join(
+        Arr.flatMap(said, (part) => (part.type === "text" ? [part.content] : [])),
+        " ",
+      ) || "files";
 };
 </script>
 

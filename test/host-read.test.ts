@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { Crypto, Effect } from "effect";
+import { Effect, Option } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Str from "effect/String";
 import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { toolNamed } from "../src/tools";
@@ -17,7 +19,7 @@ test(
           const started = yield* client.start({
             project: world.project,
             id: "offered",
-            request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+            request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
             input: { note: "compare answers" },
           });
           const runId = started.runId;
@@ -38,7 +40,7 @@ test(
               project: world.project,
               id: "hello",
               parent: runId,
-              request: yield* (yield* Crypto.Crypto).randomUUIDv4,
+              request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
               input: { name },
             });
             children.push(child.runId);
@@ -48,8 +50,8 @@ test(
             );
           }
           const withChildren = yield* toolNamed("collie_run")!.call(env, { run: runId });
-          expect(withChildren.indexOf(children[1]!)).toBeLessThan(
-            withChildren.indexOf(children[0]!),
+          expect(Option.getOrThrow(Str.indexOf(children[1]!)(withChildren))).toBeLessThan(
+            Option.getOrThrow(Str.indexOf(children[0]!)(withChildren)),
           );
           expect(yield* client.read({ tool: "collie_run", input: { run: runId } })).toBe(
             withChildren,
@@ -63,6 +65,10 @@ test(
               set,
               request: `hold-${set}`,
             });
+            yield* until(
+              () => client.run({ runId: waiting.id }),
+              (view) => view?.status.status === "suspended",
+            );
             const read = yield* client.read({ tool: "collie_run", input: { run: waiting.id } });
             expect(read).toBe(yield* toolNamed("collie_run")!.call(env, { run: waiting.id }));
           }

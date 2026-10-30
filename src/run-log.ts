@@ -1,10 +1,12 @@
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Option, Schema, Semaphore, Stream } from "effect";
 export interface LogTail {
   readonly panel: { readonly _tag: "Text"; readonly text: string; readonly truncated: boolean };
   readonly firstLine: number;
 }
 const Index = Schema.fromJsonString(
-  Schema.Struct({ bytes: Schema.Number, lines: Schema.Number, ended: Schema.Boolean }),
+  Schema.Struct({ bytes: Schema.Finite, lines: Schema.Finite, ended: Schema.Boolean }),
 );
 const writing = Semaphore.makeUnsafe(1);
 const indexOf = Effect.fn("RunLog.index")(function* (dir: string) {
@@ -30,7 +32,10 @@ const indexOf = Effect.fn("RunLog.index")(function* (dir: string) {
           ),
         );
   const index = { bytes: size, ...counted };
-  yield* fs.writeFileString(`${dir}/log-index.json`, Schema.encodeSync(Index)(index));
+  yield* fs.writeFileString(
+    `${dir}/log-index.json`,
+    yield* Schema.encodeEffect(Index)(index).pipe(Effect.orDie),
+  );
   return index;
 });
 
@@ -44,11 +49,11 @@ export const appendLogLine = Effect.fn("RunLog.append")(function* (dir: string, 
   yield* fs.writeFileString(`${dir}/log.txt`, text, { flag: "a" });
   yield* fs.writeFileString(
     `${dir}/log-index.json`,
-    Schema.encodeSync(Index)({
+    yield* Schema.encodeEffect(Index)({
       bytes: before.bytes + Buffer.byteLength(text),
-      lines: before.lines + text.split("\n").length - 1,
+      lines: before.lines + Str.split(text, "\n").length - 1,
       ended: true,
-    }),
+    }).pipe(Effect.orDie),
   );
   return first;
 }, writing.withPermits(1));
@@ -68,8 +73,14 @@ export const readLogTail = Effect.fn("RunLog.tail")(function* (
   const raw = yield* fs
     .stream(`${dir}/log.txt`, { offset: from })
     .pipe(Stream.decodeText(), Stream.mkString);
-  const text = from === 0 ? raw : raw.includes("\n") ? raw.slice(raw.indexOf("\n") + 1) : "";
-  const shown = text === "" ? 0 : text.split("\n").length - Number(text.endsWith("\n"));
+  const text =
+    from === 0
+      ? raw
+      : pipe_(raw, Str.includes("\n"))
+        ? pipe_(raw, Str.slice(Option.getOrElse(pipe_(raw, Str.indexOf("\n")), () => -1) + 1))
+        : "";
+  const shown =
+    text === "" ? 0 : Str.split(text, "\n").length - Number(pipe_(text, Str.endsWith("\n")));
   return {
     panel: { _tag: "Text", text, truncated: from > 0 },
     firstLine: index.lines + Number(!index.ended) - shown + 1,

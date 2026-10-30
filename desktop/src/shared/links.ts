@@ -1,5 +1,8 @@
 // The web links a Run produced, as cards. No Bun-only import: the view bundles this.
 
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import {
   type MrDetails,
   type MrPanel,
@@ -9,7 +12,7 @@ import {
   readMrRef,
 } from "../../../src/board-model";
 
-const capital = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}`;
+const capital = (text: string) => `${Str.toUpperCase(text[0]!)}${pipe(text, Str.slice(1))}`;
 
 /** What a Run's record calls its merge request's tab: `Merge request`, or `Pull request` on GitHub. */
 export const mrTab = (mr: string | null) => {
@@ -38,12 +41,14 @@ const LINK = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"'`)\]\\]+
 const ARTIFACT = /^https:\/\/claude\.ai\/(?:[^/]+\/)*artifacts?\//;
 const PIPELINE = /\/-\/pipelines\/(\d+)(?:[/?#]|$)/;
 
-const where = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+const where = (url: string) => pipe(url, Str.replace(/^https?:\/\//, ""), Str.replace(/\/$/, ""));
 
 /** A URL without its scheme or trailing slash, elided in the middle past 60. */
 export const shortUrl = (url: string) => {
   const shown = where(url);
-  return shown.length > 60 ? `${shown.slice(0, 40)}…${shown.slice(-15)}` : shown;
+  return shown.length > 60
+    ? `${pipe(shown, Str.slice(0, 40))}…${pipe(shown, Str.slice(-15))}`
+    : shown;
 };
 
 const cardOf = (url: string, given: string | undefined, mr: MrDetails | null): LinkCard => {
@@ -81,9 +86,9 @@ export const webLinks = ({
     details === null ? [] : [details.url, details.pipeline === "" ? "" : checksUrl(details)];
   const titles = new Map<string, string | undefined>();
   for (const text of [...texts, ...own])
-    for (const [bare, given, marked] of text.matchAll(LINK)) {
-      const url = marked ?? bare.replace(/[.,;:!?]+$/, "");
+    for (const [bare, given, marked] of pipe(text, Str.matchAll(LINK))) {
+      const url = marked ?? pipe(bare, Str.replace(/[.,;:!?]+$/, ""));
       if (titles.get(url) === undefined) titles.set(url, given);
     }
-  return [...titles].map(([url, given]) => cardOf(url, given, details));
+  return Arr.map([...titles], ([url, given]) => cardOf(url, given, details));
 };

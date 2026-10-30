@@ -1,14 +1,16 @@
 // `collie schedule` reaching another Machine over the paired link (ADR-0052 D8, ADR-0057):
 // two real hosts, each with its own fake herdr, as `remote-cli.test.ts` drives them.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { hostname } from "node:os";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { runEffect } from "./support/effect";
 import { fixtures, stopHost } from "./support/host";
 import { twoMachines, type Side } from "./support/peers";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Listed = Schema.Struct({
   schedules: Schema.Array(
     Schema.Struct({
@@ -29,7 +31,7 @@ const save = (side: Side, module: string) =>
 const installation = (side: Side) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${side.world.state}/installation`)),
-    Effect.map((text) => text.trim()),
+    Effect.map((text) => Str.trim(text)),
     Effect.orDie,
   );
 const add = (name: string, workflow: string, ...rest: ReadonlyArray<string>) => [
@@ -45,12 +47,19 @@ const add = (name: string, workflow: string, ...rest: ReadonlyArray<string>) => 
 const kept = (side: Side) =>
   Effect.gen(function* () {
     const own = yield* installation(side);
-    return (yield* listed(side)).schedules.filter(({ machine }) => machine.installation === own);
+    return Arr.filter(
+      (yield* listed(side)).schedules,
+      ({ machine }) => machine.installation === own,
+    );
   });
 const listed = (side: Side, prefix: ReadonlyArray<string> = []) =>
   side
     .cli([...prefix, "schedule", "list"])
-    .pipe(Effect.map(({ envelope }) => Schema.decodeUnknownSync(Listed)(envelope.data)));
+    .pipe(
+      Effect.map(({ envelope }) =>
+        flow(Schema.decodeUnknownResult(Listed), Result.getOrThrow)(envelope.data),
+      ),
+    );
 
 test(
   "a Schedule is added, changed and listed on the Machine --machine names, decided by that Machine",
@@ -130,14 +139,17 @@ test(
             ).toBe(true);
             const flock = yield* listed(first);
             expect(
-              flock.schedules.map(({ name, machine }) => [name, machine.installation]),
+              Arr.map(flock.schedules, ({ name, machine }) => [name, machine.installation]),
             ).toEqual([
               ["here", firstId],
               ["nightly", secondId],
             ]);
             expect(flock.machines).toEqual([]);
             expect(
-              (yield* listed(first, ["--machine", "second"])).schedules.map(({ name }) => name),
+              Arr.map(
+                (yield* listed(first, ["--machine", "second"])).schedules,
+                ({ name }) => name,
+              ),
             ).toEqual(["nightly"]);
 
             const removed = yield* first.cli([
@@ -149,13 +161,15 @@ test(
             ]);
             expect(removed.envelope).toMatchObject({ ok: true, data: { change: "remove" } });
             expect(yield* kept(second)).toEqual([]);
-            expect((yield* listed(first, [])).schedules.map(({ name }) => name)).toEqual(["here"]);
+            expect(Arr.map((yield* listed(first, [])).schedules, ({ name }) => name)).toEqual([
+              "here",
+            ]);
 
             const unknown = yield* first.cli(["--machine", "nowhere", "schedule", "list"]);
             expect(unknown.envelope.error?.code).toBe("invalid_input");
             yield* stopHost(second.world.state);
             const away = yield* listed(first);
-            expect(away.schedules.map(({ name }) => name)).toEqual(["here"]);
+            expect(Arr.map(away.schedules, ({ name }) => name)).toEqual(["here"]);
             expect(away.machines).toMatchObject([{ machine: "second", state: "away" }]);
             const unreachable = yield* first.cli(["--machine", "second", "schedule", "list"]);
             expect(unreachable.envelope.error?.code).toBe("machine_unreachable");
@@ -205,7 +219,7 @@ test(
             });
             expect((yield* first.cli(move)).envelope).toEqual(moved.envelope);
             expect(
-              (yield* listed(first)).schedules.map(({ machine }) => machine.installation),
+              Arr.map((yield* listed(first)).schedules, ({ machine }) => machine.installation),
             ).toEqual([yield* installation(second)]);
             expect(yield* kept(second)).toMatchObject([
               { name: "daily", paused: false, checkout: second.world.project },
@@ -233,7 +247,7 @@ test(
             expect(refused.envelope.error?.code).toBe("machine_unreachable");
             const still = yield* listed(first);
             expect(encode(still.schedules)).toContain('"paused":false');
-            expect(still.schedules.map(({ name }) => name)).toEqual(["daily"]);
+            expect(Arr.map(still.schedules, ({ name }) => name)).toEqual(["daily"]);
           }),
         [],
       ),

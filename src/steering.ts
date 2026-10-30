@@ -6,7 +6,11 @@
 // This module is the only writer of `deliveries.jsonl` and `budget.jsonl` — the second a
 // record of every model call and what it cost, never a permission to make one.
 
-import { Data, Effect, FileSystem, Path, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { appendJournal, readJournal, readJournalWhole } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { nowIso, epochMs } from "./time";
@@ -55,13 +59,18 @@ export const SENT_STATES: ReadonlySet<string> = new Set(["submitted", "acknowled
 
 /** The line a Run's agents log keeps for a human's message told to one of its agents. */
 export const toldLine = (agent: string, text: string) =>
-  `${agent}: told "${text.split("\n")[0] ?? ""}"`;
+  `${agent}: told "${Str.split(text, "\n")[0] ?? ""}"`;
 
 /** The first line of the newest message `log` says `agent` was told, or null for none. */
 export function toldIn(log: string, agent: string): string | null {
   const prefix = `${agent}: told "`;
-  const line = log.split("\n").findLast((one) => one.startsWith(prefix) && one.endsWith('"'));
-  return line === undefined ? null : line.slice(prefix.length, -1);
+  const line = Option.getOrUndefined(
+    Arr.findLast(
+      Str.split(log, "\n"),
+      (one) => pipe_(one, Str.startsWith(prefix)) && pipe_(one, Str.endsWith('"')),
+    ),
+  );
+  return line === undefined ? null : pipe_(line, Str.slice(prefix.length, -1));
 }
 
 /** States nothing follows: a causal key with one of these is free for a new delivery. */
@@ -151,8 +160,8 @@ export const ledgerFiles = Effect.fn("Steering.ledgerFiles")(function* (stateDir
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = path.join(stateDir, "agents");
-  const names = yield* fs.readDirectory(root).pipe(Effect.catch(() => Effect.succeed([])));
-  return names.map((name) => path.join(root, name, LEDGER_FILE));
+  const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
+  return Arr.map(names, (name) => path.join(root, name, LEDGER_FILE));
 });
 
 /**
@@ -301,7 +310,12 @@ export function overrideActive(lines: ReadonlyArray<LedgerLine>): boolean {
 
 /** Sent, with nothing to show the harness took it. */
 export const isUnobserved = (delivery: Delivery) =>
-  delivery.state === "submitted" && delivery.note?.startsWith("unobserved") === true;
+  delivery.state === "submitted" &&
+  Option.getOrUndefined(
+    Option.map(Option.fromNullishOr(delivery.note), (present) =>
+      pipe_(present, Str.startsWith("unobserved")),
+    ),
+  ) === true;
 
 /**
  * An explicit account of an unknown or unobserved delivery. Callers establish whether it
@@ -345,9 +359,11 @@ export const herdKey = Effect.fn("Steering.herdKey")(function* <R>(
 ) {
   const socket = socketPath ?? (yield* fromStatus());
   if (socket === null || socket === "")
-    return yield* Effect.fail(new HerdrUnreachable({ why: "no socket path" }));
+    return yield* new HerdrUnreachable({
+      why: "no socket path",
+    });
   const fs = yield* FileSystem.FileSystem;
-  const real = yield* fs.realPath(socket).pipe(Effect.catch(() => Effect.succeed(socket)));
+  const real = yield* fs.realPath(socket).pipe(Effect.orElseSucceed(() => socket));
   return digest(real);
 });
 
@@ -372,9 +388,9 @@ const BudgetSchema = Schema.Union([
     run: Schema.NullOr(Schema.String),
     at: Schema.String,
     /** Read from records written before spending caps were dropped; never written now. */
-    max_usd: Schema.optionalKey(Schema.Number),
-    max_seconds: Schema.Number,
-    max_output_bytes: Schema.Number,
+    max_usd: Schema.optionalKey(Schema.Finite),
+    max_seconds: Schema.Finite,
+    max_output_bytes: Schema.Finite,
     /** What the call was asked of; absent on records from before either was written. */
     model: Schema.optionalKey(Schema.String),
     effort: Schema.optionalKey(Schema.String),
@@ -384,14 +400,14 @@ const BudgetSchema = Schema.Union([
     id: Schema.String,
     at: Schema.String,
     outcome: Schema.Literals(["ok", "failed", "timeout", "over_output", "killed"]),
-    usd: Schema.optionalKey(Schema.Number),
-    seconds: Schema.Number,
-    bytes: Schema.Number,
+    usd: Schema.optionalKey(Schema.Finite),
+    seconds: Schema.Finite,
+    bytes: Schema.Finite,
   }),
 ]);
 export type BudgetLine = Schema.Schema.Type<typeof BudgetSchema>;
 const BudgetJson = Schema.fromJsonString(BudgetSchema);
-const encodeBudget = Schema.encodeSync(BudgetJson);
+const encodeBudget = flow(Schema.encodeResult(BudgetJson), Result.getOrThrow);
 
 export const budgetPath = Effect.fn("Steering.budgetPath")(function* (
   stateDir: string,
@@ -421,8 +437,8 @@ function staleSettlements(
   nowMs: number,
   at: string,
 ): BudgetLine[] {
-  const settled = new Set(lines.flatMap((l) => (l.kind === "settle" ? [l.id] : [])));
-  return lines.flatMap((line): BudgetLine[] => {
+  const settled = new Set(Arr.flatMap(lines, (l) => (l.kind === "settle" ? [l.id] : [])));
+  return Arr.flatMap(lines, (line): BudgetLine[] => {
     if (line.kind !== "reserve" || settled.has(line.id)) return [];
     const startedAt = epochMs(line.at);
     if (Number.isNaN(startedAt) || nowMs - startedAt < 2 * line.max_seconds * 1000) return [];
@@ -466,7 +482,10 @@ export const appendBudget = Effect.fn("Steering.appendBudget")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-  const body = lines.map((line) => encodeBudget(line)).join("\n");
+  const body = Arr.join(
+    Arr.map(lines, (line) => encodeBudget(line)),
+    "\n",
+  );
   yield* fs.writeFileString(file, `${body}\n`, { flag: "a" });
 });
 
@@ -480,7 +499,7 @@ export const reserve = Effect.fn("Steering.reserve")(function* (
   request: { readonly id: string; readonly run: string | null },
   limits: CallLimits,
 ) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   yield* ensureLockDir(file);
   const write = Effect.gen(function* () {
     const planned = planReservation(yield* readBudget(file), { ...request, at }, limits);
@@ -501,7 +520,7 @@ export const settle = Effect.fn("Steering.settle")(function* (
     readonly bytes: number;
   },
 ) {
-  const at = yield* nowIso();
+  const at = yield* nowIso;
   const line: Extract<BudgetLine, { kind: "settle" }> = {
     kind: "settle",
     id,

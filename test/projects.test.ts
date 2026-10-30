@@ -1,6 +1,8 @@
 // The Projects root and the checkouts under it: where a Run started from the Home is
 // rooted, and the one listing the router and an agent's refusal choose from.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { runOnPath } from "./support/forge";
@@ -130,11 +132,11 @@ test(
               "call",
               "collie_do",
               "--input",
-              Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({
+              yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
                 actions: [
                   { kind: "start", workflow: "plain", workspace, inputs: { note: "hello" } },
                 ],
-              }),
+              }).pipe(Effect.orDie),
             ]);
             expect(reply.envelope.ok).toBe(true);
             expect(reply.envelope.data).toMatchObject({
@@ -189,7 +191,7 @@ test(
             { cwd: rig.projectDir },
           );
           heads.push(
-            (yield* exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir })).stdout.trim(),
+            Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir })).stdout),
           );
           yield* exec(["git", "push", "-q", "origin", branch], { cwd: rig.projectDir });
           yield* exec(["git", "switch", "-q", "master"], { cwd: rig.projectDir });
@@ -209,7 +211,7 @@ test(
   esac`,
         );
         const placed = yield* Effect.all(
-          ["first-topic", "second-topic"].map((branch) =>
+          Arr.map(["first-topic", "second-topic"], (branch) =>
             startCheckout(rig.pluginEnv(), rig.projectDir, { branch }, true),
           ),
           { concurrency: 2 },
@@ -231,7 +233,7 @@ test(
           });
           expect(checkout.refused).toBeNull();
           expect(
-            (yield* exec(["git", "rev-parse", "HEAD"], { cwd: checkout.cwd })).stdout.trim(),
+            Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: checkout.cwd })).stdout),
           ).toBe(heads[index]!);
         }
       }),

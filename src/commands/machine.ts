@@ -3,6 +3,7 @@
 // opens the SSH connection a blocked link rides, are what a human has a use for; `invite`
 // is what pairing runs on the other Machine over SSH.
 
+import * as Arr from "effect/Array";
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { inviteFrom, machineConnect, machineList } from "../lifecycle";
@@ -30,7 +31,7 @@ const standing = (peer: PeerView) => {
   ];
   return [
     state,
-    ...(ways.length > 0 ? [ways.join("; ")] : peer.failure === null ? [] : [peer.failure]),
+    ...(ways.length > 0 ? [Arr.join(ways, "; ")] : peer.failure === null ? [] : [peer.failure]),
   ];
 };
 
@@ -47,16 +48,20 @@ const list = Command.make("list", {}, () =>
             `This Machine: collie ${BUILD}\n` +
             (peers.length === 0
               ? "No Machine is paired with this one."
-              : peers
-                  .map((peer) =>
-                    [
-                      peer.name,
-                      peer.dials === "out" ? "dialled from here" : "dials in",
-                      peer.build === null ? "build not read" : `collie ${peer.build}`,
-                      ...standing(peer),
-                    ].join("\t"),
-                  )
-                  .join("\n")),
+              : Arr.join(
+                  Arr.map(peers, (peer) =>
+                    Arr.join(
+                      [
+                        peer.name,
+                        peer.dials === "out" ? "dialled from here" : "dials in",
+                        peer.build === null ? "build not read" : `collie ${peer.build}`,
+                        ...standing(peer),
+                      ],
+                      "\t",
+                    ),
+                  ),
+                  "\n",
+                )),
         };
       }),
     ),

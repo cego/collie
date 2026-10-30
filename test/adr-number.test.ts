@@ -3,35 +3,38 @@
 // References are built here rather than written out, so the docs-links check never reads
 // this file's fixtures as the repository's own.
 
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
-const adr = (id: string) => ["ADR", id].join("-");
+const adr = (id: string) => Arr.join(["ADR", id], "-");
 const draft = (slug: string) => adr(`draft-${slug}`);
 
 const git = (cwd: string, ...args: ReadonlyArray<string>) =>
   exec(["git", ...args], { cwd }).pipe(
     Effect.tap((done) =>
-      done.exitCode === 0 ? Effect.void : Effect.die(`git ${args.join(" ")}: ${done.stderr}`),
+      done.exitCode === 0 ? Effect.void : Effect.die(`git ${Arr.join(args, " ")}: ${done.stderr}`),
     ),
-    Effect.map((done) => done.stdout.trim()),
+    Effect.map((done) => Str.trim(done.stdout)),
   );
 
 const status = (root: string) =>
   Effect.map(git(root, "status", "--porcelain"), (out) =>
-    out
-      .split("\n")
-      .map((line) => line.trim())
-      .sort(),
+    Arr.map(Str.split(out, "\n"), (line) => Str.trim(line)).sort(),
   );
 
 const write = (root: string, files: Record<string, string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    for (const [path, body] of Object.entries(files)) {
-      yield* fs.makeDirectory(`${root}/${path}`.replace(/\/[^/]*$/, ""), { recursive: true });
+    for (const [path, body] of Rec.toEntries(files)) {
+      yield* fs.makeDirectory(pipe_(`${root}/${path}`, Str.replace(/\/[^/]*$/, "")), {
+        recursive: true,
+      });
       yield* fs.writeFileString(`${root}/${path}`, body);
     }
   });

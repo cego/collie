@@ -5,6 +5,7 @@
 // reaches it over MCP and Pi through its extension, and both of those are adapters over
 // what this prints. One implementation, three ways in.
 
+import * as Arr from "effect/Array";
 import { Effect, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import {
@@ -46,7 +47,7 @@ const status = Command.make("status", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
       const chosen = yield* chatHarnessOf(env.userDir);
-      const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+      const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
       const record = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
       const unavailable = whyUnavailable(chosen, Bun.which(chosen));
       const delivery = pushable(chosen);
@@ -67,16 +68,19 @@ const status = Command.make("status", {}, () =>
           omitted: batch.omitted,
           uncertain: unsettled,
         },
-        human: [
-          `running\t${record?.harness ?? "nothing"}`,
-          `preference\t${chosen}${pending === null ? "" : "\tnext launch"}`,
-          unavailable === null ? `${chosen}\tinstalled` : `${chosen}\t${unavailable}`,
-          // Two different questions, answered apart: whether there is a conversation, and
-          // whether Collie can interrupt it. Claude has one and not the other here.
-          `delivery\t${delivery.proven ? "push" : "on the next turn"}\t${delivery.how}`,
-          `waiting\t${batch.items.length}${batch.omitted > 0 ? ` (+${batch.omitted} older)` : ""}`,
-          ...(unsettled.length === 0 ? [] : [`uncertain\t${unsettled.join(", ")}`]),
-        ].join("\n"),
+        human: Arr.join(
+          [
+            `running\t${record?.harness ?? "nothing"}`,
+            `preference\t${chosen}${pending === null ? "" : "\tnext launch"}`,
+            unavailable === null ? `${chosen}\tinstalled` : `${chosen}\t${unavailable}`,
+            // Two different questions, answered apart: whether there is a conversation, and
+            // whether Collie can interrupt it. Claude has one and not the other here.
+            `delivery\t${delivery.proven ? "push" : "on the next turn"}\t${delivery.how}`,
+            `waiting\t${batch.items.length}${batch.omitted > 0 ? ` (+${batch.omitted} older)` : ""}`,
+            ...(unsettled.length === 0 ? [] : [`uncertain\t${Arr.join(unsettled, ", ")}`]),
+          ],
+          "\n",
+        ),
       };
     }),
   ),
@@ -91,7 +95,9 @@ const harness = Command.make(
   "harness",
   {
     harness: Argument.String("harness").pipe(
-      Argument.withDescription(`Which native chat Collie opens with: ${CHAT_HARNESSES.join(", ")}`),
+      Argument.withDescription(
+        `Which native chat Collie opens with: ${Arr.join(CHAT_HARNESSES, ", ")}`,
+      ),
       Argument.optional,
     ),
     requestId: requestIdFlag,
@@ -105,7 +111,7 @@ const harness = Command.make(
           return { ok: true as const, data: { preference: now }, human: now };
         }
         if (!isChatHarness(chosen))
-          return err("invalid_input", `Chat is ${CHAT_HARNESSES.join(" or ")}.`);
+          return err("invalid_input", `Chat is ${Arr.join(CHAT_HARNESSES, " or ")}.`);
         return yield* mutation(env, "chat-harness", requestId, () =>
           Effect.gen(function* () {
             yield* writeConfigValue(env.userDir, CHAT_HARNESS_KEY, chosen);
@@ -140,7 +146,7 @@ const news = Command.make(
   ({ sent, uncertain: unsure }) =>
     answering((env) =>
       Effect.gen(function* () {
-        const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+        const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
         if (key === null) return err("invalid_state", "Collie cannot reach herdr.");
         // `sent` and `uncertain` are facts about a transport, never about a conversation.
         // Only `collie_news` being read settles an item, because only that shows it
@@ -225,7 +231,7 @@ const list = Command.make("list", {}, () =>
     Effect.succeed({
       ok: true as const,
       data: {
-        tools: TOOLS.map(({ name, title, description, input, readOnly }) => ({
+        tools: Arr.map(TOOLS, ({ name, title, description, input, readOnly }) => ({
           name,
           title,
           description,
@@ -233,9 +239,13 @@ const list = Command.make("list", {}, () =>
           readOnly,
         })),
       },
-      human: TOOLS.map(
-        (tool) => `${tool.name}\t${tool.title}\t${tool.readOnly ? "reads" : "writes"}`,
-      ).join("\n"),
+      human: Arr.join(
+        Arr.map(
+          TOOLS,
+          (tool) => `${tool.name}\t${tool.title}\t${tool.readOnly ? "reads" : "writes"}`,
+        ),
+        "\n",
+      ),
     }),
   ),
 ).pipe(Command.withDescription("The reads native chat may make"));
@@ -256,9 +266,7 @@ const call = Command.make(
       Effect.gen(function* () {
         const found = toolNamed(tool);
         if (found === null) return err("invalid_input", `No tool "${tool}".`);
-        const decoded = Schema.decodeUnknownOption(UnknownJson)(
-          Option.getOrElse(input, () => "{}"),
-        );
+        const decoded = Schema.decodeOption(UnknownJson)(Option.getOrElse(input, () => "{}"));
         if (decoded._tag === "None" || !isJsonObject(decoded.value))
           return err("invalid_input", "--input is a JSON object.");
         const text = yield* found.call(env, decoded.value);

@@ -1,5 +1,18 @@
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Cause, Config, Effect, Fiber, FileSystem, Option, Queue, Schema, Stream } from "effect";
+import {
+  Cause,
+  Config,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Queue,
+  Schema,
+  Stream,
+  flow,
+  Result,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import manifest from "../herdr-plugin.toml";
 import type { JsonObject } from "../src/schema";
@@ -13,17 +26,23 @@ import { twoMachines } from "./support/peers";
 import { TOOLS } from "../src/tools";
 import { runEffect, suiteEnv } from "./support/effect";
 
-const encodeValue = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeValue = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 const root = new URL("../", import.meta.url).pathname;
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject));
+const encode = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.JsonObject)),
+  Result.getOrThrow,
+);
 const decode = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
       jsonrpc: Schema.Literal("2.0"),
-      id: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+      id: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
       result: Schema.optionalKey(Schema.JsonObject),
-      error: Schema.optionalKey(Schema.Struct({ code: Schema.Number, message: Schema.String })),
+      error: Schema.optionalKey(Schema.Struct({ code: Schema.Finite, message: Schema.String })),
     }),
   ),
 );
@@ -116,7 +135,7 @@ test(
         const listed = yield* server.request("tools/list", {});
         expect(listed).toMatchObject({
           result: {
-            tools: TOOLS.map((tool) => ({
+            tools: Arr.map(TOOLS, (tool) => ({
               name: tool.name,
               title: tool.title,
               description: tool.description,
@@ -199,16 +218,19 @@ test(
             const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"], {
               FAKE_HERDR_OUTPUTS: outputs,
             });
-            const { runId } = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }))(
-              started.envelope.data,
-            );
+            const { runId } = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ runId: Schema.String }),
+            )(started.envelope.data).pipe(Effect.orDie);
             const host = yield* connect(first.world.state);
             yield* until(
               () => host.run({ runId }),
-              (view) => (view?.waiting ?? []).some((one) => one.answer === null),
+              (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
             );
-            const agent = (yield* everyRegistered(first.world.state)).find(
-              (one) => one.runId === runId,
+            const agent = Option.getOrUndefined(
+              Arr.findFirst(
+                yield* everyRegistered(first.world.state),
+                (one) => one.runId === runId,
+              ),
             )!;
             const server = yield* openServer({
               ...first.env,
@@ -229,7 +251,8 @@ test(
               arguments: { sender: "somebody else", actions },
             });
             expect(encodeValue(forged)).toContain("refus");
-            const before = (yield* readAudit(runDir(first.world.state, runId))).filter(
+            const before = Arr.filter(
+              yield* readAudit(runDir(first.world.state, runId)),
               (one) => one.operation === "deliver",
             ).length;
             const answer = yield* server.request("tools/call", {
@@ -237,7 +260,8 @@ test(
               arguments: { actions },
             });
             expect(encodeValue(answer)).toContain("deliver: applied");
-            const trail = (yield* readAudit(runDir(first.world.state, runId))).filter(
+            const trail = Arr.filter(
+              yield* readAudit(runDir(first.world.state, runId)),
               (one) => one.operation === "deliver",
             );
             expect(trail).toHaveLength(before + 1);

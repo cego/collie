@@ -1,22 +1,29 @@
-import { Effect, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import { Effect, Schema, flow, Result } from "effect";
 import type { RepoRef, Thread, ThreadRef } from "forges";
 import { ForgeHttp, type ForgeLogin } from "./http";
 import { Issue } from "./issues";
 import { mrWords, type MrRef } from "../board-model";
 
 const threadRepo = (login: ForgeLogin, project: string): RepoRef => {
-  const path = project.slice(login.host.length + 1);
-  const slash = path.lastIndexOf("/");
+  const path = pipe(project, Str.slice(login.host.length + 1));
+  const slash = Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1);
   return {
     forge: login.forge,
     instance: login.host,
-    owner: path.slice(0, slash),
-    name: path.slice(slash + 1),
+    owner: pipe(path, Str.slice(0, slash)),
+    name: pipe(path, Str.slice(slash + 1)),
   };
 };
 
 const issueOf = (thread: Thread) =>
-  Schema.decodeUnknownSync(Issue)({
+  flow(
+    Schema.decodeUnknownResult(Issue),
+    Result.getOrThrow,
+  )({
     number: Number(thread.ref.number),
     title: thread.title,
     body: thread.body ?? "",
@@ -29,9 +36,9 @@ export const viewerLogin = (login: ForgeLogin, cwd: string) =>
     const me = yield* http.ask(login, cwd, (provider, signal) =>
       provider.users
         .me({ signal })
-        .then((user) => Schema.decodeUnknownSync(Schema.String)(user.login)),
+        .then((user) => flow(Schema.decodeResult(Schema.String), Result.getOrThrow)(user.login)),
     );
-    return me.ok && me.value.trim() !== "" ? me.value : null;
+    return me.ok && Str.trim(me.value) !== "" ? me.value : null;
   });
 
 export const listIssues = (
@@ -53,11 +60,11 @@ export const listIssues = (
             }),
           )
         : Promise.all(
-            numbers.map((number) =>
+            Arr.map(numbers, (number) =>
               provider.threads.get(threadRef(login, project, String(number), "issue"), { signal }),
             ),
           )
-      ).then((threads) => threads.map(issueOf)),
+      ).then((threads) => Arr.map(threads, issueOf)),
     );
     return listed.ok ? { ok: true as const, issues: listed.value } : listed;
   });
@@ -171,5 +178,5 @@ export const myMergeRequests = (login: ForgeLogin, project: string, cwd: string)
           if (one.ref.number !== undefined && !seen.has(one.ref.number))
             seen.set(one.ref.number, one.title ?? "");
     }
-    return [...seen].map(([iid, title]) => ({ iid, title }));
+    return Arr.map([...seen], ([iid, title]) => ({ iid, title }));
   });

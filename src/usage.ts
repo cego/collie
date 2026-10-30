@@ -2,6 +2,10 @@
 // `/usage` reads and its agents' status lines, ChatGPT's from Codex's app server. Each
 // endpoint is called only when asked, and at most once per interval.
 
+import * as Arr from "effect/Array";
+import * as Cause from "effect/Cause";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import {
   Clock,
   Context,
@@ -19,7 +23,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { withCodex } from "./codex";
+import { type CodexError, withCodex } from "./codex";
 import { CONTROL_DIR, readControl } from "./compaction";
 import { newestRateLimits } from "./compactors";
 import { currentEnv, type PluginEnv } from "./env";
@@ -98,31 +102,36 @@ const paced = Effect.fn("Usage.paced")(function* (
   let until = 0;
   let good: UsageReading | null = null;
   let shown: UsageReading | null = null;
-  return single.withPermits(1)(
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      if (shown !== null && now < until) return shown;
-      const asked = yield* ask.pipe(
-        Effect.timeoutOption(USAGE_CALL_MS),
-        Effect.map(
-          Option.getOrElse((): Asked => ({
-            reading: problem(
-              subscription,
-              now,
-              `${SOURCE[subscription]} did not answer within ${USAGE_CALL_MS / 1000}s`,
-            ),
-            called: true,
-          })),
-        ),
-      );
-      if (asked.reading.problem === null) good = asked.reading;
-      shown =
-        good !== null && asked.reading.problem !== null
-          ? { ...good, problem: asked.reading.problem }
-          : asked.reading;
-      if (asked.called) until = now + Math.max(USAGE_INTERVAL_MS, asked.retryAfterMs ?? 0);
-      return shown;
-    }),
+  return yield* Effect.succeed(
+    single.withPermits(1)(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        if (shown !== null && now < until) return shown;
+        const asked = yield* ask.pipe(
+          Effect.timeoutOption(USAGE_CALL_MS),
+          Effect.map(
+            Option.getOrElse((): Asked => ({
+              reading: problem(
+                subscription,
+                now,
+                `${SOURCE[subscription]} did not answer within ${USAGE_CALL_MS / 1000}s`,
+              ),
+              called: true,
+            })),
+          ),
+        );
+        if (asked.reading.problem === null) good = asked.reading;
+        shown =
+          good !== null && asked.reading.problem !== null
+            ? {
+                ...good,
+                problem: asked.reading.problem,
+              }
+            : asked.reading;
+        if (asked.called) until = now + Math.max(USAGE_INTERVAL_MS, asked.retryAfterMs ?? 0);
+        return shown;
+      }),
+    ),
   );
 });
 
@@ -136,7 +145,10 @@ function withSample(reading: UsageReading, sample: StatusSample | null): UsageRe
     ...reading,
     windows: [
       ...fresh,
-      ...reading.windows.filter((window) => window.kind !== "session" && window.kind !== "weekly"),
+      ...Arr.filter(
+        reading.windows,
+        (window) => window.kind !== "session" && window.kind !== "weekly",
+      ),
     ],
     at: iso(sample.at),
     source: "claude-status-line",
@@ -162,7 +174,7 @@ const Credentials = Schema.fromJsonString(
         Schema.Struct({
           accessToken: Schema.String,
           /** Epoch ms. */
-          expiresAt: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+          expiresAt: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
           subscriptionType: Schema.optionalKey(Schema.NullOr(Schema.String)),
         }),
       ),
@@ -197,7 +209,7 @@ const keychain = (configDir: string | undefined) =>
     const service =
       configDir === undefined
         ? "Claude Code-credentials"
-        : `Claude Code-credentials-${sha256Hex(configDir).slice(0, 8)}`;
+        : `Claude Code-credentials-${pipe_(sha256Hex(configDir), Str.slice(0, 8))}`;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
       ChildProcess.make("security", ["find-generic-password", "-s", service, "-w"], {
@@ -206,7 +218,7 @@ const keychain = (configDir: string | undefined) =>
       }),
     );
     const text = yield* handle.stdout.pipe(Stream.decodeText(), Stream.mkString);
-    return Number(yield* handle.exitCode) === 0 ? text.trim() : null;
+    return Number(yield* handle.exitCode) === 0 ? Str.trim(text) : null;
   }).pipe(
     Effect.scoped,
     Effect.orElseSucceed(() => null),
@@ -314,7 +326,7 @@ export interface CodexAnswers {
 }
 
 /** A Codex app server for one exchange: a running agent's own, else one over stdio. */
-export type CodexAsk = Effect.Effect<CodexAnswers, Error>;
+export type CodexAsk = Effect.Effect<CodexAnswers, CodexError | Cause.UnknownError>;
 
 export const codexReading = (ask: CodexAsk): Effect.Effect<Asked> =>
   Effect.gen(function* () {
@@ -401,7 +413,7 @@ export const ownCodexReading = (stateDir: string, agent: string) =>
 
 const RpcReply = Schema.fromJsonString(
   Schema.Struct({
-    id: Schema.optionalKey(Schema.Number),
+    id: Schema.optionalKey(Schema.Finite),
     result: Schema.optionalKey(Schema.Unknown),
     error: Schema.optionalKey(Schema.Struct({ message: Schema.String })),
   }),
@@ -409,9 +421,13 @@ const RpcReply = Schema.fromJsonString(
 const decodeReply = Schema.decodeUnknownOption(RpcReply);
 
 /** `codex app-server` over stdio, for one exchange, closed again when it is answered. */
-const viaStdio: Effect.Effect<CodexAnswers, Error, ChildProcessSpawner.ChildProcessSpawner> =
-  Effect.gen(function* () {
-    const lines = [
+const viaStdio: Effect.Effect<
+  CodexAnswers,
+  Cause.UnknownError,
+  ChildProcessSpawner.ChildProcessSpawner
+> = Effect.gen(function* () {
+  const lines = Arr.map(
+    [
       {
         jsonrpc: "2.0",
         id: 1,
@@ -421,41 +437,55 @@ const viaStdio: Effect.Effect<CodexAnswers, Error, ChildProcessSpawner.ChildProc
       { jsonrpc: "2.0", method: "initialized" },
       { jsonrpc: "2.0", id: 2, method: RATE_LIMITS, params: {} },
       { jsonrpc: "2.0", id: 3, method: ACCOUNT, params: {} },
-    ].map((message) => `${JSON.stringify(message)}\n`);
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const handle = yield* spawner
-      .spawn(
-        ChildProcess.make("codex", ["app-server"], {
-          // Held open: a closed stdin is the server's cue to stop before it answers.
-          stdin: Stream.concat(Stream.make(new TextEncoder().encode(lines.join(""))), Stream.never),
-          stdout: "pipe",
-          stderr: "ignore",
-          extendEnv: true,
-        }),
-      )
-      .pipe(Effect.mapError(() => new Error("Codex is not installed on this Machine")));
-    const answers = new Map<number, unknown>();
-    yield* handle.stdout.pipe(
-      Stream.decodeText(),
-      Stream.splitLines,
-      Stream.mapEffect((line) => {
-        const reply = Option.getOrNull(decodeReply(line));
-        if (reply?.id === undefined || reply.id < 2) return Effect.void;
-        if (reply.error)
-          return Effect.fail(
-            new Error(`codex ${reply.id === 2 ? RATE_LIMITS : ACCOUNT}: ${reply.error.message}`),
-          );
-        answers.set(reply.id, reply.result);
-        return Effect.void;
+    ],
+    (message) => `${JSON.stringify(message)}\n`,
+  );
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const handle = yield* spawner
+    .spawn(
+      ChildProcess.make("codex", ["app-server"], {
+        // Held open: a closed stdin is the server's cue to stop before it answers.
+        stdin: Stream.concat(
+          Stream.make(new TextEncoder().encode(Arr.join(lines, ""))),
+          Stream.never,
+        ),
+        stdout: "pipe",
+        stderr: "ignore",
+        extendEnv: true,
       }),
-      Stream.takeUntil(() => answers.size === 2),
-      Stream.runDrain,
-      Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(reason(cause)))),
+    )
+    .pipe(
+      Effect.mapError(
+        () => new Cause.UnknownError(undefined, "Codex is not installed on this Machine"),
+      ),
     );
-    if (answers.size < 2)
-      return yield* Effect.fail(new Error("codex app-server stopped before it answered"));
-    return { rateLimits: answers.get(2), account: answers.get(3) };
-  }).pipe(Effect.scoped);
+  const answers = new Map<number, unknown>();
+  yield* handle.stdout.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.mapEffect((line) => {
+      const reply = Option.getOrNull(decodeReply(line));
+      if (reply?.id === undefined || reply.id < 2) return Effect.void;
+      if (reply.error)
+        return Effect.fail(
+          new Cause.UnknownError(
+            reply.error,
+            `codex ${reply.id === 2 ? RATE_LIMITS : ACCOUNT}: ${reply.error.message}`,
+          ),
+        );
+      answers.set(reply.id, reply.result);
+      return Effect.void;
+    }),
+    Stream.takeUntil(() => answers.size === 2),
+    Stream.runDrain,
+    Effect.mapError((cause) =>
+      Cause.isUnknownError(cause) ? cause : new Cause.UnknownError(cause, reason(cause)),
+    ),
+  );
+  if (answers.size < 2)
+    return yield* new Cause.UnknownError(undefined, "codex app-server stopped before it answered");
+  return { rateLimits: answers.get(2), account: answers.get(3) };
+}).pipe(Effect.scoped);
 
 /** This Machine's sources, as the host reads them. */
 export const liveSources = (env: PluginEnv) =>

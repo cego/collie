@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import {
   connectionCards,
@@ -29,13 +31,13 @@ test(
         const definitions = yield* readDefinitions(env);
         const workflows = workflowConnections(definitions.workflows);
         const gitlab = connectionUses("gitlab", workflows);
-        expect(gitlab.find((row) => row.id === "review")).toEqual({
+        expect(Option.getOrUndefined(Arr.findFirst(gitlab, (row) => row.id === "review"))).toEqual({
           id: "review",
           declares: "uses",
           with: "Reads and answers the merge request",
           without: "Reviews the local diff only",
         });
-        expect(gitlab.some((row) => row.id === "plan")).toBe(false);
+        expect(Arr.some(gitlab, (row) => row.id === "plan")).toBe(false);
         expect(definitions.connectionUses).toEqual([
           {
             id: "Notifications",
@@ -45,7 +47,9 @@ test(
           },
         ]);
         expect(
-          connectionUses("helle", workflows).find((row) => row.id === "release"),
+          Option.getOrUndefined(
+            Arr.findFirst(connectionUses("helle", workflows), (row) => row.id === "release"),
+          ),
         ).toMatchObject({ declares: "needs", without: "Does not start" });
       }),
     ),
@@ -66,7 +70,7 @@ test("a GitLab card offers one login to both lacking Machines and no action once
       workflows: [],
       problem: null,
     },
-    ...["vm", "mini"].map((name) => ({
+    ...Arr.map(["vm", "mini"], (name) => ({
       profile: `p-${name}`,
       name,
       connections: [
@@ -79,7 +83,9 @@ test("a GitLab card offers one login to both lacking Machines and no action once
       problem: null,
     })),
   ];
-  const card = connectionCards(readings).find(({ id }) => id === "gitlab")!;
+  const card = Option.getOrUndefined(
+    Arr.findFirst(connectionCards(readings), ({ id }) => id === "gitlab"),
+  )!;
   expect(card.primary).toEqual({
     kind: "reuse",
     label: "Use glab's login",
@@ -89,45 +95,60 @@ test("a GitLab card offers one login to both lacking Machines and no action once
   expect(card.where).toBe("On pc · missing on vm and mini");
   expect(card.needsYou).toBe(true);
   const complete = connectionCards(
-    readings.map((row) => ({ ...row, connections: readings[0]!.connections })),
+    Arr.map(readings, (row) => ({ ...row, connections: readings[0]!.connections })),
   );
-  expect(complete.find(({ id }) => id === "gitlab")!.primary).toBeNull();
-  expect(complete.find(({ id }) => id === "gitlab")!.needsYou).toBe(false);
+  expect(
+    Option.getOrUndefined(Arr.findFirst(complete, ({ id }) => id === "gitlab"))!.primary,
+  ).toBeNull();
+  expect(
+    Option.getOrUndefined(Arr.findFirst(complete, ({ id }) => id === "gitlab"))!.needsYou,
+  ).toBe(false);
 });
 
 test("browser setup names the one Machine it starts on, then the next after refresh", () => {
-  const machines = ["vm", "mini"].map((name) => ({
+  const machines = Arr.map(["vm", "mini"], (name) => ({
     profile: `p-${name}`,
     name,
     connections: [],
     workflows: [],
     problem: null,
   }));
-  expect(connectionCards(machines).find((card) => card.id === "linear")!.primary).toEqual({
+  expect(
+    Option.getOrUndefined(Arr.findFirst(connectionCards(machines), (card) => card.id === "linear"))!
+      .primary,
+  ).toEqual({
     kind: "setup",
     label: "Set up on vm",
     to: ["p-vm"],
   });
-  expect(connectionCards(machines).find((card) => card.id === "github")!.primary).toEqual({
+  expect(
+    Option.getOrUndefined(Arr.findFirst(connectionCards(machines), (card) => card.id === "github"))!
+      .primary,
+  ).toEqual({
     kind: "login",
     label: "Sign in on vm",
     to: ["p-vm"],
   });
   expect(
-    connectionCards(
-      machines.map((machine, i) => ({
-        ...machine,
-        connections:
-          i === 0
-            ? [
-                {
-                  id: "linear",
-                  reading: { state: "ok", account: "linear-server", detail: "connected" },
-                },
-              ]
-            : [],
-      })),
-    ).find((card) => card.id === "linear")!.primary,
+    Option.getOrUndefined(
+      Arr.findFirst(
+        connectionCards(
+          Arr.map(machines, (machine, i) => ({
+            ...machine,
+            connections:
+              i === 0
+                ? [
+                    {
+                      id: "linear",
+                      reading: { state: "ok", account: "linear-server", detail: "connected" },
+                    },
+                  ]
+                : [],
+          })),
+        ),
+        (card) => card.id === "linear",
+      ),
+    )!.primary,
   ).toMatchObject({ label: "Set up on mini", to: ["p-mini"] });
 });
 

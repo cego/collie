@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { pipe } from "effect/Function";
+import * as Str from "effect/String";
 import { AsyncResult, useAtomValue } from "@effect/atom-vue";
 import type { Trouble } from "../../../src/shared/retrying";
 import { retry } from "../flock";
@@ -9,7 +11,7 @@ const retryNow = () => retry.wake();
 const description = computed(() => {
   const now = AsyncResult.getOrElse(clock.value, () => props.trouble.at);
   const seconds = Math.ceil((props.trouble.at - now) / 1000);
-  const said = props.trouble.said.replace(/\.$/, "");
+  const said = pipe(props.trouble.said, Str.replace(/\.$/, ""));
   return `${said}. ${seconds > 0 ? `Trying again in ${seconds} s.` : "Trying again now."}`;
 });
 </script>

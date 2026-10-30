@@ -1,13 +1,13 @@
-import * as BunServices from "@effect/platform-bun/BunServices";
+import { platformLayer, type PlatformServices } from "../../src/platform";
 import { Clock, Config, Effect, ManagedRuntime, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { GIT_QUIET } from "./git-quiet";
 
-const runtime = ManagedRuntime.make(BunServices.layer);
+const runtime = ManagedRuntime.make(platformLayer);
 
 /** Runs `effect` in a scope of its own, closed when it ends. */
 export function runEffect<A, E>(
-  effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>,
+  effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ): Promise<A> {
   return runtime.runPromise(Effect.scoped(effect));
 }

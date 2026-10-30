@@ -880,8 +880,11 @@ that cannot say whether its agent started or was given its work — herdr refuse
 the start, could not list its agents, or the step's prompt did not go out — parks the same
 way, naming the prompt file, since a resume lists herdr's agents again and takes up the
 agent or starts it. The host
-registers the modules as they are now, then clears the stop before waking work. A
-restored module is picked up without restarting the host.
+registers the modules as they are now and recovers unfinished admissions and recorded
+answers, only for the resumed Run and the Runs it started, then clears the stop before
+waking work. Other Runs are left as they are: one on the same module that a host left
+mid-work waits at its start, untouched, until its own resume or a `recover`. A restored module is picked up
+without restarting the host.
 
 Resume succeeds only when the host wakes suspended work or recovers this Run's unfinished
 admission or unavailable module into the engine. It clears the old park note before work
@@ -893,6 +896,8 @@ waking it could only redo answered Steps or give back a claim. It stays stopped,
 the refusal says so in every front door. A stopped Run whose merge request is open, closed
 unmerged or absent resumes as before.
 Repeating the same request returns its recorded result; a fresh request judges the Run again.
+A stop, hold or resume the host has taken finishes even when its caller stops waiting, and
+the same request asked while it runs gets that one result.
 Delivery reconciliation remains explicit: `not-sent` permits one resend, while `sent` waits
 for Output. An unresolved delivery stays uncertain.
 
@@ -1542,6 +1547,10 @@ to fingerprint at all, because two unmeasured trees are not one tree.
 What the command prints is shown as it runs — its stdout on stdout and its stderr on
 stderr, or both on stderr under `--json`, where stdout is the one envelope — and the exit
 status is the command's own, so a failure says why the first time.
+
+Command displays preserve argument boundaries: `echo 'a b'` reads differently from
+`echo a b`. Control characters appear as escapes, so displayed commands containing them
+are for reading; the recorded argv retains the original values.
 
 | Flag       | What it does                                                                                                                                                         |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

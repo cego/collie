@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, Exit, FileSystem, Path, Schema } from "effect";
+import { ConfigProvider, Effect, Exit, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Host } from "../src/sdk";
 import { controlPath, evidenceDir, foundationLayer, runDir, STOP } from "../src/engine";
@@ -16,7 +16,10 @@ let dir: string;
 let tool: string;
 const runId = "r-once";
 
-const asApproved = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
+const asApproved = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
+  Result.getOrThrow,
+);
 
 beforeEach(() =>
   runEffect(

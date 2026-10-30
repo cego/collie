@@ -1,5 +1,8 @@
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { frontDoor, socketOf } from "../src/host";
 import { readLaunches } from "../src/launches";
 import { everyRegistered } from "../src/registry";
@@ -7,10 +10,16 @@ import { deliveriesOf } from "../src/steering";
 import { collie, proves } from "./support/world";
 import { until } from "./support/host";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const runIdOf = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }));
-const herdrCall = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) })),
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const runIdOf = flow(
+  Schema.decodeUnknownResult(Schema.Struct({ runId: Schema.String })),
+  Result.getOrThrow,
+);
+const herdrCall = flow(
+  Schema.decodeUnknownResult(
+    Schema.fromJsonString(Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) })),
+  ),
+  Result.getOrThrow,
 );
 
 // A launch is recorded before its prompt is written, so the prompt is what is waited on.
@@ -53,30 +62,57 @@ test(
               .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
               .pipe(Stream.runHead, Effect.map(Option.getOrNull));
           expect(
-            (yield* detail())?.flow?.lanes[0]?.nodes.find((node) => node.id === "b"),
+            Option.getOrUndefined(
+              Option.flatMap(Option.fromNullishOr(yield* detail()), (present) =>
+                Option.flatMap(Option.fromNullishOr(present.flow), (present_) =>
+                  Option.map(Option.fromNullishOr(present_.lanes[0]), (present__) =>
+                    Option.getOrUndefined(
+                      Arr.findFirst(present__.nodes, (node) => node.id === "b"),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ).toMatchObject({ pause: { by: expect.any(String) }, said: "Pauses before it" });
           yield* fs.writeFileString(first.output, encode("done"));
           const held = (yield* until(
             detail,
             (value) =>
-              value?.flow?.lanes[0]?.nodes.find((node) => node.id === "b")?.wait === "hold",
+              Option.getOrUndefined(
+                Option.flatMap(Option.fromNullishOr(value), (present___) =>
+                  Option.flatMap(Option.fromNullishOr(present___.flow), (present____) =>
+                    Option.flatMap(Option.fromNullishOr(present____.lanes[0]), (present_____) =>
+                      Option.map(
+                        Option.fromNullishOr(
+                          Option.getOrUndefined(
+                            Arr.findFirst(present_____.nodes, (node) => node.id === "b"),
+                          ),
+                        ),
+                        (present______) => present______.wait,
+                      ),
+                    ),
+                  ),
+                ),
+              ) === "hold",
           ))!;
-          const b = held.flow!.lanes[0]!.nodes.find((node) => node.id === "b")!;
+          const b = Option.getOrUndefined(
+            Arr.findFirst(held.flow!.lanes[0]!.nodes, (node) => node.id === "b"),
+          )!;
           expect(b).toMatchObject({ state: "waiting", primary: "continue", pause: null });
           expect(b.said).toMatch(/^Paused here, as .+ asked$/);
-          expect((yield* readLaunches(world.state, runId)).map((one) => one.operation)).toEqual([
+          expect(Arr.map(yield* readLaunches(world.state, runId), (one) => one.operation)).toEqual([
             "a",
           ]);
           expect((yield* collie(world, ["run", "release", runId])).envelope.ok).toBe(true);
           yield* until(
             () => readLaunches(world.state, runId),
-            (rows) => rows.some((one) => one.operation === "b"),
+            (rows) => Arr.some(rows, (one) => one.operation === "b"),
           );
           const late = yield* collie(world, ["run", "hold", runId, "--before", "a"]);
           expect(late.envelope.ok).toBe(false);
           expect(late.envelope.error?.message).toContain("a");
-          const entry = (yield* everyRegistered(world.state)).find(
-            (one) => one.agent === first.agent,
+          const entry = Option.getOrUndefined(
+            Arr.findFirst(yield* everyRegistered(world.state), (one) => one.agent === first.agent),
           )!;
           expect(
             (yield* collie(world, ["run", "hold", runId, "--before", "c"], {
@@ -84,19 +120,65 @@ test(
             })).envelope.ok,
           ).toBe(true);
           expect(
-            (yield* detail())?.flow?.lanes[0]?.nodes.find((node) => node.id === "c")?.pause?.by,
+            Option.getOrUndefined(
+              Option.flatMap(Option.fromNullishOr(yield* detail()), (present_______) =>
+                Option.flatMap(Option.fromNullishOr(present_______.flow), (present________) =>
+                  Option.flatMap(
+                    Option.fromNullishOr(present________.lanes[0]),
+                    (present_________) =>
+                      Option.flatMap(
+                        Option.fromNullishOr(
+                          Option.getOrUndefined(
+                            Arr.findFirst(present_________.nodes, (node) => node.id === "c"),
+                          ),
+                        ),
+                        (present__________) =>
+                          Option.map(
+                            Option.fromNullishOr(present__________.pause),
+                            (present___________) => present___________.by,
+                          ),
+                      ),
+                  ),
+                ),
+              ),
+            ),
           ).toBe(first.agent);
-          const second = (yield* readLaunches(world.state, runId)).find(
-            (one) => one.operation === "b",
+          const second = Option.getOrUndefined(
+            Arr.findFirst(yield* readLaunches(world.state, runId), (one) => one.operation === "b"),
           )!;
           yield* fs.writeFileString(second.output, encode("done"));
           const check = (yield* until(
             detail,
-            (one) => one?.flow?.lanes[0]?.nodes.find((node) => node.id === "c")?.wait === "hold",
+            (one) =>
+              Option.getOrUndefined(
+                Option.flatMap(Option.fromNullishOr(one), (present____________) =>
+                  Option.flatMap(
+                    Option.fromNullishOr(present____________.flow),
+                    (present_____________) =>
+                      Option.flatMap(
+                        Option.fromNullishOr(present_____________.lanes[0]),
+                        (present______________) =>
+                          Option.map(
+                            Option.fromNullishOr(
+                              Option.getOrUndefined(
+                                Arr.findFirst(
+                                  present______________.nodes,
+                                  (node) => node.id === "c",
+                                ),
+                              ),
+                            ),
+                            (present_______________) => present_______________.wait,
+                          ),
+                      ),
+                  ),
+                ),
+              ) === "hold",
           ))!;
-          expect(check.flow!.lanes[0]!.nodes.find((node) => node.id === "c")?.said).toBe(
-            `Paused here, as ${first.agent} asked`,
-          );
+          expect(
+            Option.getOrUndefined(
+              Arr.findFirst(check.flow!.lanes[0]!.nodes, (node) => node.id === "c"),
+            )?.said,
+          ).toBe(`Paused here, as ${first.agent} asked`);
         }),
       ["step-ahead.workflow.ts"],
     ),
@@ -195,7 +277,9 @@ test(
             door
               .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
               .pipe(Stream.runHead, Effect.map(Option.getOrNull));
-          const node = (yield* detail())!.flow!.lanes[0]!.nodes.find((one) => one.id === "b")!;
+          const node = Option.getOrUndefined(
+            Arr.findFirst((yield* detail())!.flow!.lanes[0]!.nodes, (one) => one.id === "b"),
+          )!;
           expect(node.notes).toHaveLength(2);
           expect(node.notes![0]).toMatchObject({
             text: "Check the race first.",
@@ -220,7 +304,9 @@ test(
           const prompt = yield* promptOf(world.state, runId, "b");
           expect(prompt).toStartWith("Check the race first.\n\n");
           expect(prompt).not.toContain("Ignore the race.");
-          const after = (yield* detail())!.flow!.lanes[0]!.nodes.find((one) => one.id === "b")!;
+          const after = Option.getOrUndefined(
+            Arr.findFirst((yield* detail())!.flow!.lanes[0]!.nodes, (one) => one.id === "b"),
+          )!;
           expect(after.notes).toHaveLength(1);
           expect(after.notes![0]!.read).toEqual(expect.any(String));
           expect(
@@ -256,24 +342,35 @@ test(
           const { runId } = runIdOf(start.envelope.data);
           yield* until(
             () => deliveriesOf(world.state, runId),
-            (all) => all.some((one) => one.delivery.state === "deferred"),
+            (all) => Arr.some(all, (one) => one.delivery.state === "deferred"),
           );
           const told = yield* collie(world, ["run", "steer", runId, "Check the race first."]);
           expect(told.envelope).toMatchObject({ ok: true });
 
-          const prompts = (yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!))
-            .trim()
-            .split("\n")
-            .map((line) => herdrCall(line))
-            .filter((call) => call.cmd === "agent prompt")
-            .map((call) => (call.argv[3]?.includes("Check the race first.") ? "steer" : "step"));
+          const prompts = Arr.map(
+            Arr.filter(
+              Arr.map(
+                Str.split(Str.trim(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!)), "\n"),
+                (line) => herdrCall(line),
+              ),
+              (call) => call.cmd === "agent prompt",
+            ),
+            (call) =>
+              Option.getOrUndefined(
+                Option.map(Option.fromNullishOr(call.argv[3]), (present________________) =>
+                  pipe_(present________________, Str.includes("Check the race first.")),
+                ),
+              )
+                ? "steer"
+                : "step",
+          );
           // The first step prompt is the one refused.
           expect(prompts).toEqual(["step", "step", "steer"]);
           const first = (yield* readLaunches(world.state, runId))[0]!;
           yield* fs.writeFileString(first.output, encode("done"));
           yield* until(
             () => readLaunches(world.state, runId),
-            (rows) => rows.some((one) => one.operation === "b"),
+            (rows) => Arr.some(rows, (one) => one.operation === "b"),
           );
         }),
       ["step-ahead.workflow.ts"],

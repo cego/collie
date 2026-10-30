@@ -3,8 +3,8 @@
 // everywhere else. Both behaviours here were `src/picker.ts`'s and outlived it.
 
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
-import { Keyboard, tokenizeKeys } from "../src/keys";
+import { Effect, Queue } from "effect";
+import { keyboard, tokenizeKeys } from "../src/keys";
 import { runEffect } from "./support/effect";
 
 class FakeInput {
@@ -42,13 +42,12 @@ test("a completed keyboard session releases its terminal reader", () =>
   runEffect(
     Effect.gen(function* () {
       const input = new FakeInput();
-      const keyboard = new Keyboard(input);
 
-      const key = yield* keyboard.run(
-        Effect.sync(() => {
-          keyboard.start();
+      const key = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const keys = yield* keyboard(input);
           input.send("\x1b");
-          return keyboard.take();
+          return yield* Queue.take(keys);
         }),
       );
 

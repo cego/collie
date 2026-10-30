@@ -1,7 +1,22 @@
+import * as Cause from "effect/Cause";
 // The lock every writer of a Run's directory takes: a crashed holder's claim is broken
 // at once, a live one is respected, and a claim that moved is never the one removed.
 
-import { Clock, DateTime, Deferred, Duration, Effect, FileSystem, Path, Schema } from "effect";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
+import {
+  Clock,
+  DateTime,
+  Deferred,
+  Duration,
+  Effect,
+  FileSystem,
+  Path,
+  Schema,
+  flow,
+  Result,
+} from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { breakStaleLock, processStartTime, withDirLock, withLock } from "../src/lock";
 import { exec } from "./support/command";
@@ -10,7 +25,7 @@ import { runEffect } from "./support/effect";
 let stateDir: string;
 let dir: string;
 const JsonString = Schema.fromJsonString(Schema.Unknown);
-const encodeJson = Schema.encodeSync(JsonString);
+const encodeJson = flow(Schema.encodeResult(JsonString), Result.getOrThrow);
 
 beforeEach(() =>
   runEffect(
@@ -182,7 +197,9 @@ test("taking over a crashed breaker's guard leaves this process's own claim", ()
       expect(yield* breakStaleLock(lock)).toBe(false);
       // Released because the claim in it was this process's own, never removed blind.
       expect(yield* fs.exists(guard)).toBe(false);
-      expect((yield* fs.readDirectory(dir)).some((e) => e.endsWith(".tmp"))).toBe(false);
+      expect(Arr.some(yield* fs.readDirectory(dir), (e) => pipe_(e, Str.endsWith(".tmp")))).toBe(
+        false,
+      );
     }),
   ));
 
@@ -191,7 +208,10 @@ test("taking over a crashed breaker's guard leaves this process's own claim", ()
  * inspection and the check before the removal under the test's control.
  */
 const breakInChild = (lock: string, marker: string) => {
-  const lockModule = new URL("../src/lock.ts", import.meta.url).pathname.replaceAll("'", "\\'");
+  const lockModule = pipe_(
+    new URL("../src/lock.ts", import.meta.url).pathname,
+    Str.replaceAll("'", "\\'"),
+  );
   return Bun.spawn(
     [
       "bun",
@@ -276,7 +296,7 @@ test("fibers of one process contending for one lock each get it in turn, and non
       let most = 0;
       const turn = withLock(
         lock,
-        Effect.fail(new Error("contended")),
+        Effect.fail(new Cause.TimeoutError("contended")),
         Effect.gen(function* () {
           held += 1;
           most = Math.max(most, held);

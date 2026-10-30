@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { DiffLineAnnotation, FileDiffMetadata, SelectedLineRange } from "@pierre/diffs";
 import { computed, ref } from "vue";
 import { diffAnchor, type DiffAnchor, type Draft } from "../../../src/shared/review-comments";
@@ -17,7 +18,7 @@ export const useDiffComments = (
     if (range !== null && parsed !== null) pending.value = diffAnchor(path(), range, parsed);
   };
   const annotations = computed<DiffLineAnnotation<string>[]>(() => [
-    ...drafts().flatMap((draft) =>
+    ...Arr.flatMap(drafts(), (draft) =>
       draft.anchor._tag === "Diff" && draft.anchor.path === path()
         ? [{ side: draft.anchor.side, lineNumber: draft.anchor.last, metadata: draft.id }]
         : [],

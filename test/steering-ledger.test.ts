@@ -2,6 +2,9 @@
 // after a crash, so what is tested here is what they say when nobody came back: an
 // unsettled reservation, a second attempt at the same work, a failed model call.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -250,7 +253,7 @@ test("an override lasts until it is explicitly cleared", () => {
 
 test("the call record counts every call, settles the abandoned, and refuses none", () => {
   const limits = { maxSeconds: 120, maxOutputBytes: 262_144 };
-  const at = (minute: number) => `2026-09-09T10:${String(minute).padStart(2, "0")}:00Z`;
+  const at = (minute: number) => `2026-09-09T10:${pipe_(String(minute), Str.padStart(2, "0"))}:00Z`;
 
   // A hundred calls already made this hour, every one of them a failure. Usage is data:
   // the record grows, and nothing in it is a reason to refuse the next call.
@@ -278,7 +281,7 @@ test("the call record counts every call, settles the abandoned, and refuses none
     { kind: "reserve", id: "gone", run: "r1", at: at(0), max_seconds: 120, max_output_bytes: 1 },
   ];
   const after = planReservation(abandoned, { id: "next", run: "r1", at: at(30) }, limits);
-  expect(after.append.some((l) => l.kind === "settle" && l.outcome === "failed")).toBe(true);
+  expect(Arr.some(after.append, (l) => l.kind === "settle" && l.outcome === "failed")).toBe(true);
 
   // A line from before spending caps were dropped still reads; its cap decides nothing.
   const old: BudgetLine = {
@@ -307,7 +310,7 @@ test("a reservation and its settlement are written under the lock", () =>
       yield* settle(file, "call-1", { outcome: "ok", usd: 0.02, seconds: 4, bytes: 900 });
 
       const lines = yield* readBudget(file);
-      expect(lines.map((l) => l.kind)).toEqual(["reserve", "settle"]);
+      expect(Arr.map(lines, (l) => l.kind)).toEqual(["reserve", "settle"]);
       expect(yield* fs.exists(`${file}.lock`)).toBe(false);
     }),
   ));
@@ -333,7 +336,7 @@ test("the delivery schema is what is on disk, and an unknown state is refused", 
       yield* fs.makeDirectory(path.dirname(file), { recursive: true });
       yield* fs.writeFileString(
         file,
-        `${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ ...delivery(), state: "sent-ish" })}\n`,
+        `${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({ ...delivery(), state: "sent-ish" }).pipe(Effect.orDie)}\n`,
       );
       expect(yield* readLedger(file)).toEqual([]);
     }),

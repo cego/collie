@@ -1,7 +1,11 @@
 // ADR-draft-a-blocked-link-rides-the-machines-ssh-connection, across two real hosts.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, Exit, FileSystem, Schema, Scope } from "effect";
+import { Effect, Exit, FileSystem, Schema, Scope, flow, Result } from "effect";
 import { readEnv } from "../src/env";
 import { machineList } from "../src/lifecycle";
 import { peersOf } from "../src/peers";
@@ -12,7 +16,7 @@ import { blackhole, freePort, resetter } from "./support/fake-ssh";
 import { stopHost, until } from "./support/host";
 import { listenerPort, twoMachines, type Side } from "./support/peers";
 
-const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Listed = Schema.Struct({ machines: Schema.Array(PeerView) });
 const Checks = Schema.Struct({
   checks: Schema.Array(
@@ -28,8 +32,11 @@ const Checks = Schema.Struct({
 const listed = (side: Side, name: string) =>
   side.cli(["machine", "list"]).pipe(
     Effect.map((read) => {
-      const found = Schema.decodeUnknownSync(Listed)(read.envelope.data).machines.find(
-        (one) => one.name === name,
+      const found = Option.getOrUndefined(
+        Arr.findFirst(
+          flow(Schema.decodeUnknownResult(Listed), Result.getOrThrow)(read.envelope.data).machines,
+          (one) => one.name === name,
+        ),
       );
       if (found === undefined)
         throw new Error(`${side.name} does not list ${name}: ${encode(read.envelope)}`);
@@ -42,9 +49,15 @@ const pairedLinks = (side: Side) =>
     .cli(["doctor"])
     .pipe(
       Effect.map((read) =>
-        Schema.decodeUnknownSync(Checks)(
-          read.envelope.data ?? read.envelope.error?.details,
-        ).checks.find((one) => one.name === "paired links")!,
+        Option.getOrUndefined(
+          Arr.findFirst(
+            flow(
+              Schema.decodeUnknownResult(Checks),
+              Result.getOrThrow,
+            )(read.envelope.data ?? read.envelope.error?.details).checks,
+            (one) => one.name === "paired links",
+          ),
+        )!,
       ),
     );
 
@@ -52,7 +65,9 @@ const pairedLinks = (side: Side) =>
 const logged = (side: Side, from: number, ...kinds: ReadonlyArray<string>) =>
   side.ssh.calls.pipe(
     Effect.map((all) =>
-      all.slice(from).filter((line) => kinds.some((kind) => line.startsWith(kind))),
+      Arr.filter(all.slice(from), (line) =>
+        Arr.some(kinds, (kind) => pipe_(line, Str.startsWith(kind))),
+      ),
     ),
   );
 
@@ -74,7 +89,7 @@ const listsSecondAt = (side: Side, target: string | null) =>
 const onlyMuxFromTheHost = (side: Side) =>
   side.ssh.calls.pipe(
     Effect.map((all) =>
-      all.filter((line) => !/^(master|ride|mux (check|forward|cancel|exit)) /.test(line)),
+      Arr.filter(all, (line) => !/^(master|ride|mux (check|forward|cancel|exit)) /.test(line)),
     ),
   );
 
@@ -91,7 +106,7 @@ test(
             expect(yield* logged(first, 0, "master", "login")).toEqual(["master mk@second"]);
             const rides = yield* logged(first, 0, "ride");
             expect(rides).toHaveLength(1);
-            expect(rides[0]).toContain("'invite'");
+            expect(rides[0]).toContain(" machine invite --for ");
 
             // The network starts refusing the port: the link comes up over the open connection.
             const advertised = Number(yield* listenerPort(first, second));

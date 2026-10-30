@@ -3,14 +3,14 @@
 // (ADR-draft-a-runs-checks-are-read-where-its-checkout-starts).
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { runDir } from "../src/engine";
 import { readIntent } from "../src/intent";
 import { exec } from "./support/command";
 import { until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Started = Schema.Struct({ runId: Schema.String });
 
 const LOGGED_IN = { GITLAB_USER_LOGIN: "mk", GIT_SSH_COMMAND: "false" };
@@ -61,7 +61,7 @@ const checksOf = (world: World, runId: string) =>
   ).pipe(Effect.map((intent) => intent!.authority.run_verification));
 
 const runIdOf = (started: { envelope: { data?: unknown } }) =>
-  Schema.decodeUnknownSync(Started)(started.envelope.data).runId;
+  flow(Schema.decodeUnknownResult(Started), Result.getOrThrow)(started.envelope.data).runId;
 
 test(
   "a start from a checkout behind its base is held to the base's checks, not those remembered for its remote",

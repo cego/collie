@@ -11,8 +11,9 @@
 // buy: a check it says it ran is a claim, and only the verification journal — bound to the
 // tree the command ran on — turns it into proof.
 
+import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Schema } from "effect";
+import { Effect, FileSystem, Layer, Schema, flow, Result } from "effect";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
@@ -75,18 +76,37 @@ const rally = (runId: string, rounds: number) =>
         runId,
         input: { target: "the diff", cwd: rig.projectDir, rounds },
       };
+      // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       return yield* made.workflow.execute(payload).pipe(Effect.result);
     });
     return yield* run.pipe(Effect.provide(made.layer));
   }).pipe(
-    Effect.provide(agentsLayer(hostOf())),
-    Effect.provide(Layer.succeed(Children)(Children.of({ start: nothing, result: nothing }))),
-    Effect.provide(foundationLayer({ dir, userDir: rig.userDir })),
+    Effect.provide(
+      agentsLayer(hostOf()).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(
+            Children.of({
+              start: nothing,
+              result: nothing,
+            }),
+          ),
+        ),
+        Layer.provideMerge(
+          foundationLayer({
+            dir,
+            userDir: rig.userDir,
+          }),
+        ),
+      ),
+    ),
     Effect.scoped,
     Effect.orDie,
   );
 
-const asApproved = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
+const asApproved = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
+  Result.getOrThrow,
+);
 
 /** This suite starts no children; the service is here because a registration takes one. */
 const nothing = () => Effect.die("no children in this suite");
@@ -108,9 +128,9 @@ test("a rally that reviews clean stops there, with no fix and no second review",
       const result = yield* rally("r-clean", 3);
       expect(said(result)).toBe("clean after 1 round(s), 0 non-blocking left");
       // One agent, one prompt: nothing reviewed again and nothing was asked to fix.
-      expect((yield* rig.calls()).filter((call) => (call.argv ?? [])[1] === "prompt")).toHaveLength(
-        1,
-      );
+      expect(
+        Arr.filter(yield* rig.calls(), (call) => (call.argv ?? [])[1] === "prompt"),
+      ).toHaveLength(1);
     }),
   ));
 

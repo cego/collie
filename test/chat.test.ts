@@ -2,7 +2,12 @@
 // things that must never happen — a running chat replaced because a setting changed, and
 // a Home reopening into whatever conversation the harness wrote last in this directory.
 
-import { Effect, FileSystem, Schema } from "effect";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   CHAT_HARNESS_KEY,
@@ -28,7 +33,10 @@ import type { AgentInfo, PaneInfo } from "../src/herdr";
 import { TOOLS } from "../src/tools";
 import { runEffect } from "./support/effect";
 
-const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Any));
+const decodeJson = flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Any)),
+  Result.getOrThrow,
+);
 
 const KEY = "herd-abc";
 let stateDir: string;
@@ -208,7 +216,7 @@ test("both harnesses are wired to the same Collie reads", () => {
 
   const extension = piExtension(
     ["/usr/local/bin/collie"],
-    TOOLS.map((tool) => ({
+    Arr.map(TOOLS, (tool) => ({
       name: tool.name,
       label: tool.title,
       description: tool.description,
@@ -278,7 +286,7 @@ test("both adapters are told about the same Collie, in one place", () =>
         self: ["/bin/collie"],
         serverEnv,
         news: "/state/herd/abc/news.jsonl",
-        tools: TOOLS.map((tool) => ({
+        tools: Arr.map(TOOLS, (tool) => ({
           name: tool.name,
           label: tool.title,
           description: tool.description,
@@ -302,17 +310,17 @@ test("both adapters are told about the same Collie, in one place", () =>
         };
       };
       const command = hook.hooks.UserPromptSubmit[0]!.hooks[0]!.command;
-      expect(command).toEndWith("'/bin/collie' chat context");
+      expect(command).toEndWith("/bin/collie chat context");
       // And every prompt is handed to the tool host until the turn ends, so a chat's
       // actions carry the words of the turn they were taken in.
       const heard = hook.hooks.UserPromptSubmit[0]!.hooks[1]!.command;
-      expect(heard).toEndWith("'/bin/collie' chat heard");
+      expect(heard).toEndWith("/bin/collie chat heard");
       expect(hook.hooks.Stop[0]!.hooks[0]!.command).toBe(heard);
-      for (const [key, value] of Object.entries(serverEnv))
-        expect(heard).toContain(`${key}='${value}'`);
-      for (const [key, value] of Object.entries(serverEnv))
-        expect(command).toContain(`${key}='${value}'`);
-      for (const [key, value] of Object.entries(serverEnv)) {
+      for (const [key, value] of Rec.toEntries(serverEnv))
+        expect(heard).toContain(`${key}=${value}`);
+      for (const [key, value] of Rec.toEntries(serverEnv))
+        expect(command).toContain(`${key}=${value}`);
+      for (const [key, value] of Rec.toEntries(serverEnv)) {
         expect(extension).toContain(`"${key}":"${value}"`);
         expect(config).toMatchObject({ mcpServers: { collie: { env: { [key]: value } } } });
       }
@@ -331,7 +339,16 @@ test.each([
         const root = yield* fs.makeTempDirectoryScoped({ prefix: "hw-chat-prompt-" });
         const write = (file: string, text: string) =>
           Effect.gen(function* () {
-            yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+            yield* fs.makeDirectory(
+              pipe_(
+                file,
+                Str.slice(
+                  0,
+                  Option.getOrElse(pipe_(file, Str.lastIndexOf("/")), () => -1),
+                ),
+              ),
+              { recursive: true },
+            );
             yield* fs.writeFileString(file, text);
           });
         yield* write(`${root}/plugin/prompts/collie-chat.md`, "You are Collie's chat.\n");
@@ -372,7 +389,7 @@ test("the system prompt chat writes takes a reported review as a report, asks be
         tools: [],
         mcpConfig: "{}",
       });
-      const prompt = (yield* fs.readFileString(files.systemPrompt)).replace(/\s+/g, " ");
+      const prompt = pipe_(yield* fs.readFileString(files.systemPrompt), Str.replace(/\s+/g, " "));
       expect(prompt).toContain(
         `A human reporting a review, such as "I got review on the MR", is telling you what happened, not asking you to change what a Run does.`,
       );
@@ -389,9 +406,10 @@ test("the shipped prompt has chat choose by description, with ad-hoc work as gen
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const prompt = (yield* fs.readFileString(
-        `${import.meta.dir}/../prompts/collie-chat.md`,
-      )).replace(/\s+/g, " ");
+      const prompt = pipe_(
+        yield* fs.readFileString(`${import.meta.dir}/../prompts/collie-chat.md`),
+        Str.replace(/\s+/g, " "),
+      );
       expect(prompt).toContain("Choose the workflow whose description fits the request");
       expect(prompt).toContain(
         "renovating or an architecture survey is `general`, never `implement` or `plan`",
@@ -421,7 +439,9 @@ const launchedChat = (opts: { readonly config?: string; readonly help?: string }
       ["/bin/collie"],
       () => Effect.succeed(opts.help ?? "  --autocompact <auto|tokens>"),
     );
-    const started = (yield* rig.calls()).find((call: Call) => call.cmd === "agent start");
+    const started = Option.getOrUndefined(
+      Arr.findFirst(yield* rig.calls(), (call: Call) => call.cmd === "agent start"),
+    );
     const argv = started?.argv ?? [];
     return {
       ensured,

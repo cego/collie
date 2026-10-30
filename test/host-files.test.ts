@@ -1,8 +1,12 @@
 // A Machine's files, as its host hands them to the Flock chat over a front door: read in
 // parts, found, written and edited, and never written inside the host's own state.
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
+import { platformLayer, type PlatformServices } from "../src/platform";
 import { Clock, Effect, FileSystem, Result, Schema, type Scope, Stream } from "effect";
 import { HostRefused } from "../src/board-model";
 import { readAudit } from "../src/audit";
@@ -14,7 +18,7 @@ import { proves } from "./support/world";
 
 /** Why the host refused, where it did; anything else fails the test. */
 const reasonOf = (error: { readonly _tag: string }) =>
-  Schema.is(HostRefused)(error) ? error.reason : `not a refusal: ${String(error)}`;
+  Schema.is(HostRefused)(error) ? error.reason : `not a refusal: ${JSON.stringify(error)}`;
 
 test(
   "a chat channel reads, finds, writes and edits its Machine's files, and is refused the host's state",
@@ -59,7 +63,7 @@ test(
           expect(found.paths[0]).toStartWith(`${world.project}/many/f`);
 
           const listed = yield* door.grep({ pattern: "needle", path: `${world.project}/many` });
-          expect(listed.text.split("\n").filter((line) => line !== "")).toHaveLength(100);
+          expect(Arr.filter(Str.split(listed.text, "\n"), (line) => line !== "")).toHaveLength(100);
           expect(listed.omitted).toBe(5);
           const lines = yield* door.grep({
             pattern: "needle 7$",
@@ -116,7 +120,7 @@ test(
 
           const trail = yield* readAudit(`${world.state}/files`);
           expect(
-            trail.map(({ operation, actor }) => [operation, actor.origin, actor.said]),
+            Arr.map(trail, ({ operation, actor }) => [operation, actor.origin, actor.said]),
           ).toEqual([
             ["write", "chat", "fix the config"],
             ["edit", "chat", "fix the config"],
@@ -204,7 +208,7 @@ test(
 
           const trail = yield* readAudit(`${world.state}/uploads`);
           // As each arrived, and as what this host already held.
-          expect(trail.map(({ operation, actor }) => [operation, actor.said])).toEqual([
+          expect(Arr.map(trail, ({ operation, actor }) => [operation, actor.said])).toEqual([
             ["upload", "upload"],
             ["upload", "upload"],
             ["upload", "upload"],
@@ -220,8 +224,8 @@ const inTemp = (prefix: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeTempDirectoryScoped({ prefix }));
 
 const local = <A, E>(
-  effect: Effect.Effect<A, E, FileSystem.FileSystem | Scope.Scope | BunServices.BunServices>,
-) => Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(BunServices.layer)));
+  effect: Effect.Effect<A, E, FileSystem.FileSystem | Scope.Scope | PlatformServices>,
+) => Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(platformLayer)));
 
 test("a glob stops listing, and a grep stops its search, at the bound, and a glob reaches dot paths it names", () =>
   local(
@@ -276,8 +280,61 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
         { pattern: "needle", path: dir, outputMode: "content", headLimit: 2 },
         5,
       );
-      expect(grepped.text.split("\n")).toHaveLength(2);
+      expect(Str.split(grepped.text, "\n")).toHaveLength(2);
       expect(grepped.omitted).toBe(3);
+    }),
+  ));
+
+test("a glob finds dot paths only where its pattern names them, newest first", () =>
+  local(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* inTemp("collie-glob-pins-");
+      const files = [
+        ".env",
+        ".github/workflows/ci.yml",
+        "src/.hidden/x.ts",
+        "src/a.ts",
+        "src/deep/b.ts",
+        "node_modules/m/i.js",
+        ".github/.cache/x",
+        ".github/.github/y",
+      ];
+      for (const [n, file] of files.entries()) {
+        const path = `${dir}/${file}`;
+        yield* fs.makeDirectory(
+          pipe_(
+            path,
+            Str.slice(
+              0,
+              Option.getOrElse(pipe_(path, Str.lastIndexOf("/")), () => -1),
+            ),
+          ),
+          { recursive: true },
+        );
+        yield* fs.writeFileString(path, "x\n");
+        yield* fs.utimes(path, n * 1000, n * 1000);
+      }
+      const found = (pattern: string) =>
+        globFiles(pattern, dir).pipe(
+          Effect.map(({ paths }) =>
+            Arr.map(paths, (path) => pipe_(path, Str.slice(dir.length + 1))),
+          ),
+        );
+      for (const [pattern, expected] of [
+        ["*", []],
+        ["**/*.ts", ["src/deep/b.ts", "src/a.ts"]],
+        [".env", [".env"]],
+        ["**/.github/**", [".github/.github/y", ".github/workflows/ci.yml"]],
+        [".*/**", [".github/.github/y", ".github/.cache/x", ".github/workflows/ci.yml"]],
+        ["src/**", ["src/deep/b.ts", "src/a.ts"]],
+        ["**/.hidden/*", ["src/.hidden/x.ts"]],
+        ["*.{ts,js}", []],
+      ] as const)
+        expect({ pattern, found: yield* found(pattern) }).toEqual({
+          pattern,
+          found: [...expected],
+        });
     }),
   ));
 
@@ -287,12 +344,12 @@ test("a grep answers its matches past a file it cannot read, and cuts a long lin
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* inTemp("collie-grep-partial-");
       yield* fs.writeFileString(`${dir}/a.txt`, "needle\n");
-      yield* fs.writeFileString(`${dir}/long.txt`, `needle${"x".repeat(1024 * 1024)}\n`);
+      yield* fs.writeFileString(`${dir}/long.txt`, `needle${Str.repeat(1024 * 1024)("x")}\n`);
       yield* fs.writeFileString(`${dir}/locked.txt`, "needle\n");
       yield* fs.chmod(`${dir}/locked.txt`, 0o000);
       const content = yield* grepFiles({ pattern: "needle", path: dir, outputMode: "content" });
       expect(content.text).toContain(`${dir}/a.txt:needle`);
-      for (const line of content.text.split("\n"))
+      for (const line of Str.split(content.text, "\n"))
         expect(line.length).toBeLessThanOrEqual(LINE_LIMIT);
       const files = yield* grepFiles({ pattern: "needle", path: dir });
       expect(files.text).toContain(`${dir}/a.txt`);
@@ -372,6 +429,8 @@ test("a part at the wrong offset clears what arrived, and asking for a held file
       yield* receive(state, { ...asked, offset: 0, content: "" });
       expect((yield* uploadsSweeper(state).judge).remove).toEqual([]);
       yield* fs.utimes(dir, weekAgo, weekAgo);
-      expect((yield* uploadsSweeper(state).judge).remove.map((item) => item.target)).toEqual([dir]);
+      expect(Arr.map((yield* uploadsSweeper(state).judge).remove, (item) => item.target)).toEqual([
+        dir,
+      ]);
     }),
   ));

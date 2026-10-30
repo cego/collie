@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
 import { quietSkills } from "../src/skill-overrides";
 import { mentionedSkills, skillMention } from "../src/template";
 import { runEffect } from "./support/effect";
@@ -17,18 +17,26 @@ const skill = (dir: string, name: string, frontmatter = `name: ${name}`) =>
 const settings = (file: string, overrides: Record<string, string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(path.dirname(file), { recursive: true });
     yield* fs.writeFileString(
       file,
-      Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))({ skillOverrides: overrides }),
+      yield* Schema.encodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({
+            skillOverrides: Schema.Record(Schema.String, Schema.String),
+          }),
+        ),
+      )({ skillOverrides: overrides }).pipe(Effect.orDie),
     );
   });
 
 const command = (dir: string, name: string, markdown = "A long command description.") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const file = `${dir}/${name}.md`;
-    yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+    yield* fs.makeDirectory(path.dirname(file), { recursive: true });
     yield* fs.writeFileString(file, markdown);
   });
 

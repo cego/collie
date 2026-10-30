@@ -1,6 +1,9 @@
 // Each Machine's last board, saved on this computer so the next launch can show it until
 // the Machine is live again, and each route's latest onboarding.
 
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Arr from "effect/Array";
 import { Clock, Effect, FileSystem, Schema, Stream } from "effect";
 import {
   applyItem,
@@ -23,13 +26,13 @@ const savedIn = <A>(dir: string, file: Schema.Codec<A, string>) =>
     const fs = yield* FileSystem.FileSystem;
     const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
     const read = yield* Effect.forEach(
-      names.filter((name) => name.endsWith(".json")),
+      Arr.filter(names, (name) => pipe_(name, Str.endsWith(".json"))),
       (name) =>
         fs
           .readFileString(`${dir}/${name}`)
           .pipe(Effect.flatMap(Schema.decodeUnknownEffect(file)), Effect.option),
     );
-    return read.flatMap((saved) => (saved._tag === "Some" ? [saved.value] : []));
+    return Arr.flatMap(read, (saved) => (saved._tag === "Some" ? [saved.value] : []));
   });
 
 export const savedBoards = (dir: string) => savedIn(dir, SavedFile);
@@ -41,7 +44,10 @@ export const saveOwn = (dir: string, read: MachineOwnRead) =>
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(dir, { recursive: true });
     const file = fileOf(dir, read.machine.profile);
-    yield* fs.writeFileString(`${file}.new`, Schema.encodeSync(OwnFile)(read));
+    yield* fs.writeFileString(
+      `${file}.new`,
+      yield* Schema.encodeEffect(OwnFile)(read).pipe(Effect.orDie),
+    );
     yield* fs.rename(`${file}.new`, file);
   }).pipe(Effect.ignore);
 
@@ -55,7 +61,7 @@ export const saveOnboarding = (dir: string, onboarding: MachineOnboarding) =>
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(
       fileOf(dir, onboarding.machine.profile),
-      Schema.encodeSync(OnboardingFile)(onboarding),
+      yield* Schema.encodeEffect(OnboardingFile)(onboarding).pipe(Effect.orDie),
     );
   }).pipe(Effect.ignore);
 
@@ -71,7 +77,7 @@ export const dropOwn = dropSaved;
 export const dropBoardsOf = (dir: string, profile: string) =>
   Effect.flatMap(savedBoards(dir), (saved) =>
     Effect.forEach(
-      saved.filter(({ machine }) => machine.profile === profile),
+      Arr.filter(saved, ({ machine }) => machine.profile === profile),
       ({ machine }) => dropSaved(dir, machine.installation),
       { discard: true },
     ),
@@ -98,7 +104,10 @@ export const saving =
             development,
             at,
           };
-          yield* fs.writeFileString(`${file}.new`, Schema.encodeSync(SavedFile)(saved));
+          yield* fs.writeFileString(
+            `${file}.new`,
+            yield* Schema.encodeEffect(SavedFile)(saved).pipe(Effect.orDie),
+          );
           yield* fs.rename(`${file}.new`, file);
         }).pipe(Effect.ignore);
       return items.pipe(
@@ -108,10 +117,13 @@ export const saving =
             flock = applyItem(flock, item);
             if ("_tag" in item && item._tag === "Saved") return Effect.void;
             // A Machine removed from the flock is not shown at the next launch either.
-            const dropped = [...before.keys()].filter((one) => !flock.machines.has(one));
+            const dropped = Arr.filter([...before.keys()], (one) => !flock.machines.has(one));
             // ponytail: written on every change; debounce if a busy board makes that show.
             return Effect.forEach(
-              [...flock.machines].filter(([installation, now]) => before.get(installation) !== now),
+              Arr.filter(
+                [...flock.machines],
+                ([installation, now]) => before.get(installation) !== now,
+              ),
               ([, now]) => save(now),
               { discard: true },
             ).pipe(

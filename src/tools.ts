@@ -20,8 +20,14 @@
 // — a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Crypto, Effect, Result, Schema } from "effect";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
+import * as Option from "effect/Option";
+import type { PlatformServices } from "./platform";
+import { Clock, Effect, Result, Schema, flow as Schemaflow } from "effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
 import {
@@ -112,14 +118,14 @@ import {
 type ToolAnswer = Effect.Effect<
   string,
   never,
-  BunServices | ChildProcessSpawner.ChildProcessSpawner
+  PlatformServices | ChildProcessSpawner.ChildProcessSpawner
 >;
 
 export interface RunAnswerReads {
   readonly runs: Effect.Effect<ReadonlyArray<RunFacts>>;
   readonly offers: (runId: string) => ToolAnswer;
-  readonly progress: (runId: string) => Effect.Effect<RunProgress | null, never, BunServices>;
-  readonly flow: (runId: string) => Effect.Effect<Flow | null, never, BunServices>;
+  readonly progress: (runId: string) => Effect.Effect<RunProgress | null, never, PlatformServices>;
+  readonly flow: (runId: string) => Effect.Effect<Flow | null, never, PlatformServices>;
 }
 
 const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
@@ -142,9 +148,11 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
   selected: boolean,
   reads?: RunAnswerReads,
 ) {
-  const services = yield* Effect.context<BunServices | ChildProcessSpawner.ChildProcessSpawner>();
+  const services = yield* Effect.context<
+    PlatformServices | ChildProcessSpawner.ChildProcessSpawner
+  >();
   const answer = <E>(
-    effect: Effect.Effect<string, E, BunServices | ChildProcessSpawner.ChildProcessSpawner>,
+    effect: Effect.Effect<string, E, PlatformServices | ChildProcessSpawner.ChildProcessSpawner>,
   ) => said(effect).pipe(Effect.provideContext(services));
   return CollieTools.of({
     collie_herd: (input) =>
@@ -187,7 +195,7 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     collie_propose: (input) =>
       answer(
         Effect.gen(function* () {
-          const herd = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+          const herd = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
           const requestId = input.request_id ?? (yield* newRequestId());
           const done = yield* proposeActions(env, {
             door: yield* toolDoor(env),
@@ -266,7 +274,7 @@ const once = (draw: () => JsonObject) => {
 };
 
 /** The Toolkit as each harness's tool interface and `collie tools` read it. */
-export const TOOLS = Object.values(CollieTools.tools).map((tool) => {
+export const TOOLS = Arr.map(Rec.values(CollieTools.tools), (tool) => {
   const { input, ...described } = describeTool(tool);
   const schema = once(input);
   return {
@@ -283,15 +291,15 @@ export const TOOLS = Object.values(CollieTools.tools).map((tool) => {
  * Every caller treats those three the same way: nothing is selected.
  */
 const selectionOf = Effect.fn("Tools.selection")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return null;
   return yield* readSelection(yield* selectionPath(env.stateDir, key)).pipe(
-    Effect.catch(() => Effect.succeed(null)),
+    Effect.orElseSucceed(() => null),
   );
 });
 
 const isSettle = (action: Action | Settle): action is Settle =>
-  SETTLE_KINDS.some((kind) => kind === action.kind);
+  Arr.some(SETTLE_KINDS, (kind) => kind === action.kind);
 
 /** The human's own instruction, carried out and reported a line per action. */
 const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: JsonObject) {
@@ -302,10 +310,10 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   const actions = decoded.success.actions;
   if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
   const asked: ReadonlyArray<string> = [...ASKED_KINDS, ...SETTLE_KINDS];
-  const wrong = actions.filter((action) => !asked.includes(action.kind));
+  const wrong = Arr.filter(actions, (action) => !asked.includes(action.kind));
   if (wrong.length > 0)
-    return `collie_do does not carry out ${[...new Set(wrong.map((a) => a.kind))].join(", ")}: that is collie_propose's, which carries it out in the same call.`;
-  const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+    return `collie_do does not carry out ${Arr.join([...new Set(Arr.map(wrong, (a) => a.kind))], ", ")}: that is collie_propose's, which carries it out in the same call.`;
+  const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const door: Door = yield* toolDoor(env);
   const said: string[] =
     selected.on === null
@@ -321,7 +329,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
     // What follows a failure was asked for on the assumption that it did not happen.
     if (done.state === "failed") break;
   }
-  return said.join("\n");
+  return Arr.join(said, "\n");
 });
 
 /** A decision of the board's, taken where the human said it, by the host. */
@@ -401,12 +409,12 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
     `Check running: ${check.sentence}`,
     ...(check.lastLines.length === 0
       ? []
-      : ["Its last lines:", ...check.lastLines.map((line) => `  ${line}`)]),
+      : ["Its last lines:", ...Arr.map(check.lastLines, (line) => `  ${line}`)]),
   ];
 });
 
 /** One Run in detail, led by the check Collie is running for it, then where each finished one's output is. */
-const encodeFlow = Schema.encodeSync(Schema.fromJsonString(Flow));
+const encodeFlow = Schemaflow(Schema.encodeResult(Schema.fromJsonString(Flow)), Result.getOrThrow);
 
 const runAnswer = Effect.fn("Tools.runAnswer")(function* (
   env: PluginEnv,
@@ -416,7 +424,7 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
   const runs = yield* reads?.runs ?? listRuns(env);
   const facts = yield* runFacts(env, run, runs);
   const running = yield* checkLines(run, runs, yield* Clock.currentTimeMillis);
-  const kept = (yield* donePasses(run)).filter((one) => one.log !== null);
+  const kept = Arr.filter(yield* donePasses(run), (one) => one.log !== null);
   const done =
     kept.length === 0
       ? []
@@ -424,7 +432,7 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
           "",
           "### Checks run",
           "",
-          ...kept.map((one) => `- ${one.name} (${one.pass}) ${one.result}: ${one.log}`),
+          ...Arr.map(kept, (one) => `- ${one.name} (${one.pass}) ${one.result}: ${one.log}`),
         ];
   const offers =
     reads === undefined
@@ -457,7 +465,7 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
           encodeFlow(shown.flow),
           "```",
         ];
-  return [...running, facts, ...done, ...offered, ...ready, ...flow].join("\n");
+  return Arr.join([...running, facts, ...done, ...offered, ...ready, ...flow], "\n");
 });
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
@@ -500,10 +508,10 @@ const wantsRun = (action: JsonObject) => {
  */
 const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, input: JsonObject) {
   const loose = decodeLoose(input);
-  if (loose._tag === "None" || !loose.value.actions.some(wantsRun)) return { input, on: null };
+  if (loose._tag === "None" || !Arr.some(loose.value.actions, wantsRun)) return { input, on: null };
   const on = yield* selectionOf(env);
   if (on === null) return { input, on: null };
-  const filled = loose.value.actions.map((action) =>
+  const filled = Arr.map(loose.value.actions, (action) =>
     wantsRun(action) ? { ...action, run: on.run } : action,
   );
   return { input: { ...input, actions: filled }, on };
@@ -535,7 +543,7 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   const run =
     runs === undefined
       ? yield* findRun(env, id)
-      : ((yield* runs).find((one) => one.id === id) ?? null);
+      : (Option.getOrUndefined(Arr.findFirst(yield* runs, (one) => one.id === id)) ?? null);
   if (run === null)
     return on === null
       ? `No Run "${id}". collie_herd lists the ones there are.`
@@ -556,7 +564,7 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
   if (run === undefined && workspace === undefined)
     return "collie_hold needs a run or a workspace to hold, and the board has nothing open. Ask which one they meant.";
   const why = reason ?? "asked in chat";
-  const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
 
   // One channel for every control, so what chat can do to a Run is exactly what the
   // board and the CLI can do to it — including which Runs there are to do it to.
@@ -571,7 +579,10 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
     about +
     (held.length === 0
       ? `Nothing here is running${why === "" ? "" : ` (${why})`}.`
-      : held.map((result) => `${result.kind}: ${result.state} ${result.note}`.trim()).join("\n"))
+      : Arr.join(
+          Arr.map(held, (result) => Str.trim(`${result.kind}: ${result.state} ${result.note}`)),
+          "\n",
+        ))
   );
 });
 
@@ -583,15 +594,15 @@ const holdsFor = Effect.fn("Tools.holdsFor")(function* (
 ) {
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null) return [];
-  const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
-  return runs.map((view) => ({ kind: "hold" as const, run: view.runId, reason }));
+  const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));
+  return Arr.map(runs, (view) => ({ kind: "hold" as const, run: view.runId, reason }));
 });
 
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */
 const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) {
   const herdr = new Herdr(env);
-  const all = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
-  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
+  const all = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
+  const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
   const saved = (yield* savedModules(env)).entries;
   const lines = yield* Effect.forEach(all, (workspace) =>
     Effect.gen(function* () {
@@ -603,35 +614,44 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   );
   // The Tasks too: a Task with no Run yet is in no Herd listing, so this is the only
   // place a conversation can find out the work a new Run could join.
-  const open = new Set(all.map((workspace) => workspace.workspaceId));
-  const tasks = (yield* listTasks(env.stateDir).pipe(
-    Effect.catch(() => Effect.succeed([])),
-  )).filter((task) => open.has(task.workspace));
+  const open = new Set(Arr.map(all, (workspace) => workspace.workspaceId));
+  const tasks = Arr.filter(
+    yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => [])),
+    (task) => open.has(task.workspace),
+  );
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
-  return [
-    ...(lines.length > 0 ? lines : ["- (no workspaces)"]),
-    "",
-    ...tasks.map((task) => `- task ${task.id} (${task.label}) in workspace ${task.workspace}`),
-    ...(tasks.length === 0 ? ["- (no Tasks with an open workspace)"] : []),
-    "",
-    root === null
-      ? "Projects root: none"
-      : `Projects root: ${root.path} — a checkout under it is named by its directory name`,
-    "",
-    "workflows, with the Inputs each takes (? is optional) and what it is for:",
-    ...[...saved]
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .map(
-        (one) =>
-          `- ${one.id} (${one.inputs.map((input) => `${input.name}${input.required ? "" : "?"}`).join(", ")})${one.description === "" ? "" : ` — ${one.description}`}`,
+  return Arr.join(
+    [
+      ...(lines.length > 0 ? lines : ["- (no workspaces)"]),
+      "",
+      ...Arr.map(
+        tasks,
+        (task) => `- task ${task.id} (${task.label}) in workspace ${task.workspace}`,
       ),
-    ...(saved.length === 0 ? ["- none"] : []),
-    "",
-    "a start names its workspace — an id, its label, the path of a checkout on this Machine or a",
-    "repository's directory name under the Projects root (one with no workspace open on it gets",
-    "one), or projects-root — and every Input, an optional",
-    'one left empty as "". Nothing is inferred; a start missing any is refused with each listed.',
-  ].join("\n");
+      ...(tasks.length === 0 ? ["- (no Tasks with an open workspace)"] : []),
+      "",
+      root === null
+        ? "Projects root: none"
+        : `Projects root: ${root.path} — a checkout under it is named by its directory name`,
+      "",
+      "workflows, with the Inputs each takes (? is optional) and what it is for:",
+      ...Arr.map(
+        [...saved].sort((a, b) => pipe_(a.id, Str.localeCompare(b.id))),
+        (one) =>
+          `- ${one.id} (${Arr.join(
+            Arr.map(one.inputs, (input) => `${input.name}${input.required ? "" : "?"}`),
+            ", ",
+          )})${one.description === "" ? "" : ` — ${one.description}`}`,
+      ),
+      ...(saved.length === 0 ? ["- none"] : []),
+      "",
+      "a start names its workspace — an id, its label, the path of a checkout on this Machine or a",
+      "repository's directory name under the Projects root (one with no workspace open on it gets",
+      "one), or projects-root — and every Input, an optional",
+      'one left empty as "". Nothing is inferred; a start missing any is refused with each listed.',
+    ],
+    "\n",
+  );
 });
 
 /** What `collie_report` answers with: `run report`'s own words. */
@@ -652,7 +672,7 @@ const reportFacts = Effect.fn("Tools.reportFacts")(function* (
  * the moment it demonstrably reached the model — it is in the answer.
  */
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "Collie cannot reach herdr, so it has nothing to report.";
   const read = yield* settleNewsFor(env, {
     door: yield* toolDoor(env),
@@ -668,7 +688,7 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
 const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
   const found = yield* findRun(env, run);
   if (found === null) return `No Run "${run}".`;
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
   const now = yield* Clock.currentTimeMillis;
   const proposals =
     key === null
@@ -679,28 +699,33 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
   // so there is no second place a steer can be sitting unrecorded.
   const unread: string[] = [];
   const waiting = [
-    ...found.asking.flatMap((asked) =>
-      choiceLines(run, asked).map((line, n) => (n === 0 ? `- ${line}` : `  ${line}`)),
+    ...Arr.flatMap(found.asking, (asked) =>
+      Arr.map(choiceLines(run, asked), (line, n) => (n === 0 ? `- ${line}` : `  ${line}`)),
     ),
-    ...proposals.map(
+    ...Arr.map(
+      proposals,
       (p) => `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,
     ),
   ];
-  return [
-    "### Waiting on the human",
-    "",
-    ...(waiting.length === 0 ? ["- nothing"] : waiting),
-    "",
-    "### Sent to this Run's agents",
-    "",
-    ...(deliveries.length === 0 && unread.length === 0
-      ? ["- nothing"]
-      : deliveries.map(
-          ({ delivery }) =>
-            `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}`,
-        )),
-    ...unread,
-  ].join("\n");
+  return Arr.join(
+    [
+      "### Waiting on the human",
+      "",
+      ...(waiting.length === 0 ? ["- nothing"] : waiting),
+      "",
+      "### Sent to this Run's agents",
+      "",
+      ...(deliveries.length === 0 && unread.length === 0
+        ? ["- nothing"]
+        : Arr.map(
+            deliveries,
+            ({ delivery }) =>
+              `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}`,
+          )),
+      ...unread,
+    ],
+    "\n",
+  );
 });
 
 /** What `collie_definitions` answers with: what can be run, resolved rather than as authored. */
@@ -719,70 +744,95 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
   if (asked.workflow !== undefined) {
     // A module is what its id runs, so it is what this answers with — the same reading
     // `workflow show` gives, and the same schemas a refusal asks an input for.
-    const module = saved.entries.find((one) => one.id === asked.workflow);
+    const module = Option.getOrUndefined(
+      Arr.findFirst(saved.entries, (one) => one.id === asked.workflow),
+    );
     if (module) return moduleFacts(yield* readModule(module), yield* checkModule(module));
-    const broken = saved.problems.find((one) => one.id === asked.workflow);
+    const broken = Option.getOrUndefined(
+      Arr.findFirst(saved.problems, (one) => one.id === asked.workflow),
+    );
     if (broken) return `${broken.path} will not load: ${broken.message}`;
     return `No Workflow "${asked.workflow}".`;
   }
-  return [
-    "### Workflows",
-    "",
-    ...saved.entries.map((one) => `- ${one.id} (${one.layer}): ${one.description}`).sort(),
-    ...(saved.problems.length > 0
-      ? ["", ...saved.problems.map((one) => `- ${one.id}: ${one.path} will not load`)]
-      : []),
-    "",
-    "### Personas",
-    "",
-    ...[...defs.personas.values()]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((p) => `- ${p.name} (${p.layer}): ${p.description}`),
-    ...(defs.errors.length > 0
-      ? ["", "### Would not load", "", ...defs.errors.map((e) => `- ${e}`)]
-      : []),
-  ].join("\n");
+  return Arr.join(
+    [
+      "### Workflows",
+      "",
+      ...Arr.map(saved.entries, (one) => `- ${one.id} (${one.layer}): ${one.description}`).sort(),
+      ...(saved.problems.length > 0
+        ? ["", ...Arr.map(saved.problems, (one) => `- ${one.id}: ${one.path} will not load`)]
+        : []),
+      "",
+      "### Personas",
+      "",
+      ...Arr.map(
+        [...defs.personas.values()].sort((a, b) => pipe_(a.name, Str.localeCompare(b.name))),
+        (p) => `- ${p.name} (${p.layer}): ${p.description}`,
+      ),
+      ...(defs.errors.length > 0
+        ? ["", "### Would not load", "", ...Arr.map(defs.errors, (e) => `- ${e}`)]
+        : []),
+    ],
+    "\n",
+  );
 });
 
-const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const asJson = Schemaflow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Json)),
+  Result.getOrThrow,
+);
 
 /** One module as the tool says it: what it takes, what it gives back, and what is wrong. */
 const moduleFacts = (one: Described, checked: ModuleCheck): string =>
-  [
-    `${one.id} (${one.layer}): ${one.title}`,
-    one.description,
-    `inputs: ${one.inputs.map((input) => `${input.name}${input.required ? "" : "?"}`).join(", ") || "none"}`,
-    `the host also settles: ${one.options.map((option) => option.name).join(", ")}`,
-    `result: ${asJson(one.success.schema)}`,
-    `failure: ${asJson(one.error.schema)}`,
-    `metadata: ${asJson(one.metadata)}`,
-    checked.problems.length === 0
-      ? checked.toolchain === null
-        ? "checks out"
-        : `checks out, but nothing typechecked it: ${checked.toolchain}`
-      : `problems:\n${checked.problems.map((problem) => `- ${problem}`).join("\n")}`,
-    ...checked.limits.map((limit) => `drawn without: ${limit}`),
-    `defined in: ${one.path}`,
-  ].join("\n");
+  Arr.join(
+    [
+      `${one.id} (${one.layer}): ${one.title}`,
+      one.description,
+      `inputs: ${
+        Arr.join(
+          Arr.map(one.inputs, (input) => `${input.name}${input.required ? "" : "?"}`),
+          ", ",
+        ) || "none"
+      }`,
+      `the host also settles: ${Arr.join(
+        Arr.map(one.options, (option) => option.name),
+        ", ",
+      )}`,
+      `result: ${asJson(one.success.schema)}`,
+      `failure: ${asJson(one.error.schema)}`,
+      `metadata: ${asJson(one.metadata)}`,
+      checked.problems.length === 0
+        ? checked.toolchain === null
+          ? "checks out"
+          : `checks out, but nothing typechecked it: ${checked.toolchain}`
+        : `problems:\n${Arr.join(
+            Arr.map(checked.problems, (problem) => `- ${problem}`),
+            "\n",
+          )}`,
+      ...Arr.map(checked.limits, (limit) => `drawn without: ${limit}`),
+      `defined in: ${one.path}`,
+    ],
+    "\n",
+  );
 
 /** How much of the cleanup listing chat is given; the CLI has the rest. */
 const CLEANUP_LINES = 60;
 
 /** The first `most` lines of `text`, and how many more there are. */
 const shortened = (text: string, most: number) => {
-  const lines = text.split("\n");
+  const lines = Str.split(text, "\n");
   return lines.length <= most
     ? text
-    : [...lines.slice(0, most), `(${lines.length - most} more lines)`].join("\n");
+    : Arr.join([...lines.slice(0, most), `(${lines.length - most} more lines)`], "\n");
 };
 
 /** What `collie_installation` answers with: everything that is not about a Run. */
 const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {
   const herdr = new Herdr(env);
-  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
-  const workspaces = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
-  const health = yield* doctor(env).pipe(Effect.catch(() => Effect.succeed(null)));
+  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+  const workspaces = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
+  const health = yield* doctor(env).pipe(Effect.orElseSucceed(() => null));
   const record = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
   const ownership = key === null ? null : decide(record, workspaces, panes, key);
   const { close, listed } = closable(panes);
@@ -797,7 +847,7 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
       const found =
         (yield* readDefaults(yield* defaultsPath(env.stateDir, scopeKey(scope)))) ?? EMPTY_DEFAULTS;
       return `- ${workspace.workspaceId} (${workspace.label}): ${
-        describeDefaults(found).replaceAll("\n", "; ") || "nothing"
+        pipe_(describeDefaults(found), Str.replaceAll("\n", "; ")) || "nothing"
       }`;
     }),
   );
@@ -807,37 +857,40 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
   const served = yield* anyRuns(env);
   const sweepable = served ? yield* cleanupListing(env, "chat") : null;
   const scheduled = served ? yield* scheduleListing(env, "chat") : null;
-  return [
-    `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,
-    "",
-    `home: ${
-      record === null
-        ? "none recorded"
-        : record === UNREADABLE
-          ? "the record is unreadable"
-          : `${record.workspaceId} (${record.state})`
-    }`,
-    `ownership: ${ownership === null ? "herdr could not be asked" : ownership.kind}`,
-    `panes an older release left: ${close.length} closable, ${listed.length} sharing a tab`,
-    sweepable === null
-      ? "cleanup: nothing swept here yet"
-      : sweepable.ok
-        ? `cleanup, as \`collie cleanup\` lists it:\n${shortened(cleanupLines(sweepable.value, false), CLEANUP_LINES)}`
-        : `cleanup: ${sweepable.error.message}`,
-    scheduled === null
-      ? "schedules: none"
-      : scheduled.ok
-        ? scheduleLines(scheduled.value)
-        : `schedules: ${scheduled.error.message}`,
-    "",
-    "every new Run begins with, by the workspace it is started in:",
-    ...(defaults.length > 0 ? defaults : ["- (no workspaces)"]),
-    "",
-    `chat: ${harness}${whyUnavailable(harness, Bun.which(harness)) ?? " installed"}, running ${chat?.harness ?? "nothing"}`,
-    `delivery: ${pushable(harness).how}`,
-  ].join("\n");
+  return Arr.join(
+    [
+      `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,
+      "",
+      `home: ${
+        record === null
+          ? "none recorded"
+          : record === UNREADABLE
+            ? "the record is unreadable"
+            : `${record.workspaceId} (${record.state})`
+      }`,
+      `ownership: ${ownership === null ? "herdr could not be asked" : ownership.kind}`,
+      `panes an older release left: ${close.length} closable, ${listed.length} sharing a tab`,
+      sweepable === null
+        ? "cleanup: nothing swept here yet"
+        : sweepable.ok
+          ? `cleanup, as \`collie cleanup\` lists it:\n${shortened(cleanupLines(sweepable.value, false), CLEANUP_LINES)}`
+          : `cleanup: ${sweepable.error.message}`,
+      scheduled === null
+        ? "schedules: none"
+        : scheduled.ok
+          ? scheduleLines(scheduled.value)
+          : `schedules: ${scheduled.error.message}`,
+      "",
+      "every new Run begins with, by the workspace it is started in:",
+      ...(defaults.length > 0 ? defaults : ["- (no workspaces)"]),
+      "",
+      `chat: ${harness}${whyUnavailable(harness, Bun.which(harness)) ?? " installed"}, running ${chat?.harness ?? "nothing"}`,
+      `delivery: ${pushable(harness).how}`,
+    ],
+    "\n",
+  );
 });
 
 export function toolNamed(name: string) {
-  return TOOLS.find((tool) => tool.name === name) ?? null;
+  return Option.getOrUndefined(Arr.findFirst(TOOLS, (tool) => tool.name === name)) ?? null;
 }

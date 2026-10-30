@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, Struct } from "effect";
 import { frontDoor, socketOf } from "../src/host";
 import { collie, proves } from "./support/world";
 
@@ -17,7 +17,7 @@ test(
           yield* fs.writeFileString(`${bin}/pi`, "#!/bin/sh\nexit 1\n", { mode: 0o644 });
           yield* fs.writeFileString(
             `${world.config}/config.json`,
-            Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({
               projects: { root: "/work/projects" },
               chat_harness: "pi",
               linear: { team: "TOOLS" },
@@ -25,7 +25,7 @@ test(
               harness: "codex",
               models: { codex: ["extra"] },
               notifications: { "run-done": false },
-            }),
+            }).pipe(Effect.orDie),
           );
           expect(
             (yield* collie(world, ["board"], { PATH: `${bin}:/usr/bin:/bin` })).envelope.ok,
@@ -43,8 +43,8 @@ test(
           yield* fs.writeFileString(`${world.config}/config.json`, "{}");
           const unset = yield* door.machineOwn();
           expect(unset).toEqual({ harnesses: ["codex"], remembered: [] });
-          expect(Object.hasOwn(unset, "projectsRoot")).toBe(false);
-          expect(Object.hasOwn(unset, "chatHarness")).toBe(false);
+          expect(Struct.keys(unset)).not.toContain("projectsRoot");
+          expect(Struct.keys(unset)).not.toContain("chatHarness");
         }),
       [],
     ),

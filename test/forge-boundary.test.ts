@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
@@ -57,7 +60,9 @@ const scan = Effect.fn("boundary.scan")(function* () {
       const matcher = matcherOf(file);
       if (matcher === null) continue;
       const text = yield* fs.readFileString(path.join(root, file));
-      const clis = new Set([...text.matchAll(matcher)].map((m) => m[2] ?? m[3] ?? m[1] ?? ""));
+      const clis = new Set(
+        Arr.map([...pipe(text, Str.matchAll(matcher))], (m) => m[2] ?? m[3] ?? m[1] ?? ""),
+      );
       if (clis.size > 0) found.set(file, clis);
     }
   }
@@ -66,10 +71,11 @@ const scan = Effect.fn("boundary.scan")(function* () {
 
 /** Each CLI a file runs or names that neither its adapter, its forge nor the allowlist lets it. */
 const straysIn = (found: ReadonlyMap<string, ReadonlySet<string>>) =>
-  [...found].flatMap(([file, clis]) =>
-    [...clis]
-      .filter((cli) => allowedIn(file) !== cli && !ALLOWED.has(file))
-      .map((cli) => `${file} runs ${cli}`),
+  Arr.flatMap([...found], ([file, clis]) =>
+    Arr.map(
+      Arr.filter([...clis], (cli) => allowedIn(file) !== cli && !ALLOWED.has(file)),
+      (cli) => `${file} runs ${cli}`,
+    ),
   );
 
 test("glab and gh are run only by their adapters, and only the allowlist still runs either", () =>
@@ -99,7 +105,7 @@ test("every allowlisted file still runs a forge CLI, so a moved one leaves the l
   runEffect(
     Effect.gen(function* () {
       const found = yield* scan();
-      expect([...ALLOWED.keys()].filter((file) => !found.has(file))).toEqual([]);
+      expect(Arr.filter([...ALLOWED.keys()], (file) => !found.has(file))).toEqual([]);
     }),
   ));
 

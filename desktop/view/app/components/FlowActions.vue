@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import * as Arr from "effect/Array";
 import type { FlowLane, FlowRun } from "../../../../src/board-model";
 import {
   desktopFlowAction,
@@ -18,15 +19,18 @@ const item = (one: FlowActionView) => ({
   onSelect: () => emit("act", one),
 });
 const menu = computed(() =>
-  [
-    primary.value,
-    ...(props.node.actions ?? []).map((kind) =>
-      desktopFlowAction(kind, props.node, props.lane, props.installation, props.live),
-    ),
-  ].flatMap((one) => (one === null ? [] : [item(one)])),
+  Arr.flatMap(
+    [
+      primary.value,
+      ...Arr.map(props.node.actions ?? [], (kind) =>
+        desktopFlowAction(kind, props.node, props.lane, props.installation, props.live),
+      ),
+    ],
+    (one) => (one === null ? [] : [item(one)]),
+  ),
 );
 const laneMenu = computed(() =>
-  (props.lane.actions ?? []).flatMap((kind) => {
+  Arr.flatMap(props.lane.actions ?? [], (kind) => {
     const one = desktopLaneAction(kind, props.lane, props.installation, props.live);
     return one === null ? [] : [item(one)];
   }),
