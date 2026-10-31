@@ -1781,8 +1781,12 @@ correct, in Desktop's own view. It is a benchmark, not a test: the suite never r
 
 ```sh
 bun install && (cd desktop && bun install)
-bun bench/record-open/run.ts --cells local --bar 200
+bun bench/record-open/run.ts --cells local --samples 20 --warmup 2 --bar 200
 ```
+
+On today's record path every open takes seconds, so 20 opens settle each cell's verdict; at
+the default 200 a run held the Machine for over 14 h. The 200-open matrix, the command without
+`--samples` and `--warmup`, is run on the delivered tree by ticket 07.
 
 What one run does:
 
@@ -1838,7 +1842,8 @@ Chrome gives a card's button the click's pointer events but not the click.
 
 `--cells` takes `local` or a comma-separated list. `--samples` sets the timed opens per cell
 (200), and `--warmup` the opens before them (5), which are kept but not counted. `--runs`
-sets the fixture's size (520), which must leave settled Runs beside the 40 old ones.
+sets the fixture's size (520), which must leave settled Runs beside the 40 old ones. An open
+that has not painted in 60 s fails, recorded at 60 s.
 
 The run writes `samples.jsonl`, every sample with its marks and differences, and
 `summary.json` to `.scratch/record-open/<time>/`, or to `--out`. Per cell, the summary gives:
@@ -1849,7 +1854,8 @@ The run writes `samples.jsonl`, every sample with its marks and differences, and
   `bridge_and_host` (mounted to first value) and `render` (first value to usable). A tree
   without the marks reports `absent`.
 
-It also records the tree, the fixture and the Chrome: its version, its flags, and that it is
+It also records the tree, the fixture, the opens and warm-up per cell, the run's wall time in
+`wall_s`, and the Chrome: its version, its flags, and that it is
 headless and software-rendered. These are Chrome numbers on a build with Vue's devtools hooks
 on, not native Desktop numbers, nor headed or GPU ones.
 
