@@ -631,6 +631,23 @@ export const recordFor = Effect.fn("Verify.recordFor")(function* (
   );
 });
 
+export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
+  runDir: string,
+  wanted: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
+  since: string,
+) {
+  const latest = latestRecord(
+    Arr.filter(
+      yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
+      (one) => one.name === wanted.name && one.expect === wanted.expect,
+    ),
+    { ...wanted, environment: yield* environmentOf(wanted.executable) },
+    yield* fingerprint(wanted.cwd),
+    since,
+  );
+  return latest === null || latest.result === "unstable" || ranOneTest(latest) ? null : latest;
+});
+
 /** `recordFor`, where it is a pass. */
 export const reliedFor = (...args: Parameters<typeof recordFor>) =>
   recordFor(...args).pipe(
