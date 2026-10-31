@@ -852,6 +852,12 @@ else `<session>.sock` under core's runtime directory, `HC_SESSION` naming the se
   subagent's. Collie records the id as the launch record's `agentSession`.
 - **The first prompt** of an OpenCode agent goes in at launch, as `--prompt`, since it
   reports no readiness to wait for. Its later prompts are sends.
+- **A pi agent** is launched with `--session-id` and a fresh id, which the launch record
+  keeps as its `agentSession`; the registry's incarnation keeps none, since core lists none.
+  pi has no question tool, so its per-launch `.tools.ts` registers Collie's
+  `ask_user_question` (`piQuestionTool` in `src/compactors.ts`). The tool hands its call to
+  `collie herdr compaction <control dir>` as the payload Claude's `AskUserQuestion` hook
+  gets, so it is recorded in the same `questions.jsonl` and becomes the same Decisions.
 - **Stop** at the Run's end is `terminal.kill`.
 
 The incarnation of an agent launched on core is its terminal's address, marked `core`, and

@@ -40,8 +40,17 @@ import {
 import { CommandLine } from "effect/process";
 import type { PlatformServices } from "./platform";
 import * as Activity from "effect/workflow/Activity";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
-import { Launched, LAUNCH_ORDER, LAUNCH_SUFFIX, launchDir, readLaunches, stemOf } from "./launches";
+import {
+  Launched,
+  LAUNCH_ORDER,
+  LAUNCH_SUFFIX,
+  launchDir,
+  readLaunches,
+  stemOf,
+  type AgentSession,
+} from "./launches";
 import { CurrentStep, type At } from "./steps";
 import { takeStepNotes } from "./step-steering";
 export { Launched } from "./launches";
@@ -72,6 +81,7 @@ import {
   takeHarnessQuestions,
   ranOutSince,
   submittedDelivery,
+  piQuestionTool,
   type AgentQuestion,
 } from "./compactors";
 import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
@@ -1376,6 +1386,8 @@ export interface AgentHost {
   readonly ports?: CompactionPorts;
   /** A harness's `--help`, by its kind; the installed one's where left out. */
   readonly help?: typeof installedHelp;
+  /** How a launch's helpers run Collie; this binary where left out. */
+  readonly self?: ReadonlyArray<string>;
 }
 
 type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp;
@@ -1938,6 +1950,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     backend: TerminalBackend,
     /** The step's prompt, for a harness given it at launch rather than sent it. */
     prompt: string | null,
+    /** The id its harness is to open its session under, where Collie chooses it. */
+    session: string | null,
   ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
@@ -2010,7 +2024,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     yield* write(persona, `${personaBody}\n`);
     const { mcpConfig, piExtension } = yield* Effect.promise(() => import("./chat"));
     const { TOOLS } = yield* Effect.promise(() => import("./tools"));
-    const command = selfCommand();
+    const command = host.self ?? selfCommand();
     const serverEnv = {
       HERDR_PLUGIN_ROOT: host.env.pluginRoot,
       HERDR_PLUGIN_STATE_DIR: host.env.stateDir,
@@ -2037,6 +2051,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           serverEnv,
           "",
           "",
+          piQuestionTool(command, yield* controlDir(host.env.stateDir, agent)),
         ),
       );
     const operators =
@@ -2129,7 +2144,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const terminal = yield* host.herdr
             .agentLaunch({
               name: agent,
-              argv: [adapter.kind, ...args, ...(prompt === null ? [] : ["--prompt", prompt])],
+              argv: [
+                adapter.kind,
+                ...args,
+                ...(prompt === null ? [] : ["--prompt", prompt]),
+                ...(session === null ? [] : ["--session-id", session]),
+              ],
               cwd: ask.cwd,
               env: {
                 ...serverEnv,
@@ -2288,7 +2308,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           yield* fs.readFileString(launchOrder(ask.runId)).pipe(Effect.orElseSucceed(() => "")),
           "\n",
         ).includes(stemOf(ask));
-        const landedOn = (incarnation: Incarnation | undefined) =>
+        const landedOn = (
+          incarnation: Incarnation | undefined,
+          chosen: AgentSession | null = null,
+        ) =>
           Effect.gen(function* () {
             const landed: Types.Mutable<Launched> = {
               agent,
@@ -2311,13 +2334,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               landed.terminalId = incarnation.terminalId;
               if (incarnation.agentSession !== null) landed.agentSession = incarnation.agentSession;
             }
+            if (chosen !== null) landed.agentSession = chosen;
             return landed;
           });
         // Stopped while it waited for memory: nothing started, and the caller sees the stop.
         if (memory === "stopped") return yield* landedOn(undefined);
-        const recorded = (incarnation: Incarnation | undefined) =>
+        const recorded = (
+          incarnation: Incarnation | undefined,
+          chosen: AgentSession | null = null,
+        ) =>
           Effect.gen(function* () {
-            const landed = yield* landedOn(incarnation);
+            const landed = yield* landedOn(incarnation, chosen);
             // Beside it, the agent this work landed on, so a stop and a human steering this
             // run later reach the agent that has it rather than one derived from a name again.
             yield* write(launchPath(ask.runId, stemOf(ask)), encodeLaunched(landed));
@@ -2342,6 +2369,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const backend = yield* terminalBackend(host.env.userDir);
         // OpenCode reports no readiness, so on core its first prompt goes in at launch.
         const atLaunch = !alive && backend === "core" && adapter.id === "opencode";
+        // Chosen here so a full stop can resume it; OpenCode's is read once it opens one.
+        const session =
+          !alive && backend === "core" && adapter.id === "pi"
+            ? { kind: adapter.kind, value: yield* (yield* SecureRandom.SecureRandom).uuidV4() }
+            : null;
         // Started and recorded as one step, so a stop never misses an agent this started.
         const launched = alive
           ? yield* recorded(
@@ -2356,7 +2388,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 { agents: listing.success, listedAt },
                 backend,
                 atLaunch ? pointer : null,
-              ).pipe(Effect.flatMap(recorded)),
+                session?.value ?? null,
+              ).pipe(Effect.flatMap((incarnation) => recorded(incarnation, session))),
             );
         if (atLaunch) {
           if (!replayed) yield* append(launchOrder(ask.runId), stemOf(ask));

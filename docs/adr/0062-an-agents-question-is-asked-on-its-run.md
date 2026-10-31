@@ -1,6 +1,6 @@
 # An agent's question is asked on its Run
 
-Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): a Codex agent's question is asked on its Run, as a Claude agent's is.
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): a Codex agent's question, and a pi agent's asked with Collie's own question tool, are asked on its Run, as a Claude agent's is.
 
 renovate run-8dc1f7bf parked at 13:58:51Z on "has written nothing to batch.json yet"
 (investigation run-556cba08). Its two-hour Output budget ran out while the agent was still
@@ -73,8 +73,10 @@ asks, and is now asked on the Run.
   instead records the decision under `assumptions`, as an agent with nobody to ask already
   does ([`docs/sdk.md`](../sdk.md#having-an-agent-do-the-work)), and the open question closes
   with the step.
-- Only Claude has a hook that can take a question before it reaches the pane. Codex,
-  OpenCode and Pi agents stay as they are, with the budget paused while they are blocked.
+- Only Claude has a hook that can take a question before it reaches the pane. A Codex
+  agent's question is read from its App Server, and a pi agent asks with a question tool
+  of Collie's, so both reach the Run too. OpenCode agents stay as they are, with the budget
+  paused while they are blocked.
 
 ## Amended 2026-10-19: the budget parks the Run, and collection goes on
 

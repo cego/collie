@@ -102,8 +102,13 @@ scratch XDG directories, so they never touch the live core.
 
 - herdr's per-harness detection is dropped.
 - OpenCode gets a status reporter plugin through `OPENCODE_CONFIG_CONTENT`.
-- pi's question tool gets a reporter in the per-launch extension Collie already writes.
+- pi has no question tool, so its questions do not come from a status reporter. A pi agent
+  a Run launches is given Collie's `ask_user_question` in the per-launch extension Collie
+  already writes. The tool asks on the Run the way ADR-0062's hook does for Claude's
+  `AskUserQuestion`, and returns at once. Native chat's pi is not given it.
 - Neither edits a settings file.
+- Each pi agent is given a session id at launch with `--session-id`. It is recorded on
+  the launch as its `agentSession`, for the agent to be resumed in.
 - A Codex agent's question is read from the App Server Collie runs it through
   ([ADR-0059](0059-a-stopped-agent-is-stopped-where-its-turn-runs.md)). It is put on the
   Run as a Decision, the way ADR-0062 does for Claude's `AskUserQuestion`.

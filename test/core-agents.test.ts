@@ -6,13 +6,15 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Layer, Option, Schema } from "effect";
+import { Clock, Effect, Fiber, FileSystem, Layer, Option, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { PlatformServices } from "../src/platform";
 import { Agents, agentWork, agentsLayer, type AgentHost } from "../src/agents";
 import { foundationLayer } from "../src/engine";
 import type { Collecting } from "../src/collecting";
-import type { Store } from "../src/store";
+import { Store } from "../src/store";
+import { hostLockOf } from "../src/lock";
 import { agentName } from "../src/naming";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -22,6 +24,8 @@ import type { FakeHc } from "./support/fake-hc";
 import { until } from "./support/host";
 import { deliveriesOf, machineHerd } from "../src/steering";
 import { opencodeReporter } from "../src/harness";
+import { askWith, piTools } from "./support/pi";
+import { isString } from "../src/schema";
 
 let rig: Rig;
 let dir: string;
@@ -116,6 +120,23 @@ const LaunchedSession = Schema.fromJsonString(
   Schema.Struct({ agentSession: Schema.Struct({ kind: Schema.String, value: Schema.String }) }),
 );
 
+const PiLaunch = Schema.Struct({ argv: Schema.Array(Schema.String) });
+
+/** One step by a pi agent, which asks the human before it writes anything. */
+const piWork = enveloped({ name: "core-pi", input: {}, success: Verdict });
+const piBody = piWork.toLayer((payload) =>
+  agentWork({
+    operation: "review",
+    role: "reviewer",
+    agent: "builder",
+    harness: "pi",
+    workflow: "core-pi",
+    cwd: rig.projectDir,
+    instructions: "Review the diff.",
+    output: Verdict,
+  }).pipe(asRun(payload)),
+);
+
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
 
 /** This Machine set to `backend`, with the fake core where core's own socket would be. */
@@ -142,6 +163,8 @@ const hostOf = (env: Record<string, string>): AgentHost => ({
   collectMs: 400,
   help: () => Effect.succeed(CLAUDE_HELP),
   version: () => Effect.succeed("2.1.309 (Claude Code)"),
+  // The helper a pi agent's question tool runs, from source.
+  self: [process.execPath, `${import.meta.dir}/../src/main.ts`],
 });
 
 /** The core this Machine's agents run on, and nothing of herdr's: no herdr session is open. */
@@ -283,6 +306,125 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       expect(launched.agentSession).toEqual({ kind: "opencode", value: "ses_review" });
     }),
   ));
+
+const waitFor = <E, R>(reached: Effect.Effect<boolean, E, R>) =>
+  Effect.gen(function* () {
+    while (!(yield* reached)) yield* TestClock.withLive(Effect.sleep("10 millis"));
+  });
+
+const spend = (ms: number) =>
+  Effect.gen(function* () {
+    const until = (yield* Clock.currentTimeMillis) + ms;
+    yield* waitFor(Effect.map(Clock.currentTimeMillis, (now) => now >= until));
+  });
+
+test(
+  "a pi agent on core asks with its question tool: two Decisions, its next step held, and one Delivery with both answers",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const core = yield* rig.startCore();
+        yield* onMachine("core");
+        yield* fs.writeFileString(
+          hostLockOf(rig.pluginEnv().stateDir),
+          `{"pid":${process.pid},"start":null}`,
+        );
+        yield* rig.queueOutputs([null, null, null]);
+        const agent = agentName("r1", "builder", null, 1);
+        const sends = () =>
+          Effect.map(rig.calls(), (calls) =>
+            Arr.map(
+              Arr.filter(coreCalls(calls), (call) => call.cmd === "terminal.send"),
+              (call) => (isString(call.params?.text) ? call.params.text : ""),
+            ),
+          );
+        yield* session(
+          Effect.gen(function* () {
+            yield* piWork.execute({ runId: "r1", input: {} }, { discard: true });
+            yield* waitFor(Effect.map(sends(), (sent) => sent.length === 1));
+            const [run] = Arr.filter(
+              coreCalls(yield* rig.calls()),
+              (call) => call.cmd === "terminal.run",
+            );
+            const { argv } = yield* Schema.decodeUnknownEffect(PiLaunch)(run?.params);
+            expect(argv[0]).toBe("pi");
+            const launched = yield* Schema.decodeEffect(LaunchedSession)(
+              yield* fs.readFileString(`${dir}/agents/r1/review.launch.json`),
+            );
+            const chosen = argv[argv.indexOf("--session-id") + 1];
+            expect(chosen).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+            expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
+
+            const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
+            const told = yield* askWith(
+              tools,
+              "call_1",
+              [
+                {
+                  question: "Which database?",
+                  header: "Database",
+                  options: [{ label: "Postgres" }],
+                },
+                { question: "Which checks?", header: "Checks", options: [{ label: "lint" }] },
+              ],
+              launched.agentSession.value,
+            );
+            expect(told).toContain("End your turn now");
+            const store = yield* Store;
+            yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length === 2));
+            expect(Arr.map(yield* store.asked("r1"), (asked) => asked.answer)).toEqual([
+              null,
+              null,
+            ]);
+
+            yield* Effect.forkChild(
+              (yield* Agents).launch({
+                runId: "r1",
+                operation: "fix",
+                role: "reviewer",
+                workflow: "core-pi",
+                task: null,
+                agent: "builder",
+                cwd: rig.projectDir,
+                prompt: "Fix it.",
+                output: `${dir}/agents/r1/fix.json`,
+                skill: null,
+                harness: "pi",
+                model: null,
+                effort: null,
+                permissions: null,
+              }),
+            );
+            yield* spend(30_000);
+            expect(yield* sends()).toHaveLength(1);
+
+            for (const [decision, value] of [
+              ["ask-review-1", "SQLite"],
+              ["ask-review-2", "lint and typecheck"],
+            ] as const)
+              yield* store.settle({ run: "r1", decision, value, request: "a" });
+            yield* waitFor(Effect.map(sends(), (sent) => sent.length === 3));
+            const [step, answers, next] = yield* sends();
+            expect(step).toContain("/review.prompt.md");
+            expect(answers).toContain(
+              "Your questions are answered: Database: SQLite; Checks: lint and typecheck",
+            );
+            expect(next).toContain("/fix.prompt.md");
+            expect(
+              Arr.map(
+                Arr.filter(coreCalls(yield* rig.calls()), (call) => call.cmd === "terminal.send"),
+                (call) => call.params?.terminal,
+              ),
+            ).toEqual([agent, agent, agent]);
+          }),
+          coreOnly(core),
+          piBody,
+        );
+      }),
+    ),
+  120_000,
+);
 
 test("a Machine switched to core mid-Run keeps its running agent on herdr and starts its next one on core", () =>
   runEffect(

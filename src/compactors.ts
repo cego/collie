@@ -111,6 +111,7 @@ const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
 import { selfCommand } from "./env";
 import { shell } from "./mr";
 import { reason } from "./naming";
+import type { JsonObject } from "./schema";
 
 /**
  * The harness releases these adapters were verified against. The gate refuses an older
@@ -702,9 +703,25 @@ export const AgentQuestion = Schema.Struct({
 });
 export type AgentQuestion = typeof AgentQuestion.Type;
 
-const decodeAsked = Schema.decodeUnknownOption(
-  Schema.Struct({ questions: Schema.NonEmptyArray(AgentQuestion) }),
-);
+const AskedQuestions = Schema.Struct({ questions: Schema.NonEmptyArray(AgentQuestion) });
+const decodeAsked = Schema.decodeUnknownOption(AskedQuestions);
+
+/**
+ * pi's question tool, which it does not have itself: `AskUserQuestion`'s shape, handed to
+ * the host by the helper Claude's hook runs, with the agent's control directory `dir`.
+ */
+export const piQuestionTool = (self: ReadonlyArray<string>, dir: string) => {
+  const document = Schema.toJsonSchemaDocument(AskedQuestions);
+  return {
+    name: "ask_user_question",
+    label: "Ask the human",
+    description:
+      "Ask the human one or more questions, each with options to choose from; they can also answer in their own words. The questions go on your Run, and the answers arrive as your next message.",
+    // SAFETY: a JSON Schema document is JSON.
+    parameters: { ...document.schema, $defs: document.definitions } as JsonObject,
+    helper: [...self, "herdr", "compaction", dir],
+  };
+};
 
 /** One `AskUserQuestion` call, as the hook recorded it for the agent's Run. */
 export const AskedCall = Schema.Struct({

@@ -398,7 +398,8 @@ to no Task is a TaskView of its own.
 it in **Needs you**: a **question** a Run asked, or a **Proposal** Collie made. A question
 is the Workflow's, asked with `ask`, or one a Run's agent asked with its harness's own
 question tool, which Collie puts on the Run and whose answer it delivers to that agent. A
-Codex agent's is read from the App Server Collie runs it through. While one is open,
+Codex agent's is read from the App Server Collie runs it through. A pi agent's harness has
+none, so it asks with the one Collie gives it. While one is open,
 Collie's own prompts to that agent wait. Any of a
 Task's Runs can be waiting on one, a fan-out's Repo runs included, and each is answered on
 the Run that asked. Both are answered on the card, from the CLI or from chat, and survive

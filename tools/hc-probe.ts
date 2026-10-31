@@ -5,6 +5,7 @@
 //   bun run probe:hc
 //   bun tools/hc-probe.ts --harness claude|codex|pi
 //   bun tools/hc-probe.ts --harness opencode [--no-reporter]
+//   bun tools/hc-probe.ts --harness pi-question
 //
 // It downloads and checksums the pinned release, starts it on a session of its own with
 // scratch XDG directories, and drives run, list, get, read, send, keys, events and attach.
@@ -17,6 +18,10 @@
 // on a second prompt sent as Collie does, each reporter must write its own agent's session,
 // and OpenCode's settings files must not change. `--no-reporter` leaves the reporter out,
 // and fails for want of status. OpenCode's store is a scratch one, so it uses its free model.
+// `pi-question` starts pi as Collie launches a Run's pi agent on core, with Collie's question
+// tool and a session id, and stands in for the host that owns its state. Told to ask, pi must
+// call the tool, put its question where the host reads it, and end its turn; then it must act
+// on the answer sent as Collie sends it.
 // Then it stops that core, and fails if a process of the binary is still running or core's
 // default state, config or runtime directory changed.
 
@@ -41,6 +46,7 @@ import {
   Stream,
 } from "effect";
 import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -55,6 +61,11 @@ import {
 } from "../src/hc";
 import { opencodeReporter } from "../src/harness";
 import { claudeTrust } from "../src/trust";
+import { piExtension } from "../src/chat";
+import { controlDir } from "../src/compaction";
+import { piQuestionTool, questionsSince } from "../src/compactors";
+import { marked } from "../src/dispatcher";
+import { hostLockOf } from "../src/lock";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const Pin = Schema.Struct({
@@ -391,6 +402,90 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
   yield* api.call("terminal.kill", { terminal: agent.address });
 });
 
+const PI_ASK =
+  "Use your ask_user_question tool to ask me one question: which colour the file should be, with the options Red and Blue. Then end your turn. When my answer comes, reply with only that colour in capital letters, and nothing else.";
+const PI_ANSWER = "BLUE";
+
+const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  // The probe stands in for the host that owns this state directory.
+  yield* fs.writeFileString(hostLockOf(dir), `{"pid":${process.pid},"start":null}`);
+  const name = "probe-pi-question";
+  const control = yield* controlDir(dir, name);
+  const self = [process.execPath, `${ROOT}src/main.ts`];
+  const extension = `${dir}/${name}.tools.ts`;
+  yield* fs.writeFileString(
+    extension,
+    piExtension(self, [], {}, dir, "news.jsonl", piQuestionTool(self, control)),
+  );
+  const events = yield* connect(socket);
+  yield* events.call("hello", { generation: 1 });
+  let snapshot = snapshotOf(yield* events.call("events.subscribe", {}));
+  const api = yield* connect(socket);
+  yield* api.call("hello", { generation: 1 });
+
+  const agent = yield* api.call("terminal.run", {
+    argv: ["pi", "-e", extension, "--session-id", SecureRandom.uuidV4Unsafe()],
+    name,
+    cwd: `${dir}/work`,
+    no_parent: true,
+    env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
+  });
+  const words: string[] = [];
+  const statusOf = () => snapshot.terminals.get(agent.address)?.status?.state ?? null;
+  const screen = api
+    .call("terminal.read", { terminal: agent.address })
+    .pipe(Effect.map((read) => read.text));
+  const until = <E, R>(what: string, done: () => Effect.Effect<boolean, E, R>) =>
+    Effect.gen(function* () {
+      while (!(yield* done())) {
+        snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
+        const word = statusOf();
+        if (word !== null && words.at(-1) !== word) words.push(word);
+        if (word === "error") return yield* fail(`pi reported error:\n${yield* screen}`);
+      }
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: Duration.seconds(TURN_SECONDS),
+        orElse: () =>
+          Effect.flatMap(screen, (text) =>
+            fail(`timed out waiting for ${what}; pi reported ${Arr.join(words, ", ")}:\n${text}`),
+          ),
+      }),
+    );
+  const ended = (since: number) => {
+    const after = words.slice(since);
+    return after.includes("working") && after.at(-1) === "done";
+  };
+
+  yield* until("pi to report idle", () => Effect.succeed(statusOf() === "idle"));
+  let since = words.length;
+  yield* api.call("terminal.send", { terminal: agent.address, text: PI_ASK });
+  yield* until("pi to ask with the tool and end its turn", () =>
+    Effect.map(questionsSince(control, 0), (calls) => calls.length > 0 && ended(since)),
+  );
+  const [call] = yield* questionsSince(control, 0);
+  const [question] = call?.questions ?? [];
+  const offered = Arr.map(question?.options ?? [], (option) => option.label);
+  yield* Console.error(
+    `pi: asked "${question?.question}" (${Arr.join(offered, ", ")}), then reported ${Arr.join(words.slice(since), ", ")}`,
+  );
+  yield* expect(offered.includes("Blue"), "pi's question to offer Blue");
+  yield* expect(!pipe(yield* screen, Str.includes(PI_ANSWER)), "pi to wait for the answer");
+
+  since = words.length;
+  const answer = `Your question ${question?.header ?? question?.question} is answered: Blue`;
+  yield* api.call("terminal.send", {
+    terminal: agent.address,
+    text: marked(answer, "probe-answer"),
+  });
+  yield* until("pi to act on the answer", () =>
+    Effect.map(screen, (text) => ended(since) && pipe(text, Str.includes(PI_ANSWER))),
+  );
+  yield* Console.error(`pi: answered ${PI_ANSWER} after ${Arr.join(words.slice(since), ", ")}`);
+  yield* api.call("terminal.kill", { terminal: agent.address });
+});
+
 /**
  * Each OpenCode agent's first prompt, given at launch, and the answer that shows it acted.
  * Its free model misspells a word spelled backwards, so these are facts it gets right.
@@ -617,7 +712,9 @@ const program = Effect.gen(function* () {
         yield* (
           name === "opencode"
             ? opencode(socket, dir, !process.argv.includes("--no-reporter"))
-            : harness(socket, `${dir}/work`, name)
+            : name === "pi-question"
+              ? piQuestion(socket, dir)
+              : harness(socket, `${dir}/work`, name)
         ).pipe(Effect.scoped);
         return;
       }

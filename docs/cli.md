@@ -385,7 +385,10 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   `done` rather than `blocked`, so Collie reads its questions from the App Server it runs
   that agent through and puts them on the Run the same way. Collie runs no App Server for a
   Codex agent while compaction is off (`compact_at_tokens` 0), and then its questions stay
-  in its pane. While a question is open, the next step's prompt or a repair to that agent
+  in its pane. pi has no question tool, so a pi agent a Run launches is given Collie's
+  `ask_user_question`, which takes `AskUserQuestion`'s questions and puts them on the Run
+  the same way, and says the same. Native chat's pi has none: the human is in its pane.
+  While a question is open, the next step's prompt or a repair to that agent
   waits as one to an agent in a dialog does, and goes once the answers have.
 - **A control reaches one Run.** Its siblings and the host carry on. A control over a Run
   whose module is not loaded here is recorded and says so, naming the file to repair,
