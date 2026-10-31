@@ -22,7 +22,8 @@ import { asRun, enveloped } from "./support/enveloped";
 import { forgeHttpOnPath } from "./support/forge";
 import type { FakeHc } from "./support/fake-hc";
 import { until } from "./support/host";
-import { deliveriesOf, machineHerd } from "../src/steering";
+import { deliveriesOf, herdOf, machineHerd } from "../src/steering";
+import { liveHerds } from "../src/herds";
 import { opencodeReporter } from "../src/harness";
 import { askWith, piTools } from "./support/pi";
 import { isString } from "../src/schema";
@@ -533,6 +534,24 @@ test("a send core says did not start gets one Enter, and the Run's log says so",
         Effect.flatMap((fs) => fs.readFileString(`${dir}/agents/r1/agents.log`)),
       );
       expect(log).toContain("did not start a turn on core, so Enter was pressed once");
+    }),
+  ));
+
+test("a core Machine's Herd is listed beside the herdr sessions still running there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const other = `${rig.root}/other.sock`;
+      const env = rig.pluginEnv({
+        FAKE_HERDR_SESSIONS: `[{ "name": "other", "socket_path": "${other}" }]`,
+      });
+      const herds = Effect.map(
+        liveHerds(new FakeHerdr(env), env),
+        Arr.map(({ herd }) => herd),
+      );
+      yield* onMachine("herdr");
+      expect(yield* herds).toEqual([yield* herdOf(other)]);
+      yield* onMachine("core");
+      expect(yield* herds).toEqual([yield* herdOf(other), yield* machineHerd(env)]);
     }),
   ));
 

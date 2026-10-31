@@ -865,7 +865,9 @@ The incarnation of an agent launched on core is its terminal's address, marked `
 what is sent to it goes to core. A Machine set to core also lists herdr's agents while
 `HERDR_SOCKET_PATH` is set, so an agent launched on herdr before the switch is still
 reached there; one set back to herdr lists only herdr's, and its agents on core are gone
-to it.
+to it. The host's Herds on a Machine set to core are its core Herd as well as each herdr
+session still running, so its board and News keep the core Herd's Runs while Herdr 1 stays
+open.
 
 ## The forge boundary
 
