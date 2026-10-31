@@ -24,7 +24,6 @@ import type { FakeHc } from "./support/fake-hc";
 import { until } from "./support/host";
 import { deliveriesOf, herdOf, machineHerd } from "../src/steering";
 import { liveHerds } from "../src/herds";
-import { opencodeReporter } from "../src/harness";
 import { askWith, piTools } from "./support/pi";
 import { isString } from "../src/schema";
 
@@ -123,6 +122,13 @@ const LaunchedSession = Schema.fromJsonString(
     agentSession: Schema.Struct({ kind: Schema.String, value: Schema.String }),
   }),
 );
+
+/** The part of an OpenCode plugin OpenCode calls, as the reporter exports it. */
+interface OpenCodePlugin {
+  readonly CollieStatus: () => Promise<{
+    readonly event: (input: { readonly event: Schema.Json }) => Promise<void>;
+  }>;
+}
 
 const PiLaunch = Schema.Struct({ argv: Schema.Array(Schema.String) });
 
@@ -287,10 +293,18 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       expect(content.mcp.collie).toEqual({ type: "local", enabled: true });
       expect(content.plugin).toHaveLength(2);
       expect(content.plugin[0]).toBe("their-plugin");
-      const reporter = yield* fs.readFileString(
-        pipe(content.plugin[1] ?? "", Str.replace("file://", "")),
+      yield* fs.remove(sessionFile);
+      const reporter = yield* Effect.promise(
+        (): Promise<OpenCodePlugin> =>
+          import(pipe(content.plugin[1] ?? "", Str.replace("file://", ""))),
       );
-      expect(reporter).toBe(opencodeReporter({ sessionFile, tty: "/dev/tty" }));
+      const hooks = yield* Effect.promise(() => reporter.CollieStatus());
+      yield* Effect.promise(() =>
+        hooks.event({
+          event: { type: "session.created", properties: { info: { id: "ses_new" } } },
+        }),
+      );
+      expect(yield* fs.readFileString(sessionFile)).toBe("ses_new");
 
       const sends = Arr.filter(onCore, (call) => call.cmd === "terminal.send");
       expect(Arr.map(sends, (call) => call.params?.terminal)).toEqual([agent]);
