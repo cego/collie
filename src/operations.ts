@@ -42,6 +42,7 @@ import {
   RELEASE_TAG,
   type Carried,
 } from "./release";
+import { BUNDLED_HC, placeHc } from "./hc-install";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, liveCheckouts, type Asked, type RunFacts } from "./runs";
@@ -579,8 +580,9 @@ const placeOwn = Effect.fn("operations.placeOwn")(function* (
       output: placed.failure.message,
     });
   }
-  const { root, kept } = placed.success;
+  const { root, kept, was, is } = placed.success;
   yield* (yield* FileSystem.FileSystem).makeDirectory(env.userDir, { recursive: true });
+  const hc = yield* placeHc(env, root, was[BUNDLED_HC] ?? null, is[BUNDLED_HC] ?? null, run);
   const prepared = yield* prepareAndDesktop(env, root, manifest.version, run);
   if (!prepared.ok) return prepared;
   const data = {
@@ -588,7 +590,7 @@ const placeOwn = Effect.fn("operations.placeOwn")(function* (
     checkout: false,
     release: manifest.version,
     kept,
-    steps: prepared.steps,
+    steps: [...(hc === null ? [] : [hc]), ...prepared.steps],
     ...(to && { version: to }),
   };
   return { ok: true as const, data, human: placedReport(env, data) };

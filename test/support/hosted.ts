@@ -41,6 +41,7 @@ export const hosted = <A, E>(
           HERDR_PLUGIN_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           HERDR_SOCKET_PATH: `${world.state}/herd.sock`,
+          HC_SOCKET: `${world.state}/hc.sock`,
           HOME: world.home,
           COLLIE_CWD: world.project,
         });

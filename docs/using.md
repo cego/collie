@@ -18,7 +18,10 @@ it only once its `.p256.sig` checks out against Collie's release key, which is w
 the script; a tampered, unsigned or non-program download is refused before anything in
 `~/.collie` changes. The runner then places the release it carries into
 [the Collie directory](#the-collie-directory), `~/.collie` or `COLLIE_DIR`, through the same
-path as `collie upgrade`, so a [clone install](#a-clone-install) there is migrated. Then
+path as `collie upgrade`, so a [clone install](#a-clone-install) there is migrated. The
+release carries the [`hc`](cli.md#checking-an-installation) that `hc-pin.json` pins, which
+placing it puts where upstream's installer would: `~/.local/bin/herdr-core` (or
+`HC_INSTALL_DIR`), with `hc` beside it unless an `hc` is already on PATH. Then
 `setup.sh` does its own work — add the four keybindings below to
 `~/.config/herdr/config.toml` if they are missing, configure Claude Code's status line unless
 you have one of your own, reload a running herdr. Run from inside a checkout it does the same,
@@ -93,7 +96,12 @@ against Collie's release key and places its release into `~/.collie/release/`
 ([the Collie directory](#the-collie-directory)). A
 [development checkout](#running-a-checkout-of-collie) is pulled instead (`--ff-only
 --autostash`, so it never quietly merges local work and its uncommitted work rides
-through). Either way it then runs the same `prepare.sh` steps and reports what each of them did. A pull it cannot do is reported
+through). Either way it then runs the same `prepare.sh` steps and reports what each of them did.
+A release that carries another pin of `hc` than the one it replaces swaps it with
+`herdr-core update --from` the carried binary, which restarts core and leaves its running
+terminals alone; one with the same pin leaves `hc` alone. Collie never runs `hc update`
+without `--from`, or `hc machine update`. A paired Machine upgraded to this release gets its
+`hc` the same way. A pull it cannot do is reported
 rather than installed over. The Control Plane and `collie doctor` say when a newer release
 is out (`Collie <version> is out — collie upgrade`), or for a checkout how far it is behind
 its remote, so you upgrade because you know you are stale rather than because you

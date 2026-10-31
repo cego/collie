@@ -18,6 +18,8 @@ import {
   String as Str,
 } from "effect";
 import solidPlugin from "@opentui/solid/bun-plugin";
+import { bundleHc } from "./hc-release";
+import hcPin from "../hc-pin.json";
 
 /**
  * `linux-x64` and `bun-linux-x64` both name the same target; CI passes the short one.
@@ -40,6 +42,10 @@ function bunTarget(name: string, libc: "musl" | "glibc"): string {
  * source sets `OPENTUI_LIBC=musl` and gets its own.
  */
 const libcConfig = Config.String("OPENTUI_LIBC").pipe(Config.withDefault(""));
+/** Where hc's releases are fetched from: upstream's, unless a test serves its own. */
+const hcReleasesConfig = Config.String("HERDR_RELEASES_URL").pipe(
+  Config.withDefault("https://releases.herdr.dev"),
+);
 
 const Architecture = Schema.Literals(["x64", "arm64", "aarch64"]);
 const Simd = Schema.Literals(["baseline", "modern"]);
@@ -106,6 +112,10 @@ const program = Effect.gen(function* () {
   );
   for (const entry of RELEASE_TREE)
     yield* fs.copy(entry, paths.join(tree, entry), { overwrite: true });
+  const hc = yield* bundleHc(hcPin, target, tree, {
+    releases: yield* hcReleasesConfig,
+    cache: "node_modules/.cache/collie-hc",
+  });
   const entries = yield* fs.readDirectory(tree, { recursive: true });
   const files = yield* Effect.filter(entries, (entry) =>
     fs.lstat(paths.join(tree, entry)).pipe(Effect.map((info) => info.type === "File")),
@@ -129,6 +139,7 @@ const program = Effect.gen(function* () {
   const marker = nativeMarker(target, libc);
   const artifact = Buffer.from(yield* fs.readFile(staging));
   const missing = Arr.filter([marker, ...carried], (name) => !artifact.includes(name));
+  if (!artifact.includes(hc)) missing.push(`hc ${hcPin.version}'s archive as pinned`);
   if (missing.length > 0) {
     yield* fs.remove(staging);
     return yield* Effect.die(
@@ -140,7 +151,7 @@ const program = Effect.gen(function* () {
 
   yield* fs.rename(staging, outfile);
   yield* Console.log(
-    `built ${outfile} for ${target}, embedding ${marker} and ${carried.length} release files`,
+    `built ${outfile} for ${target}, embedding ${marker}, hc ${hcPin.version} and ${carried.length} release files`,
   );
 });
 

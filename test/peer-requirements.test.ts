@@ -14,6 +14,7 @@ import { twoMachines } from "./support/peers";
 import { signalProcess } from "../src/lock";
 import { exec } from "./support/command";
 import { until } from "./support/host";
+import { writeConfigValue } from "../src/config";
 
 test(
   "a pairing whose invite never answers times out and closes its session",
@@ -473,4 +474,42 @@ test(
       ),
     ),
   120_000,
+);
+
+const Checks = Schema.Struct({
+  checks: Schema.Array(Schema.Struct({ name: Schema.String, detail: Schema.String })),
+});
+
+test(
+  "doctor with --machine is the paired Machine's own, run there by its host",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-doctor-on-",
+        (first, second) =>
+          Effect.gen(function* () {
+            yield* writeConfigValue(second.world.config, "terminal_backend", "core");
+            yield* first.lists([second]);
+            const herdrOne = (args: ReadonlyArray<string>) =>
+              Effect.gen(function* () {
+                const read = yield* first.cli(args);
+                const { checks } = yield* Schema.decodeUnknownEffect(Checks)(
+                  read.envelope.data ?? read.envelope.error?.details,
+                ).pipe(Effect.orDie);
+                return Option.getOrUndefined(
+                  Arr.findFirst(checks, (one) => one.name === "herdr 1"),
+                );
+              });
+
+            expect((yield* herdrOne(["--machine", "second", "doctor"]))?.detail).toBe(
+              "nothing on this Machine uses Herdr 1",
+            );
+            expect((yield* herdrOne(["doctor"]))?.detail).toBe(
+              "this Machine starts its agents on Herdr 1 (terminal_backend is herdr)",
+            );
+          }),
+        [],
+      ),
+    ),
+  180_000,
 );

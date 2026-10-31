@@ -355,3 +355,129 @@ test("a release source that cannot be reached changes nothing, and says so", () 
       expect(yield* placedRecord()).toBe(before);
     }),
   ));
+
+/** Where upstream's hc installer puts hc, in the rig's home. */
+const hcBin = () => `${rig.root}/.local/bin`;
+
+/**
+ * Carries an hc archive whose `herdr-core` logs each way it is run, and the second line of a
+ * `--from` binary, which names the build: `build` tells one pin's hc from another's.
+ */
+const carryHc = (build: string) =>
+  Effect.gen(function* () {
+    const staged = `${rig.root}/hc-${build}`;
+    yield* write(
+      `${staged}/herdr-core`,
+      `#!/bin/sh\n# hc build ${build}\nprintf '%s\\n' "$*" >> "${rig.root}/hc-calls"\nif [ "$1" = update ] && [ "$2" = --from ]; then sed -n 2p "$3" >> "${rig.root}/hc-calls"; fi\n`,
+    );
+    yield* (yield* FileSystem.FileSystem).makeDirectory(`${tree}/hc`, { recursive: true });
+    const made = Bun.spawnSync(
+      ["sh", "-c", `chmod 755 herdr-core && tar -czf "${tree}/hc/herdr-core.tar.gz" herdr-core`],
+      {
+        cwd: staged,
+      },
+    );
+    expect(made.exitCode).toBe(0);
+  });
+
+/** `place`, with a PATH that has no hc on it: the human's own `hc` is never the rig's. */
+const placeHc = () =>
+  upgrade(
+    { ...releaseEnv(), raw: { ...releaseEnv().raw, PATH: "/usr/bin:/bin" } },
+    { carried: { tree, runner }, key: KEY.publicKey },
+    run,
+  );
+
+const hcCalls = () =>
+  Effect.gen(function* () {
+    const file = `${rig.root}/hc-calls`;
+    return (yield* exists(file)) ? Str.split(Str.trim(yield* read(file)), "\n") : [];
+  });
+
+test("a first placement puts the hc it carries where upstream's installer does, with hc beside it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* carryHc("a");
+
+      const placed = yield* placeHc();
+
+      expect(placed.ok).toBe(true);
+      expect(yield* read(`${hcBin()}/herdr-core`)).toContain("# hc build a");
+      expect(((yield* fs.stat(`${hcBin()}/herdr-core`)).mode & 0o111) !== 0).toBe(true);
+      expect(yield* fs.readLink(`${hcBin()}/hc`)).toBe("herdr-core");
+      expect(yield* hcCalls()).toEqual([]);
+      expect(placed.ok && placed.human).toContain(`${hcBin()}/herdr-core`);
+    }),
+  ));
+
+test("an upgrade that brings another pin runs hc update --from the hc it carries, once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* carryHc("a");
+      yield* placeHc();
+      yield* carryHc("b");
+
+      const placed = yield* placeHc();
+
+      expect(placed.ok).toBe(true);
+      const calls = yield* hcCalls();
+      expect(calls.length).toBe(2);
+      expect(calls[0]).toMatch(/^update --from \/\S+\/herdr-core$/);
+      expect(calls[1]).toBe("# hc build b");
+    }),
+  ));
+
+test("an upgrade with an unchanged pin leaves hc alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* carryHc("a");
+      yield* placeHc();
+
+      const placed = yield* placeHc();
+
+      expect(placed.ok).toBe(true);
+      expect(yield* hcCalls()).toEqual([]);
+      expect(yield* read(`${hcBin()}/herdr-core`)).toContain("# hc build a");
+    }),
+  ));
+
+test("an hc of the human's own, before Collie carried one, is updated the planned way", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* place();
+      yield* write(
+        `${hcBin()}/herdr-core`,
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> "${rig.root}/hc-calls"\n`,
+      );
+      yield* (yield* FileSystem.FileSystem).chmod(`${hcBin()}/herdr-core`, 0o755);
+      yield* carryHc("a");
+
+      yield* placeHc();
+
+      const calls = yield* hcCalls();
+      expect(calls.length).toBe(1);
+      expect(calls[0]).toMatch(/^update --from \/\S+\/herdr-core$/);
+    }),
+  ));
+
+test("an hc update that fails is reported, and the release is still placed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* carryHc("a");
+      yield* placeHc();
+      yield* write(
+        `${hcBin()}/herdr-core`,
+        `#!/bin/sh\necho "hc: saved state is newer" >&2\nexit 1\n`,
+      );
+      yield* carryHc("b");
+
+      const placed = yield* placeHc();
+
+      expect(placed.ok).toBe(true);
+      expect(placed.ok && placed.human).toContain("hc: saved state is newer");
+      expect(placed.ok && "steps" in placed.data && placed.data.steps).toContainEqual(
+        expect.objectContaining({ step: "hc", state: "failed" }),
+      );
+    }),
+  ));

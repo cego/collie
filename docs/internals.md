@@ -1395,10 +1395,17 @@ manifest, `install.sh`, `prepare.sh`, the shipped workflows, personas, prompts, 
 skill, the notification logo and `release-p256.pub`. `tools/build.ts` stages that list as
 one directory and passes it to Bun's compile `assets`, so a compiled runner reads it at
 `/$bunfs/root/release`. The build refuses an artifact that does not carry every staged file,
-as it refuses one without its native renderer. `placeRelease` in `src/release.ts` writes the
+as it refuses one without its native renderer. It also stages the `hc` archive that
+`hc-pin.json` names for the target, as `hc/herdr-core.tar.gz` (`bundleHc` in
+`tools/hc-release.ts`): fetched from `HERDR_RELEASES_URL` (upstream's by default), kept in
+`node_modules/.cache/collie-hc`, and refused, failing the build, where it does not hash to
+the pin or the pin names no `hc` for the target. hc's licence notices travel inside its
+binary (`hc --licenses`). `placeRelease` in `src/release.ts` writes the
 tree and the runner into `<Collie directory>/release.new` with `placed.json`, each file's
 sha256, copies every file of the current `release/` that differs from its own record into
-`kept/`, then swaps the two. In a placed release `install.sh` and `prepare.sh` leave
+`kept/`, then swaps the two. `placeHc` in `src/hc-install.ts` then installs the carried
+`hc` where upstream's installer would, or, where the replaced release recorded another
+archive, runs `herdr-core update --from` it. In a placed release `install.sh` and `prepare.sh` leave
 `bin/collie` as it was placed. `tools/smoke.sh` checks the built runner places its release
 at its own version. Its forge check asks the compiled runner for a missing review target
 against a temporary checkout: the missing-input response must offer the pull request

@@ -1494,6 +1494,10 @@ export const catalogueReadings = (env: PluginEnv, door: Door) =>
 export const connectionReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.connections(), door);
 
+/** `script`, run by the host of the Machine `--machine` names. */
+export const machineShell = (env: PluginEnv, script: string, request: string, door: Door) =>
+  asks(env, (client) => client.shell({ script, request }), door);
+
 /** This Machine's Usage readings, as its host last read them. */
 export const usageReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.usage(), door);

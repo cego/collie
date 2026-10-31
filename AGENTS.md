@@ -29,7 +29,9 @@ here are in [`src/README.md`](src/README.md).
   `src/herdr.ts`, `machineHerd` in `src/steering.ts`, `test/core-agents.test.ts`, `test/core-cli.test.ts`;
   OpenCode's reporter: `opencodeReporter` in `src/harness.ts`, `test/opencode-reporter.test.ts`;
   pi's question tool: `piQuestionTool` in `src/compactors.ts`, `piExtension` in `src/chat.ts`,
-  `test/pi-question.test.ts`.
+  `test/pi-question.test.ts`; the `hc` a release carries: `tools/hc-release.ts`,
+  `src/hc-install.ts`, the `hc`, `core` and `herdr 1` checks in `src/doctor.ts`,
+  `test/hc-release.test.ts`, `test/upgrade-release.test.ts`, `test/doctor.test.ts`.
 - **Compaction** → [`docs/using.md`](docs/using.md#compaction-between-pieces-of-work),
   [`docs/internals.md`](docs/internals.md#compaction-at-a-work-boundary),
   [ADR-0007](docs/adr/0007-compact-a-reused-agent-at-a-work-boundary.md), `src/compaction.ts`, `src/compactors.ts`.

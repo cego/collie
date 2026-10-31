@@ -718,6 +718,8 @@ export class Rig {
       COLLIE_RELEASES: UNREACHABLE_RELEASES,
       // This Machine's memory as Collie reads it: never the real Machine's.
       COLLIE_PROC: this.procDir,
+      // The fake core's socket once `startCore` serves it; never the human's core.
+      HC_SOCKET: this.path.join(this.root, "hc.sock"),
       ...overrides,
     };
     if (this.gone.length > 0) environment.FAKE_HERDR_AGENTS_GONE = Arr.join(this.gone, ",");

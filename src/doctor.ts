@@ -15,8 +15,9 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
-import type { ChildProcessSpawner } from "effect/process";
-import { loadDefaults } from "./config";
+import { CommandLine, type ChildProcessSpawner } from "effect/process";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import { loadDefaults, terminalBackend } from "./config";
 import { savedModules } from "./discovery";
 import { layers, loadDefinitions, skillDirs, skillFile } from "./definitions";
 import type { PluginEnv } from "./env";
@@ -33,7 +34,7 @@ import { projectsRoot } from "./projects";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 import { humanBytes } from "./bytes";
 import { collieCache } from "./cleanup";
-import { anyRuns, cleanupListing, machineList } from "./lifecycle";
+import { anyRuns, cleanupListing, machineList, machineShell, type Door } from "./lifecycle";
 import { peersOf } from "./peers";
 import { HERDLESS, herdOfHost } from "./host";
 import { tmpdir } from "node:os";
@@ -52,6 +53,10 @@ import {
   type Outcome,
 } from "./doctor-check";
 import { gitlabChecks } from "./forge/gitlab-checks";
+import { connect, coreSocket } from "./hc";
+import { hcInstallDir } from "./hc-install";
+import { everyRegistered } from "./registry";
+import hcPin from "../hc-pin.json";
 import { githubChecks } from "./forge/github-checks";
 
 export type { Check } from "./doctor-check";
@@ -103,6 +108,68 @@ function older(version: string, than: string): boolean {
   }
   return false;
 }
+
+const HC_INSTALL = `curl -fsSL https://releases.herdr.dev/core/install.sh | HC_VERSION=${hcPin.version} sh`;
+
+/** The hc on PATH, else where upstream's installer puts it, at the version this Collie pins. */
+const hcInstalled = Effect.fn("Doctor.hcInstalled")(function* (
+  env: PluginEnv,
+  search: string,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  const path = yield* Path.Path;
+  const dir = yield* onPath(search, "herdr-core");
+  const installed = path.join(hcInstallDir(env.raw, env.home), "herdr-core");
+  const bin =
+    dir !== null ? path.join(dir, "herdr-core") : (yield* runnable(installed)) ? installed : null;
+  if (bin === null) return failed("not installed", HC_INSTALL);
+  const version = VERSION.exec((yield* answered(run(bin, ["--version"], env.home))).stdout)?.[0];
+  return version === hcPin.version
+    ? passed(`${version} at ${bin}`)
+    : failed(
+        `hc ${version ?? "of no version"} is installed, but this Collie is pinned to ${hcPin.version}`,
+        HC_INSTALL,
+      );
+});
+
+/** Whether this Machine's default core session says hello. */
+const coreAnswers = Effect.fn("Doctor.coreAnswers")(function* (env: PluginEnv) {
+  const socket = yield* coreSocket(env.raw);
+  const hello = yield* Effect.scoped(
+    Effect.flatMap(connect(socket), (hc) => hc.call("hello", {})),
+  ).pipe(Effect.timeout("5 seconds"), Effect.option);
+  return Option.match(hello, {
+    onNone: () => failed(`no core answers at ${socket}`, "hc server start"),
+    onSome: (said) => passed(`hc ${said.version} answers at ${socket}`),
+  });
+});
+
+/** What on this Machine still uses Herdr 1: its setting, and agents whose pane is still open. */
+const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, herdr: Herdr | null) {
+  const set = (yield* terminalBackend(env.userDir)) === "herdr";
+  const panes = herdr === null ? [] : yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+  const open = new Set(Arr.map(panes, (pane) => pane.paneId));
+  const live = Arr.filter(
+    yield* everyRegistered(env.stateDir),
+    (entry) =>
+      entry.incarnation !== undefined &&
+      entry.incarnation.backend === undefined &&
+      open.has(entry.paneId),
+  );
+  const found = [
+    ...(set ? ["this Machine starts its agents on Herdr 1 (terminal_backend is herdr)"] : []),
+    ...(live.length === 0
+      ? []
+      : [
+          `live on Herdr 1: ${Arr.join(
+            Arr.map(live, (entry) => `${entry.agent} (run ${entry.runId}, pane ${entry.paneId})`),
+            ", ",
+          )}`,
+        ]),
+  ];
+  if (found.length === 0) return passed("nothing on this Machine uses Herdr 1");
+  return noted(Arr.join(found, "; "), set ? "collie settings set terminal_backend core" : "");
+});
 
 /**
  * What this machine needs to run work: the skills the operator's own guidance names, and
@@ -333,6 +400,12 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
           : passed(serverVersion)),
     });
   }
+
+  checks.push(
+    { name: "hc", ...(yield* hcInstalled(env, search, run)) },
+    { name: "core", ...(yield* coreAnswers(env)) },
+    { name: "herdr 1", ...(yield* onHerdrOne(env, herdrBin ? herdr : null)) },
+  );
 
   const linked = herdrBin ? yield* text(["plugin", "list"]) : "";
   checks.push({
@@ -643,6 +716,53 @@ const leftoverChecks = Effect.fn("Doctor.leftoverChecks")(function* (env: Plugin
         `${left.length} check process(es) no host is collecting: ${first.reason}`,
         "collie cleanup --apply",
       );
+});
+
+const Reported = Schema.Struct({
+  checks: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      ok: Schema.Boolean,
+      detail: Schema.String,
+      fix: Schema.String,
+      warn: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+});
+const DoctorSaid = Schema.fromJsonString(
+  Schema.Union([
+    Schema.Struct({ data: Reported }),
+    Schema.Struct({ error: Schema.Struct({ details: Reported }) }),
+  ]),
+);
+
+/** Doctor on the paired Machine `--machine` names, run there by its own host. */
+export const doctorOn = Effect.fn("Doctor.doctorOn")(function* (
+  env: PluginEnv,
+  gitlabHost: Option.Option<string>,
+  door: Door,
+) {
+  const script = CommandLine.join([
+    "collie",
+    "--json",
+    "doctor",
+    ...Option.match(gitlabHost, { onNone: () => [], onSome: (host) => ["--gitlab-host", host] }),
+  ]);
+  if (script._tag === "Failure")
+    return err("invalid_input", `--gitlab-host cannot be passed on: ${script.failure.message}`);
+  const request = `doctor:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`;
+  const ran = yield* machineShell(env, script.success, request, door);
+  if (!ran.ok) return ran;
+  const said = Schema.decodeOption(DoctorSaid)(
+    Arr.findLast(Str.split(Str.trim(ran.value.stdout), "\n"), (line) => line !== "").pipe(
+      Option.getOrElse(() => ""),
+    ),
+  );
+  if (Option.isNone(said))
+    return err("operation_failed", `${env.machine}'s doctor did not report its checks.`, {
+      output: Str.trim(ran.value.stderr) || Str.trim(ran.value.stdout),
+    });
+  return report([...("data" in said.value ? said.value.data : said.value.error.details).checks]);
 });
 
 /** One line per check, and under it the command to run where there is one. */

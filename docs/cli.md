@@ -27,7 +27,7 @@ collie --json --workspace wT run start plan --input goal="ship it" --input then=
 ```
 
 `--machine` is for a command that names no Run: `board`, `run start`, `run list`,
-`schedule`, `cleanup`, `models` and `connections`. A
+`schedule`, `cleanup`, `models`, `connections` and `doctor`. A
 command that names a Run needs none (see [Another Machine's Runs](#another-machines-runs)).
 A start on another Machine opens its own Task there, so `--task`, `--continue-task` and
 `--here` are refused with it, and the module is the one that Machine has saved.
@@ -2520,11 +2520,12 @@ left, and the exit status is 1. Re-running is the retry.
 collie doctor
 collie doctor --json
 collie doctor --gitlab-host gitlab.example.com
+collie --machine vm-mk doctor
 ```
 
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
 least the `min_herdr_version` the plugin manifest declares, and a running herdr server, when
-there is one, at least that too; the plugin linked from this
+there is one, at least that too; `hc` and its core (below); the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
 its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
@@ -2551,6 +2552,17 @@ running server must stop once, which ends every program in its panes: `herdr upd
 panes alone, and a **herdr server** line fails while the server still runs an older herdr,
 until it is restarted when nothing is running. Each fix also offers the package manager
 that installed herdr. Collie never runs `herdr update` or `herdr server stop` itself.
+
+**hc** is `herdr-core` on PATH, else where upstream's installer puts it
+(`~/.local/bin/herdr-core`, or `HC_INSTALL_DIR`), at the version `hc-pin.json` pins. One
+missing or at another version fails, with upstream's installer for the pinned version as
+the fix. **Core** fails where the default core session (`HC_SOCKET`, else `HC_SESSION`'s
+socket) does not answer `hello` within 5 seconds, with `hc server start` as the fix.
+**Herdr 1** says what on this Machine still uses Herdr 1: its `terminal_backend` setting
+where it is `herdr`, with `collie settings set terminal_backend core` as the fix, and each
+agent whose registry entry has no core backend and whose herdr pane is still open. It never
+fails the run. Doctor reports the Machine it runs on; `--machine <name>` runs it on a paired
+Machine, through that Machine's host.
 
 **Disk** covers each filesystem holding the state directory, `~/.cache/collie`, herdr's
 worktrees and the temporary directory, once each. One with less than 10% or 5 GiB free is a
