@@ -24,6 +24,8 @@ export const world = {
   desktop: `${live}/desktop`,
 };
 export const socket = `${world.state}/host.sock`;
+/** Where the host, the bridge and Desktop mark a record's first frame (src/record-marks.ts). */
+export const recordMarksFile = `${live}/record-marks.log`;
 
 /** What the user's shell gave this process, before the world's own replaced it. */
 export const userEnv = { ...Bun.env };
@@ -59,6 +61,7 @@ export const enterWorld = Effect.gen(function* () {
     COLLIE_CWD: world.project,
     COLLIE_HOST: JSON.stringify([process.execPath, `${root}src/main.ts`]),
     COLLIE_HOST_WATCH_PID: String(process.pid),
+    COLLIE_RECORD_MARKS: recordMarksFile,
     HERDR_BIN_PATH: `${world.bin}/herdr`,
     FAKE_HERDR_LOG: `${live}/herdr-calls.jsonl`,
     PATH: `${world.bin}:${Bun.env.PATH ?? ""}`,

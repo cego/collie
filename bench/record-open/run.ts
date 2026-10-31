@@ -17,7 +17,7 @@ import { buildView, launchChrome, startDesktop, VIEW_PORT, viewUp, WINDOW } from
 import { COUNTS, type Fixture, prepare } from "./fixture";
 import { measuring, refusal, userStateDir } from "./guards";
 import { barFailures, type CellSummary, summaryOf } from "./stats";
-import { enterWorld, live, root, socket, userEnv, world } from "./world";
+import { enterWorld, live, recordMarksFile, root, socket, userEnv, world } from "./world";
 
 const LOCAL = [
   "first",
@@ -33,7 +33,7 @@ const LOCAL = [
   "storm",
 ] as const;
 /** Cells timed over the host's front door, with no Desktop or Chrome started. */
-const HOST_ONLY = ["first-host"] as const;
+const HOST_ONLY = ["first-host", "checks-host", "storm-host"] as const;
 type DesktopCell = (typeof LOCAL)[number];
 type Cell = DesktopCell | (typeof HOST_ONLY)[number];
 const isHostOnly = (cell: Cell) => HOST_ONLY.some((one) => one === cell);
@@ -100,6 +100,8 @@ interface Seen {
   readonly painted: Painted;
   readonly marks: Readonly<Record<string, number>>;
   readonly start: number;
+  /** The page's time origin, in epoch milliseconds. */
+  readonly origin: number;
 }
 
 /** A trivial RPC every 50 ms, as a proxy for the host's event-loop lag. */
@@ -155,6 +157,75 @@ const modelFilled = Effect.suspend(() =>
   }),
 ).pipe(Effect.repeat({ until: (filled) => filled, schedule: Schedule.spaced("100 millis") }));
 
+/** What a cell runs beside its samples, ended when they are. */
+const besideOf = (
+  fixture: Fixture,
+): Partial<Record<Cell, Effect.Effect<void, never, PlatformServices>>> => {
+  const beside = {
+    // Four Checks on a live Run, each busy until its flag is gone.
+    checks: Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const flag = `${live}/checks-running`;
+      yield* fs.writeFileString(flag, "").pipe(Effect.orDie);
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      yield* Effect.forEach(
+        [1, 2, 3, 4],
+        (n) =>
+          Stream.runDrain(
+            client.verify({
+              runId: fixture.live[0]!,
+              name: `busy ${n}`,
+              executable: "/bin/sh",
+              argv: [
+                "-c",
+                `i=0; while [ -e ${flag} ]; do i=$((i+1)); [ $((i % 5000)) -eq 0 ] && echo "line $i"; done`,
+              ],
+              cwd: world.project,
+              expect: "pass",
+            }),
+          ).pipe(Effect.ignore),
+        { concurrency: "unbounded", discard: true },
+      ).pipe(Effect.ensuring(fs.remove(flag).pipe(Effect.ignore)));
+    }).pipe(Effect.scoped),
+    // A Run started every 200 ms, each a board change.
+    storm: Effect.gen(function* () {
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const random = yield* SecureRandom.SecureRandom;
+      for (;;) {
+        yield* client
+          .start({
+            project: world.project,
+            id: "bench-steps",
+            request: yield* random.uuidV4(),
+            input: { steps: "6", live: "no" },
+          })
+          .pipe(Effect.ignore);
+        yield* Effect.sleep("200 millis");
+      }
+    }).pipe(Effect.scoped, Effect.orDie),
+  };
+  return { ...beside, "checks-host": beside.checks, "storm-host": beside.storm };
+};
+
+/** The host's, the bridge's and Desktop's first marks for `run` from `after` on, in the page's time. */
+const processMarks = (run: string, origin: number, after: number) => {
+  const marks: Record<string, number> = {};
+  let lines: ReadonlyArray<string> = [];
+  try {
+    lines = readFileSync(recordMarksFile, "utf8").split("\n");
+  } catch {
+    return marks;
+  }
+  for (const line of lines) {
+    const [epochMs, at, id] = line.split(" ");
+    const time = Number(epochMs) - origin;
+    // Their clock gives whole milliseconds.
+    if (id !== run || at === undefined || at in marks || time < after - 1) continue;
+    marks[at] = time;
+  }
+  return marks;
+};
+
 /** The longest a sample waits for its Flow before it is counted as never painted. */
 const NEVER_MS = 60_000;
 
@@ -164,7 +235,6 @@ const body = (
   chrome: { version: string; flags: ReadonlyArray<string> },
 ) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     const ev = <A>(expression: string, awaitPromise = false) =>
       Effect.promise(() =>
         page.send<{ result: { value: A } }>("Runtime.evaluate", {
@@ -298,7 +368,10 @@ const body = (
                   ...(shown.stale ? ["another Run's Flow was shown after the click"] : []),
                   ...(yield* judge(run, shown.painted)),
                 ],
-                marks: shown.marks,
+                marks: {
+                  ...shown.marks,
+                  ...processMarks(run, shown.origin, shown.marks["record:mounted"] ?? shown.start),
+                },
                 start: shown.start,
               };
         yield* close;
@@ -363,50 +436,6 @@ const body = (
         }).pipe(Effect.orDie),
     };
 
-    /** What a cell runs beside its samples, ended when they are. */
-    const beside: Partial<Record<DesktopCell, Effect.Effect<void, never, PlatformServices>>> = {
-      // Four Checks on a live Run, each busy until its flag is gone.
-      checks: Effect.gen(function* () {
-        const flag = `${live}/checks-running`;
-        yield* fs.writeFileString(flag, "").pipe(Effect.orDie);
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        yield* Effect.forEach(
-          [1, 2, 3, 4],
-          (n) =>
-            Stream.runDrain(
-              client.verify({
-                runId: fixture.live[0]!,
-                name: `busy ${n}`,
-                executable: "/bin/sh",
-                argv: [
-                  "-c",
-                  `i=0; while [ -e ${flag} ]; do i=$((i+1)); [ $((i % 5000)) -eq 0 ] && echo "line $i"; done`,
-                ],
-                cwd: world.project,
-                expect: "pass",
-              }),
-            ).pipe(Effect.ignore),
-          { concurrency: "unbounded", discard: true },
-        ).pipe(Effect.ensuring(fs.remove(flag).pipe(Effect.ignore)));
-      }).pipe(Effect.scoped),
-      // A Run started every 200 ms, each a board change.
-      storm: Effect.gen(function* () {
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const random = yield* SecureRandom.SecureRandom;
-        for (;;) {
-          yield* client
-            .start({
-              project: world.project,
-              id: "bench-steps",
-              request: yield* random.uuidV4(),
-              input: { steps: "6", live: "no" },
-            })
-            .pipe(Effect.ignore);
-          yield* Effect.sleep("200 millis");
-        }
-      }).pipe(Effect.scoped, Effect.orDie),
-    };
-
     let desktop = startDesktop();
     yield* Effect.addFinalizer(() => Effect.sync(() => desktop.kill()));
     yield* Effect.promise(viewUp);
@@ -417,6 +446,7 @@ const body = (
     mkdirSync(out, { recursive: true });
     const raw = `${out}/samples.jsonl`;
     const summaries: Summaries = {};
+    const beside = besideOf(fixture);
     for (const cell of cells.filter(isDesktopCell)) {
       yield* say(`${cell}: ${WARMUP} warm-up and ${SAMPLES} timed opens`);
       const fibers = beside[cell] === undefined ? [] : [yield* Effect.forkChild(beside[cell])];
@@ -573,6 +603,8 @@ const hostBody = (fixture: Fixture) =>
           if (!sample.warmup) samples.push(sample);
         });
       const runs = fresh.slice(0, WARMUP + SAMPLES);
+      const load = besideOf(fixture)[cell];
+      const fibers = load === undefined ? [] : [yield* Effect.forkChild(load)];
       for (const [at, run] of runs.slice(0, WARMUP).entries()) yield* sampled(at, run);
       const lag = yield* lagOver(
         Effect.forEach(runs.slice(WARMUP), (run, at) => sampled(WARMUP + at, run), {
@@ -581,6 +613,7 @@ const hostBody = (fixture: Fixture) =>
         // Opened again, untimed: the window needs more probes than first opens there are.
         (at) => firstFrame(runs[at % runs.length]!),
       );
+      yield* Effect.forEach(fibers, Fiber.interrupt, { discard: true });
       summaries[cell] = {
         ...summaryOf(
           samples.map((sample) => sample.ms),
@@ -622,14 +655,26 @@ const stagesOf = (samples: ReadonlyArray<Sample>) => {
       marks["record:usable"] !== undefined,
   );
   if (marked.length === 0) return "absent";
-  const stage = (from: string, to: string) => {
-    const spans = marked.map(({ marks }) => marks[to]! - marks[from]!);
+  const stage = (from: string, to: string, over = marked) => {
+    const spans = over.map(({ marks }) => marks[to]! - marks[from]!);
     return { p50: nearest(spans, 0.5), p95: nearest(spans, 0.95), max: nearest(spans, 1) };
   };
+  const split = marked.filter(({ marks }) =>
+    ["host:emit", "bridge:relay", "desktop:read"].every((at) => marks[at] !== undefined),
+  );
   return {
     n: marked.length,
     mount: stage("record:click", "record:mounted"),
     bridge_and_host: stage("record:mounted", "record:frame"),
+    ...(split.length > 0 && {
+      split: {
+        n: split.length,
+        host_emit: stage("record:mounted", "host:emit", split),
+        bridge: stage("host:emit", "bridge:relay", split),
+        desktop_read: stage("bridge:relay", "desktop:read", split),
+        to_view: stage("desktop:read", "record:frame", split),
+      },
+    }),
     render: stage("record:frame", "record:usable"),
   };
 };

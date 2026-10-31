@@ -81,6 +81,7 @@
         painted: paintedOf(shown, flowOf(shown)),
         marks: marksOf(expected.card, expected.start),
         start: expected.start,
+        origin: performance.timeOrigin,
       };
     }
   };
