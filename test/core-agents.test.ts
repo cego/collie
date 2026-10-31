@@ -23,7 +23,8 @@ import { forgeHttpOnPath } from "./support/forge";
 import type { FakeHc } from "./support/fake-hc";
 import { until } from "./support/host";
 import { deliveriesOf, herdOf, machineHerd } from "../src/steering";
-import { liveHerds } from "../src/herds";
+import { focusPane, liveHerds } from "../src/herds";
+import { connect } from "../src/hc";
 import { askWith, piTools } from "./support/pi";
 import { isString } from "../src/schema";
 
@@ -592,5 +593,40 @@ test("a core Machine's Herd is its core session's, whichever herdr session it is
       const [coreOne, coreTwo] = yield* herds;
       expect(coreOne).not.toBe(coreTwo);
       expect(coreOne).not.toBe(herdrOne);
+    }),
+  ));
+
+test("Go to pane on an agent on core names its core terminal, for Desktop to attach to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* onMachine("core");
+      const started = yield* Effect.scoped(
+        Effect.flatMap(connect(core.socketPath), (hc) =>
+          hc.call("terminal.run", {
+            name: "builder-1",
+            argv: ["claude"],
+            cwd: rig.projectDir,
+            labels: { run: "r1" },
+          }),
+        ),
+      );
+      const env = rig.pluginEnv(coreOnly(core));
+
+      const at = yield* focusPane(
+        yield* liveHerds(new FakeHerdr(env), env),
+        ["builder-1"],
+        null,
+        undefined,
+      );
+
+      expect(at).toEqual({
+        session: null,
+        workspace: "builder-1",
+        tab: null,
+        pane: started.address,
+        agent: "builder-1",
+        core: started.address,
+      });
     }),
   ));

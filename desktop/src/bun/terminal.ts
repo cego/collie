@@ -1,13 +1,16 @@
-// Go to pane: herdr's terminal controller for the Run's pane, run over its Machine's route
-// and drawn in Desktop; or, where there is no pane to control, a new herdr client in a
-// terminal of its own on this computer. Desktop passes on what the controller prints and
-// decides nothing from it.
+// Go to pane: herdr's terminal controller for the Run's pane, or core's attach for an agent
+// on core, run over its Machine's route and drawn in Desktop; or, where there is no pane to
+// control, a new herdr client in a terminal of its own on this computer. Desktop passes on
+// what either prints and decides nothing from it.
 
 import * as Str from "effect/String";
+import * as Socket from "effect/socket/Socket";
+import * as Base64 from "effect/encoding/Base64";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, Option, Result, Schema, Stream, flow } from "effect";
+import { Effect, Option, Queue, Result, Schema, Stream, flow, type Cause } from "effect";
 import { CommandLine } from "effect/process";
 import type { PaneAt } from "../../../src/board-model";
+import { type HcError, Kind, connectOver, u32 } from "../../../src/hc";
 import { ActionFailed, TerminalCommand, type TerminalEvent } from "../shared/flock";
 import { type ShellRoute, spawned, stderrTail } from "./machine";
 import { CHILD_CWD, childEnv } from "./login-env";
@@ -125,10 +128,168 @@ export const control = Effect.fn("Desktop.control")(function* (
   return { events, send: (command: TerminalCommand) => send(commandLine(command)) };
 });
 
+/** Core sends a viewer no more than this many bytes ahead of its CREDIT. */
+const CORE_WINDOW = 256 * 1024;
+/** The scrollback lines a core terminal's first paint brings. */
+const HISTORY = 1000;
+
+const CoreClosed = Schema.fromJsonString(
+  Schema.Struct({
+    reason: Schema.String,
+    exit_code: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  }),
+);
+
+const endedBy = (payload: Uint8Array) =>
+  Option.match(Schema.decodeOption(CoreClosed)(new TextDecoder().decode(payload)), {
+    onNone: () => "core closed the terminal",
+    onSome: ({ reason, exit_code: code = null }) =>
+      code === null ? reason : `${reason} with code ${code}`,
+  });
+
+const cells = (cols: number, rows: number) => {
+  const size = new Uint8Array(4);
+  new DataView(size.buffer).setUint16(0, cols, true);
+  new DataView(size.buffer).setUint16(2, rows, true);
+  return size;
+};
+
+interface Shown {
+  readonly event: TerminalEvent;
+  readonly channel: number;
+  readonly bytes: number;
+}
+
 /**
- * Go to pane in Desktop: `focused` finds the Run's pane, and its controller is started
- * through `route`, so a remote Machine's is one more channel on its master. Where `focused`
- * names no pane there is nothing to control, and the terminal says only where it focused.
+ * Core's attach to `terminal`, through `command`, which speaks core's API on its stdin and
+ * stdout as `herdr-core connect` does. Each DATA is credited once it is drawn, and a terminal
+ * a whole window behind is attached again for a fresh paint rather than drawing core's backlog.
+ */
+export const attachCore = Effect.fn("Desktop.attachCore")(function* (
+  command: ReadonlyArray<string>,
+  machine: string,
+  terminal: string,
+  cols: number,
+  rows: number,
+) {
+  const child = yield* spawned(() =>
+    Bun.spawn([...command], {
+      env: childEnv(),
+      cwd: CHILD_CWD,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    }),
+  );
+  const said = yield* stderrTail(child.stderr);
+  const socket = yield* Socket.fromTransformStream(
+    Effect.succeed({
+      readable: child.stdout,
+      writable: new WritableStream<Uint8Array>({
+        write: (chunk) => {
+          void child.stdin.write(chunk);
+          void child.stdin.flush();
+        },
+      }),
+    }),
+  );
+  const failed = (error: HcError) => new ActionFailed({ reason: said() || error.message });
+  const hc = yield* connectOver(socket, `${machine}'s core`, "by reader").pipe(
+    Effect.mapError(failed),
+  );
+  yield* hc.call("hello", { generation: 1, framed: true }).pipe(Effect.mapError(failed));
+  let size = { cols, rows };
+  const attach = Effect.suspend(() =>
+    hc.call("terminal.attach", { terminal, ...size, history: HISTORY }),
+  ).pipe(
+    Effect.mapError(failed),
+    Effect.flatMap((attached) =>
+      Effect.map(hc.channel(attached.channel), (frames) => ({ id: attached.channel, frames })),
+    ),
+  );
+  let channel = yield* attach;
+  let undrawn = 0;
+  let ended = false;
+  const shown = yield* Queue.unbounded<Shown, Cause.Done>();
+  const end = (reason: string) =>
+    Effect.suspend(() => {
+      if (ended) return Effect.void;
+      ended = true;
+      return Queue.offer(shown, { event: { _tag: "Ended", reason }, channel: 0, bytes: 0 }).pipe(
+        Effect.andThen(Queue.end(shown)),
+      );
+    });
+  const repaint = Effect.gen(function* () {
+    yield* hc.send(channel.id, Kind.CLOSE).pipe(Effect.ignore);
+    yield* Queue.clear(shown);
+    undrawn = 0;
+    channel = yield* attach;
+  });
+  yield* Effect.forkScoped(
+    Effect.gen(function* () {
+      for (;;) {
+        const frame = yield* Queue.take(channel.frames);
+        if (frame.kind === Kind.CLOSE) return yield* end(endedBy(frame.payload));
+        if (frame.kind !== Kind.DATA) continue;
+        undrawn += frame.payload.length;
+        if (undrawn >= CORE_WINDOW) yield* repaint;
+        else
+          yield* Queue.offer(shown, {
+            event: { _tag: "Frame", bytes: Base64.encode(frame.payload) },
+            channel: channel.id,
+            bytes: frame.payload.length,
+          });
+      }
+    }).pipe(Effect.catch((refused) => end(refused.reason))),
+  );
+  yield* Effect.forkScoped(
+    Effect.promise(() => child.exited).pipe(
+      Effect.flatMap((code) =>
+        end(
+          code === SSH_FAILED
+            ? `the connection to ${machine} dropped`
+            : said() || `core's connection exited ${code}`,
+        ),
+      ),
+    ),
+  );
+  const drawn = (one: Shown) =>
+    one.bytes === 0 || one.channel !== channel.id
+      ? Effect.void
+      : Effect.sync(() => (undrawn -= one.bytes)).pipe(
+          Effect.andThen(hc.send(one.channel, Kind.CREDIT, u32(one.bytes))),
+          Effect.ignore,
+        );
+  // xterm.js scrolls a core terminal's history itself, and types its own mouse reports.
+  const send = (command: TerminalCommand): Effect.Effect<void> => {
+    switch (command.type) {
+      case "terminal.input":
+        return hc
+          .send(channel.id, Kind.DATA, new TextEncoder().encode(command.text))
+          .pipe(Effect.ignore);
+      case "terminal.resize":
+        size = { cols: command.cols, rows: command.rows };
+        return hc
+          .send(channel.id, Kind.RESIZE, cells(command.cols, command.rows))
+          .pipe(Effect.ignore);
+      default:
+        return Effect.void;
+    }
+  };
+  return {
+    events: Stream.fromQueue(shown).pipe(
+      Stream.tap(drawn),
+      Stream.map((one) => one.event),
+    ),
+    send,
+  };
+});
+
+/**
+ * Go to pane in Desktop: `focused` finds the Run's pane, and its controller, or core's attach
+ * for an agent on core, is started through `route`, so a remote Machine's is one more channel
+ * on its master. Where `focused` names no pane there is nothing to control, and the terminal
+ * says only where it focused.
  */
 export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
   focused: Effect.Effect<PaneAt, ActionFailed>,
@@ -143,9 +304,16 @@ export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
       send: (): Effect.Effect<void> => Effect.void,
     };
   const command = yield* route
-    .sh(Result.getOrThrow(CommandLine.join(controlCommand(at.session, at.pane, cols, rows))))
+    .sh(
+      at.core === undefined
+        ? Result.getOrThrow(CommandLine.join(controlCommand(at.session, at.pane, cols, rows)))
+        : "herdr-core connect",
+    )
     .pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
-  const opened = yield* control(command, route.machine.name);
+  const opened =
+    at.core === undefined
+      ? yield* control(command, route.machine.name)
+      : yield* attachCore(command, route.machine.name, at.core, cols, rows);
   return {
     events: Stream.concat(Stream.succeed<TerminalEvent>({ _tag: "Opened", at }), opened.events),
     send: opened.send,

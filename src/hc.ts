@@ -216,7 +216,7 @@ export interface HcConnection {
   ) => Effect.Effect<HcReply<M>, HcError>;
   /** Every notification, in arrival order. */
   readonly notes: Queue.Dequeue<HcNote>;
-  /** What arrives on a stream channel; DATA is credited as it is read off the socket. */
+  /** What arrives on a stream channel; DATA is credited as its connection's `credit` says. */
   readonly channel: (id: number) => Effect.Effect<Queue.Dequeue<Frame>>;
   readonly send: (
     channel: number,
@@ -241,17 +241,24 @@ const frame = (channel: number, kind: number, payload: Uint8Array) => {
   return join(header, payload);
 };
 
-const u32 = (value: number) => {
+export const u32 = (value: number) => {
   const bytes = new Uint8Array(4);
   new DataView(bytes.buffer).setUint32(0, value, true);
   return bytes;
 };
 
 /** A connection to the core listening at `path`, closed with the scope. */
-export const connect = Effect.fn("Hc.connect")(function* (path: string) {
+export const connect = (path: string) =>
+  Effect.flatMap(BunSocket.makeNet({ path }), (socket) => connectOver(socket, path));
+
+/** A connection to core over `socket`, which reaches the core at `path`, closed with the scope. */
+export const connectOver = Effect.fn("Hc.connectOver")(function* (
+  socket: Socket.Socket,
+  path: string,
+  credit: "on read" | "by reader" = "on read",
+) {
   const unreachable = (cause: Socket.SocketError) =>
     new HcError({ method: "connect", message: `${path}: ${String(cause)}`, kind: "unreachable" });
-  const socket = yield* BunSocket.makeNet({ path });
   const pull = yield* Socket.readerBytes(socket).pipe(Effect.mapError(unreachable));
   const writer = yield* socket.writer;
   const write = (bytes: Uint8Array) => writer.write(bytes).pipe(Effect.mapError(unreachable));
@@ -309,7 +316,8 @@ export const connect = Effect.fn("Hc.connect")(function* (path: string) {
         continue;
       }
       yield* Queue.offer(yield* channel(id), { kind, payload });
-      if (kind === Kind.DATA) yield* write(frame(id, Kind.CREDIT, u32(payload.length)));
+      if (kind === Kind.DATA && credit === "on read")
+        yield* write(frame(id, Kind.CREDIT, u32(payload.length)));
     }
   });
 

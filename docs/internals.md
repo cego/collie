@@ -595,6 +595,18 @@ control, and for **Open in herdr**, it opens `herdr --remote <target> --session 
 a terminal of this computer's instead, a client the human then drives. The focus before
 either is the host's, through `herdr.ts`; its reply names the pane it focused.
 
+An agent on core has no pane: the host's focus names its core terminal (`core` in its
+reply), and Desktop runs `herdr-core connect` through the same route instead, core's API on
+its stdin and stdout, so a local agent is reached through this computer's own core and a
+remote one through that Machine's until Machines reach each other's core. On it Desktop
+says `hello {framed: true}` and `terminal.attach`, with 1000 lines of history, and draws
+the first paint and every DATA after it (`attachCore` in `desktop/src/bun/terminal.ts`).
+Keys go back as DATA and a resize as RESIZE; xterm.js keeps the history and sends its own
+mouse reports. Each DATA is credited once it is handed on to be drawn. Core streams no more
+than 256 KiB ahead of that credit, so a terminal holding a whole window undrawn is that far
+behind: Desktop closes the stream and attaches again for a fresh paint rather than draw
+core's backlog. Core's CLOSE ends the terminal with its reason and exit code.
+
 ### Settings shared across a Flock
 
 Collie's settings are one list, `src/settings.ts`: each key with its kind, its choices, its

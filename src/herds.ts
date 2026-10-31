@@ -59,7 +59,7 @@ export const liveHerds = Effect.fn("Herds.live")(function* (herdr: Herdr, env: P
 /**
  * Focuses the first of `agents` a session still has, else `workspace` in the Task's own
  * `herd` (undefined where the Task recorded none), in the first session that holds either;
- * null where none does.
+ * null where none does. An agent on core has nothing to focus, and is named by its terminal.
  */
 export const focusPane = Effect.fn("Herds.focusPane")(function* (
   sessions: ReadonlyArray<LiveHerd>,
@@ -71,6 +71,15 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
     const { herdr } = session;
     const live = yield* herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => []));
     const agent = Arr.flatMap(agents, (name) => Arr.filter(live, (one) => one.name === name))[0];
+    if (agent?.backend === "core")
+      return {
+        session: null,
+        workspace: agent.name,
+        tab: null,
+        pane: agent.paneId,
+        agent: agent.name,
+        core: agent.paneId,
+      } satisfies PaneAt;
     const pane =
       agent === undefined
         ? undefined

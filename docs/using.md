@@ -1386,6 +1386,12 @@ says that Machine is not connected until it is back. The tab says where the pane
 "vm-mk › workspace 3 › tab 2"; the card says it on one line, tab first, as
 "tab 2 · workspace 3", and the whole of it on hover.
 
+An agent on core is drawn from core's own stream of its terminal, through `herdr-core
+connect` over the same route, and shows its last 1000 lines of history, which the wheel
+scrolls here. Its tab says where it is as "vm-mk › <agent>", and a terminal that ends says
+why, with its program's exit code. One that falls a whole window behind is redrawn from its
+current screen rather than replayed.
+
 Where the Task has more than one live agent — a planner, an implementer and its reviewers,
 across a plan Run and its `.implement` Run — the tab lists every agent the card counts
 beside Open in herdr, each as its role (numbered where two share one, as "reviewer 1") with

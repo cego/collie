@@ -1300,6 +1300,8 @@ export const PaneAt = Schema.Struct({
   tab: Schema.NullOr(Schema.String),
   pane: Schema.optionalKey(Schema.String),
   agent: Schema.optionalKey(Schema.String),
+  /** The core terminal the agent runs in; absent for one in herdr. */
+  core: Schema.optionalKey(Schema.String),
 });
 export type PaneAt = typeof PaneAt.Type;
 

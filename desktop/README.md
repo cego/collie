@@ -48,11 +48,11 @@ sends a terminal's size once a resize settles.
 [ADR-0044](../docs/adr/0044-go-to-pane-opens-the-pane-in-desktop.md). Desktop draws the pane and
 decides nothing from it.
 
-| File                                  | What it owns                                              |
-| ------------------------------------- | --------------------------------------------------------- |
-| `src/bun/terminal.ts`                 | herdr's terminal controller, run over the Machine's route |
-| `view/app/components/TerminalTab.vue` | The pane, drawn                                           |
-| `src/shared/terminal-input.ts`        | What the human does, as herdr is told it                  |
+| File                                  | What it owns                                                                |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| `src/bun/terminal.ts`                 | herdr's terminal controller, or core's attach, run over the Machine's route |
+| `view/app/components/TerminalTab.vue` | The pane, drawn                                                             |
+| `src/shared/terminal-input.ts`        | What the human does, as herdr is told it                                    |
 
 ## The Flock chat
 
