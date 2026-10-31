@@ -2818,6 +2818,7 @@ the claims ([`stage`](workflows.md#stage)).
   "idle_close_ms": 3600000,
   "memory_hold": 10,
   "board_quiet_ms": 300000,
+  "run_model": true,
   "compact_at_tokens": 150000,
   "claude_auto_compact_window": 400000,
   "notifications": { "run-done": false },
@@ -2935,6 +2936,11 @@ evidence — may go unchanged, with no agent of it working and no check running,
 reads `…but silent for 9m` and takes the quiet edge. Five minutes by default. Nothing is
 nudged and nothing is given up on — it is shown, so a hung run is visible before you notice
 by accident.
+
+`run_model` ("Run model", under Settings' Board) is whether the host keeps every Run in
+memory and serves the board from that [Run model](../CONTEXT.md). On by default; `false`
+reads every Run from disk again on each change, as before the model, and takes effect when
+the host next starts. It is there to turn the model off if it misbehaves, for one release.
 
 `compact_at_tokens` is where compaction between pieces of work kicks in, and
 `claude_auto_compact_window` is where Claude Code compacts by itself: 400000 tokens until

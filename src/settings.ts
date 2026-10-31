@@ -91,6 +91,8 @@ export interface Defaults {
   boardQuietMs: number;
   /** How long a finished Run's agent may be idle before Cleanup closes it. `0` never closes one. */
   idleCloseMs: number;
+  /** Whether the host serves the board from its Run model; off rebuilds it from disk, as before the model. */
+  runModel: boolean;
   /** The percent of total memory under which this Machine is Short of memory. `0` never is. */
   memoryHold: number;
   /**
@@ -148,6 +150,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   quietMs: 10 * 60 * 1000,
   boardQuietMs: 5 * 60 * 1000,
   idleCloseMs: 60 * 60 * 1000,
+  runModel: true,
   memoryHold: 10,
   compactAtTokens: COMPACT_AT_TOKENS,
   claudeAutoCompactWindow: AUTO_COMPACT_WINDOW,
@@ -386,6 +389,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     label: "Quiet Run",
     description: "How long a running Run may write nothing before its card calls it quiet.",
     unit: "minutes",
+  }),
+  of("run_model", "boolean", String(D.runModel), {
+    group: "Board",
+    label: "Run model",
+    description:
+      "Whether the host keeps every Run in memory and serves the board from it. Off reads every Run from disk on each change, as before. Read when the host starts.",
   }),
   of("flock_chat.proactive", "boolean", "true", {
     group: "Chat",

@@ -299,6 +299,10 @@ export const Reopened = Schema.Struct({
 });
 export type Reopened = typeof Reopened.Type;
 
+/** A Run revision: its host's epoch, and that host's change sequence when it last changed. */
+export const RunRevision = Schema.Struct({ epoch: Schema.String, seq: Schema.Finite });
+export type RunRevision = typeof RunRevision.Type;
+
 /** One Task as the board draws it. */
 export const TaskView = Schema.Struct({
   /** The Task's id, or the Run's own where it belongs to no Task. */
@@ -360,6 +364,8 @@ export const TaskView = Schema.Struct({
   at: Schema.Finite,
   /** The strip its card draws of its Flow; absent from an older host. */
   flow: Schema.optionalKey(FlowStrip),
+  /** The highest revision of its Runs; absent from an older host or one with its Run model off. */
+  revision: Schema.optionalKey(RunRevision),
 });
 export type TaskView = typeof TaskView.Type;
 

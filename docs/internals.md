@@ -1712,10 +1712,19 @@ its time.
   A timer tick requests a board refresh without advancing its write coverage. Readers
   wait for writes the host has seen, while an idle timer refresh can finish in the
   background. A write during that refresh still requires a subsequent covering build.
-  Board builds and Run views reuse disk inputs per Run (`src/read-model.ts`). Host writes
-  invalidate before and after the write; external file events invalidate before the
-  board's debounce. A read overtaken by invalidation retries. If the recursive watch
-  fails, reuse is disabled. Engine status and clock-derived fields remain live.
+  The board is read from the host's Run model (`src/run-model.ts`,
+  [ADR-draft-a-runs-record-is-read-from-its-hosts-run-model](adr/draft-a-runs-record-is-read-from-its-hosts-run-model.md)).
+  It keeps each Run's disk inputs in memory, and a change dirties only the Runs it names:
+  host writes before and after the write; the state directory's watch, before the
+  board's debounce; another process's SQLite commit, seen within 250 ms through
+  `PRAGMA data_version`; and a branch moving in a checkout whose head a card reads, through
+  a watch on that checkout's git directories. A read overtaken by invalidation retries. If
+  the recursive watch fails, the model reads from disk. Engine status and clock-derived
+  fields remain live. Each change to a Run takes the next number of the host's one sequence,
+  and each board item carries the highest of its Runs' as its revision. `run_model: false`
+  restores the from-disk build at the next host start; the model is then never filled. The
+  Run views `collie run list`, `run show` and the `runs` RPC answer read from disk until
+  the record is read from the model.
   A host's `collie_run` answer uses one local Run listing for its facts and Flow, with
   local offers and the same write-covered readiness as `progress`. Flow relationship
   indexes, installation identity and usual Step times are shared across a board build.

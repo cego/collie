@@ -351,6 +351,12 @@ follow-up (see **Reopened**, ADR-0041).
 
 **Run** — One execution of a Workflow: its Inputs, its operations' Outputs and its status, kept as an audit trail. The host holds it. A restart or a resume re-enters the Workflow's current code and reuses every Activity already done, so finished work is not done again and a pending question is still pending; a Run whose code has since changed shape has no such promise, and one whose module is missing waits, naming the file. Nothing the previous engine recorded is carried over (ADR-0027). Its **slug** — `<workflow>-<what it is named after>` — names its agents, its tab and its row on the board, and for a mutating Run it is named after the task half of the Worktree's branch — the branch without the login it is namespaced under — so two Runs on different work can never read as the same row.
 
+**Run model** — What a host holds in memory of each Run it serves: the Run's view and its disk inputs, indexed by Task, parent, requester and plan. A change dirties only the Runs it names, and the board is derived from the model rather than from a fresh read of every Run. Never persisted: a host start fills it from disk. `run_model: false` turns it off (ADR-draft-a-runs-record-is-read-from-its-hosts-run-model).
+
+**Run revision** — Where a Run is in its host's changes, not a commit: the host's epoch (its installation id and that host start's id) and the number its latest change took from one sequence. It only grows within an epoch; a restarted host has another epoch. A Task's revision is the highest of its Runs'.
+
+**Kept record** — A Run's record a front door keeps after showing it, held with the epoch and revision it was shown at. It is resumed by sending both to the host, which answers that it is unchanged or sends it anew; until then, or while its Machine is unreachable, it is shown as kept, with its `as of` time and its actions disabled, never as current.
+
 **Task** — One piece of work a human is doing, and the Runs it takes: a plan, the
 implementation it chains into, the review of that, the release of its merge request.
 Recorded on every Run at creation and inherited by chains, follow-ups and resumes, so

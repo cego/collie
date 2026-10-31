@@ -6,6 +6,7 @@
 
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import {
   Config,
   ConfigProvider,
@@ -184,6 +185,20 @@ const fakeHerdrIn = Effect.fn("World.fakeHerdrIn")(function* (dir: string) {
  * directory for the host that serves both. Exercised against the compiled binary when
  * `COLLIE_TEST_BINARY` names one, and the sources otherwise.
  */
+/** Every host this world started read its board from disk: the Run model was never filled. */
+const neverModelled = (world: World) =>
+  Effect.gen(function* () {
+    const log = yield* (yield* FileSystem.FileSystem)
+      .readFileString(`${world.state}/host.log`)
+      .pipe(Effect.orElseSucceed(() => ""));
+    const started = Str.split(log, "host started").length - 1;
+    const off = Str.split(log, "the Run model is off").length - 1;
+    if (Str.includes("the Run model holds")(log) || off !== started)
+      return yield* Effect.die(
+        new Error(`a host filled its Run model with run_model false:\n${log}`),
+      );
+  });
+
 export const proves = <A, E>(
   prefix: string,
   body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
@@ -235,12 +250,20 @@ export const proves = <A, E>(
       yield* fs.writeFileString(`${world.home}/.bunfig.toml`, testBunfig).pipe(Effect.orDie);
       yield* exec(["git", "init", "-q"], { cwd: world.project });
       yield* save(world.user, modules);
+      // `off` runs a suite on the board read from disk, which `run_model: false` restores.
+      const modelOff =
+        (yield* Config.String("COLLIE_TEST_RUN_MODEL").pipe(Config.withDefault(""))) === "off";
+      if (modelOff)
+        yield* fs
+          .writeFileString(`${world.config}/config.json`, `{"run_model": false}\n`)
+          .pipe(Effect.orDie);
       const command = yield* collieCommand;
       const suite = yield* suiteEnv;
       // A herdr of the world's own, for this process and the host it starts: the real one
       // is not on a CI runner, and on a desk it is the operator's live session.
       const herdr = yield* fakeHerdrIn(dir);
       return yield* body(world).pipe(
+        Effect.tap(() => (modelOff ? neverModelled(world) : Effect.void)),
         Effect.scoped,
         Effect.provide(
           ConfigProvider.layer(

@@ -13,7 +13,7 @@
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Context, Effect, Layer, Schema, Stream, flow, Result } from "effect";
+import { Context, Effect, Layer, Schedule, type Scope, Schema, Stream, flow, Result } from "effect";
 import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
 import * as Migrator from "effect/sql/Migrator";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -265,7 +265,14 @@ const MIGRATIONS = {
   }),
 };
 
-function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | Reactivity.Reactivity> {
+/** How often a commit by another connection, another process's, is looked for. */
+const ELSEWHERE_EVERY = "250 millis";
+
+function makeStore(): Effect.Effect<
+  StoreApi,
+  never,
+  SqlClient.SqlClient | Reactivity.Reactivity | Scope.Scope
+> {
   return Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const reactivity = yield* Reactivity.Reactivity;
@@ -275,6 +282,20 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       loader: Migrator.fromRecord(MIGRATIONS),
       table: "collie_migrations",
     }).pipe(Effect.orDie);
+    // SQLite moves `data_version` only for another connection's commits.
+    const dataVersion = sql<{ readonly data_version: number }>`PRAGMA data_version`.pipe(
+      Effect.map((rows) => rows[0]?.data_version ?? 0),
+      Effect.orElseSucceed(() => 0),
+    );
+    let seen = yield* dataVersion;
+    yield* Effect.forkScoped(
+      Effect.gen(function* () {
+        const now = yield* dataVersion;
+        if (now === seen) return;
+        seen = now;
+        yield* reactivity.invalidate(RUNS);
+      }).pipe(Effect.repeat(Schedule.spaced(ELSEWHERE_EVERY))),
+    );
 
     const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, provenance, options, checkout, asked, placing, admitted, accepted`;
 

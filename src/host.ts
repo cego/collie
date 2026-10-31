@@ -60,7 +60,7 @@ import * as RpcSchema from "effect/rpc/RpcSchema";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
-import { readModelLayer, ReadModel, type ReadModelApi } from "./read-model";
+import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
 import {
   EntryError,
   REFUSED_INPUT,
@@ -1041,7 +1041,7 @@ interface BoardSource<E, F> {
 
 const hostBoard = (dir: string) =>
   Effect.gen(function* () {
-    const model = yield* ReadModel;
+    const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
     const registry = yield* Registry;
     const checks = yield* CheckProcesses;
     const bun = yield* Effect.context<PlatformServices>();
@@ -1057,7 +1057,7 @@ const hostBoard = (dir: string) =>
       Duration.infinity,
     );
     const runs = registry
-      .views(null)
+      .views(null, model?.reading)
       .pipe(Effect.map((views) => Arr.map(views, (view) => factsOfView(env.stateDir, view))));
     const idle: IdleSince = new Map();
     const finishedSince: FinishedSince = new Map();
@@ -1073,9 +1073,13 @@ const hostBoard = (dir: string) =>
               Effect.provideContext(hosted),
               Effect.orElseSucceed(() => []),
             ),
+          head: model?.head,
         });
       }).pipe(
-        Effect.provideService(FileSystem.FileSystem, model.reading),
+        (built) =>
+          model === undefined
+            ? built
+            : Effect.provideService(built, FileSystem.FileSystem, model.reading),
         Effect.provideContext(bun),
       );
     /** The board, with the Runs it was built from. */
@@ -1086,7 +1090,22 @@ const hostBoard = (dir: string) =>
         const facts = yield* runs;
         return { runs: facts, views: yield* boardOf(facts, alive), alive };
       });
-    const listing = listingOf(agentsNow);
+    let filled = false;
+    /** The board this host serves: with the model, each card carries its revision. */
+    const listing = Effect.gen(function* () {
+      const started = yield* Clock.currentTimeMillis;
+      const built = yield* listingOf(agentsNow);
+      if (model === undefined) return built;
+      yield* model.observe(built.runs);
+      if (!filled) {
+        filled = true;
+        const took = (yield* Clock.currentTimeMillis) - started;
+        yield* Effect.logInfo(
+          `the Run model holds ${built.runs.length} Runs, filled in ${took} ms`,
+        );
+      }
+      return { ...built, views: model.stamp(built.views) };
+    });
     const aliveOf = (agents: typeof agentsNow) =>
       Effect.map(agents, ({ alive }) => alive).pipe(Effect.provideContext(bun));
     /** When each Task was first seen Finished, for as long as this host runs. */
@@ -1256,7 +1275,7 @@ const watched = (dir: string, failed: Effect.Effect<void> = Effect.void) =>
   );
 
 /** Each write under the state directory that may move the board, by its path inside it. */
-export const boardWrites = (dir: string, model?: ReadModelApi) =>
+export const boardWrites = (dir: string, model?: RunModelApi) =>
   watched(dir, model?.disable).pipe(
     Stream.tap((event) => model?.invalidate(`${dir}/${event.path}`) ?? Effect.void),
     Stream.filter((event) => !isBookkeeping(event)),
@@ -1280,13 +1299,13 @@ const sharedBoardLayer = (dir: string) =>
   Layer.effect(SharedBoard)(
     Effect.gen(function* () {
       const store = yield* Store;
-      const model = yield* ReadModel;
+      const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       const { listing, herdrMoved, ...board } = yield* hostBoard(dir);
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
       // Shared, so every subscriber rides one recursive watch: setting one up walks the tree.
       const writes = yield* Stream.mergeAll(
         [
-          boardWrites(dir, model).pipe(
+          Stream.merge(boardWrites(dir, model), model?.moved ?? Stream.empty).pipe(
             Stream.debounce("200 millis"),
             Stream.map(() => undefined),
           ),
@@ -3278,8 +3297,20 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
         yield* Effect.forkScoped(
           rotateInPlace(outputOf(dir)).pipe(Effect.repeat(Schedule.spaced("1 minute"))),
         );
+        // A config that cannot be read leaves the model on, its default.
+        const modelled = yield* currentEnv.pipe(
+          Effect.flatMap((env) => loadDefaults(env.userDir)),
+          Effect.map((defaults) => defaults.runModel),
+          Effect.orElseSucceed(() => true),
+        );
+        if (!modelled)
+          yield* Effect.logInfo(
+            "the Run model is off: the board is read from disk on every change",
+          );
         yield* Effect.race(
-          own(dir, checks, sweep).pipe(Effect.provide(readModelLayer(dir))),
+          modelled
+            ? own(dir, checks, sweep).pipe(Effect.provide(runModelLayer(dir, installation)))
+            : own(dir, checks, sweep),
           orphaned(dir).pipe(Effect.flatMap(stop)),
         );
       }).pipe(Effect.provide(Logger.layer([hostLogger(logOf(dir))], { mergeWithExisting: true }))),

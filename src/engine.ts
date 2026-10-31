@@ -15,7 +15,6 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import type { Asker } from "./proposals";
-import { ReadModel } from "./read-model";
 import { actorOf, readAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
@@ -5863,8 +5862,11 @@ export interface RegistryApi {
   readonly view: (runId: string) => Effect.Effect<RunView | null>;
   /** Drops `slug` from every Run's claim record, answering the Runs it was in. */
   readonly forgetClaim: (slug: string) => Effect.Effect<ReadonlyArray<string>>;
-  /** Every run this host has rows for, newest last, narrowed to one Task where named. */
-  readonly views: (task: string | null) => Effect.Effect<ReadonlyArray<RunView>>;
+  /** Every run this host has rows for, newest last, narrowed to one Task where named; read through `read` where given. */
+  readonly views: (
+    task: string | null,
+    read?: FileSystem.FileSystem,
+  ) => Effect.Effect<ReadonlyArray<RunView>>;
   /** Records `url` as the merge request `runId` opened, as the MR step does, without its notice. */
   readonly mergeRequest: (runId: string, url: string) => Effect.Effect<void>;
   /**
@@ -6065,8 +6067,7 @@ const makeRegistry: (
   const catalogue = options?.catalogue;
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const fs = yield* FileSystem.FileSystem;
-  const readModel = yield* Effect.serviceOption(ReadModel);
-  const viewFs = Option.isSome(readModel) ? readModel.value.reading : fs;
+  const hostFs = fs;
   const store = yield* Store;
   const random = yield* SecureRandom.SecureRandom;
   const hostScope = yield* Effect.scope;
@@ -6269,7 +6270,7 @@ const makeRegistry: (
     readonly cwd: string;
   }) {
     const rows = Arr.filter(yield* store.runs, (row) => row.run !== asked.runId);
-    const runs = Arr.map(yield* Effect.forEach(rows, viewOf), (view) => ({
+    const runs = Arr.map(yield* Effect.forEach(rows, (row) => viewOf(row)), (view) => ({
       runId: view.runId,
       landing: view.landing,
       ended:
@@ -6297,7 +6298,7 @@ const makeRegistry: (
     if (!Number.isFinite(from))
       return yield* new WorkflowError({ reason: `since is not a date: ${since}` });
     const rows = Arr.filter(yield* store.runs, (row) => epochMs(row.admitted) >= from);
-    const views = yield* Effect.forEach(rows, viewOf);
+    const views = yield* Effect.forEach(rows, (row) => viewOf(row));
     const metrics = new Map<string, Metrics>();
     const recorded = new Map<string, Recorded>();
     for (const view of views) {
@@ -7155,8 +7156,8 @@ const makeRegistry: (
     return at === null ? null : DateTime.formatIso(DateTime.makeUnsafe(Number(at)));
   });
 
-  const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow) {
-    const fs = viewFs;
+  const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow, read?: FileSystem.FileSystem) {
+    const fs = read ?? hostFs;
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
     const report = Option.getOrUndefined(
@@ -8012,12 +8013,12 @@ const makeRegistry: (
         }
         return dropped;
       }).pipe(Effect.orDie, Effect.provideContext(bun)),
-    views: (task: string | null) =>
+    views: (task: string | null, read?: FileSystem.FileSystem) =>
       store.runs.pipe(
         Effect.flatMap((rows) =>
           Effect.forEach(
             task === null ? rows : Arr.filter(rows, (row) => row.task === task),
-            viewOf,
+            (row) => viewOf(row, read),
             {
               concurrency: VIEW_CONCURRENCY,
             },

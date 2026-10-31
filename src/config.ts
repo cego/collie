@@ -253,6 +253,8 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
       ? raw.board_quiet_ms
       : FALLBACK_DEFAULTS.boardQuietMs,
     idleCloseMs: isNumber(raw.idle_close_ms) ? raw.idle_close_ms : FALLBACK_DEFAULTS.idleCloseMs,
+    // Only an explicit `false` turns it off, as with `proactive`.
+    runModel: raw.run_model !== false,
     memoryHold: isNumber(raw.memory_hold) ? raw.memory_hold : FALLBACK_DEFAULTS.memoryHold,
     compactAtTokens: isNumber(raw.compact_at_tokens)
       ? raw.compact_at_tokens

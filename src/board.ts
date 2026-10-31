@@ -617,18 +617,24 @@ export function checksAt(
 }
 
 /** The commit the Run's branch is at now in its checkout, or null where that cannot be read. */
-const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
+export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: RunFacts) {
   if (run.branch === null) return null;
-  const key = `${run.cwd}\0${run.branch}`;
-  const known = heads.get(key);
-  if (known !== undefined && now - known.at < HEAD_FOR_MS) return known.sha;
   const read = yield* shell(
     "git",
     ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
     run.cwd,
   );
   const sha = Str.trim(read.stdout);
-  const head = read.code === 0 && sha !== "" ? sha : null;
+  return read.code === 0 && sha !== "" ? sha : null;
+});
+
+/** `readBranchHead`, read again only once `HEAD_FOR_MS` has passed. */
+const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
+  if (run.branch === null) return null;
+  const key = `${run.cwd}\0${run.branch}`;
+  const known = heads.get(key);
+  if (known !== undefined && now - known.at < HEAD_FOR_MS) return known.sha;
+  const head = yield* readBranchHead(run);
   heads.set(key, { at: now, sha: head });
   return head;
 });
@@ -951,6 +957,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   only?: string;
   /** Where each Task's whole Flow is put, by the Task's id. */
   flows?: Map<string, Flow>;
+  /** The commit a Run's branch is at; read through a minute's cache where not given. */
+  head?: (run: RunFacts) => Effect.Effect<string | null>;
 }) {
   const { stateDir } = opts.env;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
@@ -1185,7 +1193,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               records: yield* readVerifications(merging.evidence).pipe(
                 Effect.orElseSucceed(() => []),
               ),
-              head: forged?.head ?? (yield* branchHead(merging, now)),
+              head: forged?.head ?? (yield* opts.head?.(merging) ?? branchHead(merging, now)),
               approved: yield* Effect.forEach(
                 approvedFor(
                   yield* approvedIn(merging.evidence),
