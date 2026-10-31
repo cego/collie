@@ -87,6 +87,7 @@ describe("the fake core", () => {
         expect(Arr.map(calls, (call) => [call.transport, call.cmd])).toEqual([
           ["core", "hello"],
           ["core", "terminal.run"],
+          ["core", "reported"],
           ["core", "terminal.list"],
         ]);
       }).pipe(Effect.scoped, Effect.orDie),
