@@ -97,12 +97,14 @@ import * as dispatch from "./dispatcher";
 import type * as Types from "effect/Types";
 import { bodySections, layers, personaHoles, skillDirs, skillFile } from "./definitions";
 import { currentEnv, selfCommand, type PluginEnv } from "./env";
+import type { TerminalBackend } from "./settings";
 import {
   HARNESSES,
   foldPreferences,
   autoCompactWindowFor,
   installedHelp,
   isPermissionMode,
+  opencodeReporter,
   permissionsAsWritten,
   personaPrefix,
   ceilingIn,
@@ -172,7 +174,7 @@ import {
   type ClaudeOverlay,
   type RoleProfile,
 } from "./profile";
-import { isString } from "./schema";
+import { isString, type JsonObject } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
@@ -1463,6 +1465,50 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${stemOf(about)}.${kind}.md`;
   const promptFile = (ask: AgentAsk) => `${dirFor(ask.runId)}/${stemOf(ask)}.prompt.md`;
+  /** Where an OpenCode agent's reporter writes the id of the session OpenCode opened for it. */
+  const sessionFileOf = (about: { readonly runId: string; readonly operation: string }) =>
+    `${dirFor(about.runId)}/${stemOf(about)}.session`;
+  /** OpenCode's settings with Collie's status reporter after the operator's own plugins. */
+  const withReporter = (ask: AgentAsk, settings: JsonObject) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sessionFile = sessionFileOf(ask);
+      // One an earlier launch of this step left would be read as this launch's.
+      yield* fs.remove(sessionFile, { force: true }).pipe(Effect.orDie);
+      const reporter = `${dirFor(ask.runId)}/${stemOf(ask)}.status.js`;
+      yield* write(reporter, opencodeReporter({ sessionFile, tty: "/dev/tty" }));
+      const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
+      return { ...settings, plugin: [...plugins, `file://${reporter}`] };
+    });
+  /** The launch record with the session the reporter wrote, once OpenCode has opened it. */
+  const withSession = (launched: Launched) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const budgetMs = host.readyMs ?? READY_TIMEOUT_MS;
+      const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
+      const id = yield* fs.readFileString(sessionFileOf(launched)).pipe(
+        Effect.filterOrFail(
+          (read) => read !== "",
+          () => new Cause.NoSuchElementError(),
+        ),
+        Effect.retry({
+          schedule: Schedule.spaced(host.pollMs ?? DEFAULT_POLL_MS).pipe(
+            Schedule.while(({ now }) => now < deadline),
+          ),
+        }),
+        Effect.orElseSucceed(() => null),
+      );
+      if (id === null) {
+        yield* log(
+          launched.runId,
+          `${launched.agent}: OpenCode opened no session within ${Math.round(budgetMs / 1000)}s, so none is recorded to resume`,
+        );
+        return launched;
+      }
+      const recorded: Launched = { ...launched, agentSession: { kind: "opencode", value: id } };
+      yield* write(launchPath(launched.runId, stemOf(launched)), encodeLaunched(recorded));
+      return recorded;
+    });
   /** A launch nobody can say the fate of: a resume lists herdr's agents again before it starts one. */
   const unsettled = (ask: AgentAsk, what: string) =>
     new AgentParked({
@@ -1889,6 +1935,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       readonly agents: ReadonlyArray<AgentInfo>;
       readonly listedAt: string;
     },
+    backend: TerminalBackend,
+    /** The step's prompt, for a harness given it at launch rather than sent it. */
+    prompt: string | null,
   ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
@@ -1990,12 +2039,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           "",
         ),
       );
-    const settings =
+    const operators =
       adapter.id === "opencode" && host.env.raw.OPENCODE_CONFIG_CONTENT !== undefined
         ? yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
             host.env.raw.OPENCODE_CONFIG_CONTENT,
           )
         : undefined;
+    const settings =
+      backend === "core" && adapter.id === "opencode"
+        ? yield* withReporter(ask, operators ?? {})
+        : operators;
     const mcp = adapter.mcp({
       command,
       env: serverEnv,
@@ -2004,12 +2057,6 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       settings,
       effort: ask.effort,
     });
-    const backend = yield* terminalBackend(host.env.userDir);
-    if (backend === "core" && adapter.id === "opencode")
-      return yield* new AgentParked({
-        operation: ask.operation,
-        reason: `OpenCode is not yet supported on core. Set terminal_backend to herdr on ${machineName()}, or choose another harness, then resume this Run`,
-      });
     return yield* withControlLock(
       host.env.stateDir,
       agent,
@@ -2082,7 +2129,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const terminal = yield* host.herdr
             .agentLaunch({
               name: agent,
-              argv: [adapter.kind, ...args],
+              argv: [adapter.kind, ...args, ...(prompt === null ? [] : ["--prompt", prompt])],
               cwd: ask.cwd,
               env: {
                 ...serverEnv,
@@ -2276,19 +2323,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             yield* write(launchPath(ask.runId, stemOf(ask)), encodeLaunched(landed));
             return landed;
           });
-        // Started and recorded as one step, so a stop never misses an agent this started.
-        const launched = alive
-          ? yield* recorded(
-              live.terminalId === null
-                ? undefined
-                : { terminalId: live.terminalId, agentSession: live.agentSession },
-            )
-          : yield* Effect.uninterruptible(
-              start(ask, agent, { agents: listing.success, listedAt }).pipe(
-                Effect.flatMap(recorded),
-              ),
-            );
-        const adapter = adapterFor(launched.harness);
+        const adapter = adapterFor(ask.harness ?? host.harness);
         const prefix = personaPrefix(adapter, yield* personaOf(ask.persona ?? ask.role));
         const file = promptFile(ask);
         const notes =
@@ -2302,6 +2337,36 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           file,
           `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
         );
+        // A step's pointer: the work is the file, and the message says where it is.
+        const pointer = stepText(adapter, ask, file);
+        const backend = yield* terminalBackend(host.env.userDir);
+        // OpenCode reports no readiness, so on core its first prompt goes in at launch.
+        const atLaunch = !alive && backend === "core" && adapter.id === "opencode";
+        // Started and recorded as one step, so a stop never misses an agent this started.
+        const launched = alive
+          ? yield* recorded(
+              live.terminalId === null
+                ? undefined
+                : { terminalId: live.terminalId, agentSession: live.agentSession },
+            )
+          : yield* Effect.uninterruptible(
+              start(
+                ask,
+                agent,
+                { agents: listing.success, listedAt },
+                backend,
+                atLaunch ? pointer : null,
+              ).pipe(Effect.flatMap(recorded)),
+            );
+        if (atLaunch) {
+          if (!replayed) yield* append(launchOrder(ask.runId), stemOf(ask));
+          yield* write(sentPath(launched, "step"), pointer);
+          yield* log(
+            ask.runId,
+            `${agent}: launched for ${ask.operation}, given its prompt at launch`,
+          );
+          return yield* withSession(launched);
+        }
         if (!alive || !replayed) {
           const late = yield* awaitReady(
             compactionDeps(host, ask.runId),
@@ -2329,11 +2394,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           }
         }
         if (!replayed) yield* append(launchOrder(ask.runId), stemOf(ask));
-        // The work is the file, and the message says where it is: one send is one
-        // message and not a transcript, and a step's prompt carries a whole contract.
-        // A skill marked `disable-model-invocation` refuses an agent that invokes it
-        // itself; this is the human's channel, so a slash command here runs.
-        const pointer = stepText(adapter, ask, file);
+        // One send is one message and not a transcript, and a step's prompt carries a
+        // whole contract. A skill marked `disable-model-invocation` refuses an agent that
+        // invokes it itself; this is the human's channel, so a slash command here runs.
         yield* write(sentPath(launched, "step"), pointer);
         let asked = yield* deliver(launched, pointer, {
           kind: "step",
@@ -3550,6 +3613,8 @@ const waitForOutput = <R>(
       if (yield* every.counts) spent += (yield* Clock.currentTimeMillis) - before;
     }
   }).pipe(Effect.orDie);
+
+const isJsonArray = Schema.is(Schema.Array(Schema.Json));
 
 const write = (path: string, text: string) =>
   Effect.gen(function* () {

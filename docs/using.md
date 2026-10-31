@@ -1691,8 +1691,7 @@ scope's rule once:
   terminal_backend core` on a Machine runs the agents its Runs launch next in herdr-core
   terminals instead of herdr panes. An agent already running on herdr stays there. Set it
   back to `herdr` only once no agent runs on core: a Machine set to herdr no longer lists
-  core's. OpenCode does not run on core yet: a Run that would launch
-  it there parks and says so.
+  core's.
   A value never configured says **Not set**. A Machine out of reach keeps its last values
   and says when they were read, including after Desktop reopens. A host without this read
   says **Not known** and names its Collie version; its paired link and board keep working.

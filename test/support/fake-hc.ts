@@ -2,7 +2,8 @@
 // rig's log. Every reply it sends is checked against the pinned `hc.openrpc.json` first,
 // so a reply the real core could not send fails the call that caused it. Its terminals act
 // as a harness does: idle once started, and a sent prompt answered from the rig's Output
-// queue between a `working` and an `idle` reported as OSC 7501 status events.
+// queue between a `working` and an `idle` reported as OSC 7501 status events. One started
+// with `--prompt`, as OpenCode is, reports nothing until it has worked on that prompt.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -127,10 +128,17 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       }).pipe(Effect.orDie);
       for (const write of subscribers) yield* write(`${line}\n`);
     });
+  /** Logged beside the calls as `reported`, so a test can order a call against it. */
   const setStatus = (terminal: Terminal, state: string) =>
-    Effect.suspend(() => {
+    Effect.gen(function* () {
       terminal.status = state;
-      return emit(terminal.address, "status", { status: { state }, records: {}, reported: true });
+      const entry = yield* encodeJson({
+        transport: "core",
+        cmd: "reported",
+        params: { terminal: terminal.name, state },
+      }).pipe(Effect.orDie);
+      yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" }).pipe(Effect.orDie);
+      yield* emit(terminal.address, "status", { status: { state }, records: {}, reported: true });
     });
   /** The turn a prompt starts: working at once, then its Output written and idle again. */
   const take = (terminal: Terminal, prompt: string) =>
@@ -181,8 +189,11 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           };
           terminals.set(terminal.address, terminal);
           yield* emit(terminal.address, "created", view(terminal));
+          const argv = Arr.filter(Arr.isArray(params.argv) ? params.argv : [], isString);
+          const prompt = argv[argv.indexOf("--prompt") + 1];
+          if (argv.includes("--prompt") && prompt !== undefined) yield* take(terminal, prompt);
           // A harness at its prompt says so once it has drawn it.
-          yield* setStatus(terminal, blocked ? "blocked" : "idle");
+          else yield* setStatus(terminal, blocked ? "blocked" : "idle");
           blocked = false;
           return { result: view(terminal) };
         }

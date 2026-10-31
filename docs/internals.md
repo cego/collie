@@ -845,14 +845,20 @@ else `<session>.sock` under core's runtime directory, `HC_SESSION` naming the se
   (`terminal.keys`), and the Run's log says so. Core's `blocked` refusal is herdr's
   `agent_blocked`, so the Dispatcher holds the send as it does on herdr.
 - **Status** is read from one `events.subscribe` per socket, kept for the host's life.
+  OpenCode reports none of its own, so its launch adds Collie's reporter plugin
+  (`opencodeReporter` in `src/harness.ts`) to `OPENCODE_CONFIG_CONTENT`, after the
+  operator's plugins, and edits no settings file. It reports its own session's OSC 7501,
+  and writes that session's id once to `<step>.session` in the Run's directory, skipping a
+  subagent's. Collie records the id as the launch record's `agentSession`.
+- **The first prompt** of an OpenCode agent goes in at launch, as `--prompt`, since it
+  reports no readiness to wait for. Its later prompts are sends.
 - **Stop** at the Run's end is `terminal.kill`.
 
 The incarnation of an agent launched on core is its terminal's address, marked `core`, and
 what is sent to it goes to core. A Machine set to core also lists herdr's agents while
 `HERDR_SOCKET_PATH` is set, so an agent launched on herdr before the switch is still
 reached there; one set back to herdr lists only herdr's, and its agents on core are gone
-to it. OpenCode is
-refused on core and parks its Run, until core can drive its server.
+to it.
 
 ## The forge boundary
 

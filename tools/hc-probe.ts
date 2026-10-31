@@ -4,6 +4,7 @@
 //
 //   bun run probe:hc
 //   bun tools/hc-probe.ts --harness claude|codex|pi
+//   bun tools/hc-probe.ts --harness opencode [--no-reporter]
 //
 // It downloads and checksums the pinned release, starts it on a session of its own with
 // scratch XDG directories, and drives run, list, get, read, send, keys, events and attach.
@@ -11,6 +12,11 @@
 // as Collie does, then passes once the prompt arrived without core's `<hc from>` mark and
 // the harness answered it, reporting `idle`, `working` and `done` through OSC 7501. It runs
 // the installed harness, with no tool it would need to answer, and costs one turn of its model.
+// OpenCode runs as Collie launches it on core: two agents in one checkout, each with Collie's
+// reporter and its first prompt at launch. Each must report working then idle, one must act
+// on a second prompt sent as Collie does, each reporter must write its own agent's session,
+// and OpenCode's settings files must not change. `--no-reporter` leaves the reporter out,
+// and fails for want of status. OpenCode's store is a scratch one, so it uses its free model.
 // Then it stops that core, and fails if a process of the binary is still running or core's
 // default state, config or runtime directory changed.
 
@@ -27,6 +33,7 @@ import {
   Effect,
   Exit,
   FileSystem,
+  Option,
   Layer,
   Queue,
   Runtime,
@@ -46,6 +53,7 @@ import {
   type HcNote,
   type HcReply,
 } from "../src/hc";
+import { opencodeReporter } from "../src/harness";
 import { claudeTrust } from "../src/trust";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -89,11 +97,13 @@ const run = Effect.fn("HcProbe.run")(function* (
   command: string,
   args: ReadonlyArray<string>,
   env: Record<string, string>,
+  cwd?: string,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(
     ChildProcess.make(command, args, {
       env,
+      cwd,
       extendEnv: false,
       stdin: "ignore",
       stdout: "pipe",
@@ -381,6 +391,193 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
   yield* api.call("terminal.kill", { terminal: agent.address });
 });
 
+/**
+ * Each OpenCode agent's first prompt, given at launch, and the answer that shows it acted.
+ * Its free model misspells a word spelled backwards, so these are facts it gets right.
+ */
+const capital = (country: string, answer: string) => ({
+  prompt: `Reply with the capital of ${country} in capital letters, and nothing else.`,
+  answer,
+});
+const FIRST = [capital("France", "PARIS"), capital("Italy", "ROME")];
+const SECOND = capital("Spain", "MADRID");
+const OPENCODE_SETTINGS = [
+  "opencode.json",
+  "opencode.jsonc",
+  "config.json",
+  "tui.json",
+  "tui.jsonc",
+  "cli.json",
+];
+const OpenCodeContent = Schema.fromJsonString(
+  Schema.Struct({ plugin: Schema.Array(Schema.String) }),
+);
+const OpenCodeExport = Schema.Struct({
+  info: Schema.Struct({ id: Schema.String, parentID: Schema.optionalKey(Schema.String) }),
+  messages: Schema.Array(
+    Schema.Struct({
+      info: Schema.Struct({ role: Schema.String }),
+      parts: Schema.Array(
+        Schema.Struct({ type: Schema.String, text: Schema.optionalKey(Schema.String) }),
+      ),
+    }),
+  ),
+});
+
+const opencode = Effect.fn("HcProbe.opencode")(function* (
+  socket: string,
+  dir: string,
+  reporter: boolean,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const home = yield* Config.String("HOME");
+  const configHome = `${home}/.config`;
+  const settings = Effect.forEach(OPENCODE_SETTINGS, (name) =>
+    fs
+      .readFileString(`${configHome}/opencode/${name}`)
+      .pipe(Effect.orElseSucceed(() => `${name} absent`)),
+  );
+  const before = yield* settings;
+  const cwd = `${dir}/work`;
+  // The operator's settings, and a store of the probe's own.
+  const openEnv = {
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    XDG_CONFIG_HOME: configHome,
+    XDG_DATA_HOME: `${dir}/opencode-data`,
+  };
+  const events = yield* connect(socket);
+  yield* events.call("hello", { generation: 1 });
+  let snapshot = snapshotOf(yield* events.call("events.subscribe", {}));
+  const api = yield* connect(socket);
+  yield* api.call("hello", { generation: 1 });
+
+  const agents = yield* Effect.forEach(FIRST, (first, at) =>
+    Effect.gen(function* () {
+      const name = `probe-opencode-${at + 1}`;
+      const sessionFile = `${dir}/${name}.session`;
+      const plugin = `${dir}/${name}.status.js`;
+      yield* fs.writeFileString(plugin, opencodeReporter({ sessionFile, tty: "/dev/tty" }));
+      const content = yield* Schema.encodeEffect(OpenCodeContent)({ plugin: [`file://${plugin}`] });
+      const env = reporter ? { ...openEnv, OPENCODE_CONFIG_CONTENT: content } : openEnv;
+      const started = yield* api.call("terminal.run", {
+        argv: ["opencode", "--prompt", first.prompt],
+        name,
+        cwd,
+        no_parent: true,
+        env,
+      });
+      return { name, address: started.address, sessionFile, first };
+    }),
+  );
+  const words = new Map<string, string[]>(Arr.map(agents, (one) => [one.address, []]));
+  const screen = (address: string) =>
+    api.call("terminal.read", { terminal: address }).pipe(Effect.map((read) => read.text));
+  const until = <E>(what: string, done: () => Effect.Effect<boolean, E>) =>
+    Effect.gen(function* () {
+      while (!(yield* done())) {
+        snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
+        for (const [address, seen] of words) {
+          const word = snapshot.terminals.get(address)?.status?.state ?? null;
+          if (word !== null && seen.at(-1) !== word) seen.push(word);
+          if (word === "blocked" || word === "error")
+            return yield* fail(`${address} reported ${word}:\n${yield* screen(address)}`);
+        }
+      }
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: Duration.seconds(TURN_SECONDS),
+        orElse: () =>
+          Effect.gen(function* () {
+            const shown = yield* Effect.forEach(agents, (one) =>
+              Effect.map(
+                screen(one.address),
+                (text) =>
+                  `${one.name} reported ${Arr.join(reported(one.address), ", ") || "no status"}:\n${text}`,
+              ),
+            );
+            return yield* fail(`timed out waiting for ${what}\n${Arr.join(shown, "\n")}`);
+          }),
+      }),
+    );
+  const reported = (address: string, from = 0) => (words.get(address) ?? []).slice(from);
+  const workedThenIdle = (seen: ReadonlyArray<string>) =>
+    seen.includes("working") && seen.lastIndexOf("idle") > seen.indexOf("working");
+
+  // Settled by the screen, not by status, so a run without the reporter still gets this far.
+  yield* until("each agent to answer its first prompt", () =>
+    Effect.gen(function* () {
+      for (const one of agents)
+        if (!pipe(yield* screen(one.address), Str.includes(one.first.answer))) return false;
+      return Arr.every(agents, (one) => workedThenIdle(reported(one.address)) || !reporter);
+    }),
+  );
+  for (const one of agents) {
+    const seen = reported(one.address);
+    yield* Console.error(
+      `${one.name}: answered ${one.first.answer}; reported ${Arr.join(seen, ", ") || "no status"}`,
+    );
+    yield* expect(workedThenIdle(seen), `${one.name} to report working, then idle`);
+  }
+
+  const [first] = agents;
+  const after = reported(first!.address).length;
+  const sent = yield* api.call("terminal.send", { terminal: first!.address, text: SECOND.prompt });
+  yield* Console.error(
+    `${first!.name}: sent as turn ${sent.turn}, started ${String(sent.started)}`,
+  );
+  yield* until(`${first!.name} to act on the sent prompt`, () =>
+    Effect.gen(function* () {
+      return (
+        workedThenIdle(reported(first!.address, after)) &&
+        pipe(yield* screen(first!.address), Str.includes(SECOND.answer))
+      );
+    }),
+  );
+  const shown = yield* screen(first!.address);
+  const even = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+  yield* expect(
+    pipe(even(shown), Str.includes(even(SECOND.prompt))),
+    `${first!.name}'s screen to show the sent prompt:\n${shown}`,
+  );
+  yield* expect(
+    !pipe(shown, Str.includes("<hc from")),
+    `${first!.name}'s screen to show the sent prompt without core's <hc from> mark:\n${shown}`,
+  );
+  yield* Console.error(`${first!.name}: acted on the sent prompt, answering ${SECOND.answer}`);
+
+  const sessions = yield* Effect.forEach(agents, (one) =>
+    Effect.gen(function* () {
+      const id = yield* fs.readFileString(one.sessionFile);
+      const exported = yield* run(
+        "opencode",
+        ["export", id],
+        { PATH: yield* Config.String("PATH"), HOME: home, ...openEnv },
+        cwd,
+      );
+      const session = yield* Schema.decodeEffect(Schema.fromJsonString(OpenCodeExport))(exported);
+      const asked = pipe(
+        Arr.findFirst(session.messages, (message) => message.info.role === "user"),
+        Option.flatMap((message) => Arr.findFirst(message.parts, (part) => part.type === "text")),
+        Option.flatMap((part) => Option.fromNullishOr(part.text)),
+        Option.getOrUndefined,
+      );
+      yield* Console.error(`${one.name}: recorded session ${id}, opened on: ${asked ?? "nothing"}`);
+      yield* expect(
+        session.info.id === id && session.info.parentID === undefined && asked === one.first.prompt,
+        `${one.name}'s recorded session to be the one OpenCode opened on its first prompt`,
+      );
+      return id;
+    }),
+  );
+  yield* expect(new Set(sessions).size === agents.length, "each agent to record its own session");
+  yield* expect(
+    Arr.join(before, "\0") === Arr.join(yield* settings, "\0"),
+    "OpenCode's settings files to be the same before and after",
+  );
+  for (const one of agents) yield* api.call("terminal.kill", { terminal: one.address });
+});
+
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* Config.String("HOME");
@@ -416,7 +613,12 @@ const program = Effect.gen(function* () {
       const at = process.argv.indexOf("--harness");
       if (at >= 0) {
         yield* fs.makeDirectory(`${dir}/work`);
-        yield* harness(socket, `${dir}/work`, process.argv[at + 1] ?? "").pipe(Effect.scoped);
+        const name = process.argv[at + 1] ?? "";
+        yield* (
+          name === "opencode"
+            ? opencode(socket, dir, !process.argv.includes("--no-reporter"))
+            : harness(socket, `${dir}/work`, name)
+        ).pipe(Effect.scoped);
         return;
       }
       yield* plain(socket, dir).pipe(Effect.scoped);

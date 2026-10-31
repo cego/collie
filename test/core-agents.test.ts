@@ -21,6 +21,7 @@ import { forgeHttpOnPath } from "./support/forge";
 import type { FakeHc } from "./support/fake-hc";
 import { until } from "./support/host";
 import { deliveriesOf, machineHerd } from "../src/steering";
+import { opencodeReporter } from "../src/harness";
 
 let rig: Rig;
 let dir: string;
@@ -71,6 +72,48 @@ const twoAgentsBody = twoAgents.toLayer((payload) =>
       });
     return [yield* step("review", "reviewer"), yield* step("fix", "implementer")];
   }).pipe(asRun(payload)),
+);
+
+/** A review, then a fix, by one OpenCode agent: its first prompt goes at launch, its second as a send. */
+const opencodeWork = enveloped({
+  name: "core-opencode",
+  input: {},
+  success: Schema.Array(Verdict),
+});
+const opencodeBody = opencodeWork.toLayer((payload) =>
+  Effect.gen(function* () {
+    const step = (operation: string) =>
+      agentWork({
+        operation,
+        role: "implementer",
+        agent: "builder",
+        harness: "opencode",
+        workflow: "core-opencode",
+        cwd: rig.projectDir,
+        instructions: `${operation} the diff.`,
+        output: Verdict,
+      });
+    return [yield* step("review"), yield* step("fix")];
+  }).pipe(asRun(payload)),
+);
+
+/** What an OpenCode launch on core carries, as the fake core logged it. */
+const OpenCodeLaunch = Schema.Struct({
+  argv: Schema.Array(Schema.String),
+  env: Schema.Struct({
+    OPENCODE_CONFIG_CONTENT: Schema.fromJsonString(
+      Schema.Struct({
+        theme: Schema.String,
+        plugin: Schema.Array(Schema.String),
+        mcp: Schema.Struct({
+          collie: Schema.Struct({ type: Schema.String, enabled: Schema.Boolean }),
+        }),
+      }),
+    ),
+  }),
+});
+const LaunchedSession = Schema.fromJsonString(
+  Schema.Struct({ agentSession: Schema.Struct({ kind: Schema.String, value: Schema.String }) }),
 );
 
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
@@ -175,6 +218,69 @@ test("a Run on a core Machine launches, prompts, reads and stops its Claude agen
       expect(read).toBeGreaterThan(sent);
       expect(killed).toBeGreaterThan(read);
       expect(Arr.filter(onCore, (call) => call.cmd === "terminal.get")).toEqual([]);
+    }),
+  ));
+
+test("an OpenCode agent on core is launched with its reporter and its first prompt, and sent nothing before it reports idle", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const core = yield* rig.startCore();
+      yield* onMachine("core");
+      const sessionFile = `${dir}/agents/r1/review.session`;
+      // The reporter writes the session id once OpenCode opens the session, before any Output.
+      yield* rig.queueOutputs([
+        { writes: [{ path: sessionFile, text: "ses_review" }], output: { verdict: "clean" } },
+        { verdict: "fixed" },
+      ]);
+      const result = yield* session(
+        opencodeWork.execute({ runId: "r1", input: {} }).pipe(Effect.result),
+        {
+          ...coreOnly(core),
+          OPENCODE_CONFIG_CONTENT: '{"theme":"night","plugin":["their-plugin"]}',
+        },
+        opencodeBody,
+      );
+      expect(result._tag === "Success" && result.success).toEqual([
+        { verdict: "clean" },
+        { verdict: "fixed" },
+      ]);
+
+      const onCore = coreCalls(yield* rig.calls());
+      const agent = agentName("r1", "builder", null, 1);
+      const runs = Arr.filter(onCore, (call) => call.cmd === "terminal.run");
+      expect(Arr.map(runs, (call) => call.params?.name)).toEqual([agent]);
+      const { argv, env } = yield* Schema.decodeUnknownEffect(OpenCodeLaunch)(runs[0]?.params);
+      expect(argv[0]).toBe("opencode");
+      expect(argv[argv.indexOf("--prompt") + 1]).toEqual(
+        expect.stringContaining("review.prompt.md"),
+      );
+      const content = env.OPENCODE_CONFIG_CONTENT;
+      expect(content.theme).toBe("night");
+      expect(content.mcp.collie).toEqual({ type: "local", enabled: true });
+      expect(content.plugin).toHaveLength(2);
+      expect(content.plugin[0]).toBe("their-plugin");
+      const reporter = yield* fs.readFileString(
+        pipe(content.plugin[1] ?? "", Str.replace("file://", "")),
+      );
+      expect(reporter).toBe(opencodeReporter({ sessionFile, tty: "/dev/tty" }));
+
+      const sends = Arr.filter(onCore, (call) => call.cmd === "terminal.send");
+      expect(Arr.map(sends, (call) => call.params?.terminal)).toEqual([agent]);
+      expect(sends[0]?.params?.text).toEqual(expect.stringContaining("fix.prompt.md"));
+      const firstIdle = Arr.findFirstIndex(
+        onCore,
+        (call) =>
+          call.cmd === "reported" &&
+          call.params?.terminal === agent &&
+          call.params?.state === "idle",
+      ).pipe(Option.getOrElse(() => Infinity));
+      expect(position(onCore, "terminal.send")).toBeGreaterThan(firstIdle);
+
+      const launched = yield* Schema.decodeEffect(LaunchedSession)(
+        yield* fs.readFileString(`${dir}/agents/r1/review.launch.json`),
+      );
+      expect(launched.agentSession).toEqual({ kind: "opencode", value: "ses_review" });
     }),
   ));
 
