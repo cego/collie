@@ -1755,7 +1755,9 @@ its time.
   (`src/foreground.ts`). A record's first frame and parts, an offer, an answer, a control and
   an act run under `serve`, and while one does, every boundary holds its pass, for at most
   250 ms. The host runs on `TurnScheduler` (`src/turns.ts`), which ends a turn of the event
-  loop once its fibers have run for 8 ms. Cleanup's sweepers judge and remove through the
+  loop once its fibers have run for 8 ms. A fiber under `serve` queues its tasks ahead of
+  every other fiber's, and the others yield while one waits, so a Run start's work steps
+  aside for a read at its next yield. Cleanup's sweepers judge and remove through the
   model's reading (`sweepingWith` in `src/cleanup.ts`), so a sweep reads from disk no Run
   file the board has not, beyond those it removes. A record takes herdr's agents as the board
   last read them, rather than waiting on a read in flight. What lag is left is

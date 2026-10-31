@@ -62,7 +62,10 @@ Cleanup sweep or a Measurement. Background work yields in bounded slices:
   boundary before each Run. While a record frame, an offer or an act is being served, a boundary
   holds its pass, for at most 250 ms, so a busy front door cannot starve the board.
 - The host's scheduler ends a turn of the event loop once it has run fibers for 8 ms, so a request
-  waiting behind background fibers is read at the next turn.
+  waiting behind background fibers is read at the next turn. A fiber serving a read queues its
+  tasks ahead of every other fiber's, and the others yield while one waits, so a Run start steps
+  aside at its next yield without boundaries of its own. Under a storm of 5 starts a second this
+  does not reach 60 ms: no single step of a start is long, but together they fill the thread.
 - Cleanup judges through the model, as the board reads, and its decisions are unchanged.
 - A record reads herdr's agents as the board last read them, and does not wait on a read in flight.
 
