@@ -144,14 +144,15 @@ const coreAnswers = Effect.fn("Doctor.coreAnswers")(function* (env: PluginEnv) {
   });
 });
 
-/** Every pane open in each running herdr session, or the one this process is in where herdr cannot list them. */
+/** Every pane open in each running herdr session. */
 const herdrPanes = (herdr: Herdr) =>
-  herdr.sessionList().pipe(
-    Effect.map(Arr.map((one) => herdr.inSession(one.socketPath))),
-    Effect.orElseSucceed(() => [herdr]),
-    Effect.flatMap(Effect.forEach((one) => one.paneList())),
-    Effect.map(Arr.flatten),
-  );
+  herdr
+    .sessionList()
+    .pipe(
+      Effect.map(Arr.map((one) => herdr.inSession(one.socketPath))),
+      Effect.flatMap(Effect.forEach((one) => one.paneList())),
+      Effect.map(Arr.flatten),
+    );
 
 /** What on this Machine still uses Herdr 1: its setting, and agents whose pane is still open. */
 const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, herdr: Herdr | null) {

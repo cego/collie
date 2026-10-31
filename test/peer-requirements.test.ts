@@ -489,6 +489,12 @@ test(
         (first, second) =>
           Effect.gen(function* () {
             yield* writeConfigValue(second.world.config, "terminal_backend", "core");
+            const fs = yield* FileSystem.FileSystem;
+            for (const side of [first, second])
+              yield* fs.writeFileString(
+                `${side.herdrLog}.sessions.json`,
+                `[{"name":"default","socket_path":"${side.world.state}/herdr.sock"}]`,
+              );
             yield* first.lists([second]);
             const herdrOne = (args: ReadonlyArray<string>) =>
               Effect.gen(function* () {

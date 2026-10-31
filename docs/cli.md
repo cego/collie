@@ -2559,7 +2559,7 @@ core's `config.toml` names, else `HC_SESSION`'s socket) does not answer `hello` 
 **Herdr 1** says what on this Machine still uses Herdr 1: its `terminal_backend` setting
 where it is `herdr`, with `collie settings set terminal_backend core` as the fix, and each
 agent whose registry entry has no core backend, older entries included, and whose pane is
-still open in any running herdr session. Where herdr cannot list those panes it warns that
+still open in any running herdr session. Where herdr cannot list its sessions or their panes it warns that
 what still runs there is unknown, rather than reporting nothing. It never fails the run. Doctor reports the Machine it runs on; `--machine <name>` runs it on a paired
 Machine, through that Machine's host.
 

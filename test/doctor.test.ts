@@ -51,6 +51,7 @@ function env(overrides: Record<string, string> = {}) {
 function report(overrides: Record<string, string> = {}) {
   const pluginEnv = env({
     FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]`,
+    FAKE_HERDR_SESSIONS: asSessions([{ name: "default", socket_path: rig.socketPath }]),
     ...overrides,
   });
   return doctor(pluginEnv, undefined, new FakeHerdr(pluginEnv));
@@ -410,6 +411,21 @@ test("a herdr whose panes cannot be read is a warning, never reported as nothing
       yield* registered("builder-a", "1-7");
 
       const result = yield* report({ FAKE_HERDR_FAIL: '{"pane list":"herdr is restarting"}' });
+
+      expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+      expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
+    }),
+  ));
+
+test("a herdr that cannot list its sessions is a warning, though this session's panes read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const other = `${rig.root}/other.sock`;
+      yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
+      yield* registered("builder-other", "2-3");
+
+      const result = yield* report({ FAKE_HERDR_FAIL: '{"session list":"herdr is restarting"}' });
 
       expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
       expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
