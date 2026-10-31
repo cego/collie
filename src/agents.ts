@@ -2364,7 +2364,6 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           file,
           `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
         );
-        // A step's pointer: the work is the file, and the message says where it is.
         const pointer = stepText(adapter, ask, file);
         const backend = yield* terminalBackend(host.env.userDir);
         // OpenCode reports no readiness, so on core its first prompt goes in at launch.

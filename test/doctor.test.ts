@@ -73,11 +73,9 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
   yield* writeConfigValue(rig.userDir, "terminal_backend", "core");
 });
 
-/** An hc on PATH that says it is `version`. */
 const hc = (version: string) =>
   bin.add("herdr-core", `case "$*" in --version) echo "hc ${version}" ;; *) exit 0 ;; esac`);
 
-/** This Machine's agent `agent` on herdr's pane `paneId`, or on core's terminal there. */
 const registered = (agent: string, paneId: string, backend?: "core") =>
   Effect.gen(function* () {
     const entry: AgentEntry = {
