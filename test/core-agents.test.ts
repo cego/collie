@@ -377,7 +377,9 @@ test(
             const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
             // The tool's helper stamps its question on the wall clock, which this test's clock
             // runs ahead of: a question stamped before its work was given is not that work's.
-            yield* waitFor(Effect.sync(() => Date.now() > launched.at));
+            yield* waitFor(
+              Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at),
+            );
             const told = yield* askWith(
               tools,
               "call_1",

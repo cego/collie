@@ -234,7 +234,7 @@ test(
         );
         expect(tab?.argv).toEqual(expect.arrayContaining(["--workspace", "wT"]));
         expect(launched._tag).toBe("Success");
-      }),
+      }).pipe(Effect.scoped),
     ),
   30_000,
 );
