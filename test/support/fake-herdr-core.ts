@@ -311,6 +311,7 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
       foreground_cwd: pane.foreground_cwd ?? null,
       terminal_id: pane.terminal_id,
       agent_session: pane.agent_session,
+      ...(pane.session !== undefined && { session: pane.session }),
     })),
     agents: Arr.map(state.agents ?? [], (agent) => ({ ...agent })),
     workspaces: Arr.map(state.workspaces ?? [], (workspace) => ({ ...workspace })),

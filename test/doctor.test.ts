@@ -27,6 +27,15 @@ import { registerAgent, registryPath, type AgentEntry } from "../src/registry";
 let rig: Rig;
 let bin: FakeBin;
 
+const asSessions = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
+    ),
+  ),
+  Result.getOrThrow,
+);
+
 /**
  * The environment doctor sees. Its PATH is the stub directory alone: the developer's
  * own `claude` or `glab` would otherwise answer for one a test has removed.
@@ -76,7 +85,7 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
 const hc = (version: string) =>
   bin.add("herdr-core", `case "$*" in --version) echo "hc ${version}" ;; *) exit 0 ;; esac`);
 
-const registered = (agent: string, paneId: string, backend?: "core") =>
+const registered = (agent: string, paneId: string, backend?: "core" | "legacy") =>
   Effect.gen(function* () {
     const entry: AgentEntry = {
       role: "builder",
@@ -86,7 +95,13 @@ const registered = (agent: string, paneId: string, backend?: "core") =>
       runId: `run-${agent}`,
       workflow: "implement",
       at: "2026-10-31T00:00:00.000Z",
-      incarnation: { terminalId: `term-${agent}`, agentSession: null, ...(backend && { backend }) },
+      ...(backend !== "legacy" && {
+        incarnation: {
+          terminalId: `term-${agent}`,
+          agentSession: null,
+          ...(backend && { backend }),
+        },
+      }),
     };
     yield* registerAgent(
       yield* registryPath(rig.stateDir, { session: null, workspaceId: "1", cwd: rig.root }),
@@ -362,6 +377,42 @@ test("a live agent on Herdr 1 is reported; one on core, or whose pane is gone, i
         ok: true,
         detail: "live on Herdr 1: builder-a (run run-builder-a, pane 1-7)",
       });
+    }),
+  ));
+
+test("a live agent on Herdr 1 in another running session, or registered before incarnations, is reported", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const other = `${rig.root}/other.sock`;
+      yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
+      yield* rig.addPane("1-4", "1:1", rig.root, "builder");
+      yield* registered("builder-other", "2-3");
+      yield* registered("builder-legacy", "1-4", "legacy");
+
+      const result = yield* report({
+        FAKE_HERDR_SESSIONS: asSessions([
+          { name: "default", socket_path: rig.socketPath },
+          { name: "other", socket_path: other },
+        ]),
+      });
+
+      expect(check(result, "herdr 1").detail).toBe(
+        "live on Herdr 1: builder-other (run run-builder-other, pane 2-3), builder-legacy (run run-builder-legacy, pane 1-4)",
+      );
+    }),
+  ));
+
+test("a herdr whose panes cannot be read is a warning, never reported as nothing on Herdr 1", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("builder-a", "1-7");
+
+      const result = yield* report({ FAKE_HERDR_FAIL: '{"pane list":"herdr is restarting"}' });
+
+      expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+      expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
     }),
   ));
 

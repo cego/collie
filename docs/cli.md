@@ -2560,8 +2560,9 @@ the fix. **Core** fails where the default core session (`HC_SOCKET`, else the `s
 core's `config.toml` names, else `HC_SESSION`'s socket) does not answer `hello` within 5 seconds, with `hc server start` as the fix.
 **Herdr 1** says what on this Machine still uses Herdr 1: its `terminal_backend` setting
 where it is `herdr`, with `collie settings set terminal_backend core` as the fix, and each
-agent whose registry entry has no core backend and whose herdr pane is still open. It never
-fails the run. Doctor reports the Machine it runs on; `--machine <name>` runs it on a paired
+agent whose registry entry has no core backend, older entries included, and whose pane is
+still open in any running herdr session. Where herdr cannot list those panes it warns that
+what still runs there is unknown, rather than reporting nothing. It never fails the run. Doctor reports the Machine it runs on; `--machine <name>` runs it on a paired
 Machine, through that Machine's host.
 
 **Disk** covers each filesystem holding the state directory, `~/.cache/collie`, herdr's

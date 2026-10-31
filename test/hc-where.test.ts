@@ -20,7 +20,7 @@ test("HC_INSTALL_DIR moves where hc is installed and looked for", () =>
   runEffect(
     started({ HOME: "/home/h", HC_INSTALL_DIR: "/opt/hc/bin" }, (env) =>
       Effect.sync(() => hcInstallDir(env.raw, env.home)),
-  ).pipe(Effect.map((dir) => expect(dir).toBe("/opt/hc/bin"))),
+    ).pipe(Effect.map((dir) => expect(dir).toBe("/opt/hc/bin"))),
   ));
 
 test("the socket core's config.toml names is the core, under XDG_CONFIG_HOME; HC_SOCKET still wins", () =>

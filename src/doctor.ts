@@ -14,7 +14,7 @@
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { CommandLine, type ChildProcessSpawner } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { loadDefaults, terminalBackend } from "./config";
@@ -144,20 +144,37 @@ const coreAnswers = Effect.fn("Doctor.coreAnswers")(function* (env: PluginEnv) {
   });
 });
 
+/** Every pane open in each running herdr session, or the one this process is in where herdr cannot list them. */
+const herdrPanes = (herdr: Herdr) =>
+  herdr.sessionList().pipe(
+    Effect.map(Arr.map((one) => herdr.inSession(one.socketPath))),
+    Effect.orElseSucceed(() => [herdr]),
+    Effect.flatMap(Effect.forEach((one) => one.paneList())),
+    Effect.map(Arr.flatten),
+  );
+
 /** What on this Machine still uses Herdr 1: its setting, and agents whose pane is still open. */
 const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, herdr: Herdr | null) {
   const set = (yield* terminalBackend(env.userDir)) === "herdr";
-  const panes = herdr === null ? [] : yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-  const open = new Set(Arr.map(panes, (pane) => pane.paneId));
+  const panes = herdr === null ? Result.succeed([]) : yield* Effect.result(herdrPanes(herdr));
+  const open = new Set(
+    Arr.map(
+      Result.getOrElse(panes, () => []),
+      (pane) => pane.paneId,
+    ),
+  );
+  // An entry from before incarnations has no backend either: it was on Herdr 1.
   const live = Arr.filter(
     yield* everyRegistered(env.stateDir),
-    (entry) =>
-      entry.incarnation !== undefined &&
-      entry.incarnation.backend === undefined &&
-      open.has(entry.paneId),
+    (entry) => entry.incarnation?.backend === undefined && open.has(entry.paneId),
   );
   const found = [
     ...(set ? ["this Machine starts its agents on Herdr 1 (terminal_backend is herdr)"] : []),
+    ...(Result.isFailure(panes)
+      ? [
+          `could not read Herdr 1's open panes, so which agents still run there is unknown (${panes.failure.message})`,
+        ]
+      : []),
     ...(live.length === 0
       ? []
       : [
@@ -168,7 +185,10 @@ const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, her
         ]),
   ];
   if (found.length === 0) return passed("nothing on this Machine uses Herdr 1");
-  return noted(Arr.join(found, "; "), set ? "collie settings set terminal_backend core" : "");
+  const fix = set ? "collie settings set terminal_backend core" : "";
+  return Result.isFailure(panes)
+    ? warned(Arr.join(found, "; "), fix)
+    : noted(Arr.join(found, "; "), fix);
 });
 
 /**
