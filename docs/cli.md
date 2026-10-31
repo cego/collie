@@ -383,9 +383,7 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   running for the state directory, nothing can put it on the Run, so the agent is let ask
   in its pane instead. A Codex agent's question tool returns at once and leaves the agent
   `done` rather than `blocked`, so Collie reads its questions from the App Server it runs
-  that agent through and puts them on the Run the same way. Collie runs no App Server for a
-  Codex agent while compaction is off (`compact_at_tokens` 0), and then its questions stay
-  in its pane. pi has no question tool, so a pi agent a Run launches is given Collie's
+  that agent through and puts them on the Run the same way, with compaction off too. pi has no question tool, so a pi agent a Run launches is given Collie's
   `ask_user_question`, which takes `AskUserQuestion`'s questions and puts them on the Run
   the same way, and says the same. Native chat's pi has none: the human is in its pane.
   While a question is open, the next step's prompt or a repair to that agent

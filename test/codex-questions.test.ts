@@ -73,25 +73,25 @@ const body = work.toLayer((payload) =>
 const SERVER = `${import.meta.dir}/support/codex-server.ts`;
 const config = () => `${rig.root}/codex-server.json`;
 
-const hostOf = (): AgentHost => ({
+const hostOf = (compactAtTokens = 1_000_000): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new FakeHerdr(rig.pluginEnv()),
   harness: "codex",
   model: "default",
   permissions: "auto",
-  compactAtTokens: 1_000_000,
+  compactAtTokens,
   pollMs: 1_000,
   collectMs: 120_000,
   help: () => Effect.succeed("  --dangerously-bypass-hook-trust"),
   ports: { codex: { ...codexPort(`bun ${SERVER} ${config()}`), gate: Effect.void } },
 });
 
-const session = <A, E, R>(run: Effect.Effect<A, E, R>) =>
+const session = <A, E, R>(run: Effect.Effect<A, E, R>, host = hostOf()) =>
   run.pipe(
     Effect.provide(
       body.pipe(
-        Layer.provideMerge(agentsLayer(hostOf())),
+        Layer.provideMerge(agentsLayer(host)),
         Layer.provideMerge(foundationLayer({ dir })),
       ),
     ),
@@ -188,6 +188,33 @@ test(
               expect.stringContaining("/fix.prompt.md"),
             ]);
           }),
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "with compaction off, a Codex agent's question is still a Decision on its Run",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const standIn: StandIn = {
+          events: `${rig.root}/codex-server.events`,
+          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [question] }],
+        };
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(config(), asJson(standIn))
+          .pipe(Effect.orDie);
+        yield* rig.queueOutputs([null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            const store = yield* Store;
+            yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length > 0));
+            expect((yield* store.asked("r1"))[0]?.decision).toBe("ask-review-1");
+          }).pipe(Effect.timeout("60 seconds")),
+          hostOf(0),
         );
       }),
     ),

@@ -172,6 +172,8 @@ const hostOf = (): AgentHost => ({
   collectMs: 400,
   help: (kind) => Effect.succeed(kind === "codex" ? CODEX_HELP : CLAUDE_HELP),
   version: () => Effect.succeed("2.1.309 (Claude Code)"),
+  // Codex's controls would start the operator's own `codex app-server`.
+  ports: Struct.omit(COMPACTION_PORTS, ["codex"]),
 });
 
 test(
@@ -181,6 +183,11 @@ test(
       Effect.gen(function* () {
         const inherited = rig.pluginEnv().raw;
         yield* configured('{ "compact_at_tokens": 0, "trust": "never" }');
+        // As on CI: no codex, so none of its controls start.
+        const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
+          made.restore(),
+        );
+        yield* bin.add("codex", "exit 1");
         yield* rig.startSocket();
         yield* rig.queueOutputs([null]);
         yield* rig.addWorkspace("wT", "Project | Own task", rig.projectDir);

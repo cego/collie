@@ -453,8 +453,9 @@ const enabled = Effect.fn("Compaction.enabled")(function* (configured: number) {
 
 /**
  * The controls for a newly launched agent, as extra `agent start` arguments. Nothing
- * is installed when the feature is off or the harness is unsupported. Native compaction
- * remains available; missing Collie controls do not block the work.
+ * is installed when the harness is unsupported, or when the feature is off and the harness's
+ * questions are not read through them. Native compaction remains available; missing Collie
+ * controls do not block the work.
  */
 export const installControls = Effect.fn("Compaction.installControls")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir" | "configured" | "log" | "herdr" | "stopMs">,
@@ -475,8 +476,8 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
     return yield* new NotQuiet({ message: notStopped(agent.agent, reached, reached.target) });
   if (reached === null) yield* putDownServer(deps, prior);
   yield* fs.remove(dir, { recursive: true, force: true });
-  if (!limit) return [];
   const port = deps.ports[agent.harness];
+  if (!limit && port?.questions === undefined) return [];
   if (!port) {
     yield* deps.log(`${agent.agent}: ${agent.harness} has no compaction controls in Collie`);
     return [];
