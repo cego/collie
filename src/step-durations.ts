@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { pipe as pipe_ } from "effect/Function";
+import * as Order from "effect/Order";
 import { Effect, FileSystem, Schema, Semaphore } from "effect";
 import { readStepLines, type StepLine } from "./steps";
 import { epochMs } from "./time";
@@ -46,24 +46,30 @@ const samples = (run: string, workflow: string, lines: ReadonlyArray<StepLine>):
   });
 const latest = (all: ReadonlyArray<Sample>) => {
   const kept: Sample[] = [];
-  for (const one of [...all].sort((a, b) => pipe_(b.at, Str.localeCompare(a.at)))) {
-    if (Arr.some(kept, (other) => other.run === one.run && other.key === one.key)) continue;
-    if (
-      Arr.filter(kept, (other) => other.workflow === one.workflow && other.step === one.step)
-        .length < 10
-    )
-      kept.push(one);
+  const runs = new Set<string>();
+  const perStep = new Map<string, number>();
+  for (const one of Arr.sort(
+    all,
+    Order.mapInput(Order.flip(Str.Order), (one: Sample) => one.at),
+  )) {
+    const run = JSON.stringify([one.run, one.key]);
+    const step = JSON.stringify([one.workflow, one.step]);
+    const count = perStep.get(step) ?? 0;
+    if (runs.has(run) || count >= 10) continue;
+    runs.add(run);
+    perStep.set(step, count + 1);
+    kept.push(one);
   }
   return kept;
 };
 const write = (dir: string, values: ReadonlyArray<Sample>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(
-      `${file(dir)}.tmp`,
-      yield* Schema.encodeEffect(Index)(latest(values)).pipe(Effect.orDie),
-    );
+    const samples = latest(values);
+    const text = yield* Schema.encodeEffect(Index)(samples).pipe(Effect.orDie);
+    yield* fs.writeFileString(`${file(dir)}.tmp`, text);
     yield* fs.rename(`${file(dir)}.tmp`, file(dir));
+    decoded = { text, samples };
   }).pipe(Effect.orDie);
 
 /** Rebuild once when absent; board reads never visit historical Run records. */
@@ -94,13 +100,12 @@ export const rememberStepDurations = (
     }),
   );
 const usualOf = (samples: ReadonlyArray<Sample>, workflow: string) => {
-  const all = Arr.filter(samples, (one) => one.workflow === workflow);
+  const byStep = new Map<string, number[]>();
+  for (const one of samples)
+    if (one.workflow === workflow) byStep.set(one.step, [...(byStep.get(one.step) ?? []), one.ms]);
   const usual = new Map<string, number>();
-  for (const step of new Set(Arr.map(all, (one) => one.step))) {
-    const values = Arr.map(
-      Arr.filter(all, (one) => one.step === step),
-      (one) => one.ms,
-    ).sort((a, b) => a - b);
+  for (const [step, unsorted] of byStep) {
+    const values = unsorted.sort((a, b) => a - b);
     if (values.length < 3) continue;
     const middle = Math.floor(values.length / 2);
     usual.set(
