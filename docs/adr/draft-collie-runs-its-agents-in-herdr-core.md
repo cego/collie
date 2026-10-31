@@ -113,9 +113,10 @@ scratch XDG directories, so they never touch the live core.
 - Stall recovery's read of herdr's prompt box (`agent explain`) is dropped: no send was
   lost in 150.
 - A send that core says did not start is pressed once with `terminal.keys`, then reported.
-- Collie leaves core's `notes` setting alone, so a send arrives marked
-  `<hc from="…">`. Each harness is shown live to act on a marked step prompt before its
-  Machine switches.
+- Collie leaves core's `notes` setting alone. Its sends, with no `caller` to an agent
+  launched with `no_parent`, arrive unmarked: as measured on 0.1.14, core marks no plain
+  send `<hc from="…">`. Each harness is shown live to act on such a step prompt before its
+  Machine switches, and that live probe fails if a pin starts marking them.
 
 **D8. Collie resumes its agents.**
 

@@ -814,6 +814,14 @@ The wire is checked twice, because each check misses what the other catches:
   outlives the core it stopped, or if an entry appeared in or left core's default state,
   config or runtime directory. Only this caught hc 0.1.14's `terminal.list` without the
   `machines` its schema requires, which `replies` therefore allows to be missing.
+- `bun tools/hc-probe.ts --harness claude|codex|pi`, run by hand, starts that installed
+  harness in a terminal of the same scratch core and sends it a prompt as Collie does, with
+  no `caller` to a terminal started with `no_parent`. It passes once the prompt is on the
+  harness's screen without core's `<hc from="…">` mark, which 0.1.14 puts on no plain send,
+  and the harness has answered it and reported `idle`, `working` and `done`. A pin that
+  starts marking sends fails it. It costs one turn of the harness's model, and asks for an
+  answer rather than a file because Codex's sandbox cannot write where the host restricts
+  unprivileged user namespaces.
 
 The test rig's fake core (`rig.startCore()`, `test/support/fake-hc.ts`) records each call in
 the rig's log beside the fake herdr's, and checks each of its own replies against

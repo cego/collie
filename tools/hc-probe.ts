@@ -3,9 +3,14 @@
 // sends less than its schema promises (hc 0.1.14's `terminal.list` without `machines`).
 //
 //   bun run probe:hc
+//   bun tools/hc-probe.ts --harness claude|codex|pi
 //
 // It downloads and checksums the pinned release, starts it on a session of its own with
 // scratch XDG directories, and drives run, list, get, read, send, keys, events and attach.
+// With `--harness`, it instead starts that harness in a core terminal and sends it a prompt
+// as Collie does, then passes once the prompt arrived without core's `<hc from>` mark and
+// the harness answered it, reporting `idle`, `working` and `done` through OSC 7501. It runs
+// the installed harness, with no tool it would need to answer, and costs one turn of its model.
 // Then it stops that core, and fails if a process of the binary is still running or core's
 // default state, config or runtime directory changed.
 
@@ -41,6 +46,7 @@ import {
   type HcNote,
   type HcReply,
 } from "../src/hc";
+import { claudeTrust } from "../src/trust";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const Pin = Schema.Struct({
@@ -272,6 +278,109 @@ const framed = Effect.fn("HcProbe.framed")(function* (socket: string, cwd: strin
   );
 });
 
+/** How each harness starts as an interactive agent that answers in text and asks nothing. */
+const harnessArgv = (name: string) => {
+  switch (name) {
+    case "claude":
+      return ["claude", "--tools", ""];
+    case "codex":
+      return [
+        "codex",
+        "--no-daemon",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+      ];
+    case "pi":
+      return ["pi"];
+    default:
+      return undefined;
+  }
+};
+
+// The answer is not in the prompt, so seeing it shows the harness acted on what it was sent.
+const ANSWER = "DETCA";
+const PROMPT = "Reply with the word acted spelled backwards in capital letters, and nothing else.";
+const TURN_SECONDS = 300;
+
+const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: string, name: string) {
+  const argv = harnessArgv(name);
+  if (argv === undefined) return yield* fail(`no harness ${name}: claude, codex or pi`);
+  // As Collie's launch does, so Claude opens at its prompt and not its folder-trust dialog.
+  if (name === "claude") {
+    const granted = yield* claudeTrust(yield* Config.String("HOME"), `${cwd}/..`).grant(cwd);
+    if (!granted.ok) return yield* fail(granted.message);
+  }
+  const events = yield* connect(socket);
+  yield* events.call("hello", { generation: 1 });
+  let snapshot = snapshotOf(yield* events.call("events.subscribe", {}));
+  const api = yield* connect(socket);
+  yield* api.call("hello", { generation: 1 });
+
+  const agent = yield* api.call("terminal.run", {
+    argv,
+    name: `probe-${name}`,
+    cwd,
+    no_parent: true,
+    env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
+  });
+  const words: string[] = [];
+  const statusOf = () => snapshot.terminals.get(agent.address)?.status?.state ?? null;
+  const screen = api
+    .call("terminal.read", { terminal: agent.address })
+    .pipe(Effect.map((read) => read.text));
+  const until = <E>(what: string, done: () => Effect.Effect<boolean, E>) =>
+    Effect.gen(function* () {
+      while (!(yield* done())) {
+        snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
+        const word = statusOf();
+        if (word !== null && words.at(-1) !== word) words.push(word);
+        if (word === "blocked" || word === "error")
+          return yield* fail(`${name} reported ${word}:\n${yield* screen}`);
+      }
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: Duration.seconds(TURN_SECONDS),
+        orElse: () =>
+          Effect.flatMap(screen, (text) =>
+            fail(
+              `timed out waiting for ${what}; ${name} reported ${Arr.join(words, ", ")}:\n${text}`,
+            ),
+          ),
+      }),
+    );
+
+  yield* until(`${name} to report idle`, () => Effect.succeed(statusOf() === "idle"));
+  const before = words.length;
+  const sent = yield* api.call("terminal.send", { terminal: agent.address, text: PROMPT });
+  yield* Console.error(`${name}: sent as turn ${sent.turn}, started ${String(sent.started)}`);
+  yield* until(`${name} to answer and report done`, () =>
+    Effect.gen(function* () {
+      const after = words.slice(before);
+      return (
+        after.includes("working") &&
+        after.includes("done") &&
+        pipe(yield* screen, Str.includes(ANSWER))
+      );
+    }),
+  );
+  const shown = yield* screen;
+  yield* Console.error(`${name}: reported ${Arr.join(words, ", ")}; answered ${ANSWER}`);
+  // A TUI wraps and indents a long line, so the prompt is looked for with its spacing evened out.
+  const even = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+  yield* expect(
+    pipe(even(shown), Str.includes(even(PROMPT))),
+    `${name}'s screen to show the prompt:\n${shown}`,
+  );
+  // Measured on 0.1.14: a plain send is not marked. A pin that marks it is the planner's question.
+  yield* expect(
+    !pipe(shown, Str.includes("<hc from")),
+    `${name}'s screen to show the prompt without core's <hc from> mark:\n${shown}`,
+  );
+  yield* api.call("terminal.kill", { terminal: agent.address });
+});
+
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* Config.String("HOME");
@@ -304,6 +413,12 @@ const program = Effect.gen(function* () {
   const probed = yield* Effect.exit(
     Effect.gen(function* () {
       yield* run(binary, ["server", "start", "--json"], env);
+      const at = process.argv.indexOf("--harness");
+      if (at >= 0) {
+        yield* fs.makeDirectory(`${dir}/work`);
+        yield* harness(socket, `${dir}/work`, process.argv[at + 1] ?? "").pipe(Effect.scoped);
+        return;
+      }
       yield* plain(socket, dir).pipe(Effect.scoped);
       yield* framed(socket, dir).pipe(Effect.scoped);
     }),
