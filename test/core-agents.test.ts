@@ -118,7 +118,10 @@ const OpenCodeLaunch = Schema.Struct({
   }),
 });
 const LaunchedSession = Schema.fromJsonString(
-  Schema.Struct({ agentSession: Schema.Struct({ kind: Schema.String, value: Schema.String }) }),
+  Schema.Struct({
+    at: Schema.Finite,
+    agentSession: Schema.Struct({ kind: Schema.String, value: Schema.String }),
+  }),
 );
 
 const PiLaunch = Schema.Struct({ argv: Schema.Array(Schema.String) });
@@ -358,6 +361,9 @@ test(
             expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
 
             const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
+            // The tool's helper stamps its question on the wall clock, which this test's clock
+            // runs ahead of: a question stamped before its work was given is not that work's.
+            yield* waitFor(Effect.sync(() => Date.now() > launched.at));
             const told = yield* askWith(
               tools,
               "call_1",
