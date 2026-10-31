@@ -26,7 +26,8 @@ export const readJournalWhole = Effect.fn("Journal.readWhole")(function* <A>(
   const lines: A[] = [];
   let corrupt = 0;
   for (const [at, text] of texts.entries()) {
-    const decoded = decode(text);
+    // A line at a time, so a long journal is read in the scheduler's turns.
+    const decoded = yield* Effect.sync(() => decode(text));
     if (decoded._tag === "Some") lines.push(decoded.value);
     else if (at < texts.length - 1) corrupt += 1;
   }

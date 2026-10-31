@@ -19,6 +19,7 @@ import type { PluginEnv } from "./env";
 import { timedFlow, timeless } from "./flow-timing";
 import type { AgentInfo } from "./herdr";
 import { diffOf } from "./run-detail";
+import { Foreground } from "./foreground";
 import type { RunModelApi } from "./run-model";
 import type { RunFacts } from "./runs";
 import { readTask, type TaskRecord } from "./task";
@@ -210,10 +211,12 @@ export const recordFrames = (
         return true;
       };
 
+      // Opening a record is interactive; a frame sent later for a change is not.
+      const { serve } = yield* Foreground;
       const first = Stream.unwrap(
         Effect.gen(function* () {
           if (!parted || key.held !== undefined) {
-            const now = yield* whole;
+            const now = yield* serve(whole);
             unsent(now);
             return Stream.make<ReadonlyArray<RunDetail | RecordUnchanged | null>>(
               now?.revision !== undefined &&
@@ -226,7 +229,7 @@ export const recordFrames = (
                 : now,
             );
           }
-          const base = yield* recordBase(sources, key.runId, key.pages);
+          const base = yield* serve(recordBase(sources, key.runId, key.pages));
           if (base === null) {
             unsent(null);
             return Stream.make<ReadonlyArray<RunDetail | RecordUnchanged | null>>(null);
@@ -239,7 +242,7 @@ export const recordFrames = (
           };
           const arriving = Stream.mergeAll(
             Arr.map(parts, ({ name, value }) =>
-              Stream.fromEffect(Effect.map(value, (found) => ({ name, value: found }))),
+              Stream.fromEffect(Effect.map(serve(value), (found) => ({ name, value: found }))),
             ),
             { concurrency: "unbounded" },
           ).pipe(

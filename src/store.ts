@@ -190,6 +190,8 @@ export interface StoreApi {
   readonly changes: Stream.Stream<ReadonlyArray<RunRow>>;
   /** A run changed where the change was not one of these writes, so readers reread. */
   readonly announce: Effect.Effect<void>;
+  /** Moves whenever any Run's decisions may have changed, which no Run's row shows. */
+  readonly decided: Effect.Effect<number>;
 }
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
@@ -293,11 +295,14 @@ function makeStore(): Effect.Effect<
       Effect.orElseSucceed(() => 0),
     );
     let seen = yield* dataVersion;
+    let decided = 0;
+    const decide = Effect.sync(() => void decided++);
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         const now = yield* dataVersion;
         if (now === seen) return;
         seen = now;
+        decided++;
         yield* reactivity.invalidate(RUNS);
       }).pipe(Effect.repeat(Schedule.spaced(ELSEWHERE_EVERY))),
     );
@@ -392,6 +397,7 @@ function makeStore(): Effect.Effect<
               )
               ON CONFLICT(run, decision) DO NOTHING
             `;
+          yield* decide;
           yield* reactivity.invalidate(RUNS);
         }).pipe(Effect.orDie),
 
@@ -399,6 +405,7 @@ function makeStore(): Effect.Effect<
 
       settle: Effect.fn("Store.settle")(function* (answer) {
         const at = yield* nowIso;
+        yield* decide;
         // One write over the row while it is still unanswered. Whoever it returns a row
         // to is the answer; everybody else reads what landed and is told so.
         const settled = yield* reactivity
@@ -532,6 +539,7 @@ function makeStore(): Effect.Effect<
                   const row = (yield* byRun(run).pipe(Effect.orDie))[0];
                   if (row === undefined || row.accepted === null) continue;
                   yield* clear(row);
+                  yield* decide;
                   yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
                   yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                   gone.push(run);
@@ -556,7 +564,8 @@ function makeStore(): Effect.Effect<
         ),
       watching: (read) => reactivity.stream(RUNS, read),
       changes: sql.reactive(RUNS, all),
-      announce: reactivity.invalidate(RUNS),
+      announce: Effect.andThen(decide, reactivity.invalidate(RUNS)),
+      decided: Effect.sync(() => decided),
     } satisfies StoreApi;
   });
 }

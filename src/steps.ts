@@ -3,7 +3,6 @@
 // one, and the Flow is built from these records.
 
 import * as Str from "effect/String";
-import * as Arr from "effect/Array";
 import { Context, Effect, FileSystem, Schema, flow, Result } from "effect";
 
 export const StepKind = Schema.Literals(["agent", "question", "workflow", "check"]);
@@ -93,8 +92,22 @@ export const readStepLines = Effect.fn("Steps.read")(function* (runDir: string) 
   const text = yield* fs
     .readFileString(`${runDir}/${STEPS_FILE}`)
     .pipe(Effect.orElseSucceed(() => ""));
-  return Arr.flatMap(Str.split(text, "\n"), (line) => {
-    const read = decodeLine(line);
-    return read._tag === "Some" ? [read.value] : [];
-  });
+  const was = decoded.get(runDir);
+  if (was?.text === text) return was.lines;
+  const lines: StepLine[] = [];
+  // A line at a time, so a long Run is read in the scheduler's turns.
+  for (const line of Str.split(text, "\n")) {
+    const read = yield* Effect.sync(() => decodeLine(line));
+    if (read._tag === "Some") lines.push(read.value);
+  }
+  // ponytail: dropped whole when full; an LRU if hosts see more Runs than this at once.
+  if (decoded.size >= DECODED_RUNS) decoded.clear();
+  decoded.set(runDir, { text, lines });
+  return lines;
 });
+/** Each Run's Steps as last decoded, by the text they were decoded from. */
+const decoded = new Map<
+  string,
+  { readonly text: string; readonly lines: ReadonlyArray<StepLine> }
+>();
+const DECODED_RUNS = 2_048;

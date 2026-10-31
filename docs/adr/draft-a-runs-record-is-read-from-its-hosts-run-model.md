@@ -52,7 +52,19 @@ shows. Read-your-writes keeps the board's rule: after a write, a reader sees tha
 or a later one.
 
 **D6. Interactive reads come first.** No record frame, offer or act waits on a board derivation, the
-Cleanup sweep or a Measurement. Background work yields in bounded slices.
+Cleanup sweep or a Measurement. Background work yields in bounded slices:
+
+- The board is derived incrementally. A Task's card is kept with the key it was derived from: its
+  Runs' revisions, their markers, its agents, its pending work and its merge requests' states. It is
+  derived again only when that key moves, or when the time it shows is due to change. A tick that
+  moves nothing derives nothing.
+- A pass over many Runs (the model's fill, a re-derive, the engine's sweep, Cleanup) takes a slice
+  boundary before each Run. While a record frame, an offer or an act is being served, a boundary
+  holds its pass, for at most 250 ms, so a busy front door cannot starve the board.
+- The host's scheduler ends a turn of the event loop once it has run fibers for 8 ms, so a request
+  waiting behind background fibers is read at the next turn.
+- Cleanup judges through the model, as the board reads, and its decisions are unchanged.
+- A record reads herdr's agents as the board last read them, and does not wait on a read in flight.
 
 ## Considered
 
@@ -62,7 +74,11 @@ Cleanup sweep or a Measurement. Background work yields in bounded slices.
 - **Cache file contents (the read model of PR #271).** It made the board build cheaper but left the
   record O(all Runs), and its entries cost memory per file read. Superseded in its role by D1.
 - **A worker thread for the board.** It isolates CPU, but copies the whole state across a thread
-  boundary. Kept as the fallback if D6's event-loop guardrail fails with D1 in place.
+  boundary. It was kept as the fallback if D6's event-loop guardrail failed with D1 in place. With D1
+  and D6 built, it is not built. The lag that remains comes from JavaScriptCore's Eden collections on
+  the main thread. Their stop-the-world pauses are 11 to 27 ms, at most 40 ms, about once a second at
+  a ~100 MB live heap. They come with no board pass running: an idle host with three live Runs
+  pauses 15 to 22 ms. A worker would not remove them.
 - **Raise or remove timeouts.** It hides the latency and fixes nothing.
 
 ## Consequences

@@ -4,10 +4,12 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Queue, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Latch, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { buildBoard } from "../src/board";
 import type { RecordUnchanged, RunDetail } from "../src/board-model";
 import { readEnv } from "../src/env";
+import { Foreground, makeForeground } from "../src/foreground";
 import { recordFrames, type RecordSources } from "../src/record";
 import { makeRunModel } from "../src/run-model";
 import type { RunFacts } from "../src/runs";
@@ -176,6 +178,58 @@ test(
         expect(Arr.some(shown, isDone)).toBe(true);
         expect(Arr.some(reads, Str.startsWith(run.dir))).toBe(true);
         expect(theirs).toEqual([]);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a record opened while a board pass over 500 Runs is held at a slice boundary is sent before the pass ends",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { dir, runs } = yield* stateOf(500);
+        const model = yield* makeRunModel(dir, "installation");
+        const foreground = yield* makeForeground;
+        const reached = yield* Deferred.make<void>();
+        const held = yield* Latch.make(false);
+        let boundaries = 0;
+        const pass = yield* buildBoard({
+          env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+          runs,
+          registered: [],
+          offers: () => Effect.succeed([]),
+          cards: { revision: model.highest, kept: new Map() },
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, model.reading),
+          Effect.provideService(Foreground, {
+            ...foreground,
+            boundary: Effect.suspend(() =>
+              ++boundaries === 10
+                ? Effect.andThen(Deferred.succeed(reached, undefined), held.await)
+                : foreground.boundary,
+            ),
+          }),
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(reached);
+
+        const first = yield* recordFrames(
+          sourcesOf(dir, model, runs),
+          { ...KEY, runId: runs[499]!.id },
+          Stream.never,
+        ).pipe(
+          Stream.runHead,
+          Effect.provideService(Foreground, foreground),
+          Effect.timeoutOption("10 seconds"),
+        );
+
+        expect(first._tag === "Some" && first.value._tag === "Some").toBe(true);
+        expect(boundaries).toBe(10);
+        expect(pass.pollUnsafe()).toBeUndefined();
+        yield* held.open;
+        yield* Fiber.join(pass);
+        expect(boundaries).toBeGreaterThan(400);
       }),
     ),
   60_000,

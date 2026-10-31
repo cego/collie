@@ -1,10 +1,10 @@
 // Click to usable Flow in Desktop, end to end (docs/internals.md, Measuring a record open).
 // Prints, as its last line, one JSON object of numbers for `collie measure`.
 
-import { mkdirSync, rmSync, appendFileSync } from "node:fs";
+import { mkdirSync, rmSync, appendFileSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { parseArgs } from "node:util";
-import { Effect, Fiber, FileSystem, Option, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Option, Schedule, Stream } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { Flow } from "../../src/board-model";
 import { connect, frontDoor, socketOf } from "../../src/host";
@@ -119,6 +119,41 @@ const lagProbe = (into: number[]) =>
     Effect.catchCause(() => Effect.sleep("100 millis")),
     Effect.forever,
   );
+
+/** How many probes a cell's lag is judged over, so its p99 is not its worst probe. */
+const LAG_PROBES = 2000;
+
+/**
+ * The host's lag while `timed` runs and, after it, while `more` keeps the cell's load on until
+ * the window holds `LAG_PROBES` probes.
+ */
+const lagOver = <R>(
+  timed: Effect.Effect<void, never, R>,
+  more: (at: number) => Effect.Effect<unknown, never, R>,
+) =>
+  Effect.gen(function* () {
+    const lag: number[] = [];
+    const probe = yield* Effect.forkChild(lagProbe(lag));
+    yield* timed;
+    for (let at = 0; lag.length < LAG_PROBES; at++) yield* more(at);
+    yield* Fiber.interrupt(probe);
+    return {
+      lag_p99_ms: nearest(lag, 0.99),
+      lag_max_ms: nearest(lag, 1),
+      lag_probes: lag.length,
+    };
+  });
+
+/** Until the host's Run model says it has filled. */
+const modelFilled = Effect.suspend(() =>
+  Effect.sync(() => {
+    try {
+      return readFileSync(`${world.state}/host.log`, "utf8").includes("the Run model holds");
+    } catch {
+      return false;
+    }
+  }),
+).pipe(Effect.repeat({ until: (filled) => filled, schedule: Schedule.spaced("100 millis") }));
 
 /** The longest a sample waits for its Flow before it is counted as never painted. */
 const NEVER_MS = 60_000;
@@ -316,9 +351,15 @@ const body = (
       "host-cold": (warmup, at) =>
         Effect.gen(function* () {
           yield* stopHost(world.state);
+          const started = performance.now();
           yield* Effect.scoped(connect(world.state));
           yield* boardSettled;
-          return yield* timedOpen("host-cold", warmup, settled(at));
+          const sample = yield* timedOpen("host-cold", warmup, settled(at));
+          // Host start to the record painted, as the host-start criterion reads it.
+          return {
+            ...sample,
+            marks: { ...sample.marks, "host:started-to-painted": performance.now() - started },
+          };
         }).pipe(Effect.orDie),
     };
 
@@ -378,17 +419,20 @@ const body = (
     const summaries: Summaries = {};
     for (const cell of cells.filter(isDesktopCell)) {
       yield* say(`${cell}: ${WARMUP} warm-up and ${SAMPLES} timed opens`);
-      const lag: number[] = [];
-      const fibers = [
-        yield* Effect.forkChild(lagProbe(lag)),
-        ...(beside[cell] === undefined ? [] : [yield* Effect.forkChild(beside[cell])]),
-      ];
+      const fibers = beside[cell] === undefined ? [] : [yield* Effect.forkChild(beside[cell])];
       const samples: Sample[] = [];
-      for (let at = 0; at < WARMUP + SAMPLES; at++) {
-        const sample = yield* opens[cell](at < WARMUP, at);
-        appendFileSync(raw, `${JSON.stringify(sample)}\n`);
-        if (!sample.warmup) samples.push(sample);
-      }
+      const sampled = (at: number) =>
+        Effect.map(opens[cell](at < WARMUP, at), (sample) => {
+          appendFileSync(raw, `${JSON.stringify(sample)}\n`);
+          if (!sample.warmup) samples.push(sample);
+        });
+      for (let at = 0; at < WARMUP; at++) yield* sampled(at);
+      const lag = yield* lagOver(
+        Effect.gen(function* () {
+          for (let at = WARMUP; at < WARMUP + SAMPLES; at++) yield* sampled(at);
+        }),
+        (at) => opens[cell](true, WARMUP + (at % SAMPLES)),
+      );
       yield* Effect.forEach(fibers, Fiber.interrupt, { discard: true });
       summaries[cell] = {
         ...summaryOf(
@@ -397,7 +441,8 @@ const body = (
         ),
         warmup: WARMUP,
         stages: stagesOf(samples),
-        lag_p99_ms: nearest(lag, 0.99),
+        ...lag,
+        ...startedToPainted(samples),
       };
       yield* say(`${cell}: ${JSON.stringify(summaries[cell])}`);
     }
@@ -416,6 +461,8 @@ type Summaries = Record<
     readonly warmup: number;
     readonly stages: ReturnType<typeof stagesOf>;
     readonly lag_p99_ms: number | null;
+    readonly lag_max_ms: number | null;
+    readonly lag_probes: number;
   }
 >;
 
@@ -491,39 +538,49 @@ const hostBody = (fixture: Fixture) =>
     const opened = new Set<string>();
     for (const cell of cells.filter(isHostOnly)) {
       yield* say(`${cell}: ${WARMUP} warm-up and ${SAMPLES} timed opens`);
-      const lag: number[] = [];
-      const probe = yield* Effect.forkChild(lagProbe(lag));
+      yield* modelFilled;
       const fresh = fixture.settled.filter((run) => !opened.has(run));
       if (fresh.length < WARMUP + SAMPLES)
         return yield* Effect.die(
           new Error(`${fresh.length} settled Runs leave too few first opens for ${cell}`),
         );
       const samples: Sample[] = [];
-      for (const [at, run] of fresh.slice(0, WARMUP + SAMPLES).entries()) {
-        opened.add(run);
-        const start = performance.now();
-        const head = yield* door
+      const firstFrame = (run: string) =>
+        door
           .runDetail({ runId: run, tail: true, pages: 1, refreshMr: false, parts: true })
           .pipe(Stream.runHead, Effect.orDie);
-        const ms = performance.now() - start;
-        const first = Option.getOrNull(head);
-        const sample: Sample = {
-          cell,
-          warmup: at < WARMUP,
-          run,
-          ms,
-          stale: false,
-          differences:
-            first !== null && "flow" in first && first.flow !== undefined
-              ? []
-              : ["the first frame carried no Flow"],
-          marks: {},
-          start,
-        };
-        appendFileSync(raw, `${JSON.stringify(sample)}\n`);
-        if (!sample.warmup) samples.push(sample);
-      }
-      yield* Fiber.interrupt(probe);
+      const sampled = (at: number, run: string) =>
+        Effect.gen(function* () {
+          opened.add(run);
+          const start = performance.now();
+          const head = yield* firstFrame(run);
+          const ms = performance.now() - start;
+          const first = Option.getOrNull(head);
+          const sample: Sample = {
+            cell,
+            warmup: at < WARMUP,
+            run,
+            ms,
+            stale: false,
+            differences:
+              first !== null && "flow" in first && first.flow !== undefined
+                ? []
+                : ["the first frame carried no Flow"],
+            marks: {},
+            start,
+          };
+          appendFileSync(raw, `${JSON.stringify(sample)}\n`);
+          if (!sample.warmup) samples.push(sample);
+        });
+      const runs = fresh.slice(0, WARMUP + SAMPLES);
+      for (const [at, run] of runs.slice(0, WARMUP).entries()) yield* sampled(at, run);
+      const lag = yield* lagOver(
+        Effect.forEach(runs.slice(WARMUP), (run, at) => sampled(WARMUP + at, run), {
+          discard: true,
+        }),
+        // Opened again, untimed: the window needs more probes than first opens there are.
+        (at) => firstFrame(runs[at % runs.length]!),
+      );
       summaries[cell] = {
         ...summaryOf(
           samples.map((sample) => sample.ms),
@@ -531,7 +588,7 @@ const hostBody = (fixture: Fixture) =>
         ),
         warmup: WARMUP,
         stages: "absent",
-        lag_p99_ms: nearest(lag, 0.99),
+        ...lag,
       };
       yield* say(`${cell}: ${JSON.stringify(summaries[cell])}`);
     }
@@ -540,6 +597,20 @@ const hostBody = (fixture: Fixture) =>
 
 const nearest = (samples: ReadonlyArray<number>, q: number) =>
   [...samples].sort((a, b) => a - b)[Math.max(0, Math.ceil(q * samples.length) - 1)] ?? null;
+
+/** For a cell that starts the host for each open: from host start to the record painted. */
+const startedToPainted = (samples: ReadonlyArray<Sample>) => {
+  const spans = samples.flatMap(({ marks }) => marks["host:started-to-painted"] ?? []);
+  return spans.length === 0
+    ? {}
+    : {
+        started_to_painted: {
+          p50: nearest(spans, 0.5),
+          p95: nearest(spans, 0.95),
+          max: nearest(spans, 1),
+        },
+      };
+};
 
 /** Where a cell's time went, from Desktop's own marks: absent on a tree without them. */
 const stagesOf = (samples: ReadonlyArray<Sample>) => {

@@ -19,6 +19,7 @@ const SavedFile = Schema.fromJsonString(MachineSaved);
 const OnboardingFile = Schema.fromJsonString(MachineOnboarding);
 const OwnFile = Schema.fromJsonString(MachineOwnRead);
 const fileOf = (dir: string, key: string) => `${dir}/${encodeURIComponent(key)}.json`;
+const SAVE_EVERY = "1 second";
 
 /** Every file in `dir` that `file` decodes; one that cannot be read is left out. */
 const savedIn = <A>(dir: string, file: Schema.Codec<A, string>) =>
@@ -83,7 +84,10 @@ export const dropBoardsOf = (dir: string, profile: string) =>
     ),
   );
 
-/** Saves each Machine whenever what Desktop knows of it changes, as of when it was live. */
+/**
+ * Saves each Machine at most once a second, as it last stood, whenever what Desktop knows of
+ * it changes, as of when it was live.
+ */
 export const saving =
   (dir: string) =>
   <E, R>(items: Stream.Stream<FlockItem, E, R>) =>
@@ -110,28 +114,28 @@ export const saving =
           );
           yield* fs.rename(`${file}.new`, file);
         }).pipe(Effect.ignore);
+      const due = new Map<string, FlockMachine>();
+      const flush = Effect.suspend(() => {
+        const machines = [...due.values()];
+        due.clear();
+        return Effect.forEach(machines, save, { discard: true });
+      });
+      yield* flush.pipe(Effect.delay(SAVE_EVERY), Effect.forever, Effect.forkScoped);
+      yield* Effect.addFinalizer(() => flush);
       return items.pipe(
         Stream.tap((item) =>
           Effect.suspend(() => {
             const before = flock.machines;
             flock = applyItem(flock, item);
             if ("_tag" in item && item._tag === "Saved") return Effect.void;
+            for (const [installation, now] of flock.machines)
+              if (before.get(installation) !== now) due.set(installation, now);
             // A Machine removed from the flock is not shown at the next launch either.
             const dropped = Arr.filter([...before.keys()], (one) => !flock.machines.has(one));
-            // ponytail: written on every change; debounce if a busy board makes that show.
             return Effect.forEach(
-              Arr.filter(
-                [...flock.machines],
-                ([installation, now]) => before.get(installation) !== now,
-              ),
-              ([, now]) => save(now),
+              dropped,
+              (installation) => (due.delete(installation), dropSaved(dir, installation)),
               { discard: true },
-            ).pipe(
-              Effect.andThen(
-                Effect.forEach(dropped, (installation) => dropSaved(dir, installation), {
-                  discard: true,
-                }),
-              ),
             );
           }),
         ),

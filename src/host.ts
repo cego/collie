@@ -62,6 +62,9 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
 import { recordFlow, recordFrames, type RecordSources } from "./record";
+import { TurnScheduler } from "./turns";
+import { Foreground, foregroundLayer } from "./foreground";
+import * as Scheduler from "effect/Scheduler";
 import {
   EntryError,
   REFUSED_INPUT,
@@ -79,6 +82,7 @@ import {
   AWAITING,
   controlPath,
   type HostServices,
+  type KeptViews,
   type Locate,
 } from "./engine";
 import { RequestedBy } from "./board-model";
@@ -160,6 +164,7 @@ import {
   generationsSweeper,
   judge,
   sweepAsked,
+  sweepingWith,
   worktreesSweeper,
   type SweptBy,
 } from "./cleanup";
@@ -170,7 +175,7 @@ import { currentEnv, leaveLauncher, withoutLauncher } from "./env";
 import { installation as installedRelease, RELEASE_TAG } from "./release";
 import { Herdr, isSettled, type AgentInfo } from "./herdr";
 import { serverSocket } from "./home";
-import { buildBoard, LANDED_STATES, mrOf, taskFlowOf } from "./board";
+import { buildBoard, type KeptCards, LANDED_STATES, mrOf, taskFlowOf } from "./board";
 import { readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
@@ -1062,15 +1067,27 @@ const hostBoard = (dir: string) =>
     // runs on every write the board reads under the state directory.
     const herdsNow = yield* Effect.cachedWithTTL(liveHerds(herdr, env), SESSIONS_EVERY);
     // A write or a Run recorded moves no agent: herdr is read again only after `herdrMoved`.
-    const [agentsNow, herdrMoved] = yield* Effect.cachedInvalidateWithTTL(
+    const [agentsCached, herdrMoved] = yield* Effect.cachedInvalidateWithTTL(
       Effect.flatMap(herdsNow, agentsIn),
       Duration.infinity,
     );
+    let agentsRead: Effect.Success<typeof agentsCached> | undefined;
+    const agentsNow = Effect.map(agentsCached, (agents) => (agentsRead = agents));
+    // A record does not wait on herdr while the board reads it again.
+    const agentsLast = Effect.suspend(() =>
+      agentsRead === undefined ? agentsNow : Effect.succeed(agentsRead),
+    );
+    const kept: KeptViews | undefined =
+      model === undefined
+        ? undefined
+        : { revision: (run) => model.revision(run).seq, views: new Map() };
     const runs = registry
-      .views(null, model?.reading)
+      .views(null, model?.reading, kept)
       .pipe(Effect.map((views) => Arr.map(views, (view) => factsOfView(env.stateDir, view))));
     const idle: IdleSince = new Map();
     const finishedSince: FinishedSince = new Map();
+    const cards: KeptCards | undefined =
+      model === undefined ? undefined : { revision: model.highest, kept: new Map() };
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
       Effect.gen(function* () {
         return yield* buildBoard({
@@ -1084,6 +1101,7 @@ const hostBoard = (dir: string) =>
               Effect.orElseSucceed(() => []),
             ),
           head: model?.head,
+          cards,
         });
       }).pipe(
         (built) =>
@@ -1098,7 +1116,10 @@ const hostBoard = (dir: string) =>
         const { alive, restored } = yield* agents.pipe(Effect.provideContext(bun));
         noteIdle(idle, [...alive, ...restored], yield* Clock.currentTimeMillis);
         const facts = yield* runs;
-        return { runs: facts, views: yield* boardOf(facts, alive), alive };
+        // Before the build, so each card's key holds its Runs' revisions as read.
+        if (model !== undefined) yield* model.observe(facts);
+        const views = yield* boardOf(facts, alive);
+        return { runs: facts, views, alive };
       });
     let filled = false;
     /** The board this host serves: with the model, each card carries its revision. */
@@ -1106,7 +1127,6 @@ const hostBoard = (dir: string) =>
       const started = yield* Clock.currentTimeMillis;
       const built = yield* listingOf(agentsNow);
       if (model === undefined) return built;
-      yield* model.observe(built.runs);
       if (!filled) {
         filled = true;
         const took = (yield* Clock.currentTimeMillis) - started;
@@ -1199,7 +1219,11 @@ const hostBoard = (dir: string) =>
             retire: (ids) => registry.retire(ids).pipe(Effect.provideContext(storage)),
           }),
         ];
-      });
+      }).pipe(
+        Effect.map((list) =>
+          model === undefined ? list : Arr.map(list, sweepingWith(model.reading)),
+        ),
+      );
     /** A sweep's sweepers, each judging against a board built as it judges. */
     const sweepers = sweepersOver({
       runs,
@@ -1230,7 +1254,7 @@ const hostBoard = (dir: string) =>
       listing,
       herdrMoved,
       /** herdr's agents as the board last read them. */
-      alive: aliveOf(agentsNow),
+      alive: aliveOf(agentsLast),
       /** herdr's agents read now, which the board reads from then on. */
       aliveNow: aliveOf(Effect.andThen(herdrMoved, agentsNow)),
       sweepers,
@@ -1326,7 +1350,8 @@ const sharedBoardLayer = (dir: string) =>
             Stream.catch(() => Stream.empty),
             Stream.tap(() => herdrMoved),
           ),
-          store.changes.pipe(Stream.map(() => undefined)),
+          // A signal alone: the rows are read by the build, not once more per write.
+          store.watching(Effect.void),
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
@@ -1489,6 +1514,7 @@ const frontDoorHandlers = (
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans: PlanCache = new Map();
       const record = yield* recordSources({ panels, plans });
+      const { serve } = yield* Foreground;
       /** An act on a Step of a record refused where that Step has finished since. */
       const stepStill = (run: string, step: string | undefined, shown: RunRevision | undefined) =>
         Effect.gen(function* () {
@@ -1942,31 +1968,35 @@ const frontDoorHandlers = (
         },
         answer: ({ runId, decision, value: given, request }, { client }) => {
           const { text: value, removed } = scrub(given);
-          return fresh(
-            () => runId,
-            { operation: "answer", request, ...whoOf(client), result: Answered },
-            registry
-              .answer({ runId, decision, value, request, by: whoOf(client) })
-              .pipe(Effect.map(saying(removed))),
+          return serve(
+            fresh(
+              () => runId,
+              { operation: "answer", request, ...whoOf(client), result: Answered },
+              registry
+                .answer({ runId, decision, value, request, by: whoOf(client) })
+                .pipe(Effect.map(saying(removed))),
+            ),
           );
         },
         control: ({ runId, control, set, request, reason, before, shown }, { client }) =>
-          Effect.andThen(
-            stepStill(runId, before, shown),
-            auditedControl(
-              runId,
-              `${set ? "" : "un"}${control}${before === undefined ? "" : `:before:${before}`}`,
-              request,
-              whoOf(client),
-              reason,
-            )(
-              registry.control({
+          serve(
+            Effect.andThen(
+              stepStill(runId, before, shown),
+              auditedControl(
                 runId,
-                control,
-                set,
-                before,
-                by: whoActed(actorOf(whoOf(client), request)),
-              }),
+                `${set ? "" : "un"}${control}${before === undefined ? "" : `:before:${before}`}`,
+                request,
+                whoOf(client),
+                reason,
+              )(
+                registry.control({
+                  runId,
+                  control,
+                  set,
+                  before,
+                  by: whoActed(actorOf(whoOf(client), request)),
+                }),
+              ),
             ),
           ),
         withdrawNote: ({ runId, note, request }, { client }) =>
@@ -1993,7 +2023,7 @@ const frontDoorHandlers = (
           ).pipe(Effect.provideContext(hosted)),
         resume: ({ runId, request }, { client }) =>
           auditedControl(runId, "resume", request, whoOf(client))(takeUp(runId)),
-        offers: ({ runId }) => registry.offers(runId),
+        offers: ({ runId }) => serve(registry.offers(runId)),
         workflows: ({ project }) =>
           discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })).pipe(
             Effect.map(({ entries }) =>
@@ -2430,47 +2460,52 @@ const frontDoorHandlers = (
                 : stepStill(target.run, target.step ?? target.before, shown),
             { discard: true },
           );
-          return checked.pipe(
-            Effect.andThen(
-              plainly(
-                Schema.decodeUnknownEffect(Schema.Array(ActionSchema))(actions).pipe(
-                  Effect.mapError(
-                    () =>
-                      new HostRefused({ reason: `${REFUSED_INPUT}: ${refusedAction(actions)}` }),
-                  ),
-                  Effect.flatMap((decoded) => {
-                    const proposed = Arr.filter(decoded, (action) => !ACTED_KINDS.has(action.kind));
-                    return proposed.length > 0
-                      ? Effect.fail(
-                          new HostRefused({
-                            reason: `${REFUSED_INPUT}: ${Arr.join([...new Set(Arr.map(proposed, (a) => a.kind))], ", ")} is carried out through propose, so it is on the record as asked for`,
-                          }),
-                        )
-                      : carryOutAsked(askerEnv(client), decoded, {
-                          ...whoOf(client),
-                          requestId: request,
-                        }).pipe(
-                          Effect.map((results) =>
-                            Arr.map(results, (result, index) => {
-                              const notice = removedNotice(scrubbed[index]?.removed ?? []);
-                              const run = targets[index]?.run;
-                              const revised =
-                                record === undefined || run === undefined
-                                  ? result
-                                  : { ...result, revision: record.model.revision(run) };
-                              return notice === null
-                                ? revised
-                                : {
-                                    ...revised,
-                                    note: Arr.join(
-                                      Arr.filter([result.note, notice], Boolean),
-                                      "; ",
-                                    ),
-                                  };
+          return serve(
+            checked.pipe(
+              Effect.andThen(
+                plainly(
+                  Schema.decodeUnknownEffect(Schema.Array(ActionSchema))(actions).pipe(
+                    Effect.mapError(
+                      () =>
+                        new HostRefused({ reason: `${REFUSED_INPUT}: ${refusedAction(actions)}` }),
+                    ),
+                    Effect.flatMap((decoded) => {
+                      const proposed = Arr.filter(
+                        decoded,
+                        (action) => !ACTED_KINDS.has(action.kind),
+                      );
+                      return proposed.length > 0
+                        ? Effect.fail(
+                            new HostRefused({
+                              reason: `${REFUSED_INPUT}: ${Arr.join([...new Set(Arr.map(proposed, (a) => a.kind))], ", ")} is carried out through propose, so it is on the record as asked for`,
                             }),
-                          ),
-                        );
-                  }),
+                          )
+                        : carryOutAsked(askerEnv(client), decoded, {
+                            ...whoOf(client),
+                            requestId: request,
+                          }).pipe(
+                            Effect.map((results) =>
+                              Arr.map(results, (result, index) => {
+                                const notice = removedNotice(scrubbed[index]?.removed ?? []);
+                                const run = targets[index]?.run;
+                                const revised =
+                                  record === undefined || run === undefined
+                                    ? result
+                                    : { ...result, revision: record.model.revision(run) };
+                                return notice === null
+                                  ? revised
+                                  : {
+                                      ...revised,
+                                      note: Arr.join(
+                                        Arr.filter([result.note, notice], Boolean),
+                                        "; ",
+                                      ),
+                                    };
+                              }),
+                            ),
+                          );
+                    }),
+                  ),
                 ),
               ),
             ),
@@ -3436,7 +3471,11 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
       }).pipe(Effect.provide(Logger.layer([hostLogger(logOf(dir))], { mergeWithExisting: true }))),
       0,
     );
-  }).pipe(Effect.orDie);
+  }).pipe(
+    Effect.orDie,
+    Effect.provideService(Scheduler.Scheduler, new TurnScheduler()),
+    Effect.provide(foregroundLayer),
+  );
 
 /** How long a host told to stop waits for running steps before it exits anyway. */
 const stopGrace = Config.Duration("COLLIE_HOST_STOP_GRACE").pipe(

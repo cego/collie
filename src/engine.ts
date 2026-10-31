@@ -195,6 +195,7 @@ import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
+import { Foreground } from "./foreground";
 import { Store, storeLayer, type Admission, type RunRow, type StoreApi } from "./store";
 import {
   Answered,
@@ -5712,6 +5713,12 @@ const WAKE_TRIES = 8;
 
 const VIEW_CONCURRENCY = 8;
 
+/** Settled Runs' views kept from one read to the next, and the revision a Run's files are at. */
+export interface KeptViews {
+  readonly revision: (run: string) => number;
+  readonly views: Map<string, { readonly key: string; readonly view: RunView }>;
+}
+
 /** What a host is holding, as a caller may see it: live names and unloadable ones. */
 export const Registrations = Schema.Struct({
   live: Schema.Array(Schema.String),
@@ -5866,6 +5873,7 @@ export interface RegistryApi {
   readonly views: (
     task: string | null,
     read?: FileSystem.FileSystem,
+    kept?: KeptViews,
   ) => Effect.Effect<ReadonlyArray<RunView>>;
   /**
    * The Runs a Run's record reads, chosen from the rows alone: its Task's, their parents,
@@ -7377,8 +7385,10 @@ const makeRegistry: (
 
   const sweep = Effect.gen(function* () {
     if (watchers === 0) return;
+    const { boundary } = yield* Foreground;
     let changed = false;
     for (const [runId, entry] of watched) {
+      yield* boundary;
       const view = yield* viewOf(entry.row);
       const said = encodeView(view);
       if (said === entry.said) continue;
@@ -8022,15 +8032,37 @@ const makeRegistry: (
         }
         return dropped;
       }).pipe(Effect.orDie, Effect.provideContext(bun)),
-    views: (task: string | null, read?: FileSystem.FileSystem) =>
-      store.runs.pipe(
-        Effect.flatMap((rows) =>
+    views: (task: string | null, read?: FileSystem.FileSystem, kept?: KeptViews) =>
+      Effect.all([store.runs, store.decided]).pipe(
+        Effect.flatMap(([rows, decided]) =>
           Effect.forEach(
             task === null ? rows : Arr.filter(rows, (row) => row.task === task),
-            (row) => viewOf(row, read),
-            {
-              concurrency: VIEW_CONCURRENCY,
+            (row) => {
+              if (kept === undefined) return viewOf(row, read);
+              const key = JSON.stringify([decided, kept.revision(row.run), row]);
+              const was = kept.views.get(row.run);
+              if (was?.key === key) return Effect.succeed(was.view);
+              const boundary = Effect.flatMap(Effect.service(Foreground), (one) => one.boundary);
+              return Effect.tap(Effect.andThen(boundary, viewOf(row, read)), (view) =>
+                Effect.sync(() => {
+                  // A settled execution's status is final; a going one's is polled each time.
+                  if (finished.has(row.execution)) kept.views.set(row.run, { key, view });
+                  else kept.views.delete(row.run);
+                }),
+              );
             },
+            {
+              // The host's own background read goes one Run at a time, so the loop stays free.
+              concurrency: kept === undefined ? VIEW_CONCURRENCY : 1,
+            },
+          ).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                if (kept === undefined || task !== null) return;
+                const present = new Set(Arr.map(rows, (row) => row.run));
+                for (const run of kept.views.keys()) if (!present.has(run)) kept.views.delete(run);
+              }),
+            ),
           ),
         ),
       ),

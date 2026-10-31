@@ -1324,7 +1324,7 @@ newer collie serves that Desktop cannot decode, is not shown, and its row says *
 Desktop to see _name_**.
 
 A host that is not running needs nothing from you, because the bridge starts it. Desktop
-saves each Machine's last board on this computer, under
+saves each Machine's last board on this computer, at most once a second, under
 `$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/` on Linux, or
 `~/Library/Application Support/dk.cego.collie.desktop/<channel>/machines/` on macOS. At launch it shows those boards
 dimmed, marked "as of", until each Machine's connection is live; a board saved through a

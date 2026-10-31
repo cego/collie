@@ -1745,6 +1745,22 @@ its time.
   A host's `collie_run` answer uses one local Run listing for its facts and Flow, with
   local offers and the same write-covered readiness as `progress`. Flow relationship
   indexes, installation identity and usual Step times are shared across a board build.
+- **Interactive reads come first** (D6 of that ADR). The board keeps each Task's card with the
+  key it was derived from (`KeptCards` in `src/board.ts`): its Runs' revisions, markers,
+  agents, pending work and merge request states. A build derives a card again only when its
+  key moves or the time it shows is due to change, so a write derives one card and a tick
+  none. The Run views are kept the same way once their execution has finished (`KeptViews`
+  in `src/engine.ts`). A pass over many Runs (the model's fill, a board re-derive, the
+  engine's sweep, `tendQuestions`, Cleanup) takes `Foreground`'s `boundary` before each Run
+  (`src/foreground.ts`). A record's first frame and parts, an offer, an answer, a control and
+  an act run under `serve`, and while one does, every boundary holds its pass, for at most
+  250 ms. The host runs on `TurnScheduler` (`src/turns.ts`), which ends a turn of the event
+  loop once its fibers have run for 8 ms. Cleanup's sweepers judge and remove through the
+  model's reading (`sweepingWith` in `src/cleanup.ts`), so a sweep reads from disk no Run
+  file the board has not, beyond those it removes. A record takes herdr's agents as the board
+  last read them, rather than waiting on a read in flight. What lag is left is
+  JavaScriptCore's Eden collections, 11 to 27 ms each about once a second at a ~100 MB heap;
+  the ADR says why no worker thread was built.
 - **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
   needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
   and a fixed sleep is too long on an idle machine and too short on a busy one. Work that
@@ -1881,7 +1897,12 @@ The run writes `samples.jsonl`, every sample with its marks and differences, and
 `summary.json` to `.scratch/record-open/<time>/`, or to `--out`. Per cell, the summary gives:
 
 - p50, p95, max and n by nearest rank, and `failed`, the samples whose Flow was wrong;
-- `lag_p99_ms`;
+- `lag_p99_ms`, `lag_max_ms` and `lag_probes`: a trivial RPC every 50 ms, from after the
+  warm-up (and, for `first-host`, after the host's Run model has filled) until the window
+  holds at least 2000 probes. The cell's opens go on, untimed, until it does. GC pauses are
+  not excluded;
+- for `host-cold`, `started_to_painted`: p50, p95 and max from the host's start to its
+  record painted;
 - `stages`: where Desktop's `record:*` marks exist, `mount` (click to mounted),
   `bridge_and_host` (mounted to first value) and `render` (first value to usable). A tree
   without the marks reports `absent`.

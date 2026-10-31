@@ -66,12 +66,18 @@ export interface LaneFacts {
   readonly machine: string;
   readonly lines: ReadonlyArray<StepLine>;
   /** Its launches in order, each with whether its Output is in. */
-  readonly launches: ReadonlyArray<{ readonly launch: Launched; readonly done: boolean }>;
+  readonly launches: ReadonlyArray<{
+    readonly launch: Launched;
+    readonly done: boolean;
+  }>;
   readonly questions: ReadonlyArray<AskedFact>;
   /** Runs it started that are not rows of its Task: a Task's own, or its Repo runs. */
   readonly children: ReadonlyArray<ChildFact>;
   /** The repositories of Waves its fan-out has not started yet. */
-  readonly toCome: ReadonlyArray<{ readonly repo: string; readonly wave: number }>;
+  readonly toCome: ReadonlyArray<{
+    readonly repo: string;
+    readonly wave: number;
+  }>;
   /** What holds it up, in its card's words, other than a question or a timer. */
   readonly wait: LaneWait | null;
   /** The offer a finished leading Run makes, which ends its row. */
@@ -166,9 +172,15 @@ const flowQuestion = (one: AskedFact): FlowQuestion => ({
 export function laneOf(facts: LaneFacts): FlowLane {
   const { run, now } = facts;
   const ended = !going(run.state);
-  const forecasts: Array<{ readonly at: string; readonly steps: ReadonlyArray<StepMeta> }> = [];
+  const forecasts: Array<{
+    readonly at: string;
+    readonly steps: ReadonlyArray<StepMeta>;
+  }> = [];
   const runs = new Map<string, StepRun>();
-  const entries: Array<{ readonly at: string; readonly cause: "restarted" | "resumed" }> = [];
+  const entries: Array<{
+    readonly at: string;
+    readonly cause: "restarted" | "resumed";
+  }> = [];
   const questionIn = new Map<string, string>();
   const childIn = new Map<string, string>();
   for (const line of facts.lines) {
@@ -376,8 +388,11 @@ export function laneOf(facts: LaneFacts): FlowLane {
     Option.getOrUndefined(Arr.findLast(forecasts, (one) => one.at <= at)) ?? null;
   const latest = forecasts.at(-1) ?? null;
 
+  const callsOf = new Map<string, StepRun[]>();
+  for (const one of runs.values())
+    callsOf.set(one.meta.id, [...(callsOf.get(one.meta.id) ?? []), one]);
   const stepNode = (id: string): FlowNode => {
-    const calls = Arr.filter([...runs.values()], (one) => one.meta.id === id);
+    const calls = callsOf.get(id) ?? [];
     const meta = calls.at(-1)!.meta;
     const first = calls[0]!;
     const inForce = forecastAt(first.entered);
@@ -493,7 +508,12 @@ export function laneOf(facts: LaneFacts): FlowLane {
     const usual = facts.usual?.get(node.id) ?? null;
     const timing = (one: FlowRun) => {
       const long = one.state === "running" && usual !== null && stepElapsed(one, now) > usual * 2;
-      return { ...one, usual, long, said: long ? "Longer than usual" : one.said };
+      return {
+        ...one,
+        usual,
+        long,
+        said: long ? "Longer than usual" : one.said,
+      };
     };
     const pause =
       Option.getOrUndefined(
@@ -864,12 +884,20 @@ const PANE = "Waiting for you in its pane";
 /** The one wait that holds a Run up, other than a question or a timer, in its card's words. */
 export function laneWaitOf(facts: WaitFacts): LaneWait | null {
   if (facts.proposals > 0)
-    return { wait: "proposal", needsYou: true, said: "Collie proposes a correction" };
+    return {
+      wait: "proposal",
+      needsYou: true,
+      said: "Collie proposes a correction",
+    };
   if (facts.blocked) return { wait: "stalled", needsYou: true, said: PANE };
   if (facts.heldBy !== null)
     return { wait: "hold", needsYou: false, said: `Held by ${facts.heldBy}` };
   if (facts.memory)
-    return { wait: "memory", needsYou: false, said: `${facts.machine} is short of memory` };
+    return {
+      wait: "memory",
+      needsYou: false,
+      said: `${facts.machine} is short of memory`,
+    };
   if (facts.usage !== null)
     return {
       wait: "usage",
@@ -883,11 +911,19 @@ export function laneWaitOf(facts: WaitFacts): LaneWait | null {
     const { name, elapsedMs, usualMs } = facts.check;
     const elapsed = elapsedMs === null ? "" : ` · ${since(facts.now - elapsedMs)}`;
     const usual = usualMs === null || elapsedMs === null ? "" : `, usually ${minutes(usualMs)}`;
-    return { wait: "check", needsYou: false, said: `${name}${elapsed}${usual}` };
+    return {
+      wait: "check",
+      needsYou: false,
+      said: `${name}${elapsed}${usual}`,
+    };
   }
   if (facts.awaiting) return { wait: "ci", needsYou: false, said: "Still running" };
   if (facts.parked !== null && !facts.sleeping)
-    return { wait: "parked", needsYou: true, said: facts.parked.reason ?? PANE };
+    return {
+      wait: "parked",
+      needsYou: true,
+      said: facts.parked.reason ?? PANE,
+    };
   return null;
 }
 
@@ -992,7 +1028,10 @@ export function releaseRow(facts: {
         : [];
   return [
     { ...ci, url: facts.ci?.url },
-    ...Arr.map([merged, ...deployed], (node) => ({ ...node, url: facts.mrUrl ?? undefined })),
+    ...Arr.map([merged, ...deployed], (node) => ({
+      ...node,
+      url: facts.mrUrl ?? undefined,
+    })),
   ];
 }
 

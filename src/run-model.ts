@@ -63,7 +63,10 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   let generation = 0;
   const revisions = new Map<string, number>();
   const facts = new Map<string, string>();
-  const cards = new Map<string, { readonly text: string; readonly seq: number }>();
+  const cards = new Map<
+    string,
+    { readonly text: string; readonly seq: number; readonly from: TaskView; readonly to: TaskView }
+  >();
   const indexes: Indexes = {
     byTask: new Map(),
     byParent: new Map(),
@@ -73,12 +76,18 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const keys = new Map<string, ReturnType<typeof keysOf>>();
   const touch = (run: string) => revisions.set(run, ++seq);
 
-  /** `run/<id>` for a path under a Run's own directories, `shared` for the rest of the state directory. */
+  /**
+   * `run/<id>` for a path under a Run's own directories or one of its control files,
+   * `<control>.<id>` beside them; `shared` for the rest of the state directory.
+   */
   const groupOf = (path: string) => {
     if (!Str.startsWith(`${dir}/`)(path)) return null;
     const [top, run] = Str.split(Str.slice(dir.length + 1)(path), "/");
-    return (top === "runs" || top === "agents" || top === "evidence") && run !== undefined
-      ? `run/${run}`
+    if ((top === "runs" || top === "agents" || top === "evidence") && run !== undefined)
+      return `run/${run}`;
+    const controlled = Arr.join(Arr.drop(Str.split(top, "."), 1), ".");
+    return run === undefined && Str.includes(".")(top) && revisions.has(controlled)
+      ? `run/${controlled}`
       : "shared";
   };
   const groups = yield* Cache.make({
@@ -122,8 +131,8 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       }
       const run = Str.slice(4)(group);
       touch(run);
-      // A Run's directory coming or going changes the listing its parent directory gives.
-      if (Str.split(below, "/").length === 2) yield* Cache.invalidate(groups, "shared");
+      // A Run's directory or control file coming or going changes the listing above it.
+      if (Str.split(below, "/").length <= 2) yield* Cache.invalidate(groups, "shared");
     });
   const disable = Effect.gen(function* () {
     enabled = false;
@@ -252,13 +261,15 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   /** Each card with the highest revision of its Runs; a card that moved while none of them did moves its leading Run. */
   const stamp = (views: ReadonlyArray<TaskView>): ReadonlyArray<TaskView> =>
     Arr.map(views, (view) => {
+      const was = cards.get(view.id);
+      if (was?.from === view && highest(view.runs) === was.seq) return was.to;
       const { revision: _, ...card } = view;
       const text = fingerprint(card);
-      const was = cards.get(view.id);
       if (was !== undefined && was.text !== text && highest(view.runs) === was.seq) touch(view.run);
       const at = highest(view.runs);
-      cards.set(view.id, { text, seq: at });
-      return { ...card, revision: { epoch, seq: at } };
+      const to = { ...card, revision: { epoch, seq: at } };
+      cards.set(view.id, { text, seq: at, from: view, to });
+      return to;
     });
 
   const heads = new Map<string, string | null>();
