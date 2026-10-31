@@ -1884,9 +1884,13 @@ Chrome gives a card's button the click's pointer events but not the click.
 
 `first-host` times the record's own build: each sample opens a settled Run not opened before
 over the host's front door, with `parts` on, from request sent to first frame received. It
-starts no view, Chrome or Desktop, so it runs only on its own (`--cells first-host`), and it
+starts no view, Chrome or Desktop, so it runs only with the other host-only cells, and it
 fails a sample whose first frame has no Flow. A tree whose host ignores `parts` sends the whole
 record first, so it runs on the base tree too.
+
+`checks-host` and `storm-host` time the same opens with `checks`' and `storm`'s load beside
+them. Each host-only cell opens 205 Runs not opened before, and the fixture's 472 recent
+settled Runs hold two cells' worth, so the three take two runs.
 
 `--cells` takes `local` or a comma-separated list. `--samples` sets the timed opens per cell
 (200), and `--warmup` the opens before them (5), which are kept but not counted. `--runs`
@@ -1898,14 +1902,20 @@ The run writes `samples.jsonl`, every sample with its marks and differences, and
 
 - p50, p95, max and n by nearest rank, and `failed`, the samples whose Flow was wrong;
 - `lag_p99_ms`, `lag_max_ms` and `lag_probes`: a trivial RPC every 50 ms, from after the
-  warm-up (and, for `first-host`, after the host's Run model has filled) until the window
+  warm-up (and, for the host-only cells, after the host's Run model has filled) until the window
   holds at least 2000 probes. The cell's opens go on, untimed, until it does. GC pauses are
   not excluded;
 - for `host-cold`, `started_to_painted`: p50, p95 and max from the host's start to its
   record painted;
 - `stages`: where Desktop's `record:*` marks exist, `mount` (click to mounted),
   `bridge_and_host` (mounted to first value) and `render` (first value to usable). A tree
-  without the marks reports `absent`.
+  without the marks reports `absent`;
+- `stages.split`: `bridge_and_host` cut where the host emitted the record's first frame
+  (`host_emit`, from mounted), where the bridge passed it on (`bridge`), where Desktop's Bun
+  process decoded it (`desktop_read`), and on to the view's first value (`to_view`). The
+  harness sets `COLLIE_RECORD_MARKS`, and the host, the bridge and Desktop append those marks
+  to it in whole epoch milliseconds (`src/record-marks.ts`). A tree without them has no
+  `split`.
 
 It also records the tree, the fixture, the opens and warm-up per cell, the run's wall time in
 `wall_s`, and the Chrome: its version, its flags, and that it is

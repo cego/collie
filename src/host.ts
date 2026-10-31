@@ -62,6 +62,7 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
 import { recordFlow, recordFrames, type RecordSources } from "./record";
+import { markFirst } from "./record-marks";
 import { TurnScheduler } from "./turns";
 import { Foreground, foregroundLayer } from "./foreground";
 import * as Scheduler from "effect/Scheduler";
@@ -3287,7 +3288,7 @@ const frontDoorHandlers = (
               record,
               key,
               Stream.merge(key.parts === true ? writes : changed, own),
-            ).pipe(Stream.provideContext(bun), Stream.orDie);
+            ).pipe(markFirst("host:emit", runId), Stream.provideContext(bun), Stream.orDie);
           let fresh = refreshMr;
           const detail = Effect.gen(function* () {
             const view = yield* registry.view(runId);

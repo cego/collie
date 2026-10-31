@@ -79,6 +79,7 @@ import { CHILD_CWD, childEnv } from "./login-env";
 import { backoff } from "../shared/retrying";
 import { addressOf } from "../shared/record-terminal";
 import { withNotice } from "../../../src/redact";
+import { markFirst } from "../../../src/record-marks";
 import {
   type ActionsLog,
   type Attempted,
@@ -1503,6 +1504,7 @@ export const runDetailOn = (doors: DoorMap<Reached>, installation: string, runId
             parts: true,
           })
           .pipe(
+            markFirst("desktop:read", runId),
             Stream.filter(
               (value): value is RunDetail | null => value === null || !("_tag" in value),
             ),
