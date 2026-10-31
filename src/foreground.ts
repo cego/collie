@@ -2,7 +2,7 @@
 // a background pass that walks many Runs waits at each slice boundary while a record frame,
 // an offer or an act is being served.
 
-import { Context, Effect, Latch, Layer } from "effect";
+import { Context, Effect, Fiber, Latch, Layer } from "effect";
 
 /** The longest a slice boundary holds a pass for interactive work, so a busy door starves nothing. */
 const PATIENCE = "250 millis";
@@ -21,6 +21,9 @@ export const Foreground = Context.Reference<ForegroundApi>("collie/Foreground", 
 
 /** What interactive work sees of it: what it calls is served too, and holds for nothing. */
 const served: ForegroundApi = { serve: (effect) => effect, boundary: Effect.void };
+
+/** Whether the running fiber is serving interactive work. */
+export const servedNow = () => Fiber.getCurrent()?.getRef(Foreground) === served;
 
 export const makeForeground = Effect.gen(function* () {
   const idle = yield* Latch.make(true);

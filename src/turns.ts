@@ -11,13 +11,21 @@ export const TURN_MS = 8;
 const now = () => performance.now();
 
 class TurnDispatcher implements Scheduler.SchedulerDispatcher {
+  /** Tasks of fibers serving interactive work, run before any other. */
+  readonly front: Array<() => void> = [];
   private buckets: Array<[priority: number, tasks: Array<() => void>]> = [];
   /** What the last turn drained and had no time left for, in the order it was drained. */
   private left: Array<() => void> = [];
   private at = 0;
   private running = false;
 
+  constructor(private readonly first: () => boolean) {}
+
   scheduleTask(task: () => void, priority: number) {
+    if (this.first()) {
+      this.front.push(task);
+      return this.wake();
+    }
     const buckets = this.buckets;
     let index = 0;
     while (index < buckets.length && buckets[index]![0] < priority) index++;
@@ -27,7 +35,8 @@ class TurnDispatcher implements Scheduler.SchedulerDispatcher {
   }
 
   flush() {
-    while (this.left.length > 0 || this.buckets.length > 0) this.turn(Infinity);
+    while (this.front.length > 0 || this.left.length > 0 || this.buckets.length > 0)
+      this.turn(Infinity);
   }
 
   private wake() {
@@ -44,14 +53,14 @@ class TurnDispatcher implements Scheduler.SchedulerDispatcher {
     this.left = [];
     this.buckets = [];
     const started = now();
-    for (this.at = 0; this.at < tasks.length;) {
+    const over = () => now() - started > budget;
+    for (this.at = 0; ;) {
+      while (this.front.length > 0 && !over()) this.front.shift()!();
+      if (this.at >= tasks.length || over()) break;
       tasks[this.at++]!();
-      if (now() - started > budget) break;
     }
-    if (this.at < tasks.length) {
-      this.left = tasks.slice(this.at);
-      this.wake();
-    }
+    this.left = tasks.slice(this.at);
+    if (this.front.length > 0 || this.left.length > 0 || this.buckets.length > 0) this.wake();
   }
 }
 
@@ -62,7 +71,11 @@ class TurnDispatcher implements Scheduler.SchedulerDispatcher {
 export class TurnScheduler implements Scheduler.Scheduler {
   readonly executionMode = "async" as const;
   private readonly inner = new Scheduler.MixedScheduler();
-  private readonly dispatcher = new TurnDispatcher();
+  private readonly dispatcher: TurnDispatcher;
+  /** `first` says whether the running fiber's tasks go before every other's. */
+  constructor(private readonly first: () => boolean = () => false) {
+    this.dispatcher = new TurnDispatcher(first);
+  }
   /** When the running fiber's stretch began: one fiber runs at a time. */
   private since = 0;
   shouldYield(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
@@ -71,7 +84,9 @@ export class TurnScheduler implements Scheduler.Scheduler {
       return false;
     }
     if (this.inner.shouldYield(fiber)) return true;
-    return (fiber.currentOpCount & 63) === 0 && now() - this.since > TURN_MS;
+    if ((fiber.currentOpCount & 63) !== 0) return false;
+    // Background work steps aside while a served fiber's task waits.
+    return now() - this.since > TURN_MS || (this.dispatcher.front.length > 0 && !this.first());
   }
   makeDispatcher(): Scheduler.SchedulerDispatcher {
     return this.dispatcher;

@@ -64,7 +64,7 @@ import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
 import { recordFlow, recordFrames, type RecordSources } from "./record";
 import { markFirst } from "./record-marks";
 import { TurnScheduler } from "./turns";
-import { Foreground, foregroundLayer } from "./foreground";
+import { Foreground, foregroundLayer, servedNow } from "./foreground";
 import * as Scheduler from "effect/Scheduler";
 import {
   EntryError,
@@ -3474,7 +3474,7 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
     );
   }).pipe(
     Effect.orDie,
-    Effect.provideService(Scheduler.Scheduler, new TurnScheduler()),
+    Effect.provideService(Scheduler.Scheduler, new TurnScheduler(servedNow)),
     Effect.provide(foregroundLayer),
   );
 
