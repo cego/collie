@@ -481,3 +481,23 @@ test("an hc update that fails is reported, and the release is still placed", () 
       );
     }),
   ));
+
+test("an hc update that failed is tried again by the next upgrade, with the pin unchanged", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* carryHc("a");
+      yield* placeHc();
+      const working = yield* read(`${hcBin()}/herdr-core`);
+      yield* write(`${hcBin()}/herdr-core`, `#!/bin/sh\necho "hc: busy" >&2\nexit 1\n`);
+      yield* carryHc("b");
+      yield* placeHc();
+      yield* write(`${hcBin()}/herdr-core`, working);
+
+      const placed = yield* placeHc();
+
+      expect(yield* hcCalls()).toEqual([expect.stringMatching(/^update --from /), "# hc build b"]);
+      expect(placed.ok && "steps" in placed.data && placed.data.steps).toContainEqual(
+        expect.objectContaining({ step: "hc", state: "done" }),
+      );
+    }),
+  ));

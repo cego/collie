@@ -1407,8 +1407,8 @@ binary (`hc --licenses`). `placeRelease` in `src/release.ts` writes the
 tree and the runner into `<Collie directory>/release.new` with `placed.json`, each file's
 sha256, copies every file of the current `release/` that differs from its own record into
 `kept/`, then swaps the two. `placeHc` in `src/hc-install.ts` then installs the carried
-`hc` where upstream's installer would, or, where the replaced release recorded another
-archive, runs `herdr-core update --from` it. In a placed release `install.sh` and `prepare.sh` leave
+`hc` where upstream's installer would, or, where the archive it last placed without a
+failure (`<Collie directory>/hc-placed.sha256`) is another, runs `herdr-core update --from` it. In a placed release `install.sh` and `prepare.sh` leave
 `bin/collie` as it was placed. `tools/smoke.sh` checks the built runner places its release
 at its own version. Its forge check asks the compiled runner for a missing review target
 against a temporary checkout: the missing-input response must offer the pull request

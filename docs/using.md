@@ -97,9 +97,10 @@ against Collie's release key and places its release into `~/.collie/release/`
 [development checkout](#running-a-checkout-of-collie) is pulled instead (`--ff-only
 --autostash`, so it never quietly merges local work and its uncommitted work rides
 through). Either way it then runs the same `prepare.sh` steps and reports what each of them did.
-A release that carries another pin of `hc` than the one it replaces swaps it with
+A release that carries another pin of `hc` than the last one placed swaps it with
 `herdr-core update --from` the carried binary, which restarts core and leaves its running
-terminals alone; one with the same pin leaves `hc` alone. Collie never runs `hc update`
+terminals alone; one with the same pin leaves `hc` alone. An update that failed is tried
+again by the next upgrade, whatever pin it carries. Collie never runs `hc update`
 without `--from`, or `hc machine update`. A paired Machine upgraded to this release gets its
 `hc` the same way. A pull it cannot do is reported
 rather than installed over. The Control Plane and `collie doctor` say when a newer release

@@ -580,9 +580,9 @@ const placeOwn = Effect.fn("operations.placeOwn")(function* (
       output: placed.failure.message,
     });
   }
-  const { root, kept, was, is } = placed.success;
+  const { root, kept, is } = placed.success;
   yield* (yield* FileSystem.FileSystem).makeDirectory(env.userDir, { recursive: true });
-  const hc = yield* placeHc(env, root, was[BUNDLED_HC] ?? null, is[BUNDLED_HC] ?? null, run);
+  const hc = yield* placeHc(env, root, is[BUNDLED_HC] ?? null, run);
   const prepared = yield* prepareAndDesktop(env, root, manifest.version, run);
   if (!prepared.ok) return prepared;
   const data = {

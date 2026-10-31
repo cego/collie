@@ -22,15 +22,21 @@ export interface HcStep {
   readonly detail: string;
 }
 
+/** The sha256 of the hc archive last installed or updated without a failure. */
+const PLACED_HC = "hc-placed.sha256";
+
 /**
- * Installs the hc that the release at `root` carries, or swaps it in where the release it
- * replaced carried another archive (`was`, its recorded sha256, null where it carried none).
- * Null where the release carries no hc.
+ * Installs the hc that the release at `root` carries (`is`, its archive's sha256), or swaps it
+ * in where the last one placed was another archive or failed to go in. Null where the release
+ * carries no hc.
  */
 export const placeHc = Effect.fn("HcInstall.place")(function* (
-  env: { readonly raw: Readonly<Record<string, string | undefined>>; readonly home: string },
+  env: {
+    readonly raw: Readonly<Record<string, string | undefined>>;
+    readonly home: string;
+    readonly collieDir: string;
+  },
   root: string,
-  was: string | null,
   is: string | null,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
@@ -41,7 +47,9 @@ export const placeHc = Effect.fn("HcInstall.place")(function* (
   const bin = hcInstallDir(env.raw, env.home);
   const installed = path.join(bin, "herdr-core");
   const present = yield* fs.exists(installed);
-  if (present && was === is)
+  const record = path.join(env.collieDir, PLACED_HC);
+  const placed = yield* fs.readFileString(record).pipe(Effect.orElseSucceed(() => ""));
+  if (present && Str.trim(placed) === is)
     return { step: "hc", state: "already in place", detail: installed } satisfies HcStep;
 
   const failed = (detail: string): HcStep => ({ step: "hc", state: "failed", detail });
@@ -53,11 +61,12 @@ export const placeHc = Effect.fn("HcInstall.place")(function* (
 
   if (present) {
     const updated = yield* run(installed, ["update", "--from", carried], root);
-    return updated.code === 0
-      ? ({ step: "hc", state: "done", detail: `updated ${installed}` } satisfies HcStep)
-      : failed(
-          `${installed} update --from the carried hc: ${Str.trim(updated.stderr ?? "") || Str.trim(updated.stdout) || `exit ${updated.code}`}`,
-        );
+    if (updated.code !== 0)
+      return failed(
+        `${installed} update --from the carried hc: ${Str.trim(updated.stderr ?? "") || Str.trim(updated.stdout) || `exit ${updated.code}`}`,
+      );
+    yield* fs.writeFileString(record, `${is}\n`);
+    return { step: "hc", state: "done", detail: `updated ${installed}` } satisfies HcStep;
   }
   yield* fs.makeDirectory(bin, { recursive: true });
   yield* fs.copyFile(carried, `${installed}.new`);
@@ -71,5 +80,6 @@ export const placeHc = Effect.fn("HcInstall.place")(function* (
       Effect.catch(() => fs.exists(hc)),
     ));
   if (!taken) yield* fs.symlink("herdr-core", hc);
+  yield* fs.writeFileString(record, `${is}\n`);
   return { step: "hc", state: "done", detail: `installed ${installed}` } satisfies HcStep;
 }, Effect.scoped);
