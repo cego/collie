@@ -45,7 +45,7 @@ import { humanBytes } from "./bytes";
 import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { RESERVED_INPUTS } from "./sdk";
 import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
-import { listTasks, removeTask } from "./task";
+import { isOpen, listTasks, removeTask } from "./task";
 import {
   clearOverride,
   collieOwnRefusal,
@@ -532,7 +532,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           listing.unreadable === null
             ? Arr.filter(
                 yield* listTasks(env.stateDir),
-                (task) => !open.has(task.workspace) && !owned.has(task.id),
+                (task) => !isOpen(task, open) && !owned.has(task.id),
               )
             : [];
         for (const task of gone) yield* removeTask(env.stateDir, task.id);

@@ -495,10 +495,10 @@ Which branch it is:
 - `collie run start implement --input branch=<name>` → that branch, whatever the above
   would have said.
 
-The checkout lives under herdr's own worktree directory — `~/.herdr/worktrees/<repo>/<branch>`,
-or whatever `[worktrees] directory` says in the `config.toml` herdr is reading, which
-`HERDR_CONFIG_PATH` may move — so herdr's own "open worktree" UI still finds it; the run's
-log says which one it got. A branch with a `/` in it nests, so `feature/foo` gets
+The checkout lives under Collie's own worktree directory — `~/.collie/worktrees/<repo>/<branch>`,
+or under the directory `collie settings set worktrees_directory <dir>` names on that
+Machine; the run's log says which one it got. A checkout made before, such as one herdr
+made under `~/.herdr/worktrees`, stays where it is and is still found. A branch with a `/` in it nests, so `feature/foo` gets
 `…/<repo>/feature/foo`, apart from a branch actually called `feature-foo`. A branch that
 this repository's `git worktree list` already has a checkout of is given that one — git
 allows no second worktree on a checked-out branch, and a fix round has to land where the
@@ -520,7 +520,7 @@ stash stack — looks like, which is the thing this exists to prevent.
 `renovate` changes the repository too, but it does not build one branch — it moves across
 every Renovate Bot branch it merges. So it gets a checkout of its own that is **detached**
 at the repository's default branch as the remote has it, at
-`~/.herdr/worktrees/<repo>/roaming`, and no branch is created or claimed for the run.
+`~/.collie/worktrees/<repo>/roaming`, and no branch is created or claimed for the run.
 Where the repository has an `origin` that will not fetch, the start is refused rather
 than cut from a stale base.
 That is the first of three, `roaming`, `roaming-2` and `roaming-3`. One an ended run left
@@ -1706,7 +1706,9 @@ scope's rule once:
   terminal_backend core` on a Machine runs the agents its Runs launch next in herdr-core
   terminals instead of herdr panes. An agent already running on herdr stays there. Set it
   back to `herdr` only once no agent runs on core: a Machine set to herdr no longer lists
-  core's.
+  core's. On core a Task opens no herdr workspace, and `--input workspace=new` gets a git
+  checkout like any other. `worktrees_directory` is each Machine's own too: where its new
+  checkouts go, `~/.collie/worktrees` unless set.
   A value never configured says **Not set**. A Machine out of reach keeps its last values
   and says when they were read, including after Desktop reopens. A host without this read
   says **Not known** and names its Collie version; its paired link and board keep working.

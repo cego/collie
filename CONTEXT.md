@@ -367,14 +367,18 @@ merge request one opened or was given — read from their records, never from th
 the Task was rooted at. A Run started fresh is a new Task, unless it is about that work —
 the merge request its diff target names is one of a Task's, whatever state that Task is
 in, or the branch it is placed on or its diff target names is one of an open Task's, one
-whose workspace herdr has — and then it is the Task's that had it first: one workspace per
-Task. Joining is membership, not **Lineage**: a Run that joins has no parent. Anything
+whose workspace herdr has, or on core one not yet closed, until an hour after it is
+**Finished** — and then it is the Task's that had it first: one workspace per
+Task. On a core Machine a Task is Collie's record and a `task` label on its agents'
+terminals, and nothing else: naming or renaming it writes only the record. Joining is membership, not **Lineage**: a Run that joins has no parent. Anything
 else joins a Task only by an explicit **Continue task**. A child Run is its parent's
 Task's, unless it was started as work of its own (`ownTask`): then it is placed as a fresh
 start is, and is still its parent's child (ADR-draft-a-tasks-work-is-what-its-runs-worked-on).
 
 **Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
-Task, made when its first Run is admitted, on the checkout that Run is given. It is never
+Task, made when its first Run is admitted, on the checkout that Run is given. Herdr 1
+only: on core a Task has none, so nothing is made, focused or closed, and an hour after the
+Task is **Finished** Cleanup closes its record instead. It is never
 focused: a start does not take the human away from what they are doing. Collie closes it
 an hour after its Task is **Finished**, unless herdr has it in focus at that moment or it
 holds a pane Collie did not open, which keeps it open until the human closes it (see
@@ -498,9 +502,14 @@ checkout is the Run's: what it verifies is that tree
 ([ADR-0054](docs/adr/0054-a-reviews-fix-works-in-the-reviewed-branchs-checkout.md)). A
 Renovate Run's is the one that holds no branch — see Renovate Run.
 
+A new checkout goes under the `worktrees_directory` setting, by default
+`~/.collie/worktrees/<repo>/<branch>`. A branch's existing checkout is found through
+`git worktree list` wherever it is, `~/.herdr/worktrees` included, and is never moved.
+
 Two managers, and a Run records which: Collie makes the checkout with `git worktree add`
-by default, and `--input workspace=new` asks herdr for it instead, which opens it as a
-workspace of the Run's own — or, for a fresh Task, as the Task's. It outlives the merge request and is removed only once **Settled** —
+by default, and on a Herdr 1 Machine `--input workspace=new` asks herdr for it instead,
+which opens it as a workspace of the Run's own — or, for a fresh Task, as the Task's. On
+core git makes it either way. It outlives the merge request and is removed only once **Settled** —
 a git-managed checkout with `git worktree remove` then `git branch -d`, and the Run's
 tabs whose shells sit inside it closed with it; one herdr has a workspace open on through
 `herdr worktree remove`, whoever made it, so herdr never lists a checkout that is gone.
@@ -788,7 +797,8 @@ session that Collie has a Run, an agent or a history in. It is what a Run lookup
 and never what a Session is: the register a Run's agents are written to and starting a
 Workflow stay this Session's, and a hand-off stays in the Run's **Lineage**. The board no longer has one — it is the whole Herd's, one card per Task
 ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md)) — so the `scope` default in
-`config.json` is read at launch and narrows nothing a human sees.
+`config.json` is read at launch and narrows nothing a human sees. On core no Task has a
+workspace, so `local` narrows nothing.
 
 **Work boundary** — The moment immediately before a reused agent that has finished its
 previous work is given the next piece: a Workflow's next operation on the same agent, a

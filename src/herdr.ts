@@ -252,11 +252,6 @@ const HerdrStatusReply = Schema.Struct({
   protocol: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
 
-/** herdr's `config.toml`, as far as this plugin has any business reading it. */
-const HerdrConfig = Schema.Struct({
-  worktrees: Schema.optionalKey(Schema.Struct({ directory: Schema.optionalKey(Schema.String) })),
-});
-
 const PluginPaneReply = Schema.Struct({
   result: Schema.Struct({
     plugin_pane: Schema.Struct({
@@ -736,7 +731,7 @@ const watched = (socket: string) =>
 export class Herdr {
   private seq = 0;
 
-  constructor(private readonly env: PluginEnv) {}
+  constructor(readonly env: PluginEnv) {}
 
   /**
    * Where `target` runs: `given`, which is what its incarnation recorded, or else core on a
@@ -1426,41 +1421,6 @@ export class Herdr {
         source: result.source?.source_checkout_path ?? result.source?.repo_root ?? null,
       })),
     );
-  }
-
-  /**
-   * Where herdr keeps a repository's worktrees: what its own `config.toml` says, and
-   * herdr's default otherwise. There is no command to ask, so this is the one thing
-   * about herdr that is read from its config rather than from herdr — and it lives
-   * here so that "where would herdr have put this checkout" is a question with one
-   * answer, whoever is asking. A caller Collie makes a checkout for needs that answer
-   * for herdr's own "open worktree" UI to still list it.
-   *
-   * `HERDR_CONFIG_PATH` moves that file, and herdr honours it, so this follows it.
-   * XDG_CONFIG_HOME is not consulted: the fallback is herdr's own default, and a
-   * machine that keeps its config elsewhere says so with `HERDR_CONFIG_PATH`.
-   */
-  worktreesDirectory(): Effect.Effect<string, never, PlatformServices> {
-    const { home, herdrConfigPath } = this.env;
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      // The config herdr is reading, which `HERDR_CONFIG_PATH` may move: asking the
-      // default while herdr honours an override would put the checkout somewhere herdr
-      // never configured, which is the one thing this must not do.
-      const configured = yield* fs
-        .readFileString(herdrConfigPath ?? path.join(home, ".config", "herdr", "config.toml"))
-        .pipe(
-          Effect.flatMap((text) => Effect.try(() => Bun.TOML.parse(text))),
-          Effect.map((parsed) =>
-            Schema.decodeOption(HerdrConfig)(parsed).pipe(Option.getOrUndefined),
-          ),
-          // No config file, one that will not parse, and one herdr itself would reject
-          // are the same answer: nothing here has moved the worktrees.
-          Effect.catch(() => Effect.void),
-        );
-      return configured?.worktrees?.directory ?? path.join(home, ".herdr", "worktrees");
-    });
   }
 
   worktreeCreate(opts: {

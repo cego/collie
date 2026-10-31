@@ -17,7 +17,7 @@ import * as Arr from "effect/Array";
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { CommandLine, type ChildProcessSpawner } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { loadDefaults, terminalBackend } from "./config";
+import { loadDefaults, terminalBackend, worktreesDirectory } from "./config";
 import { savedModules } from "./discovery";
 import { layers, loadDefinitions, skillDirs, skillFile } from "./definitions";
 import type { PluginEnv } from "./env";
@@ -645,7 +645,7 @@ const LOW_SHARE = 0.1;
 const LOW_BYTES = 5 * 1024 ** 3;
 
 /**
- * Free space on each filesystem Collie writes to — the state directory, its cache, herdr's
+ * Free space on each filesystem Collie writes to — the state directory, its cache, the
  * worktrees and the temporary directory — each filesystem once. Low is a warning, with what
  * a sweep would free where a host has served this state directory.
  */
@@ -654,7 +654,13 @@ const diskSpace = Effect.fn("Doctor.diskSpace")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const wanted = [env.stateDir, collieCache(), `${env.home}/.herdr/worktrees`, tmpdir()];
+  const wanted = [
+    env.stateDir,
+    collieCache(),
+    yield* worktreesDirectory(env),
+    `${env.home}/.herdr/worktrees`,
+    tmpdir(),
+  ];
   const dirs: string[] = [];
   for (const dir of wanted)
     if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) dirs.push(dir);

@@ -175,6 +175,7 @@ describe("Each setting explains itself", () => {
       "terminal_backend",
     ],
     Runs: [
+      "worktrees_directory",
       "max_iterations",
       "handoff_timeout_ms",
       "memory_hold",

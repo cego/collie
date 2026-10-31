@@ -5382,6 +5382,38 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
     }),
   ));
 
+test("a Task on a core Machine is renamed in its record alone, and core is asked nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.startCore();
+      yield* fs.makeDirectory(rig.userDir, { recursive: true });
+      yield* fs.writeFileString(`${rig.userDir}/config.json`, '{ "terminal_backend": "core" }');
+      const env = rig.pluginEnv({ HERDR_SOCKET_PATH: "" });
+      yield* writeTask(env.stateDir, {
+        id: "task-k",
+        workspace: null,
+        label: "Collie | Plan new work",
+        cwd: rig.projectDir,
+        created_at: "2026-10-26T00:00:00.000Z",
+      });
+      const goal = { goal: "Design Tune-up performance workflow" };
+
+      yield* retitleGenericTasks(env, new Herdr(env), [
+        runFacts({ id: "r-k", workflow: "plan", task: "task-k", settled: { inputs: goal } }),
+      ]);
+
+      expect(yield* readTask(env.stateDir, "task-k")).toEqual({
+        id: "task-k",
+        workspace: null,
+        label: "Collie | Design Tune-up performance workflow",
+        cwd: rig.projectDir,
+        created_at: "2026-10-26T00:00:00.000Z",
+      });
+      expect(yield* rig.calls()).toEqual([]);
+    }),
+  ));
+
 test("a Task's workspace is looked for in its own Herd, where a workspace of the same id is another's", () =>
   runEffect(
     Effect.gen(function* () {

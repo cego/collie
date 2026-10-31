@@ -30,6 +30,7 @@ export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
 
 /** What runs a Machine's agents: Herdr 1, or herdr-core. */
 export type TerminalBackend = "herdr" | "core";
+export const WORKTREES_DIRECTORY = "~/.collie/worktrees";
 export const TERMINAL_BACKENDS: ReadonlyArray<TerminalBackend> = ["herdr", "core"];
 export function isScope(value: string): value is Scope {
   return Arr.some(SCOPES, (scope) => scope === value);
@@ -345,6 +346,13 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     label: "Claude subagents",
     description:
       "Claude's nested agents: enabled, model, forceModel, cacheTtl (5m or 1h), maxDepth and maxConcurrent. Empty keeps native behavior.",
+  }),
+  of("worktrees_directory", "text", WORKTREES_DIRECTORY, {
+    group: "Runs",
+    label: "Worktrees",
+    description:
+      "Where Collie makes a Run's checkout, under the repository's name and the branch's. A checkout made elsewhere before is found where it is. This Machine only.",
+    machine: true,
   }),
   of("max_iterations", "number", String(D.maxIterations), {
     group: "Runs",

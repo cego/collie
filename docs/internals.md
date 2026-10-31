@@ -708,13 +708,8 @@ change what reads it. Bumping the pin afterwards is editing the version and chec
 `herdr-pin.json` and running `bun run contract:regen`. A red `preview` is the same
 news weeks early, and nothing to stop for.
 
-It also owns the one fact herdr settles but answers no command about: where a
-repository's worktrees go (`worktreesDirectory`, from `[worktrees] directory` in the
-`config.toml` herdr is actually reading — `HERDR_CONFIG_PATH` where it names one, herdr's
-own default otherwise). Reading that config elsewhere would be a second
-channel to herdr, and "where would herdr have put this checkout" has to have one answer
-whoever asks — the checkout Collie makes with git is found by herdr's own "open worktree"
-UI precisely because it is at that path.
+Where a checkout goes is Collie's own setting, `worktrees_directory`
+(`worktreesDirectory` in `src/config.ts`), not herdr's config.
 
 One gotcha the engine works around rather than reports: `tab create --cwd` and
 `pane split --cwd` echo the directory back but leave the pane's shell in the workspace
@@ -872,6 +867,11 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   `collie herdr compaction <control dir>` as the payload Claude's `AskUserQuestion` hook
   gets, so it is recorded in the same `questions.jsonl` and becomes the same Decisions.
 - **Stop** at the Run's end is `terminal.kill`.
+- **A Task** is its record and the `task` label: placement opens no workspace, and a
+  Task's `workspace` is null. Cleanup's pass over Task workspaces writes the record's
+  `closed_at` an hour after the Task is Finished, which ends a start's join by branch;
+  rename, focus and close ask neither herdr nor core. A Run that asked for a workspace of
+  its own gets a git checkout (`checkoutFor` in `src/worktree.ts`).
 
 The incarnation of an agent launched on core is its terminal's address, marked `core`, and
 what is sent to it goes to core. A Machine set to core also lists herdr's agents while

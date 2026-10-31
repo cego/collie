@@ -95,7 +95,15 @@ import {
   type WorkflowDefinition,
   type WorkflowEntry,
 } from "./sdk";
-import { FALLBACK_DEFAULTS, configValue, gitlabHostOf, loadDefaults, readConfig } from "./config";
+import {
+  FALLBACK_DEFAULTS,
+  configValue,
+  gitlabHostOf,
+  loadDefaults,
+  readConfig,
+  terminalBackend,
+  worktreesDirectory,
+} from "./config";
 import { unlistedServers } from "./compaction";
 import { foldPreferences, preferencesFromOptions, resolveChoice } from "./harness";
 import type { MachineCatalogue } from "./harness-choice";
@@ -226,7 +234,7 @@ import { slackToken } from "./slack-credentials";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
-import { listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
+import { isOpen, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs } from "./time";
 import {
   pauseBefore,
@@ -3705,11 +3713,12 @@ export const hostLayer = (options: {
       const walks = yield* Cache.makeWith(
         (root: string) =>
           Effect.gen(function* () {
-            const { herdr } = yield* placing;
-            const worktrees = yield* herdr.worktreesDirectory();
-            return yield* publicationCheckouts(
-              (yield* fs.exists(worktrees)) ? [root, worktrees] : [root],
-            );
+            const { env } = yield* placing;
+            const roots = [root];
+            // Checkouts made before the setting stay where herdr put them.
+            for (const dir of [yield* worktreesDirectory(env), `${env.home}/.herdr/worktrees`])
+              if (yield* fs.exists(dir)) roots.push(dir);
+            return yield* publicationCheckouts(roots);
           }).pipe(Effect.provideContext(bun)),
         { capacity: 4, timeToLive: (exit) => (Exit.isSuccess(exit) ? "2 minutes" : 0) },
       );
@@ -6627,7 +6636,9 @@ const makeRegistry: (
         ? { workspace: opened.id, rootPane: placed.worktree?.root_pane_id ?? null }
         : ask.workspace !== undefined && ask.workspace !== null
           ? { workspace: ask.workspace, rootPane: null }
-          : yield* openWorkspace;
+          : (yield* terminalBackend(placing.env.userDir)) === "core"
+            ? { workspace: null, rootPane: null }
+            : yield* openWorkspace;
     // A workspace an earlier attempt recorded may already have its Task.
     const known =
       ask.workspace === undefined
@@ -6676,7 +6687,7 @@ const makeRegistry: (
     const mr = mrKeyOf(pointedAt(generation, ask.input));
     if (branch === null && mr === null) return null;
     const open = new Set(
-      branch === null
+      branch === null || (yield* terminalBackend(placing.env.userDir)) === "core"
         ? []
         : Arr.map(
             yield* placing.herdr
@@ -6706,7 +6717,7 @@ const makeRegistry: (
         );
         if (mrs.includes(mr)) return task;
       }
-      if (branch === null || !open.has(task.workspace) || unplaced(row)) continue;
+      if (branch === null || !isOpen(task, open) || unplaced(row)) continue;
       const at = placedOf(row, {});
       if (at.branch === null) continue;
       if ((yield* about({ cwd: at.cwd, branch: at.branch, name: row.run, inputs: {} })) === branch)

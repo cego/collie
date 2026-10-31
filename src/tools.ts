@@ -67,7 +67,7 @@ import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
 import { peersOf } from "./peers";
 import { cleanupLines } from "./cleanup";
-import { taskOfWorkspace } from "./task";
+import { isOpen, taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
@@ -617,7 +617,7 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   const open = new Set(Arr.map(all, (workspace) => workspace.workspaceId));
   const tasks = Arr.filter(
     yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => [])),
-    (task) => open.has(task.workspace),
+    (task) => isOpen(task, open),
   );
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return Arr.join(
@@ -626,7 +626,8 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
       "",
       ...Arr.map(
         tasks,
-        (task) => `- task ${task.id} (${task.label}) in workspace ${task.workspace}`,
+        (task) =>
+          `- task ${task.id} (${task.label})${task.workspace === null ? "" : ` in workspace ${task.workspace}`}`,
       ),
       ...(tasks.length === 0 ? ["- (no Tasks with an open workspace)"] : []),
       "",
