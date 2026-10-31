@@ -202,8 +202,8 @@ const once = (name: string, body: () => Promise<void>, timeout?: number) => {
 /** The installation is this checkout, so the shipped personas are the ones found. */
 const hostOf = (): AgentHost => ({
   dir,
-  env: rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT }),
-  herdr: new FakeHerdr(rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT })),
+  env: rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab }),
+  herdr: new FakeHerdr(rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab })),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -9636,12 +9636,20 @@ const driven = <A, E>(
       return yield* Effect.gen(function* () {
         yield* made.workflow.execute(payload, { discard: true });
         const id = yield* made.workflow.executionId(payload);
+        const status = engine
+          .poll(made.workflow, id)
+          .pipe(Effect.map((got) => pollStatus(got, "")));
         return yield* drive({
-          status: engine.poll(made.workflow, id).pipe(Effect.map((got) => pollStatus(got, ""))),
+          status,
           asked: store.asked(options.runId),
           resume: engine.resume(made.workflow, id),
+          // An answer landing before the Run awaits it queues a wake that would resume its next park.
           answer: (decision, value) =>
-            answerDecision(made, { name: decision, executionId: id, value }).pipe(
+            until(
+              () => status,
+              (got) => got.status === "suspended",
+            ).pipe(
+              Effect.andThen(answerDecision(made, { name: decision, executionId: id, value })),
               Effect.orDie,
               Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
             ),

@@ -7,7 +7,7 @@ import { pipe } from "effect/Function";
 import { hostname } from "node:os";
 import { Clock, Effect, Option, Result, Schema } from "effect";
 import { type ChildProcessSpawner, CommandLine } from "effect/process";
-import { gitlabHostOf, readConfig } from "../config";
+import { gitlabHostOf } from "../config";
 import {
   FETCH_LIMIT,
   answered,
@@ -20,25 +20,13 @@ import {
   type Check,
 } from "../doctor-check";
 import type { PluginEnv } from "../env";
-import { daysLeft, isHostName, RENEW_WITHIN_DAYS, TokenSelf, tokenPage } from "../gitlab-token";
+import { daysLeft, RENEW_WITHIN_DAYS, TokenSelf, tokenPage } from "../gitlab-token";
 import { whatItSaid, type Runner } from "../mr";
 import { glabLoginTo } from "./gitlab";
-import { isString } from "../schema";
 import type { ConnectionReading as Probe } from "../connection-model";
 
-export const glabLoginOn = Effect.fn("GitLab.loginOn")(function* <R>(
-  env: PluginEnv,
-  run: Runner<R>,
-) {
-  const config = yield* readConfig(env.userDir);
-  const configured = env.raw.GITLAB_HOST ?? config.gitlab_host;
-  const stored =
-    isString(configured) && isHostName(configured)
-      ? configured
-      : Str.trim((yield* run("glab", ["config", "get", "host", "--global"], env.cwd)).stdout);
-  const host = isHostName(stored) ? stored : "gitlab.com";
-  return glabLoginTo(host);
-});
+export const glabLoginOn = (env: PluginEnv) =>
+  Effect.map(gitlabHostOf(env), (host) => glabLoginTo(host));
 
 const GitlabUser = Schema.fromJsonString(Schema.Struct({ username: Schema.NonEmptyString }));
 
@@ -46,7 +34,7 @@ export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
   env: PluginEnv,
   run: Runner<R>,
 ) {
-  const login = yield* glabLoginOn(env, run);
+  const login = yield* glabLoginOn(env);
   const host = login.host;
   const fix = login.relogin;
   const environmentToken =

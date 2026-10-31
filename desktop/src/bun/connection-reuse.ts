@@ -1,5 +1,5 @@
 import { Cause, Effect } from "effect";
-import type { ConnectionLogin } from "../../../src/connection-model";
+import type { ConnectionLogin, ConnectionReading } from "../../../src/connection-model";
 import { GITHUB_WEB_LOGIN, type Keyring } from "./credentials";
 import { type MachineConnections, workflowConnections } from "../shared/connections";
 import type { Door, ShellRoute } from "./machine";
@@ -67,3 +67,30 @@ export const reuseGitlab = <R, E, RHost>(
     yield* keyring.store("gitlab-token", `Collie's GitLab token for ${login.host}`, login.token);
     return yield* give(login.token);
   });
+
+export const readBack = <E>(
+  each: ReadonlyArray<{ readonly name: string; readonly failed: string | null }>,
+  read: (name: string) => Effect.Effect<ConnectionReading, E>,
+) =>
+  Effect.forEach(
+    each,
+    (one) =>
+      one.failed !== null
+        ? Effect.succeed(one)
+        : read(one.name).pipe(
+            Effect.timeoutOrElse({
+              duration: "20 seconds",
+              orElse: () => Effect.fail("The Machine did not answer"),
+            }),
+            Effect.map((reading) =>
+              reading.state === "ok"
+                ? one
+                : { ...one, failed: `given, but it reads ${reading.detail}` },
+            ),
+            Effect.orElseSucceed(() => ({
+              ...one,
+              failed: "given, but it could not be read back; refresh Connections",
+            })),
+          ),
+    { concurrency: "unbounded" },
+  );

@@ -33,7 +33,7 @@ const json = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Resul
 const fakeAgents = () =>
   agentsLayer({
     dir: rig.stateDir,
-    env: rig.pluginEnv(),
+    env: rig.pluginEnv({ GITLAB_HOST: FORGE_HOST.gitlab }),
     herdr: new FakeHerdr(rig.pluginEnv()),
     harness: "claude",
     model: "opus",
@@ -51,7 +51,7 @@ const withMachine = <A, E, R>(
         userDir: rig.userDir,
         placing: {
           herdr: new FakeHerdr(rig.pluginEnv()),
-          env: rig.pluginEnv(),
+          env: rig.pluginEnv({ GITLAB_HOST: FORGE_HOST.gitlab }),
         },
       }).pipe(
         Layer.provideMerge(fakeAgents()),
@@ -61,7 +61,7 @@ const withMachine = <A, E, R>(
             userDir: rig.userDir,
             placing: {
               herdr: new FakeHerdr(rig.pluginEnv()),
-              env: rig.pluginEnv(),
+              env: rig.pluginEnv({ GITLAB_HOST: FORGE_HOST.gitlab }),
             },
             issuePrivacyBudget,
           }),
