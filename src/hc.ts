@@ -82,7 +82,7 @@ export const coreSocket = Effect.fn("Hc.coreSocket")(function* (
   const config = `${raw.XDG_CONFIG_HOME || `${raw.HOME ?? ""}/.config`}/herdr-core/config.toml`;
   const configured = yield* fs.readFileString(config).pipe(
     Effect.flatMap((text) => Effect.try(() => Bun.TOML.parse(text))),
-    Effect.map((parsed) => Schema.decodeUnknownOption(CoreConfig)(parsed)),
+    Effect.map((parsed) => Schema.decodeOption(CoreConfig)(parsed)),
     Effect.orElseSucceed(() => Option.none()),
   );
   if (Option.isSome(configured) && configured.value.socket) return configured.value.socket;
