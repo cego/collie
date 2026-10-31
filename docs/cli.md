@@ -2556,8 +2556,8 @@ that installed herdr. Collie never runs `herdr update` or `herdr server stop` it
 **hc** is `herdr-core` on PATH, else where upstream's installer puts it
 (`~/.local/bin/herdr-core`, or `HC_INSTALL_DIR`), at the version `hc-pin.json` pins. One
 missing or at another version fails, with upstream's installer for the pinned version as
-the fix. **Core** fails where the default core session (`HC_SOCKET`, else `HC_SESSION`'s
-socket) does not answer `hello` within 5 seconds, with `hc server start` as the fix.
+the fix. **Core** fails where the default core session (`HC_SOCKET`, else the `socket`
+core's `config.toml` names, else `HC_SESSION`'s socket) does not answer `hello` within 5 seconds, with `hc server start` as the fix.
 **Herdr 1** says what on this Machine still uses Herdr 1: its `terminal_backend` setting
 where it is `herdr`, with `collie settings set terminal_backend core` as the fix, and each
 agent whose registry entry has no core backend and whose herdr pane is still open. It never

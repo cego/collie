@@ -224,6 +224,7 @@ const environmentKeys = [
   "HC_SOCKET",
   "HC_SESSION",
   "XDG_RUNTIME_DIR",
+  "XDG_CONFIG_HOME",
   // Where upstream's installer put hc.
   "HC_INSTALL_DIR",
 ] as const;

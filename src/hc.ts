@@ -67,18 +67,28 @@ type Replies = typeof replies;
 export type HcMethod = keyof Replies;
 export type HcReply<M extends HcMethod> = Replies[M]["Type"];
 
+const CoreConfig = Schema.Struct({ socket: opt(Schema.String) });
+
 /**
- * Where this Machine's core listens, found as core finds it: `HC_SOCKET`, else the
- * session's socket under the runtime directory, else under the session's state directory.
+ * Where this Machine's core listens, found as core finds it: `HC_SOCKET`, else the `socket`
+ * its `config.toml` names, else the session's socket under the runtime directory, else under
+ * the session's state directory.
  */
 export const coreSocket = Effect.fn("Hc.coreSocket")(function* (
   raw: Readonly<Record<string, string | undefined>>,
 ) {
   if (raw.HC_SOCKET) return raw.HC_SOCKET;
+  const fs = yield* FileSystem.FileSystem;
+  const config = `${raw.XDG_CONFIG_HOME || `${raw.HOME ?? ""}/.config`}/herdr-core/config.toml`;
+  const configured = yield* fs.readFileString(config).pipe(
+    Effect.flatMap((text) => Effect.try(() => Bun.TOML.parse(text))),
+    Effect.map((parsed) => Schema.decodeUnknownOption(CoreConfig)(parsed)),
+    Effect.orElseSucceed(() => Option.none()),
+  );
+  if (Option.isSome(configured) && configured.value.socket) return configured.value.socket;
   const session = raw.HC_SESSION || "default";
   if (raw.XDG_RUNTIME_DIR) return `${raw.XDG_RUNTIME_DIR}/herdr-core/${session}.sock`;
   const runtime = `/run/user/${process.getuid?.() ?? 0}`;
-  const fs = yield* FileSystem.FileSystem;
   if (yield* fs.exists(runtime).pipe(Effect.orElseSucceed(() => false)))
     return `${runtime}/herdr-core/${session}.sock`;
   const state = raw.XDG_STATE_HOME || `${raw.HOME ?? ""}/.local/state`;

@@ -833,8 +833,9 @@ that caused it fails. Bumping the pin is editing `hc-pin.json`, copying that rel
 
 `terminal_backend` is read when an agent is launched, so switching it mid-Run moves the
 next agent and leaves the running ones where they are. The core socket is `HC_SOCKET`,
-else `<session>.sock` under core's runtime directory, `HC_SESSION` naming the session
-(`default` when unset). All of it goes through `src/herdr.ts`, as herdr's calls do:
+else the `socket` core's own `config.toml` names (under `XDG_CONFIG_HOME`, else
+`~/.config/herdr-core`), else `<session>.sock` under core's runtime directory, `HC_SESSION`
+naming the session (`default` when unset). All of it goes through `src/herdr.ts`, as herdr's calls do:
 
 - **Launch** is one `terminal.run` with the agent's name, the labels `run`, `operation`
   and `task`, its cwd and `no_parent`: it is the Run's agent, not a child of whatever
