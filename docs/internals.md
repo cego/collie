@@ -1723,8 +1723,25 @@ its time.
   fields remain live. Each change to a Run takes the next number of the host's one sequence,
   and each board item carries the highest of its Runs' as its revision. `run_model: false`
   restores the from-disk build at the next host start; the model is then never filled. The
-  Run views `collie run list`, `run show` and the `runs` RPC answer read from disk until
-  the record is read from the model.
+  Run views `collie run list`, `run show` and the `runs` RPC answer still read from disk;
+  the Flow that `run show` and `collie_run` carry is the record's, below.
+- **A Run's record is read from the model** (`src/record.ts`, D3 to D5 of that ADR). It
+  reads only the Runs its Task's rows name (`related` in `src/engine.ts`): the Task's, their
+  parents and children, Runs they asked for, and the Runs sharing its plan. A `runDetail`
+  request with `parts` is sent the Flow first, at a revision, with `pending` naming the parts
+  still coming: `texts` (review and plan), `diff`, `mr` and `tail`. Each part then arrives in
+  a frame of its own, and the frame with `pending` empty is stamped with the record's
+  revision. A record that moved while none of its Runs did, as a merge request or an agent
+  moves it, moves its own Run. After that a frame is sent only when a write the host saw
+  changes what the record carries; the 5 s tick is not one of them. A minute count is sent
+  as a `clock` beside a `said` left empty, and the front door says it (`timedFlow` in
+  `src/flow-timing.ts`). A live Run's diff is taken again only when its checkout's git
+  directories move. A request with `held` at the current epoch and revision is answered
+  `Unchanged`; any other is sent the record. `act` and `control` take the revision an act
+  was `shown` at, and refuse one whose Step has finished since with `StaleAct`, which the CLI
+  says as `invalid_state`; each act's result carries the Run's revision after it, which the
+  caller's next frame is at least. A request without `parts` is sent whole records, their
+  minutes said, on every change and tick, as an older Desktop expects.
   A host's `collie_run` answer uses one local Run listing for its facts and Flow, with
   local offers and the same write-covered readiness as `progress`. Flow relationship
   indexes, installation identity and usual Step times are shared across a board build.
@@ -1848,6 +1865,12 @@ harness times an `identity` RPC every 50 ms; its p99 is a proxy for the host's e
 
 In `desktop-cold` the click comes 3 s after the board paints: in a tab's first seconds,
 Chrome gives a card's button the click's pointer events but not the click.
+
+`first-host` times the record's own build: each sample opens a settled Run not opened before
+over the host's front door, with `parts` on, from request sent to first frame received. It
+starts no view, Chrome or Desktop, so it runs only on its own (`--cells first-host`), and it
+fails a sample whose first frame has no Flow. A tree whose host ignores `parts` sends the whole
+record first, so it runs on the base tree too.
 
 `--cells` takes `local` or a comma-separated list. `--samples` sets the timed opens per cell
 (200), and `--warmup` the opens before them (5), which are kept but not counted. `--runs`

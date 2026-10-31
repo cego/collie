@@ -43,6 +43,7 @@ import {
   type ProposalRefused,
   type RequestConflict,
   type RunDetail,
+  type StaleAct,
 } from "../../../src/board-model";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
@@ -127,7 +128,10 @@ export const stderrTail = Effect.fnUntraced(function* (
 ) {
   let text = "";
   const decoder = new TextDecoder();
-  yield* Stream.fromReadableStream({ evaluate: () => from, onError: () => undefined }).pipe(
+  yield* Stream.fromReadableStream({
+    evaluate: () => from,
+    onError: () => undefined,
+  }).pipe(
     Stream.runForEach((chunk: Uint8Array) =>
       Effect.suspend(() => {
         text = pipe_(text + decoder.decode(chunk, { stream: true }), Str.slice(-4000));
@@ -156,7 +160,10 @@ export interface RouteFailure {
   readonly reason: string;
 }
 
-const unreachable = (reason: string): RouteFailure => ({ state: "unreachable", reason });
+const unreachable = (reason: string): RouteFailure => ({
+  state: "unreachable",
+  reason,
+});
 
 /** The shell's own status for a command it could not find. */
 const NOT_FOUND = 127;
@@ -194,7 +201,13 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   waitingOnSso: WaitingOnSso = () => Effect.void,
 ) {
   const child = yield* spawned(() =>
-    Bun.spawn([...command], { env, cwd: CHILD_CWD, stdin: "pipe", stdout: "pipe", stderr: "pipe" }),
+    Bun.spawn([...command], {
+      env,
+      cwd: CHILD_CWD,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    }),
   );
   let isReady = false;
   const said = yield* stderrTail(child.stderr, (chunk, said) =>
@@ -396,8 +409,14 @@ export interface ShellRoute extends Route {
 
 const Connected = Schema.fromJsonString(
   Schema.Union([
-    Schema.Struct({ ok: Schema.Literal(true), data: Schema.Struct({ path: Schema.String }) }),
-    Schema.Struct({ ok: Schema.Literal(false), error: Schema.Struct({ message: Schema.String }) }),
+    Schema.Struct({
+      ok: Schema.Literal(true),
+      data: Schema.Struct({ path: Schema.String }),
+    }),
+    Schema.Struct({
+      ok: Schema.Literal(false),
+      error: Schema.Struct({ message: Schema.String }),
+    }),
   ]),
 );
 
@@ -489,7 +508,12 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
   const used = <A>(effect: Effect.Effect<A, RouteFailure>) =>
     effect.pipe(Effect.mapError(({ reason }) => reason));
   const route: ShellRoute = {
-    machine: { profile: machine.id, name: machine.label, target: machine.target, route: "ssh" },
+    machine: {
+      profile: machine.id,
+      name: machine.label,
+      target: machine.target,
+      route: "ssh",
+    },
     open: (waitingOnSso) =>
       Effect.gen(function* () {
         let told = false;
@@ -619,7 +643,10 @@ export const linkRoute = (
             env,
             waiting,
           )
-        : Effect.fail<RouteFailure>({ state: "unreachable", reason: "not paired yet" })
+        : Effect.fail<RouteFailure>({
+            state: "unreachable",
+            reason: "not paired yet",
+          })
       ).pipe(
         Effect.tap((opened) =>
           Effect.sync(() => {
@@ -701,7 +728,9 @@ export const buildVerdict = (snapshot: BoardSnapshot, version: string) =>
       : "as-is";
 
 const Envelope = Schema.fromJsonString(
-  Schema.Struct({ error: Schema.optionalKey(Schema.Struct({ message: Schema.String })) }),
+  Schema.Struct({
+    error: Schema.optionalKey(Schema.Struct({ message: Schema.String })),
+  }),
 );
 
 /** Moves a released Machine to exactly `version`, or says why it did not, in its own words. */
@@ -726,7 +755,11 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
 export type RouteChange<D extends BoardSource = Doors> =
   | { readonly _tag: "Add"; readonly route: Route<D> }
   /** `done` once its stream has ended and its Machine is said to be removed. */
-  | { readonly _tag: "Remove"; readonly profile: string; readonly done: Deferred.Deferred<void> }
+  | {
+      readonly _tag: "Remove";
+      readonly profile: string;
+      readonly done: Deferred.Deferred<void>;
+    }
   | { readonly _tag: "Wake"; readonly profile: string }
   | { readonly _tag: "Reopen"; readonly profile: string };
 
@@ -778,7 +811,10 @@ export const flockStream = <D extends BoardSource>(
                 (machine.route === "link" && held?.route !== "link") ||
                 ((machine.route === "link") === (held?.route === "link") && at < owner));
             const after = takes
-              ? new Map(now).set(machine.installation, { at, route: machine.route })
+              ? new Map(now).set(machine.installation, {
+                  at,
+                  route: machine.route,
+                })
               : now;
             return [[after.get(machine.installation)?.at, owner] as const, after] as const;
           });
@@ -879,7 +915,12 @@ export const flockStream = <D extends BoardSource>(
             return Stream.merge(board, upgrade, { haltStrategy: "left" }).pipe(
               Stream.interruptWhen(
                 Queue.take(reopens[at]!).pipe(
-                  Effect.andThen(Effect.fail<RouteFailure>({ state: "reopen", reason: "asked" })),
+                  Effect.andThen(
+                    Effect.fail<RouteFailure>({
+                      state: "reopen",
+                      reason: "asked",
+                    }),
+                  ),
                 ),
               ),
             );
@@ -907,7 +948,12 @@ export const flockStream = <D extends BoardSource>(
                 Stream.make(
                   notice(route, `${route.machine.name} upgraded ${from} → ${version}`),
                 ).pipe(
-                  Stream.concat(Stream.fail<RouteFailure>({ state: "reopen", reason: "upgraded" })),
+                  Stream.concat(
+                    Stream.fail<RouteFailure>({
+                      state: "reopen",
+                      reason: "upgraded",
+                    }),
+                  ),
                 ),
               onFailure: (reason) =>
                 Stream.make(
@@ -1040,7 +1086,10 @@ export const flockStream = <D extends BoardSource>(
             });
             yield* Deferred.succeed(removed[at]!, undefined);
             yield* Deferred.await(ended[at]!);
-            return { _tag: "Removed", machine: routeAt[at]!.machine } satisfies FlockItem;
+            return {
+              _tag: "Removed",
+              machine: routeAt[at]!.machine,
+            } satisfies FlockItem;
           }),
         ).pipe(Stream.ensuring(Deferred.succeed(change.done, undefined)));
         // A route that merged into this one's Machine shows it now, as a route added afresh.
@@ -1073,6 +1122,7 @@ export const flockStream = <D extends BoardSource>(
 
 type Refused =
   | HostRefused
+  | StaleAct
   | ProposalRefused
   | RequestConflict
   | RpcClientError.RpcClientError
@@ -1085,12 +1135,14 @@ const refusal = (request?: string) => (error: Refused) =>
     request,
     reason:
       error._tag === "HostRefused" ||
+      error._tag === "StaleAct" ||
       error._tag === "RequestConflict" ||
       error._tag === "Unconfirmed"
         ? error.reason
         : error._tag === "ProposalRefused"
           ? error.detail
           : error.message,
+    step: error._tag === "StaleAct" ? error.step : undefined,
   });
 
 export type Reached = Pick<Doors, "machine" | "desktop">;
@@ -1140,11 +1192,20 @@ interface Unsteered {
 const aboutOf = (action: DesktopAction) => {
   switch (action._tag) {
     case "Confirm":
-      return { about: action.proposal, what: `the confirmation of ${action.proposal}` };
+      return {
+        about: action.proposal,
+        what: `the confirmation of ${action.proposal}`,
+      };
     case "Decline":
-      return { about: action.proposal, what: `the decline of ${action.proposal}` };
+      return {
+        about: action.proposal,
+        what: `the decline of ${action.proposal}`,
+      };
     case "Control":
-      return { about: action.runId, what: `the ${action.control} of ${action.runId}` };
+      return {
+        about: action.runId,
+        what: `the ${action.control} of ${action.runId}`,
+      };
     default:
       return {
         about: action.runId,
@@ -1171,7 +1232,12 @@ export const act = (
     switch (action._tag) {
       case "Answer":
         return door
-          .answer({ runId: action.runId, decision: action.decision, value: action.value, request })
+          .answer({
+            runId: action.runId,
+            decision: action.decision,
+            value: action.value,
+            request,
+          })
           .pipe(
             Effect.map(freshly),
             Effect.map((done) => withNotice(`Answered ${action.runId}`, done.redacted, ". ")),
@@ -1185,6 +1251,7 @@ export const act = (
             set: action.set,
             request,
             before: action.before,
+            shown: action.shown,
           })
           .pipe(
             Effect.flatMap((done) => {
@@ -1215,7 +1282,13 @@ export const act = (
           .pipe(Effect.as("Declined"));
       case "Dispose":
         return door
-          .dispose({ runId: action.runId, kind: action.kind, ref: action.ref, note: null, request })
+          .dispose({
+            runId: action.runId,
+            kind: action.kind,
+            ref: action.ref,
+            note: null,
+            request,
+          })
           .pipe(Effect.as(`Marked ${action.kind}`));
       case "Seen":
         return door.seen({ runId: action.runId, request }).pipe(Effect.as("Seen"));
@@ -1232,7 +1305,10 @@ export const act = (
             Effect.flatMap((outcome) =>
               outcome.ok
                 ? Effect.succeed(outcome.human)
-                : Effect.fail<Unsteered>({ _tag: "Unsteered", message: outcome.human }),
+                : Effect.fail<Unsteered>({
+                    _tag: "Unsteered",
+                    message: outcome.human,
+                  }),
             ),
           );
       case "WithdrawNote":
@@ -1248,16 +1324,22 @@ export const act = (
         };
         // JSON has no undefined: an absent step is left out.
         if (action.step !== undefined) deliver.step = action.step;
-        return door.act({ actions: [deliver], request }).pipe(
-          Effect.flatMap(([done]) =>
-            done?.state === "applied"
-              ? Effect.succeed(done.note || "Sent")
-              : Effect.fail<Unsteered>({
-                  _tag: "Unsteered",
-                  message: done?.note || "the host said nothing about it",
-                }),
-          ),
-        );
+        return door
+          .act({
+            actions: [deliver],
+            request,
+            shown: action.shown,
+          })
+          .pipe(
+            Effect.flatMap(([done]) =>
+              done?.state === "applied"
+                ? Effect.succeed(done.note || "Sent")
+                : Effect.fail<Unsteered>({
+                    _tag: "Unsteered",
+                    message: done?.note || "the host said nothing about it",
+                  }),
+            ),
+          );
       }
       case "FollowUp":
         return door.followUp({ runId: action.runId, text: action.text, request }).pipe(
@@ -1266,7 +1348,12 @@ export const act = (
         );
       case "Invoke":
         return door
-          .invoke({ runId: action.runId, offer: action.offer, input: action.input, request })
+          .invoke({
+            runId: action.runId,
+            offer: action.offer,
+            input: action.input,
+            request,
+          })
           .pipe(
             Effect.map(freshly),
             Effect.map((started) => withNotice(`Started ${started.runId}`, started.redacted, ". ")),
@@ -1316,7 +1403,12 @@ export const actOn = (
     reason: why,
   }).pipe(
     Effect.andThen(
-      Effect.fail(new ActionFailed({ request, reason: `Not sent to ${machine}: ${why}.` })),
+      Effect.fail(
+        new ActionFailed({
+          request,
+          reason: `Not sent to ${machine}: ${why}.`,
+        }),
+      ),
     ),
   );
 };
@@ -1402,24 +1494,35 @@ export const runDetailOn = (doors: DoorMap<Reached>, installation: string, runId
   const after = (last?: Reached): Stream.Stream<RunDetail | null, ActionFailed> =>
     Stream.unwrap(
       Effect.map(nextDoor(doors, installation, last), (door) =>
-        door.desktop.runDetail({ runId, tail: true, pages: 1, refreshMr: false }).pipe(
-          // A broken connection's door is replaced soon after; one that stays was not.
-          Stream.catchTag("RpcClientError", (error) =>
-            Stream.fromEffectDrain(
-              nextDoor(doors, installation, door).pipe(
-                Effect.timeoutOrElse({
-                  duration: "5 seconds",
-                  orElse: () => Effect.fail(error),
-                }),
+        door.desktop
+          .runDetail({
+            runId,
+            tail: true,
+            pages: 1,
+            refreshMr: false,
+            parts: true,
+          })
+          .pipe(
+            Stream.filter(
+              (value): value is RunDetail | null => value === null || !("_tag" in value),
+            ),
+            // A broken connection's door is replaced soon after; one that stays was not.
+            Stream.catchTag("RpcClientError", (error) =>
+              Stream.fromEffectDrain(
+                nextDoor(doors, installation, door).pipe(
+                  Effect.timeoutOrElse({
+                    duration: "5 seconds",
+                    orElse: () => Effect.fail(error),
+                  }),
+                ),
               ),
             ),
+            Stream.mapError(refusal()),
+            Stream.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause) ? Stream.empty : Stream.failCause(cause),
+            ),
+            Stream.concat(Stream.suspend(() => after(door))),
           ),
-          Stream.mapError(refusal()),
-          Stream.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause) ? Stream.empty : Stream.failCause(cause),
-          ),
-          Stream.concat(Stream.suspend(() => after(door))),
-        ),
       ),
     );
   return after();
@@ -1486,7 +1589,12 @@ export const machineOwnOn = (
   Effect.gen(function* () {
     const at = yield* Clock.currentTimeMillis;
     const reading = yield* door.machineOwn().pipe(
-      Effect.map((values): OwnReading => ({ values, at, problem: null, unsupported: false })),
+      Effect.map((values): OwnReading => ({
+        values,
+        at,
+        problem: null,
+        unsupported: false,
+      })),
       Effect.timeoutOrElse({
         duration: "15 seconds",
         orElse: () => Effect.die("its host did not answer in time"),
@@ -1530,7 +1638,12 @@ export const schedulesOn = (
     Effect.timeoutOrElse({
       duration: "15 seconds",
       orElse: () =>
-        Effect.succeed(read({ unreachable: true, problem: "its host did not answer in time" })),
+        Effect.succeed(
+          read({
+            unreachable: true,
+            problem: "its host did not answer in time",
+          }),
+        ),
     }),
     Effect.catch((error) =>
       Effect.succeed(
@@ -1546,7 +1659,10 @@ export const schedulesOn = (
         defect._tag === "Success" &&
           pipe_(String(defect.success), Str.startsWith("Unknown request tag"))
           ? read({ problem: SCHEDULES_UPGRADE_SAID })
-          : read({ unreachable: true, problem: Str.split(Cause.pretty(cause), "\n")[0]! }),
+          : read({
+              unreachable: true,
+              problem: Str.split(Cause.pretty(cause), "\n")[0]!,
+            }),
       );
     }),
   );
@@ -1724,7 +1840,12 @@ export const moveScheduleOn = (
     Effect.flatMap((moved) =>
       moved.ok
         ? Effect.succeed(moved.said)
-        : Effect.fail(new ActionFailed({ request, reason: `${moved.code}: ${moved.message}` })),
+        : Effect.fail(
+            new ActionFailed({
+              request,
+              reason: `${moved.code}: ${moved.message}`,
+            }),
+          ),
     ),
   );
 
@@ -1737,7 +1858,10 @@ export const syncNow = (
     readonly sync: Effect.Effect<string | null>;
     readonly syncDefinitions: Effect.Effect<string | null>;
     readonly give: Effect.Effect<
-      ReadonlyArray<{ readonly credential: Credential; readonly failed: string | null }>
+      ReadonlyArray<{
+        readonly credential: Credential;
+        readonly failed: string | null;
+      }>
     >;
   },
 ) =>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import * as Option from "effect/Option";
+import { DateTime } from "effect";
 import * as Arr from "effect/Array";
 import { inField, overlayOpen } from "../../../src/shared/board-clicks";
 import { offersTerminal, opensHerdrWithoutPane } from "../../../src/shared/record-terminal";
@@ -20,6 +21,7 @@ import {
 } from "../../../src/shared/record";
 import { runDetailAtom, runDetailKey } from "../flock";
 import type { Flow } from "../../../../src/board-model";
+import { timedFlow } from "../../../../src/flow-timing";
 import type { DiffTarget } from "./DiffTab.vue";
 
 const props = defineProps<{ placed: PlacedTask }>();
@@ -49,12 +51,15 @@ const { value: read, trouble } = useHeld(() =>
 );
 const detail = computed(() => read.value ?? null);
 const flow = shallowRef<Flow | null>(null);
+/** When the Flow last came, so its minutes are never said as of an older tick of `now`. */
+const arrived = ref(0);
 watch(
   detail,
   (shown) => {
     if (shown?.flow === undefined) return;
     const first = flow.value === null;
     flow.value = shown.flow;
+    arrived.value = DateTime.toEpochMillis(DateTime.nowUnsafe());
     if (!first) return;
     const card = props.placed.key;
     timing.frame(card);
@@ -64,7 +69,10 @@ watch(
   },
   { immediate: true },
 );
-const { notLive, protocolOf } = useFlock();
+const { notLive, protocolOf, now } = useFlock();
+const timed = computed(() =>
+  flow.value === null ? null : timedFlow(flow.value, Math.max(now.value, arrived.value)),
+);
 const away = computed(() => notLive(props.placed.installation));
 const loading = computed(
   () =>
@@ -117,9 +125,18 @@ const tabs = computed(() => {
     target: target.value !== null,
     diff: Boolean(shown?.diff),
     terminal: offersTerminal(props.placed.asOf, chosen.value),
-    mr: shown?.mr ? mrTab(props.placed.task.mr) : null,
+    mr: shown?.mr || shown?.pending?.includes("mr") ? mrTab(props.placed.task.mr) : null,
+    pending: shown?.pending,
   });
 });
+const tabItems = computed(() =>
+  Arr.map(tabs.value, (one) => (one.loading ? { ...one, icon: "i-lucide-loader-circle" } : one)),
+);
+const tabLoading = computed(
+  () =>
+    Arr.findFirst(tabs.value, (one) => one.value === tab.value).pipe(Option.getOrUndefined)
+      ?.loading === true,
+);
 /** The chosen tab while present, else the first the host supports. */
 const chosen = ref<string>();
 const { asked: tabAsked, taken } = usePage();
@@ -295,7 +312,7 @@ const locationOf = (file: string, line: number | null) =>
           v-else
           v-show="!(flowFocusing && tab === 'flow')"
           v-model="tab"
-          :items="tabs"
+          :items="tabItems"
           :content="false"
           variant="link"
         />
@@ -310,9 +327,9 @@ const locationOf = (file: string, line: number | null) =>
         ]"
       >
         <FlowTab
-          v-if="flow !== null && kept.has('flow')"
+          v-if="timed !== null && kept.has('flow')"
           v-show="tab === 'flow'"
-          :flow="flow"
+          :flow="timed"
           :detail="detail"
           :placed="placed"
           :shown="tab === 'flow'"
@@ -320,6 +337,11 @@ const locationOf = (file: string, line: number | null) =>
           @open="openWork"
           @focusing="flowFocusing = $event"
         />
+        <div v-if="tabLoading" data-testid="part-loading" class="flex flex-col gap-2">
+          <USkeleton class="h-4 w-1/3" />
+          <USkeleton class="h-4 w-full" />
+          <USkeleton class="h-4 w-5/6" />
+        </div>
         <template v-if="detail !== null">
           <ReviewComments
             v-if="tab === 'plan' || tab === 'diff'"
@@ -391,7 +413,7 @@ const locationOf = (file: string, line: number | null) =>
             :installation="placed.installation"
           />
           <LogTab
-            v-if="tab === 'log'"
+            v-if="tab === 'log' && !tabLoading"
             v-model:place="logPlace"
             v-model:search="logSearch"
             :tail="detail.tail"

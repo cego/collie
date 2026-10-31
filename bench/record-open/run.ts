@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 import { Effect, Fiber, FileSystem, Option, Stream } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { Flow } from "../../src/board-model";
-import { connect } from "../../src/host";
+import { connect, frontDoor, socketOf } from "../../src/host";
 import type { PlatformServices } from "../../src/platform";
 import { runEffect } from "../../test/support/effect";
 import { stopHost } from "../../test/support/host";
@@ -32,7 +32,12 @@ const LOCAL = [
   // Last: it adds Runs, which would change the board every cell after it reads.
   "storm",
 ] as const;
-type Cell = (typeof LOCAL)[number];
+/** Cells timed over the host's front door, with no Desktop or Chrome started. */
+const HOST_ONLY = ["first-host"] as const;
+type DesktopCell = (typeof LOCAL)[number];
+type Cell = DesktopCell | (typeof HOST_ONLY)[number];
+const isHostOnly = (cell: Cell) => HOST_ONLY.some((one) => one === cell);
+const isDesktopCell = (cell: Cell): cell is DesktopCell => !isHostOnly(cell);
 /** What the last stdout line gives of each cell, for `collie measure`. */
 const NUMBERS = ["p50", "p95", "max", "n", "failed"] as const satisfies ReadonlyArray<
   keyof CellSummary
@@ -55,10 +60,15 @@ const cells: ReadonlyArray<Cell> =
   flags.cells === "local"
     ? LOCAL
     : flags.cells.split(",").map((name) => {
-        const cell = LOCAL.find((one) => one === name);
+        const cell = [...LOCAL, ...HOST_ONLY].find((one) => one === name);
         if (cell === undefined) throw new Error(`no cell ${name}`);
         return cell;
       });
+const hostOnly = cells.every(isHostOnly);
+if (!hostOnly && cells.some(isHostOnly)) {
+  console.error(`${HOST_ONLY.join(", ")} runs with no Desktop attached: run it on its own`);
+  process.exit(2);
+}
 const began = Date.now();
 const SAMPLES = Number(flags.samples);
 const WARMUP = Number(flags.warmup);
@@ -91,6 +101,24 @@ interface Seen {
   readonly marks: Readonly<Record<string, number>>;
   readonly start: number;
 }
+
+/** A trivial RPC every 50 ms, as a proxy for the host's event-loop lag. */
+const lagProbe = (into: number[]) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const client = yield* connect(world.state);
+      for (;;) {
+        const began = performance.now();
+        yield* client.identity();
+        into.push(performance.now() - began);
+        yield* Effect.sleep("50 millis");
+      }
+    }),
+  ).pipe(
+    // A host that restarts takes the connection with it.
+    Effect.catchCause(() => Effect.sleep("100 millis")),
+    Effect.forever,
+  );
 
 /** The longest a sample waits for its Flow before it is counted as never painted. */
 const NEVER_MS = 60_000;
@@ -190,7 +218,11 @@ const body = (
           Stream.runHead(client.runDetail({ runId: run, tail: true, pages: 1, refreshMr: false })),
         ),
       ).pipe(
-        Effect.map((head) => Option.getOrUndefined(head)?.flow ?? null),
+        Effect.map((head) => {
+          const one = Option.getOrNull(head);
+          // A request without `held` is never answered `Unchanged`.
+          return one !== null && "flow" in one ? (one.flow ?? null) : null;
+        }),
         Effect.orElseSucceed((): Flow | null => null),
       );
     /** How the painted Flow differs from the host's, read after the paint; a live Run gets a second read. */
@@ -241,7 +273,7 @@ const body = (
     const cycle = (pool: ReadonlyArray<string>) => (at: number) => pool[at % pool.length]!;
     const settled = cycle(fixture.settled);
     const opens: Record<
-      Cell,
+      DesktopCell,
       (warmup: boolean, at: number) => Effect.Effect<Sample, never, PlatformServices>
     > = {
       first: (warmup, at) => timedOpen("first", warmup, settled(at)),
@@ -291,7 +323,7 @@ const body = (
     };
 
     /** What a cell runs beside its samples, ended when they are. */
-    const beside: Partial<Record<Cell, Effect.Effect<void, never, PlatformServices>>> = {
+    const beside: Partial<Record<DesktopCell, Effect.Effect<void, never, PlatformServices>>> = {
       // Four Checks on a live Run, each busy until its flag is gone.
       checks: Effect.gen(function* () {
         const flag = `${live}/checks-running`;
@@ -334,24 +366,6 @@ const body = (
       }).pipe(Effect.scoped, Effect.orDie),
     };
 
-    /** A trivial RPC every 50 ms, as a proxy for the host's event-loop lag. */
-    const lagProbe = (into: number[]) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const client = yield* connect(world.state);
-          for (;;) {
-            const began = performance.now();
-            yield* client.identity();
-            into.push(performance.now() - began);
-            yield* Effect.sleep("50 millis");
-          }
-        }),
-      ).pipe(
-        // A host that restarts takes the connection with it.
-        Effect.catchCause(() => Effect.sleep("100 millis")),
-        Effect.forever,
-      );
-
     let desktop = startDesktop();
     yield* Effect.addFinalizer(() => Effect.sync(() => desktop.kill()));
     yield* Effect.promise(viewUp);
@@ -361,15 +375,8 @@ const body = (
 
     mkdirSync(out, { recursive: true });
     const raw = `${out}/samples.jsonl`;
-    const summaries: Record<
-      string,
-      CellSummary & {
-        readonly warmup: number;
-        readonly stages: ReturnType<typeof stagesOf>;
-        readonly lag_p99_ms: number | null;
-      }
-    > = {};
-    for (const cell of cells) {
+    const summaries: Summaries = {};
+    for (const cell of cells.filter(isDesktopCell)) {
       yield* say(`${cell}: ${WARMUP} warm-up and ${SAMPLES} timed opens`);
       const lag: number[] = [];
       const fibers = [
@@ -395,6 +402,36 @@ const body = (
       yield* say(`${cell}: ${JSON.stringify(summaries[cell])}`);
     }
 
+    return yield* written(fixture, summaries, {
+      ...chrome,
+      headless: true,
+      software_rendered: true,
+      window: WINDOW,
+    });
+  });
+
+type Summaries = Record<
+  string,
+  CellSummary & {
+    readonly warmup: number;
+    readonly stages: ReturnType<typeof stagesOf>;
+    readonly lag_p99_ms: number | null;
+  }
+>;
+
+/** Writes the run's summary, says what went over the bar, and answers how many did. */
+/** The Chrome a Desktop cell was timed in, as the summary records it. */
+interface Browser {
+  readonly version: string;
+  readonly flags: ReadonlyArray<string>;
+  readonly headless: true;
+  readonly software_rendered: true;
+  readonly window: typeof WINDOW;
+}
+
+const written = (fixture: Fixture, summaries: Summaries, browser: Browser | null) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
     const bar = flags.bar === undefined ? null : Number(flags.bar);
     const failures = bar === null ? [] : barFailures(summaries, bar);
     const summary = {
@@ -414,9 +451,13 @@ const body = (
         full_matrix:
           "The 200-open matrix is run on the delivered tree by ticket 07; fewer opens suffice where every open is seconds over the bar.",
       }),
-      chrome: { ...chrome, headless: true, software_rendered: true, window: WINDOW },
-      vue_prod_devtools: true,
-      note: "Chrome numbers from a headless, software-rendered Chrome on a build with Vue's production devtools hooks on; not native Desktop numbers.",
+      ...(browser === null
+        ? { note: "Timed over the host's front door, with no Desktop attached." }
+        : {
+            chrome: browser,
+            vue_prod_devtools: true,
+            note: "Chrome numbers from a headless, software-rendered Chrome on a build with Vue's production devtools hooks on; not native Desktop numbers.",
+          }),
       cells: summaries,
       bar,
       failures,
@@ -436,6 +477,65 @@ const body = (
       ),
     );
     return failures.length;
+  });
+
+/** The record's first frame over the front door: request sent to first value received. */
+const hostBody = (fixture: Fixture) =>
+  Effect.gen(function* () {
+    // A client starts the host; the front door only reaches one.
+    yield* Effect.scoped(connect(world.state));
+    const door = yield* frontDoor(socketOf(world.state));
+    mkdirSync(out, { recursive: true });
+    const raw = `${out}/samples.jsonl`;
+    const summaries: Summaries = {};
+    const opened = new Set<string>();
+    for (const cell of cells.filter(isHostOnly)) {
+      yield* say(`${cell}: ${WARMUP} warm-up and ${SAMPLES} timed opens`);
+      const lag: number[] = [];
+      const probe = yield* Effect.forkChild(lagProbe(lag));
+      const fresh = fixture.settled.filter((run) => !opened.has(run));
+      if (fresh.length < WARMUP + SAMPLES)
+        return yield* Effect.die(
+          new Error(`${fresh.length} settled Runs leave too few first opens for ${cell}`),
+        );
+      const samples: Sample[] = [];
+      for (const [at, run] of fresh.slice(0, WARMUP + SAMPLES).entries()) {
+        opened.add(run);
+        const start = performance.now();
+        const head = yield* door
+          .runDetail({ runId: run, tail: true, pages: 1, refreshMr: false, parts: true })
+          .pipe(Stream.runHead, Effect.orDie);
+        const ms = performance.now() - start;
+        const first = Option.getOrNull(head);
+        const sample: Sample = {
+          cell,
+          warmup: at < WARMUP,
+          run,
+          ms,
+          stale: false,
+          differences:
+            first !== null && "flow" in first && first.flow !== undefined
+              ? []
+              : ["the first frame carried no Flow"],
+          marks: {},
+          start,
+        };
+        appendFileSync(raw, `${JSON.stringify(sample)}\n`);
+        if (!sample.warmup) samples.push(sample);
+      }
+      yield* Fiber.interrupt(probe);
+      summaries[cell] = {
+        ...summaryOf(
+          samples.map((sample) => sample.ms),
+          samples.filter((sample) => sample.differences.length > 0).length,
+        ),
+        warmup: WARMUP,
+        stages: "absent",
+        lag_p99_ms: nearest(lag, 0.99),
+      };
+      yield* say(`${cell}: ${JSON.stringify(summaries[cell])}`);
+    }
+    return yield* written(fixture, summaries, null);
   });
 
 const nearest = (samples: ReadonlyArray<number>, q: number) =>
@@ -471,10 +571,13 @@ const failed = await runEffect(
       rmSync(live, { recursive: true, force: true });
       yield* enterWorld;
       yield* Effect.addFinalizer(() => stopHost(world.state));
-      yield* say("building the view");
-      buildView();
+      if (!hostOnly) {
+        yield* say("building the view");
+        buildView();
+      }
       yield* say(`preparing ${flags.runs} Runs`);
       const fixture = yield* prepare({ ...COUNTS, runs: Number(flags.runs) });
+      if (hostOnly) return yield* hostBody(fixture);
       const chrome =
         flags.cdp === undefined ? yield* Effect.promise(() => launchChrome(flags.chrome)) : null;
       if (chrome !== null) yield* Effect.addFinalizer(() => Effect.sync(chrome.stop));

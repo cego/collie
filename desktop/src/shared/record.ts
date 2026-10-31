@@ -3,7 +3,7 @@
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import type { RunDetail } from "../../../src/board-model";
+import type { RecordPart, RunDetail } from "../../../src/board-model";
 import type { Target } from "./board-clicks";
 
 export interface TabFacts {
@@ -19,31 +19,38 @@ export interface TabFacts {
   readonly terminal: boolean;
   /** The merge request's tab label, where there is one. */
   readonly mr: string | null;
+  /** The parts the host is still sending: each one's tab is shown loading until it comes. */
+  readonly pending?: ReadonlyArray<RecordPart>;
 }
 
 export interface Tab {
   readonly label: string;
   readonly value: string;
+  readonly loading?: true;
 }
 
 export const recordTabs = (facts: TabFacts): Array<Tab> => {
   const loaded = facts.loaded;
-  const present: ReadonlyArray<readonly [boolean, Tab]> = [
+  const coming = (part: RecordPart) => loaded && (facts.pending ?? []).includes(part);
+  const present: ReadonlyArray<readonly [boolean, Tab, RecordPart?]> = [
     [loaded && facts.flow === true, { label: "Flow", value: "flow" }],
     [loaded, { label: "Summary", value: "summary" }],
-    [loaded && facts.plan, { label: "Plan", value: "plan" }],
+    [loaded && facts.plan, { label: "Plan", value: "plan" }, "texts"],
     [
       loaded && (facts.reviewText || facts.findings || facts.target),
       { label: "Review", value: "review" },
+      "texts",
     ],
-    [loaded && facts.diff, { label: "Diff", value: "diff" }],
+    [loaded && facts.diff, { label: "Diff", value: "diff" }, "diff"],
     [loaded, { label: "Evidence", value: "evidence" }],
-    [true, { label: "Log", value: "log" }],
+    [true, { label: "Log", value: "log" }, "tail"],
     [facts.terminal, { label: "Terminal", value: "terminal" }],
-    [loaded && facts.mr !== null, { label: facts.mr ?? "", value: "mr" }],
+    [loaded && facts.mr !== null, { label: facts.mr ?? "", value: "mr" }, "mr"],
     [true, { label: "Facts", value: "facts" }],
   ];
-  return Arr.flatMap(present, ([shown, tab]) => (shown ? [tab] : []));
+  return Arr.flatMap(present, ([shown, tab, part]) =>
+    part !== undefined && coming(part) ? [{ ...tab, loading: true as const }] : shown ? [tab] : [],
+  );
 };
 
 /** The chosen tab while it is present, else the first. */

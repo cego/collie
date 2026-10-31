@@ -21,6 +21,7 @@ import {
   Result,
 } from "effect";
 import type { Flow, FlowLane, FlowNode } from "../src/board-model";
+import { recordIn } from "../src/board-model";
 import { STEPS_FILE } from "../src/steps";
 import { writeTask } from "../src/task";
 import { epochMs } from "../src/time";
@@ -122,7 +123,7 @@ const flowOf = (world: World, runId: string) =>
     const door = yield* frontDoor(socketOf(world.state));
     const detail = yield* door
       .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-      .pipe(Stream.runHead, Effect.timeout("30 seconds"));
+      .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
     return Option.getOrNull(detail)?.flow ?? null;
   }).pipe(
     // A host between one process and the next has no socket to answer on yet.

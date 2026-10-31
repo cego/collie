@@ -61,6 +61,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
+import { recordFlow, recordFrames, type RecordSources } from "./record";
 import {
   EntryError,
   REFUSED_INPUT,
@@ -186,6 +187,8 @@ import {
   Seen,
   FrontDoorRpcs,
   HostRefused,
+  StaleAct,
+  type RunRevision,
   NewsBatch,
   PaneAt,
   SharedSettings,
@@ -635,6 +638,7 @@ const handlers = (
       const bun = yield* Effect.context<PlatformServices>();
       const pid = yield* currentPid;
       const { aliveNow } = yield* SharedBoard;
+      const sources = yield* recordSources({ panels: null, plans: new Map() });
       const recordingLinks = yield* Semaphore.make(1);
       // The installation this host belongs to, which the client that started it named.
       const env = yield* currentEnv.pipe(Effect.orDie);
@@ -835,20 +839,26 @@ const handlers = (
               memory: yield* Effect.map(memoryWaitOf(runDir(dir, runId)), (wait) =>
                 wait === null ? null : waitLine(wait),
               ),
-              flow: yield* taskFlowOf(
-                {
-                  env,
-                  runs: Arr.map(all, (one) => factsOfView(env.stateDir, one)),
-                  // One command reads once, and says what herdr lists now.
-                  alive: yield* aliveNow,
-                  offers: (id) =>
-                    registry.offers(id).pipe(
-                      Effect.provideContext(hosted),
-                      Effect.orElseSucceed(() => []),
-                    ),
-                },
-                runId,
-              ).pipe(Effect.orElseSucceed(() => null)),
+              flow:
+                sources !== undefined
+                  ? // One command reads once, and says what herdr lists now.
+                    yield* recordFlow({ ...sources, alive: aliveNow }, runId).pipe(
+                      Effect.orElseSucceed(() => null),
+                    )
+                  : yield* taskFlowOf(
+                      {
+                        env,
+                        runs: Arr.map(all, (one) => factsOfView(env.stateDir, one)),
+                        // One command reads once, and says what herdr lists now.
+                        alive: yield* aliveNow,
+                        offers: (id) =>
+                          registry.offers(id).pipe(
+                            Effect.provideContext(hosted),
+                            Effect.orElseSucceed(() => []),
+                          ),
+                      },
+                      runId,
+                    ).pipe(Effect.orElseSucceed(() => null)),
             };
           }).pipe(Effect.provideContext(bun)),
         invite: (asked) =>
@@ -1236,6 +1246,8 @@ class SharedBoard extends Context.Service<
   Omit<Effect.Success<ReturnType<typeof hostBoard>>, "listing" | "herdrMoved"> & {
     /** Whatever may have moved the board. */
     readonly changed: Stream.Stream<void>;
+    /** What may have moved it, without the tick. */
+    readonly writes: Stream.Stream<void>;
     readonly boards: Stream.Stream<{
       readonly runs: ReadonlyArray<RunFacts>;
       readonly views: ReadonlyArray<TaskView>;
@@ -1332,9 +1344,60 @@ const sharedBoardLayer = (dir: string) =>
         runs: Effect.map(latest, (built) => built.runs),
         views: () => Effect.map(latest, (built) => built.views),
       });
-      return { ...board, changed, boards, listed };
+      return { ...board, changed, writes, boards, listed };
     }),
   );
+
+/** A Step in these states has finished: an act shown on it before is refused. */
+const FINISHED_STEPS = new Set(["done", "failed", "stopped", "not-run"]);
+
+/** The Run and Step an act names, where it names a Run. */
+const targetOf = Schema.decodeUnknownOption(
+  Schema.Struct({
+    run: Schema.String,
+    step: Schema.optional(Schema.String),
+    before: Schema.optional(Schema.String),
+  }),
+);
+
+/** What a Run's record is read from, where the host keeps a Run model. */
+const recordSources = (opts: { readonly panels: MrPanels | null; readonly plans: PlanCache }) =>
+  Effect.gen(function* () {
+    const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
+    if (model === undefined) return undefined;
+    const registry = yield* Registry;
+    const hosted = yield* Effect.context<HostServices>();
+    const { env, bun, alive } = yield* SharedBoard;
+    const forgeHttp = Option.getOrUndefined(yield* Effect.serviceOption(ForgeHttp));
+    const { panels } = opts;
+    return {
+      env,
+      model,
+      plans: opts.plans,
+      alive,
+      related: (runId, also) =>
+        registry
+          .related(runId, also, model.reading)
+          .pipe(Effect.map(Arr.map((view) => factsOfView(env.stateDir, view)))),
+      offers: (id) =>
+        registry.offers(id).pipe(
+          Effect.provideContext(hosted),
+          Effect.orElseSucceed(() => []),
+        ),
+      mr: (run, fresh) => {
+        const target = mrOf(run);
+        if (panels === null || forgeHttp === undefined || target === null)
+          return Effect.succeed(null);
+        return Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            watchedMr({ panels, target, cwd: env.cwd, run: shell, now, fresh }),
+          ),
+          Effect.provideContext(bun),
+          Effect.provideService(ForgeHttp, forgeHttp),
+        );
+      },
+    } satisfies RecordSources;
+  });
 
 /** The merge watch, News, the cleanup sweep and the Home's tokens, for as long as this host runs. */
 const sideJobsLayer = (panels: MrPanels) =>
@@ -1410,7 +1473,7 @@ const frontDoorHandlers = (
       const registry = yield* Registry;
       const hosted = yield* Effect.context<HostServices>();
       const reliance = yield* Reliance;
-      const { env, herdr, bun, sweepers, listed, changed, ...shared } = yield* SharedBoard;
+      const { env, herdr, bun, sweepers, listed, changed, writes, ...shared } = yield* SharedBoard;
       const collecting = yield* Collecting;
       const forgeHttp = yield* ForgeHttp;
       const boards = shared.boards.pipe(Stream.map((built) => built.views));
@@ -1425,6 +1488,28 @@ const frontDoorHandlers = (
       // Every drawer on a finished Run shares one read of its plan until a file of it changes.
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans: PlanCache = new Map();
+      const record = yield* recordSources({ panels, plans });
+      /** An act on a Step of a record refused where that Step has finished since. */
+      const stepStill = (run: string, step: string | undefined, shown: RunRevision | undefined) =>
+        Effect.gen(function* () {
+          if (shown === undefined || step === undefined || record === undefined) return;
+          const flow = yield* recordFlow(record, run).pipe(
+            Effect.provideContext(bun),
+            Effect.orElseSucceed(() => null),
+          );
+          const node = Option.getOrUndefined(
+            Option.flatMap(
+              Arr.findFirst(flow?.lanes ?? [], (lane) => lane.run === run),
+              (lane) => Arr.findFirst(lane.nodes, (one) => one.id === step),
+            ),
+          );
+          if (node !== undefined && FINISHED_STEPS.has(node.state))
+            return yield* new StaleAct({
+              run,
+              step,
+              reason: `${node.title} has finished since the record you acted on was shown`,
+            });
+        });
       const stampOf = (client: { readonly id: number }) => stampIn(declared, client);
       const doorOf = (client: { readonly id: number }) => stampOf(client).origin;
       /** Who asks on a channel: its front door, and a chat's voice. */
@@ -1865,21 +1950,24 @@ const frontDoorHandlers = (
               .pipe(Effect.map(saying(removed))),
           );
         },
-        control: ({ runId, control, set, request, reason, before }, { client }) =>
-          auditedControl(
-            runId,
-            `${set ? "" : "un"}${control}${before === undefined ? "" : `:before:${before}`}`,
-            request,
-            whoOf(client),
-            reason,
-          )(
-            registry.control({
+        control: ({ runId, control, set, request, reason, before, shown }, { client }) =>
+          Effect.andThen(
+            stepStill(runId, before, shown),
+            auditedControl(
               runId,
-              control,
-              set,
-              before,
-              by: whoActed(actorOf(whoOf(client), request)),
-            }),
+              `${set ? "" : "un"}${control}${before === undefined ? "" : `:before:${before}`}`,
+              request,
+              whoOf(client),
+              reason,
+            )(
+              registry.control({
+                runId,
+                control,
+                set,
+                before,
+                by: whoActed(actorOf(whoOf(client), request)),
+              }),
+            ),
           ),
         withdrawNote: ({ runId, note, request }, { client }) =>
           once(
@@ -2330,39 +2418,61 @@ const frontDoorHandlers = (
             Effect.provideContext(hosted),
           );
         },
-        act: ({ actions: given, request }, { client }) => {
+        act: ({ actions: given, request, shown }, { client }) => {
           const scrubbed = Arr.map(given, (one) => scrubJson(one));
           const actions = Arr.map(scrubbed, (one) => one.value);
-          return plainly(
-            Schema.decodeUnknownEffect(Schema.Array(ActionSchema))(actions).pipe(
-              Effect.mapError(
-                () => new HostRefused({ reason: `${REFUSED_INPUT}: ${refusedAction(actions)}` }),
+          const targets = Arr.map(actions, (one) => Option.getOrUndefined(targetOf(one)));
+          const checked = Effect.forEach(
+            targets,
+            (target) =>
+              target === undefined
+                ? Effect.void
+                : stepStill(target.run, target.step ?? target.before, shown),
+            { discard: true },
+          );
+          return checked.pipe(
+            Effect.andThen(
+              plainly(
+                Schema.decodeUnknownEffect(Schema.Array(ActionSchema))(actions).pipe(
+                  Effect.mapError(
+                    () =>
+                      new HostRefused({ reason: `${REFUSED_INPUT}: ${refusedAction(actions)}` }),
+                  ),
+                  Effect.flatMap((decoded) => {
+                    const proposed = Arr.filter(decoded, (action) => !ACTED_KINDS.has(action.kind));
+                    return proposed.length > 0
+                      ? Effect.fail(
+                          new HostRefused({
+                            reason: `${REFUSED_INPUT}: ${Arr.join([...new Set(Arr.map(proposed, (a) => a.kind))], ", ")} is carried out through propose, so it is on the record as asked for`,
+                          }),
+                        )
+                      : carryOutAsked(askerEnv(client), decoded, {
+                          ...whoOf(client),
+                          requestId: request,
+                        }).pipe(
+                          Effect.map((results) =>
+                            Arr.map(results, (result, index) => {
+                              const notice = removedNotice(scrubbed[index]?.removed ?? []);
+                              const run = targets[index]?.run;
+                              const revised =
+                                record === undefined || run === undefined
+                                  ? result
+                                  : { ...result, revision: record.model.revision(run) };
+                              return notice === null
+                                ? revised
+                                : {
+                                    ...revised,
+                                    note: Arr.join(
+                                      Arr.filter([result.note, notice], Boolean),
+                                      "; ",
+                                    ),
+                                  };
+                            }),
+                          ),
+                        );
+                  }),
+                ),
               ),
-              Effect.flatMap((decoded) => {
-                const proposed = Arr.filter(decoded, (action) => !ACTED_KINDS.has(action.kind));
-                return proposed.length > 0
-                  ? Effect.fail(
-                      new HostRefused({
-                        reason: `${REFUSED_INPUT}: ${Arr.join([...new Set(Arr.map(proposed, (a) => a.kind))], ", ")} is carried out through propose, so it is on the record as asked for`,
-                      }),
-                    )
-                  : carryOutAsked(askerEnv(client), decoded, {
-                      ...whoOf(client),
-                      requestId: request,
-                    }).pipe(
-                      Effect.map((results) =>
-                        Arr.map(results, (result, index) => {
-                          const notice = removedNotice(scrubbed[index]?.removed ?? []);
-                          return notice === null
-                            ? result
-                            : {
-                                ...result,
-                                note: Arr.join(Arr.filter([result.note, notice], Boolean), "; "),
-                              };
-                        }),
-                      ),
-                    );
-              }),
             ),
           );
         },
@@ -3114,24 +3224,35 @@ const frontDoorHandlers = (
                     ),
                   progress: progressFor,
                   flow: (id) =>
-                    Effect.gen(function* () {
-                      return yield* taskFlowOf(
-                        {
-                          env: askerEnv(client),
-                          runs: yield* runs,
-                          alive: yield* shared.aliveNow,
-                          offers: (run) => offers(run).pipe(Effect.orElseSucceed(() => [])),
-                        },
-                        id,
-                      );
-                    }).pipe(Effect.orElseSucceed(() => null)),
+                    record !== undefined
+                      ? recordFlow(record, id).pipe(Effect.orElseSucceed(() => null))
+                      : Effect.gen(function* () {
+                          return yield* taskFlowOf(
+                            {
+                              env: askerEnv(client),
+                              runs: yield* runs,
+                              alive: yield* shared.aliveNow,
+                              offers: (run) => offers(run).pipe(Effect.orElseSucceed(() => [])),
+                            },
+                            id,
+                          );
+                        }).pipe(Effect.orElseSucceed(() => null)),
                 });
               }),
             ),
             Effect.provideContext(bun),
           ),
         progress: ({ runId }) => progressFor(runId),
-        runDetail: ({ runId, tail, pages, refreshMr }) => {
+        runDetail: (key) => {
+          const { runId, tail, pages, refreshMr } = key;
+          const own = drawerWrites(env.stateDir, runId).pipe(Stream.provideContext(bun));
+          // Whole records say their minutes as of when they were read, so they follow the tick.
+          if (record !== undefined)
+            return recordFrames(
+              record,
+              key,
+              Stream.merge(key.parts === true ? writes : changed, own),
+            ).pipe(Stream.provideContext(bun), Stream.orDie);
           let fresh = refreshMr;
           const detail = Effect.gen(function* () {
             const view = yield* registry.view(runId);
@@ -3170,7 +3291,6 @@ const frontDoorHandlers = (
             ).pipe(Effect.orElseSucceed(() => null));
             return yield* buildRunDetail({ env, runId, runs, mr, tail, pages, plans, flow });
           }).pipe(Effect.provideContext(bun));
-          const own = drawerWrites(env.stateDir, runId).pipe(Stream.provideContext(bun));
           return followDetail(detail, Stream.merge(changed, own)).pipe(Stream.orDie);
         },
         runFile: ({ runId, ref, offset, length }) =>

@@ -9,7 +9,7 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
-import { Effect, Fiber, FileSystem, Layer, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Order, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { Store, storeLayer } from "../src/store";
 import { runEffect } from "./support/effect";
@@ -230,5 +230,33 @@ test("a subscriber is told once the change is committed", () =>
         ["run-a"],
         ["run-a", "run-b"],
       ]);
+    }),
+  ));
+
+test("a Run's near rows are its Task's, their parents and children, and the Runs asked for", () =>
+  onStore(
+    "collie-store-near-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const admit = (run: string, belongs: { task?: string; parent?: string }, placing?: string) =>
+        store.admit({ ...admission(`req-${run}`, run, {}, belongs), ...(placing && { placing }) });
+      yield* admit("parent", { task: "elsewhere" });
+      yield* admit("lead", { task: "t1" });
+      yield* admit("follow", { task: "t1", parent: "parent" });
+      yield* admit("child", { task: "t2", parent: "lead" });
+      yield* admit("asked", { task: "t3" }, '{"requestedBy":{"run":"lead"}}');
+      yield* admit("unrelated", { task: "t4" });
+      yield* admit("alone", {});
+
+      const near = (run: string) =>
+        Effect.map(store.near(run), (rows) =>
+          Arr.sort(
+            Arr.map(rows, (row) => row.run),
+            Order.String,
+          ),
+        );
+
+      expect(yield* near("lead")).toEqual(["asked", "child", "follow", "lead", "parent"]);
+      expect(yield* near("alone")).toEqual(["alone", "asked"]);
     }),
   ));

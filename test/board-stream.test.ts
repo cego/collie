@@ -29,6 +29,7 @@ import {
   PROTOCOL,
   TaskView,
   type BoardSnapshot,
+  recordIn,
 } from "../src/board-model";
 import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
@@ -251,6 +252,7 @@ const readsOnlyOnTicks = (drawer: boolean) =>
         if (drawer) {
           const opened = yield* Deferred.make<void>();
           yield* door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+            Stream.map(recordIn),
             Stream.tap(() => Deferred.succeed(opened, undefined)),
             Stream.runDrain,
             Effect.ignore,
@@ -363,6 +365,7 @@ test(
           const door = yield* frontDoor(socketOf(world.state));
           const drawn = () =>
             door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+              Stream.map(recordIn),
               Stream.runHead,
               Effect.map((one) => actionsOf(Option.getOrNull(one)?.flow, agent)),
             );

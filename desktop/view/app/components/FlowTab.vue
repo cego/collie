@@ -88,6 +88,7 @@ const controls = useFlowActions(
     } else if (effect.kind === "run") origin(effect.run, effect.machine ?? props.placed.machine);
     else if (effect.kind === "offer") offering.value = { run: effect.run, offer: effect.offer };
   },
+  () => props.detail?.revision,
 );
 const { asking } = controls;
 const lane = computed(
@@ -352,7 +353,15 @@ watch(
               :installation="placed.installation"
               :live="placed.asOf === null"
               @act="press"
-          /></template>
+            />
+            <p
+              v-if="controls.stale.value !== null && controls.stale.value.step === info.node.id"
+              data-testid="stale-act"
+              class="text-xs text-error"
+            >
+              {{ controls.stale.value.reason }}
+            </p></template
+          >
           <template #notes>
             <FlowNotes
               :node="

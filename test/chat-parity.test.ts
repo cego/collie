@@ -37,7 +37,7 @@ import type { JsonObject } from "../src/schema";
 import { checkLines, TOOLS, toolNamed } from "../src/tools";
 import { herdLines } from "../src/toolkit";
 import { boardLines, buildBoard } from "../src/board";
-import { Flow, SECTIONS, sortBoard } from "../src/board-model";
+import { Flow, SECTIONS, sortBoard, recordIn } from "../src/board-model";
 import { encodeVerifying } from "../src/verify";
 import { memoryWaitOf, waitForMemory } from "../src/memory-wait";
 import { madeRun } from "./support/records";
@@ -710,7 +710,12 @@ test(
           () =>
             door
               .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
-              .pipe(Stream.runHead, Effect.map(Option.getOrNull), Effect.orDie),
+              .pipe(
+                Stream.map(recordIn),
+                Stream.runHead,
+                Effect.map(Option.getOrNull),
+                Effect.orDie,
+              ),
           (shown) => shown?.flow?.lanes[0]?.execution === "suspended",
         );
         const said = yield* toolNamed("collie_run")!.call(env, { run: run.id });

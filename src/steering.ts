@@ -161,7 +161,11 @@ export const ledgerFiles = Effect.fn("Steering.ledgerFiles")(function* (stateDir
   const path = yield* Path.Path;
   const root = path.join(stateDir, "agents");
   const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
-  return Arr.map(names, (name) => path.join(root, name, LEDGER_FILE));
+  // A ledger's directory is its incarnation's hash; a Run's own, of its launches, holds none.
+  return Arr.map(
+    Arr.filter(names, (name) => /^[0-9a-f]+$/.test(name)),
+    (name) => path.join(root, name, LEDGER_FILE),
+  );
 });
 
 /**

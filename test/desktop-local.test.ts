@@ -18,7 +18,7 @@ import {
   flow,
   Result,
 } from "effect";
-import { type BoardMessage, type BoardSnapshot, PROTOCOL } from "../src/board-model";
+import { type BoardMessage, type BoardSnapshot, PROTOCOL, recordIn } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import {
@@ -123,6 +123,7 @@ test(
           yield* door
             .runDetail({ runId: ended.runId, tail: false, pages: 0, refreshMr: false })
             .pipe(
+              Stream.map(recordIn),
               Stream.filter((one) => one?.status === "succeeded"),
               Stream.runHead,
               Effect.orDie,

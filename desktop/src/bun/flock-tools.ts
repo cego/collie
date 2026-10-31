@@ -316,7 +316,11 @@ const boards = (flock: FlockChat) =>
       const { board } = machine;
       return board._tag === "Live"
         ? { machine, board, unread: null }
-        : { machine, board: null, unread: unreadBecause(machine.name, board, now) };
+        : {
+            machine,
+            board: null,
+            unread: unreadBecause(machine.name, board, now),
+          };
     }),
   );
 
@@ -350,7 +354,10 @@ export const place = (
         )
       : undefined;
   if (prefixed !== undefined)
-    return Result.succeed({ machine: prefixed.machine, id: pipe(named, Str.slice(colon + 1)) });
+    return Result.succeed({
+      machine: prefixed.machine,
+      id: pipe(named, Str.slice(colon + 1)),
+    });
   const having = Arr.filter(owners, ({ ids }) => ids?.has(named) === true);
   const unread = Arr.filter(owners, ({ ids }) => ids === null);
   if (colon > 0 && having.length === 0)
@@ -445,7 +452,10 @@ export const declareVoice = (flock: FlockChat, machine: Reached) => {
         Arr.map(present, ({ name }) => name),
       ),
     ) ?? [];
-  let voice: Declaration = { frontDoor: "chat", conversation: flock.conversation };
+  let voice: Declaration = {
+    frontDoor: "chat",
+    conversation: flock.conversation,
+  };
   if (said !== undefined) voice = { ...voice, said };
   if (files.length > 0) voice = { ...voice, attachments: files };
   return machine.door.declare(voice);
@@ -456,7 +466,9 @@ export const writable = (machine: ChatMachine) =>
   reach(machine).pipe(
     Effect.mapError(
       ({ reason }) =>
-        new HostRefused({ reason: `${reason}. Nothing was done on ${machine.name}.` }),
+        new HostRefused({
+          reason: `${reason}. Nothing was done on ${machine.name}.`,
+        }),
     ),
     Effect.filterOrFail(
       (reached) => reached.board.protocol >= PROTOCOL,
@@ -495,11 +507,21 @@ const sentOn = <A, E extends { readonly _tag: string; readonly message: string }
   };
   return writable(machine).pipe(
     Effect.tapError((refused) =>
-      log({ ...sending, attempt: 0, ended: "not-sent", reason: reasonOf(refused) }),
+      log({
+        ...sending,
+        attempt: 0,
+        ended: "not-sent",
+        reason: reasonOf(refused),
+      }),
     ),
     Effect.flatMap((reached) =>
       confirmed(
-        { ...sending, log, withheld: withheldOf(action), what: `the ${kind} to ${about}` },
+        {
+          ...sending,
+          log,
+          withheld: withheldOf(action),
+          what: `the ${kind} to ${about}`,
+        },
         declareVoice(flock, reached).pipe(Effect.andThen(call(reached))),
       ),
     ),
@@ -516,7 +538,10 @@ const herd = Effect.fn("FlockTools.herd")(function* (flock: FlockChat) {
   const known = yield* boards(flock);
   const on = (machine: ChatMachine, run: string) => `${machine.name}:${run}`;
   const prefixed = Arr.flatMap(known, ({ machine, board }) =>
-    Arr.map(board?.tasks ?? [], (task) => ({ ...task, run: on(machine, task.run) })),
+    Arr.map(board?.tasks ?? [], (task) => ({
+      ...task,
+      run: on(machine, task.run),
+    })),
   );
   const lost = Arr.flatMap(known, ({ unread }) => (unread === null ? [] : [`- (${unread})`]));
   return Arr.join([herdLines(prefixed, yield* Clock.currentTimeMillis), ...lost], "\n");
@@ -542,7 +567,12 @@ const readOn = (machine: ChatMachine, tool: (typeof FLOCK_READS)[number], input:
       onFailure: ({ reason }) => Effect.succeed(reason),
       onSuccess: ({ door }) =>
         answered(machine, door.read({ tool, input })).pipe(
-          Effect.map(Result.match({ onSuccess: (text) => text, onFailure: (why) => `${why}.` })),
+          Effect.map(
+            Result.match({
+              onSuccess: (text) => text,
+              onFailure: (why) => `${why}.`,
+            }),
+          ),
         ),
     }),
     Effect.map((text) => `## ${machine.name}\n\n${text}`),
@@ -996,7 +1026,10 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
     const where: Result.Result<Localized, string> = settles
       ? Result.map(
           place(textAt(action, "proposal"), owning(known, proposalsOf), "proposal"),
-          ({ machine, id }) => ({ machine, action: { ...action, proposal: id } }),
+          ({ machine, id }) => ({
+            machine,
+            action: { ...action, proposal: id },
+          }),
         )
       : yield* placeOne(action, known);
     if (Result.isFailure(where)) {
@@ -1086,17 +1119,27 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
           note: null,
           request,
         })
-        .pipe(Effect.map((done) => ({ state: "applied", note: `marked ${done.kind}` })));
-    case "seen":
-      return door
-        .seen({ runId: text("run"), request })
-        .pipe(Effect.map((done) => ({ state: "applied", note: `seen by ${done.by}` })));
-    default:
-      return door
-        .act({ actions: [action], request })
         .pipe(
-          Effect.map((results) => results[0] ?? { state: "failed", note: "the host said nothing" }),
+          Effect.map((done) => ({
+            state: "applied",
+            note: `marked ${done.kind}`,
+          })),
         );
+    case "seen":
+      return door.seen({ runId: text("run"), request }).pipe(
+        Effect.map((done) => ({
+          state: "applied",
+          note: `seen by ${done.by}`,
+        })),
+      );
+    default:
+      return door.act({ actions: [action], request }).pipe(
+        Effect.map((results) => results[0] ?? { state: "failed", note: "the host said nothing" }),
+        // Chat names no revision, so no act of its is stale.
+        Effect.catchTag("StaleAct", (stale) =>
+          Effect.fail(new HostRefused({ reason: stale.reason })),
+        ),
+      );
   }
 };
 
@@ -1155,7 +1198,11 @@ const propose = Effect.fn("FlockTools.propose")(
 
 const moveScheduleBetween = Effect.fn("FlockTools.moveSchedule")(function* (
   flock: FlockChat,
-  input: { readonly schedule: string; readonly to: string; readonly checkout?: string },
+  input: {
+    readonly schedule: string;
+    readonly to: string;
+    readonly checkout?: string;
+  },
 ) {
   const colon = Option.getOrElse(pipe(input.schedule, Str.indexOf(":")), () => -1);
   const named = (name: string) =>

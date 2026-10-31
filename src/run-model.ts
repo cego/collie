@@ -23,6 +23,9 @@ import { shell } from "./mr";
 import type { RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
 
+/** Marks a recursive listing's key in the cache of directory listings. */
+const RECURSIVE = "\0recursive";
+
 const fingerprint = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
@@ -88,7 +91,11 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
           Cache.make({ capacity, lookup });
         return {
           text: yield* memo(fs.readFileString),
-          names: yield* memo(fs.readDirectory),
+          names: yield* memo((key: string) =>
+            Str.endsWith(RECURSIVE)(key)
+              ? fs.readDirectory(Str.slice(0, -RECURSIVE.length)(key), { recursive: true })
+              : fs.readDirectory(key),
+          ),
           exists: yield* memo(fs.exists),
           stat: yield* memo(fs.stat),
         };
@@ -169,10 +176,10 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       encoding === undefined
         ? read(path, fs.readFileString(path), (group) => Cache.get(group.text, path))
         : fs.readFileString(path, encoding),
-    readDirectory: (path, options) =>
-      options === undefined
-        ? read(path, fs.readDirectory(path), (group) => Cache.get(group.names, path))
-        : fs.readDirectory(path, options),
+    readDirectory: (path, options) => {
+      const key = options?.recursive === true ? `${path}${RECURSIVE}` : path;
+      return read(path, fs.readDirectory(path, options), (group) => Cache.get(group.names, key));
+    },
     exists: (path) => read(path, fs.exists(path), (group) => Cache.get(group.exists, path)),
     stat: (path) => read(path, fs.stat(path), (group) => Cache.get(group.stat, path)),
   };
@@ -194,19 +201,22 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     else keys.set(run, next);
   };
 
+  const seen = (run: RunFacts) => {
+    const text = fingerprint(run);
+    if (facts.get(run.id) !== text) {
+      facts.set(run.id, text);
+      touch(run.id);
+    }
+    index(run.id, keysOf(run));
+  };
+  /** These Runs as a read found them, the rest left as they were. */
+  const note = (runs: ReadonlyArray<RunFacts>) => Effect.sync(() => Arr.forEach(runs, seen));
+
   /** Each Run as a build read it: one whose facts moved takes the next number, and one gone is dropped. */
   const observe = (runs: ReadonlyArray<RunFacts>) =>
     Effect.sync(() => {
-      const present = new Set<string>();
-      for (const run of runs) {
-        present.add(run.id);
-        const text = fingerprint(run);
-        if (facts.get(run.id) !== text) {
-          facts.set(run.id, text);
-          touch(run.id);
-        }
-        index(run.id, keysOf(run));
-      }
+      Arr.forEach(runs, seen);
+      const present = new Set(Arr.map(runs, (run) => run.id));
       for (const run of facts.keys())
         if (!present.has(run)) {
           facts.delete(run);
@@ -215,17 +225,38 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
         }
     });
 
+  /** The Runs that share a plan with this one: the one that wrote it, and those built from it. */
+  const planned = (run: string): ReadonlyArray<string> => {
+    const plan = keys.get(run)?.byPlan ?? `${dir}/runs/${run}/plan`;
+    const owner = /^runs\/([^/]+)\/plan$/.exec(Str.slice(dir.length + 1)(plan))?.[1];
+    return [...(indexes.byPlan.get(plan) ?? []), ...(owner === undefined ? [] : [owner])];
+  };
+
   const revision = (run: string): RunRevision => ({ epoch, seq: revisions.get(run) ?? 0 });
+  const highest = (runs: ReadonlyArray<string>) =>
+    Math.max(0, ...Arr.map(runs, (run) => revisions.get(run) ?? 0));
+
+  const records = new Map<string, { readonly text: string; readonly seq: number }>();
+  /**
+   * A Run's record at the highest revision of the Runs it reads. A record that moved while
+   * none of them did, as one an agent or a merge request moves does, moves its own Run.
+   */
+  const stampRecord = (run: string, runs: ReadonlyArray<string>, text: string): RunRevision => {
+    const was = records.get(run);
+    if (was !== undefined && was.text !== text && highest(runs) === was.seq) touch(run);
+    const seq = highest(runs);
+    records.set(run, { text, seq });
+    return { epoch, seq };
+  };
 
   /** Each card with the highest revision of its Runs; a card that moved while none of them did moves its leading Run. */
   const stamp = (views: ReadonlyArray<TaskView>): ReadonlyArray<TaskView> =>
     Arr.map(views, (view) => {
       const { revision: _, ...card } = view;
-      const highest = () => Math.max(0, ...Arr.map(view.runs, (run) => revisions.get(run) ?? 0));
       const text = fingerprint(card);
       const was = cards.get(view.id);
-      if (was !== undefined && was.text !== text && highest() === was.seq) touch(view.run);
-      const at = highest();
+      if (was !== undefined && was.text !== text && highest(view.runs) === was.seq) touch(view.run);
+      const at = highest(view.runs);
       cards.set(view.id, { text, seq: at });
       return { ...card, revision: { epoch, seq: at } };
     });
@@ -234,9 +265,12 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   /** Each watched checkout, and the Runs whose heads were read in it. */
   const readers = new Map<string, Set<string>>();
   const moves = yield* PubSub.unbounded<void>();
+  /** How often each watched checkout has moved. */
+  const checkouts = new Map<string, number>();
   /** The checkout moved: every head read in it is read again, and its Runs take the next number. */
   const moved = (cwd: string) =>
     Effect.gen(function* () {
+      checkouts.set(cwd, (checkouts.get(cwd) ?? 0) + 1);
       for (const key of heads.keys()) if (Str.startsWith(`${cwd}\0`)(key)) heads.delete(key);
       for (const run of readers.get(cwd) ?? []) touch(run);
       yield* PubSub.publish(moves, undefined);
@@ -261,15 +295,21 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       Effect.ensuring(Effect.sync(() => readers.delete(cwd))),
       Effect.provideContext(spawning),
     );
-  const head = (run: RunFacts) =>
+  const watch = (run: RunFacts) =>
     Effect.gen(function* () {
-      const key = `${run.cwd}\0${run.branch}`;
       const watched = readers.get(run.cwd);
       if (watched === undefined) {
         readers.set(run.cwd, new Set([run.id]));
         // ponytail: watched for the host's life once read; drop on retirement if checkouts pile up.
         yield* Effect.forkIn(watchCheckout(run.cwd), scope);
       } else watched.add(run.id);
+    });
+  /** How often the Run's checkout has moved since it was first watched. */
+  const checkout = (run: RunFacts) => Effect.map(watch(run), () => checkouts.get(run.cwd) ?? 0);
+  const head = (run: RunFacts) =>
+    Effect.gen(function* () {
+      const key = `${run.cwd}\0${run.branch}`;
+      yield* watch(run);
       if (heads.has(key)) return heads.get(key) ?? null;
       const read = yield* readBranchHead(run).pipe(Effect.orElseSucceed(() => null));
       heads.set(key, read);
@@ -283,9 +323,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     invalidate,
     disable,
     observe,
+    note,
     revision,
+    highest,
     stamp,
+    stampRecord,
+    planned,
     head,
+    checkout,
     /** Each time a watched checkout moved. */
     moved: Stream.fromPubSub(moves),
     indexes: (): Indexes => indexes,

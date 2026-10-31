@@ -18,13 +18,19 @@ type Sample = typeof Sample.Type;
 const Index = Schema.fromJsonString(Schema.Array(Sample));
 const lock = Semaphore.makeUnsafe(1);
 const file = (dir: string) => `${dir}/step-durations.json`;
+/** The last text read and what it decoded to: a host's cached read hands back the same text. */
+let decoded: { readonly text: string; readonly samples: ReadonlyArray<Sample> } | undefined;
 const read = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    return yield* fs.readFileString(file(dir)).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Index)),
+    const text = yield* fs.readFileString(file(dir)).pipe(Effect.option);
+    if (text._tag === "None") return null;
+    if (decoded?.text === text.value) return decoded.samples;
+    const samples = yield* Schema.decodeEffect(Index)(text.value).pipe(
       Effect.orElseSucceed(() => null),
     );
+    if (samples !== null) decoded = { text: text.value, samples };
+    return samples;
   });
 const samples = (run: string, workflow: string, lines: ReadonlyArray<StepLine>): Sample[] =>
   Arr.flatMap(lines, (line) => {
@@ -105,16 +111,25 @@ const usualOf = (samples: ReadonlyArray<Sample>, workflow: string) => {
   return usual;
 };
 
+let usual:
+  | {
+      readonly samples: ReadonlyArray<Sample>;
+      readonly byWorkflow: ReadonlyMap<string, ReadonlyMap<string, number>>;
+    }
+  | undefined;
 export const stepTimesByWorkflow = (dir: string) =>
   read(dir).pipe(
     Effect.map((samples) => {
+      if (samples !== null && usual?.samples === samples) return usual.byWorkflow;
       const all = samples ?? [];
-      return new Map(
+      const byWorkflow = new Map(
         Arr.map([...new Set(Arr.map(all, (one) => one.workflow))], (workflow) => [
           workflow,
           usualOf(all, workflow),
         ]),
       );
+      if (samples !== null) usual = { samples, byWorkflow };
+      return byWorkflow;
     }),
   );
 

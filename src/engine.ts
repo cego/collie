@@ -5867,6 +5867,15 @@ export interface RegistryApi {
     task: string | null,
     read?: FileSystem.FileSystem,
   ) => Effect.Effect<ReadonlyArray<RunView>>;
+  /**
+   * The Runs a Run's record reads, chosen from the rows alone: its Task's, their parents,
+   * the Runs they started or asked for, and `also`. Empty where `runId` has no row.
+   */
+  readonly related: (
+    runId: string,
+    also: ReadonlyArray<string>,
+    read?: FileSystem.FileSystem,
+  ) => Effect.Effect<ReadonlyArray<RunView>>;
   /** Records `url` as the merge request `runId` opened, as the MR step does, without its notice. */
   readonly mergeRequest: (runId: string, url: string) => Effect.Effect<void>;
   /**
@@ -8024,6 +8033,51 @@ const makeRegistry: (
             },
           ),
         ),
+      ),
+    related: (runId: string, also: ReadonlyArray<string>, read?: FileSystem.FileSystem) =>
+      Effect.all([
+        store.near(runId),
+        Effect.forEach(also, store.run, { concurrency: "unbounded" }),
+      ]).pipe(
+        Effect.map(([near, named]) => [
+          ...new Map(
+            Arr.map(
+              [...near, ...Arr.filter(named, (row): row is RunRow => row !== null)],
+              (row) => [row.run, row],
+            ),
+          ).values(),
+        ]),
+        Effect.flatMap((rows) => {
+          const self = Option.getOrUndefined(Arr.findFirst(rows, (row) => row.run === runId));
+          if (self === undefined) return Effect.succeed([]);
+          const inTask = new Set(
+            Arr.map(
+              Arr.filter(rows, (row) =>
+                self.task === null ? row.run === runId : row.task === self.task,
+              ),
+              (row) => row.run,
+            ),
+          );
+          const parents = new Set(
+            Arr.map(rows, (row) => (inTask.has(row.run) ? row.parent : null)),
+          );
+          const asked = (row: RunRow) =>
+            Str.includes("requestedBy")(row.placing ?? "") &&
+            inTask.has(Option.getOrUndefined(decodePlacing(row.placing))?.requestedBy?.run ?? "");
+          return Effect.forEach(
+            Arr.filter(
+              rows,
+              (row) =>
+                inTask.has(row.run) ||
+                parents.has(row.run) ||
+                inTask.has(row.parent ?? "") ||
+                also.includes(row.run) ||
+                asked(row),
+            ),
+            (row) => viewOf(row, read),
+            { concurrency: VIEW_CONCURRENCY },
+          );
+        }),
       ),
     mergeRequest: (runId: string, url: string) =>
       fs

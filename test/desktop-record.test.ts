@@ -79,6 +79,32 @@ describe("the record's tabs", () => {
     expect(values({ reviewText: false, findings: false, target: true })).toContain("review");
   });
 
+  test("show a part still coming as a loading tab, and drop it once it came empty", () => {
+    const coming = { plan: false, reviewText: false, findings: false, diff: false };
+    const loading = recordTabs({
+      ...everything,
+      ...coming,
+      pending: ["texts", "diff", "mr", "tail"],
+    });
+    const came = recordTabs({ ...everything, ...coming, pending: [] });
+
+    expect(Arr.filter(loading, (tab) => tab.loading === true)).toEqual([
+      { label: "Plan", value: "plan", loading: true },
+      { label: "Review", value: "review", loading: true },
+      { label: "Diff", value: "diff", loading: true },
+      { label: "Log", value: "log", loading: true },
+      { label: "MR !12", value: "mr", loading: true },
+    ]);
+    expect(Arr.map(came, ({ value }) => value)).toEqual([
+      "summary",
+      "evidence",
+      "log",
+      "terminal",
+      "mr",
+      "facts",
+    ]);
+    expect(Arr.some(came, (tab) => tab.loading === true)).toBe(false);
+  });
   test("are only Log, Terminal and Facts without the Run's details", () => {
     expect(
       values({

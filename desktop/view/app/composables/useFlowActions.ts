@@ -1,22 +1,34 @@
+import type { RunRevision } from "../../../../src/board-model";
 import type { PlacedTask, DesktopAction } from "../../../src/shared/flock";
-import type { FlowActionView, FlowEffect } from "../../../src/shared/flow-actions";
+import { shownAt, type FlowActionView, type FlowEffect } from "../../../src/shared/flow-actions";
 
-export const useFlowActions = (placed: () => PlacedTask, follow: (effect: FlowEffect) => void) => {
+export const useFlowActions = (
+  placed: () => PlacedTask,
+  follow: (effect: FlowEffect) => void,
+  revision: () => RunRevision | undefined = () => undefined,
+) => {
   const { run, openLink } = useActions();
   const asking = ref<(Extract<FlowEffect, { kind: "text" }> & { title: string }) | null>(null);
+  /** The last act refused because its Step finished after the record showed it. */
+  const stale = ref<{ readonly step: string; readonly reason: string } | null>(null);
   const perform = (
     installation: string,
     action: DesktopAction,
     tried?: (done: boolean | null) => void,
-  ) =>
-    run(
+  ) => {
+    stale.value = null;
+    return run(
       installation,
-      action,
+      shownAt(action, revision()),
       undefined,
       undefined,
       () => (placed().asOf === null ? undefined : "its Machine is out of reach"),
-      tried,
+      (done, failed) => {
+        if (failed?.step !== undefined) stale.value = { step: failed.step, reason: failed.reason };
+        tried?.(done);
+      },
     );
+  };
   const press = (action: FlowActionView, inspect?: () => void) => {
     if (placed().asOf !== null) return;
     const effect = action.effect;
@@ -60,5 +72,5 @@ export const useFlowActions = (placed: () => PlacedTask, follow: (effect: FlowEf
           note: target.withdraw,
         }).then((removed) => (removed ? deliver() : false));
   };
-  return { asking, perform, press, send };
+  return { asking, perform, press, send, stale };
 };

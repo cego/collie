@@ -464,6 +464,33 @@ const evidenceIn = Effect.fn("Views.evidenceIn")(function* (dir: string) {
   return kept;
 });
 
+/** A record's long texts: its review, read to `pages` caps, and the plan behind it. */
+export const textsOf = Effect.fn("Views.textsOf")(function* (opts: {
+  readonly env: PluginEnv;
+  readonly run: RunFacts;
+  readonly runs: ReadonlyArray<RunFacts>;
+  readonly pages?: number;
+  readonly plans?: PlanCache;
+}) {
+  const path = yield* Path.Path;
+  const cap = REVIEW_CAP * Math.max(1, opts.pages ?? 1);
+  return {
+    review:
+      (yield* capped(path.join(opts.run.dir, REVIEW_FILE), cap)) ??
+      ({ _tag: "None", reason: `this run wrote no ${REVIEW_FILE}` } satisfies Panel),
+    plan: yield* plannedFor(opts.run, cap, opts.plans, opts.runs, opts.env.stateDir),
+  };
+});
+
+/** The end of a Run's log, as its record's tail shows it. */
+export const tailOf = Effect.fn("Views.tailOf")(function* (run: RunFacts) {
+  const log = yield* readLogTail(run.dir, TAIL_CAP).pipe(Effect.orElseSucceed(() => null));
+  return {
+    tail: log?.panel ?? ({ _tag: "None", reason: "this run wrote no log" } satisfies Panel),
+    logStart: log?.firstLine,
+  };
+});
+
 export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts: {
   env: PluginEnv;
   runId: string;
@@ -483,8 +510,9 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
   plans?: PlanCache;
   /** Its Task's Flow, as the board builds it. */
   flow?: Flow | null;
+  /** False leaves out what comes in later frames: the texts, the tail and the diff. */
+  parts?: boolean;
 }) {
-  const path = yield* Path.Path;
   const run =
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(opts.runs), (present) =>
@@ -494,15 +522,12 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
   // Gone, or never there: the panel shows the row's own facts instead.
   if (!run) return null;
 
-  const cap = REVIEW_CAP * Math.max(1, opts.pages ?? 1);
-  const review =
-    (yield* capped(path.join(run.dir, REVIEW_FILE), cap)) ??
-    ({ _tag: "None", reason: `this run wrote no ${REVIEW_FILE}` } satisfies Panel);
-
+  const parts = opts.parts ?? true;
+  const texts = parts
+    ? yield* textsOf({ ...opts, run, runs: opts.runs ?? [run] })
+    : { review: { _tag: "None", reason: "" } satisfies Panel, plan: null };
   const attention = yield* attentionFor(run);
-  const log = opts.tail
-    ? yield* readLogTail(run.dir, TAIL_CAP).pipe(Effect.orElseSucceed(() => null))
-    : null;
+  const log = parts && opts.tail ? yield* tailOf(run) : null;
   return {
     id: run.id,
     requestedBy: run.requestedBy,
@@ -526,8 +551,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       ),
       Effect.orElseSucceed(() => null),
     ),
-    review,
-    plan: yield* plannedFor(run, cap, opts.plans, opts.runs ?? [run], opts.env.stateDir),
+    ...texts,
     outputs: [],
     attention,
     outcome: {
@@ -548,10 +572,8 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
           : null,
       metrics: metricsOf(yield* readMetrics(run.evidence), run.created),
     },
-    tail: opts.tail
-      ? (log?.panel ?? ({ _tag: "None", reason: "this run wrote no log" } satisfies Panel))
-      : null,
-    logStart: log?.firstLine,
+    tail: log?.tail ?? null,
+    logStart: log?.logStart,
     finishedAt: run.finished ? epochMs(run.finished) : 0,
     mr: opts.mr,
     findings: Arr.map(yield* findingsIn(run.dir), (finding) => ({
@@ -595,7 +617,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       ({ name, size, mediaType }) => ({ name, size, mediaType }),
     ),
     agents: yield* runAgents(opts.env.stateDir, run.id),
-    diff: yield* diffOf(run),
+    diff: parts ? yield* diffOf(run) : null,
     flow: opts.flow ?? undefined,
   } satisfies RunDetail;
 });

@@ -60,6 +60,8 @@ import {
   FrontDoor,
   Declaration,
   HostRefused,
+  StaleAct,
+  recordIn,
   type Disposition,
   type Seen,
   type ProposalCarried,
@@ -160,6 +162,7 @@ export const anyRuns = (env: PluginEnv): Effect.Effect<boolean, never, FileSyste
 
 type HostFailure =
   | HostRefused
+  | StaleAct
   | ProposalRefused
   | RequestConflict
   | HostUnavailable
@@ -186,6 +189,8 @@ export const refusal = (cause: HostFailure): Failure => {
         : err("operation_failed", cause.reason);
     case "ProposalRefused":
       return err("invalid_input", cause.detail, { reason: cause.refused });
+    case "StaleAct":
+      return err("invalid_state", cause.reason, { run: cause.run, step: cause.step });
     case "RequestConflict":
       return err("invalid_input", cause.reason, { request: cause.request });
     case "HostVersionMismatch":
@@ -761,9 +766,12 @@ export interface DetailKey {
 /** One Run's details from the host, from a host started here if none is running. */
 const detailStream = (env: PluginEnv, key: DetailKey) =>
   Effect.gen(function* () {
-    if (env.machine !== undefined) return (yield* reach(env, env.machine)).runDetail({ ...key });
+    if (env.machine !== undefined)
+      return (yield* reach(env, env.machine)).runDetail({ ...key }).pipe(Stream.map(recordIn));
     yield* connect(env.stateDir);
-    return (yield* frontDoor(socketOf(env.stateDir))).runDetail({ ...key });
+    return (yield* frontDoor(socketOf(env.stateDir)))
+      .runDetail({ ...key })
+      .pipe(Stream.map(recordIn));
   });
 
 /** A Run's details as the host has them now, for a caller that follows nothing. */

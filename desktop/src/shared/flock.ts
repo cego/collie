@@ -37,6 +37,7 @@ import {
   PaneAt,
   RunDetail,
   RunFile,
+  RunRevision,
   sortBoard,
   TaskView,
 } from "../../../src/board-model";
@@ -266,6 +267,8 @@ export const DesktopAction = Schema.Union([
     control: Schema.Literals(["hold", "stop"]),
     set: Schema.Boolean,
     before: Schema.optional(Schema.String),
+    /** The record revision it was shown at, from a record. */
+    shown: Schema.optionalKey(RunRevision),
   }),
   Schema.TaggedStruct("Resume", { runId: Schema.String }),
   Schema.TaggedStruct("Confirm", { proposal: Schema.String, hash: Schema.String }),
@@ -287,6 +290,7 @@ export const DesktopAction = Schema.Union([
     agent: Schema.optionalKey(Schema.String),
     to: Schema.optionalKey(Schema.String),
     text: Schema.String,
+    shown: Schema.optionalKey(RunRevision),
   }),
   Schema.TaggedStruct("WithdrawNote", { runId: Schema.String, note: Schema.String }),
   Schema.TaggedStruct("FollowUp", { runId: Schema.String, text: Schema.String }),
@@ -306,6 +310,8 @@ export class ActionFailed extends Schema.TaggedError<
   reason: Schema.String,
   /** The id it was asked under, which a retry sends again so the host does it once. */
   request: Schema.optional(Schema.String),
+  /** The Step an act was refused over because it finished since it was shown. */
+  step: Schema.optional(Schema.String),
 }) {}
 
 /** `command` is the herdr client that shows the pane, to copy where no terminal opened it. */

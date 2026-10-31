@@ -105,7 +105,8 @@ here are in [`src/README.md`](src/README.md).
 - **Board protocol, actors, only writer** → [ADR-0038](docs/adr/0038-the-host-builds-and-serves-the-board.md),
   [ADR-0039](docs/adr/0039-every-operation-records-who-asked.md), [ADR-0040](docs/adr/0040-the-host-is-the-only-writer.md),
   the Run model: [ADR-draft-a-runs-record-is-read-from-its-hosts-run-model](docs/adr/draft-a-runs-record-is-read-from-its-hosts-run-model.md),
-  `src/run-model.ts`, `test/run-model.test.ts`, `test/run-model-host.test.ts`,
+  `src/run-model.ts`, `src/record.ts`, `test/run-model.test.ts`, `test/run-model-host.test.ts`,
+  `test/record.test.ts`, `test/record-host.test.ts`, `test/record-acts.test.ts`,
   `FrontDoorRpcs` in `src/board-model.ts`, `src/board-stream.ts`, `src/audit.ts`, `src/run-detail.ts`,
   `test/board-stream.test.ts`, `test/actor.test.ts`, `test/only-writer.test.ts`, `test/run-detail.test.ts`.
 - **Admission, recovery** → [ADR-0017](docs/adr/0017-one-request-is-one-run.md), `src/store.ts`,

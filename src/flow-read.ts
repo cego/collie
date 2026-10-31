@@ -13,7 +13,6 @@ import { readAudit, whoActed } from "./audit";
 import type { PluginEnv } from "./env";
 import {
   currentOf,
-  flowNotice,
   laneOf,
   linkSaid,
   linkState,
@@ -30,6 +29,7 @@ import { readStepLines } from "./steps";
 import { readStepSteering } from "./step-steering";
 import { stepTimesByWorkflow, usualStepTimes } from "./step-durations";
 import { readRunLinks } from "./run-links";
+import { settleFlow } from "./flow-timing";
 import { epochMs } from "./time";
 import { readVerifications } from "./verify";
 
@@ -361,5 +361,5 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
             mrUrl: mrRefOf(task.mr) === null ? null : mrUrlOf(mrRefOf(task.mr)!),
           }),
   } satisfies Flow;
-  return { ...flow, notice: flowNotice(flow, yield* Clock.currentTimeMillis) };
+  return settleFlow(flow, yield* Clock.currentTimeMillis);
 });

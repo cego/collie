@@ -179,6 +179,11 @@ export interface StoreApi {
   /** The run a request id was already admitted as, or null. */
   readonly requested: (request: string) => Effect.Effect<RunRow | null>;
   readonly runs: Effect.Effect<ReadonlyArray<RunRow>>;
+  /**
+   * The rows a Run's record may read, a superset its reader narrows: the Run's Task's, or the
+   * Run's alone outside one, their parents and children, and every Run another asked for.
+   */
+  readonly near: (run: string) => Effect.Effect<ReadonlyArray<RunRow>>;
   /** Whatever this reads, again, whenever a run changes. */
   readonly watching: <A, E>(read: Effect.Effect<A, E>) => Stream.Stream<A, E>;
   /** Every run, again, whenever one is committed. */
@@ -315,6 +320,23 @@ function makeStore(): Effect.Effect<
       Request: Schema.Void,
       Result: Run,
       execute: () => sql`SELECT ${columns} FROM collie_runs ORDER BY admitted, run`,
+    });
+
+    const nearRun = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Run,
+      execute: (run) => sql`
+        WITH own AS (
+          SELECT other.run, other.parent FROM collie_runs other, collie_runs self
+          WHERE self.run = ${run}
+            AND (other.task = self.task OR (self.task IS NULL AND other.run = self.run))
+        )
+        SELECT ${columns} FROM collie_runs
+        WHERE run IN (SELECT run FROM own)
+          OR run IN (SELECT parent FROM own)
+          OR parent IN (SELECT run FROM own)
+          OR placing LIKE '%requestedBy%'
+      `,
     });
 
     const unaccepted = SqlSchema.findAll({
@@ -521,6 +543,7 @@ function makeStore(): Effect.Effect<
           .pipe(Effect.catchTag("SqlError", Effect.die)),
       pending: unaccepted().pipe(Effect.orDie),
       runs: all,
+      near: (run: string) => nearRun(run).pipe(Effect.orDie),
       run: (run: string) =>
         byRun(run).pipe(
           Effect.map((rows) => rows[0] ?? null),

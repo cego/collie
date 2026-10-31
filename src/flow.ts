@@ -31,7 +31,7 @@ import type { RunState } from "./runs";
 import type { StepLine, StepMeta, StepPlace } from "./steps";
 import type { Verification } from "./verify-model";
 import { clockTime, epochMs, minutes } from "./time";
-import { stepElapsed } from "./flow-timing";
+import { since, stepElapsed } from "./flow-timing";
 import type { readStepSteering } from "./step-steering";
 import type { Effect } from "effect";
 
@@ -291,12 +291,12 @@ export function laneOf(facts: LaneFacts): FlowLane {
       case "done":
         return one.left === null ? "Done" : minutes(epochMs(one.left) - epochMs(one.entered));
       case "running":
-        return said ?? minutes(now - epochMs(one.attempts.at(-1)!.at));
+        return said ?? since(epochMs(one.attempts.at(-1)!.at));
       case "needs-you": {
         const asked = Option.getOrUndefined(
           Arr.findFirst(questionsFor(one.key), (question) => question.open),
         )?.asked;
-        return asked == null ? "Asked" : `Asked ${minutes(now - epochMs(asked))} ago`;
+        return asked == null ? "Asked" : `Asked ${since(epochMs(asked))} ago`;
       }
       case "waiting":
         return facts.wakes === null ? null : `Wakes at ${clockTime(epochMs(facts.wakes))}`;
@@ -535,38 +535,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
   };
 }
 
-export const flowNotice = (flow: Flow, now: number): string | null => {
-  const node = Option.getOrUndefined(
-    Option.map(
-      Option.fromNullishOr(
-        Option.getOrUndefined(
-          Arr.findFirst(
-            flow.lanes,
-            (one) =>
-              one.run ===
-              Option.getOrUndefined(
-                Option.map(Option.fromNullishOr(flow.current), (present__) => present__.run),
-              ),
-          ),
-        ),
-      ),
-      (present___) =>
-        Option.getOrUndefined(
-          Arr.findFirst(
-            present___.nodes,
-            (one) =>
-              one.id ===
-              Option.getOrUndefined(
-                Option.map(Option.fromNullishOr(flow.current), (present____) => present____.node),
-              ),
-          ),
-        ),
-    ),
-  );
-  return node?.long === true && node.usual != null
-    ? `${node.title} is taking longer than usual: ${minutes(stepElapsed(node, now))}, usually ${pipe(minutes(node.usual), Str.replace(/ min$/, ""))}.`
-    : null;
-};
+export { flowNotice } from "./flow-timing";
 
 /**
  * The path's nodes in its order, and each node off it after the one that happened before it:
@@ -834,10 +803,10 @@ function undeclaredSaid(
     case "done":
       return "Done";
     case "running":
-      return started === null ? null : minutes(now - epochMs(started));
+      return started === null ? null : since(epochMs(started));
     case "needs-you": {
       const open = Option.getOrUndefined(Arr.findFirst(asked, (one) => one.open))?.asked;
-      return open == null ? "Asked" : `Asked ${minutes(now - epochMs(open))} ago`;
+      return open == null ? "Asked" : `Asked ${since(epochMs(open))} ago`;
     }
     case "failed":
       return firstLine(facts.run.note ?? "") || "Failed";
@@ -887,6 +856,7 @@ export interface WaitFacts {
   readonly machine: string;
   /** Whether it sleeps on a durable timer or on a child still going, which a park is not. */
   readonly sleeping: boolean;
+  readonly now: number;
 }
 
 const PANE = "Waiting for you in its pane";
@@ -911,7 +881,7 @@ export function laneWaitOf(facts: WaitFacts): LaneWait | null {
     };
   if (facts.check !== null) {
     const { name, elapsedMs, usualMs } = facts.check;
-    const elapsed = elapsedMs === null ? "" : ` · ${minutes(elapsedMs)}`;
+    const elapsed = elapsedMs === null ? "" : ` · ${since(facts.now - elapsedMs)}`;
     const usual = usualMs === null || elapsedMs === null ? "" : `, usually ${minutes(usualMs)}`;
     return { wait: "check", needsYou: false, said: `${name}${elapsed}${usual}` };
   }

@@ -961,7 +961,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   head?: (run: RunFacts) => Effect.Effect<string | null>;
 }) {
   const { stateDir } = opts.env;
-  const now = opts.now ?? (yield* Clock.currentTimeMillis);
+  const wall = yield* Clock.currentTimeMillis;
+  const now = opts.now ?? wall;
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(
@@ -1263,6 +1264,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                 check: running,
                 awaiting: waits.awaiting !== null,
                 machine: opts.env.machine ?? machineName(),
+                // A check's minutes are counted on the clock its Flow is said by.
+                now: wall,
                 sleeping:
                   (run.engine?.wakes ?? null) !== null ||
                   Arr.some(flowInputs.children.get(run.id) ?? [], (one) => !ended(one)),
