@@ -3,7 +3,8 @@
 // so a reply the real core could not send fails the call that caused it. Its terminals act
 // as a harness does: idle once started, and a sent prompt answered from the rig's Output
 // queue between a `working` and an `idle` reported as OSC 7501 status events. One started
-// with `--prompt`, as OpenCode is, reports nothing until it has worked on that prompt. After
+// with `--prompt`, as OpenCode is, reports nothing until it has worked on that prompt; an
+// `opencode` one also serves its session and a prompt posted to it on its `--port`. After
 // `hello {framed: true}` a connection is framed, and `terminal.attach` streams a terminal's
 // first paint and what it prints, never more than core's window ahead of the viewer's CREDIT.
 
@@ -40,6 +41,8 @@ export interface FakeHc {
   readonly print: (name: string, text: string) => Effect.Effect<void>;
   /** The program in the terminal named `name` exits with `code`. */
   readonly exit: (name: string, code: number) => Effect.Effect<void>;
+  /** Every live terminal ends at once, as losing core's holder ends them. */
+  readonly lose: Effect.Effect<void>;
 }
 
 /** How far core streams ahead of a viewer's CREDIT, as hc 0.1.14 does. */
@@ -114,6 +117,9 @@ const view = (terminal: Terminal): Schema.JsonObject => ({
   turn: terminal.turn,
 });
 
+/** What Collie posts to OpenCode's `prompt_async`. */
+const Prompted = Schema.Struct({ parts: Schema.Array(Schema.Struct({ text: Schema.String })) });
+
 /** How long a fake harness works on a prompt before its Output is written. */
 const TURN = "200 millis";
 const text = (value: Schema.Json | undefined) => (isString(value) ? value : undefined);
@@ -137,6 +143,18 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   let blocked = false;
   const typed = new Map<string, string>();
   const viewing = new Set<Viewer>();
+  const opencodes = new Map<string, Bun.Server<undefined>>();
+  yield* Scope.addFinalizer(
+    scope,
+    Effect.sync(() => {
+      for (const served of opencodes.values()) void served.stop(true);
+    }),
+  );
+  const ended = (terminal: Terminal) => {
+    terminal.state = "finished";
+    void opencodes.get(terminal.address)?.stop(true);
+    opencodes.delete(terminal.address);
+  };
 
   const find = (params: Schema.JsonObject) => {
     const asked = text(params.terminal);
@@ -228,6 +246,34 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       return terminal.turn;
     });
 
+  /** OpenCode's TUI is its own server: the session it continues, and a prompt posted to it. */
+  const opencodeServer = (terminal: Terminal, argv: ReadonlyArray<string>) => {
+    const session = argv[argv.indexOf("--session") + 1];
+    const served = Bun.serve<undefined>({
+      hostname: "127.0.0.1",
+      port: Number(argv[argv.indexOf("--port") + 1]),
+      fetch: (request) =>
+        Effect.runPromiseWith(services)(
+          Effect.gen(function* () {
+            const path = new URL(request.url).pathname;
+            if (request.method === "GET" && path === `/session/${session}`)
+              return Response.json({ id: session, directory: terminal.cwd });
+            if (request.method !== "POST" || path !== `/session/${session}/prompt_async`)
+              return new Response("not found", { status: 404 });
+            const body = yield* Effect.promise(() => request.json()).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(Prompted)),
+              Effect.orDie,
+            );
+            const prompt = body.parts[0]?.text ?? "";
+            yield* logged("prompt_async", { terminal: terminal.name, text: prompt });
+            yield* take(terminal, prompt);
+            return new Response(null, { status: 204 });
+          }),
+        ),
+    });
+    opencodes.set(terminal.address, served);
+  };
+
   const answer = (method: string, params: Schema.JsonObject, link: Link): Effect.Effect<Answer> =>
     Effect.gen(function* () {
       const canned = answers.get(method);
@@ -261,6 +307,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           terminals.set(terminal.address, terminal);
           yield* emit(terminal.address, "created", view(terminal));
           const argv = Arr.filter(Arr.isArray(params.argv) ? params.argv : [], isString);
+          if (argv[0] === "opencode" && argv.includes("--port")) opencodeServer(terminal, argv);
           const prompt = argv[argv.indexOf("--prompt") + 1];
           if (argv.includes("--prompt") && prompt !== undefined) yield* take(terminal, prompt);
           // A harness at its prompt says so once it has drawn it.
@@ -499,7 +546,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       Effect.suspend(() => {
         const found = find({ terminal: name });
         if (found === undefined) return Effect.void;
-        found.state = "finished";
+        ended(found);
         return Effect.gen(function* () {
           yield* emit(found.address, "finished", { reason: "exited", exit_code: code });
           const closed = yield* encodeJson({
@@ -514,5 +561,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           }
         });
       }),
+    lose: Effect.suspend(() =>
+      Effect.forEach(
+        Arr.filter([...terminals.values()], (t) => t.state === "live"),
+        (lost) => {
+          ended(lost);
+          return emit(lost.address, "finished", { reason: "holder_lost" });
+        },
+        { discard: true },
+      ),
+    ),
   } satisfies FakeHc;
 });

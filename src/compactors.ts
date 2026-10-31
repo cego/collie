@@ -1618,7 +1618,8 @@ const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
 
 /**
  * The launch: a port, a session created on a server that lives just long enough to
- * make it, and the ordinary TUI told to host that port and continue that session.
+ * make it, or the one an agent started again had, and the ordinary TUI told to host that
+ * port and continue that session.
  *
  * The temporary server is what buys exact identity. `opencode --port N` makes the TUI
  * its own server, so there is nothing to create a session on before it starts — and
@@ -1633,16 +1634,19 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
   // This server exists only to make the session, so it is stopped the moment it has —
   // including when creating the session fails, because the agent's own TUI is about to
   // want this port back.
-  const served = yield* servedEndpoint({
-    cwd: ctx.cwd,
-    log: path.join(ctx.dir, OPENCODE_LOG),
-    command: `opencode serve --hostname 127.0.0.1 --port ${port}`,
-    listening: OPENCODE_LISTENING,
-    startMs: OPENCODE_START_MS,
-    what: "opencode serve",
-    env: ctx.env,
+  const created = Effect.gen(function* () {
+    const served = yield* servedEndpoint({
+      cwd: ctx.cwd,
+      log: path.join(ctx.dir, OPENCODE_LOG),
+      command: `opencode serve --hostname 127.0.0.1 --port ${port}`,
+      listening: OPENCODE_LISTENING,
+      startMs: OPENCODE_START_MS,
+      what: "opencode serve",
+      env: ctx.env,
+    });
+    return yield* createSession(base).pipe(Effect.ensuring(terminate(served.pid)));
   });
-  const session = yield* createSession(base).pipe(Effect.ensuring(terminate(served.pid)));
+  const session = ctx.session ?? (yield* created);
 
   // Recorded before the agent starts, so the very first boundary reads the session
   // Collie made rather than guessing among the project's.

@@ -18,7 +18,7 @@ import { Data, Effect, FileSystem, Result } from "effect";
 import type { PlatformServices } from "./platform";
 import { STOP_WAIT_MS, notStopped, stopAgent, type CompactionDeps } from "./compaction";
 import type { AgentInfo, Herdr, HerdrError, PaneInfo } from "./herdr";
-import { launchDir, sameSession, type Launched } from "./launches";
+import { launchDir, sameSession, startedDir, type Launched } from "./launches";
 import { reason } from "./naming";
 import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 
@@ -61,7 +61,10 @@ export class PaneOpen extends Data.TaggedError("PaneOpen")<{
  */
 export const endAgent = Effect.fn("AgentEnd.end")(function* (
   deps: EndDeps,
-  launched: Pick<Launched, "agent" | "terminalId" | "agentSession"> & { readonly harness?: string },
+  launched: Pick<Launched, "agent" | "terminalId" | "agentSession"> & {
+    readonly harness?: string;
+    readonly runId?: string;
+  },
   why: string,
   closes: Closes,
   listed?: ReadonlyArray<AgentInfo>,
@@ -128,6 +131,13 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId, cause })));
   }
   const ended = paneId !== undefined || reached.success !== null;
+  // Ended on purpose, so nothing starts it again.
+  if (launched.runId !== undefined)
+    yield* (yield* FileSystem.FileSystem)
+      .remove(`${startedDir(deps.stateDir, launched.runId)}/${launched.agent}.json`, {
+        force: true,
+      })
+      .pipe(Effect.ignore);
   if (ended && closes === "close")
     yield* deps.log(endedLine(launched.agent, why)).pipe(Effect.ignore);
   return { _tag: "Closed", ended } satisfies Ended;

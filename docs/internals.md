@@ -860,13 +860,31 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   subagent's. Collie records the id as the launch record's `agentSession`.
 - **The first prompt** of an OpenCode agent goes in at launch, as `--prompt`, since it
   reports no readiness to wait for. Its later prompts are sends.
-- **A pi agent** is launched with `--session-id` and a fresh id, which the launch record
-  keeps as its `agentSession`; the registry's incarnation keeps none, since core lists none.
+- **A Claude or pi agent** is launched with `--session-id` and a fresh id, which the launch
+  record keeps as its `agentSession`; the registry's incarnation keeps none, since core
+  lists none. A Codex agent's is the thread its App Server has for it, read once its first
+  prompt is in; an OpenCode agent's is the one its reporter writes.
   pi has no question tool, so its per-launch `.tools.ts` registers Collie's
   `ask_user_question` (`piQuestionTool` in `src/compactors.ts`). The tool hands its call to
   `collie herdr compaction <control dir>` as the payload Claude's `AskUserQuestion` hook
   gets, so it is recorded in the same `questions.jsonl` and becomes the same Decisions.
 - **Stop** at the Run's end is `terminal.kill`.
+- **Resume.** What each agent was started with, less its credentials and its Run's
+  authority, is kept in `relaunch/<run>/<agent>.json` under the state directory until it is
+  ended. The host follows core's events, and on subscribing and on each terminal that ends,
+  starts again every agent of a running Run that `terminal.list` no longer has: a new
+  `terminal.run` under its name, in its cwd, with its harness's resume of the recorded
+  session (`claude --resume`, `codex resume`, pi's `--session-id`, `opencode --session`).
+  Codex gets a new App Server, and no permission flags: the thread keeps its own, and
+  Codex 0.166 refuses them on a remote resume. Once every lost agent is back, one whose
+  Output is still out and that has no question open is told it was restarted and to carry
+  on, then its step's pointer. OpenCode 1.18.30 ignores `--prompt` beside `--session` on a
+  session with a conversation, and its TUI takes no keys for a while after its server is
+  up, so its reporter, loaded on the resumed session, reports it idle, and the message is
+  posted to `/session/<id>/prompt_async` on its own server and kept in the Dispatcher's
+  ledger like any delivery. No idle within the launch wait, no server (compaction off), or
+  a refused post: the Run's log says it was not resumed, and nothing is typed. The Run's
+  own revival leaves such an agent to the host.
 - **A Task** is its record and the `task` label: placement opens no workspace, and a
   Task's `workspace` is null. Cleanup's pass over Task workspaces writes the record's
   `closed_at` an hour after the Task is Finished, which ends a start's join by branch;

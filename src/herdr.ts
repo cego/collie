@@ -792,6 +792,38 @@ export class Herdr {
     });
   }
 
+  /**
+   * A tick whenever an agent on core may have gone: each time core's events are followed
+   * from the start, which a holder that came back is, and each time a terminal ends.
+   * Nothing on a Machine set to herdr.
+   */
+  agentsEnded(): Stream.Stream<void, never, PlatformServices> {
+    const env = this.env;
+    const followed = Stream.unwrap(
+      Effect.gen(function* () {
+        if ((yield* terminalBackend(env.userDir)) !== "core") return Stream.empty;
+        const hc = yield* connectCore(yield* coreSocket(env.raw));
+        yield* hc.call("events.subscribe", {});
+        return Stream.concat(
+          Stream.succeed(undefined),
+          Stream.fromQueue(hc.notes).pipe(
+            Stream.filter(
+              (note) =>
+                note.method === "missed" ||
+                (note.method === "event" &&
+                  ["finished", "lost", "removed"].includes(note.params.type)),
+            ),
+            Stream.as(undefined),
+          ),
+        );
+      }),
+    );
+    return followed.pipe(
+      Stream.catch(() => Stream.empty),
+      Stream.repeat(Schedule.spaced("1 second")),
+    );
+  }
+
   /** Runs the herdr CLI; parses stdout as JSON when it is JSON. */
   cli(args: string[]): Effect.Effect<Schema.Json | string, HerdrError, CliServices> {
     const exec = this.exec.bind(this);
@@ -1376,8 +1408,14 @@ export class Herdr {
     return this.routed(target, backend, this.herdrStatus(target), (socket) =>
       Effect.gen(function* () {
         const view = yield* watched(socket);
-        const seen = Option.getOrUndefined(
-          Arr.findFirst([...view.current.terminals.values()], (one) => one.name === target),
+        const named = Arr.filter(
+          [...view.current.terminals.values()],
+          (one) => one.name === target,
+        );
+        // An agent started again shares its name with the incarnation core lost.
+        const seen = Arr.findFirst(named, (one) => one.state === "live").pipe(
+          Option.orElse(() => Arr.head(named)),
+          Option.getOrUndefined,
         );
         const terminal = seen ?? (yield* coreCall(socket, "terminal.get", { terminal: target }));
         if (terminal.state !== "live")

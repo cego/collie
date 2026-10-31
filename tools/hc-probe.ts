@@ -6,6 +6,7 @@
 //   bun tools/hc-probe.ts --harness claude|codex|pi
 //   bun tools/hc-probe.ts --harness opencode [--no-reporter]
 //   bun tools/hc-probe.ts --harness pi-question
+//   bun tools/hc-probe.ts --resume claude|codex|opencode|pi
 //
 // It downloads and checksums the pinned release, starts it on a session of its own with
 // scratch XDG directories, and drives run, list, get, read, send, keys, events and attach.
@@ -22,6 +23,11 @@
 // tool and a session id, and stands in for the host that owns its state. Told to ask, pi must
 // call the tool, put its question where the host reads it, and end its turn; then it must act
 // on the answer sent as Collie sends it.
+// `--resume` tells that harness's agent a word, stops core and starts it again as a reboot
+// would, then starts the agent again as Collie's host does: a new terminal under its name, in
+// its checkout, with `sessionArgs`' resume of the session recorded at launch (Codex's on a
+// new App Server). It passes once the agent answers with the word, which only the
+// conversation it had holds.
 // Then it stops that core, and fails if a process of the binary is still running or core's
 // default state, config or runtime directory changed.
 
@@ -42,6 +48,7 @@ import {
   Layer,
   Queue,
   Runtime,
+  Schedule,
   Schema,
   Stream,
 } from "effect";
@@ -50,6 +57,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import type { PlatformError } from "effect/PlatformError";
 import {
   applyNote,
   connect,
@@ -59,11 +67,14 @@ import {
   type HcNote,
   type HcReply,
 } from "../src/hc";
-import { opencodeReporter } from "../src/harness";
+import { opencodeReporter, sessionArgs } from "../src/harness";
 import { claudeTrust } from "../src/trust";
 import { piExtension } from "../src/chat";
 import { controlDir } from "../src/compaction";
-import { piQuestionTool, questionsSince } from "../src/compactors";
+import { COMPACTION_PORTS, codexPort, piQuestionTool, questionsSince } from "../src/compactors";
+import { promptAsync } from "../src/opencode";
+import { boundThread, withCodex } from "../src/codex";
+import { terminate } from "../src/processes";
 import { marked } from "../src/dispatcher";
 import { hostLockOf } from "../src/lock";
 
@@ -673,6 +684,225 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
   for (const one of agents) yield* api.call("terminal.kill", { terminal: one.address });
 });
 
+const WORD = "MARMALADE";
+const REMEMBER = `Remember this word: ${WORD}. Reply with only OK, and nothing else.`;
+const RECALL =
+  "Reply with word= followed by the word I asked you to remember, in lower case, and nothing else.";
+const RECALLED = `word=${Str.toLowerCase(WORD)}`;
+
+const resume = Effect.fn("HcProbe.resume")(function* (
+  socket: string,
+  dir: string,
+  name: string,
+  restart: Effect.Effect<
+    unknown,
+    PlatformError | Cause.UnknownError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const home = yield* Config.String("HOME");
+  const cwd = `${dir}/work`;
+  const agent = `probe-${name}`;
+  if (name === "claude") {
+    const granted = yield* claudeTrust(home, `${cwd}/..`).grant(cwd);
+    if (!granted.ok) return yield* fail(granted.message);
+  }
+  const sessionFile = `${dir}/${agent}.session`;
+  const plugin = `${dir}/${agent}.status.js`;
+  yield* fs.writeFileString(plugin, opencodeReporter({ sessionFile, tty: "/dev/tty" }));
+  const terminalEnv = { TERM: "xterm-256color", COLORTERM: "truecolor" };
+  const env =
+    name === "opencode"
+      ? {
+          ...terminalEnv,
+          XDG_CONFIG_HOME: `${home}/.config`,
+          XDG_DATA_HOME: `${dir}/opencode-data`,
+          OPENCODE_CONFIG_CONTENT: yield* Schema.encodeEffect(OpenCodeContent)({
+            plugin: [`file://${plugin}`],
+          }),
+        }
+      : terminalEnv;
+  const codexServer = () =>
+    codexPort("codex app-server").install({ agent, harness: "codex", cwd, dir: `${dir}/codex` });
+  const codexFlags = ["--sandbox", "workspace-write", "--ask-for-approval", "never"];
+
+  /** The agent in a core terminal of its own, with what it reported and showed. */
+  const started = (argv: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const events = yield* connect(socket);
+      yield* events.call("hello", { generation: 1 });
+      let snapshot = snapshotOf(yield* events.call("events.subscribe", {}));
+      const api = yield* connect(socket);
+      yield* api.call("hello", { generation: 1 });
+      const terminal = yield* api.call("terminal.run", {
+        argv: [...argv],
+        name: agent,
+        cwd,
+        no_parent: true,
+        env,
+      });
+      yield* Console.error(`${name}: started ${Arr.join(argv, " ")}`);
+      const words: string[] = [];
+      const screen = api
+        .call("terminal.read", { terminal: terminal.address })
+        .pipe(Effect.map((read) => read.text));
+      const until = <E, R>(what: string, done: () => Effect.Effect<boolean, E, R>) =>
+        Effect.gen(function* () {
+          while (!(yield* done())) {
+            snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
+            const word = snapshot.terminals.get(terminal.address)?.status?.state ?? null;
+            if (word !== null && words.at(-1) !== word) words.push(word);
+            if (word === "blocked" || word === "error")
+              return yield* fail(`${name} reported ${word}:\n${yield* screen}`);
+          }
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: Duration.seconds(TURN_SECONDS),
+            orElse: () =>
+              Effect.flatMap(screen, (text) =>
+                fail(
+                  `timed out waiting for ${what}; ${name} reported ${Arr.join(words, ", ")}:\n${text}`,
+                ),
+              ),
+          }),
+        );
+      const settled = (from: number) => {
+        const after = words.slice(from);
+        return after.includes("working") && ["idle", "done"].includes(after.at(-1) ?? "");
+      };
+      /** Sends `text` once it is at its prompt, and waits for the turn it starts to end. */
+      const told = (text: string) =>
+        Effect.gen(function* () {
+          yield* until(`${name} to report idle`, () =>
+            Effect.succeed(["idle", "done"].includes(words.at(-1) ?? "")),
+          );
+          const from = words.length;
+          yield* api.call("terminal.send", { terminal: terminal.address, text });
+          yield* until(`${name} to answer`, () => Effect.succeed(settled(from)));
+        });
+      return { address: terminal.address, words, screen, until, settled, told };
+    });
+
+  // The launch, and the session Collie records from it.
+  const chosen = SecureRandom.uuidV4Unsafe();
+  const server = name === "codex" ? yield* codexServer() : null;
+  const first =
+    name === "codex"
+      ? ["codex", ...codexFlags, ...(server?.args ?? [])]
+      : name === "opencode"
+        ? ["opencode", "--prompt", REMEMBER]
+        : [...(harnessArgv(name) ?? []), ...sessionArgs(name, { id: chosen, resumed: false }).tail];
+  const before = yield* started(first);
+  if (name === "opencode")
+    yield* before.until(`${name} to answer its first prompt`, () =>
+      Effect.succeed(before.settled(0)),
+    );
+  else yield* before.told(REMEMBER);
+  const recorded =
+    name === "codex"
+      ? yield* withCodex(server?.endpoint ?? "", (client) => boundThread(client, cwd))
+      : name === "opencode"
+        ? yield* fs.readFileString(sessionFile)
+        : chosen;
+  if (recorded === null) return yield* fail(`${name} has no session to resume`);
+  yield* Console.error(`${name}: told the word in session ${recorded}; stopping core`);
+
+  yield* restart;
+  const left = Arr.filter(
+    (yield* (yield* connect(socket)).call("terminal.list", {})).terminals,
+    (one) => one.name === agent && one.state === "live",
+  );
+  yield* expect(left.length === 0, `${agent} to be gone after core stopped`);
+
+  // Codex's old App Server is put down before a new one is started, as a launch waits for
+  // it: a server still holding the thread leaves it read-only to the next.
+  if (server?.pid !== undefined) {
+    yield* terminate(server.pid);
+    yield* fs.exists(`/proc/${server.pid}`).pipe(
+      Effect.repeat({ until: (alive) => !alive, schedule: Schedule.spaced("100 millis") }),
+      Effect.timeoutOrElse({
+        duration: Duration.seconds(20),
+        orElse: () => fail(`codex's App Server ${server.pid} to stop`),
+      }),
+    );
+  }
+  const again = name === "codex" ? yield* codexServer() : null;
+  yield* fs.remove(sessionFile, { force: true });
+  yield* fs.writeFileString(
+    plugin,
+    opencodeReporter({ sessionFile, tty: "/dev/tty", session: recorded }),
+  );
+  const resumed = sessionArgs(name, { id: recorded, resumed: true });
+  // OpenCode's server, as Collie's controls give it, is what a resumed agent is prompted on.
+  const served =
+    name === "opencode"
+      ? yield* COMPACTION_PORTS.opencode!.install({
+          agent,
+          harness: name,
+          cwd,
+          dir: `${dir}/opencode-controls`,
+          session: recorded,
+        })
+      : null;
+  const second =
+    name === "codex"
+      ? // The thread keeps its permissions: a remote resume refuses them again.
+        ["codex", ...resumed.lead, ...(again?.args ?? [])]
+      : name === "opencode"
+        ? // OpenCode drops a --prompt given with a session that has a conversation.
+          ["opencode", ...(served?.args ?? [])]
+        : [...(harnessArgv(name) ?? []), ...resumed.tail];
+  const after = yield* started(second);
+  if (served?.endpoint) {
+    yield* after.until(`${name}'s reporter to report idle`, () =>
+      Effect.succeed(after.words.at(-1) === "idle"),
+    );
+    const from = after.words.length;
+    yield* promptAsync(served.endpoint, recorded, RECALL);
+    yield* after.until(`${name} to answer`, () => Effect.succeed(after.settled(from)));
+  } else yield* after.told(RECALL);
+  // Claude reports done before it has drawn its answer.
+  const shown = yield* after.screen.pipe(
+    Effect.repeat({
+      until: (text) => pipe(text, Str.includes(RECALLED)),
+      schedule: Schedule.spaced("250 millis"),
+    }),
+    Effect.timeoutOrElse({ duration: Duration.seconds(30), orElse: () => after.screen }),
+  );
+  yield* expect(
+    pipe(shown, Str.includes(RECALLED)),
+    `${name} to answer ${RECALLED}; it reported ${Arr.join(after.words, ", ")}:\n${shown}`,
+  );
+  const now =
+    name === "codex"
+      ? yield* withCodex(again?.endpoint ?? "", (client) => boundThread(client, cwd))
+      : name === "opencode"
+        ? yield* fs.readFileString(sessionFile)
+        : recorded;
+  yield* expect(now === recorded, `${name} to be in session ${recorded}, not ${now}`);
+  // Claude and pi keep their own transcript of each session: the answer has to be in its.
+  const store =
+    name === "claude"
+      ? { dir: `${home}/.claude/projects`, file: `${recorded}.jsonl` }
+      : name === "pi"
+        ? { dir: `${home}/.pi/agent/sessions`, file: `_${recorded}.jsonl` }
+        : null;
+  if (store !== null) {
+    const kept = Arr.filter(yield* fs.readDirectory(store.dir, { recursive: true }), (path) =>
+      pipe(path, Str.endsWith(store.file)),
+    );
+    const texts = yield* Effect.forEach(kept, (path) => fs.readFileString(`${store.dir}/${path}`));
+    yield* expect(
+      kept.length === 1 && Arr.every(texts, (text) => pipe(text, Str.includes(RECALLED))),
+      `${name}'s one transcript of session ${recorded} to hold ${RECALLED}: ${Arr.join(kept, ", ")}`,
+    );
+  }
+  yield* Console.error(`${name}: started again in session ${now}, answered ${RECALLED}`);
+  yield* (yield* connect(socket)).call("terminal.kill", { terminal: after.address });
+  if (again?.pid !== undefined) yield* terminate(again.pid);
+});
+
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const home = yield* Config.String("HOME");
@@ -705,6 +935,17 @@ const program = Effect.gen(function* () {
   const probed = yield* Effect.exit(
     Effect.gen(function* () {
       yield* run(binary, ["server", "start", "--json"], env);
+      const resumed = process.argv.indexOf("--resume");
+      if (resumed >= 0) {
+        yield* fs.makeDirectory(`${dir}/work`);
+        yield* fs.makeDirectory(`${dir}/codex`);
+        yield* fs.makeDirectory(`${dir}/opencode-controls`);
+        const restart = run(binary, ["server", "stop", "--json"], env).pipe(
+          Effect.andThen(run(binary, ["server", "start", "--json"], env)),
+        );
+        yield* resume(socket, dir, process.argv[resumed + 1] ?? "", restart).pipe(Effect.scoped);
+        return;
+      }
       const at = process.argv.indexOf("--harness");
       if (at >= 0) {
         yield* fs.makeDirectory(`${dir}/work`);
@@ -745,7 +986,14 @@ BunRuntime.runMain(
   program.pipe(
     Effect.scoped,
     Effect.tapCause((cause) => Console.error(Cause.pretty(cause))),
-    Effect.provide(Layer.mergeAll(BunServices.layer, Digest.layerWebCrypto, FetchHttpClient.layer)),
+    Effect.provide(
+      Layer.mergeAll(
+        BunServices.layer,
+        Digest.layerWebCrypto,
+        FetchHttpClient.layer,
+        SecureRandom.layerWebCrypto,
+      ),
+    ),
   ),
   {
     disableErrorReporting: true,

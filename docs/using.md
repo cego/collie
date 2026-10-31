@@ -1707,7 +1707,9 @@ scope's rule once:
   terminals instead of herdr panes. An agent already running on herdr stays there. Set it
   back to `herdr` only once no agent runs on core: a Machine set to herdr no longer lists
   core's. On core a Task opens no herdr workspace, and `--input workspace=new` gets a git
-  checkout like any other. `worktrees_directory` is each Machine's own too: where its new
+  checkout like any other. When core stops with agents in it (`hc server stop`, a reboot),
+  the host starts each agent of a running Run again in its own conversation; one stopped
+  mid-step is told to carry on. `worktrees_directory` is each Machine's own too: where its new
   checkouts go, `~/.collie/worktrees` unless set.
   A value never configured says **Not set**. A Machine out of reach keeps its last values
   and says when they were read, including after Desktop reopens. A host without this read

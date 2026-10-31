@@ -290,7 +290,10 @@ names a process. A registry entry without one is never a delivery target. Where 
 work runs outside its pane — Codex's, in the App Server Collie starts for that one agent —
 the incarnation is the pane's process and that server, with every thread loaded on it,
 until the server is **Quiet**. That server is also where a Codex agent's question is read
-from: its question tool never shows the agent as blocked.
+from: its question tool never shows the agent as blocked. When core loses an incarnation of a
+Run still running — its holder lost, `hc server stop`, a reboot — the host starts the next
+one: a fresh terminal under the same name, in the same checkout, resuming the harness
+session recorded at launch. An incarnation Collie ended is never started again.
 
 **Drift** — A recorded evidence–Intent mismatch. `rule` drift Collie establishes itself;
 `semantic` drift is judged against bounded actual evidence. Nothing passes on an absence.

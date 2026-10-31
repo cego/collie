@@ -7999,6 +7999,32 @@ const makeRegistry: (
     }),
   );
 
+  // The agents of a running Run that core lost, started again: once now, and whenever core
+  // says one may have gone.
+  const hosted = yield* Effect.context<HostServices>();
+  yield* Effect.forkScoped(
+    (yield* Agents).onLosses(
+      Effect.gen(function* () {
+        const host = yield* Host;
+        const agents = yield* Agents;
+        for (const { run } of yield* store.runs)
+          yield* agents.resumeLost(run, {
+            running: hasEnded(run).pipe(
+              Effect.map((ended) => !ended),
+              Effect.orElseSucceed(() => false),
+              Effect.provideContext(hosted),
+            ),
+            authority: host.place(run).pipe(Effect.map((place) => place.authority)),
+            questions: {
+              ask: (question, asker) => host.asking(run, question, asker),
+              asked: host.asked(run),
+              close: (decision, value) => host.close(run, decision, value),
+            },
+          });
+      }).pipe(Effect.provideContext(hosted)),
+    ),
+  );
+
   return {
     load: (file: string) => registering.withPermits(1)(mint(file)),
 

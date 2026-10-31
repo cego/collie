@@ -105,6 +105,8 @@ export interface LaunchContext {
   env?: ReadonlyArray<string>;
   /** The agent's MCP launch arguments, as its harness is given them. */
   mcp?: ReadonlyArray<string>;
+  /** The harness session it is started again in, where it had one. */
+  session?: string;
 }
 
 export interface AgentContext extends LaunchContext {
@@ -462,6 +464,8 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   agent: { agent: string; harness: string; cwd: string; runLog: string },
   env: ReadonlyArray<string> = [],
   mcp: ReadonlyArray<string> = [],
+  /** Started again in this session, keeping these files of its controls. */
+  resumed?: { readonly session: string; readonly keep: ReadonlyArray<string> },
 ) {
   const limit = yield* enabled(deps.configured);
   const fs = yield* FileSystem.FileSystem;
@@ -475,7 +479,17 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   if (reached !== null && reached.state !== "quiet")
     return yield* new NotQuiet({ message: notStopped(agent.agent, reached, reached.target) });
   if (reached === null) yield* putDownServer(deps, prior);
+  const kept = yield* Effect.forEach(resumed?.keep ?? [], (name) =>
+    fs.readFileString(`${dir}/${name}`).pipe(
+      Effect.map((text) => ({ name, text })),
+      Effect.option,
+    ),
+  );
   yield* fs.remove(dir, { recursive: true, force: true });
+  for (const { name, text } of Arr.getSomes(kept)) {
+    yield* fs.makeDirectory(dir, { recursive: true });
+    yield* fs.writeFileString(`${dir}/${name}`, text);
+  }
   const port = deps.ports[agent.harness];
   if (!limit && port?.questions === undefined) return [];
   if (!port) {
@@ -495,14 +509,16 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   // launch must not prune these controls before herdr can list their agent.
   yield* Effect.ignore(putDownStaleControls(deps, agent.agent));
   yield* fs.makeDirectory(dir, { recursive: true });
-  const installed = yield* port.install({
+  const ctx: LaunchContext = {
     agent: agent.agent,
     harness: agent.harness,
     cwd: agent.cwd,
     dir,
     env,
     mcp,
-  });
+  };
+  if (resumed !== undefined) ctx.session = resumed.session;
+  const installed = yield* port.install(ctx);
   const started =
     installed.pid === undefined ? null : ((yield* processOf(installed.pid))?.started ?? null);
   yield* writeControl(deps.stateDir, {

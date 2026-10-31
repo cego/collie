@@ -255,6 +255,8 @@ export const HARNESSES: Harnesses = {
 export const opencodeReporter = (files: {
   sessionFile: string;
   tty: string;
+  /** The session an agent started again resumes. */
+  session?: string;
 }) => `import { linkSync, unlinkSync, writeFileSync } from "node:fs";
 
 const tty = ${JSON.stringify(files.tty)};
@@ -267,10 +269,8 @@ const report = (state) => {
   } catch {}
 };
 
-// A subagent's session has a parent, and is not the agent's.
-const record = (info) => {
-  if (own !== null || !info || info.parentID) return;
-  own = info.id;
+const keep = (id) => {
+  own = id;
   const written = \`\${sessionFile}.\${process.pid}\`;
   try {
     writeFileSync(written, own);
@@ -281,34 +281,48 @@ const record = (info) => {
   } catch {}
 };
 
-export const CollieStatus = async () => ({
-  event: async ({ event }) => {
-    const about = event.properties ?? {};
-    switch (event.type) {
-      case "session.created":
-      case "session.updated":
-        record(about.info);
-        break;
-      case "session.status":
-        if (about.sessionID === own) report(about.status?.type === "idle" ? "idle" : "working");
-        break;
-      case "session.error":
-        if (about.sessionID === own) report("error");
-        break;
-      case "permission.asked":
-        report("blocked:kind=permission");
-        break;
-      case "question.asked":
-        report("blocked:kind=question");
-        break;
-      case "permission.replied":
-      case "question.replied":
-      case "question.rejected":
-        report("working");
-        break;
-    }
-  },
-});
+// A subagent's session has a parent, and is not the agent's.
+const record = (info) => {
+  if (own === null && info && !info.parentID) keep(info.id);
+};
+
+const resumed = ${JSON.stringify(files.session ?? null)};
+
+export const CollieStatus = async () => {
+  // A resumed session says nothing of itself until it is prompted.
+  if (resumed !== null) {
+    keep(resumed);
+    report("idle");
+  }
+  return {
+    event: async ({ event }) => {
+      const about = event.properties ?? {};
+      switch (event.type) {
+        case "session.created":
+        case "session.updated":
+          record(about.info);
+          break;
+        case "session.status":
+          if (about.sessionID === own) report(about.status?.type === "idle" ? "idle" : "working");
+          break;
+        case "session.error":
+          if (about.sessionID === own) report("error");
+          break;
+        case "permission.asked":
+          report("blocked:kind=permission");
+          break;
+        case "question.asked":
+          report("blocked:kind=question");
+          break;
+        case "permission.replied":
+        case "question.replied":
+        case "question.rejected":
+          report("working");
+          break;
+      }
+    },
+  };
+};
 `;
 
 /** Args for `herdr agent start ... -- <args>`. */
@@ -369,3 +383,31 @@ export const autoCompactWindowFor = Effect.fn("Harness.autoCompactWindowFor")(fu
 export function personaPrefix(harness: HarnessAdapter, persona: string): string {
   return harness.personaArgs ? "" : persona;
 }
+
+/** A harness session at a start: one Collie chose for it, or the one it had. */
+export interface StartSession {
+  readonly id: string;
+  readonly resumed: boolean;
+}
+
+/** A harness's arguments for its session: before its other arguments, and after them. */
+export interface SessionArgs {
+  readonly lead: ReadonlyArray<string>;
+  readonly tail: ReadonlyArray<string>;
+}
+
+/** How each harness is started in `session`. */
+export const sessionArgs = (harness: string, session: StartSession): SessionArgs => {
+  const { id } = session;
+  if (!session.resumed) return { lead: [], tail: ["--session-id", id] };
+  switch (harness) {
+    case "codex":
+      return { lead: ["resume", id], tail: [] };
+    case "claude":
+      return { lead: [], tail: ["--resume", id] };
+    case "opencode":
+      return { lead: [], tail: ["--session", id] };
+    default:
+      return { lead: [], tail: ["--session-id", id] };
+  }
+};

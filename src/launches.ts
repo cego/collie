@@ -60,6 +60,33 @@ export const Launched = Schema.Struct({
 });
 export type Launched = typeof Launched.Type;
 
+/**
+ * What an agent on core was started with, for the host to start it again once core has
+ * lost it. Nothing here is a credential: the profile's environment and the Run's authority
+ * are read again when it is.
+ */
+export const StartedWith = Schema.Struct({
+  runId: Schema.String,
+  operation: Schema.String,
+  role: Schema.String,
+  persona: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  agent: Schema.NullOr(Schema.String),
+  workflow: Schema.String,
+  task: Schema.NullOr(Schema.String),
+  cwd: Schema.String,
+  output: Schema.String,
+  skill: Schema.NullOr(Schema.String),
+  harness: Schema.NullOr(Schema.String),
+  model: Schema.NullOr(Schema.String),
+  effort: Schema.NullOr(Schema.String),
+  permissions: Schema.NullOr(Schema.String),
+  claudeSubagents: Schema.optionalKey(ClaudeSubagents),
+  sequence: Schema.optionalKey(Schema.Finite),
+});
+
+/** Where a Run's agents on core keep what they were started with, until one is ended. */
+export const startedDir = (stateDir: string, runId: string) => `${stateDir}/relaunch/${runId}`;
+
 export const LAUNCH_SUFFIX = ".launch.json";
 /** One operation a line, in the order its agent was launched. */
 export const LAUNCH_ORDER = "launches";
