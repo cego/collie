@@ -59,6 +59,7 @@ const cells: ReadonlyArray<Cell> =
         if (cell === undefined) throw new Error(`no cell ${name}`);
         return cell;
       });
+const began = Date.now();
 const SAMPLES = Number(flags.samples);
 const WARMUP = Number(flags.warmup);
 const out =
@@ -407,6 +408,12 @@ const body = (
         live: fixture.live.length,
       },
       samples_per_cell: SAMPLES,
+      warmup_per_cell: WARMUP,
+      wall_s: Math.round((Date.now() - began) / 1000),
+      ...(SAMPLES < 200 && {
+        full_matrix:
+          "The 200-open matrix is run on the delivered tree by ticket 07; fewer opens suffice where every open is seconds over the bar.",
+      }),
       chrome: { ...chrome, headless: true, software_rendered: true, window: WINDOW },
       vue_prod_devtools: true,
       note: "Chrome numbers from a headless, software-rendered Chrome on a build with Vue's production devtools hooks on; not native Desktop numbers.",
