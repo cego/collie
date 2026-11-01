@@ -12,11 +12,12 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
-import { lstat, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+// oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's file info has no ctime.
+import { lstat } from "node:fs/promises";
 import { CheckProcesses } from "./check-processes";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
@@ -177,44 +178,52 @@ const identityOf = (executable: string) =>
 
 /** The checkout's package roots: each directory holding a tracked `package.json`, or `cwd` outside git. */
 const packageRoots = Effect.fn("Verify.packageRoots")(function* (cwd: string) {
+  const path = yield* Path.Path;
   const top = yield* git(["rev-parse", "--show-toplevel"], cwd);
   if (top.code !== 0) return [cwd];
   const root = Str.trim(top.stdout);
   const listed = yield* git(["ls-files", "-z", "--", ":(glob)**/package.json"], root);
   if (listed.code !== 0) return [cwd];
   const files = Arr.filter(Str.split(listed.stdout, "\0"), (file) => file !== "");
-  return Arr.map(files, (file) => join(root, dirname(file)));
+  return Arr.map(files, (file) => path.join(root, path.dirname(file)));
 });
 
-const identityLine = async (name: string, at: string) => {
-  const info = await lstat(at);
-  return { line: `${name}:${info.ino}:${info.ctimeMs}`, info };
-};
+const identityLine = (name: string, at: string) =>
+  Effect.map(
+    Effect.tryPromise(() => lstat(at)),
+    (info) => ({
+      line: `${name}:${info.ino}:${info.ctimeMs}`,
+      scope: pipe(name, Str.startsWith("@")) && info.isDirectory(),
+    }),
+  );
 
 /**
  * What is installed under a package root, by entry name and file identity, never read.
  * Dot-entries but `.bin` are caches tools write while a check runs.
  */
 // ponytail: a file rewritten in place inside a package goes unseen; content digests if that bites.
-const installedAt = (root: string) =>
-  Effect.tryPromise(async () => {
-    const modules = join(root, "node_modules");
-    const names = await readdir(modules).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    });
-    if (names === null) return `${root}:absent`;
-    const lines = [root];
-    for (const name of names.sort()) {
-      if (name.startsWith(".") && name !== ".bin") continue;
-      const { line, info } = await identityLine(name, join(modules, name));
-      lines.push(line);
-      if (!name.startsWith("@") || !info.isDirectory()) continue;
-      for (const inner of (await readdir(join(modules, name))).sort())
-        lines.push((await identityLine(`${name}/${inner}`, join(modules, name, inner))).line);
-    }
-    return Arr.join(lines, "\n");
-  });
+const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const modules = path.join(root, "node_modules");
+  const names = yield* fs.readDirectory(modules).pipe(
+    Effect.map((found): ReadonlyArray<string> | null => found),
+    Effect.catchTag("PlatformError", (error) =>
+      error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
+    ),
+  );
+  if (names === null) return `${root}:absent`;
+  const lines = [root];
+  for (const name of Arr.sort(names, Order.String)) {
+    if (pipe(name, Str.startsWith(".")) && name !== ".bin") continue;
+    const { line, scope } = yield* identityLine(name, path.join(modules, name));
+    lines.push(line);
+    if (!scope) continue;
+    for (const inner of Arr.sort(yield* fs.readDirectory(path.join(modules, name)), Order.String))
+      lines.push((yield* identityLine(`${name}/${inner}`, path.join(modules, name, inner))).line);
+  }
+  return Arr.join(lines, "\n");
+});
 
 /**
  * The environment a check runs in: the executable's real path and content, the runtimes

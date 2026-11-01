@@ -563,7 +563,8 @@ const taking = Effect.fn("Measurement.taking")(function* (
   const environment: Record<string, string | null> = {};
   for (const command of plan.commands) {
     const absolute = yield* resolveExecutable(command.executable, candidate.cwd);
-    environment[command.name] = absolute === null ? null : yield* environmentOf(absolute, candidate.cwd);
+    environment[command.name] =
+      absolute === null ? null : yield* environmentOf(absolute, candidate.cwd);
   }
   const prepared: Array<Measurement["prepare"][number]> = [];
   const samples: Array<Sample> = [];
