@@ -15,6 +15,8 @@ import * as Arr from "effect/Array";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
+import { lstat, readdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { CheckProcesses } from "./check-processes";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
@@ -173,19 +175,61 @@ const identityOf = (executable: string) =>
     return `${real}@${digest}`;
   });
 
+/** The checkout's package roots: each directory holding a tracked `package.json`, or `cwd` outside git. */
+const packageRoots = Effect.fn("Verify.packageRoots")(function* (cwd: string) {
+  const top = yield* git(["rev-parse", "--show-toplevel"], cwd);
+  if (top.code !== 0) return [cwd];
+  const root = Str.trim(top.stdout);
+  const listed = yield* git(["ls-files", "-z", "--", ":(glob)**/package.json"], root);
+  if (listed.code !== 0) return [cwd];
+  const files = Arr.filter(Str.split(listed.stdout, "\0"), (file) => file !== "");
+  return Arr.map(files, (file) => join(root, dirname(file)));
+});
+
+const identityLine = async (name: string, at: string) => {
+  const info = await lstat(at);
+  return { line: `${name}:${info.ino}:${info.ctimeMs}`, info };
+};
+
+/**
+ * What is installed under a package root, by entry name and file identity, never read.
+ * Dot-entries but `.bin` are caches tools write while a check runs.
+ */
+// ponytail: a file rewritten in place inside a package goes unseen; content digests if that bites.
+const installedAt = (root: string) =>
+  Effect.tryPromise(async () => {
+    const modules = join(root, "node_modules");
+    const names = await readdir(modules).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (names === null) return `${root}:absent`;
+    const lines = [root];
+    for (const name of names.sort()) {
+      if (name.startsWith(".") && name !== ".bin") continue;
+      const { line, info } = await identityLine(name, join(modules, name));
+      lines.push(line);
+      if (!name.startsWith("@") || !info.isDirectory()) continue;
+      for (const inner of (await readdir(join(modules, name))).sort())
+        lines.push((await identityLine(`${name}/${inner}`, join(modules, name, inner))).line);
+    }
+    return Arr.join(lines, "\n");
+  });
+
 /**
  * The environment a check runs in: the executable's real path and content, the runtimes
- * on PATH, and `TOOLCHAIN_VARIABLES`. Null where any of them cannot be read, which no
- * record can be reused under.
+ * on PATH, `TOOLCHAIN_VARIABLES`, and the dependencies installed in `cwd`'s checkout. Null
+ * where any of them cannot be read, which no record can be reused under.
  */
 export const environmentOf = Effect.fn("Verify.environmentOf")(
-  function* (absolute: string) {
+  function* (absolute: string, cwd: string) {
     const parts = [yield* identityOf(absolute)];
     for (const runtime of TOOLCHAIN_RUNTIMES) {
       const found = Bun.which(runtime, { PATH: Bun.env.PATH ?? "" });
       parts.push(`${runtime}=${found === null ? "" : yield* identityOf(found)}`);
     }
     for (const name of TOOLCHAIN_VARIABLES) parts.push(`${name}=${Bun.env[name] ?? ""}`);
+    for (const root of yield* packageRoots(cwd)) parts.push(yield* installedAt(root));
     return Bun.hash(Arr.join(parts, "\n")).toString(16);
   },
   Effect.orElseSucceed(() => null),
@@ -353,7 +397,7 @@ export const collect = Effect.fn("Verify.collect")(function* (
   if (absolute === null)
     return yield* new VerifyRefused({ why: `nothing on PATH called "${what.executable}"` });
 
-  const environment = yield* environmentOf(absolute);
+  const environment = yield* environmentOf(absolute, what.cwd);
   const start = yield* fingerprint(what.cwd);
   const began = yield* nowIso;
   const fs = yield* FileSystem.FileSystem;
@@ -625,7 +669,7 @@ export const recordFor = Effect.fn("Verify.recordFor")(function* (
   if (executable === null) return null;
   return latestRecord(
     yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
-    { executable, argv: spec.argv, cwd, environment: yield* environmentOf(executable) },
+    { executable, argv: spec.argv, cwd, environment: yield* environmentOf(executable, cwd) },
     yield* fingerprint(cwd),
     since,
   );
