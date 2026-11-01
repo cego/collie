@@ -22,6 +22,7 @@ const Logged = Schema.fromJsonString(
       Schema.Struct({
         name: Schema.optionalKey(Schema.String),
         env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+        labels: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
       }),
     ),
   }),
@@ -65,7 +66,8 @@ test(
               Arr.filterMap(Str.split(yield* fs.readFileString(log), "\n"), (line) =>
                 Schema.decodeResult(Logged)(line),
               ),
-              (call) => call.cmd === "terminal.run",
+              // The host's board and chat are core terminals too, with no Run.
+              (call) => call.cmd === "terminal.run" && call.params?.labels?.run === runId,
             ),
           );
           const agent = launch.params?.name ?? "";

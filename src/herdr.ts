@@ -34,6 +34,7 @@ import { PLUGIN_ID } from "./env";
 import { reason } from "./naming";
 import { verifyIncarnation, type AgentEntry } from "./registry";
 import { HerdrMachine } from "./peers-model";
+import { viaTarget } from "./ssh-argv";
 import { terminalBackend } from "./config";
 import type { TerminalBackend } from "./settings";
 import {
@@ -42,6 +43,7 @@ import {
   coreSocket,
   snapshotOf,
   type HcError,
+  type HcMachine,
   type HcMethod,
   type HcSnapshot,
   type HcTerminal,
@@ -680,6 +682,15 @@ const coreCall = <M extends HcMethod>(socket: string, method: M, params: Schema.
     Effect.mapError(coreFailure),
   );
 
+/** A machine core keeps, as the Machine Collie pairs with by core's name for it. */
+const rosterEntry = (machine: HcMachine): HerdrMachine => ({
+  id: machine.name,
+  label: machine.name,
+  target: machine.via === true ? viaTarget(machine.target) : machine.target,
+  session: machine.session ?? "default",
+  enabled: true,
+});
+
 /** The label that marks a core terminal as one of Collie's agents, naming its Run. */
 export const RUN_LABEL = "run";
 
@@ -1278,10 +1289,45 @@ export class Herdr {
     });
   }
 
-  /** herdr's saved SSH machines, which are the Machines this one may pair with. */
-  machineList(): Effect.Effect<ReadonlyArray<HerdrMachine>, HerdrError, CliServices> {
+  /** herdr's saved SSH machines. */
+  herdrMachineList(): Effect.Effect<ReadonlyArray<HerdrMachine>, HerdrError, CliServices> {
     return this.cli(["machine", "list", "--json"]).pipe(
       Effect.flatMap((reply) => decodeBoundary("machine list", Schema.Array(HerdrMachine), reply)),
+    );
+  }
+
+  /**
+   * The Machines this one may pair with: core's, by core's name, on a Machine set to core;
+   * herdr's saved ones on a Machine set to herdr.
+   */
+  machineList(): Effect.Effect<ReadonlyArray<HerdrMachine>, HerdrError, CliServices> {
+    const env = this.env;
+    const herdr = this.herdrMachineList();
+    return Effect.gen(function* () {
+      if ((yield* terminalBackend(env.userDir)) === "herdr") return yield* herdr;
+      const listed = yield* coreCall(yield* coreSocket(env.raw), "machine.list", {});
+      return Arr.map(listed.machines, rosterEntry);
+    });
+  }
+
+  /** Adds a Machine to core, which reaches it with `via` and never installs hc there. */
+  machineAdd(name: string, via: string) {
+    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
+      coreCall(socket, "machine.add", { name, via }),
+    );
+  }
+
+  /** Has core dial a Machine now rather than at its next retry. */
+  machineDial(name: string) {
+    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
+      coreCall(socket, "machine.connect", { machine: name }),
+    );
+  }
+
+  /** Has core forget a Machine; its terminals keep running there. */
+  machineRemove(name: string) {
+    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
+      coreCall(socket, "machine.rm", { machine: name }),
     );
   }
 

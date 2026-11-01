@@ -545,3 +545,50 @@ test("Go to pane attaches to core for an agent on core, and runs herdr's control
       }),
     ).pipe(Effect.provide(BunServices.layer)),
   ));
+
+test("Go to pane on another Machine's core agent attaches to <machine>/<terminal> through this computer's core", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { dir, core, told } = yield* coreRig;
+        const shell = Bun.env.SHELL;
+        Bun.env.SHELL = `${dir}/shell`;
+        yield* Effect.addFinalizer(() => Effect.sync(() => (Bun.env.SHELL = shell)));
+        yield* Effect.scoped(
+          Effect.flatMap(connect(core.socketPath), (hc) =>
+            hc.call("machine.add", { name: "vm-mk", target: "mk@vm-mk" }),
+          ),
+        );
+        yield* core.print("builder-1", "on vm-mk");
+        const route = {
+          machine: { profile: "vm", name: "vm-mk", target: "mk@vm-mk", route: "ssh" as const },
+          sh: () => Effect.die("nothing runs over SSH"),
+        };
+        const at: PaneAt = {
+          session: null,
+          workspace: "builder-1",
+          tab: null,
+          pane: "t1",
+          agent: "builder-1",
+          core: "builder-1",
+        };
+        const [opened, painted] = yield* Effect.scoped(
+          Effect.flatMap(openTerminal(Effect.succeed(at), route, 80, 24), (shown) =>
+            Stream.runCollect(Stream.take(shown.events, 2)),
+          ),
+        );
+
+        expect(opened).toEqual({ _tag: "Opened", at });
+        expect(drawn(painted)).toContain("on vm-mk");
+        const said = yield* told((entries) =>
+          Arr.some(entries, (entry) => entry.cmd === "terminal.attach"),
+        );
+        expect(
+          Arr.map(
+            Arr.filter(said, (entry) => entry.cmd === "terminal.attach"),
+            (entry) => entry.params,
+          ),
+        ).toEqual([expect.objectContaining({ terminal: "vm-mk/builder-1" })]);
+      }),
+    ).pipe(Effect.provide(BunServices.layer)),
+  ));

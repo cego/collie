@@ -47,8 +47,8 @@ import {
 } from "../../../src/board-model";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
+  HerdrMachine,
   HerdrMachines,
-  type HerdrMachine,
   type PeerView,
   PeerView as PeerSchema,
 } from "../../../src/peers-model";
@@ -376,6 +376,45 @@ export const herdrMachines = (herdr: string, minHerdr: string) =>
     Effect.map((machines) => Arr.filter(machines, (machine) => machine.enabled)),
   );
 
+const Answered = Schema.fromJsonString(
+  Schema.Union([
+    Schema.Struct({ ok: Schema.Literal(true), data: Schema.Json }),
+    Schema.Struct({ ok: Schema.Literal(false), error: Schema.Struct({ message: Schema.String }) }),
+  ]),
+);
+
+/** What `collie --json <args>` answered, or why it refused. */
+export const collieSaid = (collie: ReadonlyArray<string>, args: ReadonlyArray<string>) =>
+  ran([...collie, "--json", ...args]).pipe(
+    Effect.flatMap(({ out, err, code }) =>
+      Option.match(Schema.decodeOption(Answered)(Str.trim(out)), {
+        onSome: (answer) =>
+          answer.ok ? Effect.succeed(answer.data) : Effect.fail(answer.error.message),
+        onNone: () =>
+          Effect.fail(
+            Str.trim(err) || `${CommandLine.display([...collie, ...args])} exited ${code}`,
+          ),
+      }),
+    ),
+  );
+
+const Roster = Schema.Struct({
+  backend: Schema.Literals(["herdr", "core"]),
+  roster: Schema.Array(HerdrMachine),
+});
+
+/** This computer's Machines as its terminal backend keeps them: core's list, or herdr's. */
+export const rosterOf = (collie: ReadonlyArray<string>) =>
+  collieSaid(collie, ["machine", "list"]).pipe(
+    Effect.flatMap((data) =>
+      Schema.decodeUnknownEffect(Roster)(data).pipe(Effect.mapError((e) => e.message)),
+    ),
+  );
+
+/** Removes a Machine from core and from Pairing; nothing on it is stopped or uninstalled. */
+export const forgetMachine = (collie: ReadonlyArray<string>, name: string) =>
+  collieSaid(collie, ["machine", "forget", name]).pipe(Effect.asVoid);
+
 /** Drops a machine from herdr's list; nothing on it is stopped or uninstalled. */
 export const removeFromHerdr = (herdr: string, profile: string, collie?: ReadonlyArray<string>) =>
   output([herdr, "machine", "remove", profile]).pipe(
@@ -413,14 +452,23 @@ const Connected = Schema.fromJsonString(
 
 /**
  * Opens the Machine's shared SSH connection with the local `collie machine connect`, saying
- * what an SSO login asks for as it waits, and answers its control path.
+ * what an SSO login asks for as it waits, and answers its control path. Its target goes too,
+ * for a Machine onboarding has not added yet.
  */
 const machineConnect = Effect.fn("Desktop.machineConnect")(function* (
   collie: ReadonlyArray<string>,
-  label: string,
+  machine: HerdrMachine,
   waitingOnSso: WaitingOnSso,
 ) {
-  const command = [...collie, "--json", "machine", "connect", label];
+  const command = [
+    ...collie,
+    "--json",
+    "machine",
+    "connect",
+    machine.label,
+    "--target",
+    machine.target,
+  ];
   const child = yield* spawned(() =>
     Bun.spawn(command, {
       env: childEnv(),
@@ -487,7 +535,7 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
         );
         if (checked) return path;
       }
-      path = yield* machineConnect(collie, machine.label, heard).pipe(
+      path = yield* machineConnect(collie, machine, heard).pipe(
         Effect.ensuring(Effect.sync(() => void (unheard = undefined))),
       );
       return path;

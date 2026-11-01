@@ -52,7 +52,9 @@ exit 1
   );
   const connects = collieLog.pipe(
     Effect.map((lines) =>
-      Arr.filter(lines, (line) => pipe_(line, Str.endsWith("machine connect vm-mk"))),
+      Arr.filter(lines, (line) =>
+        pipe_(line, Str.endsWith("machine connect vm-mk --target mk@vm-mk")),
+      ),
     ),
   );
   const sso = (on: boolean) =>
@@ -90,7 +92,7 @@ test("the SSH route opens its connection through collie machine connect and ride
       const doors = yield* Effect.scoped(route.open(() => Effect.void));
       expect(doors.machine.route).toBe("ssh");
 
-      expect(yield* connects).toEqual(["control= --json machine connect vm-mk"]);
+      expect(yield* connects).toEqual(["control= --json machine connect vm-mk --target mk@vm-mk"]);
       const calls = yield* fake.calls;
       expect(kinds(calls, "master")).toHaveLength(1);
       expect(kinds(calls, "login")).toEqual([]);

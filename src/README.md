@@ -169,7 +169,7 @@ keeping paired Machines level. `peer-transport.ts` is the way to a peer this Mac
 dials: direct, then through the Machine's SSH connection, with its bounds and its words.
 `ssh-connection.ts` runs every ssh command against a Machine: its control path, the one
 opener a front door runs, the host's `-O`-only handle and the sweep that closes what herdr
-no longer names, and `-G`. `ssh-argv.ts` holds the argv and bounds Desktop shares with it, the rider
+no longer names, and `-G`. `ssh-argv.ts` holds the argv and bounds Desktop shares with it, core's `via` for a Machine, the rider
 a session through the connection uses among them, so Desktop never loads the host's lock. `peers-model.ts` holds the peer records and states
 Desktop shares. `flock-settings.ts` holds the latest-edit rule and merge both hosts and
 Desktop use. `shared-definitions.ts` reads and writes the user Layer's files a Flock

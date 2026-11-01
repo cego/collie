@@ -16,6 +16,7 @@ import { Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
 import { exec } from "./command";
 import { suiteEnv } from "./effect";
 import { writeFakeHerdrShim } from "./fake-herdr-core";
+import { type FakeHc, serveFakeHc } from "./fake-hc";
 import { type FakeSsh, writeFakeSsh, socketDir } from "./fake-ssh";
 import { fixtures, root, stopHost } from "./host";
 import { peersOf } from "../../src/peers";
@@ -46,6 +47,9 @@ export interface Side {
   ) => ReturnType<typeof collie>;
   /** Says which of herdr's machines this Machine's herdr lists. */
   readonly lists: (machines: ReadonlyArray<Side>) => Effect.Effect<void>;
+  /** The first's core, where the test set it to `core`; its calls are logged to `coreLog`. */
+  readonly core: FakeHc | undefined;
+  readonly coreLog: string;
 }
 
 /** The port `listener`'s host answered `dialler`'s invitation with. */
@@ -82,6 +86,8 @@ export const twoMachines = <A, E>(
     readonly before?: (
       ports: Readonly<Record<string, string>>,
     ) => Effect.Effect<void, never, PlatformServices | Scope.Scope>;
+    /** Sets the first Machine's terminal backend to `core`, served by a fake core. */
+    readonly core?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -126,6 +132,13 @@ export const twoMachines = <A, E>(
           { mode: 0o755 },
         );
         const herdrLog = `${dir}/herdr-calls.jsonl`;
+        const coreLog = `${dir}/core-calls.jsonl`;
+        const onCore = options.core === true && name === "first";
+        if (onCore)
+          yield* fs.writeFileString(
+            `${world.config}/config.json`,
+            `{ "terminal_backend": "core" }`,
+          );
         const env = {
           PATH: `${bin}:/usr/bin:/bin`,
           SHELL: "/bin/sh",
@@ -139,7 +152,15 @@ export const twoMachines = <A, E>(
           HERDR_BIN_PATH: herdr,
           FAKE_HERDR_LOG: herdrLog,
           ...suite,
+          // Served only where `core` is set; elsewhere nothing listens there.
+          HC_SOCKET: `${dir}/hc.sock`,
         };
+        yield* fs.writeFileString(coreLog, "");
+        const core = onCore
+          ? yield* serveFakeHc(`${dir}/hc.sock`, coreLog, yield* Effect.scope, "", {
+              PATH: env.PATH,
+            })
+          : undefined;
         const sshDir = `${dir}/ssh`;
         yield* fs.makeDirectory(sshDir);
         const side = (ssh: FakeSsh): Side => ({
@@ -147,6 +168,8 @@ export const twoMachines = <A, E>(
           world,
           env,
           herdrLog,
+          coreLog,
+          core,
           sshLog: ssh.log,
           ssh,
           cli: (args, extra = {}) => collie(world, args, { ...env, ...extra }),

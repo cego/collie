@@ -53,7 +53,10 @@ here are in [`src/README.md`](src/README.md).
   `test/agent-origin.test.ts`, `test/mcp.test.ts`, `test/reports.test.ts`.
 - **Machine to Machine** → [ADR-0057](docs/adr/0057-a-machine-reaches-another-over-a-paired-link.md),
   [`docs/internals.md`](docs/internals.md#reaching-another-machine), `src/peers.ts`, `src/peers-model.ts`,
-  `src/channel.ts`, `connectPeer` in `src/host.ts`, `test/peers.test.ts`, `test/support/peers.ts`.
+  `src/channel.ts`, `connectPeer` in `src/host.ts`, `test/peers.test.ts`, `test/support/peers.ts`;
+  core's machines as the Machines, added with a `via` riding the SSH master: `machineList` in
+  `src/herdr.ts`, `viaCommand` in `src/ssh-argv.ts`, `machineAdd` and `machineForget` in
+  `src/lifecycle.ts`, `test/machines-core.test.ts`.
 - **Desktop**, its Flock chat, record and Diff tab → [`desktop/README.md`](desktop/README.md),
   [`docs/using.md`](docs/using.md#collie-desktop), `test/desktop-*.test.ts`, `test/flock-*.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),

@@ -539,6 +539,8 @@ export const HostRpcs = RpcGroup.make(
   Rpc.make("peers", { success: Schema.Array(PeerView) }),
   /** Ends the backoff of this Machine's link to the one it dials by that name. */
   Rpc.make("wake", { payload: { machine: Schema.String } }),
+  /** Forgets the Machine by that name, as forgetting it from a front door does. */
+  Rpc.make("unpair", { payload: { machine: Schema.String } }),
   Rpc.make("agentRun", {
     payload: { agent: Schema.String },
     success: Schema.NullOr(Schema.String),
@@ -839,6 +841,7 @@ const handlers = (
         },
         peers: () => peers.list,
         wake: ({ machine }) => peers.wake(machine),
+        unpair: ({ machine }) => peers.unpair(machine),
         agentRun: ({ agent }) =>
           everyRegistered(dir).pipe(
             Effect.map(
@@ -3462,6 +3465,10 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
       machines: herdr.machineList().pipe(
         Effect.map((machines): ReadonlyArray<SshMachine> => machines),
         Effect.orElseSucceed(() => null),
+        Effect.provideContext(bun),
+      ),
+      forgetsUnlisted: terminalBackend(env.userDir).pipe(
+        Effect.map((backend) => backend === "herdr"),
         Effect.provideContext(bun),
       ),
       tell: (peer) =>

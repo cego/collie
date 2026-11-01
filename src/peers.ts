@@ -331,8 +331,10 @@ export interface Link {
   readonly socket: string;
   /** Tells a peer this Machine has forgotten it, over its relay. */
   readonly tell: (peer: Peer) => Effect.Effect<void>;
-  /** herdr's machines, or null where herdr could not say. */
+  /** This Machine's Machines, or null where its backend could not say. */
   readonly machines: Effect.Effect<ReadonlyArray<SshMachine> | null>;
+  /** Whether a pairing `machines` leaves out is forgotten: herdr's list, not core's. */
+  readonly forgetsUnlisted: Effect.Effect<boolean>;
 }
 
 export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: Peer) {
@@ -393,6 +395,8 @@ export interface Peers {
   }) => Effect.Effect<Invited, HostRefused>;
   readonly add: (peer: Peer) => Effect.Effect<void, HostRefused>;
   readonly forget: (installation: string) => Effect.Effect<void>;
+  /** Forgets the peer by that name, tells it so, and ends this computer's SSH connection to it. */
+  readonly unpair: (name: string) => Effect.Effect<void>;
   readonly list: Effect.Effect<ReadonlyArray<PeerView>>;
   /** Ends the backoff of the link to the peer this Machine dials by that name. */
   readonly wake: (name: string) => Effect.Effect<void>;
@@ -672,6 +676,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       keep(Arr.filter(peers, (peer) => peer.installation !== installation)),
     ).pipe(pairing.withPermits(1), Effect.ignore({ log: "Unhandled" }));
   const reconcileMachines = Effect.gen(function* () {
+    if (!(yield* link.forgetsUnlisted)) return;
     const listed = yield* link.machines;
     if (listed !== null) {
       const labels = new Set(Arr.map(listed, (machine) => machine.label));
@@ -698,7 +703,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         return yield* new HostRefused({ reason: `"${name}" cannot name a relay socket` });
     });
 
-  /** The SSH connection herdr's machine by this peer's name has, or none where it lists none. */
+  /** The SSH connection the Machine by this peer's name has, or none where the list names none. */
   const connectionOf = (peer: Peer) =>
     Effect.gen(function* () {
       const machine = Option.getOrUndefined(
@@ -1337,6 +1342,15 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         ),
       ),
     ),
+    unpair: (name) =>
+      Effect.gen(function* () {
+        for (const peer of Arr.filter(peers, (one) => one.name === name)) {
+          const connection = peer.dials === "out" ? yield* connectionOf(peer) : null;
+          yield* link.tell(peer);
+          yield* forget(peer.installation);
+          if (connection !== null) yield* connection.exit;
+        }
+      }),
     wake: (name) =>
       Effect.sync(() => {
         const peer = Option.getOrUndefined(

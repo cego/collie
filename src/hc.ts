@@ -34,6 +34,20 @@ export type HcTerminal = typeof HcTerminal.Type;
 
 const Machine = Schema.Struct({ name: Schema.String, state: Schema.String });
 
+const MachineProfile = Schema.Struct({
+  name: Schema.String,
+  id: Schema.String,
+  target: Schema.String,
+  via: opt(Schema.Boolean),
+  session: opt(NullOr(Schema.String)),
+});
+export const HcMachine = Schema.Struct({
+  ...MachineProfile.fields,
+  state: Schema.String,
+  why: opt(NullOr(Schema.String)),
+});
+export type HcMachine = typeof HcMachine.Type;
+
 /** The decoder of each method's reply, by method. A method Collie calls has a row here. */
 export const replies = {
   hello: Schema.Struct({
@@ -62,6 +76,10 @@ export const replies = {
     terminals: Schema.Array(HcTerminal),
     channel: opt(NullOr(Schema.Finite)),
   }),
+  "machine.list": Schema.Struct({ machines: Schema.Array(HcMachine) }),
+  "machine.add": MachineProfile,
+  "machine.connect": HcMachine,
+  "machine.rm": Schema.Struct({ removed: Schema.String }),
 };
 type Replies = typeof replies;
 export type HcMethod = keyof Replies;

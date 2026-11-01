@@ -338,6 +338,8 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["bridge", { route: "shell" }],
   ["machine list", { route: "shell" }],
   ["machine connect", { route: "shell" }],
+  ["machine add", { route: "shell" }],
+  ["machine forget", { route: "shell" }],
   ["machine invite", { route: "shell" }],
   ["upgrade", { route: "propose", kind: "upgrade", action: { kind: "upgrade" } }],
   ["onboard", { route: "propose", kind: "onboard", action: { kind: "onboard" } }],

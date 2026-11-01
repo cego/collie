@@ -7,13 +7,16 @@
 // `opencode` one also serves its session and a prompt posted to it on its `--port`. After
 // `hello {framed: true}` a connection is framed, and `terminal.attach` streams a terminal's
 // first paint and what it prints, never more than core's window ahead of the viewer's CREDIT.
+// A machine added with `via` is dialled as core dials one: its command, given a shell line
+// last, run with the rig's `PATH`, each dial logged as `dialled`. An added machine's
+// terminals are this core's own, under `<machine>/`.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import * as Socket from "effect/socket/Socket";
-import { Effect, FileSystem, Option, Path, Schema, Scope } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Schema, Scope } from "effect";
 import { isString } from "../../src/schema";
 import { Kind } from "../../src/hc";
 import { answerPrompt } from "./fake-herdr-core";
@@ -43,6 +46,14 @@ export interface FakeHc {
   readonly exit: (name: string, code: number) => Effect.Effect<void>;
   /** Every live terminal ends at once, as losing core's holder ends them. */
   readonly lose: Effect.Effect<void>;
+}
+
+interface Added {
+  readonly name: string;
+  readonly target: string;
+  readonly via: boolean;
+  state: string;
+  why: string | null;
 }
 
 /** How far core streams ahead of a viewer's CREDIT, as hc 0.1.14 does. */
@@ -131,6 +142,8 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   scope: Scope.Scope,
   /** Where a sent prompt's Output is taken from, as the fake herdr's agents take theirs. */
   queuePath = "",
+  /** The environment a `via` command is run with. */
+  dialEnv: Readonly<Record<string, string>> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
@@ -144,6 +157,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const typed = new Map<string, string>();
   const viewing = new Set<Viewer>();
   const opencodes = new Map<string, Bun.Server<undefined>>();
+  const machines = new Map<string, Added>();
   yield* Scope.addFinalizer(
     scope,
     Effect.sync(() => {
@@ -157,7 +171,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   };
 
   const find = (params: Schema.JsonObject) => {
-    const asked = text(params.terminal);
+    const named = text(params.terminal) ?? "";
+    const [on, there] = Str.split(named, "/");
+    const asked = there !== undefined && machines.has(on ?? "") ? there : named;
     return Option.getOrUndefined(
       Arr.findFirst(
         [...terminals.values()],
@@ -274,6 +290,45 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     opencodes.set(terminal.address, served);
   };
 
+  const profile = (machine: Added): Schema.JsonObject => ({
+    name: machine.name,
+    target: machine.target,
+    via: machine.via,
+    id: `id-${machine.name}`,
+    host: machine.name,
+    version: "0.1.14",
+  });
+  const machineView = (machine: Added): Schema.JsonObject => ({
+    ...profile(machine),
+    state: machine.state,
+    why: machine.why,
+  });
+  /** Runs a machine's `via` with a line that answers at once, as core checks hc there. */
+  const dial = (machine: Added) =>
+    Effect.gen(function* () {
+      const started = yield* Clock.currentTimeMillis;
+      const child = Bun.spawn(["/bin/sh", "-c", `${machine.target} true`], {
+        env: { ...process.env, ...dialEnv },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "pipe",
+      });
+      const [code, said] = yield* Effect.promise(() =>
+        Promise.all([child.exited, new Response(child.stderr).text()]),
+      );
+      machine.state = code === 0 ? "connected" : "unreachable";
+      machine.why = code === 0 ? null : Str.trim(said);
+      const ms = (yield* Clock.currentTimeMillis) - started;
+      yield* logged("dialled", { machine: machine.name, code, ms });
+    });
+  const unknownMachine = (params: Schema.JsonObject): Answer => ({
+    failure: {
+      code: -32000,
+      message: `no machine ${text(params.machine) ?? ""}`,
+      kind: "machine_unknown",
+    },
+  });
+
   const answer = (method: string, params: Schema.JsonObject, link: Link): Effect.Effect<Answer> =>
     Effect.gen(function* () {
       const canned = answers.get(method);
@@ -388,6 +443,41 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
               terminals: live(),
             },
           };
+        case "machine.list":
+          return { result: { machines: Arr.map([...machines.values()], machineView) } };
+        case "machine.add": {
+          const name = text(params.name) ?? text(params.target) ?? "";
+          if (machines.has(name))
+            return { failure: { code: -32000, message: "already_added", kind: "already_added" } };
+          const via = text(params.via);
+          const added: Added = {
+            name,
+            target: via ?? text(params.target) ?? "",
+            via: via !== undefined,
+            state: "connecting",
+            why: null,
+          };
+          if (added.via) {
+            yield* dial(added);
+            if (added.state !== "connected")
+              return {
+                failure: { code: -32000, message: added.why ?? "", kind: "unreachable" },
+              };
+          }
+          machines.set(name, added);
+          return { result: profile(added) };
+        }
+        case "machine.connect": {
+          const found = machines.get(text(params.machine) ?? "");
+          if (found === undefined) return unknownMachine(params);
+          if (found.via) yield* dial(found);
+          return { result: machineView(found) };
+        }
+        case "machine.rm": {
+          const name = text(params.machine) ?? "";
+          if (!machines.delete(name)) return unknownMachine(params);
+          return { result: { removed: name } };
+        }
         default:
           return { failure: { code: -32601, message: `no method ${method}`, kind: "not_found" } };
       }

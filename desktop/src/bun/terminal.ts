@@ -1,7 +1,7 @@
-// Go to pane: herdr's terminal controller for the Run's pane, or core's attach for an agent
-// on core, run over its Machine's route and drawn in Desktop; or, where there is no pane to
-// control, a new herdr client in a terminal of its own on this computer. Desktop passes on
-// what either prints and decides nothing from it.
+// Go to pane: herdr's terminal controller for the Run's pane, run over its Machine's route, or
+// core's attach for an agent on core, through this computer's core, drawn in Desktop; or,
+// where there is no pane to control, a new herdr client in a terminal of its own on this
+// computer. Desktop passes on what either prints and decides nothing from it.
 
 import * as Str from "effect/String";
 import * as Socket from "effect/socket/Socket";
@@ -12,7 +12,7 @@ import { CommandLine } from "effect/process";
 import type { PaneAt } from "../../../src/board-model";
 import { type HcError, Kind, connectOver, u32 } from "../../../src/hc";
 import { ActionFailed, TerminalCommand, type TerminalEvent } from "../shared/flock";
-import { type ShellRoute, spawned, stderrTail } from "./machine";
+import { localRoute, type ShellRoute, spawned, stderrTail } from "./machine";
 import { CHILD_CWD, childEnv } from "./login-env";
 
 /** herdr's controller for one pane, taking it over from any other direct attach. */
@@ -286,10 +286,11 @@ export const attachCore = Effect.fn("Desktop.attachCore")(function* (
 });
 
 /**
- * Go to pane in Desktop: `focused` finds the Run's pane, and its controller, or core's attach
- * for an agent on core, is started through `route`, so a remote Machine's is one more channel
- * on its master. Where `focused` names no pane there is nothing to control, and the terminal
- * says only where it focused.
+ * Go to pane in Desktop: `focused` finds the Run's pane, and its controller is started through
+ * `route`, so a remote Machine's is one more channel on its master. An agent on core is
+ * attached through this computer's core, as `<machine>/<terminal>` on another Machine.
+ * Where `focused` names no pane there is nothing to control, and the terminal says only
+ * where it focused.
  */
 export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
   focused: Effect.Effect<PaneAt, ActionFailed>,
@@ -303,17 +304,24 @@ export const openTerminal = Effect.fn("Desktop.openTerminal")(function* (
       events: Stream.succeed<TerminalEvent>({ _tag: "NoPane", at }),
       send: (): Effect.Effect<void> => Effect.void,
     };
-  const command = yield* route
-    .sh(
-      at.core === undefined
-        ? Result.getOrThrow(CommandLine.join(controlCommand(at.session, at.pane, cols, rows)))
-        : "herdr-core connect",
-    )
-    .pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
+  const local = route.machine.profile === "local";
+  const command = yield* (
+    at.core === undefined
+      ? route.sh(
+          Result.getOrThrow(CommandLine.join(controlCommand(at.session, at.pane, cols, rows))),
+        )
+      : (local ? route : localRoute([], "")).sh("herdr-core connect")
+  ).pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
   const opened =
     at.core === undefined
       ? yield* control(command, route.machine.name)
-      : yield* attachCore(command, route.machine.name, at.core, cols, rows);
+      : yield* attachCore(
+          command,
+          route.machine.name,
+          local ? at.core : `${route.machine.name}/${at.core}`,
+          cols,
+          rows,
+        );
   return {
     events: Stream.concat(Stream.succeed<TerminalEvent>({ _tag: "Opened", at }), opened.events),
     send: opened.send,

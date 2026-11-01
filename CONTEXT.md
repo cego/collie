@@ -68,8 +68,10 @@ are one Machine. Desktop names it by the label of the first enabled herdr machin
 reaches it, or by the hostname for Local, and adds its SSH target where two share a name.
 A computer Desktop reaches that has no Collie yet is known by its herdr profile id until a
 host there reports an installation id. Not the plugin installation a host serves, which
-`identity` calls `root`. herdr's machine list (`herdr machine list`) is the list of
-Machines, for the CLI as for Desktop: adding a Machine there is all it takes to reach it.
+`identity` calls `root`. On a Machine set to `core`, core's machine list (`hc machine ls`)
+is the list of Machines, for the CLI as for Desktop, and a Machine is known by core's name
+for it, which its pairing is keyed by; on one set to `herdr`, herdr's (`herdr machine list`)
+is. Adding a Machine there is all it takes to reach it.
 Its `terminal_backend` setting, its own and never the Flock's, says where the agents its
 Runs launch next run: in herdr panes (`herdr`, the default) or in herdr-core terminals
 (`core`). An agent already running on herdr stays there.

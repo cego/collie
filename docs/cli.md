@@ -47,13 +47,15 @@ Intent edits, override clearing and remembered checks execute on the owning host
 the caller recorded. `verify` runs inside its checkout and streams output back.
 `run checks --follow` streams that host's live log; paths it returns belong to that Machine.
 
-Adding a Machine to herdr (`herdr machine add`) is all it takes. The first command that
+Adding a Machine is all it takes: to core with [`collie machine add`](#collie-machine) on a
+Machine set to `core`, to herdr with `herdr machine add` on one set to `herdr`. The first command that
 reaches it opens this computer's SSH connection to it, as
 [`collie machine connect`](#collie-machine) does, which asks for that login's approval
 once, where the command runs, and pairs the two through it; from then on the Machines talk
 over a TLS WebSocket the dialled one listens for on port 47217. A connection already
 open, as one Desktop opened, is ridden and nothing is asked. A pairing whose connection has gone before it asks fails with what ssh said; it never logs
-in by itself. Removing the Machine from herdr forgets the pairing on both sides. A host's
+in by itself. [`collie machine forget`](#collie-machine), or removing the Machine from
+herdr's list on a Machine set to `herdr`, forgets the pairing on both sides. A host's
 own jobs never start an SSH login, so a Machine no command has reached yet is
 `invalid_state` for them: not paired yet.
 
@@ -71,9 +73,16 @@ The receiving host records each operation as the front door that asked — `cli`
 
 ```sh
 collie machine list
-collie machine connect <name>
+collie machine connect <name> [--target <ssh target>]
+collie machine add <name> --target <ssh target>
+collie machine forget <name>
 collie machine invite --for <installation> --name <name> [--address <host>]
 ```
+
+The Machines are core's machine list, by core's name for each, on a Machine whose
+`terminal_backend` is `core`, and herdr's machine list on one set to `herdr`. `data.backend`
+says which, and `data.roster` is that list: each Machine's `label` (its name), `target` (how
+ssh reaches it) and `session`.
 
 `list` names each Machine paired with this one, which side dials (`out`: this one dials it;
 `in`: it dials this one), and whether it answers now. Its `data.machines` is each one's
@@ -90,6 +99,9 @@ and `failure`, never the secret. `data.build` is this Machine's build. A listene
   connection to it; null for one that dials in.
 - `waits`: `ssh_connection` while the link is not up because direct failed and no SSH
   connection is open, else null.
+- `added`: on a Machine set to `core`, whether core keeps a Machine this one dials; null
+  otherwise. A pairing core does not keep, as one made before the Machine was set to core,
+  is kept, and its human line says `not added to core: collie machine connect <name> adds it`.
 
 Each is null in an older Machine's answer. The human line puts the transport after the
 state, as `live	ssh (direct: <why>)` or `live	direct`, and a link not up as
@@ -102,20 +114,37 @@ Its channels and dial-backs go the same way while it is up, and its next connect
 direct again. The host never logs in: with no connection open, the link waits, and
 `machine list` says what opens one.
 
-`connect` opens this computer's SSH connection to herdr's machine by that name, where
+`connect` opens this computer's SSH connection to the Machine by that name, where
 none is open: one `ssh` master with `ControlPersist`, under the user's SSH config, whose
 login prompt or SSO banner shows on this command's stderr. ssh keeps it open after the
 command returns. It is bounded to two minutes, after which it is `machine_unreachable`
 naming the Machine and the last thing ssh said. It then wakes this host's link to that
-Machine, so the link does not wait out its backoff. Its `data` is `machine`, `path` (the
-control path) and `opened`, false where a connection was already open. A name herdr does
-not list is `invalid_input`.
+Machine, so the link does not wait out its backoff. On a Machine set to core, it also has
+core dial the Machine now (`machine.connect`), which connects at once now that the
+connection is open; for a paired Machine core does not keep yet, it adds it as `add` does.
+Its `data` is `machine`, `path` (the control path), `opened`, false where a connection was
+already open, and `added`. A Machine no list names is reached at `--target`, as onboarding
+reaches a VM before it is added; with neither it is `invalid_input`. On a Machine set to
+core, a pairing herdr still lists is reached at herdr's target.
 
-**Closing.** Each time the host reads herdr's machines — at start, at `machine list`, and
+`add`, on a Machine set to `core`, opens the SSH connection to `--target` as `connect` does,
+then adds the Machine to core under `<name>` (`machine.add`) with a `via` that rides that
+connection: `ssh -S <control path> -o ControlMaster=no -o ProxyCommand=false -T <target>`.
+That command fails at once where the connection has gone, so core never starts a login
+nobody sees: core retries, and connects once a front door opens the connection again. It
+never asks core to install `hc`; the release onboarding places carries it. Core refusing,
+as `hc_missing` or `already_added`, is `operation_failed` with core's words. On a Machine set
+to `herdr` it is `invalid_state`.
+
+`forget` unpairs the Machine on both sides, ends this computer's SSH connection to it, and on
+a Machine set to `core` has core forget it (`machine.rm`). Nothing on it is stopped.
+
+**Closing.** On a Machine set to `herdr`, each time the host reads herdr's machines — at start, at `machine list`, and
 when a link comes up — it ends every SSH connection under its state directory that is not
 the one for a machine herdr lists now, with `ssh -O exit`: a Machine herdr forgot, after it
 is told and forgotten, and one herdr lists at another target. It opens none for the new
-target. Where herdr cannot say, nothing is closed.
+target. Where herdr cannot say, nothing is closed. On a Machine set to `core`, a reading of
+core's list forgets and closes nothing: only `forget` does.
 
 `live` means the control link is up. `connecting` names the dialler's last failure while
 it retries. `away` says when the listener lost its peer's control link and why. A call

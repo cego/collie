@@ -10,7 +10,7 @@ import { CommandLine } from "effect/process";
 import { inTerminal } from "../../../src/in-terminal";
 import { verifiedRunner as sharedVerifiedRunner } from "../../../src/releases";
 import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
-import { type Route, type ShellRoute, spawned } from "./machine";
+import { collieSaid, type Route, type ShellRoute, spawned } from "./machine";
 import { CHILD_CWD, childEnv } from "./login-env";
 
 export const RELEASES = "https://github.com/cego/collie/releases/download";
@@ -440,3 +440,10 @@ export const addToHerdr = Effect.fn("Desktop.addToHerdr")(function* (
     return yield* Effect.fail(last || `herdr machine add exited ${code}`);
   }
 }, Effect.scoped);
+
+/**
+ * Adds the Machine to core with `collie machine add`, whose `via` rides the SSH connection
+ * onboarding opened, once the release it placed there carries `hc`.
+ */
+export const addToCore = (collie: ReadonlyArray<string>, label: string, target: string) =>
+  collieSaid(collie, ["machine", "add", label, "--target", target]).pipe(Effect.asVoid);

@@ -461,11 +461,27 @@ second failure as it is. Everything else — reports (`pairs: false`), Schedules
 the dialler through the host's own `connectPeer` — gets the typed refusal and opens
 nothing.
 
-**Closing.** `reconcileMachines` runs `closeConnections` each time it reads herdr's list:
+**Closing.** On a Machine set to `herdr`, `reconcileMachines` runs `closeConnections` each
+time it reads herdr's list:
 every 16-hex path under `<state dir>/ssh/` that is not `controlPathOf` a machine herdr
 lists now is ended with `-O exit` (the path no longer names its Machine, so the
 destination is `collie`) and removed. A forgotten peer is told and dropped first. Where
-herdr cannot say, nothing is closed.
+herdr cannot say, nothing is closed. On a Machine set to `core` (the link's
+`forgetsUnlisted` is false), it does nothing: a pairing core does not keep yet, as one made
+on herdr before the switch, stays paired, and `machine list` says it is not added. Only
+`collie machine forget` (`machineForget`) removes one: the host's `unpair` tells the peer,
+forgets it and ends its connection, then core is asked `machine.rm`.
+
+**Core's machines.** On a Machine set to `core`, `Herdr.machineList` reads core's
+`machine.list`, each machine by core's name, its ssh target the last word of the `via`
+Collie gave it (`viaTarget` in `src/ssh-argv.ts`). `collie machine add` opens the Machine's
+connection with `openConnection`, then calls `machine.add {name, via}` with
+`viaCommand`: the rider's own argv (`-S <control path>`, `ControlMaster=no`,
+`ProxyCommand=false`) without its remote line, which core appends. With no master on that
+path it exits 255 at once, logging in nowhere, so core's own retries never raise an SSO
+prompt; `collie machine connect` reopens the master and calls `machine.connect`, which
+dials at once. `test/machines-core.test.ts` proves it with a fake core that runs each `via`
+through the fake `ssh`.
 
 The listener sends a heartbeat every fifteen seconds. Silence past that interval ends a
 control link. Reconnection backs off from one second to one minute, resetting after a
@@ -541,12 +557,15 @@ state, and a binary in a temp directory rather than the one the user is running.
 nothing above it to fake, and routing it through `herdr.ts` would mean asking the running
 herdr what some other version's schema says.
 
-The host and the CLI read herdr's list of saved machines through `herdr.ts` too
-(`machineList`, `herdr machine list --json`): it is the list of Machines a pairing may be
-made with, and a peer it no longer names is forgotten
-([Reaching another Machine](#reaching-another-machine)).
+The host and the CLI read the list of Machines through `herdr.ts` too (`machineList`):
+`herdr machine list --json` on a Machine set to `herdr`, core's `machine.list` on one set to
+`core`. It is the list of Machines a pairing may be made with, and on herdr a peer it no
+longer names is forgotten ([Reaching another Machine](#reaching-another-machine)).
 
-Desktop's main process runs three more, all on herdr's list of saved machines:
+Desktop's main process runs three more, all on herdr's list of saved machines, while the
+Local Machine is set to `herdr`; set to `core`, it reads the list from `collie machine list`
+(`rosterOf`), adds with `collie machine add` and removes with `collie machine forget`, and
+runs none of these:
 `herdr machine list --json`, which machines to reach, and `herdr machine remove`
 (`desktop/src/bun/machine.ts`), and `herdr machine add` (`desktop/src/bun/onboarding.ts`),
 run in Bun's terminal so herdr has the terminal its questions need. Local Claude and Linear

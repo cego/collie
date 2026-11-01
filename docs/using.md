@@ -167,15 +167,20 @@ Keychain login. It adds no keybindings; the steps and their `--json` stream are 
 
 ### Your other Machine
 
-Adding a Machine to herdr (`herdr machine add`) is all it takes for Collie on this computer
-to reach Collie on that one. The first `collie` command about one of its Runs — `collie run
+Adding a Machine is all it takes for Collie on this computer to reach Collie on that one:
+to core, with Desktop's **Add Machine** or `collie machine add <name> --target <ssh target>`,
+on a computer whose `terminal_backend` is `core`; to herdr (`herdr machine add`) on one set
+to `herdr`. The first `collie` command about one of its Runs — `collie run
 steer <its Run> "…"`, say — or the first `collie --machine <name> …` pairs the two over that
 machine's SSH login, which asks for its approval once, and then goes on to do what it was
 asked. From then on the Machines talk over a TLS WebSocket the one you can dial (the VM)
 listens for, with no SSH and no approval. A command that names a Run finds the Machine
 that has it, so `--machine` is only for `board`, `run start` and `run list`. `collie machine
-list` says which Machines are paired and whether each answers. Removing the Machine from
-herdr forgets the pairing on both sides. Each Machine records who asked for what in the
+list` says which Machines are paired and whether each answers. `collie machine forget
+<name>` forgets the pairing on both sides and, on core, removes it from core; on a computer
+set to `herdr`, removing it from herdr's list does too. Switching a computer to core forgets
+no pairing: `machine list` says which core does not keep yet, and `collie machine connect
+<name>` adds each. Each Machine records who asked for what in the
 Run's audit, with the Machine it came from
 ([the CLI reference](cli.md#another-machines-runs)).
 
@@ -1222,8 +1227,10 @@ left behind. [`collie cleanup`](cli.md#cleaning-up) lists the same files of Desk
 the kind `desktop`, on a computer that has Desktop
 ([ADR-0045](adr/0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
 
-The Machines are this computer and every machine enabled in `herdr machine list`; Collie
-keeps no list of its own. A paired Machine is reached through Local's host and its paired
+The Machines are this computer and every machine in core's machine list (`hc machine ls`),
+known by core's name, or, while this computer is set to `herdr`, every machine enabled in
+`herdr machine list`; Collie keeps no list of its own. Go to pane on an agent on another
+Machine's core attaches to `<machine>/<terminal>` through this computer's core. A paired Machine is reached through Local's host and its paired
 link, without an SSH login. Commands, upgrades, doctor and credentials use that host's
 shell operation. Desktop uses SSH for Go to pane, a login's port forward, onboarding, an
 unpaired Machine's board, and a paired link's fallback while the link is away, which can
@@ -1404,7 +1411,11 @@ on it starts, edits or checks anything: Runs are started from the Flock chat.
 herdr's — with how it stands, and is where Machines join the Flock. Each joins the same way:
 
 - **Add Machine** opens a dialog that takes an SSH target, a label and a herdr session
-  (`default` unless you say), all three needed; adding closes it and runs `herdr machine
+  (`default` unless you say), all three needed. On a computer set to `core`, adding opens
+  the Machine's SSH connection, which asks for its one SSO approval, onboards it, then adds
+  it to core under the label with a `via` that rides that connection, as the step "Added to
+  core"; core uses the Machine's default session and never logs in by itself. On one set to
+  `herdr`, adding closes the dialog and runs `herdr machine
   add` in a terminal Desktop drives. herdr's own questions — whether to install herdr there, whether to replace a running server — are dialogs, and
   closing one answers herdr's default, which for replacing a server is No. herdr saves the
   machine, so its list stays the only one, and Desktop then onboards it.
@@ -1805,7 +1816,8 @@ a browser that cannot reach the callback. Linear's login, which `collie onboard`
 with its port, is forwarded and opened the same way. Desktop then onboards the Machine
 again.
 
-**Remove** runs `herdr machine remove` for that herdr machine, closes Desktop's connection
+**Remove** runs `collie machine forget` on a computer set to `core`, which removes the
+Machine from core and from Pairing, or `herdr machine remove` on one set to `herdr`; it closes Desktop's connection
 to it and drops its saved board. It never stops a host, a Run or herdr there, and never
 uninstalls Collie. This computer is not in herdr's list, so it has no Remove.
 
