@@ -36,12 +36,7 @@ export function isScope(value: string): value is Scope {
   return Arr.some(SCOPES, (scope) => scope === value);
 }
 
-/**
- * How a Run's question reaches the human. `focus` brings the Session's Collie tab to
- * the front the moment a Choice opens — the behavior every install has had. `notify`
- * leaves the toast and the board's own `asks you` alone but takes no focus, so a
- * question arriving mid-thought does not move the human off what they are doing.
- */
+/** Left over from the Collie tab, which `focus` brought to the front; it changes nothing now. */
 export type Questions = "focus" | "notify";
 export const QUESTION_MODES: ReadonlyArray<Questions> = ["focus", "notify"];
 export function isQuestionMode(value: string): value is Questions {
@@ -430,7 +425,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     group: "Notifications",
     label: "A new question",
     description:
-      "Whether a Run's question brings the TUI's Collie tab to the front (focus) or only says so (notify).",
+      "Left over from the TUI's Collie tab, which a question once brought to the front; changes nothing.",
   }),
   ...Arr.map(NOTIFICATION_KINDS, (kind) =>
     of(`notifications.${kind}`, "boolean", "true", {

@@ -141,16 +141,6 @@ export function deliveryLine(delivery: Delivery): Line {
   );
 }
 
-/** The Home's ownership question, which only a human can settle. */
-export function ownershipLines(why: string, candidates: ReadonlyArray<string>): Line[] {
-  return [
-    line("Collie cannot tell which workspace is this Herd's Home.", "bad"),
-    line(why, "bad", 1),
-    line(`candidates: ${Arr.join(candidates, ", ")}`, "bad", 1),
-    line("`collie home reconcile --adopt <id>` or `--forget` settles it.", "bad", 1),
-  ];
-}
-
 /**
  * What Collie has noticed that the conversation has not been told. Drawn because a chat
  * that cannot be pushed to leaves this waiting for its next turn, and a human should see
@@ -213,7 +203,7 @@ export function describeAction(action: Action): string {
     case "fork_definition":
       return `fork ${action.what} ${action.name} as ${action.as} in the ${action.layer ?? "user"} layer`;
     case "home_cleanup":
-      return "close the Collie panes an older release left, and forget Tasks whose workspace is gone";
+      return "forget Tasks whose workspace is gone";
     case "cleanup":
       return "sweep now: remove what Collie made that nothing needs any more, as `collie cleanup` lists it";
     case "upgrade":

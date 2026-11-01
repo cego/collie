@@ -43,7 +43,6 @@ export interface PluginEnv {
   paneId: string | null;
   actionId: string | null;
   entrypointId: string | null;
-  collieMode: string | null;
   /** The GitLab login a generated branch is namespaced under; null leaves it to glab. */
   gitlabLogin: string | null;
   /** `GITHUB_ACTOR`: who a generated branch is namespaced under on GitHub. */
@@ -142,7 +141,6 @@ export function readEnv(
     paneId: first(env, "HERDR_PANE_ID", "HERDR_ACTIVE_PANE_ID") ?? context.focused_pane_id ?? null,
     actionId: first(env, "HERDR_PLUGIN_ACTION_ID"),
     entrypointId: first(env, "HERDR_PLUGIN_ENTRYPOINT_ID"),
-    collieMode: first(env, "COLLIE_MODE"),
     gitlabLogin: first(env, "GITLAB_USER_LOGIN"),
     githubLogin: first(env, "GITHUB_ACTOR"),
     cwd,
@@ -173,7 +171,6 @@ const environmentKeys = [
   "PATH",
   "COLLIE_BIN_DIR",
   "COLLIE_CWD",
-  "COLLIE_MODE",
   "COLLIE_RUN",
   "COLLIE_AGENT",
   "OPENCODE_CONFIG_CONTENT",

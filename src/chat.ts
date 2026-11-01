@@ -1,6 +1,5 @@
-// Native chat in the Herd's Home: which harness Collie opens with, which native session
-// that conversation is, and when the pane beside the board is launched into rather than
-// adopted.
+// Native chat, the Herd's core terminal beside the board: which harness Collie opens with,
+// which native session that conversation is, and how it is started.
 //
 // Collie does not own the conversation. The harness owns the editor, the streaming, the
 // history and the compaction; Collie owns which harness, which session, and what the
@@ -11,12 +10,11 @@
 // a swap: a human who picks Pi while Claude is mid-answer keeps that answer, and Pi is
 // what opens next time there is a launch to do. And a conversation is bound to the Herd,
 // the harness and a session id Collie mints — never to whichever session the harness
-// happened to write last in this directory, which is how a Home reopens into somebody
+// happened to write last in this directory, which is how a chat reopens into somebody
 // else's conversation.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
 import { Effect, FileSystem, Path, Result, Schema, flow } from "effect";
@@ -28,8 +26,7 @@ import { redact } from "./redact";
 import { NATIVE, newsPath } from "./news";
 import { selfCommand, type PluginEnv } from "./env";
 import { autoCompactWindowFor, HARNESSES, installedHelp } from "./harness";
-import type { AgentInfo, Herdr, PaneInfo } from "./herdr";
-import { ensureLockDir, withLock } from "./lock";
+import type { Herdr } from "./herdr";
 import { reason } from "./naming";
 import { isString, type JsonObject } from "./schema";
 import type { AutoCompactWindow } from "./settings";
@@ -57,28 +54,13 @@ export function isChatHarness(value: string | undefined): value is ChatHarness {
   return Arr.some(CHAT_HARNESSES, (harness) => harness === value);
 }
 
-/** What the Home's chat pane is marked with, so recovery can tell it from the board. */
-export const CHAT_PANE_TOKEN = "collie_chat";
-
-/**
- * What the board keeps when the tab is split: four sevenths, with the remaining three
- * for chat. herdr's ratio is the share the pane being split keeps.
- */
-export const BOARD_RATIO = 4 / 7;
-
-/**
- * What this Herd's chat agent is called in herdr. Suffixed per launch: herdr keeps a
- * name until the process using it has gone, and a relaunch that raced that refusal would
- * leave the Home with a chat pane and nothing in it.
- */
-export const CHAT_AGENT_PREFIX = "collie-chat";
+/** The core terminal this Machine's chat runs in, and what `hc attach` reaches it by. */
+export const CHAT_TERMINAL = "collie-chat";
 
 const RecordSchema = Schema.Struct({
   /** The harness actually running, which is not necessarily the one now preferred. */
   harness: Schema.Literals(CHAT_HARNESSES),
   agent: Schema.String,
-  paneId: Schema.String,
-  terminalId: Schema.NullOr(Schema.String),
   /** The native session id the running chat was started with, under its harness. */
   sessions: Schema.Record(Schema.String, Schema.String),
   startedAt: Schema.String,
@@ -109,50 +91,6 @@ export const writeChat = Effect.fn("Chat.write")(function* (file: string, record
   yield* fs.rename(tmp, file);
 });
 
-export type ChatDecision =
-  /**
-   * A conversation is live in the Home's chat pane. `next` names a harness the human has
-   * since chosen, which is what the next launch will use and what the board says is
-   * pending — it is never a reason to interrupt what is running.
-   */
-  | { readonly kind: "adopt"; readonly record: ChatRecord; readonly next: ChatHarness | null }
-  /**
-   * Start one, on a new conversation: a resumed one would carry its whole history into
-   * every turn, and the model it began on (ADR-0032).
-   */
-  | { readonly kind: "launch"; readonly harness: ChatHarness; readonly why: string }
-  /** The Home has no chat pane to launch into; the board is still usable. */
-  | { readonly kind: "no_pane" };
-
-/**
- * Whether the recorded conversation is still the one in the Home's chat pane.
- *
- * Three independent facts have to agree: the Home's pane is the pane the record names,
- * herdr still has the agent, and the process in that pane is the process the record was
- * written about. A pane outlives what ran in it, so `terminalId` is what stops a dead
- * chat's record adopting a shell a human started in the same place.
- */
-export function decideChat(
-  record: ChatRecord | null,
-  chatPaneId: string | null,
-  panes: ReadonlyArray<PaneInfo>,
-  agents: ReadonlyArray<AgentInfo>,
-  preferred: ChatHarness,
-): ChatDecision {
-  if (chatPaneId === null) return { kind: "no_pane" };
-  const launch = (why: string): ChatDecision => ({ kind: "launch", harness: preferred, why });
-  if (record === null) return launch("no chat has been started for this Herd");
-  if (record.paneId !== chatPaneId) return launch("the Home's chat pane is a different pane");
-  const agent = Option.getOrUndefined(
-    Arr.findFirst(agents, (entry) => entry.name === record.agent),
-  );
-  if (agent === undefined) return launch(`herdr no longer has ${record.agent}`);
-  const pane = Option.getOrUndefined(Arr.findFirst(panes, (entry) => entry.paneId === chatPaneId));
-  if (record.terminalId !== null && pane?.terminalId !== record.terminalId)
-    return launch("a different process is in the Home's chat pane");
-  return { kind: "adopt", record, next: preferred === record.harness ? null : preferred };
-}
-
 /** Where a launch's generated tool wiring is written. One directory per Herd, rewritten each launch. */
 export const chatDir = Effect.fn("Chat.dir")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;
@@ -171,7 +109,7 @@ export interface LaunchFiles {
 }
 
 /**
- * What `herdr agent start ... -- <args>` is given.
+ * What the harness is started with, after its own name.
  *
  * Every flag is this launch only. Nothing here rewrites `~/.claude` or `~/.pi`, and
  * nothing pins a spend: native authentication is the human's, and a chat that silently
@@ -193,7 +131,7 @@ export function chatArgs(
   return harness === "claude"
     ? [
         // Never `--continue`: "the most recent conversation in this directory" is how a
-        // Home reopens into somebody else's.
+        // chat reopens into somebody else's.
         "--session-id",
         sessionId,
         "--append-system-prompt-file",
@@ -217,7 +155,7 @@ export function chatArgs(
         files.systemPrompt,
         "-e",
         files.extension,
-        // The role is the appended prompt above, not whatever repository the pane's
+        // The role is the appended prompt above, not whatever repository the terminal's
         // directory happens to be.
         "--no-context-files",
       ];
@@ -274,16 +212,12 @@ export function whyUnavailable(harness: ChatHarness, found: string | null): stri
 export function started(opts: {
   readonly harness: ChatHarness;
   readonly agent: string;
-  readonly paneId: string;
-  readonly terminalId: string | null;
   readonly sessionId: string;
   readonly at: string;
 }): ChatRecord {
   return {
     harness: opts.harness,
     agent: opts.agent,
-    paneId: opts.paneId,
-    terminalId: opts.terminalId,
     sessions: { [opts.harness]: opts.sessionId },
     startedAt: opts.at,
   };
@@ -641,29 +575,24 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
   } satisfies LaunchFiles;
 });
 
-export type Ensured =
-  /** A conversation is live. `next` is a preference for the launch after this one. */
-  | { readonly kind: "running"; readonly record: ChatRecord; readonly next: ChatHarness | null }
+export type Started =
   /** One was just started, on a new conversation. */
   | { readonly kind: "launched"; readonly record: ChatRecord }
   /** There is no conversation, and why. The board and every Run are unaffected. */
   | { readonly kind: "unavailable"; readonly harness: ChatHarness; readonly why: string };
 
 /**
- * The Herd's conversation, found or started, beside a Home that already exists.
- *
- * Separate from `ensureHome` on purpose: the Home owns two panes, and this owns what runs
- * in one of them. A harness that will not start is a missing conversation reported as
- * one — never a reason for the board or a Run to be unavailable, and never a reason to
- * quietly open the other harness instead.
+ * The Herd's conversation, started as this Machine's chat terminal on core in the
+ * preferred harness, on a new conversation: a resumed one would carry its whole history
+ * into every turn, and the model it began on (ADR-0032). A harness that will not start is
+ * a missing conversation reported as one — never a reason for the board or a Run to be
+ * unavailable, and never a reason to quietly open the other harness instead.
  */
-export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
+export const startChat = Effect.fn("Chat.start")(function* (
   herdr: Herdr,
   env: PluginEnv,
   /** Which Herd this conversation belongs to; the caller resolves it once. */
   key: string,
-  home: { readonly chatPaneId?: string | null },
-  preferred: ChatHarness,
   log: (line: string) => Effect.Effect<void, never, never>,
   /**
    * How the launch re-invokes Collie — the MCP server Claude starts, and the command Pi's
@@ -675,141 +604,83 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
   /** A harness's `--help`, by its kind; the installed one's where left out. */
   help: typeof installedHelp = installedHelp,
 ) {
-  const file = yield* chatPath(env.stateDir, key);
-  yield* ensureLockDir(file);
-  return yield* withLock(
-    `${file}.lock`,
-    // A launch already under way is a launch: the loser returns what the winner will
-    // have, rather than starting a second conversation beside it.
-    Effect.succeed({
-      kind: "unavailable",
-      harness: preferred,
-      why: "another launch holds this Herd's chat",
-    } satisfies Ensured),
-    Effect.gen(function* () {
-      const nothing = <A>(value: A) => Effect.catch(() => Effect.succeed(value));
-      const record = yield* readChat(file);
-      const panes = yield* herdr.paneList().pipe(nothing<ReadonlyArray<PaneInfo>>([]));
-      const agents = yield* herdr.agentList().pipe(nothing<ReadonlyArray<AgentInfo>>([]));
-      const decision = decideChat(record, home.chatPaneId ?? null, panes, agents, preferred);
+  const harness = yield* chatHarnessOf(env.userDir);
+  // The PATH as it is now, which is what the launch's own processes are given.
+  const unavailable = whyUnavailable(harness, Bun.which(harness, { PATH: Bun.env.PATH ?? "" }));
+  if (unavailable !== null) {
+    yield* log(`chat: ${unavailable}`);
+    return { kind: "unavailable", harness, why: unavailable } satisfies Started;
+  }
 
-      if (decision.kind === "no_pane")
-        return {
-          kind: "unavailable",
-          harness: preferred,
-          why: "the Home has no chat pane; `collie home show` says what herdr would not do",
-        } satisfies Ensured;
-      if (decision.kind === "adopt")
-        return { kind: "running", record: decision.record, next: decision.next } satisfies Ensured;
+  const adapter = HARNESSES[harness];
+  const window =
+    adapter === undefined
+      ? { passed: null, leftOff: null }
+      : yield* autoCompactWindowFor(
+          adapter,
+          autoCompactWindowAsWritten(
+            (yield* readConfig(env.userDir).pipe(Effect.orElseSucceed((): YamlMap => ({}))))
+              .claude_auto_compact_window,
+          ),
+          help,
+        );
+  if ("refused" in window) {
+    const why = `${window.refused} in ${env.userDir}/config.json`;
+    yield* log(`chat: ${why}`);
+    return { kind: "unavailable", harness, why } satisfies Started;
+  }
+  if (window.leftOff !== null)
+    yield* log(`chat: started without an auto-compact window: ${window.leftOff}`);
 
-      // The PATH as it is now, which is what the launch's own processes are given.
-      const unavailable = whyUnavailable(
-        decision.harness,
-        Bun.which(decision.harness, { PATH: Bun.env.PATH ?? "" }),
-      );
-      if (unavailable !== null) {
-        yield* log(`chat: ${unavailable}`);
-        return {
-          kind: "unavailable",
-          harness: decision.harness,
-          why: unavailable,
-        } satisfies Ensured;
-      }
+  const cwd = yield* herdDir(env.stateDir, key);
+  // Which Collie both adapters read. One object, given to both: Claude's server and
+  // Pi's extension are fresh processes, and giving them different answers here is two
+  // conversations about two different Herds — Pi read the human's real state directory
+  // that way, and said so confidently. An empty value reads as unset.
+  const serverEnv = {
+    HERDR_PLUGIN_STATE_DIR: env.stateDir,
+    COLLIE_USER_DIR: env.userDir,
+    HERDR_SOCKET_PATH: env.socketPath ?? "",
+    COLLIE_CWD: cwd,
+  };
 
-      const adapter = HARNESSES[decision.harness];
-      const window =
-        adapter === undefined
-          ? { passed: null, leftOff: null }
-          : yield* autoCompactWindowFor(
-              adapter,
-              autoCompactWindowAsWritten(
-                (yield* readConfig(env.userDir).pipe(Effect.orElseSucceed((): YamlMap => ({}))))
-                  .claude_auto_compact_window,
-              ),
-              help,
-            );
-      if ("refused" in window) {
-        const why = `${window.refused} in ${env.userDir}/config.json`;
-        yield* log(`chat: ${why}`);
-        return { kind: "unavailable", harness: decision.harness, why } satisfies Ensured;
-      }
-      if (window.leftOff !== null)
-        yield* log(`chat: started without an auto-compact window: ${window.leftOff}`);
+  const files = yield* writeLaunchFiles({
+    dir: yield* chatDir(env.stateDir, key),
+    pluginRoot: env.pluginRoot,
+    userDir: env.userDir,
+    home: env.home,
+    self,
+    serverEnv,
+    tools: Arr.map(TOOLS, (tool) => ({
+      name: tool.name,
+      label: tool.title,
+      description: tool.description,
+      parameters: tool.input,
+    })),
+    news: yield* newsPath(env.stateDir, key),
+    mcpConfig: mcpConfig(self, serverEnv),
+  });
 
-      // Which Collie both adapters read. One object, given to both: Claude's server and
-      // Pi's extension are fresh processes with none of herdr's environment, and giving
-      // them different answers here is two conversations about two different Herds — Pi
-      // read the human's real state directory that way, and said so confidently.
-      // An empty value reads as unset, which is what a CLI launch with no socket has.
-      const serverEnv = {
-        HERDR_PLUGIN_STATE_DIR: env.stateDir,
-        COLLIE_USER_DIR: env.userDir,
-        HERDR_SOCKET_PATH: env.socketPath ?? "",
-        COLLIE_CWD: yield* herdDir(env.stateDir, key),
-      };
-
-      const files = yield* writeLaunchFiles({
-        dir: yield* chatDir(env.stateDir, key),
-        pluginRoot: env.pluginRoot,
-        userDir: env.userDir,
-        home: env.home,
-        self,
-        serverEnv,
-        tools: Arr.map(TOOLS, (tool) => ({
-          name: tool.name,
-          label: tool.title,
-          description: tool.description,
-          parameters: tool.input,
-        })),
-        news: yield* newsPath(env.stateDir, key),
-        mcpConfig: mcpConfig(self, serverEnv),
-      });
-
-      const random = yield* SecureRandom.SecureRandom;
-      const paneId = home.chatPaneId ?? "";
-      const kind = adapter?.kind ?? decision.harness;
-      const start = Effect.fn("Chat.start")(function* (sessionId: string) {
-        // A fresh name every attempt, never derived from the session: herdr keeps a name
-        // until the process holding it has gone, so a relaunch under the same name was
-        // refused `agent_name_taken` and left the Home with a pane and nothing in it.
-        const agent = `${CHAT_AGENT_PREFIX}-${pipe(yield* random.uuidV4(), Str.slice(0, 8))}`;
-        const failed = yield* herdr
-          .agentStart({
-            name: agent,
-            kind,
-            paneId,
-            args: [...chatArgs(decision.harness, sessionId, files, window.passed)],
-          })
-          .pipe(
-            Effect.as(null),
-            Effect.catch((cause) => Effect.succeed(reason(cause))),
-          );
-        return { agent, sessionId, failed };
-      });
-
-      const attempt = yield* start(yield* random.uuidV4());
-      if (attempt.failed !== null) {
-        // herdr's own words: "would not start it" is not something a human can act on.
-        const why = `herdr would not start ${decision.harness} in the Home's chat pane: ${attempt.failed}`;
-        yield* log(`chat: ${why}`);
-        return { kind: "unavailable", harness: decision.harness, why } satisfies Ensured;
-      }
-      const after = Option.getOrUndefined(
-        Arr.findFirst(
-          yield* herdr.paneList().pipe(nothing<ReadonlyArray<PaneInfo>>([])),
-          (entry) => entry.paneId === paneId,
-        ),
-      );
-      const next = yield* startedNow({
-        harness: decision.harness,
-        agent: attempt.agent,
-        paneId,
-        terminalId: after?.terminalId ?? null,
-        sessionId: attempt.sessionId,
-      });
-      yield* writeChat(file, next);
-      yield* log(`chat: started ${decision.harness} (${decision.why}); a new conversation`);
-      return { kind: "launched", record: next } satisfies Ensured;
-    }),
-  );
+  const sessionId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
+  const failed = yield* herdr
+    .agentLaunch({
+      name: CHAT_TERMINAL,
+      argv: [adapter?.kind ?? harness, ...chatArgs(harness, sessionId, files, window.passed)],
+      cwd,
+      env: serverEnv,
+      labels: {},
+    })
+    .pipe(
+      Effect.as(null),
+      Effect.catch((cause) => Effect.succeed(reason(cause))),
+    );
+  if (failed !== null) {
+    const why = `core would not start ${harness} as ${CHAT_TERMINAL}: ${failed}`;
+    yield* log(`chat: ${why}`);
+    return { kind: "unavailable", harness, why } satisfies Started;
+  }
+  const record = yield* startedNow({ harness, agent: CHAT_TERMINAL, sessionId });
+  yield* writeChat(yield* chatPath(env.stateDir, key), record);
+  yield* log(`chat: started ${harness}; a new conversation`);
+  return { kind: "launched", record } satisfies Started;
 });

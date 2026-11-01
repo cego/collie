@@ -793,15 +793,25 @@ export class Herdr {
   }
 
   /**
-   * A tick whenever an agent on core may have gone: each time core's events are followed
-   * from the start, which a holder that came back is, and each time a terminal ends.
-   * Nothing on a Machine set to herdr.
+   * A tick whenever an agent on core may have gone. Nothing on a Machine set to herdr.
    */
   agentsEnded(): Stream.Stream<void, never, PlatformServices> {
     const env = this.env;
+    return Stream.unwrap(
+      Effect.map(terminalBackend(env.userDir), (backend) =>
+        backend === "core" ? this.terminalsEnded() : Stream.empty,
+      ),
+    );
+  }
+
+  /**
+   * A tick whenever a terminal on this Machine's core may have gone: each time core's events
+   * are followed from the start, which a holder that came back is, and each time one ends.
+   */
+  terminalsEnded(): Stream.Stream<void, never, PlatformServices> {
+    const env = this.env;
     const followed = Stream.unwrap(
       Effect.gen(function* () {
-        if ((yield* terminalBackend(env.userDir)) !== "core") return Stream.empty;
         const hc = yield* connectCore(yield* coreSocket(env.raw));
         yield* hc.call("events.subscribe", {});
         return Stream.concat(
@@ -822,6 +832,15 @@ export class Herdr {
       Stream.catch(() => Stream.empty),
       Stream.repeat(Schedule.spaced("1 second")),
     );
+  }
+
+  /** Whether this Machine's core has a live terminal named `name`. */
+  coreTerminalLive(name: string): HerdrEffect<boolean> {
+    const raw = this.env.raw;
+    return Effect.gen(function* () {
+      const listed = yield* coreCall(yield* coreSocket(raw), "terminal.list", {});
+      return Arr.some(listed.terminals, (one) => one.state === "live" && one.name === name);
+    });
   }
 
   /** Runs the herdr CLI; parses stdout as JSON when it is JSON. */
@@ -1650,11 +1669,7 @@ export class Herdr {
    * what Collie was built against; this says what is actually there, which is the only
    * one that can refuse a feature at runtime.
    */
-  /**
-   * Which herdr this is, as its own CLI reports it. Recorded in the Herd's `server.json`
-   * at every ensure, so a version or protocol change is something the log can name
-   * rather than something a human works out from a call that started failing.
-   */
+  /** Which herdr this is, and where its server listens, as its own CLI reports it. */
   serverInfo(): HerdrEffect<{
     running: boolean;
     socket: string;
@@ -1685,3 +1700,10 @@ export class Herdr {
     return this.rpc("popup.close", {}).pipe(Effect.asVoid);
   }
 }
+
+/** Where herdr says its running server listens, or null where it cannot say. */
+export const serverSocket = (herdr: Herdr) =>
+  herdr.serverInfo().pipe(
+    Effect.map((server) => (server.socket === "" ? null : server.socket)),
+    Effect.orElseSucceed(() => null),
+  );

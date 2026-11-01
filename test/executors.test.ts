@@ -15,13 +15,11 @@ import * as Option from "effect/Option";
 import { pipe as pipe_ } from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Rec from "effect/Record";
 import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { readEnv, type PluginEnv } from "../src/env";
 import { defaultsPath, readDefaults } from "../src/intent";
 import { executorFor, resetExecutors } from "../src/executors";
-import { LEGACY_PANE_TOKEN } from "../src/home";
 import { registerRunExecutors } from "../src/operations";
 import { scopeKey } from "../src/registry";
 import { listTasks, writeTask } from "../src/task";
@@ -50,20 +48,6 @@ const fakeHerdrOn = Effect.fn("test.fakeHerdrOn")(function* (
   yield* fs.writeFileString(
     `${logPath}.state.json`,
     asJson({ workspaces: [{ ...WORKSPACE, cwd: root }], paneList: panes }),
-  );
-  // What a `*.report_metadata` left on each pane, which is how `closable` tells a legacy
-  // per-workspace Collie pane from any other pane in the same tab.
-  yield* fs.writeFileString(
-    `${logPath}.tokens.json`,
-    asJson({
-      workspaces: {},
-      panes: Rec.fromEntries(
-        Arr.map(
-          Arr.filter(panes, (pane) => pane.label === "collie"),
-          (pane) => [pane.pane_id, { [LEGACY_PANE_TOKEN]: "legacy" }] as const,
-        ),
-      ),
-    }),
   );
   return binPath;
 });
@@ -272,21 +256,6 @@ test("a definition that is not there is refused, and writes nothing", () =>
         as: "mine",
       });
       expect(done).toEqual({ state: "failed", note: 'No persona "not-a-persona".' });
-    }),
-  ));
-
-test("a cleanup closes the panes that are Collie's alone, and leaves the shared tab", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const done = yield* carry({ kind: "home_cleanup" });
-      expect(done.state).toBe("applied");
-      // Taking somebody's window away is not cleanup: the pane sharing a tab with an
-      // editor is listed, never closed.
-      const log = yield* fs.readFileString(logPath, "utf8").pipe(Effect.orElseSucceed(() => ""));
-      expect(log).toContain("p-collie");
-      expect(log).not.toContain("p-other");
-      expect(done.note).toContain("left 1 sharing a tab");
     }),
   ));
 

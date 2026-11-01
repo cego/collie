@@ -56,7 +56,7 @@ restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-
 
 **Herd** — One herdr session: every workspace in it. On a Machine whose
 `terminal_backend` is `core`, one herdr-core session instead: every terminal in it. The
-scope of the Collie tab, the conversation, proposals, the budget and elections. Keyed by
+scope of the board, the conversation, proposals, the budget and elections. Keyed by
 the canonical path of the session's socket, herdr's or core's, never by a directory. A Task records the Herd its workspace is in, and a
 Machine's host reads every Herd on it. **Session** keeps its own meaning below — one
 workspace — and is not the Herd.
@@ -148,19 +148,17 @@ is still refused. Only the Flock chat chooses between Machines, so the rule is D
 and no Machine is given it. Where the Run lands on the chosen Machine is still decided by
 placement ([ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)).
 
-**Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
-`collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
-label is never proof. Anything uncertain is `ownership_unknown` and waits for a human; a
-`ready` record whose workspace nothing else claims is not uncertain, and is healed. It holds
-one tab of two panes: the board on the left at four sevenths, **Native chat** on the
-right at three. Only a pane that has gone is reopened, so a layout a human resized stays
-where they put it.
+**Home** — Where a human works with the Herd from a terminal: two core terminals the
+Machine's host keeps, whatever its `terminal_backend`. `collie-board` draws the board and
+`collie-chat` holds **Native chat**, both in the Herd's own directory, which has no
+checkout. The host starts each when it starts and once more, under the same name, whenever
+one ends; `hc attach collie-board` reaches it. Neither is a herdr tab or pane, and nothing
+about them is recorded.
 
 **Native chat** — The Herd's conversation, held in an ordinary Claude Code or Pi session in
-the Home's right-hand pane. The harness owns the editor, the streaming, the history and the
-compaction; Collie owns which harness, which session, and what the model may reach. It is
-bound to a session id Collie mints per Herd and harness, never to whichever session ran
-last in a directory. Its whole reach is **Collie tools**.
+the Home's `collie-chat` terminal. The harness owns the editor, the streaming, the history and the
+compaction; Collie owns which harness, which session, and what the model may reach. Each start
+is a new session Collie mints, never whichever session ran last in a directory. Its whole reach is **Collie tools**.
 
 **Flock chat** — Desktop's conversation about the **Flock**: one live per Desktop (earlier
 ones can be reopened, never two at once), a session of the harness Desktop's Settings name
@@ -473,7 +471,7 @@ until it is seen (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
 and lifted by a human.
 
 **Session** — One herdr session and one workspace, taken together. It is the
-scope of a Control Plane tab and of a register file of live agents, which holds one entry
+scope of a register file of live agents, which holds one entry
 per agent for every Run started there. An agent on core is in no herdr workspace, but
 its entry is kept in the same register, its Incarnation marked as core's. One workspace, always: a mutating Run's checkout
 does not take it out of the Session it was started in.
@@ -729,11 +727,7 @@ whole `recheck` (ADR-0034, amended 2026-10-15).
 
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
-**Collie tab** — The Herd's own tab, labelled `🐕 Collie`: the Control Plane rendered
-as an application (ADR-0005). One per Herd, in the Home (ADR-0009). Effect produces its state and Solid renders
-it; a pane that cannot start the renderer falls back to the one-screen text view.
-
-**View** — What the Collie tab's nav switches between, one at a time, each a projection of
+**View** — What the board's nav switches between, one at a time, each a projection of
 state Effect produces and none of them read until it is first shown. **Runs** is this
 Session's live work: agents, active Runs, finished Runs. **History** is every finished Run
 of this checkout whatever session it came from — where "review !123 again next week" comes
@@ -752,9 +746,8 @@ outside the Home it is the checkout the human is in, and from the Home it is the
 before the Run starts. It is the human's front door only: an agent's start is given
 everything explicitly (see **Input**). Nothing about the Run's questions — those
 are asked when the Run reaches them, with the work they decide about in front of the
-human. One set of components, two placements — a popup pane for the herdr action, and inline in the
-Collie tab for `＋ New run` — because a question a human answers is a component. A
-question a Run answers is a file in its Run directory, and those two never converge.
+human. It is asked inline on the board, for `＋ New run`; a question a Run answers is a
+file in its Run directory instead.
 
 **Flow** — A Task drawn as the work it took. Each of its Runs is shown on its Machine, as the
 **Steps** it ran and is running, each with its attempts, waits and evidence. Around them are
@@ -777,31 +770,21 @@ record selects that card, and a click on the board's background, Escape outside 
 message sent clears it. A message sent with a Selection keeps it: the message shows that
 card's name as a pill for as long as the conversation is kept, and the pill opens its record.
 
-**Focus** — What the Collie tab is being looked at as: the showing View, every View shown
+**Focus** — What the board is being looked at as: the showing View, every View shown
 at least once, the Selection, and whether the panel's log tail is open. It is what decides
 how much has to be read, so it is state rather than a render-local signal, and it is plain
 data: one function says where a focus command leaves it, and one says what a new one means
 for the reads behind it — whether the last board may be reused, and whether the merge
 request must be read past its cache.
 
-**Control Plane** — The tab a Session keeps as its control surface, one per workspace, and
-the only pane Collie keeps open. It is a view over the run dirs and the register, always the
-workspace's first tab, and holds no state of its own, so closing it loses nothing. Its Runs
-view is drawn at a **Scope**. What it shows and what its keys do: `docs/using.md`. A Run's
-own tabs follow in the order its agents started, whatever the Workflow is called, and
-Collie never moves a tab.
+**Control Plane** — The board as a human works it: what is running, where it is heading and
+what needs them. A view over the run dirs and the register that holds no state of its own,
+so closing it loses nothing. It is drawn in the Home's `collie-board` terminal, and in
+**Desktop**. What it shows and what its keys do: `docs/using.md`.
 
 **Filter** — What the Home board shows: `all`, one workspace, or one Run. A view property
 and nothing more — supervision never reads it, so a Run outside the current filter is still
 driven, still checked and still corrected.
-
-**Scope** — `local`, this Session's own workspace, or `all`, every workspace of this herdr
-session that Collie has a Run, an agent or a history in. It is what a Run lookup searches
-and never what a Session is: the register a Run's agents are written to and starting a
-Workflow stay this Session's, and a hand-off stays in the Run's **Lineage**. The board no longer has one — it is the whole Herd's, one card per Task
-([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md)) — so the `scope` default in
-`config.json` is read at launch and narrows nothing a human sees. On core no Task has a
-workspace, so `local` narrows nothing.
 
 **Work boundary** — The moment immediately before a reused agent that has finished its
 previous work is given the next piece: a Workflow's next operation on the same agent, a

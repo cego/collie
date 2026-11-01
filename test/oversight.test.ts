@@ -42,7 +42,7 @@ import {
 } from "../src/drift";
 import { proposalsPath, read as readProposals } from "../src/proposals";
 import { budgetPath, herdOf } from "../src/steering";
-import { serverSocket } from "../src/home";
+import { serverSocket } from "../src/herdr";
 import { readVerifications } from "../src/verify";
 import { VerifySpecSchema } from "../src/verify-spec";
 import {

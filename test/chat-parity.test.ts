@@ -295,13 +295,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["measure", { route: "shell" }],
   // The same Herd, shaped as the board's Tasks rather than as its Runs.
   ["board", { route: "read", tool: "collie_herd" }],
-  ["home show", { route: "read", tool: "collie_installation" }],
-  ["home reconcile", { route: "shell" }],
-  ["home cleanup", { route: "read", tool: "collie_installation" }],
-  [
-    "home cleanup --confirm",
-    { route: "propose", kind: "home_cleanup", action: { kind: "home_cleanup" } },
-  ],
   ["cleanup", { route: "read", tool: "collie_installation" }],
   ["cleanup --apply", { route: "propose", kind: "cleanup", action: { kind: "cleanup" } }],
   ["usage", { route: "shell" }],

@@ -14,7 +14,6 @@ import {
   Clock,
   Config,
   ConfigProvider,
-  Console,
   Duration,
   Effect,
   Fiber,
@@ -36,6 +35,7 @@ import {
   type CheckRecord,
 } from "../src/check-processes";
 import { evidenceDir } from "../src/engine";
+import { restartHostAt } from "../src/lifecycle";
 import { signalProcess } from "../src/lock";
 import { startedOf, stillRunning } from "../src/processes";
 import { readVerifications, verifyingIn } from "../src/verify";
@@ -44,7 +44,6 @@ import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { Rig } from "./support/recorder";
-import { restartHostFlow } from "../src/flows";
 
 const root = new URL("../", import.meta.url).pathname;
 const fixtures = `${root}test/fixtures/workflows`;
@@ -484,7 +483,7 @@ test(
 );
 
 test(
-  "the herdr action restarts the host and says what it did",
+  "collie host restart replaces the host and says what it did",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -495,21 +494,10 @@ test(
           connect(env.stateDir).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.provide(starting), Effect.orDie);
 
-        const said: string[] = [];
-        const capturing = {
-          ...console,
-          log: (...line: unknown[]) => void said.push(Arr.join(Arr.map(line, String), " ")),
-        };
-        expect(
-          yield* restartHostFlow(env).pipe(
-            Effect.provide(starting),
-            Effect.provideService(Console.Console, capturing),
-          ),
-        ).toBe(0);
+        const restarted = yield* restartHostAt(env.stateDir).pipe(Effect.provide(starting));
         const owner = yield* ownerOf(env.stateDir);
         expect(owner?.pid).not.toBe(old.pid);
-        expect(said).toEqual([expect.stringContaining("Collie host restarted")]);
-        expect(said[0]).toContain(`pid ${old.pid}`);
+        expect(restarted.ok && restarted.human).toContain(`pid ${old.pid}`);
         expect(
           Arr.filter(yield* rig.calls(), (call) => pipe_(call.cmd, Str.startsWith("notification"))),
         ).toEqual([]);

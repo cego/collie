@@ -14,15 +14,7 @@ import { diffTargetOf } from "./strategies";
 import type { Live } from "./live";
 import { boardLines, type PendingChoice } from "./board";
 import type { TaskView } from "./board-model";
-import {
-  asText,
-  cardLines,
-  deliveryLine,
-  driftLines,
-  newsLines,
-  ownershipLines,
-  type Line,
-} from "./lines";
+import { asText, cardLines, deliveryLine, driftLines, newsLines, type Line } from "./lines";
 import { liveEntries, type AgentEntry } from "./registry";
 import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
@@ -721,9 +713,6 @@ function askingRows(choice: PendingChoice, asking: Asking): string[] {
  */
 function liveLines(live: Live): string[] {
   const lines: Line[] = [
-    ...(live.ownership === null
-      ? []
-      : ownershipLines(live.ownership.why, live.ownership.candidates)),
     ...newsLines(live.news),
     ...Arr.flatMap(live.cards, cardLines),
     ...Arr.flatMap(live.drift, (report) => driftLines(report)),
@@ -731,18 +720,6 @@ function liveLines(live: Live): string[] {
     ...Arr.map(live.deliveries, deliveryLine),
   ];
   return Arr.map(lines, (entry) => `  ${asText(entry)}`);
-}
-
-/**
- * What a legacy per-workspace pane shows: one line saying where Collie went, and the key
- * that goes there. Nothing else — no board and no chat — because two boards disagreeing
- * about the same Runs is exactly what one Home per Herd exists to prevent (ADR-0009).
- */
-export function renderRedirect(): string {
-  return Arr.join(
-    ["Collie moved to the Home — one board for the whole herdr session.", "o open Collie"],
-    "\n",
-  );
 }
 
 /** The run whose question is being answered, if any: the first one asking. */

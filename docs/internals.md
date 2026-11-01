@@ -1313,29 +1313,25 @@ its socket. On a Machine set to core, it is that Machine's core session, keyed b
 socket. Never by a directory: a cwd would key two sessions in one repository to the
 same Herd, and one session across two repositories to different ones. Everything shared
 across a session's workspaces lives under `<state>/herd/<herdKey>/`: the conversation, the
-proposals, the budget, the elections, and `home.json`.
+proposals, the budget and the elections. That directory has no checkout, and it is where
+the Home works.
 
-The **Home** is the one workspace that Herd's board lives in. Ownership is a **record**
-Collie wrote plus **proof** that what it names is still what it meant — either a live
-`collie_home` token on the workspace, or the recorded pane still carrying the recorded
-`terminal_id`. Either proof alone is enough, and the second is what heals an expired
-token: the pane Collie opened is still there, so the claim was true and the TTL merely
-lapsed. While either proof holds, the host restates the token on the workspace and on both
-of the Home's panes every four hours, well inside the token's 24-hour TTL, so a board left
-open for days does not let it lapse.
+The **Home** is two core terminals the Machine's host keeps, whatever its
+`terminal_backend`: `collie-board`, which runs `collie board --draw`, and `collie-chat`,
+which runs the chat's harness. `keepTerminals` in `src/side-jobs.ts` starts each that core
+does not list as live, once when the host starts and again on every tick of
+`terminalsEnded`, core's event stream, so one that ends — a crash, a rebuilt binary, a
+human quitting it — is started again under the same name, with `no_parent`, so it is no
+other terminal's child. Chat starts on a new session each time, with the harness
+`chat_harness` names then. There is no layout, record or proof: a name core lists as live
+is the terminal. Both need core answering and a Herd;
+without either, the host logs a warning and keeps going. A start drawn on the board runs
+with the Herd's directory as its cwd, and that is what places it
+([ADR-0033](adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)).
 
-A herdr restart loses both proofs at once. herdr 0.9.3 saves each session to
-`~/.config/herdr/session.json`: workspace ids, tabs, and each pane with its cwd, label,
-launch command and agent session, so it relaunches the board and resumes the chat. It saves
-nothing reported with `report_metadata`, so every token is gone when the server comes back,
-and each restored pane has a new terminal. A recorded workspace that is still there, with a
-`ready` record, no other Herd's token and no other workspace carrying this one's, is
-therefore **healed** rather than refused: the panes still under their recorded ids are
-taken back with their new terminals, any that are gone are reopened, and the tokens are
-written again. The record keeps when and why, and `collie home show` prints it as `healed`.
-This rests on herdr never handing a workspace id to a different workspace.
+A herdr restart cannot take the Home away, because none of it is herdr's.
 
-A Run's agents come back the same way, each resumed in its harness session on a new
+A Run's agents on herdr come back when herdr restores its session, each resumed in its harness session on a new
 terminal, and sometimes without its name. A launch record keeps the terminal and the
 harness session herdr reported for its agent, and the Cleanup sweep fills the session in
 while the agent is still on that terminal. A restored pane is proved to be that agent by
@@ -1346,48 +1342,6 @@ started on its name, its stop controls are that agent's: a restored pane whose h
 outside the pane cannot be made Quiet, and is left open. A pane with no session, or one no
 launch recorded, proves nothing
 ([ADR-draft-a-finished-runs-idle-agent-is-closed](adr/draft-a-finished-runs-idle-agent-is-closed.md), D4).
-
-A **label is never proof**. Two workspaces can be called the same thing, and a home test
-reads `home.ts` to keep it that way. A live token with no record is not proof either — it
-is a previous Collie's Home or another state directory's, and adopting it silently would
-be one Herd taking over another's board.
-
-Anything uncertain — another workspace carrying this Herd's token, more than one
-candidate, a token with no record — is `ownership_unknown` and stops: `collie home show` says what was
-recorded, what herdr has, and which candidates there are; `collie home reconcile --adopt`
-or `--forget` is how a person settles it. Two things this must never do are creating a
-second Home because a token expired, and adopting one because it looks right.
-
-The record is written **before** the pane is opened, so a crash in that window leaves
-something attributable rather than a workspace nobody can explain. `server.json` records
-the socket, version and protocol at every ensure and logs when they move; no start time
-and no pid, because `status server` exposes neither and inventing one would be worse than
-re-checking.
-
-The **runtime gate** is a different question from the pinned contract. `herdr-pin.json`
-and `test/herdr-contract.test.ts` say what Collie was _built_ against; `home.capabilityGate`
-parses the installed binary's own `herdr api schema --json` and requires
-`workspace.report_metadata`, `pane.report_metadata`, `workspace.create`,
-`WorkspaceInfo.tokens`, `PaneInfo.tokens` and `PaneInfo.terminal_id`. A binary older than
-the pin runs this code, and the only honest answer then is `herdr_capability_missing:<name>`
-and an exit — there is deliberately no label-only path to fall back to. The schema is asked
-for once per process and remembered by binary path: a capability declaration cannot change
-while that binary is the one on disk, and it is a quarter of a megabyte down a pipe.
-
-The shortcut writes `origin.json` beside the record — the workspace and directory it was
-pressed in, or `filter: "all"` when it was pressed inside the Home — with a 60-second TTL.
-The board reads it once at startup for its opening filter. Short on purpose: it exists so
-the board opens on the work you came from, and a note from an hour ago says nothing about
-the board in front of you.
-
-The board tab and the tab-ordering anchor are separate: `RunCtx.boardTabId` comes from
-`ensureHome` and is where a pending question goes — it may be in another workspace
-entirely — while `RunCtx.orderAnchorTabId` is a tab in the Run's _own_ workspace: the first
-one in that strip any Run of that workspace opened. Conflating them made a Run in one
-workspace reorder the tabs of another. The anchor is resolved again while it is still null,
-because the first tab Collie opens in a workspace is the anchor for the ones after it; with
-no anchor at all nothing is reordered, which is a strip Collie has no business touching.
-Only a pending question ever focuses anything, and only under `questions: focus`.
 
 ## Steering ledgers
 
@@ -1840,8 +1794,8 @@ its time.
   waits out its own timers runs under `fastForward`, test by test: a file whose time goes
   to real IO runs slower under a fast clock, because its polling keeps firing.
   Before adjusting `TestClock`, wait for the actual sleep to be registered. A lock
-  release can precede that registration; the Home proof observes the Clock service's
-  sleep rather than assuming a filesystem event means the timer is ready.
+  release can precede that registration, so observe the Clock service's sleep rather than
+  assuming a filesystem event means the timer is ready.
 - **A test starts the build.** A helper that starts `collie` or its host runs
   `COLLIE_TEST_BINARY` when it is set, as `test/support/host.ts` does, and the sources only
   without it. A start from source is most of a second of CPU, and the suite makes over a

@@ -148,7 +148,6 @@ test("a proposal that has appeared is drawn, and Enter confirms exactly what is 
         deliveries: [],
         proposals: [proposal],
         pending: [],
-        ownership: null,
         news: { waiting: 0, uncertain: 0 },
       };
       const app = yield* mount(appState({ live }));

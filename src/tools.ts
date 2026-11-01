@@ -82,7 +82,6 @@ import { memoryWaitOf, waitLine } from "./memory-wait";
 import { deliveriesOf, machineHerd } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
-import { closable, decide, homePath, readHome, UNREADABLE } from "./home";
 import { doctor } from "./doctor";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeKey } from "./registry";
@@ -834,9 +833,6 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
   const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
   const workspaces = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
   const health = yield* doctor(env).pipe(Effect.orElseSucceed(() => null));
-  const record = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
-  const ownership = key === null ? null : decide(record, workspaces, panes, key);
-  const { close, listed } = closable(panes);
   // Per workspace, because that is how a Run reads them: what a new Run begins with is
   // the file under the workspace it was started in, never under whichever one this
   // process happens to be serving from.
@@ -862,15 +858,6 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
     [
       `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,
       "",
-      `home: ${
-        record === null
-          ? "none recorded"
-          : record === UNREADABLE
-            ? "the record is unreadable"
-            : `${record.workspaceId} (${record.state})`
-      }`,
-      `ownership: ${ownership === null ? "herdr could not be asked" : ownership.kind}`,
-      `panes an older release left: ${close.length} closable, ${listed.length} sharing a tab`,
       sweepable === null
         ? "cleanup: nothing swept here yet"
         : sweepable.ok

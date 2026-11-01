@@ -167,8 +167,7 @@ import { once, readAudit, recordAudit, startedBy, trimAudit, whoActed, actorOf }
 import { usagePhrase } from "./usage-model";
 import { currentEnv, leaveLauncher, withoutLauncher } from "./env";
 import { installation as installedRelease, RELEASE_TAG } from "./release";
-import { Herdr, isSettled, type AgentInfo } from "./herdr";
-import { serverSocket } from "./home";
+import { Herdr, isSettled, serverSocket, type AgentInfo } from "./herdr";
 import { buildBoard, LANDED_STATES, mrOf, taskFlowOf } from "./board";
 import { readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
@@ -1295,7 +1294,7 @@ const sharedBoardLayer = (dir: string) =>
     }),
   );
 
-/** The merge watch, News, the cleanup sweep and the Home's tokens, for as long as this host runs. */
+/** The merge watch, News, the cleanup sweep, and the board and chat terminals, for as long as this host runs. */
 const sideJobsLayer = (panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {

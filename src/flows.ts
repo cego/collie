@@ -1,6 +1,5 @@
-// What each plugin action does. Actions have no tty, so they only open a pane; the
-// interactive work happens in the pane entrypoints. Every question a human answers goes
-// through `InputPrompts`, so the same flow draws in a popup pane and inline in the tab.
+// The board terminal and the flows it runs inline. Every question a human answers goes
+// through `InputPrompts`, so a flow knows nothing of what draws it.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -29,20 +28,8 @@ import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
 import { offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
 import { gitlabHostOf, loadDefaults, setSetting } from "./config";
 import { parseSetting, settingText } from "./settings";
-import { machineHerd } from "./steering";
-import { chatHarnessOf, ensureChatFor } from "./chat";
-import {
-  ensureHomeFor,
-  homePath,
-  LEGACY_PANE_TOKEN,
-  originPath,
-  readHome,
-  readOrigin,
-  TOKEN_TTL_MS,
-  writeOrigin,
-  UNREADABLE,
-} from "./home";
-import { liveFor, markedOf, type Live } from "./live";
+import { herdDir, machineHerd } from "./steering";
+import { liveFor, markedOf } from "./live";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import { selfCommand, type PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
@@ -64,7 +51,6 @@ import {
   invokeOffer,
   type BoardRead,
   offersOf,
-  restartHostAt,
   resumeRun,
   savedModules,
   startRun,
@@ -108,7 +94,6 @@ import {
   askingRun,
   buildView,
   buildWideView,
-  renderRedirect,
   renderWorkspace,
   type Asking,
   type RunRow,
@@ -153,104 +138,12 @@ export interface ControlSession extends BoardSession {
 export type Mode = "pick" | "continue" | "resume" | "fork";
 
 /**
- * Where a launch flow is being drawn. Only a popup can close itself, and the tab's
- * inline placement closing "the popup" closed whatever unrelated one the session had
- * open elsewhere.
+ * Whether this flow runs in the board terminal: the Herd's own directory, which is no
+ * checkout, so a Run started there is placed rather than asked (ADR-0033).
  */
-export type Placement = "popup" | "inline";
-
-/** An action: open the popup that does the actual work. */
-export const openPicker = Effect.fn("Flows.openPicker")(function* (
-  herdr: Herdr,
-  env: PluginEnv,
-  mode: Mode,
-) {
-  yield* Console.log(`${mode}: opening the picker in ${env.cwd}`);
-  yield* herdr.pluginPaneOpen({
-    entrypoint: "picker",
-    env: { COLLIE_MODE: mode, COLLIE_CWD: env.cwd },
-    focus: true,
-  });
-  return 0;
-});
-
-/** The herdr action for `collie host restart`. */
-export const restartHostFlow = Effect.fn("Flows.restartHostFlow")(function* (env: PluginEnv) {
-  const result = yield* restartHostAt(env.stateDir);
-  yield* result.ok
-    ? Console.log(`Collie host restarted: ${result.human}`)
-    : Console.error(`Collie host did not restart: ${result.error.message}`);
-  return result.ok ? 0 : 1;
-});
-
-/**
- * The workspace's Collie tab, from any pane: found or opened, moved to the front and
- * focused. `prefix+1` already lands on it because every run keeps it first, but that is
- * a position rather than a name — and a workspace whose runs all pre-date the tab, or
- * whose tab was closed, has nothing at position one.
- *
- * The finding and opening is the engine's own, not a second copy: two of those is how
- * one workspace ends up with two Collie tabs.
- */
-export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, env: PluginEnv) {
-  const ensured = yield* ensureHomeFor(herdr, env, (line) => Console.error(line));
-  if (ensured === null) return 1;
-  if (ensured.kind === "ownership_unknown") {
-    yield* Console.error(
-      Arr.join(
-        [
-          `Collie cannot tell which workspace is this Herd's Home: ${ensured.why}.`,
-          `Candidates: ${Arr.join(ensured.candidates, ", ")}`,
-          "`collie home reconcile --adopt <id>` or `--forget` settles it.",
-        ],
-        "\n",
-      ),
-    );
-    return 1;
-  }
-  const home = ensured.record;
-  // Where the shortcut was pressed, so the board opens narrowed to the work the human
-  // came from. Pressed inside the Home it means the opposite — show me everything — so
-  // that is what it records.
-  const inHome = env.workspaceId !== null && env.workspaceId === home.workspaceId;
-  yield* writeOrigin(yield* originPath(env.stateDir, yield* machineHerd(env)), {
-    workspaceId: inHome ? null : env.workspaceId,
-    cwd: env.cwd,
-    filter: inHome ? "all" : null,
-  });
-  // The conversation beside the board, started or found. Reported and never fatal: a
-  // harness that will not open costs the human their chat, not their control plane.
-  const chat = yield* ensureChatFor(
-    herdr,
-    env,
-    yield* machineHerd(env),
-    home,
-    yield* chatHarnessOf(env.userDir),
-    (line) => Console.error(line),
-  ).pipe(Effect.orElseSucceed(() => null));
-  if (chat?.kind === "unavailable")
-    yield* Console.error(`Collie has no native chat: ${chat.why}. The board is unaffected.`);
-
-  // The Home may be another workspace entirely: one Herd has one board (ADR-0009), so
-  // reaching it is a workspace switch as well as a tab focus. Neither is what the exit
-  // status turns on — a tab that will not focus is still a tab the human can reach.
-  yield* Effect.ignore(herdr.workspaceFocus(home.workspaceId));
-  if (home.tabId !== null) yield* Effect.ignore(herdr.tabFocus(home.tabId));
-  // Focused, so the next thing typed is a question: no mode to enter and no composer to
-  // find. The board is reached with ordinary pane controls, as any other pane is.
-  if (chat !== null && chat.kind !== "unavailable")
-    yield* Effect.ignore(herdr.agentFocus(chat.record.agent));
-  return 0;
-});
-
-/**
- * Whether this flow was opened from the Herd's Home (ADR-0009): Collie's own namespace
- * directory, which is no checkout, so a Run started there is placed rather than asked.
- */
-const fromHome = Effect.fn("Flows.fromHome")(function* (env: PluginEnv) {
+const fromBoard = Effect.fn("Flows.fromBoard")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
-  return home !== null && home !== UNREADABLE && env.workspaceId === home.workspaceId;
+  return key !== null && env.cwd === (yield* herdDir(env.stateDir, key));
 });
 
 function banner(defs: Definitions): string | undefined {
@@ -261,10 +154,7 @@ function banner(defs: Definitions): string | undefined {
   );
 }
 
-/**
- * How a flow asks. The popup and the tab hand in different implementations of the same
- * interface, and this is the only thing any of these flows knows about either.
- */
+/** How a flow asks, and the only thing any of these flows knows about what draws it. */
 export type FlowPrompts = InputPrompts;
 
 /**
@@ -277,13 +167,12 @@ export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
   prompts: FlowPrompts,
-  placement: Placement = "popup",
 ) {
   const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
   const task =
     here === null ? yield* pickTask(env, prompts) : ({ mode: "continue", task: here } as const);
   if (task === null) return 0;
-  return yield* pickFlow(herdr, env, prompts, placement, task);
+  return yield* pickFlow(herdr, env, prompts, task);
 });
 
 /** The picker's own id for keeping the work in the workspace it was opened from. */
@@ -322,7 +211,6 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
   prompts: FlowPrompts,
-  placement: Placement = "popup",
   task: TaskChoice = { mode: "new" },
 ) {
   const offered = new Map<string, PickItem>();
@@ -347,7 +235,7 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
   });
   if (!chosen) return 0;
 
-  yield* startChosen(herdr, env, prompts, { workflow: chosen.id, placement, task });
+  yield* startChosen(herdr, env, prompts, { workflow: chosen.id, task });
   return 0;
 });
 
@@ -366,7 +254,6 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   prompts: FlowPrompts,
   opts: {
     workflow: string;
-    placement: Placement;
     /** Inputs the caller has already settled, which are not asked for again. */
     given?: Record<string, string>;
     parent?: RunFacts;
@@ -426,7 +313,6 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   env: PluginEnv,
   prompts: FlowPrompts,
   opts: {
-    placement: Placement;
     given?: Record<string, string>;
     /** The human's words, already said, for the launch Input. */
     words?: string;
@@ -438,7 +324,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   const launchInput = Option.getOrUndefined(
     Arr.findFirst(module.inputs, (field) => EXCLUSIVE_STRATEGIES.includes(field.strategy ?? "")),
   );
-  const home = yield* fromHome(env);
+  const home = yield* fromBoard(env);
   const text = { ...opts.given };
   const inferred = new Map<string, string>();
   const strategy = launchInput?.strategy ?? "";
@@ -543,7 +429,6 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     yield* bail(prompts, started.error.message);
     return null;
   }
-  if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
   const given = Arr.map(Rec.toEntries(text), ([name, value]) => `${name}=${value}`);
   return {
     line: withNotice(
@@ -704,7 +589,6 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
   prompts: FlowPrompts,
-  placement: Placement = "popup",
 ) {
   const runs = Arr.filter(yield* listRuns(env), (run) => !settled(run));
   if (runs.length === 0) return yield* bail(prompts, "No runs are still going to pick back up.");
@@ -727,8 +611,6 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
     request: yield* newRequestId(),
   });
   if (!resumed.ok) return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
-  // Only a popup can close itself; running the picker in a plain pane is fine..
-  if (placement === "popup") yield* Effect.ignore(herdr.popupClose());
   return 0;
 });
 
@@ -820,18 +702,6 @@ const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
 });
 
 /**
- * The Collie tab: the Session's control surface, as an application. It watches the run
- * dirs and the register and renders them; the actions are the plugin's own actions, one
- * hand-off, and whatever the Selection can be asked for. It drives no run and holds no
- * engine state, so closing it loses nothing.
- *
- * OpenTUI arrives through a dynamic import, so the `collie` CLI — `--json`, the receipts
- * path, CI — neither loads the native renderer nor depends on it being there.
- */
-/** The board's exit when its binary was rebuilt: the pane's command starts the new one. */
-export const RELAUNCH = 75;
-
-/**
  * Reads `file` now, and gives back what completes once it is a different file than it was:
  * a build renames a new binary over the old one, so an upgrade is a new inode under the
  * same path. That never completes where the file cannot be read, as under `bun src/main.ts`.
@@ -859,29 +729,20 @@ export const replacedOnDisk = (
     );
   });
 
+/**
+ * The board: the Herd's control surface, as an application in a terminal of its own. It
+ * watches the run dirs and the register and renders them; the actions are its own flows,
+ * one hand-off, and whatever the Selection can be asked for. It drives no run and holds no
+ * engine state, so ending it loses nothing, and the host starts it again.
+ *
+ * OpenTUI arrives through a dynamic import, so the `collie` CLI — `--json`, the receipts
+ * path, CI — neither loads the native renderer nor depends on it being there.
+ */
 export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
 ) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
-  // A board outside the Home is a board this Herd no longer has: one Home per Herd, so
-  // two of them would be two boards disagreeing about the same Runs (ADR-0009). It is
-  // marked as legacy — which is the only thing `home cleanup` will close — and it says
-  // where Collie went rather than drawing a second board.
-  if (
-    home !== null &&
-    home !== UNREADABLE &&
-    env.workspaceId !== null &&
-    env.workspaceId !== home.workspaceId
-  ) {
-    if (env.paneId !== null) {
-      yield* Effect.ignore(
-        herdr.paneReportMetadata(env.paneId, { [LEGACY_PANE_TOKEN]: "legacy" }, TOKEN_TTL_MS),
-      );
-    }
-    return yield* redirectBoard(herdr, env);
-  }
   const platform = yield* Effect.context<
     FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
   >();
@@ -906,21 +767,11 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         Effect.provideContext(platform),
       ),
   };
-  /**
-   * Where the shortcut was pressed, which is what `g` narrows to and what the board
-   * opens on. `env.workspaceId` is the fallback for a board nobody arrived at through
-   * the shortcut — its own workspace is then the only origin there is.
-   */
-  const noted = key === null ? null : yield* readOrigin(yield* originPath(env.stateDir, key));
-  const origin = noted?.workspaceId ?? env.workspaceId;
-  /** `all` when the shortcut was pressed inside the Home, which means "show me everything". */
-  const opening =
-    noted?.filter === "all"
-      ? ({ kind: "all" } as const)
-      : openingFilter((yield* loadDefaults(env.userDir)).scope, origin);
+  const origin = env.workspaceId;
+  const opening = openingFilter((yield* loadDefaults(env.userDir)).scope, origin);
   // An upgrade that leaves this board drawing the old build is an upgrade the human
-  // believes happened and did not, so a rebuilt binary closes it for the new one.
-  let replaced = false;
+  // believes happened and did not, so a rebuilt binary ends it, for the host to start the
+  // new one.
   const why =
     (yield* whyNoRenderer()) ??
     (yield* Effect.gen(function* () {
@@ -949,8 +800,8 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         logo: (yield* everyViewerPaints())
           ? `${env.pluginRoot}/assets/brand/logos/collie-horizontal-light-512.png`
           : undefined,
-        // What the board has open, where the other half of the Home can read it. Nothing
-        // to write it to without a Herd, which is a board running outside herdr.
+        // What the board has open, where chat can read it. Nothing to write it to without
+        // a Herd.
         selected:
           key === null
             ? undefined
@@ -958,17 +809,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
                 Effect.flatMap(selectionPath(env.stateDir, key), (file) =>
                   writeSelection(file, on),
                 ),
-      }).pipe(
-        Effect.raceFirst(
-          Effect.flatten(replacedOnDisk(process.execPath)).pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                replaced = true;
-              }),
-            ),
-          ),
-        ),
-      );
+      }).pipe(Effect.raceFirst(Effect.flatten(replacedOnDisk(process.execPath))));
       return null;
     }).pipe(
       // A renderer that will not start must not take the tab down with it: say why and
@@ -980,36 +821,9 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         (cause) => Effect.succeed(Str.split(reason(cause), "\n")[0]!),
       ),
     ));
-  if (why === null) return replaced ? RELAUNCH : 0;
-  return yield* textBoard(session, herdr, env, why);
+  if (why === null) return 0;
+  return yield* textBoard(session, env, why);
 }, Effect.scoped);
-
-/**
- * A pane left over from when every workspace had its own Collie tab. One line saying
- * where the board went, and the key that goes there — no board and no chat, because two
- * boards disagreeing about one Herd's Runs is what one Home exists to prevent.
- *
- * Old binaries already running are not touched: this is what a pane shows the next time
- * it is drawn, and `collie home cleanup --confirm` is what closes one.
- */
-const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, env: PluginEnv) {
-  const text = renderRedirect();
-  if (!process.stdin.isTTY) {
-    process.stdout.write(`${text}\n`);
-    return 0;
-  }
-  const chosen = yield* Effect.scoped(
-    Effect.gen(function* () {
-      const keys = yield* keyboard();
-      process.stdout.write(`${CLEAR}${pipe_(text, Str.replace(/\n/g, "\r\n"))}\r\n`);
-      for (;;) {
-        const key = yield* Queue.take(keys);
-        if (key === "q" || key === "\x03" || key === "o") return key;
-      }
-    }),
-  );
-  return chosen === "o" ? yield* boardFlow(herdr, env) : 0;
-});
 
 /** One Run's details from the host, as this session reads them. */
 const detailRead = (session: ControlSession, env: PluginEnv, key: DetailKey) =>
@@ -1027,17 +841,7 @@ const boardRead = (session: ControlSession, env: PluginEnv) =>
   );
 
 /** Everything the app draws, for whatever it is looking at. */
-export function appState(
-  session: ControlSession,
-  env: PluginEnv,
-  /**
-   * The Home's ownership question, when there is one nobody has settled. Decided once at
-   * startup rather than per tick: it is a herdr answer, `collie home reconcile` is what
-   * clears it, and re-asking every three seconds would be two calls a tick for a fact
-   * only a human changes.
-   */
-  ownership: Live["ownership"] = null,
-) {
+export function appState(session: ControlSession, env: PluginEnv) {
   const runsOf = session.runsOf ?? listRuns;
   /** The board from the last read, for whatever `rereads` says may be taken from it. */
   let last: { focus: Focus; state: AppState } | null = null;
@@ -1148,7 +952,6 @@ export function appState(
               ...row,
               ...(recorded.get(row.id) ?? { held: false, harnesses: [] }),
             })),
-            ownership,
             region: focus.view === "runs",
           });
     const defaults = yield* loadDefaults(env.userDir);
@@ -1420,19 +1223,15 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       );
     }
 
-    /**
-     * The launch flow, inline. A popup landed on whatever pane herdr had focused, which
-     * is rarely the workspace the board is for — and it is the same flow either way, so
-     * the tab draws it itself and the popup stays the herdr action's front door.
-     */
+    /** The launch flow, drawn by the board itself. */
     case "OpenMode":
       switch (command.mode) {
         case "pick":
-          return yield* pickFlow(session.herdr, env, prompts, "inline").pipe(Effect.as(null));
+          return yield* pickFlow(session.herdr, env, prompts).pipe(Effect.as(null));
         case "continue":
-          return yield* continueFlow(session.herdr, env, prompts, "inline").pipe(Effect.as(null));
+          return yield* continueFlow(session.herdr, env, prompts).pipe(Effect.as(null));
         case "resume":
-          return yield* resumeFlow(session.herdr, env, prompts, "inline").pipe(Effect.as(null));
+          return yield* resumeFlow(session.herdr, env, prompts).pipe(Effect.as(null));
         case "fork":
           return yield* forkFlow(session.herdr, env, prompts).pipe(Effect.as(null));
       }
@@ -1553,7 +1352,6 @@ const launch = Effect.fn("Flows.launch")(function* (
   // the opposite of what deciding upfront is for.
   const line = yield* startChosen(session.herdr, env, prompts, {
     workflow: opts.workflow,
-    placement: "inline",
     given: opts.inputs,
     parent: opts.parent,
   });
@@ -1568,7 +1366,6 @@ const launch = Effect.fn("Flows.launch")(function* (
  */
 const textBoard = Effect.fn("Flows.textBoard")(function* (
   session: ControlSession,
-  herdr: Herdr,
   env: PluginEnv,
   why: string,
 ) {
@@ -1603,7 +1400,6 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
             : markedOf(run, registered);
         });
       }),
-      ownership: null,
       region: true,
     });
     return { ...live, tasks: yield* tasksOf() };
@@ -1619,7 +1415,6 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   }
   const keys = yield* keyboard();
   let view = yield* boardOf(session, yield* scan(env, session.runsOf));
-  const open = (mode: Mode) => openMode(herdr, env, mode);
   let note: string | null = why;
   let drawn = "";
   let read = yield* Clock.currentTimeMillis;
@@ -1632,7 +1427,6 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     if (waiting && waiting.id !== answering) {
       asking = { index: 0, typed: "" };
       answering = waiting.id;
-      yield* announce(herdr, env, session.userDir);
     }
     if (!waiting) answering = null;
 
@@ -1652,7 +1446,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       } else if (key === "q" || key === "\x03") {
         return 0;
       } else {
-        note = yield* act(session, env, view, key, open);
+        note = yield* act(session, env, view, key);
       }
       view = yield* boardOf(session, yield* scan(env, session.runsOf));
       read = yield* Clock.currentTimeMillis;
@@ -1664,26 +1458,6 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     }
   }
 }, Effect.scoped);
-
-/**
- * A question nobody sees is a run that has silently stopped, so the board brings this
- * tab to the front when one arrives. The toast is the Driver's — it raises `needs-you`
- * for the step before it waits, once per `(run, kind, step)` and recorded on the run,
- * so announcing it here as well would interrupt twice for one question and again
- * whenever the board is reopened.
- */
-const announce = Effect.fn("Flows.announce")(function* (
-  herdr: Herdr,
-  env: PluginEnv,
-  userDir: string,
-) {
-  // Same opt-out as the Driver's: `questions: notify` leaves the question on the
-  // board and in the toast, and only stops it moving the human here.
-  if ((yield* loadDefaults(userDir)).questions === "notify") return;
-  if (!env.tabId) return;
-  // A tab that will not focus is still a tab the human can reach.
-  yield* Effect.ignore(herdr.tabFocus(env.tabId));
-});
 
 /**
  * One keypress against a pending question; the answer goes back to the run dir. The
@@ -1713,30 +1487,12 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
   };
 });
 
-/**
- * The picker, opened in the board's own pane rather than as a popup: a popup lands
- * on whatever pane herdr has focused, which is rarely the workspace this board is
- * for, and the mode and cwd have to be this board's.
- */
-const openMode = Effect.fn("Flows.openMode")(function* (herdr: Herdr, env: PluginEnv, mode: Mode) {
-  yield* herdr.pluginPaneOpen({
-    entrypoint: "picker",
-    placement: "split",
-    targetPaneId: env.paneId ?? undefined,
-    direction: "down",
-    cwd: env.cwd,
-    env: { COLLIE_MODE: mode, COLLIE_CWD: env.cwd },
-    focus: true,
-  });
-});
-
 /** What one keypress does. Returns the line to show under the lists, if any. */
 const act = Effect.fn("Flows.act")(function* (
   session: ControlSession,
   env: PluginEnv,
   view: WorkspaceView,
   key: string,
-  open: (mode: Mode) => ReturnType<typeof openMode>,
 ) {
   if (/^[1-9]$/.test(key)) {
     const agent = agentForKey(view, key);
@@ -1744,22 +1500,6 @@ const act = Effect.fn("Flows.act")(function* (
     return yield* session.herdr.agentFocus(agent.agent).pipe(
       Effect.as(`focused ${agent.name} (${agent.agent})`),
       Effect.catch((cause) => Effect.succeed(`${agent.agent}: ${reason(cause)}`)),
-    );
-  }
-  const mode =
-    key === "p"
-      ? "pick"
-      : key === "C"
-        ? "continue"
-        : key === "u"
-          ? "resume"
-          : key === "f"
-            ? "fork"
-            : null;
-  if (mode) {
-    return yield* open(mode).pipe(
-      Effect.as(null),
-      Effect.catch((cause) => Effect.succeed(`${mode}: ${reason(cause)}`)),
     );
   }
   // The text board acts on the newest run it drew rather than on a Selection, so this
@@ -1921,9 +1661,8 @@ const bail = Effect.fn("Flows.bail")(function* (
 });
 
 /**
- * Something the human has to see before the pane goes. A menu of one, because a flow
- * that printed and exited would close the popup over its own message — and because a
- * thing you acknowledge is a thing you can click.
+ * Something the human has to see before the flow ends. A menu of one, because a thing you
+ * acknowledge is a thing you can click.
  */
 const notice = Effect.fn("Flows.notice")(function* (
   prompts: FlowPrompts,

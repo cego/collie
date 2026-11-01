@@ -45,7 +45,8 @@ here are in [`src/README.md`](src/README.md).
 - **Board** → [`docs/using.md`](docs/using.md#the-control-plane),
   [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md), [ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md)
   (supersedes [ADR-0005](docs/adr/0005-collie-tab-is-an-application.md) on what it draws),
-  `src/board-model.ts`, `src/board.ts`, `src/ui/Board.tsx`, `src/ui/Drawer.tsx`, `src/home.ts`.
+  `src/board-model.ts`, `src/board.ts`, `src/ui/Board.tsx`, `src/ui/Drawer.tsx`; the Home's board and chat
+  terminals: `keepTerminals` in `src/side-jobs.ts`, `test/board-chat-terminals.test.ts`.
 - **Agent to agent, agent reports** → [ADR-0058](docs/adr/0058-an-agent-speaks-to-another-as-itself.md),
   `src/harness.ts`, `src/tools.ts`, `asksRun` in `src/lifecycle.ts`, `src/dispatcher.ts`, `src/handoff.ts`,
   `src/reports.ts`, `requestedBy` in `src/engine.ts`, `src/agent-start.ts`, `workflows/investigate.workflow.ts`,
@@ -165,7 +166,7 @@ here are in [`src/README.md`](src/README.md).
   [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md),
   `test/workflow-names.test.ts`, `test/baseline-unrelated-*.test.ts`.
 - **Execution, coordination, records** → [`docs/internals.md`](docs/internals.md), [`docs/adr/`](docs/adr).
-- **Install, keybindings, Control Plane** → [`docs/using.md`](docs/using.md).
+- **Install, Control Plane** → [`docs/using.md`](docs/using.md).
 - **Release signing, installers, macOS** → [ADR-0048](docs/adr/0048-collie-is-released-for-macos-on-apple-silicon.md),
   `tools/sign.ts`, `src/signing.ts`, `install.sh`, `install-desktop.sh`, `src/script.ts`,
   `test/signing.test.ts`, `test/prepare.test.ts`.

@@ -1,17 +1,18 @@
-// What the host does on its own, whether or not a pane is open: the merge watch, each
-// Herd's News, the cleanup sweep and keeping each Herd's Home tokened.
+// What the host does on its own, whether or not anyone is looking: the merge watch, each
+// Herd's News, the cleanup sweep, and the board and chat terminals kept running.
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Clock, Effect, Schedule, type Duration } from "effect";
+import { Clock, Effect, Schedule, Stream, type Duration } from "effect";
 import type { TaskView, MrState, Reopened } from "./board-model";
 import { readyRuns } from "./board";
+import { CHAT_TERMINAL, startChat } from "./chat";
 import { gitlabHostOf, loadDefaults } from "./config";
 import { currentReports, readDrift } from "./drift";
-import type { PluginEnv } from "./env";
-import type { Herdr } from "./herdr";
+import { selfCommand, type PluginEnv } from "./env";
+import { coreSocket } from "./hc";
+import { serverSocket, type Herdr } from "./herdr";
 import { SESSIONS_EVERY, liveHerds, type LiveHerd } from "./herds";
-import { homeDeps, restateHome, type HomeDeps } from "./home";
 import { landingNow } from "./landing";
 import { settleMerges, type MrPanels } from "./merges";
 import { shell } from "./mr";
@@ -128,9 +129,6 @@ const MERGES_EVERY = "10 seconds";
 /** How long after one cleanup sweep ends the next begins (ADR-0045). */
 const SWEEP_EVERY = "10 minutes";
 
-/** How often a proven Home's tokens are restated: well within their 24-hour TTL. */
-const RESTATE_EVERY = "4 hours";
-
 /** The host's own cleanup sweep, ten minutes after it starts and after each one ends. */
 export const sweepEvery = <E, R>(
   stateDir: string,
@@ -140,19 +138,43 @@ export const sweepEvery = <E, R>(
     Effect.andThen(every(SWEEP_EVERY, sweeping.withPermit(sweep(sweepers, stateDir, "host")))),
   );
 
-/** Each live Herd's proven Home kept tokened; one Herd's failure skips only that Herd. */
-export const keepHomesTokened = <R>(
-  stateDir: string,
-  herds: Effect.Effect<ReadonlyArray<{ readonly key: string; readonly deps: HomeDeps }>, never, R>,
-) =>
-  every(
-    RESTATE_EVERY,
+/** The core terminal this Machine's board runs in, and what `hc attach` reaches it by. */
+export const BOARD_TERMINAL = "collie-board";
+
+/**
+ * The board and chat, each a core terminal of its own on this Machine whatever runs its
+ * agents: started when core is first followed, and again whenever either has ended.
+ */
+export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
+  Stream.runForEach(herdr.terminalsEnded(), () =>
     Effect.gen(function* () {
-      for (const { key, deps } of yield* herds)
-        yield* restateHome(stateDir, key, deps).pipe(
-          Effect.catchCause((cause) => Effect.logWarning(`home: could not restate ${key}`, cause)),
-        );
-    }),
+      const herdrSocket = env.socketPath ?? (yield* serverSocket(herdr));
+      const at = { ...env, socketPath: herdrSocket };
+      const key = yield* machineHerd(at);
+      const cwd = yield* herdDir(env.stateDir, key);
+      if (!(yield* herdr.coreTerminalLive(BOARD_TERMINAL)))
+        yield* herdr.agentLaunch({
+          name: BOARD_TERMINAL,
+          argv: [...selfCommand(), "board", "--draw"],
+          cwd,
+          env: {
+            HERDR_PLUGIN_ROOT: env.pluginRoot,
+            COLLIE_DIR: env.collieDir,
+            COLLIE_USER_DIR: env.userDir,
+            HERDR_PLUGIN_STATE_DIR: env.stateDir,
+            HERDR_SOCKET_PATH: herdrSocket ?? "",
+            HC_SOCKET: yield* coreSocket(env.raw),
+            COLLIE_CWD: cwd,
+          },
+          labels: {},
+        });
+      if (!(yield* herdr.coreTerminalLive(CHAT_TERMINAL)))
+        yield* startChat(herdr, at, key, (line) => Effect.logInfo(line));
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("could not keep the board and chat terminals", cause),
+      ),
+    ),
   );
 
 /** Every side job, run until the host stops. */
@@ -214,18 +236,7 @@ export const sideJobs = <E, R>(opts: {
           }),
         ),
         sweepEvery(env.stateDir, opts.sweepers),
-        keepHomesTokened(
-          env.stateDir,
-          herds.pipe(
-            Effect.map((sessions) =>
-              Arr.flatMap(sessions, (session) =>
-                session.herd === null
-                  ? []
-                  : [{ key: session.herd, deps: homeDeps(session.herdr, () => Effect.void) }],
-              ),
-            ),
-          ),
-        ),
+        keepTerminals(env, herdr),
       ],
       { concurrency: "unbounded", discard: true },
     ),

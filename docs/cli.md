@@ -786,9 +786,11 @@ nothing in the `fallbacks` chain had room, the work stays on its preferred agent
 
 ```sh
 collie --json board
+collie board --draw
 ```
 
-The first snapshot of the board the host serves
+`--draw` draws the board itself in the terminal it runs in: what the host's `collie-board`
+core terminal runs, and a start made from it is placed as one from the Home. Without it, the first snapshot of the board the host serves
 ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
 board, in the order the Home draws them: **Needs you** first, then **Waiting on you** (work
 that ended and has not landed, what is `ready` to release first), then **Working** (`active`
@@ -1013,7 +1015,7 @@ Defaults are per workspace: every run started there begins with them.
 
 ## Talk to Collie
 
-The Home's right-hand pane is an ordinary Claude Code (or Pi) session with Collie's role
+The Home's `collie-chat` terminal is an ordinary Claude Code (or Pi) session with Collie's role
 and Collie's tools — that is where questions about the flock are asked, and it is
 [docs/using.md](using.md#talking-to-collie-about-a-herd). From a terminal:
 
@@ -1036,7 +1038,7 @@ the default, on an existing installation as much as a new one.
 `chat status-line` prints `board selection: <name>`, or `board selection: none · whole
 herd`, which is what Claude Code shows under the prompt so that chat and board agree on
 what "it" means. `--install` is what `setup.sh` runs: it configures `statusLine` in your
-own Claude Code settings — never `prepare.sh`, exactly like the keybindings — and leaves a
+own Claude Code settings — never `prepare.sh` — and leaves a
 status line you already have alone, naming it instead. `collie doctor` reports which of
 those it found. Outside a herdr session the command prints nothing, so a Claude Code you
 opened somewhere else carries no line about a board it is nowhere near.
@@ -1060,7 +1062,7 @@ through a generated extension; this is the third way in.
 | `collie_workspaces`   | The workspaces this session has (the Home marked as no checkout), the Tasks whose workspace is open, the Projects root, and each workflow with its Inputs                                                                                    |
 | `collie_receipts`     | What one run waits on the human for — its Choice and proposals — and what state each message to its agents actually reached                                                                                                                  |
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                        |
-| `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults                                                                                                                                                     |
+| `collie_installation` | What Collie needs, the defaults                                                                                                                                                                                                              |
 | `collie_connections`  | Each Machine's service logins, accounts, absent or broken states, and fixes; `machine` keeps one Machine                                                                                                                                     |
 | `collie_news`         | What this conversation has not been told; reading it settles those items for it                                                                                                                                                              |
 | `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it                                                                                                                                                                |

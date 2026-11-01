@@ -74,7 +74,6 @@ import {
 } from "./intent";
 import { scopeKey } from "./registry";
 import { layers, loadDefinitions } from "./definitions";
-import { closable } from "./home";
 import { forkResolvedDefinition } from "./fork";
 import { upgrade } from "./operations";
 import { onboard } from "./onboard";
@@ -518,11 +517,6 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       elsewhereCleanup,
       Effect.gen(function* () {
         const herdr = new Herdr(env);
-        const panes = yield* herdr.paneList();
-        // Only the panes that are Collie's alone: a legacy pane sharing a tab with
-        // something else is left, because taking somebody's window away is not cleanup.
-        const { close, listed } = closable(panes);
-        for (const paneId of close) yield* herdr.paneClose(paneId).pipe(Effect.ignore);
         // A Task whose workspace herdr no longer has, and that no Run belongs to, is work
         // nobody can reach. A listing that could not be read keeps every Task.
         const open = new Set(Arr.map(yield* herdr.workspaceList(), (one) => one.workspaceId));
@@ -538,7 +532,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         for (const task of gone) yield* removeTask(env.stateDir, task.id);
         return {
           state: "applied" as const,
-          note: `closed ${close.length}, left ${listed.length} sharing a tab, forgot ${gone.length} Tasks whose workspace is gone`,
+          note: `forgot ${gone.length} Tasks whose workspace is gone`,
         };
       }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
     ),
