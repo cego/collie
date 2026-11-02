@@ -120,6 +120,13 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
 
+  // Ended on purpose, so nothing starts it again: before the close, whose exit core reports.
+  if (launched.runId !== undefined)
+    yield* (yield* FileSystem.FileSystem)
+      .remove(`${startedDir(deps.stateDir, launched.runId)}/${launched.agent}.json`, {
+        force: true,
+      })
+      .pipe(Effect.ignore);
   if (paneId !== undefined && closes === "close") {
     // Core has no workspace to keep.
     if (one?.backend === undefined) {
@@ -131,13 +138,6 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId, cause })));
   }
   const ended = paneId !== undefined || reached.success !== null;
-  // Ended on purpose, so nothing starts it again.
-  if (launched.runId !== undefined)
-    yield* (yield* FileSystem.FileSystem)
-      .remove(`${startedDir(deps.stateDir, launched.runId)}/${launched.agent}.json`, {
-        force: true,
-      })
-      .pipe(Effect.ignore);
   if (ended && closes === "close")
     yield* deps.log(endedLine(launched.agent, why)).pipe(Effect.ignore);
   return { _tag: "Closed", ended } satisfies Ended;
