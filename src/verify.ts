@@ -338,18 +338,6 @@ export interface Collected {
   readonly test?: FailedTest;
 }
 
-/** How much of a stream's end is read for its tail: enough bytes for its last `TAIL_BYTES` characters. */
-const TAIL_READ = 4 * TAIL_BYTES;
-
-const tailOf = (output: string) =>
-  Effect.tryPromise(() => {
-    const file = Bun.file(output);
-    return file.slice(Math.max(0, file.size - TAIL_READ)).text();
-  }).pipe(
-    Effect.map(tail),
-    Effect.orElseSucceed(() => ""),
-  );
-
 /** A check `startCheck` started, finished by `finishCheck` once `exit` is known. */
 export interface StartedCheck {
   readonly id: string;
@@ -433,8 +421,8 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   if (handle.id === null) return yield* Effect.never;
   if (handle.pid !== null && echo?.said !== undefined)
     yield* echo.said(`"${what.name}" started, pid ${handle.pid}`);
-  // Never folded whole: its tail is read from its output once it ends, and a verification
-  // that prints for an hour must not allocate for an hour to say so.
+  // Never folded whole: only each stream's end is kept, and a verification that prints for
+  // an hour must not allocate for an hour to say so.
   const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
     stream.pipe(
       Stream.decodeText(),
@@ -469,8 +457,10 @@ export const finishCheck = (id: string, exit: number) =>
 const readCheck = Effect.fn("Verify.readCheck")(function* (id: string) {
   const found = yield* (yield* CheckProcesses).finished(id);
   if (found === null) return yield* Effect.die(`check ${id} has no record to finish it from`);
-  const [stdout, stderr] = yield* Effect.all([tailOf(found.stdout), tailOf(found.stderr)]);
-  return { ...found, tail: { stdout, stderr } };
+  return {
+    ...found,
+    tail: { stdout: tail(found.output.stdout), stderr: tail(found.output.stderr) },
+  };
 });
 
 const settleCheck = Effect.fn("Verify.settleCheck")(function* (

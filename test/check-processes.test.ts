@@ -18,6 +18,7 @@ import {
   Struct,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as PlatformError from "effect/PlatformError";
 import { TestClock } from "effect/testing";
 import {
   CHECK_ID,
@@ -1361,7 +1362,6 @@ test.skipIf(process.platform !== "linux")(
   30_000,
 );
 
-/** `script` collected as a check of the host `checks`, its Verification in `${root}/evidence`. */
 const collected = (
   {
     root,
@@ -1457,5 +1457,93 @@ test("what finishing a check needs is written before it is spawned", () =>
         argv: [one.state],
       });
       expect(kept.exit).toBe(0);
+    }),
+  ));
+
+/** A check of a host whose output files are slow to write stdout, or cannot be written at all. */
+const storedOutput = (mode: "slow" | "unwritable", baseline = false) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-check-output-" });
+    if (baseline)
+      yield* fs.writeFileString(
+        `${root}/named.test.ts`,
+        'import { test, expect } from "bun:test"; test("named", () => expect(1).toBe(2));',
+      );
+    const output = (path: string) =>
+      pipe_(path, Str.endsWith(".stdout")) || pipe_(path, Str.endsWith(".stderr"));
+    const refused = Effect.fail(
+      PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "write",
+      }),
+    );
+    const edge: FileSystem.FileSystem = {
+      ...fs,
+      open: (path, options) =>
+        !output(path)
+          ? fs.open(path, options)
+          : mode === "unwritable"
+            ? fs.writeFileString(path, "").pipe(Effect.andThen(fs.open(path, { flag: "r" })))
+            : Effect.map(fs.open(path, options), (file) => ({
+                ...file,
+                writeAll: (bytes: Uint8Array) =>
+                  pipe_(path, Str.endsWith(".stdout"))
+                    ? Effect.sleep("200 millis").pipe(Effect.andThen(file.writeAll(bytes)))
+                    : file.writeAll(bytes),
+              })),
+      writeFile: (path, bytes, options) =>
+        !output(path)
+          ? fs.writeFile(path, bytes, options)
+          : mode === "unwritable"
+            ? refused
+            : Effect.sleep(pipe_(path, Str.endsWith(".stdout")) ? "200 millis" : 0).pipe(
+                Effect.andThen(fs.writeFile(path, bytes, options)),
+              ),
+    };
+    const checks = yield* hostCheckProcesses({ dir: root, installation, sweep: false }).pipe(
+      Effect.provideService(FileSystem.FileSystem, edge),
+    );
+    const log = `${root}/output.log`;
+    const kept = yield* collect(`${root}/evidence`, {
+      ...check,
+      name: "stored",
+      executable: "sh",
+      argv: ["-c", "echo first; sleep 0.05; echo second >&2"],
+      cwd: root,
+      log,
+      ...(baseline && {
+        executable: process.execPath,
+        argv: ["test", `${root}/named.test.ts`, "-t", "^named$"],
+        pass: { pass: "baseline" },
+        test: { file: "named.test.ts", name: "named" },
+      }),
+    }).pipe(Effect.provideService(CheckProcesses, checks));
+    return { kept, log: yield* fs.readFileString(log) };
+  });
+
+test("output slow to store reaches the log in the order it was written", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect((yield* storedOutput("slow")).log).toBe("first\nsecond\n");
+    }),
+  ));
+
+test("output that cannot be stored is still logged and still the Verification's tails", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { kept, log } = yield* storedOutput("unwritable");
+      expect(log).toBe("first\nsecond\n");
+      expect(kept.tail).toEqual({ stdout: "first\n", stderr: "second\n" });
+    }),
+  ));
+
+test("a failing baseline test does not pass because its output could not be stored", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { kept } = yield* storedOutput("unwritable", true);
+      expect(kept.exit).toBe(1);
+      expect(kept.result).toBe("fail");
     }),
   ));

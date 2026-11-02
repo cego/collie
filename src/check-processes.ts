@@ -35,6 +35,8 @@ export const CHECK_INSTALLATION = "COLLIE_CHECK_INSTALLATION";
 export const CHECK_ID = "COLLIE_CHECK_ID";
 const KILL_AFTER = "2 seconds";
 const KILL_WAIT = 1_000;
+/** Enough of a stream's end for its last 4 KiB of characters. */
+const KEPT_BYTES = 16 * 1024;
 
 /** Which check of which Run, as its record and the host's log name it. */
 export interface CheckOf {
@@ -89,10 +91,11 @@ export interface CheckCommand {
   readonly spec?: CheckSpec;
 }
 
-/** What a check that exited is finished from: its facts, and where its two streams were written. */
-export interface FinishedCheck extends Schema.Schema.Type<typeof FinishingSchema> {
-  readonly stdout: string;
-  readonly stderr: string;
+type Finishing = Schema.Schema.Type<typeof FinishingSchema>;
+
+/** What a check that exited is finished from: its facts, and the end of each of its streams. */
+export interface FinishedCheck extends Finishing {
+  readonly output: { readonly stdout: string; readonly stderr: string };
 }
 
 export interface RunningCheck {
@@ -211,7 +214,7 @@ const writeFinishing = (
   fs: FileSystem.FileSystem,
   stateDir: string,
   id: string,
-  finishing: Schema.Schema.Type<typeof FinishingSchema>,
+  finishing: Finishing,
 ) =>
   fs
     .writeFileString(`${finishingPath(stateDir, id)}.new`, encodeFinishing(finishing))
@@ -220,15 +223,9 @@ const writeFinishing = (
     );
 
 const readFinishing = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
-  fs.readFileString(finishingPath(stateDir, id)).pipe(
-    Effect.map((text) =>
-      Option.match(decodeFinishing(text), {
-        onNone: () => null,
-        onSome: (finishing): FinishedCheck => ({ ...finishing, ...outputsOf(stateDir, id) }),
-      }),
-    ),
-    Effect.orElseSucceed(() => null),
-  );
+  fs
+    .readFileString(finishingPath(stateDir, id))
+    .pipe(Effect.map((text) => Option.getOrNull(decodeFinishing(text))));
 
 /** The records of the checks running in this state directory, as their hosts wrote them. */
 export const recordsIn = Effect.fn("CheckProcesses.recordsIn")(function* (stateDir: string) {
@@ -258,35 +255,47 @@ const spawnCheck = (command: CheckCommand, env?: Readonly<Record<string, string>
     ),
   );
 
-/** `stream` as it is read, each chunk also written to `path` where that can be opened. */
-const teed = (
-  fs: FileSystem.FileSystem,
+/** The last `KEPT_BYTES` of each of a check's streams, as read so far. */
+interface Kept {
+  stdout: Uint8Array;
+  stderr: Uint8Array;
+}
+const nothingKept = (): Kept => ({ stdout: new Uint8Array(), stderr: new Uint8Array() });
+const textOf = (kept: Kept) => ({
+  stdout: new TextDecoder().decode(kept.stdout),
+  stderr: new TextDecoder().decode(kept.stderr),
+});
+
+/** Kept in memory as it is read, so neither the log nor the tail waits on `store`, which gets it once it ends. */
+const keptOf = (
   stream: Stream.Stream<Uint8Array, PlatformError>,
-  path: string,
+  kept: Kept,
+  name: keyof Kept,
+  store: (name: keyof Kept, bytes: Uint8Array) => Effect.Effect<void>,
 ) =>
-  Effect.match(fs.open(path, { flag: "w" }), {
-    onFailure: () => stream,
-    onSuccess: (file) =>
-      stream.pipe(Stream.tap((chunk) => file.writeAll(chunk).pipe(Effect.ignore))),
-  });
+  stream.pipe(
+    Stream.tap((chunk) =>
+      Effect.sync(() => {
+        kept[name] = Buffer.concat([kept[name], chunk]).subarray(-KEPT_BYTES);
+      }),
+    ),
+    Stream.onEnd(Effect.suspend(() => store(name, kept[name]))),
+  );
 
 const runningOf = (
-  fs: FileSystem.FileSystem,
   id: string,
   handle: ChildProcessSpawner.ChildProcessHandle,
-  outputs: { readonly stdout: string; readonly stderr: string },
+  kept: Kept,
+  store: (name: keyof Kept, bytes: Uint8Array) => Effect.Effect<void>,
   collected: RunningCheck["collected"],
-) =>
-  Effect.gen(function* () {
-    return {
-      id,
-      pid: handle.pid,
-      stdout: yield* teed(fs, handle.stdout, outputs.stdout),
-      stderr: yield* teed(fs, handle.stderr, outputs.stderr),
-      exit: Effect.map(handle.exitCode, Number),
-      collected,
-    } satisfies RunningCheck;
-  });
+): RunningCheck => ({
+  id,
+  pid: handle.pid,
+  stdout: keptOf(handle.stdout, kept, "stdout", store),
+  stderr: keptOf(handle.stderr, kept, "stderr", store),
+  exit: Effect.map(handle.exitCode, Number),
+  collected,
+});
 
 const newId = (run: string, began: string) =>
   Effect.map(
@@ -295,30 +304,35 @@ const newId = (run: string, began: string) =>
   );
 
 // ponytail: in memory, as nothing outside this process could finish one.
-const unrecordedChecks = new Map<string, FinishedCheck>();
+const unrecordedChecks = new Map<string, { readonly finishing: Finishing; readonly kept: Kept }>();
 
-/** Outside a host: its own group, its output in a directory of its own, both gone with its Scope. */
+/** Outside a host: its own group, and nothing of it kept past its Scope. */
 const unrecorded: CheckProcessesApi = {
   run: (check, command) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-check-" });
       const id = yield* newId(check.run, yield* nowIso);
-      const outputs = outputsOf(dir, id);
-      yield* fs.makeDirectory(checkOutputDir(dir));
+      const kept = nothingKept();
       const handle = yield* spawnCheck(command);
       if (command.spec !== undefined) {
-        const { spec } = command;
+        const finishing = { check, command: { ...command, spec: command.spec } };
         yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            unrecordedChecks.set(id, { check, command: { ...command, spec }, ...outputs }),
-          ),
+          Effect.sync(() => unrecordedChecks.set(id, { finishing, kept })),
           () => Effect.sync(() => unrecordedChecks.delete(id)),
         );
       }
-      return yield* runningOf(fs, id, handle, outputs, (collecting) => collecting);
+      return runningOf(
+        id,
+        handle,
+        kept,
+        () => Effect.void,
+        (collecting) => collecting,
+      );
     }),
-  finished: (id) => Effect.sync(() => unrecordedChecks.get(id) ?? null),
+  finished: (id) =>
+    Effect.sync(() => {
+      const found = unrecordedChecks.get(id);
+      return found === undefined ? null : { ...found.finishing, output: textOf(found.kept) };
+    }),
   adopt: (_check, spawn) =>
     Effect.map(spawn({}), (handle) => ({ handle, collected: (collecting) => collecting })),
   endAll: Effect.succeed([]),
@@ -508,6 +522,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     ),
   );
   const collecting = new Map<string, Collecting>();
+  const kept = new Map<string, Kept>();
   let stopping = false;
   let killing = false;
   // Their processes carry their markers before their record is read.
@@ -767,17 +782,37 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       Effect.flatMap((begun) => {
         if (begun === null) return Effect.succeed(endedCheck);
         const { handle, entry } = begun;
-        return runningOf(
-          fs,
-          entry.record.id,
-          handle,
-          outputsOf(dir, entry.record.id),
-          collectedOf(entry),
-        );
+        const { id } = entry.record;
+        const ends = nothingKept();
+        const store = (name: keyof Kept, bytes: Uint8Array) => {
+          const path = outputsOf(dir, id)[name];
+          // A file that may be cut short is worse than none: without it, only this host finishes it.
+          return fs.writeFile(path, bytes).pipe(
+            Effect.catch(() => fs.remove(path, { force: true })),
+            Effect.ignore,
+          );
+        };
+        return Effect.acquireRelease(
+          Effect.sync(() => kept.set(id, ends)),
+          () => Effect.sync(() => kept.delete(id)),
+        ).pipe(Effect.as(runningOf(id, handle, ends, store, collectedOf(entry))));
       }),
     );
 
-  const finished: CheckProcessesApi["finished"] = (id) => readFinishing(fs, dir, id);
+  /** From what this host kept of a check it runs, or else from the files its host stored. */
+  const finished: CheckProcessesApi["finished"] = (id) =>
+    Effect.gen(function* () {
+      const finishing = yield* readFinishing(fs, dir, id);
+      if (finishing === null) return null;
+      const own = kept.get(id);
+      if (own !== undefined) return { ...finishing, output: textOf(own) };
+      const outputs = outputsOf(dir, id);
+      const [stdout, stderr] = yield* Effect.all([
+        fs.readFile(outputs.stdout),
+        fs.readFile(outputs.stderr),
+      ]);
+      return { ...finishing, output: textOf({ stdout, stderr }) };
+    }).pipe(Effect.orElseSucceed(() => null));
 
   const adopt: CheckProcessesApi["adopt"] = (check, spawn, say = () => Effect.void) =>
     begin(check, spawn, say).pipe(

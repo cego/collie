@@ -105,10 +105,11 @@ until it is gone.
 What a check's Verification is finished from is written to `check-output/<id>.json`
 before it is spawned: which check of which Run, the command as resolved, the tree it
 started on, when, what it expects and where its evidence goes. The host reads its stdout
-and stderr through pipes, as they arrive, for its log and a watching client, and writes
-each to `check-output/<id>.stdout` and `.stderr` as it reads it. Finishing reads that file,
-the tails of those two and the exit status, so any host on the state directory could
-finish a check that has exited. They go with its record, `running-checks/<id>.json`.
+and stderr through pipes, as they arrive, for its log and a watching client, and keeps the
+last 16 KiB of each, which it writes to `check-output/<id>.stdout` and `.stderr` once that
+stream ends. The host that ran it finishes it from what it kept; another host on the state
+directory could finish it from those files, and one that could not be written leaves none.
+They go with its record, `running-checks/<id>.json`.
 
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no
