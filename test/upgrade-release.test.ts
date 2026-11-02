@@ -371,13 +371,12 @@ const carryHc = (build: string) =>
       `#!/bin/sh\n# hc build ${build}\nprintf '%s\\n' "$*" >> "${rig.root}/hc-calls"\nif [ "$1" = update ] && [ "$2" = --from ]; then sed -n 2p "$3" >> "${rig.root}/hc-calls"; fi\n`,
     );
     yield* (yield* FileSystem.FileSystem).makeDirectory(`${tree}/hc`, { recursive: true });
-    const made = Bun.spawnSync(
-      ["sh", "-c", `chmod 755 herdr-core && tar -czf "${tree}/hc/herdr-core.tar.gz" herdr-core`],
-      {
-        cwd: staged,
-      },
+    const made = yield* shell(
+      "sh",
+      ["-c", `chmod 755 herdr-core && tar -czf "${tree}/hc/herdr-core.tar.gz" herdr-core`],
+      staged,
     );
-    expect(made.exitCode).toBe(0);
+    expect(made.code).toBe(0);
   });
 
 /** `place`, with a PATH that has no hc on it: the human's own `hc` is never the rig's. */
