@@ -19,6 +19,7 @@ import { Stream } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's file info has no ctime.
 import { lstat } from "node:fs/promises";
 import { CheckProcesses, type CheckOf } from "./check-processes";
+import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
 import { appendJournal, readJournal } from "./journal";
@@ -33,8 +34,7 @@ export const FINGERPRINT_MAX_BYTES = 50 * 1024 * 1024;
 /** How much of each stream is kept: enough to see what failed, not a transcript. */
 const TAIL_BYTES = 4 * 1024;
 
-/** How much of a check's output its log keeps; what comes after is cut, and the log says so. */
-export const LOG_BYTES = 8 * 1024 * 1024;
+export { LOG_BYTES } from "./check-supervisor";
 
 /**
  * A tree too large to fingerprint. Two of these are **not** equality: they say the same
@@ -454,6 +454,8 @@ export interface Echo {
   readonly stderr: (text: string) => Effect.Effect<void>;
   /** A line of verify's own about what it waits on, for its client and the Run's log. */
   readonly said?: (line: string) => Effect.Effect<void>;
+  /** The check's id once it runs, which a host that takes it over knows it by. */
+  readonly started?: (check: string) => Effect.Effect<void>;
 }
 
 export interface Collected {
@@ -501,22 +503,19 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   const began = yield* nowIso;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  let logged = 0;
+  let already = 0;
   if (what.log !== undefined) {
     yield* fs.makeDirectory(path.dirname(what.log), { recursive: true }).pipe(Effect.orDie);
     yield* fs.writeFileString(what.log, "").pipe(Effect.orDie);
   }
   /** One chunk into the log, in the order the two streams delivered them. */
   const toLog = (chunk: string): Effect.Effect<void> => {
-    if (what.log === undefined || logged > LOG_BYTES) return Effect.void;
-    const bytes = Buffer.byteLength(chunk, "utf8");
-    const room = LOG_BYTES - logged;
-    logged += bytes;
-    const text =
-      bytes <= room
-        ? chunk
-        : `${Buffer.from(chunk, "utf8").subarray(0, room).toString("utf8")}\n[collie: the output was cut at ${LOG_BYTES} bytes; the rest was not kept]\n`;
-    return fs.writeFileString(what.log, text, { flag: "a" }).pipe(Effect.ignore);
+    if (what.log === undefined || handle.logged) return Effect.void;
+    const next = logged(chunk, already);
+    already = next.logged;
+    return next.text === ""
+      ? Effect.void
+      : fs.writeFileString(what.log, next.text, { flag: "a" }).pipe(Effect.ignore);
   };
   const atStep = yield* CurrentStep;
   const step = what.step === undefined ? atStep : { step: what.step, place: what.place ?? null };
@@ -557,6 +556,7 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
       ),
     );
   if (handle.id === null) return yield* Effect.never;
+  if (echo?.started !== undefined) yield* echo.started(handle.id);
   if (handle.pid !== null && echo?.said !== undefined)
     yield* echo.said(`"${what.name}" started, pid ${handle.pid}`);
   // Never folded whole: only each stream's end is kept, and a verification that prints for

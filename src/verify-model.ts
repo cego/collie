@@ -76,6 +76,8 @@ export const VerificationSchema = Schema.Struct({
 });
 export type Verification = typeof VerificationSchema.Type;
 export const VerifyEvent = Schema.Union([
+  /** The check now running, by the id a host that takes it over knows it by. */
+  Schema.TaggedStruct("Started", { check: Schema.String }),
   Schema.TaggedStruct("Output", {
     stream: Schema.Literals(["stdout", "stderr"]),
     text: Schema.String,

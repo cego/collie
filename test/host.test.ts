@@ -26,18 +26,19 @@ import {
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { connect, outputOf, ownerOf, restartHost } from "../src/host";
+import { connect, followVerify, outputOf, ownerOf, restartHost } from "../src/host";
 import {
   CHECK_ID,
   CHECK_INSTALLATION,
   encodeCheckRecord,
+  KILL_CEILING,
   runningChecksDir,
   type CheckRecord,
 } from "../src/check-processes";
 import { evidenceDir } from "../src/engine";
 import { restartHostAt } from "../src/lifecycle";
 import { signalProcess } from "../src/lock";
-import { startedOf, stillRunning } from "../src/processes";
+import { groupOf, startedOf, stillRunning } from "../src/processes";
 import { readVerifications, verifyingIn } from "../src/verify";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
@@ -730,13 +731,32 @@ const endsWithAHeldCheck = <R>(
 ) =>
   Effect.gen(function* () {
     const { state, runId, who, check, notes, project } = yield* runsAHeldCheck(watch);
+    const began = yield* Clock.currentTimeMillis;
     yield* end({ state, pid: who.pid });
     yield* until(
       () => signalProcess(who.pid),
       (alive) => !alive,
     );
     const running = yield* Effect.forEach(check, stillRunning);
-    return { state, runId, running, check, notes, project, host: who.pid };
+    // A host exits once its checks are gone, so its exit bounds theirs.
+    const ended = running.includes(true)
+      ? Option.none<Duration.Duration>()
+      : Option.some(Duration.millis((yield* Clock.currentTimeMillis) - began));
+    return { state, runId, running, ended, check, notes, project, host: who.pid };
+  });
+
+/**
+ * Within the stop grace, with the last look its SIGKILL may take, a second for the poll that
+ * saw it, and `seen`, how long the end took to be noticed.
+ */
+const withinTheGrace = (ended: Option.Option<Duration.Duration>, seen = Duration.zero) =>
+  Effect.gen(function* () {
+    const grace = yield* Config.Duration("COLLIE_HOST_STOP_GRACE");
+    const bound = Duration.sum(
+      Duration.sum(grace, KILL_CEILING),
+      Duration.sum(Duration.seconds(1), seen),
+    );
+    return Option.exists(ended, (took) => Duration.isLessThanOrEqualTo(took, bound));
   });
 
 test.skipIf(process.platform !== "linux")(
@@ -745,11 +765,12 @@ test.skipIf(process.platform !== "linux")(
     proves(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const { state, runId, running } = yield* endsWithAHeldCheck("", ({ pid }) =>
+        const { state, runId, running, ended } = yield* endsWithAHeldCheck("", ({ pid }) =>
           Effect.asVoid(signalProcess(pid, "SIGTERM")),
         );
         expect(yield* ownerOf(state)).toBeNull();
         expect(running).toEqual([false, false]);
+        expect(yield* withinTheGrace(ended)).toBe(true);
         const recorded = yield* readVerifications(evidenceDir(state, runId)).pipe(
           Effect.orElseSucceed(() => []),
         );
@@ -881,11 +902,20 @@ test.skipIf(process.platform !== "linux")(
       Effect.gen(function* () {
         const removed = yield* endsWithAHeldCheck("", ({ state }) =>
           FileSystem.FileSystem.pipe(
-            Effect.flatMap((fs) => fs.rename(state, `${state}.gone`)),
+            // An empty one put back in its place is where the host's last lines land.
+            Effect.flatMap((fs) =>
+              fs.rename(state, `${state}.gone`).pipe(Effect.andThen(fs.makeDirectory(state))),
+            ),
             Effect.orDie,
           ),
         );
         expect(removed.running).toEqual([false, false]);
+        // A host looks for its lock each second.
+        expect(yield* withinTheGrace(removed.ended, Duration.seconds(1))).toBe(true);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${removed.state}/host.log`)).toContain(
+          `ended check held of ${removed.runId}`,
+        );
 
         const outlived = yield* watchable;
         const watched = yield* endsWithAHeldCheck(String(outlived.pid), () => outlived.kill);
@@ -987,19 +1017,250 @@ test.skipIf(process.platform !== "linux")(
         const { state, runId, notes } = restarted;
         yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
         expect(restarted.running).toEqual([false, false]);
+        expect(yield* withinTheGrace(restarted.ended)).toBe(true);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${state}/host.log`)).toContain(
+          `ended check held of ${runId}`,
+        );
 
         const [, rerun] = yield* until(
           () => notedIn(notes, "starts"),
           (pids) => pids.length === 2,
         );
-        // The host records a check only once it has spawned it and read its leader.
+        // The host records a check only once it has spawned it and read its leader, the
+        // supervisor whose group the check's command runs in.
+        const group = (yield* groupOf(Number(rerun))) ?? 0;
         const leaders = yield* until(
           () => recordedLeaders(state),
-          (pids) => pids.includes(Number(rerun)),
+          (pids) => pids.includes(group),
         );
-        expect(leaders).toEqual([Number(rerun)]);
+        expect(leaders).toEqual([group]);
         expect(yield* notedIn(notes, "overlaps")).toEqual([]);
         expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+/** A build older than this one, which a host started with `COLLIE_TEST_BUILD` says it is. */
+const OLDER = "0.0.1";
+const handedCheck = `${root}test/fixtures/checks/handed.sh`;
+
+/**
+ * The `handed` check running for a Run on a host of an older build, with the check's
+ * process, and how long that host took to start and answer.
+ */
+const runsOnAnOlderHost = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const { wf, project, state } = yield* workspace("collie-host-handover-");
+  yield* fs.copyFile(`${fixtures}/checking.workflow.ts`, `${wf}/checking.workflow.ts`);
+  const notes = `${project}-notes`;
+  yield* fs.makeDirectory(notes);
+  yield* fs.writeFileString(
+    `${project}/.collie/verify.json`,
+    yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(VerifySpecSchema)))([
+      { name: "handed", executable: handedCheck, argv: [notes], cwd: "." },
+    ]).pipe(Effect.orDie),
+  );
+  for (const args of [
+    ["init", "-q"],
+    ["-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A"],
+    ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "first"],
+  ])
+    yield* exec(["git", ...args], { cwd: project });
+  yield* Effect.addFinalizer(() => fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore));
+  const began = yield* Clock.currentTimeMillis;
+  const { old, runId, started } = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const client = yield* connect(state, {
+        build: OLDER,
+        hostEnv: { COLLIE_TEST_BUILD: OLDER },
+      });
+      const old = yield* client.identity();
+      const started = Duration.millis((yield* Clock.currentTimeMillis) - began);
+      const run = yield* client.start({
+        project,
+        id: "checking",
+        request: "req-1",
+        input: { check: "handed", cwd: project },
+      });
+      return { old, runId: run.runId, started };
+    }),
+  ).pipe(Effect.orDie);
+  yield* Effect.addFinalizer(() => signalProcess(old.pid, "SIGKILL"));
+  yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
+  const [pid] = yield* until(
+    () => notedIn(notes, "starts"),
+    (pids) => pids.length === 1,
+  );
+  const check = { pid: Number(pid), started: (yield* startedOf(Number(pid))) ?? "" };
+  yield* recordedChecks(state, 1);
+  return { state, notes, runId, old, check, started };
+});
+
+/** What the Run recorded of the `handed` check once it was let go and its Run completed. */
+const handedRecorded = (state: string, runId: string, notes: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const client = yield* connect(state);
+      yield* fs.writeFileString(`${notes}/release`, "");
+      yield* until(
+        () => client.status({ runId }),
+        (status) => status.status === "complete",
+      );
+      const recorded = yield* readVerifications(evidenceDir(state, runId));
+      return {
+        recorded: Arr.filter(recorded, (one) => one.name === "handed"),
+        runs: yield* notedIn(notes, "count"),
+        log: yield* fs.readFileString(`${state}/host.log`),
+      };
+    }),
+  ).pipe(Effect.orDie);
+
+const takesOverTheCheck = (
+  replace: (
+    state: string,
+  ) => Effect.Effect<
+    unknown,
+    never,
+    FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+  >,
+) =>
+  proves(
+    Effect.gen(function* () {
+      const { state, notes, runId, old, check, started } = yield* runsOnAnOlderHost;
+      const grace = yield* Config.Duration("COLLIE_HOST_STOP_GRACE");
+      const began = yield* Clock.currentTimeMillis;
+      yield* replace(state);
+      const took = Duration.millis((yield* Clock.currentTimeMillis) - began);
+
+      expect(yield* signalProcess(old.pid)).toBe(false);
+      expect(yield* stillRunning(check)).toBe(true);
+      // The old host's stop, its kill ceiling and a host's start, as on a replacement before.
+      expect(
+        Duration.isLessThanOrEqualTo(
+          took,
+          Duration.sum(
+            Duration.sum(grace, KILL_CEILING),
+            Duration.sum(started, Duration.seconds(2)),
+          ),
+        ),
+      ).toBe(true);
+
+      const { recorded, runs, log } = yield* handedRecorded(state, runId, notes);
+      expect(runs).toHaveLength(1);
+      expect(yield* notedIn(notes, "starts")).toEqual([String(check.pid)]);
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).toMatchObject({
+        exit: 3,
+        tail: { stdout: "out\ndone\n", stderr: "err\n" },
+      });
+      expect(log).not.toContain(`ended check handed of ${runId}`);
+    }),
+  );
+
+test.skipIf(process.platform !== "linux")(
+  "a newer client takes the host over without ending its check, which is recorded once with what it produced",
+  () =>
+    takesOverTheCheck((state) =>
+      Effect.scoped(connect(state).pipe(Effect.flatMap((client) => client.identity()))).pipe(
+        Effect.orDie,
+      ),
+    ),
+  120_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a restart onto a newer build hands over the check, which is recorded once with what it produced",
+  () => takesOverTheCheck((state) => restartHost(state).pipe(Effect.orDie)),
+  120_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "an agent's verify waiting on a host a newer client replaces returns its check's result, run once",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { project, state } = yield* workspace("collie-host-verify-follow-");
+        const notes = `${project}-notes`;
+        yield* fs.makeDirectory(notes);
+        yield* Effect.addFinalizer(() =>
+          fs.writeFileString(`${notes}/release`, "").pipe(Effect.ignore),
+        );
+        yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
+        const older = yield* connect(state, {
+          build: OLDER,
+          hostEnv: { COLLIE_TEST_BUILD: OLDER },
+        }).pipe(Effect.orDie);
+        const { runId } = yield* older
+          .start({ project, id: "stubborn", request: "req-1", input: { marker: `${notes}/m` } })
+          .pipe(Effect.orDie);
+        const events = followVerify(
+          state,
+          older.verify({
+            runId,
+            name: "handed",
+            executable: handedCheck,
+            argv: [notes],
+            cwd: project,
+            expect: "pass",
+          }),
+          () => Effect.void,
+        );
+        const verifying = yield* events.pipe(Stream.runCollect, Effect.forkScoped);
+        yield* until(
+          () => notedIn(notes, "starts"),
+          (pids) => pids.length === 1,
+        );
+
+        yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        yield* fs.writeFileString(`${notes}/release`, "");
+        const got = yield* Fiber.join(verifying).pipe(Effect.timeout("60 seconds"), Effect.orDie);
+        const result = Arr.findLast(got, (event) => event._tag === "Result");
+        expect(Option.getOrUndefined(result)).toMatchObject({
+          verification: {
+            name: "handed",
+            exit: 3,
+            tail: { stdout: "out\ndone\n", stderr: "err\n" },
+          },
+        });
+        expect(yield* notedIn(notes, "count")).toHaveLength(1);
+        const recorded = yield* readVerifications(evidenceDir(state, runId));
+        expect(Arr.filter(recorded, (one) => one.name === "handed")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a check an older host left when it was killed is ended by the newer host rather than taken over",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { state, runId, old, check } = yield* runsOnAnOlderHost;
+        yield* signalProcess(old.pid, "SIGKILL");
+        yield* until(
+          () => signalProcess(old.pid),
+          (alive) => !alive,
+        );
+
+        yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        const said = `check handed (pass gate) of ${runId}, left running by host ${old.pid} `;
+        yield* until(
+          () =>
+            fs
+              .readFileString(`${state}/runs/${runId}/log.txt`)
+              .pipe(Effect.orElseSucceed(() => "")),
+          (log) => pipe_(log, Str.includes(said)),
+        );
+        expect(yield* stillRunning(check)).toBe(false);
       }),
     ),
   120_000,
