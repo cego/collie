@@ -19,8 +19,8 @@ the script; a tampered, unsigned or non-program download is refused before anyth
 `~/.collie` changes. The runner then places the release it carries into
 [the Collie directory](#the-collie-directory), `~/.collie` or `COLLIE_DIR`, through the same
 path as `collie upgrade`, so a [clone install](#a-clone-install) there is migrated. The
-release carries the [`hc`](cli.md#checking-an-installation) that `hc-pin.json` pins, which
-placing it puts where upstream's installer would: `~/.local/bin/herdr-core` (or
+release carries the [`hc`](cli.md#checking-an-installation) that `hc-pin.json` pins, the
+oldest Collie works with, which placing it puts where upstream's installer would: `~/.local/bin/herdr-core` (or
 `HC_INSTALL_DIR`), with `hc` beside it unless an `hc` is already on PATH. Then
 `setup.sh` does its own work — configure Claude Code's status line unless you have one of
 your own. It writes nothing to herdr's config: the board and chat are terminals the host
@@ -97,7 +97,8 @@ against Collie's release key and places its release into `~/.collie/release/`
 through). Either way it then runs the same `prepare.sh` steps and reports what each of them did.
 A release that carries another pin of `hc` than the last one placed swaps it with
 `herdr-core update --from` the carried binary, which restarts core and leaves its running
-terminals alone; one with the same pin leaves `hc` alone. An update that failed is tried
+terminals alone, unless the installed `hc` is already at or past the carried version: that
+one is never downgraded. One with the same pin leaves `hc` alone. An update that failed is tried
 again by the next upgrade, whatever pin it carries. Collie never runs `hc update`
 without `--from`, or `hc machine update`. A paired Machine upgraded to this release gets its
 `hc` the same way. A pull it cannot do is reported
