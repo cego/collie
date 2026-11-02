@@ -54,6 +54,24 @@ export type RunRow = typeof Run.Type;
 
 const RUN_FIELDS = Struct.keys(Run.fields);
 
+/** The Run's Task's rows, their parents and children, and every Run another asked for. */
+const nearOf = (rows: ReadonlyArray<RunRow>, run: string) => {
+  const self = rows.find((row) => row.run === run);
+  const own = Arr.filter(rows, (row) =>
+    self?.task == null ? row === self : row.task === self.task,
+  );
+  const runs = new Set(Arr.map(own, (row) => row.run));
+  const parents = new Set(Arr.map(own, (row) => row.parent));
+  return Arr.filter(
+    rows,
+    (row) =>
+      runs.has(row.run) ||
+      parents.has(row.run) ||
+      (row.parent !== null && runs.has(row.parent)) ||
+      /requestedby/i.test(row.placing ?? ""),
+  );
+};
+
 /** Whether two reads of a Run's row read the same. */
 export const sameRow = (one: RunRow, other: RunRow) =>
   one === other || RUN_FIELDS.every((field) => one[field] === other[field]);
@@ -341,23 +359,6 @@ function makeStore(): Effect.Effect<
       execute: () => sql`SELECT ${columns} FROM collie_runs ORDER BY admitted, run`,
     });
 
-    const nearRun = SqlSchema.findAll({
-      Request: Schema.String,
-      Result: Run,
-      execute: (run) => sql`
-        WITH own AS (
-          SELECT other.run, other.parent FROM collie_runs other, collie_runs self
-          WHERE self.run = ${run}
-            AND (other.task = self.task OR (self.task IS NULL AND other.run = self.run))
-        )
-        SELECT ${columns} FROM collie_runs
-        WHERE run IN (SELECT run FROM own)
-          OR run IN (SELECT parent FROM own)
-          OR parent IN (SELECT run FROM own)
-          OR placing LIKE '%requestedBy%'
-      `,
-    });
-
     const unaccepted = SqlSchema.findAll({
       Request: Schema.Void,
       Result: Run,
@@ -559,7 +560,7 @@ function makeStore(): Effect.Effect<
         ).pipe(Effect.catchTag("SqlError", Effect.die)),
       pending: unaccepted().pipe(Effect.orDie),
       runs: all,
-      near: (run: string) => nearRun(run).pipe(Effect.orDie),
+      near: (run: string) => Effect.map(all, (rows) => nearOf(rows, run)),
       run: (run: string) =>
         byRun(run).pipe(
           Effect.map((rows) => rows[0] ?? null),

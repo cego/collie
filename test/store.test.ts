@@ -261,6 +261,21 @@ test("a Run's near rows are its Task's, their parents and children, and the Runs
     }),
   ));
 
+test("a Run's near rows, with nothing written, are the rows read before", () =>
+  onStore(
+    "collie-store-near-kept-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-lead", "lead", {}, { task: "t1" }));
+      yield* store.admit(admission("req-follow", "follow", {}, { task: "t1" }));
+      const every = yield* store.runs;
+
+      const near = yield* store.near("lead");
+      expect(near.length).toBe(2);
+      for (const row of near) expect(every).toContain(row);
+    }),
+  ));
+
 test("Runs read again with nothing written are the rows read before, and a write renews only its Run's", () =>
   onStore(
     "collie-store-kept-rows-",

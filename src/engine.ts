@@ -8223,16 +8223,13 @@ const makeRegistry: (
       read?: FileSystem.FileSystem,
       kept?: KeptViews,
     ) =>
-      Effect.all([
-        store.near(runId),
-        Effect.forEach(also, store.run, { concurrency: "unbounded" }),
-      ]).pipe(
-        Effect.map(([near, named]) => [
+      Effect.all([store.near(runId), store.runs]).pipe(
+        Effect.map(([near, every]) => [
           ...new Map(
-            Arr.map(
-              [...near, ...Arr.filter(named, (row): row is RunRow => row !== null)],
-              (row) => [row.run, row],
-            ),
+            Arr.map([...near, ...Arr.filter(every, (row) => also.includes(row.run))], (row) => [
+              row.run,
+              row,
+            ]),
           ).values(),
         ]),
         Effect.flatMap((rows) => {
