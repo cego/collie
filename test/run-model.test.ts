@@ -159,6 +159,25 @@ test("revisions grow within an epoch, per Run, and a Task's is the highest of it
     }),
   ));
 
+test("a record that moves while its Runs do not moves its Run, under any of its keys", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const model = yield* makeRunModel(dir, "installation");
+      yield* model.observe([runFacts({ id: "r1", task: "t1", dir: `${dir}/runs/r1` })]);
+      const tailed = "r1 with its tail";
+      const before = model.stampRecord(tailed, "r1", ["r1"], "merge request open");
+      const after = model.stampRecord(tailed, "r1", ["r1"], "merge request merged");
+      expect(after.seq).toBeGreaterThan(before.seq);
+      expect(model.revision("r1").seq).toBe(after.seq);
+      // Another view of the same record is at the Run's revision too.
+      expect(model.stampRecord("r1 without", "r1", ["r1"], "merge request merged").seq).toBe(
+        after.seq,
+      );
+    }),
+  ));
+
 test("the model indexes Runs by Task, parent, requester and plan", () =>
   runEffect(
     Effect.gen(function* () {

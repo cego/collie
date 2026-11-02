@@ -201,7 +201,7 @@ export const recordFrames = (
         }
         return {
           ...detail,
-          revision: model.stampRecord(stampKey, base.ids, fingerprint(detail)),
+          revision: model.stampRecord(stampKey, key.runId, base.ids, fingerprint(detail)),
         };
       });
       const unsent = (detail: RunDetail | null) => {
@@ -258,7 +258,7 @@ export const recordFrames = (
             Stream.map((detail): RunDetail => {
               if (detail.pending?.length !== 0) return detail;
               const { pending: _, revision: __, ...done } = detail;
-              const revision = model.stampRecord(stampKey, base.ids, fingerprint(done));
+              const revision = model.stampRecord(stampKey, key.runId, base.ids, fingerprint(done));
               unsent(done);
               return { ...done, revision, pending: [] };
             }),

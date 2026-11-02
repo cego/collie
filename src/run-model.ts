@@ -255,11 +255,16 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
    * A Run's record at the highest revision of the Runs it reads. A record that moved while
    * none of them did, as one an agent or a merge request moves does, moves its own Run.
    */
-  const stampRecord = (run: string, runs: ReadonlyArray<string>, text: string): RunRevision => {
-    const was = records.get(run);
-    if (was !== undefined && was.text !== text && highest(runs) === was.seq) touch(run);
-    const seq = highest(runs);
-    records.set(run, { text, seq });
+  const stampRecord = (
+    key: string,
+    run: string,
+    runs: ReadonlyArray<string>,
+    text: string,
+  ): RunRevision => {
+    const was = records.get(key);
+    if (was !== undefined && was.text !== text && highest([run, ...runs]) === was.seq) touch(run);
+    const seq = highest([run, ...runs]);
+    records.set(key, { text, seq });
     return { epoch, seq };
   };
 
