@@ -3,19 +3,9 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import {
-  Cache,
-  Context,
-  Effect,
-  FileSystem,
-  Layer,
-  PubSub,
-  Result,
-  Schema,
-  Stream,
-  flow,
-} from "effect";
+import { Context, Effect, FileSystem, Layer, PubSub, Result, Schema, Stream, flow } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as PlatformError from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/process";
 import type { RunRevision, TaskView } from "./board-model";
 import { readBranchHead } from "./board";
@@ -47,6 +37,53 @@ const keysOf = (run: RunFacts) => {
     byRequester: run.requestedBy?.run ?? null,
     byPlan: work?.kind === "plan-dir" ? work.value : null,
   };
+};
+
+/**
+ * Reads by key, up to `capacity`, the oldest dropped first. A failure is kept as its reason's
+ * data and made again when read: an Error held makes every collection of the heap slower.
+ */
+const kept = <A>(
+  capacity: number,
+  generation: () => number,
+  lookup: (key: string) => Effect.Effect<A, PlatformError.PlatformError>,
+) => {
+  type Read =
+    | { readonly value: A }
+    | { readonly failed: Parameters<typeof PlatformError.systemError>[0] };
+  const reads = new Map<string, Read>();
+  return (key: string): Effect.Effect<A, PlatformError.PlatformError> =>
+    Effect.suspend(() => {
+      const hit = reads.get(key);
+      if (hit !== undefined)
+        return "value" in hit
+          ? Effect.succeed(hit.value)
+          : Effect.fail(PlatformError.systemError(hit.failed));
+      const at = generation();
+      const keep = (read: Read) =>
+        Effect.sync(() => {
+          if (at !== generation()) return;
+          if (reads.size >= capacity) reads.delete(reads.keys().next().value!);
+          reads.set(key, read);
+        });
+      return lookup(key).pipe(
+        Effect.tap((value) => keep({ value })),
+        Effect.tapError(({ reason }) =>
+          reason._tag === "BadArgument"
+            ? Effect.void
+            : keep({
+                failed: {
+                  _tag: reason._tag,
+                  module: reason.module,
+                  method: reason.method,
+                  description: reason.description,
+                  syscall: reason.syscall,
+                  pathOrDescriptor: reason.pathOrDescriptor,
+                },
+              }),
+        ),
+      );
+    });
 };
 
 export const makeRunModel = Effect.fn("RunModel.make")(function* (
@@ -90,26 +127,31 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       ? `run/${controlled}`
       : "shared";
   };
-  const groups = yield* Cache.make({
-    capacity: 4_096,
-    lookup: (group: string) =>
-      Effect.gen(function* () {
-        // Every Task's record is shared, so the shared group holds a file per Task.
-        const capacity = group === "shared" ? 65_536 : 1_024;
-        const memo = <A, E>(lookup: (path: string) => Effect.Effect<A, E>) =>
-          Cache.make({ capacity, lookup });
-        return {
-          text: yield* memo(fs.readFileString),
-          names: yield* memo((key: string) =>
-            Str.endsWith(RECURSIVE)(key)
-              ? fs.readDirectory(Str.slice(0, -RECURSIVE.length)(key), { recursive: true })
-              : fs.readDirectory(key),
-          ),
-          exists: yield* memo(fs.exists),
-          stat: yield* memo(fs.stat),
-        };
-      }),
-  });
+  /** Each group's reads, built when the group is first read. */
+  const groups = new Map<string, ReturnType<typeof readsOf>>();
+  const readsOf = (group: string) => {
+    // Every Task's record is shared, so the shared group holds a file per Task.
+    const capacity = group === "shared" ? 65_536 : 1_024;
+    const memo = <A>(lookup: (key: string) => Effect.Effect<A, PlatformError.PlatformError>) =>
+      kept(capacity, () => generation, lookup);
+    return {
+      text: memo(fs.readFileString),
+      names: memo((key: string) =>
+        Str.endsWith(RECURSIVE)(key)
+          ? fs.readDirectory(Str.slice(0, -RECURSIVE.length)(key), { recursive: true })
+          : fs.readDirectory(key),
+      ),
+      exists: memo(fs.exists),
+      stat: memo(fs.stat),
+    };
+  };
+  const groupReads = (group: string) => {
+    const found = groups.get(group);
+    if (found !== undefined) return found;
+    const made = readsOf(group);
+    groups.set(group, made);
+    return made;
+  };
   const invalidate = (path: string) =>
     Effect.gen(function* () {
       const group = path === dir ? "shared" : groupOf(path);
@@ -117,11 +159,11 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       generation++;
       const below = Str.slice(dir.length + 1)(path);
       if (path === dir || below === "runs" || below === "agents" || below === "evidence") {
-        yield* Cache.invalidateAll(groups);
+        groups.clear();
         for (const run of revisions.keys()) touch(run);
         return;
       }
-      yield* Cache.invalidate(groups, group);
+      groups.delete(group);
       if (group === "shared") {
         // A Task's record is its Runs' as much as their own files are.
         const [top, name] = Str.split(below, "/");
@@ -132,24 +174,24 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const run = Str.slice(4)(group);
       touch(run);
       // A Run's directory or control file coming or going changes the listing above it.
-      if (Str.split(below, "/").length <= 2) yield* Cache.invalidate(groups, "shared");
+      if (Str.split(below, "/").length <= 2) groups.delete("shared");
     });
   const disable = Effect.gen(function* () {
     enabled = false;
     generation++;
-    yield* Cache.invalidateAll(groups);
+    groups.clear();
   });
   const read = <A, E>(
     path: string,
     direct: Effect.Effect<A, E>,
-    cached: (group: Effect.Success<ReturnType<typeof groups.lookup>>) => Effect.Effect<A, E>,
+    cached: (group: ReturnType<typeof readsOf>) => Effect.Effect<A, E>,
   ) =>
     Effect.gen(function* () {
       const group = groupOf(path);
       if (!enabled || group === null) return yield* direct;
       for (;;) {
         const before = generation;
-        const found = yield* cached(yield* Cache.get(groups, group)).pipe(Effect.result);
+        const found = yield* cached(groupReads(group)).pipe(Effect.result);
         if (before === generation) return yield* Effect.fromResult(found);
         if (!enabled) return yield* direct;
       }
@@ -183,14 +225,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     ...writing,
     readFileString: (path, encoding) =>
       encoding === undefined
-        ? read(path, fs.readFileString(path), (group) => Cache.get(group.text, path))
+        ? read(path, fs.readFileString(path), (group) => group.text(path))
         : fs.readFileString(path, encoding),
     readDirectory: (path, options) => {
       const key = options?.recursive === true ? `${path}${RECURSIVE}` : path;
-      return read(path, fs.readDirectory(path, options), (group) => Cache.get(group.names, key));
+      return read(path, fs.readDirectory(path, options), (group) => group.names(key));
     },
-    exists: (path) => read(path, fs.exists(path), (group) => Cache.get(group.exists, path)),
-    stat: (path) => read(path, fs.stat(path), (group) => Cache.get(group.stat, path)),
+    exists: (path) => read(path, fs.exists(path), (group) => group.exists(path)),
+    stat: (path) => read(path, fs.stat(path), (group) => group.stat(path)),
   };
 
   const index = (run: string, next: ReturnType<typeof keysOf> | undefined) => {

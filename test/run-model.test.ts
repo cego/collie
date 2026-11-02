@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
+import { heapStats } from "bun:jsc";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { TaskView } from "../src/board-model";
@@ -114,6 +115,33 @@ test(
     ),
   60_000,
 );
+
+test("files the model keeps as missing read as missing, and keep no Error alive", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const model = yield* makeRunModel(dir, "installation");
+      yield* model.observe([runFacts({ id: "r1", task: "t1", dir: `${dir}/runs/r1` })]);
+      const missing = (n: number) =>
+        model.reading.readFileString(`${dir}/runs/r1/missing-${n}.md`).pipe(
+          Effect.flip,
+          Effect.map((error) => error.reason._tag),
+        );
+      const errors = () => {
+        Bun.gc(true);
+        return heapStats().objectTypeCounts["Error"] ?? 0;
+      };
+      yield* missing(-1);
+      const before = errors();
+
+      const first = yield* Effect.forEach(Arr.range(0, 299), missing);
+      const again = yield* Effect.forEach(Arr.range(0, 299), missing);
+
+      expect(new Set([...first, ...again])).toEqual(new Set(["NotFound"]));
+      expect(errors() - before).toBeLessThan(100);
+    }),
+  ));
 
 test("revisions grow within an epoch, per Run, and a Task's is the highest of its Runs'", () =>
   runEffect(
