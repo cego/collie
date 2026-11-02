@@ -784,7 +784,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
       return { address: terminal.address, words, screen, until, settled, told };
     });
 
-  // The launch, and the session Collie records from it.
   const chosen = SecureRandom.uuidV4Unsafe();
   const server = name === "codex" ? yield* codexServer() : null;
   const first =
@@ -874,13 +873,13 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     pipe(shown, Str.includes(RECALLED)),
     `${name} to answer ${RECALLED}; it reported ${Arr.join(after.words, ", ")}:\n${shown}`,
   );
-  const now =
-    name === "codex"
-      ? yield* withCodex(again?.endpoint ?? "", (client) => boundThread(client, cwd))
-      : name === "opencode"
-        ? yield* fs.readFileString(sessionFile)
-        : recorded;
-  yield* expect(now === recorded, `${name} to be in session ${recorded}, not ${now}`);
+  if (name === "codex" || name === "opencode") {
+    const now =
+      name === "codex"
+        ? yield* withCodex(again?.endpoint ?? "", (client) => boundThread(client, cwd))
+        : yield* fs.readFileString(sessionFile);
+    yield* expect(now === recorded, `${name} to be in session ${recorded}, not ${now}`);
+  }
   // Claude and pi keep their own transcript of each session: the answer has to be in its.
   const store =
     name === "claude"
@@ -898,7 +897,7 @@ const resume = Effect.fn("HcProbe.resume")(function* (
       `${name}'s one transcript of session ${recorded} to hold ${RECALLED}: ${Arr.join(kept, ", ")}`,
     );
   }
-  yield* Console.error(`${name}: started again in session ${now}, answered ${RECALLED}`);
+  yield* Console.error(`${name}: started again in session ${recorded}, answered ${RECALLED}`);
   yield* (yield* connect(socket)).call("terminal.kill", { terminal: after.address });
   if (again?.pid !== undefined) yield* terminate(again.pid);
 });

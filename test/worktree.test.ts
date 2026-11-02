@@ -1597,7 +1597,6 @@ test("a branch with a slash in it nests, and never collides with the dashed name
     }),
   ));
 
-/** This Machine's config.json, holding `settings`. */
 const configured = (settings: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
