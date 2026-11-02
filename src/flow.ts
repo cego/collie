@@ -650,7 +650,11 @@ function undeclaredNodes(
   }
   for (const one of facts.questions) {
     if (askerOf(one.name) !== null || questionKey(one.name) !== undefined) continue;
-    const state: FlowState = one.open ? "needs-you" : "done";
+    const state: FlowState = one.open
+      ? "needs-you"
+      : one.answered == null && (run.state === "stopped" || run.state === "failed")
+        ? run.state
+        : "done";
     nodes.push({
       at: one.asked ?? "",
       node: {
