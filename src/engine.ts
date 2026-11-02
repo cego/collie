@@ -2820,8 +2820,8 @@ export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSy
 
 /**
  * The host's own stack: Bun's SQLite under Effect's single-node cluster under its
- * workflow engine. Two settings are not the defaults, and both would otherwise turn
- * recoverable work terminal — the reason each is here is in ADR-0014.
+ * workflow engine. Three settings are not the defaults; why each is here is in ADR-0014
+ * and ADR-draft-one-runner-holds-one-shard.
  */
 export function engineLayer(options: {
   readonly dir: string;
@@ -2849,6 +2849,8 @@ export function engineLayer(options: {
     // default marks them failed after a minute, which turns "the file is not there
     // yet" into a terminal result; waiting is what lets a repair recover the work.
     entityRegistrationTimeout: Duration.infinity,
+    // Each shard is a lock row taken, refreshed and released by the one runner there is.
+    shardsPerGroup: 1,
   };
   const polled =
     options.messagePoll === undefined
@@ -2865,7 +2867,7 @@ export function engineLayer(options: {
     ).pipe(
       Effect.map(([SingleRunner, ClusterWorkflowEngine]) => {
         const cluster = SingleRunner.layer({ shardingConfig: polled }).pipe(
-          Layer.provide([sql, Digest.layerWebCrypto]),
+          Layer.provide([oneShard.pipe(Layer.provideMerge(sql)), Digest.layerWebCrypto]),
         );
         // The message storage too: forgetting a Run clears what the engine kept of it.
         return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
@@ -2874,6 +2876,23 @@ export function engineLayer(options: {
   );
   return engine.pipe(Layer.provideMerge(sql));
 }
+
+/**
+ * Moves what an engine on upstream's 300 shards left onto the one shard this engine holds,
+ * before the cluster reads its storage: a message on any other shard is never read again.
+ */
+const oneShard = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const tables = yield* sql<{
+      readonly name: string;
+    }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('cluster_messages', 'cluster_locks')`;
+    for (const { name } of tables)
+      yield* name === "cluster_messages"
+        ? sql`UPDATE cluster_messages SET shard_id = 'default:1' WHERE shard_id <> 'default:1'`
+        : sql`DELETE FROM cluster_locks WHERE shard_id <> 'default:1'`;
+  }).pipe(Effect.orDie),
+);
 
 /** What the engine kept of one execution of a workflow registered under `name`, gone. */
 export const forgetExecution = (name: string, execution: string) =>

@@ -9,8 +9,14 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
+import { Duration, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
+import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
+import * as ClusterWorkflowEngine from "effect/cluster/ClusterWorkflowEngine";
+import * as SingleRunner from "effect/cluster/SingleRunner";
+import * as Digest from "effect/crypto/Digest";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import { engineLayer, loadEntry, TOOLCHAIN } from "../src/engine";
@@ -504,6 +510,60 @@ test("work for a workflow nobody has registered waits past upstream's deadline f
             (result) => Option.isSome(result) && result.value._tag === "Complete",
           ),
         ),
+      );
+      expect(Option.isSome(done) && done.value._tag === "Complete" && done.value.exit).toEqual(
+        Exit.succeed("recovered"),
+      );
+    }).pipe(Effect.scoped),
+  ));
+
+test("work an engine on upstream's 300 shards left waiting is finished by the one-shard engine", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-shards-" });
+      const patient = Workflow.make("patient", {
+        payload: { runId: Schema.String },
+        idempotencyKey: (payload) => payload.runId,
+        success: Schema.String,
+      });
+      const payload = { runId: "r1" };
+      const executionId = yield* patient.executionId(payload);
+      const sql = SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
+        Layer.provideMerge(Reactivity.layer),
+      );
+      // The engine a host ran before this one: upstream's sharding, nothing registered.
+      yield* patient.execute(payload, { discard: true }).pipe(
+        Effect.provide(
+          ClusterWorkflowEngine.layer.pipe(
+            Layer.provideMerge(
+              SingleRunner.layer({
+                shardingConfig: { entityRegistrationTimeout: Duration.infinity },
+              }),
+            ),
+            Layer.provide([sql, Digest.layerWebCrypto]),
+          ),
+        ),
+        Effect.scoped,
+        Effect.orDie,
+      );
+      const shards = yield* Effect.flatMap(
+        SqlClient.SqlClient,
+        (client) => client<{ shard_id: string }>`SELECT shard_id FROM cluster_messages`,
+      ).pipe(Effect.provide(sql), Effect.scoped, Effect.orDie);
+      expect(Arr.map(shards, (row) => row.shard_id)).not.toContain("default:1");
+
+      const done = yield* until(
+        () => patient.poll(executionId),
+        (result) => Option.isSome(result) && result.value._tag === "Complete",
+      ).pipe(
+        Effect.provide(
+          patient
+            .toLayer(() => Effect.succeed("recovered"))
+            .pipe(Layer.provideMerge(engineLayer({ dir }))),
+        ),
+        Effect.scoped,
+        Effect.orDie,
       );
       expect(Option.isSome(done) && done.value._tag === "Complete" && done.value.exit).toEqual(
         Exit.succeed("recovered"),

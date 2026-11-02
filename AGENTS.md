@@ -92,6 +92,7 @@ here are in [`src/README.md`](src/README.md).
   [ADR-draft-a-step-is-declared-where-its-work-is-written](docs/adr/draft-a-step-is-declared-where-its-work-is-written.md),
   `src/sdk.ts`, `src/steps.ts`, `src/flow.ts`, `src/flow-read.ts`, `src/output.ts`, `test/flow.test.ts`.
 - **Engine, loading, recovery** → [ADR-0014](docs/adr/0014-native-workflows-run-on-effects-own-engine.md),
+  its shard: [ADR-draft-one-runner-holds-one-shard](docs/adr/draft-one-runner-holds-one-shard.md),
   `src/engine.ts`, `test/engine.test.ts`.
 - **Naming, host tests** → [ADR-0028](docs/adr/0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md),
   `test/support/host.ts`.
