@@ -16,12 +16,14 @@ import * as Rec from "effect/Record";
 import {
   Context,
   Effect,
+  Exit,
   Layer,
   Option,
   Order,
   Schedule,
   type Scope,
   Schema,
+  Semaphore,
   Stream,
   flow,
   Result,
@@ -413,7 +415,8 @@ function makeStore(): Effect.Effect<
 
     let read: { readonly at: number; readonly rows: ReadonlyArray<RunRow> } | null = null;
     /** Every Run, read again only after a write, each unchanged row the one read before. */
-    const all = Effect.suspend(() => {
+    const refreshing = Semaphore.makeUnsafe(1);
+    const refresh = Effect.suspend(() => {
       if (read?.at === written) return Effect.succeed(read.rows);
       const at = written;
       const which = dirty;
@@ -445,8 +448,19 @@ function makeStore(): Effect.Effect<
           read = { at, rows };
           return rows;
         }),
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : Effect.sync(() => {
+                if (which === "all") dirty = "all";
+                else if (dirty !== "all") for (const run of which) dirty.add(run);
+              }),
+        ),
       );
     });
+    const all = Effect.suspend(() =>
+      read?.at === written ? Effect.succeed(read.rows) : refreshing.withPermit(refresh),
+    );
 
     return {
       remember: (generation: GenerationRow) =>

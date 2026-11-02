@@ -10,7 +10,7 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
-import { Effect, Fiber, FileSystem, Layer, Order, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Order, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { Store, storeLayer } from "../src/store";
 import { runEffect } from "./support/effect";
@@ -315,6 +315,46 @@ test("a write reads again only the rows of the Runs it wrote, and an announce no
       expect(after[0]).toBe(before[0]);
       expect(after[1]?.accepted).not.toBeNull();
       expect(Arr.map(after, (row) => row.run)).toEqual(["run-a", "run-b", "run-c"]);
+    }),
+  ));
+
+/** An accepted run-a whose next read of the Runs waits on the connection until `release`. */
+const waitingRead = Effect.gen(function* () {
+  const store = yield* Store;
+  const sql = yield* SqlClient.SqlClient;
+  yield* store.admit(admission("req-a", "run-a", { note: "a" }));
+  yield* store.runs;
+  yield* store.accepted("run-a");
+  const held = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  yield* sql
+    .withTransaction(Effect.andThen(Deferred.succeed(held, undefined), Deferred.await(release)))
+    .pipe(Effect.forkChild({ startImmediately: true }));
+  yield* Deferred.await(held);
+  const first = yield* store.runs.pipe(Effect.forkChild({ startImmediately: true }));
+  return { store, first, release: Deferred.succeed(release, undefined) };
+});
+
+test("a read of the Runs made while another is reading them again has the writes before it", () =>
+  onStore(
+    "collie-store-overlap-",
+    Effect.gen(function* () {
+      const { store, first, release } = yield* waitingRead;
+      const second = yield* store.runs.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* release;
+      expect((yield* Fiber.join(second))[0]?.accepted).not.toBeNull();
+      expect((yield* Fiber.join(first))[0]?.accepted).not.toBeNull();
+    }),
+  ));
+
+test("a read of the Runs interrupted while reading them again leaves the writes to the next", () =>
+  onStore(
+    "collie-store-interrupted-",
+    Effect.gen(function* () {
+      const { store, first, release } = yield* waitingRead;
+      yield* Fiber.interrupt(first);
+      yield* release;
+      expect((yield* store.runs)[0]?.accepted).not.toBeNull();
     }),
   ));
 
