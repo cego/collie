@@ -1435,7 +1435,6 @@ prerequisite rather than a preference.
 
 ```sh
 bun install
-(cd desktop && bun install)
 bun run check          # formatting, lint, types, then the full test suite
 bun run build          # bin/collie for this platform
 bun run smoke          # bin/collie answers --help and returns typed envelopes
@@ -1481,8 +1480,10 @@ The suite builds its SSH and Codex protocol fixtures with the runner and forward
 fixture. A focused source test builds each needed protocol fixture once under its
 isolated home. This keeps repeated process starts within their existing test budgets.
 
-Root tests import Desktop modules and libraries, so install both sets of dependencies
-before running root checks. CI installs both with `--frozen-lockfile` before its root gate.
+Root tests import Desktop modules and libraries, so the root `bun install` installs
+Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
+dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
+Desktop lockfile. CI relies on that one install before its root gate.
 Desktop's full typecheck, including its Vue views, runs separately with
 `cd desktop && bun run typecheck`; CI runs that as a job of its own.
 Desktop installs TypeScript twice. `@typescript/native` is TypeScript 7, the `tsc` that
