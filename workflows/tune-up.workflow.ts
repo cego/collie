@@ -1735,6 +1735,7 @@ export default defineWorkflow({
                 runId,
                 `final Measurement ${measurement.id} of ${measurement.candidate.head_sha} against ${mergeBase}: ${verdictsLine(measurement)}`,
               );
+            yield* archivedResults(archiving);
             return measurement;
           }),
         });

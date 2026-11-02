@@ -16944,6 +16944,14 @@ scenario(
   120_000,
 );
 
+/** The archive holds `final`, raw and with its intervals, though the change was dropped. */
+const archivedFinal = (runId: string, final: Measurement) =>
+  Effect.gen(function* () {
+    const archive = `${runDir(dir, runId)}/archive`;
+    expect(yield* readText(`${archive}/measurements.jsonl`)).toContain(final.id);
+    expect(yield* readText(`${archive}/README.md`)).toContain(`${final.id} (final)`);
+  });
+
 scenario(
   "a tune-up whose final Measurement is no-change once integrated drops back to its base tree, and completes with its findings and no merge request",
   () =>
@@ -16966,6 +16974,7 @@ scenario(
         expect(yield* checkoutTree()).toBe(final!.base.content);
         expect(said(result)).toContain("bench.count no-change, not a gain");
         expect(yield* readText(Str.split(said(result), ": ")[0]!)).toContain(final!.id);
+        yield* archivedFinal(runId, final!);
       }),
     ),
   120_000,
@@ -17395,6 +17404,8 @@ scenario(
         expect(yield* wasAsked(runId, "mr")).toBe(false);
         expect(said(result)).toContain("guardrail bench.size regression, not held");
         expect(yield* runLog(runId)).not.toContain("accepted tradeoff");
+        const [final] = yield* finals(runId);
+        yield* archivedFinal(runId, final!);
       }),
     ),
   180_000,
