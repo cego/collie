@@ -18,6 +18,7 @@ import { relayOf } from "../src/peers";
 import { RunMetrics } from "../src/run-record";
 import { recordAudit } from "../src/audit";
 import { writeTask } from "../src/task";
+import { seedIntent, writeIntent } from "../src/intent";
 import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
 import { collieCommand } from "./support/world";
@@ -306,7 +307,7 @@ test(
     world(({ state, collie, shownRun }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        for (const one of ["a", "b", "c", "d", "e", "p"])
+        for (const one of ["a", "b", "c", "d", "e", "f", "p"])
           yield* writeTask(state, task(`task-${one}`, `ws-${one}`));
         yield* fs.writeFileString(`${state}/host.db`, "");
         const here = yield* hostOf(socketOf(state), state, [
@@ -322,7 +323,14 @@ test(
           view("run-c", "task-c"),
           view("run-d", "task-d"),
           view("run-e", "task-e"),
+          view("run-f", "task-f"),
         ]);
+        // A goal given with --goal, or amended since, is in the Run's Intent, not its input.
+        yield* fs.makeDirectory(`${state}/runs/run-a`, { recursive: true });
+        yield* writeIntent(
+          `${state}/runs/run-a`,
+          seedIntent("run-a", { goal: "Find out why run-c and run-f failed" }),
+        );
         yield* recordAudit(`${state}/runs/run-a`, {
           operation: "deliver",
           request: "steer-1",
@@ -339,7 +347,7 @@ test(
         ] as const;
         const answers = yield* Effect.all(
           Arr.flatMap(doors, (door) =>
-            Arr.map(["run-b", "run-p", "run-c", "run-d", "run-e", "run-none"], (run) =>
+            Arr.map(["run-b", "run-p", "run-c", "run-d", "run-e", "run-f", "run-none"], (run) =>
               collie("ws-a", [...door, run], "run-a").pipe(
                 Effect.map((said) => ({ door, run, said })),
               ),

@@ -14,6 +14,7 @@ import { err, resolveWorkspace, type Failure } from "../operations";
 import { evidenceDir, runDir, type Given, type RunView } from "../engine";
 import { asks, asksRun } from "../lifecycle";
 import { readAudit, type AuditLine } from "../audit";
+import { readIntent } from "../intent";
 import { FrontDoor } from "../board-model";
 import { connect } from "../host";
 import { actorName } from "../proposals";
@@ -79,7 +80,7 @@ const textOf = (asked: Schema.Json | undefined) =>
     onSome: (said) => said.text,
   });
 
-/** Whether `caller`'s Run started `view`, or its inputs or a steer it received name it. */
+/** Whether `caller`'s Run started `view`, or its goal, inputs or a steer it received name it. */
 const callerReaches = Effect.fn("collie.callerReaches")(function* (
   env: PluginEnv,
   view: RunView,
@@ -89,6 +90,10 @@ const callerReaches = Effect.fn("collie.callerReaches")(function* (
   if (view.parent === caller || view.requestedBy?.run === caller) return true;
   const trail = yield* readAudit(runDir(env.stateDir, caller)).pipe(Effect.orElseSucceed(() => []));
   if (Arr.some(trail, (line) => steered(line, view.runId))) return true;
+  const intent = yield* readIntent(runDir(env.stateDir, caller)).pipe(
+    Effect.orElseSucceed(() => null),
+  );
+  if (pipe_(intent?.goal ?? "", Str.includes(view.runId))) return true;
   const own = yield* asks(env, (client) => client.run({ runId: caller }));
   if (!own.ok || own.value === null) return false;
   const inputs = yield* Schema.encodeEffect(UnknownJson)(own.value.input).pipe(

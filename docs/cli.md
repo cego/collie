@@ -527,7 +527,8 @@ Runs are scoped by Task, not by workspace. `collie run list` inside a task works
 that Task's local Runs and live peers' Runs; elsewhere it lists every reachable Run. A
 command that names a Run, typed in a task workspace, reaches that Task's Runs, every Run on
 another Machine, and, from an agent's pane, any Run its own Run started (as `parent` or
-`requestedBy`) or was asked about (its inputs, or a steer it received, name the Run's id).
+`requestedBy`) or was asked about (its goal, its inputs, or a steer it received, name the
+Run's id).
 Outside a task workspace every Run is reachable. Any other Run is `run_outside_task`, whose
 `details` name the Run's `task` and the `workspace` that reaches it; `--workspace <id>`
 picks that workspace.
