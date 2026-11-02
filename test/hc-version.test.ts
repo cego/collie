@@ -30,9 +30,18 @@ test("build metadata is ignored", () => {
   expect(hcMeets("hc 0.1.14+abc123", "0.1.14")).toBe(true);
 });
 
-test.each(["", "hc", "hc unknown", "hc 1.2", "hc v", "hc 0.1.x"])(
-  "output naming no version (%p) does not meet the minimum",
-  (said) => {
-    expect(hcMeets(said, "0.1.14")).toBe(false);
-  },
-);
+test.each([
+  "",
+  "hc",
+  "hc unknown",
+  "hc 1.2",
+  "hc v",
+  "hc 0.1.x",
+  "hc 0.1.15-rc..1",
+  "hc 0.1.15-01",
+  "hc 01.2.3",
+  "hc 0.1.15.4",
+  "hc 9999999999999999999999999.0.0",
+])("output naming no version (%p) does not meet the minimum", (said) => {
+  expect(hcMeets(said, "0.1.14")).toBe(false);
+});

@@ -3,16 +3,28 @@
 // beside it only where no `hc` exists. One already there older than the carried hc is swapped
 // with `hc update --from`, so its running terminals survive; one at or past it is left alone.
 
+import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Option, Path } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { answered, onPath } from "./doctor-check";
 import type { Runner } from "./mr";
 
-const SEMVER = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?/;
+const IDENTIFIER = String.raw`(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)`;
+/** semver.org's grammar, whole: major, minor, patch, optional prerelease and build. */
+const SEMVER = new RegExp(
+  String.raw`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-${IDENTIFIER}(?:\.${IDENTIFIER})*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`,
+);
 
-/** The semantic version hc's `--version` output names, or null. */
-export const hcVersion = (said: string): string | null => SEMVER.exec(said)?.[0] ?? null;
+/** The valid semantic version hc's `--version` output names as its first numeric word, or null. */
+export const hcVersion = (said: string): string | null => {
+  const word = Arr.findFirst(Str.split(said, /\s+/), (one) => /^\d/.test(one));
+  if (Option.isNone(word)) return null;
+  const parts = SEMVER.exec(word.value);
+  return parts !== null && Arr.every(parts.slice(1, 4), (n) => Number.isSafeInteger(Number(n)))
+    ? word.value
+    : null;
+};
 
 /**
  * Whether hc's `--version` output names a version at or above `min` by semver precedence,
