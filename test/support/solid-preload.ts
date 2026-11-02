@@ -1,6 +1,8 @@
 // Defer Babel's per-file startup cost until a file loads JSX or Solid.
 
 import { plugin, type OnLoadCallback, type PluginBuilder } from "bun";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 interface Handler {
   readonly filter: RegExp;
@@ -33,9 +35,9 @@ plugin({
     for (const filter of LOADS)
       build.onLoad({ filter }, (args) =>
         solid().then((found) => {
-          const handler = found.find((one) => one.filter.test(args.path));
-          if (handler === undefined) throw new Error(`no Solid transform loads ${args.path}`);
-          return handler.load(args);
+          const handler = Arr.findFirst(found, (one) => one.filter.test(args.path));
+          if (Option.isNone(handler)) throw new Error(`no Solid transform loads ${args.path}`);
+          return handler.value.load(args);
         }),
       );
   },
