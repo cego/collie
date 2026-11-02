@@ -526,7 +526,6 @@ test(
           const plan = planOf(harness, "bench.sh", ran);
           const runId = yield* asking(world, extra);
 
-          // Carrying the harness, the candidate is sampled in the checkout itself.
           expect((yield* measuring(world, extra, runId, base, plan, "cycle 1")).envelope.ok).toBe(
             true,
           );
@@ -537,7 +536,6 @@ test(
             Arr.filter(yield* linesOf(world, ran), (dir) => dir === world.project).length,
           ).toBe(3);
 
-          // Cleaned: the harness taken off the branch.
           yield* exec(["git", "rm", "-rq", "bench"], { cwd: world.project });
           const cleaned = yield* commit("cleanup");
           const status = () =>
@@ -576,27 +574,23 @@ test(
             Str.trim((yield* exec(["git", "rev-parse", "HEAD~1"], { cwd: scratch[0]! })).stdout),
           ).toBe(cleaned);
 
-          // The checkout is unchanged: same commit, nothing written, no harness.
           expect(
             Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout),
           ).toBe(cleaned);
           expect(yield* status()).toBe("");
           expect(yield* fs.exists(`${world.project}/bench`)).toBe(false);
 
-          // Uncommitted work cannot go into a scratch tree.
           yield* fs.writeFileString(`${world.project}/value`, "6\n").pipe(Effect.orDie);
           const dirty = yield* measuring(world, extra, runId, base, plan, "final");
           expect(dirty.envelope.ok).toBe(false);
           expect(dirty.envelope.error?.message).toContain("uncommitted");
           yield* exec(["git", "checkout", "--", "value"], { cwd: world.project });
 
-          // The same cleaned candidate under the same plan is the recorded Measurement.
           const again = yield* measuring(world, extra, runId, base, plan, "final");
           expect(
             yield* Schema.decodeUnknownEffect(Answered)(again.envelope.data).pipe(Effect.orDie),
           ).toEqual({ ran: false, measurement: expect.objectContaining({ id: measured.id }) });
 
-          // Some harness paths but not all: refused, naming what is missing.
           yield* exec(["git", "checkout", "-q", product], { cwd: world.project });
           const partly = yield* measuring(
             world,
