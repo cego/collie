@@ -4,7 +4,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Clock, Effect, FileSystem, Schema, Stream } from "effect";
+import { Clock, Effect, FileSystem, Schema, Semaphore, Stream } from "effect";
 import {
   applyItem,
   EMPTY_FLOCK,
@@ -20,6 +20,8 @@ const OnboardingFile = Schema.fromJsonString(MachineOnboarding);
 const OwnFile = Schema.fromJsonString(MachineOwnRead);
 const fileOf = (dir: string, key: string) => `${dir}/${encodeURIComponent(key)}.json`;
 const SAVE_EVERY = "1 second";
+/** One board save or removal at a time, so a removal never runs under a save in flight. */
+const boardFiles = Semaphore.makeUnsafe(1);
 
 /** Every file in `dir` that `file` decodes; one that cannot be read is left out. */
 const savedIn = <A>(dir: string, file: Schema.Codec<A, string>) =>
@@ -82,7 +84,7 @@ export const dropBoardsOf = (dir: string, profile: string) =>
       ({ machine }) => dropSaved(dir, machine.installation),
       { discard: true },
     ),
-  );
+  ).pipe(boardFiles.withPermits(1));
 
 /**
  * Saves each Machine at most once a second, as it last stood, whenever what Desktop knows of
@@ -97,6 +99,7 @@ export const saving =
       let flock = EMPTY_FLOCK;
       const save = ({ machine, herds, tasks, asOf, build, development }: FlockMachine) =>
         Effect.gen(function* () {
+          if (!flock.machines.has(machine.installation)) return;
           const at = asOf ?? (yield* Clock.currentTimeMillis);
           const file = fileOf(dir, machine.installation);
           const saved = {
@@ -113,7 +116,7 @@ export const saving =
             yield* Schema.encodeEffect(SavedFile)(saved).pipe(Effect.orDie),
           );
           yield* fs.rename(`${file}.new`, file);
-        }).pipe(Effect.ignore);
+        }).pipe(Effect.ignore, boardFiles.withPermits(1));
       const due = new Map<string, FlockMachine>();
       const flush = Effect.suspend(() => {
         const machines = [...due.values()];
@@ -134,7 +137,10 @@ export const saving =
             const dropped = Arr.filter([...before.keys()], (one) => !flock.machines.has(one));
             return Effect.forEach(
               dropped,
-              (installation) => (due.delete(installation), dropSaved(dir, installation)),
+              (installation) => (
+                due.delete(installation),
+                dropSaved(dir, installation).pipe(boardFiles.withPermits(1))
+              ),
               { discard: true },
             );
           }),
