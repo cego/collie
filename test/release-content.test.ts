@@ -3,7 +3,8 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { RELEASE_CLEARS, RELEASE_ON } from "../workflows/release.workflow";
+import * as Schema from "effect/Schema";
+import { Checked, RELEASE_CLEARS, RELEASE_ON } from "../workflows/release.workflow";
 import { contentOf } from "../src/sdk";
 import onGitlab from "../workflows/release.gitlab.md" with { type: "text" };
 import onGithub from "../workflows/release.github.md" with { type: "text" };
@@ -180,4 +181,13 @@ test("production names its jobs with their URLs, then by name, then by count, wh
     expect(said).toContain(` on ${url}, and no other job`);
     expect(times(said, url)).toBe(1);
   }
+});
+
+test("checks a release recorded before it knew of conflicts decode on replay as not conflicting", () => {
+  // As 0.109.2 journaled run-31754f6b.implement.release's answer-2.checks.
+  const recorded = { head: "8cc52cf15f461725e8d0b8e7da3a1204c5082e7d", failed: [] };
+  expect(Schema.decodeUnknownSync(Checked)(recorded)).toEqual({ ...recorded, conflicting: false });
+  expect(Schema.decodeUnknownSync(Checked)({ ...recorded, conflicting: true }).conflicting).toBe(
+    true,
+  );
 });
