@@ -450,8 +450,11 @@ test(
             yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
             yield* idleAfterItsStep(agent, "at launch");
             yield* until(
-              () => recordedSession(runId, "opencode").pipe(Effect.option),
-              Option.isSome,
+              () =>
+                fs
+                  .readFileString(`${dir()}/agents/${runId}/opencode.launch.json`)
+                  .pipe(Effect.orElseSucceed(() => "")),
+              Str.includes('"agentSession"'),
             );
             return { runId, agent, before: coreCalls(yield* rig.calls()).length };
           }),
