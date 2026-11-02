@@ -1538,8 +1538,10 @@ pane holds, and the host says whose Run that agent is. Anywhere else, without `-
 fails `invalid_input`: `verify needs --run outside a Run's agent pane.` A `--run` given
 explicitly always wins.
 
-Runs the command, watches its exit, and records the result against the run's tree — the
-commit it was on and a digest of everything not committed, taken **before and after**.
+Runs the command, watches its exit, and records the result against the run's tree — its
+content, the Git tree the working tree would commit as, untracked files included, taken
+**before and after**, with the commit it was on beside it. Committing the same bytes keeps
+the result; changing any byte makes it about an earlier tree.
 That pair is the point: a pass on a tree that changed while the command ran says nothing
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
@@ -1561,7 +1563,11 @@ are for reading; the recorded argv retains the original values.
 
 Every record carries the **environment** it ran in: a digest of the executable's real path
 and content, the `node` and `bun` that `PATH` resolves to, again by path and content, and
-`PATH`, `NODE_ENV` and `NODE_OPTIONS`. A gate relies on an earlier pass only where this
+`PATH`, `NODE_ENV` and `NODE_OPTIONS`. It also covers the dependencies installed in the
+checkout: the entries of the `node_modules` of every directory holding a tracked
+`package.json`, by name and file identity, leaving out caches such as `.cache` and `.vite`.
+Installing, removing or replacing a package makes an earlier record stale, and the command
+runs again. A gate relies on an earlier pass only where this
 matches, so an upgraded toolchain is a fresh run. A record from before environments were
 recorded has none, and is never relied on.
 

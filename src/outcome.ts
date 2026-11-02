@@ -20,7 +20,7 @@ import {
   passed,
   ranOneTest,
   sameAsked,
-  TOO_LARGE,
+  sameTree,
   type CheckCommand,
   type FailedTest,
   type Snapshot,
@@ -420,7 +420,7 @@ function reviewerSays(got: Collected, key: string): boolean {
 
 /** Whether a verification ran on a tree other than the one in front of us. */
 function earlierTree(v: Verification, final: Snapshot): boolean {
-  return v.end.head_sha !== final.head_sha || v.end.fingerprint !== final.fingerprint;
+  return !sameTree(v.end, final);
 }
 
 /** A command whole, so two that differ never read the same. */
@@ -636,10 +636,7 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
   return gaps;
 }
 
-const isFinal = (tree: Snapshot, final: Snapshot) =>
-  tree.fingerprint !== TOO_LARGE &&
-  tree.head_sha === final.head_sha &&
-  tree.fingerprint === final.fingerprint;
+const isFinal = (tree: Snapshot, final: Snapshot) => sameTree(tree, final);
 
 function reviewerSaysOfThisTree(got: Collected, key: string): boolean {
   for (const [id, output] of got.outputs) {
@@ -700,10 +697,9 @@ export function endsWithoutPatch(kind: Outcome, got: Collected): boolean {
   const base = got.measurements?.at(-1)?.base;
   return (
     base !== undefined &&
-    base.fingerprint !== TOO_LARGE &&
+    sameTree(base, got.final) &&
     base.content !== "" &&
-    base.content === got.content &&
-    base.fingerprint === got.final.fingerprint
+    base.content === got.content
   );
 }
 
@@ -715,10 +711,7 @@ export function renderEvidence(
   for (const v of got.verifications) if (!ranOneTest(v)) latest.set(`${v.name}:${v.by}`, v);
   const measured = finalMeasurementLine(got.measurements ?? []);
   const lines = Arr.map([...latest.values()], (v) => {
-    const stale =
-      v.end.head_sha === got.final.head_sha && v.end.fingerprint === got.final.fingerprint
-        ? ""
-        : " (on an earlier tree)";
+    const stale = sameTree(v.end, got.final) ? "" : " (on an earlier tree)";
     const expected = v.expect === "fail" ? ", expected to fail" : "";
     return `- ${v.name}: ${v.result} (by ${v.by}${expected})${stale}`;
   });
@@ -750,9 +743,7 @@ export function renderRecordedChecks(
   if (latest.size + baseline.size + leftToCi.length === 0)
     return "(nothing is recorded for this Run)";
   const onTree = (v: Verification) =>
-    v.end.head_sha === got.final.head_sha && v.end.fingerprint === got.final.fingerprint
-      ? "on this tree"
-      : "on an earlier tree";
+    sameTree(v.end, got.final) ? "on this tree" : "on an earlier tree";
   const seenFailing = (v: Verification) =>
     Arr.some(
       got.verifications,
