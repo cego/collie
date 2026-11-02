@@ -9756,16 +9756,22 @@ const releaseHost = <E = never>(
 /**
  * A Run of a shipped module, driven from outside while it runs: its status, what it asks,
  * and an answer given as a door gives one. Answers with what `drive` does. A `restarted` Run
- * was admitted by an earlier host, which this one takes over from.
+ * was admitted by an earlier host, which this one takes over from. `reached` is completed
+ * once an answer has reached the engine.
  */
 const driven = <A, E>(
-  options: ShippedRun & { readonly restarted?: boolean },
+  options: ShippedRun & {
+    readonly restarted?: boolean;
+    readonly reached?: Deferred.Deferred<void>;
+  },
   drive: (run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
     readonly asked: Effect.Effect<
       ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
     >;
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
+    /** Whether the engine has done with the answer to `decision`, waking the Run included. */
+    readonly taken: (decision: string) => Effect.Effect<boolean>;
     readonly resume: Effect.Effect<void>;
   }) => Effect.Effect<A, E, FileSystem.FileSystem>,
 ) =>
@@ -9774,6 +9780,20 @@ const driven = <A, E>(
       const made = yield* loaded(options.entry, options.runId);
       const engine = yield* WorkflowEngine.WorkflowEngine;
       const store = yield* Store;
+      const sql = yield* SqlClient.SqlClient;
+      const reached = options.reached;
+      const answering =
+        reached === undefined
+          ? engine
+          : WorkflowEngine.WorkflowEngine.of({
+              ...engine,
+              poll: (workflow, id) =>
+                Effect.tap(engine.poll(workflow, id), () => Deferred.succeed(reached, undefined)),
+              deferredDone: (deferred, done) =>
+                Effect.tap(engine.deferredDone(deferred, done), () =>
+                  Deferred.succeed(reached, undefined),
+                ),
+            });
       if (options.restarted !== true)
         yield* admit({ runId: options.runId, workflow: made.workflow.name, input: options.input });
       const payload = { runId: options.runId, input: options.input };
@@ -9787,21 +9807,51 @@ const driven = <A, E>(
           status,
           asked: store.asked(options.runId),
           resume: engine.resume(made.workflow, id),
-          // An answer landing before the Run awaits it queues a wake that would resume its next park.
           answer: (decision, value) =>
-            until(
-              () => status,
-              (got) => got.status === "suspended",
-            ).pipe(
-              Effect.andThen(answerDecision(made, { name: decision, executionId: id, value })),
+            answerDecision(made, { name: decision, executionId: id, value }).pipe(
               Effect.orDie,
-              Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
+              Effect.provideService(WorkflowEngine.WorkflowEngine, answering),
             ),
+          taken: (decision) =>
+            sql
+              .unsafe<{ processed: number }>(
+                `SELECT processed FROM cluster_messages WHERE tag = 'deferred' AND payload LIKE '%"name":"${decision}"%'`,
+              )
+              .pipe(Effect.map(Arr.some((row) => row.processed === 1)), Effect.orDie),
         });
       }).pipe(Effect.provide(made.layer));
     }),
     options.host,
   );
+
+/**
+ * `over`, with the Run held between asking `question` and awaiting it until `reached`: an
+ * answer given the moment the question shows, before the Run waits on it. `held` is
+ * completed once the Run is held.
+ */
+const answeredEarly = (question: string, over: HostOverride) => {
+  const held = Deferred.makeUnsafe<void>();
+  const reached = Deferred.makeUnsafe<void>();
+  const host: HostOverride = Layer.effect(Host)(
+    Effect.gen(function* () {
+      const host = yield* Host;
+      return Host.of({
+        ...host,
+        asking: (runId, asked, asker) =>
+          host
+            .asking(runId, asked, asker)
+            .pipe(
+              Effect.andThen(
+                asked.name === question && !Deferred.isDoneUnsafe(held)
+                  ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(reached)))
+                  : Effect.void,
+              ),
+            ),
+      });
+    }),
+  ).pipe(Layer.provide(over));
+  return { host, held, reached };
+};
 
 /** The go asked under `name`, once it is open. */
 const goAsked = (
@@ -12386,6 +12436,59 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
     );
 
   scenario(
+    "release: a claim Helle will not take back parks the release, unmerged, on an answer that reached the engine before the Run awaited it",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* stageable("gitlab");
+          claimed.length = 0;
+          refusedBack.length = 0;
+          refusedBack.push(["happytiger"]);
+          const runId = "r-helle-kept-early";
+          yield* rig.queueOutputs([MONOREPO_ASSESSED]);
+          const why = "helle POST /projects/spilnu/claim answered 500: down";
+          const early = answeredEarly(
+            "go-1.claim.unclaimed",
+            helleRun(runId, () => ({ held: { unresolved: why } })).host,
+          );
+          const [status, model] = yield* driven(
+            {
+              ...helleRun(runId, () => ({ held: { unresolved: why } })),
+              host: early.host,
+              reached: early.reached,
+            },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Merge, tag and stage");
+                yield* Deferred.await(early.held);
+                yield* run.answer("go-1.claim.unclaimed", "Release without a Helle claim");
+                const merged = forge
+                  .model()
+                  .pipe(Effect.map((model) => (model.merges ?? []).length > 0));
+                // A Run that went past its park merges before the engine is done with the answer.
+                yield* until(
+                  () => Effect.all([run.taken("go-1.claim.unclaimed"), merged]),
+                  ([taken, merged]) => taken || merged,
+                );
+                return yield* until(
+                  () => Effect.all([run.status, forge.model()]),
+                  ([status, model]) =>
+                    status.status !== "pending" || (model.merges ?? []).length > 0,
+                );
+              }),
+          );
+          yield* bin.restore();
+          expect(model.merges ?? []).toEqual([]);
+          expect(status.status).toBe("suspended");
+          expect(yield* parkedWhy(runId)).toContain("happytiger");
+          expect(yield* runLog(runId)).not.toContain("released without a Helle claim");
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     "release: a release goes on without a Helle claim only on the human's recorded say",
     () =>
       runEffect(
@@ -14180,6 +14283,40 @@ for (const name of ["gitlab", "github"] as const) {
         ),
       120_000,
     );
+
+  scenario(
+    `stage on ${name}: a refused claim give-back parks on a Done that reached the engine before the Run awaited it`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, staging, unstaging } = yield* stageOn();
+          claimed.length = 0;
+          refusedBack.length = 0;
+          refusedBack.push(["project"]);
+          const runId = `r-stage-retained-early-${name}`;
+          yield* rig.queueOutputs([MR_STAGED, staging(undefined, "passed"), unstaging()]);
+          const early = answeredEarly("staged-1", releaseHost());
+          const status = yield* driven(
+            { ...options(runId, early.host), reached: early.reached },
+            (run) =>
+              Effect.gen(function* () {
+                yield* Deferred.await(early.held);
+                yield* run.answer("staged-1", "Done");
+                yield* until(() => run.taken("staged-1"), Boolean);
+                return yield* until(
+                  () => run.status,
+                  (status) => status.status !== "pending",
+                );
+              }),
+          );
+          yield* bin.restore();
+          expect(status.status).toBe("suspended");
+          expect(yield* parkedWhy(runId)).toContain("project");
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
 
   const APPS = ["bingo", "casino", "happytiger", "lobby", "playground", "poker", "spilnu"] as const;
   const appJob = (app: string) => `stage:${app}`;

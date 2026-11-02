@@ -5088,7 +5088,12 @@ export const nextRegistrationName = (
   id: string,
 ): string => `${id}@${Arr.filter(known, (entry) => entry.workflow === id).length + 1}`;
 
-/** The exit a decision is answered with, encoded by the decision's own schema. */
+/**
+ * The exit a decision is answered with, encoded by the decision's own schema, once the Run
+ * has stopped to wait on it: the engine still wakes a Run that read its answer early, and
+ * that wake resumes whatever park the Run reached next. One that does not stop within a
+ * wake's patience is answered anyway.
+ */
 export const answerDecision = (
   registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
@@ -5099,7 +5104,13 @@ export const answerDecision = (
     workflow: registration.workflow,
     executionId: options.executionId,
   });
-  return DurableDeferred.done(decision, { token, exit: Exit.succeed(options.value) });
+  return WorkflowEngine.WorkflowEngine.pipe(
+    Effect.flatMap((engine) => engine.poll(registration.workflow, options.executionId)),
+    Effect.filterOrFail(Option.isSome),
+    Effect.retry({ times: WAKE_TRIES, schedule: Schedule.spaced(WAKE_INTERVAL) }),
+    Effect.ignore,
+    Effect.andThen(DurableDeferred.done(decision, { token, exit: Exit.succeed(options.value) })),
+  );
 };
 
 /**

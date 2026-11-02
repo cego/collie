@@ -899,6 +899,10 @@ open, that is refused. The answer is one of the question's options, in any case 
 does. A refusal is `invalid_input` where your answer was the reason, and otherwise
 `operation_failed` with the host's own sentence.
 
+A run shows its question a moment before it stops to wait on it. An answer given in that
+moment is recorded at once and handed to the run once it has stopped, so it cannot wake the
+run out of a later park instead.
+
 ## Stop and resume
 
 ```sh
