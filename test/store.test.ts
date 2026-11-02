@@ -295,7 +295,7 @@ test("Runs read again with nothing written are the rows read before, and a write
     }),
   ));
 
-test("a write reads again only the rows of the Runs it wrote", () =>
+test("a write reads again only the rows of the Runs it wrote, and an announce none", () =>
   onStore(
     "collie-store-written-rows-",
     Effect.gen(function* () {
@@ -307,6 +307,7 @@ test("a write reads again only the rows of the Runs it wrote", () =>
 
       // Unseen by the store, as no write through it names run-a.
       yield* sql`UPDATE collie_runs SET project = '/elsewhere' WHERE run = 'run-a'`;
+      yield* store.announce;
       yield* store.accepted("run-b");
       yield* store.admit(admission("req-c", "run-c", { note: "c" }));
       const after = yield* store.runs;

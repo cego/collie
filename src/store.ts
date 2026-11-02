@@ -628,7 +628,8 @@ function makeStore(): Effect.Effect<
         ),
       watching: (read) => reactivity.stream(RUNS, read),
       changes: sql.reactive(RUNS, all),
-      announce: invalidate,
+      // Only this store writes the Runs, so an announce moves none of their rows.
+      announce: reactivity.invalidate(RUNS),
       decided: Effect.succeed((run: string) => elsewhere + (decisions.get(run) ?? 0)),
     } satisfies StoreApi;
   });
