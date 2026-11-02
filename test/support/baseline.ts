@@ -16653,6 +16653,57 @@ scenario(
   120_000,
 );
 
+scenario(
+  "a tune-up whose Cycle starts the build before recorded resumes in Cycle 2 on this one and runs no more than its cycles",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-upgraded";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [
+          NO_CHANGE(),
+          RESET(),
+          FASTER(),
+          NO_CHANGE(),
+          RESET(),
+          cleanedUp(),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 3 } };
+        yield* running(options, () =>
+          until(
+            () => wasAsked(runId, "cycle-2"),
+            (asked) => asked,
+          ),
+        );
+        // As 7d15bed3 recorded a Cycle's start: the tree, beside whether the wall time was spent.
+        yield* session(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`UPDATE cluster_replies
+              SET payload = json_set(payload, '$.value.exit.value', json_object('spent', NULL, 'tree', json(json_extract(payload, '$.value.exit.value'))))
+              WHERE json_extract(payload, '$.value.exit.value.head') IS NOT NULL
+              AND request_id IN (SELECT id FROM cluster_messages WHERE tag = 'activity' AND json_extract(payload, '$.name') LIKE 'cycle-%.start')`;
+          }).pipe(Effect.orDie),
+        );
+        const result = yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.andThen(run.resume, answeringProgress(run)),
+        );
+        expect(yield* cyclePrompts(runId)).toEqual([
+          "cycle-1",
+          "cycle-1-revert",
+          "cycle-2",
+          "cycle-3",
+          "cycle-3-revert",
+        ]);
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+      }),
+    ),
+  120_000,
+);
+
 /** A clock two hours ahead once `marker` holds anything, as a Cycle that ran long would leave it. */
 const lateOnce = (marker: string) =>
   Effect.map(Clock.Clock, (clock): Clock.Clock => {

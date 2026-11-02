@@ -1461,27 +1461,24 @@ export default defineWorkflow({
       /** One Cycle. An `automatic` one does not start once the wall time is spent, and says so as `spent`. */
       const cycle = (n: number, automatic: boolean) =>
         Effect.gen(function* () {
-          if (automatic && wall !== null) {
-            const spent = yield* Activity.make({
-              name: `cycle-${n}.budget`,
-              success: Schema.NullOr(text),
-              execute: Effect.map(Clock.currentTimeMillis, (now) =>
-                now - started >= wall
-                  ? `wall time ${budget.wall_time} spent ${n === 1 ? "before Cycle 1" : `after Cycle ${n - 1}`}`
-                  : null,
-              ),
-            });
-            if (spent !== null) return { spent, kept: false, stopped: null };
-          }
-          const start = yield* Activity.make({
-            name: `cycle-${n}.start`,
-            success: Tree,
+          // The shape a Run recorded before this build, so one it started still recovers. That
+          // start may have recorded the wall time spent, so a Cycle a No asks for has its own.
+          const begun = yield* Activity.make({
+            name: automatic ? `cycle-${n}.start` : `cycle-${n}.start-after-no`,
+            success: Schema.Struct({ spent: Schema.NullOr(text), tree: Tree }),
             execute: Effect.gen(function* () {
               const tree = yield* treeNow;
+              if (automatic && wall !== null && (yield* Clock.currentTimeMillis) - started >= wall)
+                return {
+                  spent: `wall time ${budget.wall_time} spent ${n === 1 ? "before Cycle 1" : `after Cycle ${n - 1}`}`,
+                  tree,
+                };
               yield* host.record(runId, `cycle ${n} started on ${tree.head} ${tree.fingerprint}`);
-              return tree;
+              return { spent: null, tree };
             }),
           });
+          if (begun.spent !== null) return { spent: begun.spent, kept: false, stopped: null };
+          const start = begun.tree;
           const tried = yield* cycles(
             agentWork({
               operation: `cycle-${n}`,
