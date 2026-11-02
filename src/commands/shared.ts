@@ -12,11 +12,12 @@ import { Herdr, type WorkspaceInfo } from "../herdr";
 import { unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, type Failure } from "../operations";
 import { evidenceDir, runDir, type Given, type RunView } from "../engine";
-import { asksRun } from "../lifecycle";
+import { asks, asksRun } from "../lifecycle";
+import { readAudit, type AuditLine } from "../audit";
 import { FrontDoor } from "../board-model";
 import { connect } from "../host";
 import { actorName } from "../proposals";
-import { taskOfWorkspace } from "../task";
+import { readTask, taskOfWorkspace } from "../task";
 import { attempt, mutation, type CollieError, type Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 import { isHostName } from "../gitlab-token";
@@ -58,26 +59,68 @@ export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: 
   return (yield* taskOfWorkspace(env.stateDir, yield* selected(global)))?.id ?? null;
 });
 
-/** Whom a Run lookup is for, built once from the command line. */
-export type RunScope = { readonly task: string | null };
+/** Whom a Run lookup is for, built once from the command line: the Task, and the pane's Run. */
+export type RunScope = { readonly task: string | null; readonly caller: string | null };
 
 export const runScope = Effect.fn("collie.runScope")(function* (global: Global) {
-  return { task: yield* selectedTask(global) } satisfies RunScope;
+  return {
+    task: yield* selectedTask(global),
+    caller: (yield* currentEnv).raw["COLLIE_RUN"] || null,
+  } satisfies RunScope;
+});
+
+const steered = (line: AuditLine, id: string) =>
+  (line.operation === "deliver" || line.operation === "steer") &&
+  pipe_(textOf(line.asked), Str.includes(id));
+
+const textOf = (asked: Schema.Json | undefined) =>
+  Option.match(Schema.decodeUnknownOption(Schema.Struct({ text: Schema.String }))(asked), {
+    onNone: () => "",
+    onSome: (said) => said.text,
+  });
+
+/** Whether `caller`'s Run started `view`, or its inputs or a steer it received name it. */
+const callerReaches = Effect.fn("collie.callerReaches")(function* (
+  env: PluginEnv,
+  view: RunView,
+  caller: string | null,
+) {
+  if (caller === null) return false;
+  if (view.parent === caller || view.requestedBy?.run === caller) return true;
+  const trail = yield* readAudit(runDir(env.stateDir, caller)).pipe(Effect.orElseSucceed(() => []));
+  if (Arr.some(trail, (line) => steered(line, view.runId))) return true;
+  const own = yield* asks(env, (client) => client.run({ runId: caller }));
+  if (!own.ok || own.value === null) return false;
+  const inputs = yield* Schema.encodeEffect(UnknownJson)(own.value.input).pipe(
+    Effect.orElseSucceed(() => ""),
+  );
+  return pipe_(inputs, Str.includes(view.runId));
 });
 
 /** Why `view`, on `machine` (null for this one), is out of `scope`'s reach; null where it is not. */
-export const outOfReach = (
+export const outOfReach = Effect.fn("collie.outOfReach")(function* (
+  env: PluginEnv,
   view: RunView,
   machine: string | null,
   scope: RunScope,
-): Failure | null =>
+) {
   // A Task is this Machine's, so a Run on another is never outside it.
-  machine === null && scope.task !== null && view.task !== scope.task
-    ? err("run_not_found", `Run "${view.runId}" is not part of task "${scope.task}".`, {
-        run: view.runId,
-        task: scope.task,
-      })
-    : null;
+  if (machine !== null || scope.task === null || view.task === scope.task) return null;
+  if (yield* callerReaches(env, view, scope.caller)) return null;
+  const workspace =
+    view.task === null
+      ? null
+      : ((yield* readTask(env.stateDir, view.task).pipe(Effect.orElseSucceed(() => null)))
+          ?.workspace ?? null);
+  const where = view.task === null ? "in no task" : `in task "${view.task}"`;
+  const reach =
+    workspace === null ? "no workspace reaches it." : `\`--workspace ${workspace}\` reaches it.`;
+  return err(
+    "run_outside_task",
+    `Run "${view.runId}" is ${where}, not task "${scope.task}": ${reach}`,
+    { run: view.runId, task: view.task, workspace },
+  );
+});
 
 export type ContextResolution =
   | {
@@ -211,7 +254,7 @@ export const locateRun = Effect.fn("collie.locateRun")(function* (
   if (!found.ok) return { _tag: "RunFailure" as const, result: found };
   const view = found.value;
   if (view === null) return missing;
-  const refused = outOfReach(view, found.machine, scope);
+  const refused = yield* outOfReach(env, view, found.machine, scope);
   if (refused !== null) return { _tag: "RunFailure", result: refused };
   return { _tag: "Hosted", view, dir, evidence: evidenceDir(env.stateDir, id) };
 });

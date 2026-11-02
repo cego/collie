@@ -524,8 +524,13 @@ renaming a task workspace by hand changes nothing about what belongs to it, and 
 does not rename it back. See [Using Collie](using.md#what-a-task-workspace-is-called).
 
 Runs are scoped by Task, not by workspace. `collie run list` inside a task workspace lists
-that Task's local Runs and live peers' Runs; elsewhere it lists every reachable Run. A Run is reachable by id from the
-workspace it was started in. `--workspace <id>` picks which workspace that is.
+that Task's local Runs and live peers' Runs; elsewhere it lists every reachable Run. A
+command that names a Run, typed in a task workspace, reaches that Task's Runs, every Run on
+another Machine, and, from an agent's pane, any Run its own Run started (as `parent` or
+`requestedBy`) or was asked about (its inputs, or a steer it received, name the Run's id).
+Outside a task workspace every Run is reachable. Any other Run is `run_outside_task`, whose
+`details` name the Run's `task` and the `workspace` that reaches it; `--workspace <id>`
+picks that workspace.
 
 Checkouts are unchanged: a mutating run still gets a worktree of its own, keyed by its
 branch. A task workspace groups the work; it does not isolate files or branches.
@@ -2016,7 +2021,8 @@ human line and a failure prints `error.message`.
 | `workspace_not_found` | The `--workspace` id is not a workspace herdr has.                                                                                                                             |
 | `workflow_not_found`  | No layer defines that workflow.                                                                                                                                                |
 | `persona_not_found`   | No layer defines that persona.                                                                                                                                                 |
-| `run_not_found`       | No run with that id, or none by that id in the Task this command is scoped to.                                                                                                 |
+| `run_not_found`       | No Machine has a Run by that id.                                                                                                                                               |
+| `run_outside_task`    | The Run is in another Task than the one this command is scoped to; `details` name its `task` and the `workspace` that reaches it.                                              |
 | `task_not_found`      | `--task` named a Task that does not exist.                                                                                                                                     |
 | `target_exists`       | A fork would overwrite a file that is already there.                                                                                                                           |
 | `needs_input`         | Inputs are missing; `details.inputs` says which, with their questions.                                                                                                         |

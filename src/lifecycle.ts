@@ -395,7 +395,7 @@ type Answered<A> = { readonly ok: true; readonly value: A; readonly machine: str
  * names — asked on its own connection. An operation names the front door asking, which the
  * channel declares before anything else.
  */
-const asks = <A>(
+export const asks = <A>(
   env: PluginEnv,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
   door?: Door,
