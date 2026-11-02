@@ -37,6 +37,7 @@ import {
   flow,
 } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
+import * as SqlClient from "effect/sql/SqlClient";
 import { Rig, FakeHerdr } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";
@@ -269,6 +270,7 @@ const session = <A, E>(
     | Children
     | Host
     | Store
+    | SqlClient.SqlClient
     | FileSystem.FileSystem
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner
@@ -3580,6 +3582,118 @@ scenario(
           "- 01-first.md: after merge: The nightly deploy counts each registry once.",
         );
         expect(opening).toContain("- 01-first.md: after merge: The dashboard shows it.");
+      }),
+    ),
+  120_000,
+);
+
+/** implement delivering a ticket with an after-merge outcome, to park on its merge request: `gh` is missing. */
+const afterMergeParking = (runId: string) =>
+  Effect.gen(function* () {
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* noGitlabMrs(bin);
+    yield* bin.add(
+      "gh",
+      `case "$1 $2" in
+  "auth token") echo gho-fake; exit 0;;
+  "auth status") echo 'Logged in to github.com account tester'; exit 0;;
+esac
+exit 127`,
+    );
+    yield* repository();
+    yield* exec(["git", "remote", "set-url", "upstream", "git@github.com:team/project.git"], {
+      cwd: rig.projectDir,
+    });
+    const plan = yield* planOf([
+      {
+        file: "01-first.md",
+        title: "the first one",
+        checks: "unit",
+        body: "\n## After merge\n\n- The nightly deploy counts each registry once.\n",
+      },
+    ]);
+    yield* approve(runId, ["unit"]);
+    yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+    const repaired = exec(
+      ["git", "remote", "set-url", "origin", "git@gitlab.example.com:team/project.git"],
+      { cwd: rig.projectDir },
+    );
+    return { bin, repaired, options: { entry: shipped("implement"), runId, input: { plan } } };
+  });
+
+const unsettledLines = (runId: string) =>
+  Effect.map(
+    runLog(runId),
+    (log) => Arr.filter(Str.split(log, "\n"), Str.startsWith("unsettled: ")).length,
+  );
+
+scenario(
+  "a delivery parked, resumed and answered at What next records its unsettled outcomes once",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-unsettled-once";
+        const { bin, repaired, options } = yield* afterMergeParking(runId);
+        const status = yield* driven(options, (run) =>
+          Effect.gen(function* () {
+            yield* until(
+              () => parkedWhy(runId),
+              (why) => why !== "",
+            );
+            yield* repaired;
+            yield* run.resume;
+            yield* goAsked(run.asked, "next");
+            yield* run.answer("next", "Finish");
+            return yield* ended(run.status);
+          }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("complete");
+        expect(yield* unsettledLines(runId)).toBe(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a Run parked after its unsettled outcomes were recorded with no Activity resumes, and records them at most once more",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-unsettled-recovered";
+        const { bin, repaired, options } = yield* afterMergeParking(runId);
+        yield* parkedOn(options);
+        // The journal origin/master's build leaves: the line in log.txt, no Activity for it.
+        const forgotten = yield* session(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const recorded = `SELECT id FROM cluster_messages WHERE tag = 'activity' AND payload LIKE '%"name":"unsettled"%'`;
+            const found = (yield* sql.unsafe(recorded)).length;
+            yield* sql.unsafe(`DELETE FROM cluster_replies WHERE request_id IN (${recorded})`);
+            yield* sql.unsafe(`DELETE FROM cluster_messages WHERE id IN (${recorded})`);
+            return found;
+          }),
+        );
+        expect(forgotten).toBe(1);
+        expect(yield* unsettledLines(runId)).toBe(1);
+        yield* repaired;
+
+        const status = yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.gen(function* () {
+            yield* run.resume;
+            yield* goAsked(run.asked, "next");
+            const resumed = yield* unsettledLines(runId);
+            yield* run.answer("next", "Finish");
+            const finished = yield* ended(run.status);
+            return { finished, resumed };
+          }),
+        );
+        yield* bin.restore();
+
+        expect(status.finished.status).toBe("complete");
+        expect(status.resumed).toBeLessThanOrEqual(2);
+        expect(yield* unsettledLines(runId)).toBe(status.resumed);
       }),
     ),
   120_000,
