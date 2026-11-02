@@ -18,6 +18,7 @@ import {
   Effect,
   Layer,
   Option,
+  Order,
   Schedule,
   type Scope,
   Schema,
@@ -82,6 +83,12 @@ const nearOf = (rows: ReadonlyArray<RunRow>, run: string) => {
       /requestedby/i.test(row.placing ?? ""),
   );
 };
+
+/** As every Run is read: by admission, then id. */
+const byAdmission = Order.mapInput(
+  Order.Tuple([Order.String, Order.String]),
+  (row: RunRow) => [row.admitted, row.run] as const,
+);
 
 /** Whether two reads of a Run's row read the same. */
 export const sameRow = (one: RunRow, other: RunRow) =>
@@ -332,10 +339,17 @@ function makeStore(): Effect.Effect<
     let seen = yield* dataVersion;
     /** Moves with every write to the Runs, so a read of them stands until the next. */
     let written = 0;
-    const wrote = Effect.sync(() => void written++);
-    const invalidate = Effect.andThen(wrote, reactivity.invalidate(RUNS));
-    const mutation = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      reactivity.mutation(RUNS, Effect.ensuring(effect, wrote));
+    /** The Runs written since the last read, or every Run where that is not known. */
+    let dirty: Set<string> | "all" = "all";
+    const wrote = (runs?: ReadonlyArray<string>) =>
+      Effect.sync(() => {
+        written++;
+        if (runs === undefined) dirty = "all";
+        else if (dirty !== "all") for (const run of runs) dirty.add(run);
+      });
+    const invalidate = Effect.andThen(wrote(), reactivity.invalidate(RUNS));
+    const mutation = <A, E, R>(runs: ReadonlyArray<string>, effect: Effect.Effect<A, E, R>) =>
+      reactivity.mutation(RUNS, Effect.ensuring(effect, wrote(runs)));
     let elsewhere = 0;
     const decisions = new Map<string, number>();
     const decide = (run: string) =>
@@ -402,15 +416,33 @@ function makeStore(): Effect.Effect<
     const all = Effect.suspend(() => {
       if (read?.at === written) return Effect.succeed(read.rows);
       const at = written;
-      return everyRun().pipe(
+      const which = dirty;
+      dirty = new Set();
+      const kept = read?.rows ?? [];
+      const fresh =
+        which === "all" || read === null
+          ? everyRun()
+          : Effect.map(
+              Effect.forEach([...which], (run) => byRun(run)),
+              (written) => {
+                const now = new Map(Arr.map(written.flat(), (row) => [row.run, row] as const));
+                const rows = Arr.filter(kept, (row) => !which.has(row.run) || now.has(row.run));
+                const known = new Set(Arr.map(rows, (row) => row.run));
+                const added = Arr.filter([...now.values()], (row) => !known.has(row.run));
+                const merged = Arr.map(rows, (row) => now.get(row.run) ?? row);
+                return added.length === 0 ? merged : Arr.sort([...merged, ...added], byAdmission);
+              },
+            );
+      return fresh.pipe(
         Effect.orDie,
         Effect.map((fresh) => {
-          const before = new Map(Arr.map(read?.rows ?? [], (row) => [row.run, row] as const));
+          const before = new Map(Arr.map(kept, (row) => [row.run, row] as const));
           const rows = Arr.map(fresh, (row) => {
             const was = before.get(row.run);
             return was !== undefined && sameRow(was, row) ? was : row;
           });
-          if (at === written) read = { at, rows };
+          // Writes made since `at` are in `dirty`, so these rows stand for every one before.
+          read = { at, rows };
           return rows;
         }),
       );
@@ -441,7 +473,8 @@ function makeStore(): Effect.Effect<
               ON CONFLICT(run, decision) DO NOTHING
             `;
           yield* decide(question.run);
-          yield* invalidate;
+          yield* wrote([question.run]);
+          yield* reactivity.invalidate(RUNS);
         }).pipe(Effect.orDie),
 
       asked: (run: string) => decisionsOf(run).pipe(Effect.orDie),
@@ -451,13 +484,16 @@ function makeStore(): Effect.Effect<
         yield* decide(answer.run);
         // One write over the row while it is still unanswered. Whoever it returns a row
         // to is the answer; everybody else reads what landed and is told so.
-        const settled = yield* mutation(sql`
+        const settled = yield* mutation(
+          [answer.run],
+          sql`
               UPDATE collie_decisions
               SET answer = ${answer.value}, request = ${answer.request}, answered = ${at},
                 answerer = ${answer.answerer === undefined ? null : answererText(answer.answerer)}
               WHERE run = ${answer.run} AND decision = ${answer.decision} AND answer IS NULL
               RETURNING decision
-            `).pipe(Effect.orDie);
+            `,
+        ).pipe(Effect.orDie);
         const [row] = yield* decisionRow({ run: answer.run, decision: answer.decision }).pipe(
           Effect.orDie,
         );
@@ -490,7 +526,9 @@ function makeStore(): Effect.Effect<
         // The claim is the insert, and what it returns is whether this caller made it:
         // one request id, one row, decided by the database rather than by a read another
         // caller could be between.
-        const claimed = yield* mutation(sql`
+        const claimed = yield* mutation(
+          [admission.run],
+          sql`
               INSERT INTO collie_runs
                 (run, request, workflow, project, input, generation, execution,
                  task, parent, provenance, options, asked, placing, admitted)
@@ -503,7 +541,8 @@ function makeStore(): Effect.Effect<
               )
               ON CONFLICT(request) DO NOTHING
               RETURNING run
-            `).pipe(Effect.orDie);
+            `,
+        ).pipe(Effect.orDie);
 
         const [row] = yield* byRequest(admission.request).pipe(Effect.orDie);
         if (row === undefined) {
@@ -527,15 +566,18 @@ function makeStore(): Effect.Effect<
       accepted: (run: string) =>
         Effect.gen(function* () {
           const at = yield* nowIso;
-          yield* mutation(sql`UPDATE collie_runs SET accepted = ${at} WHERE run = ${run}`);
+          yield* mutation([run], sql`UPDATE collie_runs SET accepted = ${at} WHERE run = ${run}`);
         }).pipe(Effect.orDie),
 
       place: Effect.fn("Store.place")(function* (run, placed) {
-        yield* mutation(sql`
+        yield* mutation(
+          [run],
+          sql`
               UPDATE collie_runs
               SET checkout = ${placed.checkout}, task = COALESCE(${placed.task}, task)
               WHERE run = ${run}
-            `).pipe(Effect.orDie);
+            `,
+        ).pipe(Effect.orDie);
         const [row] = yield* byRun(run).pipe(Effect.orDie);
         if (row === undefined) return yield* Effect.die(new Error(`run "${run}" is not admitted`));
         return row;
@@ -543,16 +585,18 @@ function makeStore(): Effect.Effect<
 
       recordPlacing: (run, placing) =>
         mutation(
+          [run],
           sql`UPDATE collie_runs SET placing = ${placing} WHERE run = ${run} AND checkout IS NULL`,
         ).pipe(Effect.asVoid, Effect.orDie),
 
       forget: (run: string) =>
-        mutation(sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`).pipe(
+        mutation([run], sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`).pipe(
           Effect.asVoid,
           Effect.orDie,
         ),
       retire: <E>(runs: ReadonlyArray<string>, clear: (row: RunRow) => Effect.Effect<void, E>) =>
         mutation(
+          runs,
           sql.withTransaction(
             Effect.gen(function* () {
               const gone: string[] = [];

@@ -9,6 +9,7 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { Effect, Fiber, FileSystem, Layer, Order, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { Store, storeLayer } from "../src/store";
@@ -42,7 +43,7 @@ const admission = (
 });
 
 /** A database of its own, and the store on it, for the length of one question. */
-const onStore = <A, E>(prefix: string, body: Effect.Effect<A, E, Store>) =>
+const onStore = <A, E>(prefix: string, body: Effect.Effect<A, E, Store | SqlClient.SqlClient>) =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -291,6 +292,28 @@ test("Runs read again with nothing written are the rows read before, and a write
       expect(after[0]).toBe(before[0]);
       expect(after[1]).not.toBe(before[1]);
       expect(after[1]?.accepted).not.toBeNull();
+    }),
+  ));
+
+test("a write reads again only the rows of the Runs it wrote", () =>
+  onStore(
+    "collie-store-written-rows-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const sql = yield* SqlClient.SqlClient;
+      yield* store.admit(admission("req-a", "run-a", { note: "a" }));
+      yield* store.admit(admission("req-b", "run-b", { note: "b" }));
+      const before = yield* store.runs;
+
+      // Unseen by the store, as no write through it names run-a.
+      yield* sql`UPDATE collie_runs SET project = '/elsewhere' WHERE run = 'run-a'`;
+      yield* store.accepted("run-b");
+      yield* store.admit(admission("req-c", "run-c", { note: "c" }));
+      const after = yield* store.runs;
+
+      expect(after[0]).toBe(before[0]);
+      expect(after[1]?.accepted).not.toBeNull();
+      expect(Arr.map(after, (row) => row.run)).toEqual(["run-a", "run-b", "run-c"]);
     }),
   ));
 
