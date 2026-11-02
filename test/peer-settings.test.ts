@@ -324,6 +324,7 @@ test(
             connect: () => Effect.succeed(client),
             tell: () => Effect.void,
             machines: Effect.succeed([]),
+            forgetsUnlisted: Effect.succeed(true),
           };
           yield* levelPeer(link, {
             installation: "other",

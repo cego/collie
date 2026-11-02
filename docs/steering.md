@@ -151,7 +151,9 @@ Run the same way, and is reconciled the same way; `not-sent` has the resume send
 `deferred` is the one refusal that is retried, because it is the one that proves the prompt
 was not delivered and says why the next try may land. Which refusals count is decided by
 herdr's code, recorded on the line as `code` — today only `agent_blocked`, an agent with a
-dialog up — and never by its message. A step's prompt and its repair are tried again with
+dialog up — and never by its message. A step's prompt or repair to an agent whose question is
+open on a Run is refused by the Dispatcher itself with the same code, before herdr is asked,
+so the answers reach the agent first. A step's prompt and its repair are tried again with
 a backoff from two seconds to thirty, each try reserved again under the same id, so every
 attempt is on the ledger and a second copy of the work stays blocked meanwhile. Ten minutes
 after the first refusal the delivery is settled `failed` with the note

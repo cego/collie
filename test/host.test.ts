@@ -35,6 +35,7 @@ import {
   type CheckRecord,
 } from "../src/check-processes";
 import { evidenceDir } from "../src/engine";
+import { restartHostAt } from "../src/lifecycle";
 import { signalProcess } from "../src/lock";
 import { startedOf, stillRunning } from "../src/processes";
 import { readVerifications, verifyingIn } from "../src/verify";
@@ -42,8 +43,7 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { FakeHerdr, Rig } from "./support/recorder";
-import { restartHostFlow } from "../src/flows";
+import { Rig } from "./support/recorder";
 
 const root = new URL("../", import.meta.url).pathname;
 const fixtures = `${root}test/fixtures/workflows`;
@@ -483,7 +483,7 @@ test(
 );
 
 test(
-  "the herdr action restarts the host and says what it did",
+  "collie host restart replaces the host and says what it did",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -494,22 +494,13 @@ test(
           connect(env.stateDir).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.provide(starting), Effect.orDie);
 
-        expect(yield* restartHostFlow(new FakeHerdr(env), env).pipe(Effect.provide(starting))).toBe(
-          0,
-        );
+        const restarted = yield* restartHostAt(env.stateDir).pipe(Effect.provide(starting));
         const owner = yield* ownerOf(env.stateDir);
         expect(owner?.pid).not.toBe(old.pid);
-        const shown = Option.getOrUndefined(
-          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "notification show"),
-        );
-        expect(shown?.argv).toContain("Collie host restarted");
+        expect(restarted.ok && restarted.human).toContain(`pid ${old.pid}`);
         expect(
-          Option.getOrUndefined(
-            Option.flatMap(Option.fromNullishOr(shown), (present) =>
-              Option.map(Option.fromNullishOr(present.argv), (present_) => Arr.join(present_, " ")),
-            ),
-          ),
-        ).toContain(`pid ${old.pid}`);
+          Arr.filter(yield* rig.calls(), (call) => pipe_(call.cmd, Str.startsWith("notification"))),
+        ).toEqual([]);
         yield* stopHost(env.stateDir);
       }).pipe(Effect.scoped, Effect.orDie),
     ),

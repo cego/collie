@@ -14,6 +14,8 @@ import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { appendJournal, readJournal, readJournalWhole } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { nowIso, epochMs } from "./time";
+import { terminalBackend } from "./config";
+import { coreSocket } from "./hc";
 
 /** What a delivery is about. The work, not the words. */
 const CauseSchema = Schema.Struct({
@@ -348,7 +350,7 @@ export function reconcile(
 export class HerdrUnreachable extends Data.TaggedError("HerdrUnreachable")<{ why: string }> {}
 
 /**
- * The Herd: one herdr session, named by the canonical path of its socket. Everything
+ * The Herd: one herdr or herdr-core session, named by the canonical path of its socket. Everything
  * shared across the workspaces of one session — the conversation, proposals, the budget,
  * elections — is filed under this. A cwd would key two sessions in one repository to the
  * same Herd and one session across two repositories to different ones.
@@ -374,6 +376,20 @@ export const herdKey = Effect.fn("Steering.herdKey")(function* <R>(
  */
 export const herdOf = (socketPath: string | null) =>
   herdKey(socketPath, () => Effect.succeed(null));
+
+/**
+ * The Herd of a Collie on this Machine: on one set to core, its core session's, keyed by
+ * that session's socket; on herdr, the herdr session it runs in.
+ */
+export const machineHerd = (env: {
+  readonly socketPath: string | null;
+  readonly userDir: string;
+  readonly raw: Readonly<Record<string, string | undefined>>;
+}) =>
+  Effect.gen(function* () {
+    const core = (yield* terminalBackend(env.userDir)) === "core";
+    return yield* herdOf(core ? yield* coreSocket(env.raw) : env.socketPath);
+  });
 
 export const herdDir = Effect.fn("Steering.herdDir")(function* (stateDir: string, key: string) {
   const path = yield* Path.Path;

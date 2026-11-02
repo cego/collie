@@ -91,6 +91,7 @@ const install = (dir: string, publicKey: string, extra: Record<string, string> =
       placed: yield* read(`${dir}/placed`),
       calls: yield* read(`${dir}/collie-calls`),
       config: yield* read(`${home}/.config/herdr/config.toml`),
+      herdr: yield* read(`${dir}/herdr-calls`),
       collieDir: `${home}/.collie`,
     };
   });
@@ -114,8 +115,9 @@ test("a signed runner places the release, and setup ends in doctor", () =>
       expect(again.placed).toBe(
         `${again.collieDir}/release upgrade\n${again.collieDir}/release upgrade\n`,
       );
-      expect(Str.split(again.config, "cego.collie.pick").length - 1).toBe(1);
-      expect(again.said).toContain("Keybinding for pick already present");
+      // herdr has no Collie of its own to bind or reload: the board is a core terminal.
+      expect(again.config).toBe("");
+      expect(again.herdr).not.toContain("reload-config");
       expect(again.calls).toContain("chat status-line --install");
       expect(Str.split(Str.trim(again.calls), "\n").at(-1)).toBe("doctor");
     }).pipe(Effect.scoped),

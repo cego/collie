@@ -221,6 +221,13 @@ export const Shared = Schema.Struct({
   }),
 });
 
+export const Checked = Schema.Struct({
+  head: Schema.String,
+  failed: Schema.Array(Schema.String),
+  // A Run journaled before 0.110.0 replays checks recorded without it.
+  conflicting: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+});
+
 /** One agent for the whole Run, which each step continues. */
 export const RELEASER = "release";
 
@@ -622,11 +629,7 @@ export default defineWorkflow({
         ) =>
           Activity.make({
             name,
-            success: Schema.Struct({
-              head: Schema.String,
-              failed: Schema.Array(Schema.String),
-              conflicting: Schema.Boolean,
-            }),
+            success: Checked,
             execute: Effect.gen(function* () {
               const checks = yield* host.approved(runId);
               const failed: string[] = [];

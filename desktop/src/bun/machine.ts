@@ -43,11 +43,12 @@ import {
   type ProposalRefused,
   type RequestConflict,
   type RunDetail,
+  type Toasted,
 } from "../../../src/board-model";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
+  HerdrMachine,
   HerdrMachines,
-  type HerdrMachine,
   type PeerView,
   PeerView as PeerSchema,
 } from "../../../src/peers-model";
@@ -273,12 +274,21 @@ export const openDoors = (
       desktop,
       chat,
       board: desktop.board(),
+      toasts: desktop.toasts(),
     })),
   );
 
 export interface BoardSource {
   readonly machine?: KnownMachine;
   readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
+  readonly toasts?: Stream.Stream<Toasted, unknown>;
+}
+
+/** What Electrobun's `showNotification` takes. */
+export interface Notification {
+  readonly title: string;
+  readonly body: string;
+  readonly silent: boolean;
 }
 
 /**
@@ -366,6 +376,45 @@ export const herdrMachines = (herdr: string, minHerdr: string) =>
     Effect.map((machines) => Arr.filter(machines, (machine) => machine.enabled)),
   );
 
+const Answered = Schema.fromJsonString(
+  Schema.Union([
+    Schema.Struct({ ok: Schema.Literal(true), data: Schema.Json }),
+    Schema.Struct({ ok: Schema.Literal(false), error: Schema.Struct({ message: Schema.String }) }),
+  ]),
+);
+
+/** What `collie --json <args>` answered, or why it refused. */
+export const collieSaid = (collie: ReadonlyArray<string>, args: ReadonlyArray<string>) =>
+  ran([...collie, "--json", ...args]).pipe(
+    Effect.flatMap(({ out, err, code }) =>
+      Option.match(Schema.decodeOption(Answered)(Str.trim(out)), {
+        onSome: (answer) =>
+          answer.ok ? Effect.succeed(answer.data) : Effect.fail(answer.error.message),
+        onNone: () =>
+          Effect.fail(
+            Str.trim(err) || `${CommandLine.display([...collie, ...args])} exited ${code}`,
+          ),
+      }),
+    ),
+  );
+
+const Roster = Schema.Struct({
+  backend: Schema.Literals(["herdr", "core"]),
+  roster: Schema.Array(HerdrMachine),
+});
+
+/** This computer's Machines as its terminal backend keeps them: core's list, or herdr's. */
+export const rosterOf = (collie: ReadonlyArray<string>) =>
+  collieSaid(collie, ["machine", "list"]).pipe(
+    Effect.flatMap((data) =>
+      Schema.decodeUnknownEffect(Roster)(data).pipe(Effect.mapError((e) => e.message)),
+    ),
+  );
+
+/** Removes a Machine from core and from Pairing; nothing on it is stopped or uninstalled. */
+export const forgetMachine = (collie: ReadonlyArray<string>, name: string) =>
+  collieSaid(collie, ["machine", "forget", name]).pipe(Effect.asVoid);
+
 /** Drops a machine from herdr's list; nothing on it is stopped or uninstalled. */
 export const removeFromHerdr = (herdr: string, profile: string, collie?: ReadonlyArray<string>) =>
   output([herdr, "machine", "remove", profile]).pipe(
@@ -403,14 +452,23 @@ const Connected = Schema.fromJsonString(
 
 /**
  * Opens the Machine's shared SSH connection with the local `collie machine connect`, saying
- * what an SSO login asks for as it waits, and answers its control path.
+ * what an SSO login asks for as it waits, and answers its control path. Its target goes too,
+ * for a Machine onboarding has not added yet.
  */
 const machineConnect = Effect.fn("Desktop.machineConnect")(function* (
   collie: ReadonlyArray<string>,
-  label: string,
+  machine: HerdrMachine,
   waitingOnSso: WaitingOnSso,
 ) {
-  const command = [...collie, "--json", "machine", "connect", label];
+  const command = [
+    ...collie,
+    "--json",
+    "machine",
+    "connect",
+    machine.label,
+    "--target",
+    machine.target,
+  ];
   const child = yield* spawned(() =>
     Bun.spawn(command, {
       env: childEnv(),
@@ -477,7 +535,7 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
         );
         if (checked) return path;
       }
-      path = yield* machineConnect(collie, machine.label, heard).pipe(
+      path = yield* machineConnect(collie, machine, heard).pipe(
         Effect.ensuring(Effect.sync(() => void (unheard = undefined))),
       );
       return path;
@@ -743,6 +801,7 @@ export const flockStream = <D extends BoardSource>(
   doors: Map<string, D>,
   version: string,
   changes: Stream.Stream<RouteChange<D>> = Stream.empty,
+  show: (notification: Notification) => void = () => {},
 ): Stream.Stream<FlockItem> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -876,7 +935,24 @@ export const flockStream = <D extends BoardSource>(
                 upgradeThenReopen(route, installation, from),
               ),
             );
-            return Stream.merge(board, upgrade, { haltStrategy: "left" }).pipe(
+            // ponytail: a route merged into another may show a toast in the moment before it ends.
+            const toasts = (door.toasts ?? Stream.empty).pipe(
+              Stream.tap((toast) =>
+                Effect.sync(() =>
+                  show({
+                    title: toast.title,
+                    body: `${route.machine.name} · ${toast.runId}\n${toast.body}`,
+                    silent: toast.sound === "none",
+                  }),
+                ),
+              ),
+              Stream.drain,
+              // A host too old to send toasts still shows its board.
+              Stream.ignoreCause,
+            );
+            return Stream.merge(Stream.merge(board, upgrade, { haltStrategy: "left" }), toasts, {
+              haltStrategy: "left",
+            }).pipe(
               Stream.interruptWhen(
                 Queue.take(reopens[at]!).pipe(
                   Effect.andThen(Effect.fail<RouteFailure>({ state: "reopen", reason: "asked" })),

@@ -172,6 +172,8 @@ const hostOf = (): AgentHost => ({
   collectMs: 400,
   help: (kind) => Effect.succeed(kind === "codex" ? CODEX_HELP : CLAUDE_HELP),
   version: () => Effect.succeed("2.1.309 (Claude Code)"),
+  // Codex's controls would start the operator's own `codex app-server`.
+  ports: Struct.omit(COMPACTION_PORTS, ["codex"]),
 });
 
 test(
@@ -181,6 +183,11 @@ test(
       Effect.gen(function* () {
         const inherited = rig.pluginEnv().raw;
         yield* configured('{ "compact_at_tokens": 0, "trust": "never" }');
+        // As on CI: no codex, so none of its controls start.
+        const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
+          made.restore(),
+        );
+        yield* bin.add("codex", "exit 1");
         yield* rig.startSocket();
         yield* rig.queueOutputs([null]);
         yield* rig.addWorkspace("wT", "Project | Own task", rig.projectDir);
@@ -227,7 +234,7 @@ test(
         );
         expect(tab?.argv).toEqual(expect.arrayContaining(["--workspace", "wT"]));
         expect(launched._tag).toBe("Success");
-      }),
+      }).pipe(Effect.scoped),
     ),
   30_000,
 );
@@ -5372,6 +5379,38 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
       expect(live.get("wH")).toBe("Offer banner, by hand");
       expect(yield* label("task-n")).toBe("Collie | Passkey bridge race");
       expect(live.get("wN")).toBe("Collie | Passkey bridge race");
+    }),
+  ));
+
+test("a Task on a core Machine is renamed in its record alone, and core is asked nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.startCore();
+      yield* fs.makeDirectory(rig.userDir, { recursive: true });
+      yield* fs.writeFileString(`${rig.userDir}/config.json`, '{ "terminal_backend": "core" }');
+      const env = rig.pluginEnv({ HERDR_SOCKET_PATH: "" });
+      yield* writeTask(env.stateDir, {
+        id: "task-k",
+        workspace: null,
+        label: "Collie | Plan new work",
+        cwd: rig.projectDir,
+        created_at: "2026-10-26T00:00:00.000Z",
+      });
+      const goal = { goal: "Design Tune-up performance workflow" };
+
+      yield* retitleGenericTasks(env, new Herdr(env), [
+        runFacts({ id: "r-k", workflow: "plan", task: "task-k", settled: { inputs: goal } }),
+      ]);
+
+      expect(yield* readTask(env.stateDir, "task-k")).toEqual({
+        id: "task-k",
+        workspace: null,
+        label: "Collie | Design Tune-up performance workflow",
+        cwd: rig.projectDir,
+        created_at: "2026-10-26T00:00:00.000Z",
+      });
+      expect(yield* rig.calls()).toEqual([]);
     }),
   ));
 

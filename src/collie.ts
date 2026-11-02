@@ -22,7 +22,6 @@ import { measure } from "./commands/measure";
 import { confirm, decline, proposal, steer } from "./commands/steer";
 import { chat, mcp, tools } from "./commands/chat";
 import { board } from "./commands/board";
-import { home } from "./commands/home";
 import { workflow } from "./commands/workflow";
 import { host } from "./commands/host";
 import { bridge } from "./commands/bridge";
@@ -45,7 +44,6 @@ export const app = root.pipe(
     verify,
     measure,
     board,
-    home,
     chat,
     tools,
     mcp,

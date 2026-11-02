@@ -1,5 +1,7 @@
 # Collie is one Effect program with two adapters
 
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): the herdr actions stop being a front door; the front doors are the CLI, Desktop and MCP.
+
 Collie replaces herdr-plugin and herdr-workflows in one big-bang cutover. Its Herdr actions
 and `collie` CLI are thin adapters over the same Effect v4 services, schemas, layers, and
 Bun runtime so every interactive capability is also available programmatically without a

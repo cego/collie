@@ -141,7 +141,7 @@ test("a Codex agent that does not become Quiet keeps its pane, in ADR-0059's wor
       );
       expect(stops).toEqual(["impl"]);
       expect(ended).toMatchObject({ _tag: "NotQuiet" });
-      expect(ended.reason).toStartWith(
+      expect(ended._tag === "NotQuiet" && ended.reason).toStartWith(
         "impl is not stopped: acknowledged, turn tu-1 still running after 30s — thread th-1 turn tu-1",
       );
       expect(yield* paneCloses).toEqual([]);

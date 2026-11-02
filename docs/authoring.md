@@ -134,7 +134,7 @@ it and no others.
 
 ## Forking
 
-`prefix+shift+f`, the Control Plane's `f` key, and `collie workflow fork` /
+The Control Plane's `f` key, and `collie workflow fork` /
 `collie persona fork` all put a copy in your layer (`--layer user`) or the project's
 (`--layer project`), under the id `--name` gives it.
 

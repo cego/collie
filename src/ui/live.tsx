@@ -13,7 +13,7 @@
 // moving a human off what they are doing — only a pending question does that, and that
 // is the engine's call, not the board's (ADR-0008).
 
-import { For, Show } from "solid-js";
+import { For } from "solid-js";
 import { TextAttributes } from "@opentui/core";
 import type { Live } from "../live";
 import type { ProposalRecord } from "../proposals";
@@ -25,7 +25,6 @@ import {
   describeAction,
   driftLines,
   newsLines,
-  ownershipLines,
   type Line,
   type Tone,
 } from "../lines";
@@ -69,11 +68,6 @@ export function LiveRegion(props: { live: Live }) {
   const live = () => props.live;
   return (
     <box style={{ flexDirection: "column" }}>
-      {/* First: an ownership question is the board saying it does not know which
-          workspace is its own, and only a human can settle it. */}
-      <Show when={live().ownership !== null}>
-        <Lines lines={ownershipLines(live().ownership!.why, live().ownership!.candidates)} />
-      </Show>
       {/* What Collie noticed and the conversation has not been told. Drawn, never
           delivered: looking at the board is not a chat having read it. */}
       <Lines lines={newsLines(live().news)} />

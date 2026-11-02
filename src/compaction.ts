@@ -28,7 +28,7 @@ import type { Channel } from "./dispatcher";
 import type { Herdr, HerdrError, Submission } from "./herdr";
 import type { CodexError } from "./codex";
 import type { OpenCodeError } from "./opencode";
-import type { HarnessVersionError, Submitting } from "./compactors";
+import type { AgentQuestion, HarnessVersionError, Submitting } from "./compactors";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import { COMPACTION_OFF } from "./settings";
@@ -105,6 +105,8 @@ export interface LaunchContext {
   env?: ReadonlyArray<string>;
   /** The agent's MCP launch arguments, as its harness is given them. */
   mcp?: ReadonlyArray<string>;
+  /** The harness session it is started again in, where it had one. */
+  session?: string;
 }
 
 export interface AgentContext extends LaunchContext {
@@ -245,6 +247,17 @@ export interface CompactionPort {
     note: (line: string) => Effect.Effect<void>,
     budgetMs: number,
   ) => Effect.Effect<Stopped, never, PortServices>;
+  /**
+   * The questions this agent put to the human through its controls, each call by its own
+   * id, for a harness whose question never shows as `blocked`.
+   */
+  readonly questions?: (
+    ctx: ReadyContext,
+  ) => Effect.Effect<
+    ReadonlyArray<{ readonly id: string; readonly questions: ReadonlyArray<AgentQuestion> }>,
+    PortError,
+    PortServices
+  >;
   /** What this request has established, or `null` while it is still unresolved. */
   poll(
     ctx: AgentContext,
@@ -442,14 +455,17 @@ const enabled = Effect.fn("Compaction.enabled")(function* (configured: number) {
 
 /**
  * The controls for a newly launched agent, as extra `agent start` arguments. Nothing
- * is installed when the feature is off or the harness is unsupported. Native compaction
- * remains available; missing Collie controls do not block the work.
+ * is installed when the harness is unsupported, or when the feature is off and the harness's
+ * questions are not read through them. Native compaction remains available; missing Collie
+ * controls do not block the work.
  */
 export const installControls = Effect.fn("Compaction.installControls")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir" | "configured" | "log" | "herdr" | "stopMs">,
   agent: { agent: string; harness: string; cwd: string; runLog: string },
   env: ReadonlyArray<string> = [],
   mcp: ReadonlyArray<string> = [],
+  /** Started again in this session, keeping these files of its controls. */
+  resumed?: { readonly session: string; readonly keep: ReadonlyArray<string> },
 ) {
   const limit = yield* enabled(deps.configured);
   const fs = yield* FileSystem.FileSystem;
@@ -463,9 +479,19 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   if (reached !== null && reached.state !== "quiet")
     return yield* new NotQuiet({ message: notStopped(agent.agent, reached, reached.target) });
   if (reached === null) yield* putDownServer(deps, prior);
+  const kept = yield* Effect.forEach(resumed?.keep ?? [], (name) =>
+    fs.readFileString(`${dir}/${name}`).pipe(
+      Effect.map((text) => ({ name, text })),
+      Effect.option,
+    ),
+  );
   yield* fs.remove(dir, { recursive: true, force: true });
-  if (!limit) return [];
+  for (const { name, text } of Arr.getSomes(kept)) {
+    yield* fs.makeDirectory(dir, { recursive: true });
+    yield* fs.writeFileString(`${dir}/${name}`, text);
+  }
   const port = deps.ports[agent.harness];
+  if (!limit && port?.questions === undefined) return [];
   if (!port) {
     yield* deps.log(`${agent.agent}: ${agent.harness} has no compaction controls in Collie`);
     return [];
@@ -483,14 +509,16 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   // launch must not prune these controls before herdr can list their agent.
   yield* Effect.ignore(putDownStaleControls(deps, agent.agent));
   yield* fs.makeDirectory(dir, { recursive: true });
-  const installed = yield* port.install({
+  const ctx: LaunchContext = {
     agent: agent.agent,
     harness: agent.harness,
     cwd: agent.cwd,
     dir,
     env,
     mcp,
-  });
+  };
+  if (resumed !== undefined) ctx.session = resumed.session;
+  const installed = yield* port.install(ctx);
   const started =
     installed.pid === undefined ? null : ((yield* processOf(installed.pid))?.started ?? null);
   yield* writeControl(deps.stateDir, {
@@ -946,7 +974,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
   ).pipe(Effect.result);
   const failure = Result.isFailure(submitted) ? submitted.failure : null;
   // Written but unconfirmed: what tells a request that never arrived from one ignored.
-  if (Result.isSuccess(submitted) && submitted.success === "unobserved") {
+  if (Result.isSuccess(submitted) && submitted.success !== "observed") {
     yield* deps.log(`${at.agent}: compaction request written, no turn observed`);
   }
   if (failure instanceof Unsubmitted) {

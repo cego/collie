@@ -360,7 +360,9 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
   runs: ReadonlyArray<RunFacts>,
 ) {
   const tasks = yield* listTasks(env.stateDir);
-  const herds = yield* liveHerds(herdr, env);
+  const herds = Arr.some(tasks, (task) => task.workspace !== null)
+    ? yield* liveHerds(herdr, env)
+    : [];
   for (const task of tasks) {
     const [, project, title] = PREFIXED.exec(task.label) ?? [];
     const first = Arr.filter(runs, (run) => run.task === task.id).sort((one, other) =>
@@ -375,7 +377,7 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
           ? herds[0]
           : undefined
         : Option.getOrUndefined(Arr.findFirst(herds, (one) => one.herd === task.herd));
-    if (herd === undefined) continue;
+    if (herd === undefined && task.workspace !== null) continue;
     const named = fallbackName(
       {
         workflow: first.workflow,
@@ -394,6 +396,8 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
       Effect.gen(function* () {
         const now = yield* readTask(env.stateDir, task.id);
         if (now === null || now.label !== task.label) return;
+        if (now.workspace === null || herd === undefined)
+          return yield* writeTask(env.stateDir, { ...now, label });
         const listed = yield* herd.herdr.workspaceList().pipe(Effect.option);
         // Unread, a workspace a human renamed is indistinguishable from one that is gone.
         if (listed._tag === "None") return;

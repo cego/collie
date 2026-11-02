@@ -191,7 +191,7 @@ test("a roaming Run is cut from the repository the strategy names, under a neutr
 
       expect(checkout.refused).toBeNull();
       // The directory is not named after the workflow that first needed one.
-      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "roaming"));
+      expect(checkout.cwd).toBe(join(rig.root, ".collie", "worktrees", "project", "roaming"));
     }),
   ));
 

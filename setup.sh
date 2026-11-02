@@ -5,14 +5,12 @@
 #
 # It downloads the runner for this platform, verifies it against Collie's release key, and has
 # it place the release it carries into the Collie directory, migrating a clone found there.
-# Then the first-time work: keybindings, the status line, reloading herdr, and `collie doctor`.
+# Then the first-time work: the status line and `collie doctor`.
 # Safe to re-run; every step skips what is already in place.
 set -eu
 
 RELEASES="${COLLIE_RELEASES:-https://github.com/cego/collie/releases}"
 COLLIE_DIR="${COLLIE_DIR:-$HOME/.collie}"
-PLUGIN_ID="cego.collie"
-CONFIG="${HERDR_CONFIG:-$HOME/.config/herdr/config.toml}"
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
@@ -68,48 +66,16 @@ COLLIE_DIR="$COLLIE_DIR" HERDR_PLUGIN_ROOT="$plugin_root" COLLIE_RELEASES="$RELE
   "$work/collie" upgrade ${VERSION:+--to "$VERSION"} || die "the runner did not place its release"
 ROOT="$COLLIE_DIR/release"
 
-add_binding() { # key action description
-  if grep -q "command = \"$PLUGIN_ID.$2\"" "$CONFIG" 2>/dev/null; then
-    say "Keybinding for $2 already present"
-    return
-  fi
-  say "Binding $1 → $2"
-  cat >>"$CONFIG" <<TOML
-
-[[keys.command]]
-key = "$1"
-type = "plugin_action"
-command = "$PLUGIN_ID.$2"
-description = "$3"
-TOML
-}
-
-mkdir -p "$(dirname "$CONFIG")"
-add_binding "prefix+f"       pick   "Run a workflow"
-add_binding "prefix+u"       resume "Resume a workflow run"
-add_binding "prefix+shift+f" fork   "Fork a workflow or persona"
-# `prefix+c` is herdr's own `new_tab`, so the board takes the shifted one.
-add_binding "prefix+shift+c" board  "Open the Control Plane"
-
 # The line under the chat prompt, in the human's own Claude Code settings: first-time
-# work like the keybindings above, and never `prepare.sh`'s. The runner edits the file so
-# that everything else the human keeps there survives it, and says what it did.
+# work, never `prepare.sh`'s. The runner edits the file so that everything else the
+# human keeps there survives it, and says what it did.
 say "Configuring Claude Code's status line"
 "$ROOT/bin/collie" chat status-line --install || say "Could not configure the status line; collie doctor says what to do"
 
-if herdr status server 2>/dev/null | grep -q "status: running"; then
-  say "Reloading herdr config"
-  herdr server reload-config >/dev/null
-else
-  say "herdr is not running; the bindings apply on next start"
-fi
-
 say "Done."
-say "Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks,"
-say "and prefix+shift+c opens this session's Control Plane."
-say "Outside it, the collie skill lets an agent drive runs from the CLI."
-say "The board is one card per task, in three sections: what needs you, what is working,"
-say "what finished. Chat about the flock is the pane beside it."
+say "The Collie host keeps two core terminals: the board, collie-board, and chat about"
+say "the flock, collie-chat: hc attach collie-board opens the board."
+say "The collie skill lets an agent drive runs from the CLI."
 
 # The last word, and the exit status: either everything is ready or what is missing
 # with the command that fixes each one. `exec`, so nothing here can print after it
