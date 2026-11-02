@@ -18,6 +18,7 @@ import {
   readVerifications,
   resolveExecutable,
   resultOf,
+  recordFor,
   reliedFor,
   runApproved,
   staleAgainst,
@@ -563,6 +564,39 @@ test("a pass is relied on only while its tree, its command and its environment a
       // The tool changed.
       yield* tool(runDir, "exit 0 # upgraded");
       expect(yield* relied()).toBeNull();
+    }),
+  ));
+
+test("an install into an ignored node_modules makes a record stale, and a cache written there does not", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
+      yield* fs.writeFileString(`${repo}/.gitignore`, "node_modules/\n");
+      yield* fs.writeFileString(`${repo}/package.json`, "{}\n");
+      yield* git(["add", "-A"]);
+      yield* git(["commit", "-qm", "a package"]);
+      const executable = yield* tool(runDir, `[ -d ${repo}/node_modules/left-pad ]`);
+      const spec: VerifySpec = { name: "unit", executable, argv: [], cwd: "." };
+      const run = { id: "r1", cwd: repo, worktree: null };
+      const since = "2000-01-01T00:00:00.000Z";
+      const recorded = () => recordFor(runDir, run, spec, since);
+
+      const failed = yield* runApproved(runDir, run, [spec], spec);
+      expect(failed.result).toBe("fail");
+      expect((yield* recorded())?.id).toBe(failed.id);
+
+      const before = yield* fingerprint(repo);
+      yield* fs.makeDirectory(`${repo}/node_modules/left-pad`, { recursive: true });
+      yield* fs.writeFileString(`${repo}/node_modules/left-pad/package.json`, "{}\n");
+      expect(yield* fingerprint(repo)).toEqual(before);
+      expect(yield* recorded()).toBeNull();
+
+      const installed = yield* runApproved(runDir, run, [spec], spec);
+      expect(installed.result).toBe("pass");
+      yield* fs.makeDirectory(`${repo}/node_modules/.cache`);
+      yield* fs.writeFileString(`${repo}/node_modules/.cache/results.json`, "{}\n");
+      expect((yield* recorded())?.id).toBe(installed.id);
     }),
   ));
 

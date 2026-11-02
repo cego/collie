@@ -12,9 +12,12 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result, type Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
+// oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's file info has no ctime.
+import { lstat } from "node:fs/promises";
 import { CheckProcesses, type CheckOf } from "./check-processes";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
@@ -173,19 +176,69 @@ const identityOf = (executable: string) =>
     return `${real}@${digest}`;
   });
 
+/** The checkout's package roots: each directory holding a tracked `package.json`, or `cwd` outside git. */
+const packageRoots = Effect.fn("Verify.packageRoots")(function* (cwd: string) {
+  const path = yield* Path.Path;
+  const top = yield* git(["rev-parse", "--show-toplevel"], cwd);
+  if (top.code !== 0) return [cwd];
+  const root = Str.trim(top.stdout);
+  const listed = yield* git(["ls-files", "-z", "--", ":(glob)**/package.json"], root);
+  if (listed.code !== 0) return [cwd];
+  const files = Arr.filter(Str.split(listed.stdout, "\0"), (file) => file !== "");
+  return Arr.map(files, (file) => path.join(root, path.dirname(file)));
+});
+
+const identityLine = (name: string, at: string) =>
+  Effect.map(
+    Effect.tryPromise(() => lstat(at)),
+    (info) => ({
+      line: `${name}:${info.ino}:${info.ctimeMs}`,
+      scope: pipe(name, Str.startsWith("@")) && info.isDirectory(),
+    }),
+  );
+
+/**
+ * What is installed under a package root, by entry name and file identity, never read.
+ * Dot-entries but `.bin` are caches tools write while a check runs.
+ */
+// ponytail: a file rewritten in place inside a package goes unseen; content digests if that bites.
+const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const modules = path.join(root, "node_modules");
+  const names = yield* fs.readDirectory(modules).pipe(
+    Effect.map((found): ReadonlyArray<string> | null => found),
+    Effect.catchTag("PlatformError", (error) =>
+      error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
+    ),
+  );
+  if (names === null) return `${root}:absent`;
+  const lines = [root];
+  for (const name of Arr.sort(names, Order.String)) {
+    if (pipe(name, Str.startsWith(".")) && name !== ".bin") continue;
+    const { line, scope } = yield* identityLine(name, path.join(modules, name));
+    lines.push(line);
+    if (!scope) continue;
+    for (const inner of Arr.sort(yield* fs.readDirectory(path.join(modules, name)), Order.String))
+      lines.push((yield* identityLine(`${name}/${inner}`, path.join(modules, name, inner))).line);
+  }
+  return Arr.join(lines, "\n");
+});
+
 /**
  * The environment a check runs in: the executable's real path and content, the runtimes
- * on PATH, and `TOOLCHAIN_VARIABLES`. Null where any of them cannot be read, which no
- * record can be reused under.
+ * on PATH, `TOOLCHAIN_VARIABLES`, and the dependencies installed in `cwd`'s checkout. Null
+ * where any of them cannot be read, which no record can be reused under.
  */
 export const environmentOf = Effect.fn("Verify.environmentOf")(
-  function* (absolute: string) {
+  function* (absolute: string, cwd: string) {
     const parts = [yield* identityOf(absolute)];
     for (const runtime of TOOLCHAIN_RUNTIMES) {
       const found = Bun.which(runtime, { PATH: Bun.env.PATH ?? "" });
       parts.push(`${runtime}=${found === null ? "" : yield* identityOf(found)}`);
     }
     for (const name of TOOLCHAIN_VARIABLES) parts.push(`${name}=${Bun.env[name] ?? ""}`);
+    for (const root of yield* packageRoots(cwd)) parts.push(yield* installedAt(root));
     return Bun.hash(Arr.join(parts, "\n")).toString(16);
   },
   Effect.orElseSucceed(() => null),
@@ -358,7 +411,7 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   if (absolute === null)
     return yield* new VerifyRefused({ why: `nothing on PATH called "${what.executable}"` });
 
-  const environment = yield* environmentOf(absolute);
+  const environment = yield* environmentOf(absolute, what.cwd);
   const start = yield* fingerprint(what.cwd);
   const began = yield* nowIso;
   const fs = yield* FileSystem.FileSystem;
@@ -707,7 +760,7 @@ export const recordFor = Effect.fn("Verify.recordFor")(function* (
   if (executable === null) return null;
   return latestRecord(
     yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
-    { executable, argv: spec.argv, cwd, environment: yield* environmentOf(executable) },
+    { executable, argv: spec.argv, cwd, environment: yield* environmentOf(executable, cwd) },
     yield* fingerprint(cwd),
     since,
   );
