@@ -144,7 +144,6 @@ const coreAnswers = Effect.fn("Doctor.coreAnswers")(function* (env: PluginEnv) {
   });
 });
 
-/** Every pane open in each running herdr session. */
 const herdrPanes = (herdr: Herdr) =>
   herdr
     .sessionList()
