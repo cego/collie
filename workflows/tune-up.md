@@ -112,6 +112,24 @@ lost. Where any of it fails, change nothing more and push nothing: Collie then c
 checkout's head and files against the Cycle's start and fails the Run naming both trees, and
 nothing is lost.
 
+## cleanup
+
+The human is happy with the progress, so this branch is prepared for release. Collie has
+archived the benchmark material in {{archive}}: the harness commits {{harness.commits}} as
+patches, every Measurement and the plan. The host measures the cleaned branch with those
+commits applied in a scratch tree of its own, so nothing the benchmark needs stays here.
+
+Take off this branch, in new commits on top of it, and nothing else:
+
+- the harness: everything under {{harness.paths}};
+- instrumentation and counters you added only for the benchmark;
+- setup that only this Run needed: fixtures, scripts, configuration or dependencies.
+
+Keep every product change a kept Cycle made, and rewrite no history: never rebase, reset or
+amend. A metric only instrumentation reports keeps its instrumentation inside the harness
+paths, where applying the harness brings it back. Push nothing. Answer with what you removed
+and the commits that removed it. Collie then checks that none of {{harness.paths}} is left.
+
 ## external-search
 
 Search Linear, read-only, with its MCP server, for this finding, which only another repository

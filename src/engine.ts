@@ -534,7 +534,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly plan_digest: string;
     readonly plan_reason: string | null;
     readonly base: MeasuredTree & { readonly commit: string };
-    readonly candidate: MeasuredTree;
+    /** \`harness_applied\`: the harness commits a scratch tree put on a candidate that had none; it was sampled there. */
+    readonly candidate: MeasuredTree & { readonly harness_applied?: ReadonlyArray<string> };
     readonly environment: Readonly<Record<string, string | null>>;
     readonly waited: { readonly memory: boolean; readonly machine: ReadonlyArray<string> };
     readonly prepare: ReadonlyArray<{ readonly tree: "base" | "candidate"; readonly exit: number; readonly seconds: number; readonly output: string }>;

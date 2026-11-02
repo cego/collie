@@ -15966,8 +15966,51 @@ const tunePlan = (
 const NOISY_PRIMARY = { name: "bench.value", direction: "lower", role: "primary" } as const;
 const STEADY_PRIMARY = { name: "bench.count", direction: "lower", role: "primary" } as const;
 
-const tunedUp = (runId: string, input: Readonly<Record<string, Schema.Json>> = {}) =>
-  ran({ entry: shipped("tune-up"), runId, input });
+type Driving = Parameters<Parameters<typeof driven>[1]>[0];
+
+/** Each progress question answered as it opens, with the next of `answers` and then Yes, until the Run ends. */
+const answeringProgress = (run: Driving, answers: ReadonlyArray<string> = []) =>
+  Effect.gen(function* () {
+    const given: string[] = [];
+    for (;;) {
+      const [status, open] = yield* Effect.all([
+        run.status,
+        Effect.map(run.asked, (rows) =>
+          Arr.findFirst(
+            rows,
+            (row) =>
+              row.answer === null &&
+              pipe(row.decision, Str.startsWith("progress-")) &&
+              !given.includes(row.decision),
+          ),
+        ),
+      ]).pipe(
+        Effect.filterOrFail(
+          ([status, open]) =>
+            status.status === "complete" || status.status === "failed" || Option.isSome(open),
+        ),
+        Effect.retry({ schedule: Schedule.spaced("20 millis") }),
+      );
+      if (Option.isSome(open)) {
+        yield* run.answer(open.value.decision, answers[given.length] ?? "Yes");
+        given.push(open.value.decision);
+        continue;
+      }
+      return status.status === "complete"
+        ? { _tag: "Success" as const, success: status.value }
+        : {
+            _tag: "Failure" as const,
+            failure: { reason: status.status === "failed" ? status.reason : "" },
+          };
+    }
+  });
+
+/** A tune-up run to its end, each progress question answered with the next of `answers`, then Yes. */
+const tunedUp = (
+  runId: string,
+  input: Readonly<Record<string, Schema.Json>> = {},
+  answers: ReadonlyArray<string> = [],
+) => driven({ entry: shipped("tune-up"), runId, input }, (run) => answeringProgress(run, answers));
 
 const calibrations = (runId: string) =>
   Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
@@ -16509,11 +16552,12 @@ scenario(
         const runId = "r-tune-dirty-drop";
         yield* cycling(runId, [
           fasterWhileUpstreamPushes(3, "fixed"),
-          asTold("echo '# mine' >> bench/bench.sh", "dropped"),
+          cleanedUp(),
+          asTold("echo '# mine' > mine", "dropped"),
         ]);
         yield* tunedUp(runId, { samples: 4, cycles: 1 });
         expect(yield* wasAsked(runId, "drop")).toBe(true);
-        expect(yield* readText(`${rig.projectDir}/bench/bench.sh`)).toEndWith("# mine\n");
+        expect(yield* readText(`${rig.projectDir}/mine`)).toBe("# mine\n");
         const [final] = yield* finals(runId);
         expect(yield* checkoutTree()).toBe(final!.base.content);
       }),
@@ -16529,6 +16573,7 @@ scenario(
         const runId = "r-tune-foreign-drop";
         yield* cycling(runId, [
           fasterWhileUpstreamPushes(3, "fixed"),
+          cleanedUp(),
           asTold("echo theirs > theirs && git add theirs && git commit -qm theirs", "dropped"),
         ]);
         const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
@@ -16574,6 +16619,7 @@ scenario(
           FASTER(),
           NO_CHANGE(),
           RESET(),
+          cleanedUp(),
           TUNE_REVIEWED,
           OPENED,
         ]);
@@ -16585,7 +16631,9 @@ scenario(
           ),
         );
         expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert", "cycle-2"]);
-        const result = yield* resumed(options);
+        const result = yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.andThen(run.resume, answeringProgress(run)),
+        );
         expect(yield* cyclePrompts(runId)).toEqual([
           "cycle-1",
           "cycle-1-revert",
@@ -16749,7 +16797,7 @@ scenario(
         const { bin, forge } = yield* tuneForge;
         const commit = yield* cycling(
           runId,
-          [fasterTo(5), fasterTo(3), TUNE_REVIEWED, OPENED],
+          [fasterTo(5), fasterTo(3), cleanedUp(), TUNE_REVIEWED, OPENED],
           [`API_TOKEN=${SECRET}`],
         );
         const result = yield* tunedUp(runId, { samples: 4, cycles: 2 });
@@ -16821,6 +16869,7 @@ scenario(
         yield* cycling(runId, [
           fasterTo(5),
           fasterWhileUpstreamPushes(3, "upstream.txt"),
+          cleanedUp(),
           TUNE_REVIEWED,
           OPENED,
         ]);
@@ -16852,11 +16901,8 @@ scenario(
         const runId = "r-tune-lost";
         yield* cycling(runId, [
           fasterWhileUpstreamPushes(3, "fixed"),
-          {
-            writes: [],
-            sh: inCheckout("git rm -q count && git commit -qm drop"),
-            output: "dropped",
-          },
+          cleanedUp(),
+          asTold("true", "dropped"),
         ]);
         const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
         expect(result._tag).toBe("Success");
@@ -16908,6 +16954,7 @@ scenario(
         const { bin, forge } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           TUNE_REVIEWED,
           openedFailing(forge),
           ciFixedTo(forge, 2),
@@ -16944,6 +16991,7 @@ scenario(
         const { bin, forge } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           TUNE_REVIEWED,
           openedFailing(forge),
           ciFixedTo(forge, 7),
@@ -16977,6 +17025,7 @@ scenario(
         const { bin } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           {
             ...TUNE_REVIEWED,
             verdict: "findings",
@@ -17033,6 +17082,7 @@ scenario(
         );
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           ...Arr.flatMap([1, 2, 3, 4], blockedThenFixed),
           TUNE_REVIEWED,
           {
@@ -17062,6 +17112,7 @@ scenario(
         const { bin, forge } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           TUNE_REVIEWED,
           {
             verdict: "findings",
@@ -17078,6 +17129,283 @@ scenario(
       }),
     ),
   120_000,
+);
+
+/** The tuner's cleanup: the harness taken off the branch, then `more`, in one commit. */
+const cleanedUp = (more = "true") => ({
+  writes: [],
+  sh: inCheckout(`git rm -rq bench && ${more} && git commit -qm cleanup`),
+  output: { removed: ["bench"], commits: ["HEAD"] },
+});
+
+const progressAsked = (runId: string) =>
+  Effect.map(
+    session(Effect.flatMap(Store, (store) => store.asked(runId))),
+    Arr.filter((row) => pipe(row.decision, Str.startsWith("progress-"))),
+  );
+
+const occurrences = (text: string, part: string) => Str.split(text, part).length - 1;
+
+scenario(
+  "a tune-up asks whether the progress is enough once its cycles are spent; each No runs one more Cycle past the budget, and Yes archives the benchmark, takes the harness off the branch and proves the cleaned tree",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-asked";
+        const { bin } = yield* tuneForge;
+        const commit = yield* cycling(runId, [
+          fasterTo(5),
+          NO_CHANGE(),
+          RESET(),
+          fasterTo(3),
+          cleanedUp(),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } };
+        const status = yield* driven(options, (run) =>
+          Effect.gen(function* () {
+            const first = yield* nextAsked(run.asked, []);
+            expect(first.decision).toBe("progress-1");
+            expect(yield* cyclePrompts(runId)).toEqual(["cycle-1"]);
+            expect(first.prompt).toContain("Are you happy with the progress?");
+            expect(first.prompt).toContain("Automatic cycling stopped: cycles spent: 1 of 1");
+            expect(first.prompt).toMatch(
+              /Cycle 1, .*: kept; \S+: bench\.count gain \(ratio 0\.714, 95% interval/,
+            );
+            expect(first.prompt).toContain("bench.size no-change");
+            yield* run.answer(first.decision, "No");
+            const second = yield* nextAsked(run.asked, [first.decision]);
+            expect(second.decision).toBe("progress-2");
+            expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-2", "cycle-2-revert"]);
+            expect(second.prompt).toContain("Cycle 2, ");
+            expect(second.prompt).toContain("reverted: bench.count no-change, not a gain");
+            yield* run.answer(second.decision, "no, keep improving");
+            const third = yield* nextAsked(run.asked, [first.decision, second.decision]);
+            expect(third.decision).toBe("progress-3");
+            yield* run.answer(third.decision, "Yes");
+            return yield* ended(run.status);
+          }),
+        );
+        yield* bin.restore();
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "cycle-3")).toContain("past it because the human answered No");
+        const log = yield* runLog(runId);
+        expect(occurrences(log, "cycle 2 started")).toBe(1);
+        expect(occurrences(log, "cycle 3 started")).toBe(1);
+        expect(Arr.map(yield* progressAsked(runId), (row) => row.decision)).toEqual([
+          "progress-1",
+          "progress-2",
+          "progress-3",
+        ]);
+        for (const decided of [
+          "decision progress-1: No",
+          "decision progress-2: no, keep improving",
+          "decision progress-3: Yes",
+        ])
+          expect(occurrences(log, decided)).toBe(1);
+
+        // Yes: the branch ships without the harness, and the final Measurement is of that tree.
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${rig.projectDir}/bench`)).toBe(false);
+        expect(yield* wasAsked(runId, "cleanup")).toBe(true);
+        const [final, ...more] = yield* finals(runId);
+        expect(more).toEqual([]);
+        expect(final!.candidate.head_sha).toBe(yield* headOf());
+        expect(final!.candidate.harness_applied).toEqual([commit]);
+        expect(verdictsOf(final!)).toEqual(["bench.count gain", "bench.size no-change"]);
+
+        // The archive, in the Run's record.
+        const archive = `${runDir(dir, runId)}/archive`;
+        const patches = yield* fs.readDirectory(`${archive}/harness`);
+        expect(patches).toHaveLength(1);
+        expect(yield* readText(`${archive}/harness/${patches[0]}`)).toContain("bench/bench.sh");
+        expect(yield* readText(`${archive}/plan.json`)).toContain('"paths":["bench"]');
+        const raw = yield* readText(`${archive}/measurements.jsonl`);
+        const taken = yield* readMeasurements(evidenceDir(dir, runId));
+        for (const one of taken) expect(raw).toContain(one.id);
+        const readme = yield* readText(`${archive}/README.md`);
+        expect(readme).toContain(`${final!.id} (final)`);
+        expect(readme).toContain(`candidate ${final!.candidate.head_sha} with ${commit} applied`);
+        expect(readme).toContain("95% interval");
+        expect(readme).toContain(`collie measure --run ${runId} --base ${final!.base.commit}`);
+
+        const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
+        expect(Str.split(body, "<details>")[0]).toContain(final!.id);
+        expect(body).toContain(archive);
+        expect(body).toContain("measured with it applied in a scratch tree");
+        expect(body).not.toContain("Accepted tradeoffs");
+      }),
+    ),
+  180_000,
+);
+
+scenario(
+  "a tune-up whose wall time is spent before Cycle 1 runs one more Cycle on a No, and a Yes with no Cycle kept ends with its findings and no merge request, archive or cleanup",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-no-time-no";
+        yield* cycling(runId, [NO_CHANGE(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4, wall_time: "1 millis" }, ["No"]);
+        expect(result._tag).toBe("Success");
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+        expect(Arr.map(yield* progressAsked(runId), (row) => row.decision)).toEqual([
+          "progress-1",
+          "progress-2",
+        ]);
+        expect(yield* runLog(runId)).toContain("decision progress-1: No");
+        const [, again] = yield* progressAsked(runId);
+        expect(again!.prompt).toContain("the human answered No, so Cycle 1 ran");
+        expect(said(result)).toContain("no Cycle was kept");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* wasAsked(runId, "cleanup")).toBe(false);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${runDir(dir, runId)}/archive`)).toBe(false);
+        expect(yield* fs.exists(`${rig.projectDir}/bench`)).toBe(true);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up answered with neither Yes nor No is asked again, and nothing else happens",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-unclear";
+        yield* cycling(runId, [NO_CHANGE(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 }, ["maybe later", "Yes."]);
+        expect(result._tag).toBe("Success");
+        expect(Arr.map(yield* progressAsked(runId), (row) => row.decision)).toEqual([
+          "progress-1",
+          "progress-1-again",
+        ]);
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+        const log = yield* runLog(runId);
+        expect(log).not.toContain("decision progress-1:");
+        expect(log).toContain("decision progress-1-again: Yes.");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up Yes with a tradeoff in words keeps a final Measurement whose guardrail regressed, writes the tradeoff apart from the verdicts, and the gate still fails it with no merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-tradeoff";
+        const tradeoff = "a larger index is fine for this speed";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          cleanedUp("echo 200 > size && git add size"),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 }, [`Yes, ${tradeoff}`]);
+        yield* bin.restore();
+        expect(result._tag).toBe("Failure");
+        const [final] = yield* finals(runId);
+        expect(verdictsOf(final!)).toEqual(["bench.count gain", "bench.size regression, not held"]);
+        expect(reasonOf(result)).toContain("guardrail bench.size is not held");
+        expect(reasonOf(result)).toContain(`accepted tradeoff: ${tradeoff}`);
+        expect(yield* wasAsked(runId, "drop")).toBe(false);
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect((yield* forge.model()).mrs ?? []).toEqual([]);
+        const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
+        const [table, rest] = Str.split(body, "### Accepted tradeoffs");
+        expect(table).toContain("| bench.size | guardrail |");
+        expect(table).toContain("regression, not held");
+        expect(Str.split(rest!, "###")[0]).toContain(tradeoff);
+        expect(yield* runLog(runId)).toContain(`accepted tradeoff: ${tradeoff}`);
+      }),
+    ),
+  180_000,
+);
+
+scenario(
+  "a tune-up Yes with no tradeoff drops a final Measurement whose guardrail regressed, as before",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-no-tradeoff";
+        yield* cycling(runId, [
+          fasterTo(3),
+          cleanedUp("echo 200 > size && git add size"),
+          asTold("true", "dropped"),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 }, [
+          "yes, prepare for release",
+        ]);
+        expect(result._tag).toBe("Success");
+        expect(yield* wasAsked(runId, "drop")).toBe(true);
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(said(result)).toContain("guardrail bench.size regression, not held");
+        expect(yield* runLog(runId)).not.toContain("accepted tradeoff");
+      }),
+    ),
+  180_000,
+);
+
+scenario(
+  "a tune-up host restarted while the question waits, after a No in the middle of the next Cycle, and after a Yes in the middle of cleanup records each decision once and repeats no Cycle, cleanup or final Measurement",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-asked-restart";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [fasterTo(5), fasterTo(3), cleanedUp(), TUNE_REVIEWED, OPENED]);
+        const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } };
+        yield* stalled(options);
+        expect(Arr.map(yield* progressAsked(runId), (row) => row.decision)).toEqual(["progress-1"]);
+        yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.gen(function* () {
+            yield* run.resume;
+            yield* run.answer("progress-1", "No");
+            yield* until(
+              () => wasAsked(runId, "cycle-2"),
+              (got) => got,
+            );
+          }),
+        );
+        yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.gen(function* () {
+            yield* run.resume;
+            const next = yield* nextAsked(run.asked, ["progress-1"]);
+            expect(next.decision).toBe("progress-2");
+            yield* run.answer(next.decision, "Yes");
+            yield* until(
+              () => wasAsked(runId, "cleanup"),
+              (got) => got,
+            );
+          }),
+        );
+        const result = yield* resumed(options);
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        const log = yield* runLog(runId);
+        expect(occurrences(log, "decision progress-1: No")).toBe(1);
+        expect(occurrences(log, "decision progress-2: Yes")).toBe(1);
+        expect(occurrences(log, "cycle 2 started")).toBe(1);
+        expect(occurrences(log, "cleaned up to")).toBe(1);
+        const sent = Arr.map(yield* prompts(), (one) =>
+          Option.getOrUndefined(
+            Option.map(
+              Option.fromNullishOr(new RegExp(`/${runId}/([a-z0-9-]+)\\.prompt\\.md`).exec(one)),
+              (named) => named[1],
+            ),
+          ),
+        );
+        expect(Arr.filter(sent, (one) => one === "cycle-2")).toHaveLength(1);
+        expect(Arr.filter(sent, (one) => one === "cleanup")).toHaveLength(1);
+        expect(
+          Arr.map(yield* readMeasurements(evidenceDir(dir, runId)), (one) => one.pass),
+        ).toEqual(["calibration", "cycle 1", "cycle 2", "final"]);
+      }),
+    ),
+  240_000,
 );
 
 const POOLING = {
@@ -17203,25 +17531,42 @@ scenario(
           yield* emptyTracker();
           yield* cycling(
             runId,
-            [withExternal(fasterTo(3), [KNOWN]), TUNE_REVIEWED, OPENED, SEARCHED(), FILED()],
+            [
+              withExternal(fasterTo(3), [KNOWN]),
+              cleanedUp(),
+              TUNE_REVIEWED,
+              OPENED,
+              SEARCHED(),
+              FILED(),
+            ],
             [],
             { ...TUNE_DISCOVERED, external: [POOLING, FTS] },
           );
           const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } };
           const driving = yield* driven(options, (run) =>
             Effect.gen(function* () {
-              const pooling = yield* nextAsked(run.asked, []);
-              expect(Arr.map(openOf(yield* run.asked), (row) => row.decision)).toEqual([
-                pooling.decision,
-              ]);
+              const happy = yield* nextAsked(run.asked, []);
+              expect(happy.decision).toBe("progress-1");
+              yield* run.answer(happy.decision, "Yes");
+              const pooling = yield* nextAsked(run.asked, [happy.decision]);
+              expect(
+                Arr.map(
+                  Arr.filter(openOf(yield* run.asked), (row) => row.decision !== happy.decision),
+                  (row) => row.decision,
+                ),
+              ).toEqual([pooling.decision]);
               expect(pooling.prompt).toContain(POOLING.title);
               expect(optionsOf([pooling], pooling.decision)).toEqual(["Ignore", "Post"]);
               yield* run.answer(pooling.decision, "Post");
-              const team = yield* nextAsked(run.asked, [pooling.decision]);
+              const team = yield* nextAsked(run.asked, [happy.decision, pooling.decision]);
               expect(team.prompt).toContain(FTS.title);
               expect(optionsOf([team], team.decision)).toEqual([]);
               yield* run.answer(team.decision, "Platform");
-              const fts = yield* nextAsked(run.asked, [pooling.decision, team.decision]);
+              const fts = yield* nextAsked(run.asked, [
+                happy.decision,
+                pooling.decision,
+                team.decision,
+              ]);
               expect(fts.prompt).toContain(FTS.title);
               expect(optionsOf([fts], fts.decision)).toEqual(["Ignore", "Post"]);
               yield* run.answer(fts.decision, "Ignore");
@@ -17446,6 +17791,8 @@ once("tune-up declares every input with its default, and its path", () =>
         "Harness",
         "Calibrate",
         "Cycles",
+        "Progress",
+        "Cleanup",
         "Integrate",
         "Review",
         "Checks",

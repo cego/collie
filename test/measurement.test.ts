@@ -511,3 +511,107 @@ test(
     ),
   240_000,
 );
+
+test(
+  "a candidate without the harness is measured with the harness applied in a scratch tree, and its checkout is left as it was; one that carries it is measured in place",
+  () =>
+    proves(
+      "collie-measure-cleaned-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const extra = {};
+          const { base, harness, product, commit } = yield* project(world);
+          const ran = `${world.home}/ran`;
+          const plan = planOf(harness, "bench.sh", ran);
+          const runId = yield* asking(world, extra);
+
+          // Carrying the harness, the candidate is sampled in the checkout itself.
+          expect((yield* measuring(world, extra, runId, base, plan, "cycle 1")).envelope.ok).toBe(
+            true,
+          );
+          const [inPlace] = yield* recorded(world, runId);
+          expect(inPlace!.candidate.head_sha).toBe(product);
+          expect(inPlace!.candidate.harness_applied).toBeUndefined();
+          expect(
+            Arr.filter(yield* linesOf(world, ran), (dir) => dir === world.project).length,
+          ).toBe(3);
+
+          // Cleaned: the harness taken off the branch.
+          yield* exec(["git", "rm", "-rq", "bench"], { cwd: world.project });
+          const cleaned = yield* commit("cleanup");
+          const status = () =>
+            Effect.map(
+              exec(["git", "status", "--porcelain", "--untracked-files=all"], {
+                cwd: world.project,
+              }),
+              (got) => got.stdout,
+            );
+          const before = yield* linesOf(world, ran);
+          const answered = yield* measuring(world, extra, runId, base, plan, "final");
+          expect(answered.envelope.error).toBeUndefined();
+          const measured = (yield* recorded(world, runId)).at(-1)!;
+          expect(measured.pass).toBe("final");
+          expect(measured.candidate.cwd).toBe(world.project);
+          expect(measured.candidate.head_sha).toBe(cleaned);
+          expect(verdictOf(measured, "bench.counter")).toBe("gain");
+          expect(
+            Arr.map(
+              Arr.filter(measured.samples, (one) => !one.warmup),
+              (one) => [one.tree, one.readings["bench.counter"]],
+            ),
+          ).toEqual([
+            ["base", 10],
+            ["candidate", 7],
+            ["candidate", 7],
+            ["base", 10],
+          ]);
+          expect(measured.candidate.harness_applied).toEqual([harness]);
+          const sampled = Arr.drop(yield* linesOf(world, ran), before.length);
+          const scratch = Arr.filter(sampled, (dir) => dir !== measured.base.cwd);
+          expect(scratch).toHaveLength(3);
+          expect(new Set(scratch).size).toBe(1);
+          expect(scratch[0]).not.toBe(world.project);
+          expect(
+            Str.trim((yield* exec(["git", "rev-parse", "HEAD~1"], { cwd: scratch[0]! })).stdout),
+          ).toBe(cleaned);
+
+          // The checkout is unchanged: same commit, nothing written, no harness.
+          expect(
+            Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout),
+          ).toBe(cleaned);
+          expect(yield* status()).toBe("");
+          expect(yield* fs.exists(`${world.project}/bench`)).toBe(false);
+
+          // Uncommitted work cannot go into a scratch tree.
+          yield* fs.writeFileString(`${world.project}/value`, "6\n").pipe(Effect.orDie);
+          const dirty = yield* measuring(world, extra, runId, base, plan, "final");
+          expect(dirty.envelope.ok).toBe(false);
+          expect(dirty.envelope.error?.message).toContain("uncommitted");
+          yield* exec(["git", "checkout", "--", "value"], { cwd: world.project });
+
+          // The same cleaned candidate under the same plan is the recorded Measurement.
+          const again = yield* measuring(world, extra, runId, base, plan, "final");
+          expect(
+            yield* Schema.decodeUnknownEffect(Answered)(again.envelope.data).pipe(Effect.orDie),
+          ).toEqual({ ran: false, measurement: expect.objectContaining({ id: measured.id }) });
+
+          // Some harness paths but not all: refused, naming what is missing.
+          yield* exec(["git", "checkout", "-q", product], { cwd: world.project });
+          const partly = yield* measuring(
+            world,
+            extra,
+            runId,
+            base,
+            { ...plan, harness: { commits: [harness], paths: ["bench", "tools"] } },
+            "final",
+            "a second harness path",
+          );
+          expect(partly.envelope.ok).toBe(false);
+          expect(partly.envelope.error?.message).toContain("tools");
+          yield* stopHost(world.state);
+        }),
+      ["asks.workflow.ts"],
+    ),
+  240_000,
+);

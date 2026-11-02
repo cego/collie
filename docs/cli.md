@@ -1778,7 +1778,13 @@ Machine on many samples
 The host makes the **base tree** as a detached worktree at `--base` with the plan's harness
 commits applied, under `measurements/trees/<run>/` in its state directory, and keeps it for
 the Run's later Measurements of the same base. The **candidate** is the Run's checkout, or
-`--cwd` inside it. `--run` defaults as for `collie verify`. A workflow asks for the same
+`--cwd` inside it. A candidate that holds every harness path is sampled where it is. One
+that holds none, such as a branch cleaned up for release, is sampled in a scratch worktree
+the host makes at its head with the harness commits applied, kept and removed as a base tree
+is. The checkout is left as it was, and the record names the commits applied as
+`candidate.harness_applied`. A candidate holding only some harness paths is refused with
+`invalid_input`, naming the missing ones. So is one with none of them and uncommitted work,
+which a scratch tree cannot carry. `--run` defaults as for `collie verify`. A workflow asks for the same
 Measurement with [`host.measure`](sdk.md#proving-it-rather-than-saying-so); both go through
 one host operation, on the Run's own Machine.
 
