@@ -275,6 +275,7 @@ import {
   ranCommand,
   readVerifications,
   recordFor,
+  recordedFor,
   reliedFor,
   rerunTest,
   resolveExecutable,
@@ -3176,6 +3177,11 @@ export class Reliance extends Context.Service<
       runId: string,
       command: Pick<Verification, "executable" | "argv" | "cwd">,
     ) => Effect.Effect<{ readonly check: string; readonly record: Verification | null } | null>;
+    /** The record that answers a command that is none of the Run's Checks, or null where it runs. */
+    readonly recorded: (
+      runId: string,
+      command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
+    ) => Effect.Effect<Verification | null>;
   }
 >()("collie/Reliance") {}
 
@@ -5013,10 +5019,28 @@ export const hostLayer = (options: {
             return null;
           }),
         ).pipe(Effect.orElseSucceed(() => null));
+      const recorded: Reliance["Service"]["recorded"] = (runId, command) =>
+        under(
+          Effect.gen(function* () {
+            const executable = yield* resolveExecutable(command.executable, command.cwd);
+            if (executable === null) return null;
+            const record = yield* recordedFor(
+              evidenceDir(dir, runId),
+              { ...command, executable },
+              hostStarted,
+            );
+            if (record !== null)
+              yield* appendLog(
+                runDir(dir, runId),
+                `verify: ${command.name} answered by verification ${record.id}`,
+              ).pipe(Effect.orDie);
+            return record;
+          }),
+        ).pipe(Effect.orElseSucceed(() => null));
       return Context.make(Host, host).pipe(
         Context.add(Notifier, Notifier.of({ notify })),
         Context.add(Oversight, oversight),
-        Context.add(Reliance, Reliance.of({ relied })),
+        Context.add(Reliance, Reliance.of({ relied, recorded })),
       );
     }),
   );

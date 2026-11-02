@@ -84,8 +84,10 @@ ran itself, `by agent` one an agent ran through the collector:
 
 {{checks}}
 
-Read these rather than running them again. Run only targeted checks — the test file or
-command that confirms or refutes a finding — and never the whole suite.
+Read these rather than running them again. `collie verify` answers a command already
+recorded on this tree with that record; `--again` reruns it, only to look for a flake. Run
+only targeted checks — the test file or command that confirms or refutes a finding — and
+never the whole suite.
 
 Each check says whether a failing run of the same command was recorded on an earlier tree.
 A new test that was never seen failing is a finding: nothing shows it can fail.
