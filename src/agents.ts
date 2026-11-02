@@ -3996,9 +3996,10 @@ const NO_AUTHORITY: RunAuthority = { created: null, roaming: false, started: nul
 const withoutCollieInstructions = (
   overlay: ClaudeOverlay,
   cwd: string,
-  collieDir: string,
-): ClaudeOverlay =>
-  pipe(cwd, Str.startsWith(`${collieDir}/`))
+  given: string,
+): ClaudeOverlay => {
+  const collieDir = pipe(given, Str.replace(/\/+$/, ""));
+  return pipe(cwd, Str.startsWith(`${collieDir}/`))
     ? {
         ...overlay,
         claudeMdExcludes: [
@@ -4010,6 +4011,7 @@ const withoutCollieInstructions = (
         ],
       }
     : overlay;
+};
 
 /**
  * Claude's `--settings` with the operator's overlay and the Run's `autoMode` merged in: into
