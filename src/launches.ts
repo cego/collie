@@ -4,7 +4,8 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { DateTime, Effect, FileSystem, Schema } from "effect";
+import { DateTime, Duration, Effect, FileSystem, Schema } from "effect";
+import { ensureLockDir, withLock } from "./lock";
 import { RanOn, type RunAgent, type RunStep } from "./board-model";
 import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
@@ -86,6 +87,25 @@ export const StartedWith = Schema.Struct({
 
 /** Where a Run's agents on core keep what they were started with, until one is ended. */
 export const startedDir = (stateDir: string, runId: string) => `${stateDir}/relaunch/${runId}`;
+
+/** Longer than an end's stop and close, or a start on core, each of which it may wait out. */
+const RELAUNCH_LOCK_BUDGET = Duration.minutes(2);
+
+/**
+ * Held to start one of the Run's agents again after core lost it, and to end one: an end
+ * then sees the agent recovery started, and recovery never starts one an end has retired.
+ */
+export const withRelaunchLock = <A, E, R, A2, E2, R2>(
+  stateDir: string,
+  runId: string,
+  contended: Effect.Effect<A2, E2, R2>,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const lock = `${startedDir(stateDir, runId)}.lock`;
+    yield* ensureLockDir(lock);
+    return yield* withLock(lock, contended, effect, RELAUNCH_LOCK_BUDGET);
+  });
 
 export const LAUNCH_SUFFIX = ".launch.json";
 /** One operation a line, in the order its agent was launched. */

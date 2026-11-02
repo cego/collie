@@ -7,7 +7,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Result, Schema, flow } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Result, Schema, flow } from "effect";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import type { SqlClient } from "effect/sql";
 import type { PlatformServices } from "../src/platform";
@@ -528,11 +528,15 @@ test(
             const agent = agentName(runId, "pi", null, 1);
             yield* idleAfterItsStep(agent);
             const agents = yield* Agents;
+            const recoveries: Array<Fiber.Fiber<void>> = [];
             class ExitSeenWhileClosing extends FakeHerdr {
               override paneClose(paneId: string, backend?: Backend) {
-                return super
-                  .paneClose(paneId, backend)
-                  .pipe(Effect.andThen(agents.resumeLost(runId, runningNow)));
+                return super.paneClose(paneId, backend).pipe(
+                  Effect.andThen(Effect.forkChild(agents.resumeLost(runId, runningNow))),
+                  Effect.map((recovery) => {
+                    recoveries.push(recovery);
+                  }),
+                );
               }
             }
             const herdr = new ExitSeenWhileClosing(env());
@@ -545,8 +549,77 @@ test(
               "it ran out",
               "close",
             );
+            yield* Fiber.joinAll(recoveries);
             return { ended, left: yield* herdr.agentList() };
           }),
+        );
+        expect(ended).toEqual({ _tag: "Closed", ended: true });
+        expect(left).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "an agent ended while core's recovery is starting it again stays ended",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const core = yield* rig.startCore();
+        yield* rig.queueOutputs([null]);
+        const launching = Deferred.makeUnsafe<void>();
+        const go = Deferred.makeUnsafe<void>();
+        let held = false;
+        class HeldLaunch extends FakeHerdr {
+          override agentLaunch(opts: Parameters<FakeHerdr["agentLaunch"]>[0]) {
+            if (!held) return super.agentLaunch(opts);
+            return Deferred.succeed(launching, undefined).pipe(
+              Effect.andThen(Deferred.await(go)),
+              Effect.andThen(super.agentLaunch(opts)),
+            );
+          }
+        }
+        const { ended, left } = yield* hosted(
+          Effect.gen(function* () {
+            const runId = yield* started("pi", "r1");
+            const agent = agentName(runId, "pi", null, 1);
+            yield* idleAfterItsStep(agent);
+            const launched = Option.getOrThrow(
+              Arr.findLast(yield* readLaunches(dir(), runId), (one) => one.agent === agent),
+            );
+            held = true;
+            yield* core.lose;
+            yield* Deferred.await(launching);
+            const herdr = new FakeHerdr(env());
+            const ending = yield* Effect.forkChild(
+              endAgent(
+                {
+                  herdr,
+                  stateDir: dir(),
+                  ports: {},
+                  log: () => Effect.void,
+                  cwd: rig.projectDir,
+                },
+                launched,
+                "it ran out",
+                "close",
+              ),
+            );
+            // Room for an end that does not wait on the recovery to finish before it.
+            yield* TestClock.withLive(Effect.sleep("500 millis"));
+            yield* Deferred.succeed(go, undefined);
+            const ended = yield* Fiber.join(ending);
+            yield* until(
+              () =>
+                fs
+                  .readFileString(`${dir()}/agents/${runId}/agents.log`)
+                  .pipe(Effect.orElseSucceed(() => "")),
+              Str.includes("started again on core"),
+            );
+            return { ended, left: yield* herdr.agentList() };
+          }),
+          { ...hostOf(), herdr: new HeldLaunch(env()) },
         );
         expect(ended).toEqual({ _tag: "Closed", ended: true });
         expect(left).toEqual([]);

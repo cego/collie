@@ -52,6 +52,7 @@ import {
   readLaunches,
   StartedWith,
   startedDir,
+  withRelaunchLock,
   stemOf,
   type AgentSession,
 } from "./launches";
@@ -2989,9 +2990,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   ) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const started = yield* fs
-        .readFileString(startedPath(runId, agent))
-        .pipe(Effect.flatMap(decodeStarted));
+      const path = startedPath(runId, agent);
+      // Ended on purpose since the Run's agents were read.
+      if (!(yield* fs.exists(path))) return [];
+      const started = yield* fs.readFileString(path).pipe(Effect.flatMap(decodeStarted));
       const own = Arr.filter(launches, (one) => one.agent === agent);
       const latest = own.at(-1);
       if (latest === undefined) return [];
@@ -3134,12 +3136,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               // A launch already under way starts it.
               if (stepsGoingOut.has(agent)) continue;
               tells.push(
-                ...(yield* relaunch(
+                ...(yield* withRelaunchLock(
+                  host.env.stateDir,
                   runId,
-                  agent,
-                  launches,
-                  { agents: listing.value, listedAt },
-                  run,
+                  log(
+                    runId,
+                    `${agent}: not started again on core: an end of it is still under way`,
+                  ).pipe(Effect.as([])),
+                  relaunch(runId, agent, launches, { agents: listing.value, listedAt }, run),
                 ).pipe(
                   Effect.catch((cause) =>
                     log(

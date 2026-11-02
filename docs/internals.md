@@ -915,6 +915,9 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   one, or sent through core where it has none, and kept in the Dispatcher's ledger like any
   delivery. No idle within the launch wait, or a refused post: the Run's log says it was
   not resumed, and nothing is typed. The Run's own revival leaves such an agent to the host.
+  Starting one again and ending one take the Run's `relaunch/<run>.lock`: an end waits out
+  a start already under way and ends the terminal it started, read from the operation's
+  launch record, and a start after an end finds no record and starts nothing.
 - **A Task** is its record and the `task` label: placement opens no workspace, and a
   Task's `workspace` is null. Cleanup's pass over Task workspaces writes the record's
   `closed_at` an hour after the Task is Finished, which ends a start's join by branch;
