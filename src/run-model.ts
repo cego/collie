@@ -210,7 +210,11 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     else keys.set(run, next);
   };
 
+  /** The facts each Run was last seen with, so the same object is not fingerprinted again. */
+  const last = new Map<string, RunFacts>();
   const seen = (run: RunFacts) => {
+    if (last.get(run.id) === run) return;
+    last.set(run.id, run);
     const text = fingerprint(run);
     if (facts.get(run.id) !== text) {
       facts.set(run.id, text);
@@ -229,6 +233,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       for (const run of facts.keys())
         if (!present.has(run)) {
           facts.delete(run);
+          last.delete(run);
           revisions.delete(run);
           index(run, undefined);
         }

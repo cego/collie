@@ -10,6 +10,7 @@ import { writeTask } from "../src/task";
 import { epochMs } from "../src/time";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
+import { VERIFYING_FILE } from "../src/verify";
 
 const RUNS = 500;
 const NOW = epochMs("2026-10-30T10:00:00Z");
@@ -65,7 +66,7 @@ test(
           runs,
           registered: [],
           offers: (run) => Effect.sync(() => (derived.push(run), [])),
-          cards: { revision: model.highest, kept },
+          cards: { revision: model.highest, kept, markers: new Map() },
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, model.reading),
           Effect.tap(() => Queue.offer(built, derived.length)),
@@ -106,7 +107,7 @@ test("a kept card says the time as one derived now does, hours on", () =>
       // Finished half an hour ago: shown as quiet, then gone a day after.
       const { dir, env, runs } = yield* planners(20, "2026-10-30T09:30:00Z");
       const model = yield* makeRunModel(dir, "installation");
-      const cards: KeptCards = { revision: model.highest, kept: new Map() };
+      const cards: KeptCards = { revision: model.highest, kept: new Map(), markers: new Map() };
       const build = (kept?: KeptCards) =>
         buildBoard({
           env,
@@ -120,5 +121,42 @@ test("a kept card says the time as one derived now does, hours on", () =>
         yield* TestClock.adjust(step);
         expect([step, yield* build(cards)]).toEqual([step, yield* build()]);
       }
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a build reads only the check markers of Runs that moved since the last", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { dir, env, runs } = yield* planners(20);
+      const model = yield* makeRunModel(dir, "installation");
+      const read: Array<string> = [];
+      const counting: FileSystem.FileSystem = {
+        ...model.reading,
+        readFileString: (path, encoding) => {
+          if (path.endsWith(`/${VERIFYING_FILE}`)) read.push(path);
+          return model.reading.readFileString(path, encoding);
+        },
+      };
+      const cards: KeptCards = { revision: model.highest, kept: new Map(), markers: new Map() };
+      const build = buildBoard({
+        env,
+        runs,
+        registered: [],
+        offers: () => Effect.succeed([]),
+        cards,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, counting));
+      yield* build;
+      expect(read.length).toBe(runs.length);
+
+      read.length = 0;
+      yield* build;
+      expect(read).toEqual([]);
+
+      const checking = runs[7]!;
+      yield* model.writing.writeFileString(`${checking.dir}/${VERIFYING_FILE}`, "lint\n");
+      const board = yield* build;
+      expect(read).toEqual([`${checking.dir}/${VERIFYING_FILE}`]);
+      expect(board.find((view) => view.runs.includes(checking.id))?.check?.name).toBe("lint");
     }).pipe(Effect.provide(TestClock.layer())),
   ));

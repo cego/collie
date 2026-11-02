@@ -65,6 +65,7 @@ import { recordFlow, recordFrames, type RecordSources } from "./record";
 import { markFirst } from "./record-marks";
 import { TurnScheduler } from "./turns";
 import { Foreground, foregroundLayer, servedNow } from "./foreground";
+import * as References from "effect/References";
 import * as Scheduler from "effect/Scheduler";
 import {
   EntryError,
@@ -1082,13 +1083,22 @@ const hostBoard = (dir: string) =>
       model === undefined
         ? undefined
         : { revision: (run) => model.revision(run).seq, views: new Map() };
-    const runs = registry
-      .views(null, model?.reading, kept)
-      .pipe(Effect.map((views) => Arr.map(views, (view) => factsOfView(env.stateDir, view))));
+    const facts = new WeakMap<RunView, RunFacts>();
+    /** The view's facts, the same object for as long as the view is. */
+    const factsOf = (view: RunView) => {
+      const known = facts.get(view);
+      if (known !== undefined) return known;
+      const made = factsOfView(env.stateDir, view);
+      facts.set(view, made);
+      return made;
+    };
+    const runs = registry.views(null, model?.reading, kept).pipe(Effect.map(Arr.map(factsOf)));
     const idle: IdleSince = new Map();
     const finishedSince: FinishedSince = new Map();
     const cards: KeptCards | undefined =
-      model === undefined ? undefined : { revision: model.highest, kept: new Map() };
+      model === undefined
+        ? undefined
+        : { revision: model.highest, kept: new Map(), markers: new Map() };
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
       Effect.gen(function* () {
         return yield* buildBoard({
@@ -1253,6 +1263,8 @@ const hostBoard = (dir: string) =>
       herdr,
       bun,
       listing,
+      kept,
+      factsOf,
       herdrMoved,
       /** herdr's agents as the board last read them. */
       alive: aliveOf(agentsLast),
@@ -1393,7 +1405,7 @@ const recordSources = (opts: { readonly panels: MrPanels | null; readonly plans:
     if (model === undefined) return undefined;
     const registry = yield* Registry;
     const hosted = yield* Effect.context<HostServices>();
-    const { env, bun, alive } = yield* SharedBoard;
+    const { env, bun, alive, kept, factsOf } = yield* SharedBoard;
     const forgeHttp = Option.getOrUndefined(yield* Effect.serviceOption(ForgeHttp));
     const { panels } = opts;
     return {
@@ -1402,9 +1414,7 @@ const recordSources = (opts: { readonly panels: MrPanels | null; readonly plans:
       plans: opts.plans,
       alive,
       related: (runId, also) =>
-        registry
-          .related(runId, also, model.reading)
-          .pipe(Effect.map(Arr.map((view) => factsOfView(env.stateDir, view)))),
+        registry.related(runId, also, model.reading, kept).pipe(Effect.map(Arr.map(factsOf))),
       offers: (id) =>
         registry.offers(id).pipe(
           Effect.provideContext(hosted),
@@ -1435,8 +1445,14 @@ const sideJobsLayer = (panels: MrPanels) =>
           latest._tag === "Some" ? Effect.succeed(latest.value) : Effect.never,
         ),
       );
+      const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       yield* Effect.forkScoped(
         sideJobs({ env, herdr, board, panels, record, stop, sweepers }).pipe(
+          // Each round reads every Run's files, as the board does: through the model.
+          (jobs) =>
+            model === undefined
+              ? jobs
+              : Effect.provideService(jobs, FileSystem.FileSystem, model.reading),
           Effect.provideContext(bun),
         ),
       );
@@ -3475,6 +3491,8 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
   }).pipe(
     Effect.orDie,
     Effect.provideService(Scheduler.Scheduler, new TurnScheduler(servedNow)),
+    // Nothing reads a host's spans, and making them was most of what an idle host allocated.
+    Effect.provideService(References.TracerEnabled, false),
     Effect.provide(foregroundLayer),
   );
 

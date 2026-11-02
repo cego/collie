@@ -52,6 +52,12 @@ const Run = Schema.Struct({
 });
 export type RunRow = typeof Run.Type;
 
+const RUN_FIELDS = Struct.keys(Run.fields);
+
+/** Whether two reads of a Run's row read the same. */
+export const sameRow = (one: RunRow, other: RunRow) =>
+  one === other || RUN_FIELDS.every((field) => one[field] === other[field]);
+
 /**
  * A question one run is waiting on: what was asked, what may answer it, and the answer it
  * has if it has one. One row per run and decision, which is what makes a second answer a
@@ -190,8 +196,8 @@ export interface StoreApi {
   readonly changes: Stream.Stream<ReadonlyArray<RunRow>>;
   /** A run changed where the change was not one of these writes, so readers reread. */
   readonly announce: Effect.Effect<void>;
-  /** Moves whenever any Run's decisions may have changed, which no Run's row shows. */
-  readonly decided: Effect.Effect<number>;
+  /** Moves whenever the Run's decisions may have changed, which no Run's row shows. Read when called. */
+  readonly decided: Effect.Effect<(run: string) => number>;
 }
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
@@ -295,15 +301,23 @@ function makeStore(): Effect.Effect<
       Effect.orElseSucceed(() => 0),
     );
     let seen = yield* dataVersion;
-    let decided = 0;
-    const decide = Effect.sync(() => void decided++);
+    /** Moves with every write to the Runs, so a read of them stands until the next. */
+    let written = 0;
+    const wrote = Effect.sync(() => void written++);
+    const invalidate = Effect.andThen(wrote, reactivity.invalidate(RUNS));
+    const mutation = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      reactivity.mutation(RUNS, Effect.ensuring(effect, wrote));
+    let elsewhere = 0;
+    const decisions = new Map<string, number>();
+    const decide = (run: string) =>
+      Effect.sync(() => void decisions.set(run, (decisions.get(run) ?? 0) + 1));
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         const now = yield* dataVersion;
         if (now === seen) return;
         seen = now;
-        decided++;
-        yield* reactivity.invalidate(RUNS);
+        elsewhere++;
+        yield* invalidate;
       }).pipe(Effect.repeat(Schedule.spaced(ELSEWHERE_EVERY))),
     );
 
@@ -371,7 +385,24 @@ function makeStore(): Effect.Effect<
       execute: () => sql`SELECT name, workflow, entry FROM collie_generations ORDER BY rowid`,
     });
 
-    const all = everyRun().pipe(Effect.orDie);
+    let read: { readonly at: number; readonly rows: ReadonlyArray<RunRow> } | null = null;
+    /** Every Run, read again only after a write, each unchanged row the one read before. */
+    const all = Effect.suspend(() => {
+      if (read?.at === written) return Effect.succeed(read.rows);
+      const at = written;
+      return everyRun().pipe(
+        Effect.orDie,
+        Effect.map((fresh) => {
+          const before = new Map(Arr.map(read?.rows ?? [], (row) => [row.run, row] as const));
+          const rows = Arr.map(fresh, (row) => {
+            const was = before.get(row.run);
+            return was !== undefined && sameRow(was, row) ? was : row;
+          });
+          if (at === written) read = { at, rows };
+          return rows;
+        }),
+      );
+    });
 
     return {
       remember: (generation: GenerationRow) =>
@@ -397,29 +428,24 @@ function makeStore(): Effect.Effect<
               )
               ON CONFLICT(run, decision) DO NOTHING
             `;
-          yield* decide;
-          yield* reactivity.invalidate(RUNS);
+          yield* decide(question.run);
+          yield* invalidate;
         }).pipe(Effect.orDie),
 
       asked: (run: string) => decisionsOf(run).pipe(Effect.orDie),
 
       settle: Effect.fn("Store.settle")(function* (answer) {
         const at = yield* nowIso;
-        yield* decide;
+        yield* decide(answer.run);
         // One write over the row while it is still unanswered. Whoever it returns a row
         // to is the answer; everybody else reads what landed and is told so.
-        const settled = yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
+        const settled = yield* mutation(sql`
               UPDATE collie_decisions
               SET answer = ${answer.value}, request = ${answer.request}, answered = ${at},
                 answerer = ${answer.answerer === undefined ? null : answererText(answer.answerer)}
               WHERE run = ${answer.run} AND decision = ${answer.decision} AND answer IS NULL
               RETURNING decision
-            `,
-          )
-          .pipe(Effect.orDie);
+            `).pipe(Effect.orDie);
         const [row] = yield* decisionRow({ run: answer.run, decision: answer.decision }).pipe(
           Effect.orDie,
         );
@@ -452,10 +478,7 @@ function makeStore(): Effect.Effect<
         // The claim is the insert, and what it returns is whether this caller made it:
         // one request id, one row, decided by the database rather than by a read another
         // caller could be between.
-        const claimed = yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
+        const claimed = yield* mutation(sql`
               INSERT INTO collie_runs
                 (run, request, workflow, project, input, generation, execution,
                  task, parent, provenance, options, asked, placing, admitted)
@@ -468,9 +491,7 @@ function makeStore(): Effect.Effect<
               )
               ON CONFLICT(request) DO NOTHING
               RETURNING run
-            `,
-          )
-          .pipe(Effect.orDie);
+            `).pipe(Effect.orDie);
 
         const [row] = yield* byRequest(admission.request).pipe(Effect.orDie);
         if (row === undefined) {
@@ -494,61 +515,48 @@ function makeStore(): Effect.Effect<
       accepted: (run: string) =>
         Effect.gen(function* () {
           const at = yield* nowIso;
-          yield* reactivity.mutation(
-            RUNS,
-            sql`UPDATE collie_runs SET accepted = ${at} WHERE run = ${run}`,
-          );
+          yield* mutation(sql`UPDATE collie_runs SET accepted = ${at} WHERE run = ${run}`);
         }).pipe(Effect.orDie),
 
       place: Effect.fn("Store.place")(function* (run, placed) {
-        yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
+        yield* mutation(sql`
               UPDATE collie_runs
               SET checkout = ${placed.checkout}, task = COALESCE(${placed.task}, task)
               WHERE run = ${run}
-            `,
-          )
-          .pipe(Effect.orDie);
+            `).pipe(Effect.orDie);
         const [row] = yield* byRun(run).pipe(Effect.orDie);
         if (row === undefined) return yield* Effect.die(new Error(`run "${run}" is not admitted`));
         return row;
       }),
 
       recordPlacing: (run, placing) =>
-        reactivity
-          .mutation(
-            RUNS,
-            sql`UPDATE collie_runs SET placing = ${placing} WHERE run = ${run} AND checkout IS NULL`,
-          )
-          .pipe(Effect.asVoid, Effect.orDie),
+        mutation(
+          sql`UPDATE collie_runs SET placing = ${placing} WHERE run = ${run} AND checkout IS NULL`,
+        ).pipe(Effect.asVoid, Effect.orDie),
 
       forget: (run: string) =>
-        reactivity
-          .mutation(RUNS, sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`)
-          .pipe(Effect.asVoid, Effect.orDie),
+        mutation(sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`).pipe(
+          Effect.asVoid,
+          Effect.orDie,
+        ),
       retire: <E>(runs: ReadonlyArray<string>, clear: (row: RunRow) => Effect.Effect<void, E>) =>
-        reactivity
-          .mutation(
-            RUNS,
-            sql.withTransaction(
-              Effect.gen(function* () {
-                const gone: string[] = [];
-                for (const run of runs) {
-                  const row = (yield* byRun(run).pipe(Effect.orDie))[0];
-                  if (row === undefined || row.accepted === null) continue;
-                  yield* clear(row);
-                  yield* decide;
-                  yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
-                  yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
-                  gone.push(run);
-                }
-                return gone;
-              }),
-            ),
-          )
-          .pipe(Effect.catchTag("SqlError", Effect.die)),
+        mutation(
+          sql.withTransaction(
+            Effect.gen(function* () {
+              const gone: string[] = [];
+              for (const run of runs) {
+                const row = (yield* byRun(run).pipe(Effect.orDie))[0];
+                if (row === undefined || row.accepted === null) continue;
+                yield* clear(row);
+                yield* decide(run);
+                yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
+                gone.push(run);
+              }
+              return gone;
+            }),
+          ),
+        ).pipe(Effect.catchTag("SqlError", Effect.die)),
       pending: unaccepted().pipe(Effect.orDie),
       runs: all,
       near: (run: string) => nearRun(run).pipe(Effect.orDie),
@@ -564,8 +572,8 @@ function makeStore(): Effect.Effect<
         ),
       watching: (read) => reactivity.stream(RUNS, read),
       changes: sql.reactive(RUNS, all),
-      announce: Effect.andThen(decide, reactivity.invalidate(RUNS)),
-      decided: Effect.sync(() => decided),
+      announce: invalidate,
+      decided: Effect.succeed((run: string) => elsewhere + (decisions.get(run) ?? 0)),
     } satisfies StoreApi;
   });
 }

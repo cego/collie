@@ -196,7 +196,7 @@ import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
-import { Store, storeLayer, type Admission, type RunRow, type StoreApi } from "./store";
+import { Store, sameRow, storeLayer, type Admission, type RunRow, type StoreApi } from "./store";
 import {
   Answered,
   Controlled,
@@ -5403,12 +5403,20 @@ const PlacingJson = Schema.fromJsonString(Placing);
 const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
 const encodePlacing = flow(Schema.encodeResult(PlacingJson), Result.getOrThrow);
 
+/** The reports sweep asks of every row each second; a row read again unchanged is the same object. */
+const owing = new WeakMap<RunRow, boolean>();
+
 /** Whether a Run's report is owed: an agent started it, or its Task closes once it is reported. */
-export const owesReport = (row: RunRow) =>
-  Option.match(decodePlacing(row.placing ?? ""), {
+export const owesReport = (row: RunRow) => {
+  const known = owing.get(row);
+  if (known !== undefined) return known;
+  const owes = Option.match(decodePlacing(row.placing ?? ""), {
     onNone: () => false,
     onSome: (placing) => placing.requestedBy !== undefined || placing.closes === "reported",
   });
+  owing.set(row, owes);
+  return owes;
+};
 
 /** What a Run's agents are told it authorises; a record from before this was kept authorises nothing. */
 const authorityOf = (
@@ -5716,7 +5724,15 @@ const VIEW_CONCURRENCY = 8;
 /** Settled Runs' views kept from one read to the next, and the revision a Run's files are at. */
 export interface KeptViews {
   readonly revision: (run: string) => number;
-  readonly views: Map<string, { readonly key: string; readonly view: RunView }>;
+  readonly views: Map<
+    string,
+    {
+      readonly row: RunRow;
+      readonly decided: number;
+      readonly revision: number;
+      readonly view: RunView;
+    }
+  >;
 }
 
 /** What a host is holding, as a caller may see it: live names and unloadable ones. */
@@ -5883,6 +5899,7 @@ export interface RegistryApi {
     runId: string,
     also: ReadonlyArray<string>,
     read?: FileSystem.FileSystem,
+    kept?: KeptViews,
   ) => Effect.Effect<ReadonlyArray<RunView>>;
   /** Records `url` as the merge request `runId` opened, as the MR step does, without its notice. */
   readonly mergeRequest: (runId: string, url: string) => Effect.Effect<void>;
@@ -7367,6 +7384,59 @@ const makeRegistry: (
     );
   });
 
+  /** The Run's view kept where its row, decisions and files are as they were, else undefined. */
+  const keptHit = (row: RunRow, decided: (run: string) => number, kept: KeptViews) => {
+    const was = kept.views.get(row.run);
+    return was !== undefined &&
+      was.decided === decided(row.run) &&
+      was.revision === kept.revision(row.run) &&
+      sameRow(was.row, row)
+      ? was.view
+      : undefined;
+  };
+
+  /** The Run's view, read again and kept once its execution has settled. */
+  const keepView = (
+    row: RunRow,
+    decided: (run: string) => number,
+    kept: KeptViews,
+    read?: FileSystem.FileSystem,
+  ) =>
+    Effect.gen(function* () {
+      const before = { decided: decided(row.run), revision: kept.revision(row.run) };
+      yield* (yield* Foreground).boundary;
+      const view = yield* viewOf(row, read);
+      // A settled execution's status is final; a going one's is polled each time.
+      if (finished.has(row.execution)) kept.views.set(row.run, { row, ...before, view });
+      else kept.views.delete(row.run);
+      return view;
+    });
+
+  /** Each Run's view, reading again only those not kept. */
+  const keptViews = (
+    rows: ReadonlyArray<RunRow>,
+    concurrency: number,
+    read?: FileSystem.FileSystem,
+    kept?: KeptViews,
+  ) =>
+    Effect.gen(function* () {
+      if (kept === undefined)
+        return yield* Effect.forEach(rows, (row) => viewOf(row, read), { concurrency });
+      const decided = yield* store.decided;
+      const views: Array<RunView | undefined> = Arr.map(rows, (row) => keptHit(row, decided, kept));
+      yield* Effect.forEach(
+        rows,
+        (row, at) =>
+          views[at] === undefined
+            ? Effect.map(keepView(row, decided, kept, read), (view) => {
+                views[at] = view;
+              })
+            : Effect.void,
+        { concurrency, discard: true },
+      );
+      return views as Array<RunView>;
+    });
+
   const view = (runId: string) =>
     store
       .run(runId)
@@ -8033,28 +8103,14 @@ const makeRegistry: (
         return dropped;
       }).pipe(Effect.orDie, Effect.provideContext(bun)),
     views: (task: string | null, read?: FileSystem.FileSystem, kept?: KeptViews) =>
-      Effect.all([store.runs, store.decided]).pipe(
-        Effect.flatMap(([rows, decided]) =>
-          Effect.forEach(
+      store.runs.pipe(
+        Effect.flatMap((rows) =>
+          keptViews(
             task === null ? rows : Arr.filter(rows, (row) => row.task === task),
-            (row) => {
-              if (kept === undefined) return viewOf(row, read);
-              const key = JSON.stringify([decided, kept.revision(row.run), row]);
-              const was = kept.views.get(row.run);
-              if (was?.key === key) return Effect.succeed(was.view);
-              const boundary = Effect.flatMap(Effect.service(Foreground), (one) => one.boundary);
-              return Effect.tap(Effect.andThen(boundary, viewOf(row, read)), (view) =>
-                Effect.sync(() => {
-                  // A settled execution's status is final; a going one's is polled each time.
-                  if (finished.has(row.execution)) kept.views.set(row.run, { key, view });
-                  else kept.views.delete(row.run);
-                }),
-              );
-            },
-            {
-              // The host's own background read goes one Run at a time, so the loop stays free.
-              concurrency: kept === undefined ? VIEW_CONCURRENCY : 1,
-            },
+            // The host's own background read goes one Run at a time, so the loop stays free.
+            kept === undefined ? VIEW_CONCURRENCY : 1,
+            read,
+            kept,
           ).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
@@ -8066,7 +8122,12 @@ const makeRegistry: (
           ),
         ),
       ),
-    related: (runId: string, also: ReadonlyArray<string>, read?: FileSystem.FileSystem) =>
+    related: (
+      runId: string,
+      also: ReadonlyArray<string>,
+      read?: FileSystem.FileSystem,
+      kept?: KeptViews,
+    ) =>
       Effect.all([
         store.near(runId),
         Effect.forEach(also, store.run, { concurrency: "unbounded" }),
@@ -8096,7 +8157,7 @@ const makeRegistry: (
           const asked = (row: RunRow) =>
             Str.includes("requestedBy")(row.placing ?? "") &&
             inTask.has(Option.getOrUndefined(decodePlacing(row.placing))?.requestedBy?.run ?? "");
-          return Effect.forEach(
+          return keptViews(
             Arr.filter(
               rows,
               (row) =>
@@ -8106,8 +8167,9 @@ const makeRegistry: (
                 also.includes(row.run) ||
                 asked(row),
             ),
-            (row) => viewOf(row, read),
-            { concurrency: VIEW_CONCURRENCY },
+            VIEW_CONCURRENCY,
+            read,
+            kept,
           );
         }),
       ),

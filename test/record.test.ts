@@ -199,7 +199,7 @@ test(
           runs,
           registered: [],
           offers: () => Effect.succeed([]),
-          cards: { revision: model.highest, kept: new Map() },
+          cards: { revision: model.highest, kept: new Map(), markers: new Map() },
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, model.reading),
           Effect.provideService(Foreground, {

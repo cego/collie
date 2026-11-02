@@ -38,7 +38,7 @@ import {
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
-import { markersOf, runningCheck } from "./checks";
+import { type KeptMarkers, markersOf, runningCheck } from "./checks";
 import { recordsIn } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
@@ -950,6 +950,7 @@ interface Retimed {
 export interface KeptCards {
   readonly revision: (runs: ReadonlyArray<string>) => number;
   readonly kept: Map<string, KeptCard>;
+  readonly markers: KeptMarkers["markers"];
 }
 
 const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -1016,7 +1017,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
   const records = yield* recordsIn(stateDir);
-  const markers = yield* markersOf(all, records);
+  const keptCards = opts.only === undefined ? opts.cards : undefined;
+  const markers = yield* markersOf(
+    all,
+    records,
+    keptCards && { revision: (run) => keptCards.revision([run]), markers: keptCards.markers },
+  );
   const checked = new Set(Arr.map(records, (record) => record.run));
   // Every agent's ledger, read only once a card has a finished Run to look for a steer to.
   const deliveries =

@@ -260,3 +260,39 @@ test("a Run's near rows are its Task's, their parents and children, and the Runs
       expect(yield* near("alone")).toEqual(["alone", "asked"]);
     }),
   ));
+
+test("Runs read again with nothing written are the rows read before, and a write renews only its Run's", () =>
+  onStore(
+    "collie-store-kept-rows-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-a", "run-a", { note: "a" }));
+      yield* store.admit(admission("req-b", "run-b", { note: "b" }));
+      const before = yield* store.runs;
+      expect(yield* store.runs).toBe(before);
+
+      yield* store.accepted("run-b");
+      const after = yield* store.runs;
+      expect(after[0]).toBe(before[0]);
+      expect(after[1]).not.toBe(before[1]);
+      expect(after[1]?.accepted).not.toBeNull();
+    }),
+  ));
+
+test("a question asked of one Run moves that Run's decisions alone, and an announce moves none", () =>
+  onStore(
+    "collie-store-decided-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-a", "run-a", {}));
+      yield* store.admit(admission("req-b", "run-b", {}));
+      const decided = yield* store.decided;
+      const a = decided("run-a");
+      const b = decided("run-b");
+
+      yield* store.asking({ run: "run-a", decision: "go", prompt: "Go?", options: ["yes"] });
+      yield* store.announce;
+      expect(decided("run-a")).not.toBe(a);
+      expect(decided("run-b")).toBe(b);
+    }),
+  ));
