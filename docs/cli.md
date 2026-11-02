@@ -1575,8 +1575,10 @@ pane holds, and the host says whose Run that agent is. Anywhere else, without `-
 fails `invalid_input`: `verify needs --run outside a Run's agent pane.` A `--run` given
 explicitly always wins.
 
-Runs the command, watches its exit, and records the result against the run's tree — the
-commit it was on and a digest of everything not committed, taken **before and after**.
+Runs the command, watches its exit, and records the result against the run's tree — its
+content, the Git tree the working tree would commit as, untracked files included, taken
+**before and after**, with the commit it was on beside it. Committing the same bytes keeps
+the result; changing any byte makes it about an earlier tree.
 That pair is the point: a pass on a tree that changed while the command ran says nothing
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
@@ -1595,10 +1597,15 @@ are for reading; the recorded argv retains the original values.
 | `--cwd`    | Where to run it. Must be inside the run's checkout, including one it was given later — a review's fix moves it to the reviewed branch's; defaults to it.             |
 | `--name`   | What to call it on a card. By default the script it runs (`bun run typecheck` is `typecheck`), else the tool and its subcommand (`bun test`), else the tool (`tsc`). |
 | `--expect` | What a pass looks like: `pass` (default), or `fail` for a reproduction.                                                                                              |
+| `--again`  | Run it even where this tree already has a record of it, to look for a flake. Never runs one of the Run's checks.                                                     |
 
 Every record carries the **environment** it ran in: a digest of the executable's real path
 and content, the `node` and `bun` that `PATH` resolves to, again by path and content, and
-`PATH`, `NODE_ENV` and `NODE_OPTIONS`. A gate relies on an earlier pass only where this
+`PATH`, `NODE_ENV` and `NODE_OPTIONS`. It also covers the dependencies installed in the
+checkout: the entries of the `node_modules` of every directory holding a tracked
+`package.json`, by name and file identity, leaving out caches such as `.cache` and `.vite`.
+Installing, removing or replacing a package makes an earlier record stale, and the command
+runs again. A gate relies on an earlier pass only where this
 matches, so an upgraded toolchain is a fresh run. A record from before environments were
 recorded has none, and is never relied on.
 
@@ -1612,8 +1619,17 @@ record: it says `not run again: verification <id> of "<check>" passed on this tr
 envelope is `{ "verification": <that record>, "ran": false }`. Where the tree has none, it
 refuses with `invalid_state`, naming the gate: Collie runs that check itself, on the final
 tree. `--expect fail` makes no exception, and a human's `collie verify --run` is answered as
-an agent's is. Any command that is not one of the Run's checks runs, and its envelope has
-`"ran": true`; no script name is special.
+an agent's is.
+
+A command that is not one of the Run's checks is answered the same way where this tree
+already has a record of it: the latest record of the same executable as resolved, arguments,
+directory, `--name` and `--expect`, collected by this host in the same environment, that
+passed or failed. It says `not run again: verification <id> of "<name>" passed on this tree`
+(or `failed`), names the record's log and adds `--again runs it anyway`; the Run's log gets
+`verify: <name> answered by verification <id>`. An `unstable` latest record, or a gate's
+rerun of one failed test, answers nothing, and the command runs. `--again` runs it whatever
+is recorded; a Check is unaffected and is still answered or refused, `--again` or not.
+A command that runs has `"ran": true` in its envelope; no script name is special.
 
 While the Machine is [Short of memory](using.md#short-of-memory), the host holds the
 command before it runs, reading again every 15 seconds: `collie verify` first prints

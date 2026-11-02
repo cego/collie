@@ -212,8 +212,8 @@ implementer; a test that passes there, or that the base does not have, is the Ru
 whose failures name no tests has no baseline and is handed to the fixes. A fix that changes nothing and disputes every finding it was
 handed ends the fixes, since another would check the same tree: the outcome stays unproved,
 and the merge request names each disputed gap with the fixer's reason. A check is not run whole
-again on a tree it failed on: after a fix that left HEAD and the fingerprint as they were,
-nothing runs and the round is read from the records already on that tree, and a check whose
+again on a tree it failed on: after a fix that left the tree's content as it was, whether
+or not it committed, nothing runs and the round is read from the records already on that tree, and a check whose
 failures named tests is read from its runs alone and at the base rather than rechecked. A
 check re-granted with another command or directory still runs. When the four fixes run out
 with a check still failing and no stall, the Run is parked "Outcome unproved after 4 gate
@@ -234,7 +234,11 @@ with the job's URL; on GitLab a merged-results pipeline counts for the head it w
 from, and records the merge commit beside it. A job that failed, was skipped or cancelled,
 is missing from the pipeline, or has not finished after 2 hours parks the run unproved,
 naming the check, the job and the commit, and a resume waits again; a job already recorded
-is not recorded twice. A merge of the merge request while the run waits stops it, through
+is not recorded twice. A job missing because the merge request conflicts with its target
+branch, by the forge's word, is that conflict and not a missing job: the run parks unproved
+saying the merge request conflicts with its target branch and its branch must take the
+target. A job missing while the forge has not yet said whether it can merge is waited on as
+pending. A merge of the merge request while the run waits stops it, through
 the merge watch, and records nothing for the job.
 
 A failed job is settled before anyone fixes it. The run reads the same job where the branch
@@ -515,7 +519,12 @@ with why: nothing is reset or discarded.
 application, by renovate's own rule, and for an application names the stage deploy jobs of
 its merge request pipelines and of its tag pipelines. An application whose pipelines of
 neither kind deploy to stage fails here, before any wait, saying it has no stage deploy
-Collie can prove. Collie then proves the head with the Run's checks, and
+Collie can prove. A merge request the forge says conflicts with its target branch is never
+proved while it does, since the forge runs no pipeline for it: before its checkout moves or a
+check runs, and whenever a check left to CI finds its job missing for that reason, the Run
+parks as Needs you with "`<mr>` cannot be released: it conflicts with its target branch, and
+its branch must take the target.", spends no fix round on it, keeps reading the review, and
+proves the head it then has once the forge no longer says so. Collie then proves the head with the Run's checks, and
 waits, at no token cost, reading the review every five minutes until the merge request is
 approved, has no unanswered external comment, is green and mergeable at the proved head.
 Changes requested keep it from being ready. While what it waits for comes by itself — CI
@@ -560,7 +569,8 @@ moves; a teammate who approves meanwhile takes the Run on to its go. Turned on w
 channel, the Run says so on its log and asks nothing.
 
 **Checks** run on every head before it can be asked about, the one a round pushed
-included, and a check Collie leaves to CI is waited on there. A failure goes to a fix
+included, and a check Collie leaves to CI is waited on there. A check that already passed
+on a head with the same bytes is relied on there rather than run again. A failure goes to a fix
 round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. Four rounds in a
 row that leave a check failing, or one that changes nothing, park the Run with why;
 resuming it runs the checks again. Collie's own `check` is left to CI's `test` job, so a
@@ -598,7 +608,10 @@ head moved, a comment is unanswered, the pipeline failed, changes are requested,
 refuses the merge, or the merge request was merged or closed: the claim is given back, and
 the Run says why on its log and waits for a fresh go. Where it holds, Collie merges at exactly the head the go named — never an admin
 merge, never auto-merge. A head that moved before the merge gives the claim back and goes
-back to waiting. The agent then tags by the repository's own conventions, and Collie reads
+back to waiting. A merge the forge refuses is read once more at that head: where it is no
+longer ready, as when another merge left it in conflict with its target branch, the claim is
+given back, the Run says why on its log and goes back to waiting. Only a refusal while the
+forge still says it is ready fails the Run. The agent then tags by the repository's own conventions, and Collie reads
 the tag back on origin, carrying the merged commit, with its pipeline finished and
 succeeded by the forge's word: the pipeline the agent named, or the newest the forge shows
 the tag started, and only one the forge shows ran for that tag and its commit in this

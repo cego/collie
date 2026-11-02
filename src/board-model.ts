@@ -1521,6 +1521,7 @@ export const FrontDoorRpcs = RpcGroup.make(
       argv: Schema.Array(Schema.String),
       cwd: Schema.optionalKey(Schema.String),
       expect: Schema.Literals(["pass", "fail"]),
+      again: Schema.optionalKey(Schema.Boolean),
     },
     success: VerifyEvent,
     error: HostRefused,

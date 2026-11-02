@@ -1041,7 +1041,7 @@ test("a Run with relatives stands for the cross-run check, and one leaving unans
 
 // --- The cross-run judgement reads the work ------------------------------------------
 
-test("a card reads its branch, head and dirtiness from the one status its fingerprint hashes", () =>
+test("a card reads its branch, head and dirtiness from one status, asking git only where its index is", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1071,7 +1071,9 @@ test("a card reads its branch, head and dirtiness from the one status its finger
       expect(card.revision).toMatchObject({ branch: "feat/picker", dirty: true });
       expect(card.revision.head_sha).toHaveLength(40);
       expect(
-        Arr.filter(yield* starts, (line) => /^(rev-parse|status --porcelain$)/.test(line)),
+        Arr.filter(yield* starts, (line) =>
+          /^(rev-parse (?!--git-path index$)|status --porcelain$)/.test(line),
+        ),
       ).toEqual([]);
       expect(
         Arr.filter(yield* starts, (line) => pipe_(line, Str.startsWith("status"))),

@@ -2000,6 +2000,7 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
     argv: ReadonlyArray<string>;
     cwd?: string;
     expect: "pass" | "fail";
+    again?: boolean;
   },
   door: Door,
 ) {

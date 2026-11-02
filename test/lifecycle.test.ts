@@ -984,12 +984,61 @@ test(
             verification: answer.verification,
           });
           expect(yield* runs).toBe(1);
+          yield* stopHost(world.state);
+        }),
+      ["checked.workflow.ts"],
+    ),
+  240_000,
+);
 
-          // A command that is not one of the Run's Checks runs, every time.
-          const other = yield* verify("--", "sh", "-c", `echo ran >> ${counter}; true`);
-          yield* verify("--", "sh", "-c", `echo ran >> ${counter}; true`);
+test(
+  "collie verify of a command already recorded on this tree answers with that record unless --again",
+  () =>
+    provesWith(
+      "collie-lifecycle-verify-recorded-",
+      (world) =>
+        Effect.gen(function* () {
+          const { counter, runs } = yield* counted(world);
+          const runId = yield* checkedRun(world, "checked", ["true"]);
+          const verify = (...args: ReadonlyArray<string>) =>
+            collie(world, ["verify", "--run", runId, ...args]);
+          const answerOf = (envelope: { readonly data?: unknown }) =>
+            Schema.decodeUnknownEffect(Answer)(envelope.data).pipe(Effect.orDie);
+          const command = ["sh", "-c", `echo ran >> ${counter}; true`];
+
+          const first = yield* answerOf((yield* verify("--", ...command)).envelope);
+          expect(first).toMatchObject({ ran: true, verification: { by: "agent" } });
+          expect(yield* runs).toBe(1);
+
+          const repeated = yield* verify("--", ...command);
+          expect(repeated.exit).toBe(0);
+          expect(yield* answerOf(repeated.envelope)).toMatchObject({
+            ran: false,
+            verification: { id: first.verification.id },
+          });
+          expect(repeated.stderr).toContain(`not run again: verification ${first.verification.id}`);
+          expect(yield* runs).toBe(1);
+
+          const forced = yield* answerOf((yield* verify("--again", "--", ...command)).envelope);
+          expect(forced.ran).toBe(true);
+          expect(forced.verification.id).not.toBe(first.verification.id);
+          expect(yield* runs).toBe(2);
+
+          yield* verify("--name", "renamed", "--", ...command);
           expect(yield* runs).toBe(3);
-          expect(other.envelope.data).toMatchObject({ ran: true, verification: { by: "agent" } });
+
+          const failing = ["sh", "-c", `echo ran >> ${counter}; exit 3`];
+          yield* verify("--", ...failing);
+          const failed = yield* verify("--", ...failing);
+          expect(failed.exit).toBe(3);
+          expect(yield* answerOf(failed.envelope)).toMatchObject({
+            ran: false,
+            verification: { result: "fail", exit: 3 },
+          });
+          expect(yield* runs).toBe(4);
+
+          yield* verify("--expect", "fail", "--", ...command);
+          expect(yield* runs).toBe(5);
           yield* stopHost(world.state);
         }),
       ["checked.workflow.ts"],

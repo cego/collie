@@ -2362,7 +2362,7 @@ const frontDoorHandlers = (
               );
             }),
           ),
-        verify: ({ runId, name, executable, argv, cwd, expect }, { client }) =>
+        verify: ({ runId, name, executable, argv, cwd, expect, again }, { client }) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const view = yield* known(runId);
@@ -2388,6 +2388,27 @@ const frontDoorHandlers = (
                     text: `not run again: verification ${record.id} of "${check.check}" ${record.result === "pass" ? "passed" : "failed"} on this tree${log}\n`,
                   },
                   { _tag: "Result" as const, verification: record, ran: false },
+                );
+              }
+              const recorded =
+                again === true
+                  ? null
+                  : yield* reliance.recorded(runId, {
+                      name,
+                      executable,
+                      argv,
+                      cwd: where,
+                      expect,
+                    });
+              if (recorded !== null) {
+                const log = recorded.log === undefined ? "" : `; its log is ${recorded.log}`;
+                return Stream.make(
+                  {
+                    _tag: "Output" as const,
+                    stream: "stderr" as const,
+                    text: `not run again: verification ${recorded.id} of "${name}" ${recorded.result === "pass" ? "passed" : "failed"} on this tree${log}; --again runs it anyway\n`,
+                  },
+                  { _tag: "Result" as const, verification: recorded, ran: false },
                 );
               }
               return Stream.callback<typeof import("./verify-model").VerifyEvent.Type, HostRefused>(

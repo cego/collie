@@ -144,7 +144,13 @@ import {
   type RollbackRead,
   type StageRead,
 } from "./releasing";
-import { blockedLine, reviewWaitOf, standingOf, type ReviewStanding } from "./review-wait";
+import {
+  blockedLine,
+  conflictsWithTarget,
+  reviewWaitOf,
+  standingOf,
+  type ReviewStanding,
+} from "./review-wait";
 import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
@@ -277,6 +283,7 @@ import {
   ranCommand,
   readVerifications,
   recordFor,
+  recordedFor,
   reliedFor,
   rerunTest,
   resolveExecutable,
@@ -716,6 +723,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly log: string | null;
         /** It failed where the branch leaves its target too: not this Run's to fix. */
         readonly before?: { readonly at: string; readonly url: string | null };
+        /** Missing because the merge request conflicts with its target branch. */
+        readonly conflicts?: true;
       };
 
   /** One of this Run's checks, named by a human, chat or the Run's agent. */
@@ -972,6 +981,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly seen: ReadonlyArray<string>;
       /** Also return a \`Waiting\` review that needs a repair, rather than wait for it. */
       readonly untilBlocked?: boolean;
+      /**
+       * Wait only while the forge says the merge request conflicts with its target branch,
+       * parked with the line that says its branch must take the target, and return the
+       * standing at \`proved\` once it no longer does, or it is merged or closed, or a Hold or
+       * Stop ends it.
+       */
+      readonly whileConflicting?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
@@ -2157,6 +2173,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
   export const TOO_LARGE: "unstable:too-large";
+  /** Whether two snapshots are the same bytes, whatever commit each was on. A tree too large to look at is never the same as another. */
+  export function sameTree(
+    one: { readonly fingerprint: string },
+    other: { readonly fingerprint: string },
+  ): boolean;
 
   /** A Run's checks read against its journal, for which tests failed and how each rerun went. */
   type FailedChecks = CheckEvidence & { readonly approved: ReadonlyArray<VerifySpec> };
@@ -3164,6 +3185,11 @@ export class Reliance extends Context.Service<
       runId: string,
       command: Pick<Verification, "executable" | "argv" | "cwd">,
     ) => Effect.Effect<{ readonly check: string; readonly record: Verification | null } | null>;
+    /** The record that answers a command that is none of the Run's Checks, or null where it runs. */
+    readonly recorded: (
+      runId: string,
+      command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
+    ) => Effect.Effect<Verification | null>;
   }
 >()("collie/Reliance") {}
 
@@ -4596,9 +4622,16 @@ export const hostLayer = (options: {
             const polled = Effect.gen(function* () {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
-                if (standing._tag !== "Waiting" && standing._tag !== "Unreadable") return standing;
                 const wait = reviewWaitOf(mr, read);
-                if (wait._tag === "Blocked" && asked.untilBlocked === true) return standing;
+                if (asked.whileConflicting === true) {
+                  const conflicting =
+                    read.ok && read.state === "open" && conflictsWithTarget(read.mergeable);
+                  if (!conflicting && standing._tag !== "Unreadable") return standing;
+                } else {
+                  if (standing._tag !== "Waiting" && standing._tag !== "Unreadable")
+                    return standing;
+                  if (wait._tag === "Blocked" && asked.untilBlocked === true) return standing;
+                }
                 yield* waitOn(
                   asked.runId,
                   wait._tag === "Awaiting" ? wait : { repair: blockedLine(mr, wait.why) },
@@ -4996,10 +5029,28 @@ export const hostLayer = (options: {
             return null;
           }),
         ).pipe(Effect.orElseSucceed(() => null));
+      const recorded: Reliance["Service"]["recorded"] = (runId, command) =>
+        under(
+          Effect.gen(function* () {
+            const executable = yield* resolveExecutable(command.executable, command.cwd);
+            if (executable === null) return null;
+            const record = yield* recordedFor(
+              evidenceDir(dir, runId),
+              { ...command, executable },
+              hostStarted,
+            );
+            if (record !== null)
+              yield* appendLog(
+                runDir(dir, runId),
+                `verify: ${command.name} answered by verification ${record.id}`,
+              ).pipe(Effect.orDie);
+            return record;
+          }),
+        ).pipe(Effect.orElseSucceed(() => null));
       return Context.make(Host, host).pipe(
         Context.add(Notifier, Notifier.of({ notify })),
         Context.add(Oversight, oversight),
-        Context.add(Reliance, Reliance.of({ relied })),
+        Context.add(Reliance, Reliance.of({ relied, recorded })),
       );
     }),
   );

@@ -26,10 +26,18 @@ resumes the Run so its gate runs it.
 **D3. A Check is matched by the Run's Checks, never by a script name.** Collie does not know
 which of a repository's commands is its whole suite, and `test` means a whole suite in one
 repository and a quick check in another. A command that is not one of the Run's Checks runs
-as before. In Collie's own repository that leaves `bun run test` to the rule in `AGENTS.md`.
+unless D5 answers it. In Collie's own repository that leaves `bun run test` to the rule in `AGENTS.md`.
 
 **D4. No gap asks an agent to run a Check.** A Check with no record on the tree says the
 gate runs it, rather than telling the agent to.
+
+**D5. A command already recorded on this tree is answered, not run again.** Reviewers ran
+commands the builder had recorded minutes earlier on the identical tree, although their
+prompt listed those records (cego/collie#282). Where the latest record of the same command,
+name and expectation on this tree, in the same environment and collected by this host,
+passed or failed, `collie verify` answers with it as it answers a Check. An `unstable`
+record answers nothing. `--again` runs it anyway, for a suspected flake; it never runs a
+Check.
 
 ## Consequences
 
