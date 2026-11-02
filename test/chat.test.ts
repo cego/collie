@@ -1,6 +1,5 @@
-// The Home's native conversation: which harness opens, which session it is, and the two
-// things that must never happen — a running chat replaced because a setting changed, and
-// a Home reopening into whatever conversation the harness wrote last in this directory.
+// Native chat: which harness opens, which session it is, and what must never happen — a
+// chat reopening into whatever conversation the harness wrote last in this directory.
 
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -14,13 +13,12 @@ import {
   chatArgs,
   chatHarnessOf,
   chatPath,
-  decideChat,
   DEFAULT_CHAT_HARNESS,
-  ensureChatFor,
   mcpConfig,
   piExtension,
   preferredHarness,
   readChat,
+  startChat,
   writeLaunchFiles,
   whyUnavailable,
   writeChat,
@@ -29,7 +27,6 @@ import {
 import { writeConfigValue } from "../src/config";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { FakeBin } from "./support/bin";
-import type { AgentInfo, PaneInfo } from "../src/herdr";
 import { TOOLS } from "../src/tools";
 import { runEffect } from "./support/effect";
 
@@ -41,36 +38,9 @@ const decodeJson = flow(
 const KEY = "herd-abc";
 let stateDir: string;
 
-const pane = (over: Partial<PaneInfo> = {}): PaneInfo => ({
-  paneId: "1-2",
-  tabId: "1",
-  label: null,
-  agent: "collie-chat-abcd1234",
-  workspaceId: "w1",
-  cwd: "/ns",
-  foregroundCwd: null,
-  tokens: {},
-  terminalId: "term-2",
-  agentSession: null,
-  ...over,
-});
-
-const agent = (over: Partial<AgentInfo> = {}): AgentInfo => ({
-  name: "collie-chat-abcd1234",
-  paneId: "1-2",
-  workspaceId: "w1",
-  status: "idle",
-  title: null,
-  terminalId: "term-2",
-  agentSession: null,
-  ...over,
-});
-
 const record = (over: Partial<ChatRecord> = {}): ChatRecord => ({
   harness: "claude",
-  agent: "collie-chat-abcd1234",
-  paneId: "1-2",
-  terminalId: "term-2",
+  agent: "collie-chat",
   sessions: { claude: "abcd1234-0000-4000-8000-000000000000" },
   startedAt: "2026-09-14T10:00:00Z",
   ...over,
@@ -113,46 +83,6 @@ test("Claude Code is what opens, whatever the workers are on", () =>
       expect(preferredHarness(undefined)).toBe("claude");
     }),
   ));
-
-test("a changed preference is the next launch, never a swap", () => {
-  // Claude is running and the human has chosen Pi. The conversation in front of them is
-  // not interrupted, replaced or summarised: `next` is a fact about the launch after it.
-  expect(decideChat(record(), "1-2", [pane()], [agent()], "pi")).toEqual({
-    kind: "adopt",
-    record: record(),
-    next: "pi",
-  });
-  // And with the preference unchanged there is nothing pending to say.
-  expect(decideChat(record(), "1-2", [pane()], [agent()], "claude")).toMatchObject({
-    kind: "adopt",
-    next: null,
-  });
-});
-
-test("a chat that has to be launched starts a new conversation, whatever was recorded", () => {
-  // Resumed, it would carry its whole history into every turn, and the model it began on.
-  expect(decideChat(record(), "1-2", [pane()], [], "claude")).toEqual({
-    kind: "launch",
-    harness: "claude",
-    why: `herdr no longer has ${record().agent}`,
-  });
-});
-
-test("a pane that outlived its process is not the conversation that was recorded", () => {
-  // herdr still has an agent of that name, but the pane holds a different process: a
-  // shell the human started where the chat used to be is not the chat.
-  expect(
-    decideChat(record(), "1-2", [pane({ terminalId: "term-9" })], [agent()], "claude"),
-  ).toMatchObject({ kind: "launch" });
-  // A different pane entirely — the Home recovered one — is a launch, not an adoption.
-  expect(decideChat(record(), "1-9", [pane({ paneId: "1-9" })], [agent()], "claude")).toMatchObject(
-    {
-      kind: "launch",
-    },
-  );
-  // And with no chat pane at all there is nothing to launch into. The board is untouched.
-  expect(decideChat(record(), null, [], [], "claude")).toEqual({ kind: "no_pane" });
-});
 
 test("the record survives a round trip through disk", () =>
   runEffect(
@@ -418,49 +348,73 @@ test("the shipped prompt has chat choose by description, with ad-hoc work as gen
     }),
   ));
 
-/** A Home's chat launched on Claude Code, against a fake herdr and a stand-in `claude`. */
-const launchedChat = (opts: { readonly config?: string; readonly help?: string }) =>
+/** The chat started on Claude Code as a core terminal, against the fake core and a stand-in `claude`. */
+const launchedChat = (opts: {
+  readonly config?: string;
+  readonly help?: string;
+  readonly recorded?: ChatRecord;
+}) =>
   Effect.gen(function* () {
     const rig = yield* Rig.scoped();
+    yield* rig.startCore();
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     yield* Effect.addFinalizer(() => bin.restore());
     yield* bin.add("claude", "exit 0");
     const fs = yield* FileSystem.FileSystem;
+    const env = rig.pluginEnv();
     if (opts.config !== undefined)
-      yield* fs.writeFileString(`${rig.pluginEnv().userDir}/config.json`, opts.config);
+      yield* fs.writeFileString(`${env.userDir}/config.json`, opts.config);
+    if (opts.recorded !== undefined)
+      yield* writeChat(yield* chatPath(env.stateDir, KEY), opts.recorded);
     const lines: string[] = [];
-    const ensured = yield* ensureChatFor(
-      new FakeHerdr(rig.pluginEnv()),
-      rig.pluginEnv(),
+    const ensured = yield* startChat(
+      new FakeHerdr(env),
+      env,
       KEY,
-      { chatPaneId: "1-2" },
-      "claude",
       (line) => Effect.sync(() => lines.push(line)),
       ["/bin/collie"],
       () => Effect.succeed(opts.help ?? "  --autocompact <auto|tokens>"),
     );
     const started = Option.getOrUndefined(
-      Arr.findFirst(yield* rig.calls(), (call: Call) => call.cmd === "agent start"),
+      Arr.findFirst(yield* rig.calls(), (call: Call) => call.cmd === "terminal.run"),
     );
-    const argv = started?.argv ?? [];
+    const argv = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.String))(
+      started?.params?.argv ?? [],
+    );
     return {
       ensured,
       lines,
       started: started !== undefined,
-      args: argv.includes("--") ? argv.slice(argv.indexOf("--") + 1) : [],
+      name: started?.params?.name,
+      args: argv.slice(1),
+      recorded: yield* readChat(yield* chatPath(env.stateDir, KEY)),
     };
   }).pipe(Effect.scoped);
 
-test("the Home's chat on Claude Code starts with a 400000 auto-compact window when none is set", () =>
+test("chat on Claude Code starts as collie-chat with a 400000 auto-compact window when none is set", () =>
   runEffect(
     Effect.gen(function* () {
       const chat = yield* launchedChat({});
       expect(chat.ensured.kind).toBe("launched");
+      expect(chat.name).toBe("collie-chat");
       expect(chat.args.slice(-2)).toEqual(["--autocompact", "400000"]);
     }),
   ));
 
-test("the Home's chat takes the window written to the config at its launch", () =>
+test("a chat started again starts a new conversation, whatever was recorded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Resumed, it would carry its whole history into every turn, and the model it began on.
+      const chat = yield* launchedChat({ recorded: record() });
+      const session = chat.args[chat.args.indexOf("--session-id") + 1];
+      expect(session).toBeDefined();
+      expect(session).not.toBe(record().sessions.claude);
+      expect(chat.args).not.toContain("--resume");
+      expect(chat.recorded?.sessions.claude).toBe(session);
+    }),
+  ));
+
+test("chat takes the window written to the config at its launch", () =>
   runEffect(
     Effect.gen(function* () {
       const chat = yield* launchedChat({ config: `{ "claude_auto_compact_window": 500000 }` });

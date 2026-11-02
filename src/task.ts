@@ -18,8 +18,8 @@ import { unsafePathComponent } from "./naming";
 
 const TaskSchema = Schema.Struct({
   id: Schema.String,
-  /** The herdr workspace this Task's Runs and agents live in. */
-  workspace: Schema.String,
+  /** The herdr workspace this Task's Runs and agents live in; null on core, which has none. */
+  workspace: Schema.NullOr(Schema.String),
   /**
    * What the workspace was called when it was made. A display label and nothing more:
    * it is never read to decide which Task something belongs to, and a human who renames
@@ -37,6 +37,8 @@ const TaskSchema = Schema.Struct({
   /** The Herd its workspace is in. Absent from a record older than the field. */
   herd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   created_at: Schema.String,
+  /** When Cleanup closed a Task with no workspace, as it closes a workspace. */
+  closed_at: Schema.optionalKey(Schema.String),
 });
 export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
 
@@ -95,6 +97,10 @@ export const listTasks = Effect.fn("task.listTasks")(function* (stateDir: string
   return tasks.sort((a, b) => pipe_(b.created_at, Str.localeCompare(a.created_at)));
 });
 
+/** Whether a Task is open: its workspace is, or, having none, Cleanup has not closed it. */
+export const isOpen = (task: TaskRecord, workspaces: ReadonlySet<string>) =>
+  task.workspace === null ? task.closed_at === undefined : workspaces.has(task.workspace);
+
 /** The Task whose workspace this is, which is what "the current Task" means. */
 export const taskOfWorkspace = Effect.fn("task.taskOfWorkspace")(function* (
   stateDir: string,
@@ -149,7 +155,7 @@ export const withTaskLock = <A, E, R>(
   });
 
 export const newTask = Effect.fn("task.newTask")(function* (opts: {
-  readonly workspace: string;
+  readonly workspace: string | null;
   readonly label: string;
   readonly cwd: string;
   readonly rootPane?: string | null;

@@ -36,6 +36,7 @@ import {
   Layer,
   Logger,
   Option,
+  PubSub,
   Queue,
   Result,
   Path,
@@ -166,8 +167,7 @@ import { once, readAudit, recordAudit, startedBy, trimAudit, whoActed, actorOf }
 import { usagePhrase } from "./usage-model";
 import { currentEnv, leaveLauncher, withoutLauncher } from "./env";
 import { installation as installedRelease, RELEASE_TAG } from "./release";
-import { Herdr, isSettled, type AgentInfo } from "./herdr";
-import { serverSocket } from "./home";
+import { Herdr, isSettled, serverSocket, type AgentInfo } from "./herdr";
 import { buildBoard, LANDED_STATES, mrOf, taskFlowOf } from "./board";
 import { readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { shell } from "./mr";
@@ -185,6 +185,7 @@ import {
   Seen,
   FrontDoorRpcs,
   HostRefused,
+  type Toasted,
   NewsBatch,
   PaneAt,
   SharedSettings,
@@ -232,9 +233,9 @@ import {
   deliveriesOf,
   DeliverySchema,
   herdDir,
-  herdOf,
   readLedger,
   reconcile as reconcileDelivery,
+  machineHerd,
 } from "./steering";
 import {
   actorName,
@@ -261,7 +262,14 @@ import { VERIFYING_FILE, verifyingIn } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
-import { loadDefaults, SettingRefused, sharedSettings, takeShared } from "./config";
+import {
+  loadDefaults,
+  SettingRefused,
+  sharedSettings,
+  takeShared,
+  terminalBackend,
+} from "./config";
+import { coreSocket } from "./hc";
 import {
   decodeAnswer,
   machineName,
@@ -531,6 +539,8 @@ export const HostRpcs = RpcGroup.make(
   Rpc.make("peers", { success: Schema.Array(PeerView) }),
   /** Ends the backoff of this Machine's link to the one it dials by that name. */
   Rpc.make("wake", { payload: { machine: Schema.String } }),
+  /** Forgets the Machine by that name, as forgetting it from a front door does. */
+  Rpc.make("unpair", { payload: { machine: Schema.String } }),
   Rpc.make("agentRun", {
     payload: { agent: Schema.String },
     success: Schema.NullOr(Schema.String),
@@ -831,6 +841,7 @@ const handlers = (
         },
         peers: () => peers.list,
         wake: ({ machine }) => peers.wake(machine),
+        unpair: ({ machine }) => peers.unpair(machine),
         agentRun: ({ agent }) =>
           everyRegistered(dir).pipe(
             Effect.map(
@@ -1286,7 +1297,7 @@ const sharedBoardLayer = (dir: string) =>
     }),
   );
 
-/** The merge watch, News, the cleanup sweep and the Home's tokens, for as long as this host runs. */
+/** The merge watch, News, the cleanup sweep, and the board and chat terminals, for as long as this host runs. */
 const sideJobsLayer = (panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -1354,6 +1365,7 @@ const frontDoorHandlers = (
   panels: MrPanels,
   declared: Declared,
   stamp: string,
+  toasted: PubSub.PubSub<Toasted>,
 ) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
@@ -1449,7 +1461,7 @@ const frontDoorHandlers = (
       const trail = (runId: string) => runDir(env.stateDir, runId);
       /** The Herd of the session the asker runs in, where it names none. */
       const askersHerd = (client: { readonly id: number }) =>
-        herdOf(askerEnv(client).socketPath).pipe(Effect.orElseSucceed(() => null));
+        machineHerd(askerEnv(client)).pipe(Effect.orElseSucceed(() => null));
       /** An operation that is idempotent by itself, recorded the first time it does anything. */
       // ponytail: a host that dies between acting and recording leaves that one unrecorded.
       const fresh = <A extends { readonly fresh: boolean }, I extends Schema.Json, E>(
@@ -2975,7 +2987,10 @@ const frontDoorHandlers = (
               },
               Effect.gen(function* () {
                 const asker = askerEnv(client);
-                const deps = yield* evaluationDeps({ ...asker, herdKey: task?.herd ?? undefined });
+                const deps = yield* evaluationDeps({
+                  pluginRoot: asker.pluginRoot,
+                  herdKey: task?.herd ?? (yield* machineHerd(asker)),
+                });
                 const said = yield* steer(asker, deps, {
                   text,
                   target: runId,
@@ -3159,6 +3174,7 @@ const frontDoorHandlers = (
             Effect.provideContext(bun),
             Effect.provideService(ForgeHttp, forgeHttp),
           ),
+        toasts: () => Stream.fromPubSub(toasted),
         board: () =>
           Stream.unwrap(
             liveHerds(herdr, env).pipe(
@@ -3434,7 +3450,10 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
         recordOf(dir),
         encodeRecord({ pid, build: BUILD, root: env.pluginRoot, herd }),
       );
-    const herdSocket = env.socketPath ?? (yield* serverSocket(herdr));
+    const herdSocket =
+      (yield* terminalBackend(env.userDir)) === "core"
+        ? yield* coreSocket(env.raw)
+        : (env.socketPath ?? (yield* serverSocket(herdr)));
     yield* record(herdSocket).pipe(Effect.orDie);
     if (herdSocket === null) yield* Effect.logWarning(HERDLESS);
     const locate = serverSocket(herdr).pipe(
@@ -3455,6 +3474,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     const panels: MrPanels = new Map();
     const declared: Declared = new Map();
     const stamp = yield* (yield* SecureRandom.SecureRandom).uuidV4();
+    const toasted = yield* PubSub.unbounded<Toasted>();
     const peers = yield* startPeers({
       dir,
       userDir: env.userDir,
@@ -3477,6 +3497,10 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
         Effect.orElseSucceed(() => null),
         Effect.provideContext(bun),
       ),
+      forgetsUnlisted: terminalBackend(env.userDir).pipe(
+        Effect.map((backend) => backend === "herdr"),
+        Effect.provideContext(bun),
+      ),
       tell: (peer) =>
         Effect.scoped(
           connectPeer(dir, peer.name, { as: "host", client: machineName(), stamp }).pipe(
@@ -3494,7 +3518,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
         Layer.provide(
           Layer.mergeAll(
             handlers(dir, installation, development, declared, peers),
-            frontDoorHandlers(dir, installation, development, panels, declared, stamp),
+            frontDoorHandlers(dir, installation, development, panels, declared, stamp, toasted),
             sideJobsLayer(panels),
             questionsLayer,
             slowRpcsLayer,
@@ -3533,8 +3557,8 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
           foundationLayer({
             dir,
             userDir: env.userDir,
-            toast: (title, body, sound) =>
-              herdr.notify(title, body, sound).pipe(Effect.provideContext(bun), Effect.ignore),
+            toast: (title, body, sound, runId) =>
+              PubSub.publish(toasted, { runId, title, body, sound }).pipe(Effect.asVoid),
             herd: { socketPath: herdSocket, pluginRoot: env.pluginRoot, locate },
             readings: usage.readings,
             messagePoll: seconds ? "1 second" : undefined,

@@ -2020,7 +2020,7 @@ scenario(
         expect(yield* prompts()).toHaveLength(3);
         expect(yield* asked("r-review-mr", "review-2-1")).toContain("Iteration 2");
         const fix = yield* asked("r-review-mr", "fix");
-        expect(fix).toContain(`Project root: ${rig.root}/.herdr/worktrees/project/fix-the-guard`);
+        expect(fix).toContain(`Project root: ${rig.root}/.collie/worktrees/project/fix-the-guard`);
         expect(fix).toContain("the checkout of `fix-the-guard`");
         expect(yield* clearance("r-review-mr", "fix")).toBe(
           "Cleared for this step: pushing new commits to fix-the-guard on origin (https://gitlab.example.com/group/project) with a plain push.",
@@ -4667,7 +4667,7 @@ scenario(
         });
         yield* repository();
         yield* exec(["git", "branch", "feature"], { cwd: rig.projectDir });
-        const first = `${rig.root}/.herdr/worktrees/${Str.split(rig.projectDir, "/").pop()}/feature`;
+        const first = `${rig.root}/.collie/worktrees/${Str.split(rig.projectDir, "/").pop()}/feature`;
         for (const slot of [first, `${first}-2`, `${first}-3`])
           yield* fs.makeDirectory(slot, { recursive: true });
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
@@ -13640,7 +13640,7 @@ for (const name of ["gitlab", "github"] as const) {
           yield* exec(["git", "worktree", "remove", "--force", `${rig.root}/reviewed`], {
             cwd: rig.projectDir,
           });
-          const held = `${rig.root}/.herdr/worktrees/project/feature`;
+          const held = `${rig.root}/.collie/worktrees/project/feature`;
           yield* fs.makeDirectory(held, { recursive: true });
           yield* fs.writeFileString(`${held}/notes.txt`, "mine\n");
           yield* forge.set({

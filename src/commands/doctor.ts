@@ -1,8 +1,8 @@
 import { Effect } from "effect";
 import { Command } from "effect/cli";
-import { doctor as checkInstallation } from "../doctor";
+import { doctor as checkInstallation, doctorOn } from "../doctor";
 import { attempt } from "../envelope";
-import { context, gitlabHostFlag, root, withGitlabHost } from "./shared";
+import { cliDoor, context, gitlabHostFlag, root, withGitlabHost } from "./shared";
 
 export const doctor = Command.make("doctor", { gitlabHost: gitlabHostFlag }, ({ gitlabHost }) =>
   Effect.gen(function* () {
@@ -16,6 +16,7 @@ export const doctor = Command.make("doctor", { gitlabHost: gitlabHostFlag }, ({ 
         if (resolved._tag === "ContextFailure") return resolved.result;
         const env = withGitlabHost(resolved.env, gitlabHost);
         if ("ok" in env) return env;
+        if (env.machine !== undefined) return yield* doctorOn(env, gitlabHost, yield* cliDoor(env));
         return yield* checkInstallation(env);
       }),
       global.json,
@@ -29,6 +30,10 @@ export const doctor = Command.make("doctor", { gitlabHost: gitlabHostFlag }, ({ 
       description: "Report what is missing; exit non-zero if anything is",
     },
     { command: "collie doctor --json", description: "The same checks as data" },
+    {
+      command: "collie --machine vm-mk doctor",
+      description: "The same checks, on a paired Machine",
+    },
     {
       command: "collie doctor --gitlab-host gitlab.example.com",
       description: "Check glab, the token and git push against another GitLab",

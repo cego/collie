@@ -40,6 +40,7 @@ import {
 import { mrWords, parseMrTarget } from "./board-model";
 import { FORGES, forgeOf, forgeOfHost } from "./forge/forge";
 import { withLock } from "./lock";
+import { terminalBackend, worktreesDirectory } from "./config";
 import { withoutCredentials } from "./automode";
 import type { AgentEntry } from "./registry";
 import type { WorktreeRecord } from "./run";
@@ -682,7 +683,7 @@ export const repositoryName = Effect.fn("worktree.repositoryName")(function* (
  * The checkout for a branch, made with git. The one the branch already has where it has
  * one — git allows no second worktree on a checked-out branch, and a fix round has to
  * land where the reviewed work already is — and otherwise a new one at the first free
- * slot of the path herdr would have chosen. Anything else at a slot, such as another
+ * slot under the worktrees directory. Anything else at a slot, such as another
  * clone's checkout of the same name, is left as it is and passed over
  * (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
  */
@@ -690,7 +691,7 @@ const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   cwd: string;
   branch: string;
   base?: string | undefined;
-  /** Where a new checkout goes, which is where herdr would have put it. */
+  /** Where a new checkout goes. */
   worktrees: string;
   stateDir: string;
   recordedBy?: RecordedBy | undefined;
@@ -1221,7 +1222,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     }
     const made = yield* roamingCheckout({
       cwd: from,
-      worktrees: yield* herdr.worktreesDirectory(),
+      worktrees: yield* worktreesDirectory(herdr.env),
       stateDir: opts.stateDir,
       recordedBy: opts.recordedBy,
       claimed: opts.claimed,
@@ -1302,7 +1303,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     ({ ...here, refused: `no worktree for ${plan.branch}: ${why}` }) satisfies Checkout;
 
   const newOn = yield* newOnOrigin(plan.branch, opts.cwd);
-  if (opts.separate === true) {
+  if (opts.separate === true && (yield* terminalBackend(herdr.env.userDir)) === "herdr") {
     // The Task's own name where the caller worked one out, so the workspace herdr opens
     // reads like every other task workspace rather than like the branch under it.
     const label =
@@ -1336,7 +1337,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     cwd: opts.cwd,
     branch: plan.branch,
     base: plan.base,
-    worktrees: yield* herdr.worktreesDirectory(),
+    worktrees: yield* worktreesDirectory(herdr.env),
     stateDir: opts.stateDir,
     recordedBy: opts.recordedBy,
     run: shell,
@@ -1389,7 +1390,7 @@ export const checkoutRefusal = Effect.fn("worktree.checkoutRefusal")(function* (
   if (!listing) return `no worktree for ${plan.branch}: ${opts.cwd} is not a git checkout`;
   if (Arr.some(listing.checkouts, (checkout) => checkout.branch === plan.branch)) return null;
   const first = path.join(
-    yield* herdr.worktreesDirectory(),
+    yield* worktreesDirectory(herdr.env),
     path.basename(listing.repo),
     ...branchPath(plan.branch),
   );

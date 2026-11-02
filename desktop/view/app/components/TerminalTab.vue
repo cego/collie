@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// The Run's live agent's pane, drawn from herdr's own frames: what the human types, pastes,
-// scrolls and clicks goes back to herdr, and nothing the pane shows decides anything here.
+// The Run's live agent's pane, drawn from herdr's own frames or core's attach stream: what the
+// human types, pastes, scrolls and clicks goes back to it, and nothing the pane shows decides
+// anything here. A core terminal's history is xterm.js's own, scrolled here.
 // The pane is held while this tab is mounted and given back when it is not.
 
 import * as Option from "effect/Option";
@@ -65,6 +66,8 @@ const TYPE = {
 
 let term: Terminal | undefined;
 let fiber: Fiber.Fiber<void> | undefined;
+/** Whether the open terminal is core's, a raw stream xterm.js keeps the history of. */
+let onCore = false;
 const send = (command: TerminalCommand) => void terminalSend(command);
 const sizes = settledResizes((cols, rows) => send({ type: "terminal.resize", cols, rows }), {
   set: (run, ms) => window.setTimeout(run, ms),
@@ -122,8 +125,12 @@ const linksOn = (line: number): ILink[] =>
 const shown = (event: TerminalEvent) => {
   switch (event._tag) {
     case "Opened":
-      // A resize sent while the controller was starting was refused.
-      if (term !== undefined) sizes.opened(term.cols, term.rows);
+      onCore = event.at.core !== undefined;
+      if (term !== undefined) {
+        term.options.scrollback = onCore ? 1000 : 0;
+        // A resize sent while the controller was starting was refused.
+        sizes.opened(term.cols, term.rows);
+      }
       focused.value = event.at.agent;
       return panes.showing(props.placed, event.at);
     case "Frame":
@@ -229,11 +236,14 @@ onMounted(() => {
   term.open(element);
   fit.fit();
   listening = [
-    term.onData((text) => isMouseReport(text) || send({ type: "terminal.input", text })),
+    term.onData(
+      (text) => (isMouseReport(text) && !onCore) || send({ type: "terminal.input", text }),
+    ),
     term.onResize(({ cols, rows }) => sizes.resized(cols, rows)),
     term.registerLinkProvider({ provideLinks: (line, links) => links(linksOn(line)) }),
   ];
   term.attachCustomWheelEventHandler((event) => {
+    if (onCore) return true;
     sendIf(scrollOf(event.deltaY, event, screen()));
     event.preventDefault();
     return false;

@@ -38,26 +38,23 @@ git. To work on Collie itself, clone cego/collie anywhere and run its `prepare.s
 installs herdr, Claude Code and Collie at a release instead, one reported step at a time; see
 [Onboarding a Machine](docs/using.md#onboarding-a-machine).
 
-The install links the plugin, puts `collie` on your PATH, adds four keybindings, installs
+The install links the plugin, puts `collie` on your PATH, installs
 the required skills, and runs `collie doctor`. Later, `collie upgrade` brings all of it up
 to date. Helle and a Linear MCP are optional; doctor tells you when a workflow you'd run
 needs one. See [Install](docs/using.md#install) and
 [Optional integrations](docs/using.md#optional-integrations) for the detail.
 
-## Four keys
+## The board and chat
 
-| Key              | What it does                      |
-| ---------------- | --------------------------------- |
-| `prefix+f`       | Run a workflow                    |
-| `prefix+u`       | Resume a run that stopped         |
-| `prefix+shift+f` | Fork a persona into your layer    |
-| `prefix+shift+c` | Open this session's Control Plane |
+Each Machine's host keeps two herdr-core terminals in the Herd's own directory: the
+**Control Plane**, `collie-board`, a board with one card per task, grouped by what needs
+you, what is working, and what finished; and `collie-chat`, where you can ask about the work
+or redirect it. `hc attach collie-board` opens the board, and the host starts either again
+when it ends. Desktop draws the same board and its own chat.
 
-`prefix` is `ctrl+b` by default. Each herdr session has one **Control Plane** in a workspace
-of Collie's own: a board with one card per task, grouped by what needs you, what is
-working, and what finished, with a chat pane beside it where you can ask about the work
-or redirect it. `prefix+shift+c` reaches it from any pane and opens it when the session
-has none yet.
+From a shell, `collie run start` runs a workflow (`--task` continues one), `collie run
+resume` picks up a run that stopped, `collie persona fork` copies a persona into your layer
+and `collie host restart` restarts the host.
 
 ## The workflows
 
@@ -74,7 +71,7 @@ has none yet.
 The bundled workflows are a shared starting point, not a restriction. `collie workflow
 fork <id>` writes a module of your own that imports what it keeps and replaces what it
 changes, and a workflow you write yourself is found where you saved it. A persona forks into
-your own layer with `prefix+shift+f`, changing only the keys you disagree with.
+your own layer with `collie persona fork`, changing only the keys you disagree with.
 
 Every action is also a command, so an agent can drive Collie:
 
@@ -84,7 +81,7 @@ collie run start review --input target=worktree --input plan= --input proves=
 
 ## Documentation
 
-- [Using Collie](docs/using.md): install, keybindings, the Control Plane, hand-offs, your
+- [Using Collie](docs/using.md): install, the Control Plane, hand-offs, your
   defaults, troubleshooting.
 - [Workflows](docs/workflows.md): what each workflow is for, what it needs, how they chain.
 - [Authoring](docs/authoring.md): where a workflow is saved, forking, personas and their frontmatter.
