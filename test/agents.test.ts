@@ -6502,6 +6502,51 @@ test("without Collie's controls, a Claude overlay is a settings file of its own"
     }),
   ));
 
+const ClaudeMdExcludes = Schema.fromJsonString(
+  Schema.Struct({ claudeMdExcludes: Schema.Array(Schema.String) }),
+);
+
+test("a Claude agent working inside the Collie directory never loads that directory's instructions", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* withProfile({
+        reviewer: { claude: { claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"] } },
+      });
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { env: rig.pluginEnv({ COLLIE_DIR: rig.root }) });
+
+      const { claudeMdExcludes } = yield* Schema.decodeEffect(ClaudeMdExcludes)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(claudeMdExcludes).toEqual([
+        `${rig.root}/CLAUDE.md`,
+        `${rig.root}/CLAUDE.local.md`,
+        `${rig.root}/.claude/CLAUDE.md`,
+        `${rig.root}/.claude/rules/**`,
+        "/home/me/.claude/CLAUDE.md",
+      ]);
+    }),
+  ));
+
+test("a Claude agent working outside the Collie directory keeps only the operator's exclusions", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* withProfile({
+        reviewer: { claude: { claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"] } },
+      });
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), {
+        // A prefix of the checkout's path, but not a directory it is in.
+        env: rig.pluginEnv({ COLLIE_DIR: `${rig.root}/proj` }),
+      });
+
+      const { claudeMdExcludes } = yield* Schema.decodeEffect(ClaudeMdExcludes)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(claudeMdExcludes).toEqual(["/home/me/.claude/CLAUDE.md"]);
+    }),
+  ));
+
 test("a Claude launch's settings carry the Run's autoMode block, each list opening with the defaults", () =>
   runEffect(
     Effect.gen(function* () {
