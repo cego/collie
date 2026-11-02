@@ -95,3 +95,32 @@ test("a Run stopped or failed on its question asks nobody, and keeps the questio
   );
   expect(failed.asking).toEqual([]);
 });
+
+test("a finished Run's agent that asks after a steer is still asking, unless the Run was stopped", () => {
+  const region = {
+    name: "ask-build-1",
+    prompt: "Which region?",
+    options: ["eu-west"],
+    answer: null,
+    asker: "build",
+  };
+  const post = { name: "post-1", prompt: "What next?", options: ["Post"], answer: null };
+  const done = factsOfView(
+    "/state",
+    view({ status: { status: "complete", value: "done" }, waiting: [post, region] }),
+  );
+  expect(done.state).toBe("succeeded");
+  expect(done.asking).toEqual([
+    { name: "ask-build-1", prompt: "Which region?", options: ["eu-west"] },
+  ]);
+  expect(done.engine?.questions).toMatchObject([
+    { name: "post-1", open: false },
+    { name: "ask-build-1", open: true },
+  ]);
+
+  const stopped = factsOfView(
+    "/state",
+    view({ status: { status: "suspended" }, controls: ["stop"], waiting: [post, region] }),
+  );
+  expect(stopped.asking).toEqual([]);
+});

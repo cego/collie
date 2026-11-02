@@ -640,8 +640,10 @@ on the card, or an agent waiting for you in its own pane — a harness dialog he
 answer, or a run that parked because its agent's pane would not take a prompt. The second kind has nothing to
 answer under the card and says where to go instead (`Waiting for you in build-r7's pane.`);
 Enter on the card gets you there. Either way the work has stopped, which is what the
-section is for. A Run that ended — stopped included — asks nothing: a question it was
-stopped at comes back only if it is resumed, so it never keeps its Task here. **Working** is one card per Task something is
+section is for. The workflow of a Run that ended — stopped included — asks nothing: a question it was
+stopped at comes back only if it is resumed, so it never keeps its Task here. Only an agent
+you steered after its Run finished can still ask, and not once the Run is stopped, since a
+stop closes its agents. **Working** is one card per Task something is
 actually doing — a Run the host holds that has not settled, or an agent herdr still has: its name,
 its project, one plain sentence about what is happening, one amber line when it has
 drifted, the step glyphs, where it has got to, how many agents are on it and how long it

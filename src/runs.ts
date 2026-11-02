@@ -137,13 +137,10 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   worktree: view.worktree,
   dir: runDir(stateDir, view.runId),
   evidence: evidenceDir(stateDir, view.runId),
-  // A stop leaves its question open in the engine for a resume; until then nobody is asked.
-  asking: settled({ state: stateOf(view) })
-    ? []
-    : Arr.map(
-        Arr.filter(view.waiting, (one) => one.answer === null),
-        (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
-      ),
+  asking: Arr.map(
+    Arr.filter(view.waiting, (one) => isAsking(view, one)),
+    (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
+  ),
   answered: Arr.flatMap(view.waiting, ({ name, prompt, options, answer }) =>
     answer === null ? [] : [{ name, prompt, options, answer }],
   ),
@@ -169,7 +166,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       asked: one.asked ?? null,
       answered: one.answered ?? null,
       by: one.by ?? null,
-      open: one.answer === null && !settled({ state: stateOf(view) }),
+      open: isAsking(view, one),
       text: one.prompt,
       options: Arr.map(one.options, (value) => ({ id: value, title: value, subtitle: null })),
     })),
@@ -177,6 +174,15 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
     execution: executionOf(view),
   },
 });
+
+/**
+ * An ended Run's workflow asks nothing: a stop leaves its question open in the engine for a
+ * resume. Its agent still asks after a steer, unless a stop closed it (ADR-0041).
+ */
+const isAsking = (view: RunView, one: RunView["waiting"][number]): boolean => {
+  const state = stateOf(view);
+  return one.answer === null && (!settled({ state }) || (one.asker != null && state !== "stopped"));
+};
 
 const executionOf = (view: RunView): Execution => {
   if (view.controls.includes(STOP)) return "stopped";
