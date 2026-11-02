@@ -29,6 +29,7 @@ import {
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
 import { deliveriesOf } from "../src/steering";
+import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
 
@@ -279,6 +280,8 @@ test(
             const view = yield* finished(runId);
             return { runId, named, sessions, before, view };
           }),
+          // Compaction's controls are what give OpenCode a server to be prompted on.
+          { ...hostOf(), compactAtTokens: COMPACT_AT_TOKENS },
         );
         const { runId, named, sessions, before, view } = result;
         expect(view?.status.status).toBe("complete");
@@ -423,6 +426,42 @@ test(
           agent,
         ]);
         expect(sendsSince(calls, before)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "an OpenCode agent started again with compaction off is told to carry on through core once it reports idle, and the Run completes",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const core = yield* rig.startCore();
+        yield* rig.queueOutputs([null, { verdict: "fixed" }]);
+        const { runId, agent, before } = yield* hosted(
+          Effect.gen(function* () {
+            const runId = yield* started("opencode", "r1");
+            const agent = agentName(runId, "opencode", null, 1);
+            yield* until(
+              () => fs.exists(`${dir()}/agents/${runId}/opencode.status.js`),
+              (there) => there,
+            );
+            yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
+            yield* idleAfterItsStep(agent, "at launch");
+            yield* until(
+              () => recordedSession(runId, "opencode").pipe(Effect.option),
+              Option.isSome,
+            );
+            return { runId, agent, before: coreCalls(yield* rig.calls()).length };
+          }),
+        );
+        yield* core.lose;
+        const view = yield* hosted(finished(runId));
+        expect(view?.status.status).toBe("complete");
+        const sent = sendsSince(yield* rig.calls(), before);
+        expect(Arr.map(sent, (send) => send.terminal)).toEqual([agent]);
+        expect(sent[0]?.text).toContain("Carry on with your step from where you were");
       }),
     ),
   120_000,
