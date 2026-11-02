@@ -40,8 +40,7 @@ export const markFirst =
       }),
     );
 
-/** Each whole line `chunk` completes; a line still arriving is kept for the next. */
-const lines = () => {
+const wholeLines = () => {
   let partial = "";
   return (chunk: string) => {
     const split = Str.split(partial + chunk, "\n");
@@ -53,8 +52,8 @@ const lines = () => {
 /** The Runs whose `runDetail` request the bridge passed to the host, by its first answer. */
 export const relayedRecords = () => {
   const asked = new Map<string, string>();
-  const requests = lines();
-  const answers = lines();
+  const requests = wholeLines();
+  const answers = wholeLines();
   return {
     asked: (chunk: string) => {
       for (const line of requests(chunk)) {

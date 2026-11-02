@@ -171,10 +171,8 @@ test("a record that moves while its Runs do not moves its Run, under any of its 
       const after = model.stampRecord(tailed, "r1", ["r1"], "merge request merged");
       expect(after.seq).toBeGreaterThan(before.seq);
       expect(model.revision("r1").seq).toBe(after.seq);
-      // Another view of the same record is at the Run's revision too.
-      expect(model.stampRecord("r1 without", "r1", ["r1"], "merge request merged").seq).toBe(
-        after.seq,
-      );
+      const untailed = "r1 without its tail";
+      expect(model.stampRecord(untailed, "r1", ["r1"], "merge request merged").seq).toBe(after.seq);
     }),
   ));
 
