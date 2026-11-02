@@ -664,6 +664,8 @@ const stagesOf = (samples: ReadonlyArray<Sample>) => {
   );
   return {
     n: marked.length,
+    // Samples whose host, bridge or Desktop mark never came, so the split leaves them out.
+    unsplit: marked.length - split.length,
     mount: stage("record:click", "record:mounted"),
     bridge_and_host: stage("record:mounted", "record:frame"),
     ...(split.length > 0 && {

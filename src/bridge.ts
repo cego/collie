@@ -71,13 +71,15 @@ export const bridge = Effect.fn("Bridge")(function* (
   const mark = yield* recordMarks;
   const run = Effect.runForkWith(yield* Effect.context<never>());
   const relayed = relayedRecords();
-  const text = new TextDecoder();
+  const fromHost = new TextDecoder();
+  const toHost = new TextDecoder();
   return yield* channelInto(socket, declaration, {
     ready: () => process.stdout.write(`${BRIDGE_READY}\n`),
     write: (chunk) => {
       process.stdout.write(chunk);
       if (mark !== null)
-        for (const runId of relayed.answered(text.decode(chunk))) run(mark("bridge:relay", runId));
+        for (const runId of relayed.answered(fromHost.decode(chunk, { stream: true })))
+          run(mark("bridge:relay", runId));
     },
     end: (done) => {
       process.stdin.destroy();
@@ -85,7 +87,7 @@ export const bridge = Effect.fn("Bridge")(function* (
     },
     read: (deliver, done) => {
       process.stdin.on("data", (chunk: Buffer) => {
-        if (mark !== null) relayed.asked(text.decode(chunk));
+        if (mark !== null) relayed.asked(toHost.decode(chunk, { stream: true }));
         deliver(chunk);
       });
       process.stdin.on("end", done);

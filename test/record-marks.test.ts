@@ -29,3 +29,22 @@ test("the bridge names a record once, at the first answer to its runDetail reque
   expect(relay.answered(answer)).toEqual(["run-a"]);
   expect(relay.answered(answer)).toEqual([]);
 });
+
+test("the bridge names a record whose request and answer arrive in fragments", () => {
+  const relay = relayedRecords();
+  const pieces = (text: string) => text.match(/[\s\S]{1,5}/g) ?? [];
+  for (const piece of pieces(
+    line({
+      _tag: "Request",
+      id: "7",
+      tag: "runDetail",
+      payload: { runId: "run-a", tail: true, pages: 1, refreshMr: false, parts: true },
+      headers: [],
+    }),
+  ))
+    relay.asked(piece);
+  const named = pieces(line({ _tag: "Chunk", requestId: "7", values: [{ id: "run-a" }] })).flatMap(
+    (piece) => relay.answered(piece),
+  );
+  expect(named).toEqual(["run-a"]);
+});
