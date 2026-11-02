@@ -13,6 +13,10 @@ import { shell } from "./mr";
 import type { RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
 
+/** A path under a Run's own directories, by its Run. */
+const OWN_DIR = /^(?:runs|agents|evidence)\/([^/]*)/;
+/** A control file beside them, `<control>.<id>`, by what follows its first dot. */
+const CONTROL_FILE = /^[^/.]*\.([^/]*)$/;
 /** Marks a recursive listing's key in the cache of directory listings. */
 const RECURSIVE = "\0recursive";
 
@@ -117,15 +121,15 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
    * `run/<id>` for a path under a Run's own directories or one of its control files,
    * `<control>.<id>` beside them; `shared` for the rest of the state directory.
    */
+  const underDir = Str.startsWith(`${dir}/`);
+  const below = Str.slice(dir.length + 1);
   const groupOf = (path: string) => {
-    if (!Str.startsWith(`${dir}/`)(path)) return null;
-    const [top, run] = Str.split(Str.slice(dir.length + 1)(path), "/");
-    if ((top === "runs" || top === "agents" || top === "evidence") && run !== undefined)
-      return `run/${run}`;
-    const controlled = Arr.join(Arr.drop(Str.split(top, "."), 1), ".");
-    return run === undefined && Str.includes(".")(top) && revisions.has(controlled)
-      ? `run/${controlled}`
-      : "shared";
+    if (!underDir(path)) return null;
+    const rest = below(path);
+    const own = OWN_DIR.exec(rest);
+    if (own !== null) return `run/${own[1]}`;
+    const control = CONTROL_FILE.exec(rest);
+    return control !== null && revisions.has(control[1]!) ? `run/${control[1]}` : "shared";
   };
   /** Each group's reads, built when the group is first read. */
   const groups = new Map<string, ReturnType<typeof readsOf>>();
@@ -153,12 +157,12 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     return made;
   };
   const invalidate = (path: string) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const group = path === dir ? "shared" : groupOf(path);
       if (group === null) return;
       generation++;
-      const below = Str.slice(dir.length + 1)(path);
-      if (path === dir || below === "runs" || below === "agents" || below === "evidence") {
+      const inside = below(path);
+      if (path === dir || inside === "runs" || inside === "agents" || inside === "evidence") {
         groups.clear();
         for (const run of revisions.keys()) touch(run);
         return;
@@ -166,7 +170,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       groups.delete(group);
       if (group === "shared") {
         // A Task's record is its Runs' as much as their own files are.
-        const [top, name] = Str.split(below, "/");
+        const [top, name] = Str.split(inside, "/");
         const task = top === "tasks" ? Str.replace(/\.json$/, "")(name ?? "") : "";
         for (const run of indexes.byTask.get(task) ?? []) touch(run);
         return;
@@ -174,7 +178,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const run = Str.slice(4)(group);
       touch(run);
       // A Run's directory or control file coming or going changes the listing above it.
-      if (Str.split(below, "/").length <= 2) groups.delete("shared");
+      if (Str.split(inside, "/").length <= 2) groups.delete("shared");
     });
   const disable = Effect.sync(() => {
     enabled = false;
@@ -185,17 +189,17 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     path: string,
     direct: Effect.Effect<A, E>,
     cached: (group: ReturnType<typeof readsOf>) => Effect.Effect<A, E>,
-  ) =>
-    Effect.gen(function* () {
+  ) => {
+    const attempt = (): Effect.Effect<A, E> => {
       const group = groupOf(path);
-      if (!enabled || group === null) return yield* direct;
-      for (;;) {
-        const before = generation;
-        const found = yield* cached(groupReads(group)).pipe(Effect.result);
-        if (before === generation) return yield* Effect.fromResult(found);
-        if (!enabled) return yield* direct;
-      }
-    });
+      if (!enabled || group === null) return direct;
+      const before = generation;
+      return Effect.flatMap(Effect.exit(cached(groupReads(group))), (exit) =>
+        before === generation ? exit : Effect.suspend(attempt),
+      );
+    };
+    return Effect.suspend(attempt);
+  };
   const changed = <A, E, R>(effect: Effect.Effect<A, E, R>, ...paths: ReadonlyArray<string>) => {
     const forget = Effect.forEach(paths, invalidate, { discard: true });
     return forget.pipe(Effect.andThen(effect), Effect.ensuring(forget));
