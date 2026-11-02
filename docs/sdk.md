@@ -1515,7 +1515,9 @@ Machine at a time, and none while it is Short of memory; a Stop ends the wait or
 and suspends the Run. `pass` is `calibration`, `cycle N` or `final`. `reason` says why the
 plan changed, and a Run already measured under another plan is refused a new one without it. The plan, the record and
 every refusal are [`collie measure`](cli.md#measure)'s, since both go through one host
-operation. Take it inside an Activity, journaled with `MeasurementSchema`, which keeps an
+operation. `BenchmarkPlan` is the plan's schema, and `decodeBenchmarkPlan(input)` decodes a
+plan file as the host will: the plan with its defaults, or a failure with the reason
+`measure` would refuse it. Take it inside an Activity, journaled with `MeasurementSchema`, which keeps an
 infinite ratio as JSON:
 
 ```ts
