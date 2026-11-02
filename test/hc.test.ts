@@ -78,7 +78,11 @@ describe("the fake core", () => {
         const core = yield* rig.startCore();
         const hc = yield* connect(core.socketPath);
         yield* hc.call("hello", { generation: 1 });
-        const run = yield* hc.call("terminal.run", { argv: ["claude"], name: "impl-1", cwd: rig.root });
+        const run = yield* hc.call("terminal.run", {
+          argv: ["claude"],
+          name: "impl-1",
+          cwd: rig.root,
+        });
         const list = yield* hc.call("terminal.list", {});
         expect(Arr.map(list.terminals, (t) => [t.address, t.name])).toEqual([
           [run.address, "impl-1"],
