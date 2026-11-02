@@ -3,7 +3,7 @@
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Clock, Effect, Schedule, Stream, type Duration } from "effect";
+import { Clock, Effect, FileSystem, Schedule, Stream, type Duration } from "effect";
 import type { TaskView, MrState, Reopened } from "./board-model";
 import { readyRuns } from "./board";
 import { CHAT_TERMINAL, startChat } from "./chat";
@@ -152,6 +152,7 @@ export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
       const at = { ...env, socketPath: herdrSocket };
       const key = yield* machineHerd(at);
       const cwd = yield* herdDir(env.stateDir, key);
+      yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
       if (!(yield* herdr.coreTerminalLive(BOARD_TERMINAL)))
         yield* herdr.agentLaunch({
           name: BOARD_TERMINAL,

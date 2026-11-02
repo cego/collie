@@ -346,6 +346,11 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             },
           };
         case "terminal.run": {
+          const cwd = text(params.cwd);
+          if (cwd !== undefined && !(yield* fs.exists(cwd).pipe(Effect.orElseSucceed(() => false))))
+            return {
+              failure: { code: -32000, message: "spawn_failed", kind: "spawn_failed" },
+            };
           made += 1;
           const terminal: Terminal = {
             address: `t${made}`,
