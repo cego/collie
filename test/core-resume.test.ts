@@ -15,7 +15,10 @@ import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { fixtures } from "./support/host";
 import { TestClock } from "effect/testing";
-import { agentsLayer, type AgentHost } from "../src/agents";
+import { Agents, agentsLayer, type AgentHost, type RunNow } from "../src/agents";
+import { endAgent } from "../src/agent-end";
+import type { Backend } from "../src/herdr";
+import { readLaunches } from "../src/launches";
 import {
   Registry,
   foundationLayer,
@@ -26,7 +29,6 @@ import {
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
 import { deliveriesOf } from "../src/steering";
-import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
 
@@ -130,7 +132,12 @@ const hosted = <A, E>(
   run: Effect.Effect<
     A,
     E,
-    Registry | Store | HostServices | MessageStorage.MessageStorage | SqlClient.SqlClient
+    | Registry
+    | Store
+    | HostServices
+    | MessageStorage.MessageStorage
+    | SqlClient.SqlClient
+    | PlatformServices
   >,
   host: AgentHost = hostOf(),
 ) =>
@@ -272,8 +279,6 @@ test(
             const view = yield* finished(runId);
             return { runId, named, sessions, before, view };
           }),
-          // Compaction's controls are what give OpenCode a server to be prompted on.
-          { ...hostOf(), compactAtTokens: COMPACT_AT_TOKENS },
         );
         const { runId, named, sessions, before, view } = result;
         expect(view?.status.status).toBe("complete");
@@ -418,6 +423,91 @@ test(
           agent,
         ]);
         expect(sendsSince(calls, before)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+/** A running Run's recovery, as the host gives it, with nobody to ask. */
+const runningNow: RunNow = {
+  running: Effect.succeed(true),
+  authority: Effect.succeed({ created: null, roaming: false, started: null }),
+  questions: { ask: () => Effect.void, asked: Effect.succeed([]), close: () => Effect.void },
+};
+
+test(
+  "a host started on a Machine set to herdr starts again an agent core lost after the Machine switched to core",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const core = yield* rig.startCore();
+        yield* rig.queueOutputs([null]);
+        const config = `${rig.userDir}/config.json`;
+        const backend = (name: string) =>
+          fs.writeFileString(
+            config,
+            `{ "compact_at_tokens": 0, "trust": "never", "terminal_backend": "${name}" }`,
+          );
+        yield* backend("herdr");
+        const again = yield* hosted(
+          Effect.gen(function* () {
+            // Long enough for the host to have read the setting it started on.
+            yield* TestClock.withLive(Effect.sleep("500 millis"));
+            yield* backend("core");
+            const runId = yield* started("pi", "r1");
+            const agent = agentName(runId, "pi", null, 1);
+            yield* idleAfterItsStep(agent);
+            const before = coreCalls(yield* rig.calls()).length;
+            yield* core.lose;
+            const launches = yield* until(
+              () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
+              (launches) => launches.length > 0,
+            );
+            return { agent, launches };
+          }),
+        );
+        expect(Arr.map(again.launches, (launch) => launch.name)).toEqual([again.agent]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "an agent ended on purpose stays ended when core reports its exit before the end is done",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.startCore();
+        yield* rig.queueOutputs([null]);
+        const { ended, left } = yield* hosted(
+          Effect.gen(function* () {
+            const runId = yield* started("pi", "r1");
+            const agent = agentName(runId, "pi", null, 1);
+            yield* idleAfterItsStep(agent);
+            const agents = yield* Agents;
+            class ExitSeenWhileClosing extends FakeHerdr {
+              override paneClose(paneId: string, backend?: Backend) {
+                return super
+                  .paneClose(paneId, backend)
+                  .pipe(Effect.andThen(agents.resumeLost(runId, runningNow)));
+              }
+            }
+            const herdr = new ExitSeenWhileClosing(env());
+            const launched = Option.getOrThrow(
+              Arr.findLast(yield* readLaunches(dir(), runId), (one) => one.agent === agent),
+            );
+            const ended = yield* endAgent(
+              { herdr, stateDir: dir(), ports: {}, log: () => Effect.void, cwd: rig.projectDir },
+              launched,
+              "it ran out",
+              "close",
+            );
+            return { ended, left: yield* herdr.agentList() };
+          }),
+        );
+        expect(ended).toEqual({ _tag: "Closed", ended: true });
+        expect(left).toEqual([]);
       }),
     ),
   120_000,
