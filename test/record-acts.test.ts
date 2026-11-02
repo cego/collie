@@ -174,6 +174,36 @@ test(
   120_000,
 );
 
+test(
+  "an act shown while a stopped Step ran again is refused once it finishes again",
+  () =>
+    proves(
+      "collie-record-again-",
+      (world) =>
+        Effect.gen(function* () {
+          const door = yield* frontDoor(socketOf(world.state));
+          const again = yield* shipping(world, "a");
+          const ship = (state: string) => (record: RunDetail | null) =>
+            nodeOf(record?.flow, again.runId, "ship")?.state === state;
+          yield* until(() => recordOf(world, again.runId), ship("running"));
+          yield* collie(world, ["run", "stop", again.runId]);
+          yield* until(() => recordOf(world, again.runId), ship("stopped"));
+          yield* collie(world, ["run", "resume", again.runId]);
+          const shown = (yield* until(() => recordOf(world, again.runId), ship("running")))!
+            .revision!;
+          yield* again.open;
+          yield* until(() => recordOf(world, again.runId), ship("done"));
+
+          const acted = yield* door
+            .act({ actions: holdBefore(again.runId, "ship"), request: "again-a", shown })
+            .pipe(Effect.result);
+          expect(acted._tag === "Failure" ? acted.failure._tag : "carried out").toBe("StaleAct");
+        }),
+      ["stepped.workflow.ts"],
+    ),
+  120_000,
+);
+
 const FlowShown = Schema.Struct({ flow: Flow });
 const decodeFlow = Schema.decodeUnknownEffect(Schema.fromJsonString(Flow));
 const FLOW_BLOCK = /### Flow, as `run show --json` carries it\n\n```json\n(.*)\n```/s;

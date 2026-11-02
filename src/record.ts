@@ -95,6 +95,7 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
     for (const lane of found?.lanes ?? [])
       for (const node of lane.nodes)
         if (FINISHED_STEPS.has(node.state)) model.finishedAt(lane.run, node.id, model.highest(ids));
+        else model.unfinished(lane.run, node.id);
     const detail = yield* buildRunDetail({
       env,
       runId,

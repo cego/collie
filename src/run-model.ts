@@ -295,6 +295,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     finishes.set(key, seq);
     return seq;
   };
+  const unfinished = (run: string, step: string) => finishes.delete(`${run}\0${step}`);
 
   const heads = new Map<string, string | null>();
   /** Each watched checkout, and the Runs whose heads were read in it. */
@@ -364,6 +365,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     stamp,
     stampRecord,
     finishedAt,
+    unfinished,
     planned,
     head,
     checkout,
