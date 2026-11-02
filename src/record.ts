@@ -147,7 +147,8 @@ export const recordFrames = (
       const diffAt = (run: RunFacts) =>
         Effect.gen(function* () {
           const at = `${yield* model.checkout(run)}\0${run.state}\0${run.branch}\0${run.cwd}`;
-          if (kept?.at !== at)
+          // A going Run's diff includes edits no git directory records, so it is read each time.
+          if (kept?.at !== at || kept.diff?.live !== false)
             kept = {
               at,
               diff: yield* diffOf(run).pipe(

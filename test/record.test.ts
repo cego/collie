@@ -234,3 +234,52 @@ test(
     ),
   60_000,
 );
+
+test("a going Run's record shows an edit to its checkout on its next frame", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-record-diff-" });
+      const repo = `${dir}/repo`;
+      yield* fs.makeDirectory(repo);
+      const git = (...args: Array<string>) =>
+        Effect.sync(() =>
+          Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+            cwd: repo,
+          }),
+        );
+      yield* git("init", "-q", "-b", "main");
+      yield* fs.writeFileString(`${repo}/kept.txt`, "kept\n");
+      yield* git("add", ".");
+      yield* git("commit", "-q", "-m", "first");
+      yield* git("checkout", "-q", "-b", "work");
+      const run = yield* madeRun(dir, {
+        id: "r1",
+        state: "running",
+        cwd: repo,
+        branch: "work",
+        created: "2026-10-30T09:00:00Z",
+        finished: null,
+      });
+      const model = yield* makeRunModel(dir, "installation");
+      const poked = yield* Queue.unbounded<void>();
+      const frames = yield* Queue.unbounded<Frame>();
+      yield* recordFrames(
+        sourcesOf(dir, model, [run]),
+        { ...KEY, runId: run.id },
+        Stream.fromQueue(poked),
+      ).pipe(
+        Stream.runForEach((frame) => Queue.offer(frames, frame)),
+        Effect.forkScoped,
+      );
+      let first = yield* Queue.take(frames);
+      while (!isDone(first)) first = yield* Queue.take(frames);
+      expect(first.diff?.files ?? []).toEqual([]);
+
+      yield* fs.writeFileString(`${repo}/new.txt`, "hello\n");
+      yield* Queue.offer(poked, undefined);
+      let next = yield* Queue.take(frames);
+      while (!isDone(next)) next = yield* Queue.take(frames);
+      expect(Arr.map(next.diff?.files ?? [], (file) => file.path)).toEqual(["new.txt"]);
+    }),
+  ));
