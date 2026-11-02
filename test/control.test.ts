@@ -18,6 +18,7 @@ import { Effect, Fiber, FileSystem } from "effect";
 import { readAudit } from "../src/audit";
 import { mrLabel, type MrState } from "../src/board-model";
 import { connect } from "../src/host";
+import { factsOfView } from "../src/runs";
 import { writeMrStates } from "../src/merges";
 import { runEffect } from "./support/effect";
 import { HostReply, events, fixtures, openHost, runDirOf, until, workspace } from "./support/host";
@@ -601,6 +602,33 @@ test(
         expect(first.applied).toBe(true);
         expect(second).toEqual(first);
         expect(yield* recorded(trail, "twice")).toHaveLength(1);
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
+  "a Run stopped twice at its question is stopped each time and asks nobody",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { host, state, runId } = yield* heldAtNextEntry("collie-control-stop-twice-");
+        const facts = Effect.scoped(
+          Effect.flatMap(connect(state), (client) => client.run({ runId })),
+        ).pipe(Effect.map((view) => (view === null ? null : factsOfView(state, view))));
+        for (const request of ["stop-1", "stop-2"]) {
+          const stopped = yield* Effect.scoped(
+            Effect.flatMap(connect(state), (client) =>
+              client.control({ runId, control: "stop", set: true, request }),
+            ),
+          );
+          expect(stopped).toMatchObject({ applied: true, left: [] });
+          const after = yield* facts;
+          expect(after?.state).toBe("stopped");
+          expect(after?.asking).toEqual([]);
+        }
+        expect((yield* facts)?.engine?.questions).toMatchObject([{ name: "decision", open: true }]);
         yield* host.stop;
       }).pipe(Effect.scoped),
     ),

@@ -137,10 +137,13 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   worktree: view.worktree,
   dir: runDir(stateDir, view.runId),
   evidence: evidenceDir(stateDir, view.runId),
-  asking: Arr.map(
-    Arr.filter(view.waiting, (one) => one.answer === null),
-    (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
-  ),
+  // A stop leaves its question open in the engine for a resume; until then nobody is asked.
+  asking: settled({ state: stateOf(view) })
+    ? []
+    : Arr.map(
+        Arr.filter(view.waiting, (one) => one.answer === null),
+        (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
+      ),
   answered: Arr.flatMap(view.waiting, ({ name, prompt, options, answer }) =>
     answer === null ? [] : [{ name, prompt, options, answer }],
   ),

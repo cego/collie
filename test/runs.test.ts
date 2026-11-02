@@ -62,3 +62,34 @@ test("a Run awaiting what comes by itself is working, and says what it awaits", 
   expect(repair.state).toBe("waiting");
   expect(repair.note).toBe("group/app!3 cannot be released");
 });
+
+test("a Run stopped or failed on its question asks nobody, and keeps the question for a resume", () => {
+  const post = {
+    name: "post-1",
+    prompt: "What next?",
+    options: ["Post", "Don't post"],
+    answer: null,
+  };
+  const asking = view({ status: { status: "suspended" }, waiting: [post] });
+  expect(factsOfView("/state", asking).asking).toEqual([
+    { name: "post-1", prompt: "What next?", options: ["Post", "Don't post"] },
+  ]);
+
+  const stopped = factsOfView("/state", { ...asking, controls: ["stop"] });
+  expect(stopped.state).toBe("stopped");
+  expect(stopped.asking).toEqual([]);
+  expect(stopped.engine?.questions).toMatchObject([{ name: "post-1", open: true }]);
+
+  const failed = factsOfView(
+    "/state",
+    view({
+      status: {
+        status: "failed",
+        reason: "boom",
+        entry: "/project/.collie/workflows/builds.workflow.ts",
+      },
+      waiting: [post],
+    }),
+  );
+  expect(failed.asking).toEqual([]);
+});
