@@ -212,8 +212,8 @@ implementer; a test that passes there, or that the base does not have, is the Ru
 whose failures name no tests has no baseline and is handed to the fixes. A fix that changes nothing and disputes every finding it was
 handed ends the fixes, since another would check the same tree: the outcome stays unproved,
 and the merge request names each disputed gap with the fixer's reason. A check is not run whole
-again on a tree it failed on: after a fix that left HEAD and the fingerprint as they were,
-nothing runs and the round is read from the records already on that tree, and a check whose
+again on a tree it failed on: after a fix that left the tree's content as it was, whether
+or not it committed, nothing runs and the round is read from the records already on that tree, and a check whose
 failures named tests is read from its runs alone and at the base rather than rechecked. A
 check re-granted with another command or directory still runs. When the four fixes run out
 with a check still failing and no stall, the Run is parked "Outcome unproved after 4 gate
@@ -560,7 +560,8 @@ moves; a teammate who approves meanwhile takes the Run on to its go. Turned on w
 channel, the Run says so on its log and asks nothing.
 
 **Checks** run on every head before it can be asked about, the one a round pushed
-included, and a check Collie leaves to CI is waited on there. A failure goes to a fix
+included, and a check Collie leaves to CI is waited on there. A check that already passed
+on a head with the same bytes is relied on there rather than run again. A failure goes to a fix
 round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. Four rounds in a
 row that leave a check failing, or one that changes nothing, park the Run with why;
 resuming it runs the checks again. Collie's own `check` is left to CI's `test` job, so a

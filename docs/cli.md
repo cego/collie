@@ -1538,8 +1538,10 @@ pane holds, and the host says whose Run that agent is. Anywhere else, without `-
 fails `invalid_input`: `verify needs --run outside a Run's agent pane.` A `--run` given
 explicitly always wins.
 
-Runs the command, watches its exit, and records the result against the run's tree — the
-commit it was on and a digest of everything not committed, taken **before and after**.
+Runs the command, watches its exit, and records the result against the run's tree — its
+content, the Git tree the working tree would commit as, untracked files included, taken
+**before and after**, with the commit it was on beside it. Committing the same bytes keeps
+the result; changing any byte makes it about an earlier tree.
 That pair is the point: a pass on a tree that changed while the command ran says nothing
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
