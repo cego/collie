@@ -146,6 +146,7 @@ const suite = (targeted: boolean, kind: Kind, since: bigint, budget: Budget, see
             ...request.args,
           ],
           {
+            kind,
             env: {
               ...suiteEnv(),
               COLLIE_TEST_BINARY: `${out}/collie`,
