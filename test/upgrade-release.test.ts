@@ -17,6 +17,7 @@ import { ownPlatform } from "../src/releases";
 import { signRelease } from "../src/signing";
 import { generateKeyPairSync } from "node:crypto";
 import manifest from "../herdr-plugin.toml";
+import hcPin from "../hc-pin.json";
 
 let rig: Rig;
 let collieDir: string;
@@ -360,15 +361,16 @@ test("a release source that cannot be reached changes nothing, and says so", () 
 const hcBin = () => `${rig.root}/.local/bin`;
 
 /**
- * Carries an hc archive whose `herdr-core` logs each way it is run, and the second line of a
- * `--from` binary, which names the build: `build` tells one pin's hc from another's.
+ * Carries an hc archive whose `herdr-core` says it is 0.1.0, older than any pin, and logs
+ * every other way it is run, and the second line of a `--from` binary, which names the
+ * build: `build` tells one pin's hc from another's.
  */
 const carryHc = (build: string) =>
   Effect.gen(function* () {
     const staged = `${rig.root}/hc-${build}`;
     yield* write(
       `${staged}/herdr-core`,
-      `#!/bin/sh\n# hc build ${build}\nprintf '%s\\n' "$*" >> "${rig.root}/hc-calls"\nif [ "$1" = update ] && [ "$2" = --from ]; then sed -n 2p "$3" >> "${rig.root}/hc-calls"; fi\n`,
+      `#!/bin/sh\n# hc build ${build}\n[ "$1" = --version ] && echo "hc 0.1.0" && exit 0\nprintf '%s\\n' "$*" >> "${rig.root}/hc-calls"\nif [ "$1" = update ] && [ "$2" = --from ]; then sed -n 2p "$3" >> "${rig.root}/hc-calls"; fi\n`,
     );
     yield* (yield* FileSystem.FileSystem).makeDirectory(`${tree}/hc`, { recursive: true });
     const made = yield* shell(
@@ -441,15 +443,24 @@ test("an upgrade with an unchanged pin leaves hc alone", () =>
     }),
   ));
 
-test("an hc of the human's own, before Collie carried one, is updated the planned way", () =>
+/** An hc of the human's own in upstream's place, saying `version`, logging every other call. */
+const ownHc = (version: string) =>
+  Effect.gen(function* () {
+    yield* write(
+      `${hcBin()}/herdr-core`,
+      `#!/bin/sh\n[ "$1" = --version ] && echo "hc ${version}" && exit 0\nprintf '%s\\n' "$*" >> "${rig.root}/hc-calls"\n`,
+    );
+    yield* (yield* FileSystem.FileSystem).chmod(`${hcBin()}/herdr-core`, 0o755);
+  });
+
+test.each([
+  ["older than the pin", "0.1.0"],
+  ["naming no version", "unknown"],
+])("an hc of the human's own %s is updated to the hc the release carries", (_, version) =>
   runEffect(
     Effect.gen(function* () {
       yield* place();
-      yield* write(
-        `${hcBin()}/herdr-core`,
-        `#!/bin/sh\nprintf '%s\\n' "$*" >> "${rig.root}/hc-calls"\n`,
-      );
-      yield* (yield* FileSystem.FileSystem).chmod(`${hcBin()}/herdr-core`, 0o755);
+      yield* ownHc(version);
       yield* carryHc("a");
 
       yield* placeHc();
@@ -458,7 +469,30 @@ test("an hc of the human's own, before Collie carried one, is updated the planne
       expect(calls.length).toBe(1);
       expect(calls[0]).toMatch(/^update --from \/\S+\/herdr-core$/);
     }),
-  ));
+  ),
+);
+
+test.each([
+  ["at the pin", hcPin.version],
+  ["newer than the pin", "99.0.0"],
+])("an hc of the human's own %s is left alone, never downgraded", (_, version) =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* place();
+      yield* ownHc(version);
+      const own = yield* read(`${hcBin()}/herdr-core`);
+      yield* carryHc("a");
+
+      const placed = yield* placeHc();
+
+      expect(yield* hcCalls()).toEqual([]);
+      expect(yield* read(`${hcBin()}/herdr-core`)).toBe(own);
+      expect(placed.ok && "steps" in placed.data && placed.data.steps).toContainEqual(
+        expect.objectContaining({ step: "hc", state: "already in place" }),
+      );
+    }),
+  ),
+);
 
 test("an hc update that fails is reported, and the release is still placed", () =>
   runEffect(
