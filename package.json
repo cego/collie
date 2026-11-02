@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch --oxlint",
+    "postinstall": "bun install --cwd desktop --frozen-lockfile",
     "lint": "bun run lint:ts && bun run lint:vue",
     "lint:ts": "effect-tsgo oxlint --vue-plugin",
     "lint:vue": "bun tools/lint-vue.ts",

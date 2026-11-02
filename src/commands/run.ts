@@ -107,8 +107,9 @@ import {
   mutating,
   parseInput,
   locateRun,
-  outsideTask,
+  outOfReach,
   runFacts,
+  runScope,
   requestIdFlag,
   runIdArg,
   root,
@@ -456,7 +457,7 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   const resolved = yield* context(global, false);
   if (resolved._tag === "ContextFailure")
     return { _tag: "RunFailure" as const, result: resolved.result };
-  const located = yield* locateRun(resolved.env, runId, yield* selectedTask(global));
+  const located = yield* locateRun(resolved.env, runId, yield* runScope(global));
   // The environment travels with the Run: a command that then reads the Run's children
   // out of the same state directory should not resolve the context twice.
   return located._tag === "RunFailure" ? located : { ...located, env: resolved.env };
@@ -502,10 +503,8 @@ const runShow = Command.make(
             memory = null,
             flow = null,
           } = shown;
-          // A Task is this Machine's, so a Run on another is never outside it.
-          const task = yield* selectedTask(global);
-          if (machine === null && task !== null && view.task !== task)
-            return outsideTask(runId, task).result;
+          const refused = outOfReach(view, machine, yield* runScope(global));
+          if (refused !== null) return refused;
           const progress = yield* runProgress(resolved.env, runId);
           const ready = progress.ok && progress.value !== null ? progress.value.ready : null;
           // Both facts on the head line: how execution ended, and what became of the
@@ -1025,9 +1024,8 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
 
   const shown = yield* runShown(resolved.env, runId);
   if (!shown.ok) return yield* printResult(shown, global.json);
-  const task = yield* selectedTask(global);
-  if (shown.machine === null && task !== null && shown.view.task !== task)
-    return yield* printResult(outsideTask(runId, task).result, global.json);
+  const refused = outOfReach(shown.view, shown.machine, yield* runScope(global));
+  if (refused !== null) return yield* printResult(refused, global.json);
   return yield* waitForRun(global, resolved.env, runId, {
     follow,
     ms,

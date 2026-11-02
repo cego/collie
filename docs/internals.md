@@ -92,6 +92,8 @@ SQLite file. The registry in `engine.ts` loads a module into a generation of its
 value came from, its options, its decisions and its receipts. The request id is the claim:
 the same request twice is one Run, and a Run recorded and not yet handed to the engine is
 handed over when the host starts again ([ADR-0017](adr/0017-one-request-is-one-run.md)).
+A starting host registers every saved generation before a Run it recovers looks one up, so a
+parent resumed in the swap reads a child of any generation.
 
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one recorded under `running-checks/`, or a process marked with this
@@ -101,6 +103,15 @@ Run's log and `host.log` name the check and the host that left it, and the step 
 runs it once more. No check of a Run starts while one a previous host left of that Run is
 still running: one that survives SIGKILL is ended again a second later, and named again,
 until it is gone.
+
+What a check's Verification is finished from is written to `check-output/<id>.json`
+before it is spawned: which check of which Run, the command as resolved, the tree it
+started on, when, what it expects and where its evidence goes. The host reads its stdout
+and stderr through pipes, as they arrive, for its log and a watching client, and keeps the
+last 16 KiB of each, which it writes to `check-output/<id>.stdout` and `.stderr` once that
+stream ends. The host that ran it finishes it from what it kept; another host on the state
+directory could finish it from those files, and one that could not be written leaves none.
+They go with its record, `running-checks/<id>.json`.
 
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no
@@ -1123,7 +1134,8 @@ checkouts belong to the Run's own repository. Remote paths and host-qualified id
 are checked, including URLs with ports and SCP syntax. The registry lends each workflow
 its Machine report using the same Run views and `reportOf` reading as the CLI, including
 Run identity, parent and status.
-Recovered workflows read reports after every saved generation has been registered.
+Recovered workflows read reports after every saved generation has been registered, the same
+gate a Run's lookup of its own generation waits on.
 
 An adapter runs its commands through a `Runner` (`src/mr.ts`), the same seam the tests
 fake. `test/support/forge.ts` is a fake of each forge built on one model of a forge, with
@@ -1521,7 +1533,6 @@ prerequisite rather than a preference.
 
 ```sh
 bun install
-(cd desktop && bun install)
 bun run check          # formatting, lint, types, then the full test suite
 bun run build          # bin/collie for this platform
 bun run smoke          # bin/collie answers --help and returns typed envelopes
@@ -1567,8 +1578,10 @@ The suite builds its SSH and Codex protocol fixtures with the runner and forward
 fixture. A focused source test builds each needed protocol fixture once under its
 isolated home. This keeps repeated process starts within their existing test budgets.
 
-Root tests import Desktop modules and libraries, so install both sets of dependencies
-before running root checks. CI installs both with `--frozen-lockfile` before its root gate.
+Root tests import Desktop modules and libraries, so the root `bun install` installs
+Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
+dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
+Desktop lockfile. CI relies on that one install before its root gate.
 Desktop's full typecheck, including its Vue views, runs separately with
 `cd desktop && bun run typecheck`; CI runs that as a job of its own.
 Desktop installs TypeScript twice. `@typescript/native` is TypeScript 7, the `tsc` that

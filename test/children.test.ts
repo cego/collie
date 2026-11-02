@@ -540,6 +540,53 @@ test(
   300_000,
 );
 
+test(
+  "a parent the host is replaced under reads the child that finished before the swap",
+  () =>
+    proves(
+      "collie-children-swap-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const project = `${world.project}/swapped-project`;
+          yield* save(`${project}/.collie/workflows`, ["outlived.workflow.ts", "late.workflow.ts"]);
+          const gate = `${world.project}/gate`;
+          yield* fs.writeFileString(gate, "").pipe(Effect.orDie);
+          const runId = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const client = yield* connect(world.state);
+              const started = yield* client.start({
+                project,
+                id: "outlived",
+                request: "req-1",
+                input: { note: "n", gate },
+              });
+              // Admitted at runtime, the child's generation is recorded after the parent's.
+              yield* until(
+                () => events(world.state, started.runId),
+                (lines) => lines.includes("held"),
+              );
+              return started.runId;
+            }),
+          ).pipe(Effect.orDie);
+
+          yield* stopHost(world.state);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          yield* fs.remove(gate).pipe(Effect.orDie);
+
+          const done = yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete" || view?.status.status === "failed",
+          );
+          expect(done?.status).toEqual({ status: "complete", value: "outlived late:n" });
+          expect(graded(yield* events(world.state, `${runId}.grade`))).toEqual(["graded late:n"]);
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
 /** This Machine's fork of `plan`: the shipped definition spread, under the same id. */
 const SPREADING_FORK = `import { defineWorkflow } from "collie";
 import original from "../../workflows/plan.workflow.ts";

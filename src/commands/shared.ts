@@ -58,6 +58,27 @@ export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: 
   return (yield* taskOfWorkspace(env.stateDir, yield* selected(global)))?.id ?? null;
 });
 
+/** Whom a Run lookup is for, built once from the command line. */
+export type RunScope = { readonly task: string | null };
+
+export const runScope = Effect.fn("collie.runScope")(function* (global: Global) {
+  return { task: yield* selectedTask(global) } satisfies RunScope;
+});
+
+/** Why `view`, on `machine` (null for this one), is out of `scope`'s reach; null where it is not. */
+export const outOfReach = (
+  view: RunView,
+  machine: string | null,
+  scope: RunScope,
+): Failure | null =>
+  // A Task is this Machine's, so a Run on another is never outside it.
+  machine === null && scope.task !== null && view.task !== scope.task
+    ? err("run_not_found", `Run "${view.runId}" is not part of task "${scope.task}".`, {
+        run: view.runId,
+        task: scope.task,
+      })
+    : null;
+
 export type ContextResolution =
   | {
       readonly _tag: "ResolvedContext";
@@ -174,8 +195,7 @@ export type Located =
 export const locateRun = Effect.fn("collie.locateRun")(function* (
   env: PluginEnv,
   id: string,
-  /** The Task this lookup is scoped to; null scopes to nothing, as `selectedTask` says. */
-  task: string | null,
+  scope: RunScope,
 ): Effect.fn.Return<
   Located,
   never,
@@ -191,13 +211,9 @@ export const locateRun = Effect.fn("collie.locateRun")(function* (
   if (!found.ok) return { _tag: "RunFailure" as const, result: found };
   const view = found.value;
   if (view === null) return missing;
-  if (found.machine === null && task !== null && view.task !== task) return outsideTask(id, task);
+  const refused = outOfReach(view, found.machine, scope);
+  if (refused !== null) return { _tag: "RunFailure", result: refused };
   return { _tag: "Hosted", view, dir, evidence: evidenceDir(env.stateDir, id) };
-});
-
-export const outsideTask = (id: string, task: string): Located & { _tag: "RunFailure" } => ({
-  _tag: "RunFailure",
-  result: err("run_not_found", `Run "${id}" is not part of task "${task}".`, { run: id, task }),
 });
 
 /** What a located Run is called and what it was for. */
