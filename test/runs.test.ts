@@ -78,7 +78,9 @@ test("a Run stopped or failed on its question asks nobody, and keeps the questio
   const stopped = factsOfView("/state", { ...asking, controls: ["stop"] });
   expect(stopped.state).toBe("stopped");
   expect(stopped.asking).toEqual([]);
-  expect(stopped.engine?.questions).toMatchObject([{ name: "post-1", open: false, answered: null }]);
+  expect(stopped.engine?.questions).toMatchObject([
+    { name: "post-1", open: false, answered: null },
+  ]);
 
   const failed = factsOfView(
     "/state",

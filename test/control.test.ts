@@ -628,7 +628,9 @@ test(
           expect(after?.state).toBe("stopped");
           expect(after?.asking).toEqual([]);
         }
-        expect((yield* facts)?.engine?.questions).toMatchObject([{ name: "decision", open: false }]);
+        expect((yield* facts)?.engine?.questions).toMatchObject([
+          { name: "decision", open: false },
+        ]);
         yield* host.stop;
       }).pipe(Effect.scoped),
     ),

@@ -761,7 +761,7 @@ test(
           expect(decide.primary).not.toBe("answer");
           expect(decide.questions).toMatchObject([{ id: "go", open: false, answered: null }]);
         }),
-      0,
+      1,
     ),
   120_000,
 );
