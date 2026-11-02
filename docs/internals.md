@@ -910,11 +910,11 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   Output is still out and that has no question open is told it was restarted and to carry
   on, then its step's pointer. OpenCode 1.18.30 ignores `--prompt` beside `--session` on a
   session with a conversation, and its TUI takes no keys for a while after its server is
-  up, so its reporter, loaded on the resumed session, reports it idle, and the message is
-  posted to `/session/<id>/prompt_async` on its own server and kept in the Dispatcher's
-  ledger like any delivery. No idle within the launch wait, no server (compaction off), or
-  a refused post: the Run's log says it was not resumed, and nothing is typed. The Run's
-  own revival leaves such an agent to the host.
+  up, so its reporter, loaded on the resumed session, reports it idle first. The message is
+  then posted to `/session/<id>/prompt_async` on its own server where compaction gave it
+  one, or sent through core where it has none, and kept in the Dispatcher's ledger like any
+  delivery. No idle within the launch wait, or a refused post: the Run's log says it was
+  not resumed, and nothing is typed. The Run's own revival leaves such an agent to the host.
 - **A Task** is its record and the `task` label: placement opens no workspace, and a
   Task's `workspace` is null. Cleanup's pass over Task workspaces writes the record's
   `closed_at` an hour after the Task is Finished, which ends a start's join by branch;

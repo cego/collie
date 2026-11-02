@@ -3076,12 +3076,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (late !== null)
           return yield* log(runId, `${agent}: was not told to carry on with its step: ${late}`);
         let delivery: Parameters<typeof deliver>[2] = { kind: "step", ref: stemOf(latest) };
-        if (adapter.id === "opencode") {
-          const base = (yield* readControl(host.env.stateDir, agent))?.endpoint ?? null;
-          if (had === null || base === null)
-            return yield* log(runId, `${agent}: not resumed: it has no OpenCode server to prompt`);
-          delivery = { ...delivery, herdr: posting(base, had) };
-        }
+        // Its server where compaction gave it one; otherwise core, now that its reporter is idle.
+        const base =
+          adapter.id === "opencode"
+            ? ((yield* readControl(host.env.stateDir, agent))?.endpoint ?? null)
+            : null;
+        if (base !== null && had !== null) delivery = { ...delivery, herdr: posting(base, had) };
         const sent = yield* deliver(now, told, delivery);
         yield* log(
           runId,
