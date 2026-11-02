@@ -70,7 +70,8 @@ import { toldIn, toldLine, type Delivery } from "../src/steering";
 import { herdLines } from "../src/toolkit";
 import { append as appendProposal, type ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
-import type { RunFacts } from "../src/runs";
+import { factsOfView, type RunFacts } from "../src/runs";
+import type { RunView } from "../src/engine";
 import type { TaskRecord } from "../src/task";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
@@ -3605,3 +3606,65 @@ test.each([false, true])("a fan-out's Repo runs appear once, by Wave (item calls
     }),
   ),
 );
+
+test("a Task whose Runs were stopped is not waiting on you, though an earlier one stopped at its question", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const next = { name: "next", prompt: "What next?", options: ["Finish", "Release"] };
+      const engineView = (runId: string, over: Partial<RunView>): RunView => ({
+        runId,
+        workflow: "implement",
+        project: "/project",
+        task: "task-1",
+        parent: null,
+        registration: "implement@1",
+        entry: "/project/.collie/workflows/implement.workflow.ts",
+        input: {},
+        provenance: {},
+        strategies: {},
+        options: {},
+        cwd: "/project",
+        branch: null,
+        workspace: null,
+        worktree: null,
+        outcome: "unspecified",
+        created: "2026-09-14T09:00:00Z",
+        status: { status: "suspended" },
+        waiting: [],
+        controls: [],
+        diagnostic: null,
+        parked: null,
+        awaiting: null,
+        mr: null,
+        landing: null,
+        ...over,
+      });
+      const facts = (view: RunView) => madeRun(dir, factsOfView(dir, view));
+      const runs = [
+        yield* facts(engineView("r-old", { workflow: "plan", created: "2026-09-14T09:00:00Z" })),
+        yield* facts(
+          engineView("r-old.implement", {
+            parent: "r-old",
+            created: "2026-09-14T09:10:00Z",
+            controls: ["stop"],
+            waiting: [{ ...next, answer: null }],
+          }),
+        ),
+        yield* facts(engineView("r-new", { workflow: "plan", created: "2026-09-14T09:20:00Z" })),
+        yield* facts(
+          engineView("r-new.implement", {
+            parent: "r-new",
+            created: "2026-09-14T09:30:00Z",
+            controls: ["stop"],
+            waiting: [{ ...next, answer: "Finish" }],
+          }),
+        ),
+      ];
+
+      const [card] = yield* board(env, runs, { quietMs: Infinity });
+      expect(card!.run).toBe("r-new.implement");
+      expect(card!.state).toBe("stopped");
+      expect(sectionOf(card!)).not.toBe("needs-you");
+    }),
+  ));

@@ -5706,6 +5706,8 @@ export const OpenDecision = Schema.Struct({
   answered: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** Who answered it, as an agent's name or the front door a human used. */
   by: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** The operation whose agent asked it; null where the workflow did. */
+  asker: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type OpenDecision = typeof OpenDecision.Type;
 
@@ -7443,6 +7445,7 @@ const makeRegistry: (
           asked: row.asked,
           answered: row.answered,
           by: row.answerer === null ? null : whoActed(row.answerer),
+          asker: row.asker,
         })),
       ),
     );

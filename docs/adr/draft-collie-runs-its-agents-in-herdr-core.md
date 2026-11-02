@@ -146,18 +146,19 @@ scratch XDG directories, so they never touch the live core.
 **D10. Collie's release carries `hc`.**
 
 - **The pin.** `hc-pin.json` pins `hc`'s version and SHA-256 for each platform Collie
-  ships.
+  ships. The version is a minimum: an `hc` at or past it by semver precedence is accepted
+  and never downgraded.
 - **The release.** Collie's signed release carries that archive, for each of its runners
   ([ADR-0048](0048-collie-is-released-for-macos-on-apple-silicon.md) D3's keys). Core's
   own updates are checked only by a checksum from an HTTPS manifest, so they are not
   signed.
 - **Install and update.** Install puts the binary where upstream's installer would, so
-  the human's `hc` is the pinned one. A running core is updated only with
+  the human's `hc` is at least the pinned one. A running core is updated only with
   `hc update --from` that binary. Collie never runs `hc update` from the network, or
   `hc machine update`.
 - **Other Machines** get `hc` with Collie's own release, through the paired upgrade.
 - **Doctor and onboarding** check and set up `hc`, not herdr. Doctor reports only the
-  Machine it runs on: `hc` at the pin, its core answering, and what there still uses
+  Machine it runs on: `hc` at or past the pin, its core answering, and what there still uses
   Herdr 1. `collie --machine <name> doctor` runs it on a paired one, over the host's
   existing shell call.
 
