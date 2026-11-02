@@ -3,6 +3,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { Checked, RELEASE_CLEARS, RELEASE_ON } from "../workflows/release.workflow";
 import { contentOf } from "../src/sdk";
@@ -186,8 +187,8 @@ test("production names its jobs with their URLs, then by name, then by count, wh
 test("checks a release recorded before it knew of conflicts decode on replay as not conflicting", () => {
   // As 0.109.2 journaled run-31754f6b.implement.release's answer-2.checks.
   const recorded = { head: "8cc52cf15f461725e8d0b8e7da3a1204c5082e7d", failed: [] };
-  expect(Schema.decodeUnknownSync(Checked)(recorded)).toEqual({ ...recorded, conflicting: false });
-  expect(Schema.decodeUnknownSync(Checked)({ ...recorded, conflicting: true }).conflicting).toBe(
-    true,
-  );
+  const decode = (value: typeof Checked.Encoded) =>
+    Effect.runSync(Schema.decodeEffect(Checked)(value));
+  expect(decode(recorded)).toEqual({ ...recorded, conflicting: false });
+  expect(decode({ ...recorded, conflicting: true }).conflicting).toBe(true);
 });
