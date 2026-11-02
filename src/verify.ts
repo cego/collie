@@ -861,7 +861,7 @@ export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
       yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => [])),
       (one) => one.name === wanted.name && one.expect === wanted.expect,
     ),
-    { ...wanted, environment: yield* environmentOf(wanted.executable) },
+    { ...wanted, environment: yield* environmentOf(wanted.executable, wanted.cwd) },
     yield* fingerprint(wanted.cwd),
     since,
   );
