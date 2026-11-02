@@ -49,7 +49,6 @@ const keysOf = (run: RunFacts) => {
  */
 const kept = <A>(
   capacity: number,
-  generation: () => number,
   lookup: (key: string) => Effect.Effect<A, PlatformError.PlatformError>,
 ) => {
   type Read =
@@ -63,10 +62,8 @@ const kept = <A>(
         return "value" in hit
           ? Effect.succeed(hit.value)
           : Effect.fail(PlatformError.systemError(hit.failed));
-      const at = generation();
       const keep = (read: Read) =>
         Effect.sync(() => {
-          if (at !== generation()) return;
           if (reads.size >= capacity) reads.delete(reads.keys().next().value!);
           reads.set(key, read);
         });
@@ -137,7 +134,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     // Every Task's record is shared, so the shared group holds a file per Task.
     const capacity = group === "shared" ? 65_536 : 1_024;
     const memo = <A>(lookup: (key: string) => Effect.Effect<A, PlatformError.PlatformError>) =>
-      kept(capacity, () => generation, lookup);
+      kept(capacity, lookup);
     return {
       text: memo(fs.readFileString),
       names: memo((key: string) =>

@@ -3,7 +3,7 @@ import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 import { heapStats } from "bun:jsc";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Schema } from "effect";
 import { TaskView } from "../src/board-model";
 import { buildBoard } from "../src/board";
 import { readEnv } from "../src/env";
@@ -140,6 +140,43 @@ test("files the model keeps as missing read as missing, and keep no Error alive"
 
       expect(new Set([...first, ...again])).toEqual(new Set(["NotFound"]));
       expect(errors() - before).toBeLessThan(100);
+    }),
+  ));
+
+test("a read kept while another Run's file changed is read from disk once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const file = `${dir}/runs/r1/log.txt`;
+      yield* fs.makeDirectory(`${dir}/runs/r1`, { recursive: true });
+      yield* fs.writeFileString(file, "started\n");
+      const gate = yield* Deferred.make<void>();
+      const reading = yield* Deferred.make<void>();
+      let reads = 0;
+      const model = yield* makeRunModel(dir, "installation").pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: (path, encoding) =>
+            path === file
+              ? Effect.sync(() => reads++).pipe(
+                  Effect.andThen(Deferred.succeed(reading, undefined)),
+                  Effect.andThen(Deferred.await(gate)),
+                  Effect.andThen(fs.readFileString(path, encoding)),
+                )
+              : fs.readFileString(path, encoding),
+        }),
+      );
+      yield* model.observe([runFacts({ id: "r1", task: "t1", dir: `${dir}/runs/r1` })]);
+
+      const first = yield* Effect.forkChild(model.reading.readFileString(file));
+      yield* Deferred.await(reading);
+      yield* model.invalidate(`${dir}/runs/r2/log.txt`);
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(first);
+      yield* model.reading.readFileString(file);
+
+      expect(reads).toBe(1);
     }),
   ));
 
