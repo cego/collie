@@ -62,3 +62,65 @@ test("a Run awaiting what comes by itself is working, and says what it awaits", 
   expect(repair.state).toBe("waiting");
   expect(repair.note).toBe("group/app!3 cannot be released");
 });
+
+test("a Run stopped or failed on its question asks nobody, and keeps the question for a resume", () => {
+  const post = {
+    name: "post-1",
+    prompt: "What next?",
+    options: ["Post", "Don't post"],
+    answer: null,
+  };
+  const asking = view({ status: { status: "suspended" }, waiting: [post] });
+  expect(factsOfView("/state", asking).asking).toEqual([
+    { name: "post-1", prompt: "What next?", options: ["Post", "Don't post"] },
+  ]);
+
+  const stopped = factsOfView("/state", { ...asking, controls: ["stop"] });
+  expect(stopped.state).toBe("stopped");
+  expect(stopped.asking).toEqual([]);
+  expect(stopped.engine?.questions).toMatchObject([
+    { name: "post-1", open: false, answered: null },
+  ]);
+
+  const failed = factsOfView(
+    "/state",
+    view({
+      status: {
+        status: "failed",
+        reason: "boom",
+        entry: "/project/.collie/workflows/builds.workflow.ts",
+      },
+      waiting: [post],
+    }),
+  );
+  expect(failed.asking).toEqual([]);
+});
+
+test("a finished Run's agent that asks after a steer is still asking, unless the Run was stopped", () => {
+  const region = {
+    name: "ask-build-1",
+    prompt: "Which region?",
+    options: ["eu-west"],
+    answer: null,
+    asker: "build",
+  };
+  const post = { name: "post-1", prompt: "What next?", options: ["Post"], answer: null };
+  const done = factsOfView(
+    "/state",
+    view({ status: { status: "complete", value: "done" }, waiting: [post, region] }),
+  );
+  expect(done.state).toBe("succeeded");
+  expect(done.asking).toEqual([
+    { name: "ask-build-1", prompt: "Which region?", options: ["eu-west"] },
+  ]);
+  expect(done.engine?.questions).toMatchObject([
+    { name: "post-1", open: false },
+    { name: "ask-build-1", open: true },
+  ]);
+
+  const stopped = factsOfView(
+    "/state",
+    view({ status: { status: "suspended" }, controls: ["stop"], waiting: [post, region] }),
+  );
+  expect(stopped.asking).toEqual([]);
+});
