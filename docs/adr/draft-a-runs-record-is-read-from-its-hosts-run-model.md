@@ -48,7 +48,8 @@ actions are disabled with that reason.
 
 **D5. An action names the revision it was shown at.** The host checks the action against the Run's
 current state. A precondition that no longer holds is refused with a typed error, which the record
-shows. Read-your-writes keeps the board's rule: after a write, a reader sees that write's revision
+shows: an act on a Step is stale only where that Step finished after the revision it was shown at,
+and a Step shown going again finishes anew. Read-your-writes keeps the board's rule: after a write, a reader sees that write's revision
 or a later one.
 
 **D6. Interactive reads come first.** No record frame, offer or act waits on a board derivation, the
@@ -81,7 +82,10 @@ Cleanup sweep or a Measurement. Background work yields in bounded slices:
   and D6 built, it is not built. The lag that remains comes from JavaScriptCore's Eden collections on
   the main thread. Their stop-the-world pauses are 11 to 27 ms, at most 40 ms, about once a second at
   a ~100 MB live heap. They come with no board pass running: an idle host with three live Runs
-  pauses 15 to 22 ms. A worker would not remove them.
+  pauses 15 to 22 ms. A worker would not remove them. Much of that pause was ~46k live `Error`
+  objects: each kept read held its lookup's fiber with a call-site `Error`, and each missing
+  file's failure held three more. Kept as plain values, the heap holds under 1k, and the pause
+  under back-to-back record opens fell from 25 to 11 ms.
 - **Raise or remove timeouts.** It hides the latency and fixes nothing.
 
 ## Consequences

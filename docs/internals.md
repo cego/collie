@@ -1823,8 +1823,10 @@ its time.
   host writes before and after the write; the state directory's watch, before the
   board's debounce; another process's SQLite commit, seen within 250 ms through
   `PRAGMA data_version`; and a branch moving in a checkout whose head a card reads, through
-  a watch on that checkout's git directories. A read overtaken by invalidation retries. If
-  the recursive watch fails, the model reads from disk. Engine status and clock-derived
+  a watch on that checkout's git directories. A read overtaken by invalidation retries. A missing file is kept as its error's data, not as
+  the error, since every live `Error` slows each collection of the heap. If the recursive watch
+  fails, the model reads from disk, and every read takes a new revision, so nothing derived
+  before is reused. Engine status and clock-derived
   fields remain live. Each change to a Run takes the next number of the host's one sequence,
   and each board item carries the highest of its Runs' as its revision. `run_model: false`
   restores the from-disk build at the next host start; the model is then never filled. The
@@ -1840,10 +1842,11 @@ its time.
   moves it, moves its own Run. After that a frame is sent only when a write the host saw
   changes what the record carries; the 5 s tick is not one of them. A minute count is sent
   as a `clock` beside a `said` left empty, and the front door says it (`timedFlow` in
-  `src/flow-timing.ts`). A live Run's diff is taken again only when its checkout's git
-  directories move. A request with `held` at the current epoch and revision is answered
+  `src/flow-timing.ts`). A going Run's diff is taken again for every frame, so an edit not yet committed shows; a
+  settled Run's is kept until its checkout's git directories move. A request with `held` at the current epoch and revision is answered
   `Unchanged`; any other is sent the record. `act` and `control` take the revision an act
-  was `shown` at, and refuse one whose Step has finished since with `StaleAct`, which the CLI
+  was `shown` at, and refuse one whose Step has finished since that revision with `StaleAct` (a Step a record
+  shows going again finishes anew; one already finished when shown is not stale), which the CLI
   says as `invalid_state`; each act's result carries the Run's revision after it, which the
   caller's next frame is at least. A request without `parts` is sent whole records, their
   minutes said, on every change and tick, as an older Desktop expects.
