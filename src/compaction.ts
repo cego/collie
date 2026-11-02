@@ -461,14 +461,7 @@ const enabled = Effect.fn("Compaction.enabled")(function* (configured: number) {
  */
 export const installControls = Effect.fn("Compaction.installControls")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir" | "configured" | "log" | "herdr" | "stopMs">,
-  agent: {
-    agent: string;
-    harness: string;
-    cwd: string;
-    runLog: string;
-    /** Installed with compaction off too: a resumed agent is prompted through them. */
-    resumesThrough?: boolean;
-  },
+  agent: { agent: string; harness: string; cwd: string; runLog: string },
   env: ReadonlyArray<string> = [],
   mcp: ReadonlyArray<string> = [],
   /** Started again in this session, keeping these files of its controls. */
@@ -498,7 +491,7 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
     yield* fs.writeFileString(`${dir}/${name}`, text);
   }
   const port = deps.ports[agent.harness];
-  if (!limit && port?.questions === undefined && agent.resumesThrough !== true) return [];
+  if (!limit && port?.questions === undefined) return [];
   if (!port) {
     yield* deps.log(`${agent.agent}: ${agent.harness} has no compaction controls in Collie`);
     return [];
