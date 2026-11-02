@@ -246,9 +246,13 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     return [...(indexes.byPlan.get(plan) ?? []), ...(owner === undefined ? [] : [owner])];
   };
 
-  const revision = (run: string): RunRevision => ({ epoch, seq: revisions.get(run) ?? 0 });
+  // Unwatched, nothing says what moved: every read is a revision no reader has seen.
+  const revision = (run: string): RunRevision => ({
+    epoch,
+    seq: enabled ? (revisions.get(run) ?? 0) : ++seq,
+  });
   const highest = (runs: ReadonlyArray<string>) =>
-    Math.max(0, ...Arr.map(runs, (run) => revisions.get(run) ?? 0));
+    enabled ? Math.max(0, ...Arr.map(runs, (run) => revisions.get(run) ?? 0)) : ++seq;
 
   const records = new Map<string, { readonly text: string; readonly seq: number }>();
   /**

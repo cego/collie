@@ -160,3 +160,26 @@ test("a build reads only the check markers of Runs that moved since the last", (
       expect(board.find((view) => view.runs.includes(checking.id))?.check?.name).toBe("lint");
     }).pipe(Effect.provide(TestClock.layer())),
   ));
+
+test("once the model is disabled, a kept card is derived again from the disk", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, env, runs } = yield* planners(3);
+      const run = runs[1]!;
+      yield* fs.remove(`${run.dir}/plan`, { recursive: true });
+      const model = yield* makeRunModel(dir, "installation");
+      const cards: KeptCards = { revision: model.highest, kept: new Map(), markers: new Map() };
+      const opts = { env, runs, registered: [], offers: () => Effect.succeed([]) };
+      const kept = buildBoard({ ...opts, cards }).pipe(
+        Effect.provideService(FileSystem.FileSystem, model.reading),
+      );
+      yield* kept;
+      yield* model.disable;
+      // Written past the model, as a write it can no longer watch.
+      yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
+      yield* fs.writeFileString(`${run.dir}/plan/issues/01-first.md`, "# First\n");
+      expect(yield* kept).toEqual(yield* buildBoard(opts));
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
