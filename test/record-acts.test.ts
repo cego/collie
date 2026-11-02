@@ -135,6 +135,45 @@ test(
   120_000,
 );
 
+test(
+  "an act shown on a Step already finished is not stale, though the record moved since",
+  () =>
+    proves(
+      "collie-record-finished-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const door = yield* frontDoor(socketOf(world.state));
+          const finished = yield* shipping(world, "a");
+          yield* finished.open;
+          const shown = (yield* until(
+            () => recordOf(world, finished.runId),
+            (record) => nodeOf(record?.flow, finished.runId, "wrap")?.state === "done",
+          ))!.revision!;
+          const handoffs = `${runDir(world.state, finished.runId)}/handoffs`;
+          yield* fs.makeDirectory(handoffs, { recursive: true }).pipe(Effect.orDie);
+          yield* fs.writeFileString(`${handoffs}/note.md`, "a note\n").pipe(Effect.orDie);
+          yield* until(
+            () => recordOf(world, finished.runId),
+            (record) => record!.revision!.seq > shown.seq,
+          );
+
+          const acted = yield* door
+            .act({
+              actions: [{ kind: "deliver", run: finished.runId, step: "wrap", text: "Again." }],
+              request: "finished-a",
+              shown,
+            })
+            .pipe(Effect.result);
+          expect(acted._tag === "Failure" ? acted.failure._tag : "carried out").not.toBe(
+            "StaleAct",
+          );
+        }),
+      ["stepped.workflow.ts"],
+    ),
+  120_000,
+);
+
 const FlowShown = Schema.Struct({ flow: Flow });
 const decodeFlow = Schema.decodeUnknownEffect(Schema.fromJsonString(Flow));
 const FLOW_BLOCK = /### Flow, as `run show --json` carries it\n\n```json\n(.*)\n```/s;

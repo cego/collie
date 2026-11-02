@@ -282,6 +282,16 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       return to;
     });
 
+  const finishes = new Map<string, number>();
+  /** The revision a record first showed the Step finished at: the one given, if none before. */
+  const finishedAt = (run: string, step: string, seq: number) => {
+    const key = `${run}\0${step}`;
+    const was = finishes.get(key);
+    if (was !== undefined) return was;
+    finishes.set(key, seq);
+    return seq;
+  };
+
   const heads = new Map<string, string | null>();
   /** Each watched checkout, and the Runs whose heads were read in it. */
   const readers = new Map<string, Set<string>>();
@@ -349,6 +359,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     highest,
     stamp,
     stampRecord,
+    finishedAt,
     planned,
     head,
     checkout,

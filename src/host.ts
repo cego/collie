@@ -62,7 +62,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
-import { recordFlow, recordFrames, type RecordSources } from "./record";
+import { FINISHED_STEPS, recordFlow, recordFrames, type RecordSources } from "./record";
 import { markFirst } from "./record-marks";
 import { TurnScheduler } from "./turns";
 import { Foreground, foregroundLayer, servedNow } from "./foreground";
@@ -1397,9 +1397,6 @@ const sharedBoardLayer = (dir: string) =>
     }),
   );
 
-/** A Step in these states has finished: an act shown on it before is refused. */
-const FINISHED_STEPS = new Set(["done", "failed", "stopped", "not-run"]);
-
 /** The Run and Step an act names, where it names a Run. */
 const targetOf = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -1558,7 +1555,10 @@ const frontDoorHandlers = (
               (lane) => Arr.findFirst(lane.nodes, (one) => one.id === step),
             ),
           );
-          if (node !== undefined && FINISHED_STEPS.has(node.state))
+          if (node === undefined || !FINISHED_STEPS.has(node.state)) return;
+          const { model } = record;
+          const at = model.finishedAt(run, step, model.revision(run).seq);
+          if (shown.epoch !== model.epoch || at > shown.seq)
             return yield* new StaleAct({
               run,
               step,

@@ -91,6 +91,10 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
       },
       runId,
     ).pipe(Effect.orElseSucceed(() => null));
+    const ids = Arr.map(runs, (one) => one.id);
+    for (const lane of found?.lanes ?? [])
+      for (const node of lane.nodes)
+        if (FINISHED_STEPS.has(node.state)) model.finishedAt(lane.run, node.id, model.highest(ids));
     const detail = yield* buildRunDetail({
       env,
       runId,
@@ -105,10 +109,13 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
     return {
       run: run.value,
       runs,
-      ids: Arr.map(runs, (one) => one.id),
+      ids,
       detail,
     };
   }).pipe(Effect.provideService(FileSystem.FileSystem, sources.model.reading));
+
+/** A Step in these states has finished: an act shown on it before is refused. */
+export const FINISHED_STEPS = new Set(["done", "failed", "stopped", "not-run"]);
 
 /** The Run's Task's Flow as `run show` and chat's `collie_run` say it: the record's, read now. */
 export const recordFlow = (sources: RecordSources, runId: string) =>
