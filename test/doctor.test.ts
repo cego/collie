@@ -21,9 +21,20 @@ import type { OpResult } from "../src/operations";
 import { writeConfigValue } from "../src/config";
 import { withGitlabHost } from "../src/commands/shared";
 import manifest from "../herdr-plugin.toml";
+import hcPin from "../hc-pin.json";
+import { registerAgent, registryPath, type AgentEntry } from "../src/registry";
 
 let rig: Rig;
 let bin: FakeBin;
+
+const asSessions = flow(
+  Schema.encodeResult(
+    Schema.fromJsonString(
+      Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
+    ),
+  ),
+  Result.getOrThrow,
+);
 
 /**
  * The environment doctor sees. Its PATH is the stub directory alone: the developer's
@@ -33,10 +44,14 @@ function env(overrides: Record<string, string> = {}) {
   return rig.pluginEnv({ PATH: `${rig.root}/bin`, ...overrides });
 }
 
-/** doctor against this rig: the fake herdr in-process, everything else on PATH. */
+/**
+ * doctor against this rig: the fake herdr in-process, everything else on PATH, and the rig's
+ * fake core.
+ */
 function report(overrides: Record<string, string> = {}) {
   const pluginEnv = env({
     FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]`,
+    FAKE_HERDR_SESSIONS: asSessions([{ name: "default", socket_path: rig.socketPath }]),
     ...overrides,
   });
   return doctor(pluginEnv, undefined, new FakeHerdr(pluginEnv));
@@ -64,7 +79,36 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
   yield* installFakeSkills(rig.root);
   yield* freeSpace(50);
   yield* rig.memory(50);
+  yield* hc(hcPin.version);
+  yield* writeConfigValue(rig.userDir, "terminal_backend", "core");
 });
+
+const hc = (version: string) =>
+  bin.add("herdr-core", `case "$*" in --version) echo "hc ${version}" ;; *) exit 0 ;; esac`);
+
+const registered = (agent: string, paneId: string, backend?: "core" | "legacy") =>
+  Effect.gen(function* () {
+    const entry: AgentEntry = {
+      role: "builder",
+      agent,
+      paneId,
+      workspaceId: "1",
+      runId: `run-${agent}`,
+      workflow: "implement",
+      at: "2026-10-31T00:00:00.000Z",
+      ...(backend !== "legacy" && {
+        incarnation: {
+          terminalId: `term-${agent}`,
+          agentSession: null,
+          ...(backend && { backend }),
+        },
+      }),
+    };
+    yield* registerAgent(
+      yield* registryPath(rig.stateDir, { session: null, workspaceId: "1", cwd: rig.root }),
+      entry,
+    );
+  });
 
 /** A `df` that says the one filesystem it is asked about is `percent` free, of 100 GiB. */
 const freeSpace = (percent: number) =>
@@ -125,6 +169,7 @@ beforeEach(() =>
       rig = yield* Rig.make();
       yield* installBaseline(rig);
       bin = yield* FakeBin.make(`${rig.root}/bin`);
+      yield* rig.startCore();
     }),
   ),
 );
@@ -183,6 +228,9 @@ test("a healthy machine passes every check and says so", () =>
       expect(Arr.map(checks, (c) => c.name)).toEqual([
         "herdr",
         "herdr server",
+        "hc",
+        "core",
+        "herdr 1",
         "plugin",
         "runner",
         "collie on PATH",
@@ -207,6 +255,197 @@ test("a healthy machine passes every check and says so", () =>
         "slack connection",
       ]);
       expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
+    }),
+  ));
+
+test("a missing hc fails, with upstream's installer for the pinned version as its fix", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* remove(`${rig.root}/bin/herdr-core`);
+
+      const result = yield* report();
+
+      expect(result.ok).toBe(false);
+      expect(check(result, "hc")).toMatchObject({ ok: false, detail: "not installed" });
+      expect(check(result, "hc").fix).toContain(`HC_VERSION=${hcPin.version}`);
+      expect(check(result, "core").ok).toBe(true);
+    }),
+  ));
+
+test("an hc off the pin fails, naming both versions", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* hc("0.1.13");
+
+      const result = yield* report();
+
+      expect(check(result, "hc")).toMatchObject({
+        ok: false,
+        detail: `hc 0.1.13 is installed, but this Collie is pinned to ${hcPin.version}`,
+      });
+      expect(check(result, "hc").fix).toContain(`HC_VERSION=${hcPin.version}`);
+    }),
+  ));
+
+test("the pinned hc passes, found where upstream's installer puts it when it is not on PATH", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* remove(`${rig.root}/bin/herdr-core`);
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${rig.root}/.local/bin`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.root}/.local/bin/herdr-core`,
+        `#!/bin/sh\necho "hc ${hcPin.version}"\n`,
+        { mode: 0o755 },
+      );
+
+      const result = yield* report();
+
+      expect(check(result, "hc")).toEqual({
+        name: "hc",
+        ok: true,
+        detail: `${hcPin.version} at ${rig.root}/.local/bin/herdr-core`,
+        fix: "",
+      });
+    }),
+  ));
+
+test("a core that does not answer fails, with how to start it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+
+      const result = yield* report({ HC_SOCKET: `${rig.root}/no-core.sock` });
+
+      expect(check(result, "core")).toMatchObject({
+        ok: false,
+        detail: `no core answers at ${rig.root}/no-core.sock`,
+        fix: "hc server start",
+      });
+    }),
+  ));
+
+test("a core that answers passes with its version", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+
+      const result = yield* report();
+
+      expect(check(result, "core")).toEqual({
+        name: "core",
+        ok: true,
+        detail: `hc 0.1.14 answers at ${rig.root}/hc.sock`,
+        fix: "",
+      });
+    }),
+  ));
+
+test("this Machine set to herdr is reported, with the setting that moves it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* writeConfigValue(rig.userDir, "terminal_backend", "herdr");
+
+      const result = yield* report();
+
+      expect(result.ok).toBe(true);
+      expect(check(result, "herdr 1")).toEqual({
+        name: "herdr 1",
+        ok: true,
+        detail: "this Machine starts its agents on Herdr 1 (terminal_backend is herdr)",
+        fix: "collie settings set terminal_backend core",
+      });
+    }),
+  ));
+
+test("a live agent on Herdr 1 is reported; one on core, or whose pane is gone, is not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* rig.addPane("1-7", "1:1", rig.root, "builder");
+      yield* rig.addPane("1-8", "1:1", rig.root, "reviewer");
+      yield* registered("builder-a", "1-7");
+      yield* registered("reviewer-a", "1-8", "core");
+      yield* registered("builder-b", "1-9");
+
+      const result = yield* report();
+
+      expect(check(result, "herdr 1")).toMatchObject({
+        ok: true,
+        detail: "live on Herdr 1: builder-a (run run-builder-a, pane 1-7)",
+      });
+    }),
+  ));
+
+test("a live agent on Herdr 1 in another running session, or registered before incarnations, is reported", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const other = `${rig.root}/other.sock`;
+      yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
+      yield* rig.addPane("1-4", "1:1", rig.root, "builder");
+      yield* registered("builder-other", "2-3");
+      yield* registered("builder-legacy", "1-4", "legacy");
+
+      const result = yield* report({
+        FAKE_HERDR_SESSIONS: asSessions([
+          { name: "default", socket_path: rig.socketPath },
+          { name: "other", socket_path: other },
+        ]),
+      });
+
+      expect(check(result, "herdr 1").detail).toBe(
+        "live on Herdr 1: builder-other (run run-builder-other, pane 2-3), builder-legacy (run run-builder-legacy, pane 1-4)",
+      );
+    }),
+  ));
+
+test("a herdr whose panes cannot be read is a warning, never reported as nothing on Herdr 1", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("builder-a", "1-7");
+
+      const result = yield* report({ FAKE_HERDR_FAIL: '{"pane list":"herdr is restarting"}' });
+
+      expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+      expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
+    }),
+  ));
+
+test("a herdr that cannot list its sessions is a warning, though this session's panes read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const other = `${rig.root}/other.sock`;
+      yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
+      yield* registered("builder-other", "2-3");
+
+      const result = yield* report({ FAKE_HERDR_FAIL: '{"session list":"herdr is restarting"}' });
+
+      expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+      expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
+    }),
+  ));
+
+test("with no Herdr 1 setting and no live agent on it, doctor reports none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("reviewer-a", "1-8", "core");
+
+      const result = yield* report();
+
+      expect(check(result, "herdr 1")).toEqual({
+        name: "herdr 1",
+        ok: true,
+        detail: "nothing on this Machine uses Herdr 1",
+        fix: "",
+      });
     }),
   ));
 

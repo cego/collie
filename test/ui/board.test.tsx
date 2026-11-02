@@ -1235,7 +1235,6 @@ function liveOf(over: Partial<Live> = {}): Live {
     deliveries: [],
     proposals: [],
     pending: [],
-    ownership: null,
     news: { waiting: 0, uncertain: 0 },
     ...over,
   };

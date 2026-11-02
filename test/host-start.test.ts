@@ -42,6 +42,7 @@ const hostThrough = (
       HERDR_BIN_PATH: `${root}/herdr`,
       HERDR_SOCKET_PATH: `${root}/herdr.sock`,
       HERDR_PLUGIN_STATE_DIR: state,
+      HC_SOCKET: "/nonexistent/collie-test/hc.sock",
       COLLIE_USER_DIR: `${root}/user`,
       COLLIE_RELEASES: "http://127.0.0.1:9",
       COLLIE_PROC,

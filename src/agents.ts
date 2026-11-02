@@ -35,14 +35,28 @@ import {
   Predicate,
   Schedule,
   Schema,
+  Semaphore,
+  Stream,
   flow,
   Result,
 } from "effect";
 import { CommandLine } from "effect/process";
 import type { PlatformServices } from "./platform";
 import * as Activity from "effect/workflow/Activity";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
-import { Launched, LAUNCH_ORDER, LAUNCH_SUFFIX, launchDir, readLaunches, stemOf } from "./launches";
+import {
+  Launched,
+  LAUNCH_ORDER,
+  LAUNCH_SUFFIX,
+  launchDir,
+  readLaunches,
+  StartedWith,
+  startedDir,
+  withRelaunchLock,
+  stemOf,
+  type AgentSession,
+} from "./launches";
 import { CurrentStep, type At } from "./steps";
 import { takeStepNotes } from "./step-steering";
 export { Launched } from "./launches";
@@ -56,6 +70,7 @@ import {
   awaitReady,
   controlDir,
   installControls,
+  readControl,
   NotQuiet,
   notStopped,
   serversOfRun,
@@ -70,11 +85,15 @@ import {
   atLeast,
   installedVersion,
   questionsSince,
+  QUESTIONS,
+  takeHarnessQuestions,
   ranOutSince,
   submittedDelivery,
+  piQuestionTool,
   type AgentQuestion,
 } from "./compactors";
 import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
+import { boundThread, withCodex } from "./codex";
 import { kindForRole } from "./cards";
 import { Oversight } from "./oversight";
 import {
@@ -83,6 +102,7 @@ import {
   gitlabHostOf,
   loadDefaults,
   readConfig,
+  terminalBackend,
   type Defaults,
 } from "./config";
 import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
@@ -96,12 +116,14 @@ import * as dispatch from "./dispatcher";
 import type * as Types from "effect/Types";
 import { bodySections, layers, personaHoles, skillDirs, skillFile } from "./definitions";
 import { currentEnv, selfCommand, type PluginEnv } from "./env";
+import type { TerminalBackend } from "./settings";
 import {
   HARNESSES,
   foldPreferences,
   autoCompactWindowFor,
   installedHelp,
   isPermissionMode,
+  opencodeReporter,
   permissionsAsWritten,
   personaPrefix,
   ceilingIn,
@@ -112,12 +134,22 @@ import {
   resolveWithRoom,
   said,
   startArgs,
+  sessionArgs,
   type AgentChoice,
   type HarnessAdapter,
+  type StartSession,
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr, herdrFailureReason, isSettled, type AgentInfo, type HerdrError } from "./herdr";
+import {
+  Herdr,
+  herdrFailureReason,
+  isSettled,
+  RUN_LABEL,
+  type AgentInfo,
+  HerdrError,
+} from "./herdr";
+import { promptAsync } from "./opencode";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
@@ -157,13 +189,14 @@ import {
 import {
   envFileProblems,
   envLines,
+  envValues,
   mergeClaudeSettings,
   parseProfile,
   roleProfile,
   type ClaudeOverlay,
   type RoleProfile,
 } from "./profile";
-import { isString } from "./schema";
+import { isString, type JsonObject } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
@@ -465,6 +498,21 @@ export interface AgentsApi {
    * finished or parked, or the agent between steps — and sends it the answers.
    */
   readonly tendQuestions: (questionsFor: (runId: string) => Questions) => Effect.Effect<void>;
+  /**
+   * Starts again, each in the session it had, every agent of this Run that core no longer
+   * has. The one whose Output is still out is told to carry on with its step.
+   */
+  readonly resumeLost: (runId: string, run: RunNow) => Effect.Effect<void>;
+  /** Runs `resumed` each time an agent on core may have gone, for as long as this runs. */
+  readonly onLosses: (resumed: Effect.Effect<void>) => Effect.Effect<void>;
+}
+
+/** What only the host knows of a Run whose agents are started again. */
+export interface RunNow {
+  readonly running: Effect.Effect<boolean>;
+  /** Read again for each start, as a launch reads it. */
+  readonly authority: Effect.Effect<RunAuthority>;
+  readonly questions: Questions;
 }
 
 export type DeliveryMode = "boundary" | "now" | "interrupt";
@@ -1322,6 +1370,18 @@ function contractSection(contract: Projection): string {
   return `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${JSON.stringify(contract.document, null, 2)}\n\`\`\`${limits}`;
 }
 
+/** What one delivery and its confirmation ask of herdr. */
+type DeliveringHerdr = Pick<
+  Herdr,
+  | "agentPrompt"
+  | "agentList"
+  | "agentSendKeys"
+  | "restoreAgentName"
+  | "agentStatus"
+  | "promptBox"
+  | "agentPressEnter"
+>;
+
 /** What the host has, so an agent it starts is the one the operator configured. */
 export interface AgentHost {
   /** The state directory this host owns: prompts, Outputs and the log live under it. */
@@ -1365,6 +1425,8 @@ export interface AgentHost {
   readonly ports?: CompactionPorts;
   /** A harness's `--help`, by its kind; the installed one's where left out. */
   readonly help?: typeof installedHelp;
+  /** How a launch's helpers run Collie; this binary where left out. */
+  readonly self?: ReadonlyArray<string>;
 }
 
 type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp;
@@ -1454,6 +1516,76 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${stemOf(about)}.${kind}.md`;
   const promptFile = (ask: AgentAsk) => `${dirFor(ask.runId)}/${stemOf(ask)}.prompt.md`;
+  /** Where an OpenCode agent's reporter writes the id of the session OpenCode opened for it. */
+  const sessionFileOf = (about: { readonly runId: string; readonly operation: string }) =>
+    `${dirFor(about.runId)}/${stemOf(about)}.session`;
+  /** OpenCode's settings with Collie's status reporter after the operator's own plugins. */
+  const withReporter = (ask: AgentAsk, settings: JsonObject, resumed: string | null) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sessionFile = sessionFileOf(ask);
+      // One an earlier launch of this step left would be read as this launch's.
+      yield* fs.remove(sessionFile, { force: true }).pipe(Effect.orDie);
+      const reporter = `${dirFor(ask.runId)}/${stemOf(ask)}.status.js`;
+      yield* write(
+        reporter,
+        opencodeReporter(
+          resumed === null
+            ? { sessionFile, tty: "/dev/tty" }
+            : { sessionFile, tty: "/dev/tty", session: resumed },
+        ),
+      );
+      const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
+      return { ...settings, plugin: [...plugins, `file://${reporter}`] };
+    });
+  /** The launch record with the session its harness opened, once `read` names it. */
+  const withSession = (
+    launched: Launched,
+    read: Effect.Effect<string | null, never, AgentServices>,
+    none: string,
+  ) =>
+    Effect.gen(function* () {
+      const budgetMs = host.readyMs ?? READY_TIMEOUT_MS;
+      const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
+      const id = yield* read.pipe(
+        Effect.filterOrFail(
+          (found): found is string => found !== null && found !== "",
+          () => new Cause.NoSuchElementError(),
+        ),
+        Effect.retry({
+          schedule: Schedule.spaced(host.pollMs ?? DEFAULT_POLL_MS).pipe(
+            Schedule.while(({ now }) => now < deadline),
+          ),
+        }),
+        Effect.orElseSucceed(() => null),
+      );
+      if (id === null) {
+        yield* log(
+          launched.runId,
+          `${launched.agent}: ${none} within ${Math.round(budgetMs / 1000)}s, so none is recorded to resume`,
+        );
+        return launched;
+      }
+      const recorded: Launched = {
+        ...launched,
+        agentSession: { kind: launched.harness, value: id },
+      };
+      yield* write(launchPath(launched.runId, stemOf(launched)), encodeLaunched(recorded));
+      return recorded;
+    });
+  /** The session the reporter wrote, once OpenCode has opened it. */
+  const openedSession = (launched: Launched) =>
+    FileSystem.FileSystem.pipe(
+      Effect.flatMap((fs) => fs.readFileString(sessionFileOf(launched))),
+      Effect.orElseSucceed(() => null),
+    );
+  /** The thread Codex's App Server has for this agent, once it has one. */
+  const boundThreadOf = (launched: Launched) =>
+    Effect.gen(function* () {
+      const record = yield* readControl(host.env.stateDir, launched.agent);
+      if (record?.endpoint == null) return null;
+      return yield* withCodex(record.endpoint, (client) => boundThread(client, record.cwd));
+    }).pipe(Effect.orElseSucceed(() => null));
   /** A launch nobody can say the fate of: a resume lists herdr's agents again before it starts one. */
   const unsettled = (ask: AgentAsk, what: string) =>
     new AgentParked({
@@ -1465,15 +1597,23 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const skills = (names: ReadonlyArray<string>) => installedSkills(host.env, names);
   const personaOf = (role: string) => personaText(host.env, role);
 
+  /** The questions holding each agent, as collection and tending last saw them. */
+  const openQuestions = new Map<string, Set<string>>();
   const deps: dispatch.DispatcherDeps = {
     stateDir: host.env.stateDir,
     herdr: host.herdr,
     log: (line) => append(`${host.dir}/agents/deliveries.log`, line),
+    asking: (agent) =>
+      Effect.sync(() => {
+        const open = [...(openQuestions.get(agent) ?? [])];
+        return open.length === 0 ? null : `its question ${Arr.join(open, ", ")} is waiting`;
+      }),
   };
 
   // A harness nobody here has an adapter for falls back to the operator's own, which is
   // the nearest true thing: the agent still starts, on what this machine is set up for.
   const configured = HARNESSES[host.harness] ?? HARNESSES.claude!;
+  const ports = host.ports ?? COMPACTION_PORTS;
   const adapterFor = (harness: string) => HARNESSES[harness] ?? configured;
 
   /** Null places it where herdr says the agent is. */
@@ -1515,7 +1655,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       readonly requestId?: string;
       readonly actor?: Asker;
       /** The session the agent is in, where it is not the host's own. */
-      readonly herdr?: Herdr;
+      readonly herdr?: DeliveringHerdr;
       readonly idleOnly?: boolean;
     },
   ) {
@@ -1562,6 +1702,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     ).pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
     const pane = entry.paneId;
     if (outcome.ok) {
+      if (outcome.submission === "pressed")
+        yield* log(
+          about.runId,
+          `${about.agent}: its ${delivery.kind} ${outcome.id} did not start a turn on core, so Enter was pressed once`,
+        );
       if (outcome.submission === "observed")
         return { sent: true, why: "", observed: dispatch.TURN_STARTED, pane, kept: fitted.kept };
       if (delivery.kind !== "steer" && delivery.kind !== "correction")
@@ -1600,7 +1745,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     about: Launched,
     entry: AgentEntry,
     draft: dispatch.DeliveryDraft,
-    herdr = host.herdr,
+    herdr: DeliveringHerdr = host.herdr,
   ) =>
     Effect.gen(function* () {
       const dir = yield* controlDir(host.env.stateDir, about.agent);
@@ -1867,6 +2012,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       readonly agents: ReadonlyArray<AgentInfo>;
       readonly listedAt: string;
     },
+    backend: TerminalBackend,
+    /** The step's prompt, for a harness given it at launch rather than sent it. */
+    prompt: string | null,
+    /** The session its harness opens, where Collie chose it, or resumes. */
+    session: StartSession | null,
   ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
@@ -1939,7 +2089,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     yield* write(persona, `${personaBody}\n`);
     const { mcpConfig, piExtension } = yield* Effect.promise(() => import("./chat"));
     const { TOOLS } = yield* Effect.promise(() => import("./tools"));
-    const command = selfCommand();
+    const command = host.self ?? selfCommand();
     const serverEnv = {
       HERDR_PLUGIN_ROOT: host.env.pluginRoot,
       HERDR_PLUGIN_STATE_DIR: host.env.stateDir,
@@ -1966,14 +2116,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           serverEnv,
           "",
           "",
+          piQuestionTool(command, yield* controlDir(host.env.stateDir, agent)),
         ),
       );
-    const settings =
+    const operators =
       adapter.id === "opencode" && host.env.raw.OPENCODE_CONFIG_CONTENT !== undefined
         ? yield* Schema.decodeEffect(Schema.fromJsonString(Schema.JsonObject))(
             host.env.raw.OPENCODE_CONFIG_CONTENT,
           )
         : undefined;
+    const settings =
+      backend === "core" && adapter.id === "opencode"
+        ? yield* withReporter(ask, operators ?? {}, session?.resumed === true ? session.id : null)
+        : operators;
     const mcp = adapter.mcp({
       command,
       env: serverEnv,
@@ -1998,6 +2153,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           },
           env,
           mcp.args,
+          session?.resumed === true ? { session: session.id, keep: [QUESTIONS] } : undefined,
         ).pipe(
           Effect.catchIf(isNotQuiet, (refused) =>
             Effect.fail(
@@ -2033,6 +2189,67 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 ask.claudeSubagents,
               )
             : controls;
+        const args = [
+          ...startArgs(
+            adapter,
+            ask.model ?? host.model,
+            persona,
+            ask.effort ?? undefined,
+            // A resumed Codex thread keeps its permissions, and its remote TUI refuses them again.
+            session?.resumed === true && adapter.id === "codex" ? "harness" : permissions,
+            window.passed ?? undefined,
+          ),
+          ...(adapter.dirArgs?.(`${host.dir}/runs/${ask.runId}`) ?? []),
+          ...hookTrustArgs,
+          ...settingsArgs,
+          ...mcp.args,
+        ];
+        const started = `permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}`;
+        if (backend === "core") {
+          const named = { [RUN_LABEL]: ask.runId, operation: ask.operation };
+          const labels = ask.task === null ? named : { ...named, task: ask.task };
+          const opened = session === null ? null : sessionArgs(adapter.id, session);
+          const terminal = yield* host.herdr
+            .agentLaunch({
+              name: agent,
+              argv: [
+                adapter.kind,
+                ...(opened?.lead ?? []),
+                ...args,
+                ...(prompt === null ? [] : ["--prompt", prompt]),
+                // OpenCode's controls, where installed, already name the session.
+                ...(opened === null || settingsArgs.includes("--session") ? [] : opened.tail),
+              ],
+              cwd: ask.cwd,
+              env: {
+                ...serverEnv,
+                // Who it is comes from these, never from a herdr pane core was started in.
+                HERDR_SOCKET_PATH: "",
+                HERDR_PANE_ID: "",
+                ...mcp.env,
+                ...(yield* envValues(profile.env ?? {}, host.env.home)),
+              },
+              labels,
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                unsettled(ask, `${agent} did not start on core: ${herdrFailureReason(cause)}`),
+              ),
+            );
+          yield* log(ask.runId, `${agent}: ${adapter.id} in core terminal ${terminal}, ${started}`);
+          yield* write(
+            `${startedDir(host.env.stateDir, ask.runId)}/${agent}.json`,
+            encodeStarted(ask),
+          );
+          const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
+          if (found.entry === null) return undefined;
+          yield* registerAgent(
+            yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
+            found.entry,
+            alive,
+          );
+          return found.entry.incarnation;
+        }
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
         const reused = ask.workspace ? null : yield* rootPane(ask);
         const label = agentTabLabel(ask);
@@ -2055,20 +2272,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             kind: adapter.kind,
             paneId: tab.paneId,
             timeoutMs: START_TIMEOUT_MS,
-            args: [
-              ...startArgs(
-                adapter,
-                ask.model ?? host.model,
-                persona,
-                ask.effort ?? undefined,
-                permissions,
-                window.passed ?? undefined,
-              ),
-              ...(adapter.dirArgs?.(`${host.dir}/runs/${ask.runId}`) ?? []),
-              ...hookTrustArgs,
-              ...settingsArgs,
-              ...mcp.args,
-            ],
+            args,
           })
           .pipe(
             Effect.retry({
@@ -2086,10 +2290,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ),
             ),
           );
-        yield* log(
-          ask.runId,
-          `${agent}: ${adapter.id} in ${tab.paneId}, permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}`,
-        );
+        yield* log(ask.runId, `${agent}: ${adapter.id} in ${tab.paneId}, ${started}`);
         const found = yield* entryFor(ask, agent, {
           paneId: tab.paneId,
           workspaceId: workspace,
@@ -2151,11 +2352,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           Arr.findFirst(listing.success, (one) => one.name === agent),
         );
         const alive = live !== undefined && !fresh;
+        const back = live === undefined ? comingBack.get(agent) : undefined;
+        if (back !== undefined) {
+          // The host is starting it again after core lost it: this work goes to that one.
+          yield* Deferred.await(back);
+          return yield* launch(ask, false, note);
+        }
         // Only a new agent's first work holds a steer; one reused takes it at its boundary.
         if (alive) yield* stepGoneOut(agent);
         // herdr keeps a name while it lists it, so a new agent cannot take it until then.
         if (fresh && live !== undefined)
-          yield* host.herdr.paneClose(live.paneId).pipe(
+          yield* host.herdr.paneClose(live.paneId, live.backend).pipe(
             Effect.mapError(
               (cause) =>
                 new AgentUncertain({
@@ -2181,7 +2388,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           yield* fs.readFileString(launchOrder(ask.runId)).pipe(Effect.orElseSucceed(() => "")),
           "\n",
         ).includes(stemOf(ask));
-        const landedOn = (incarnation: Incarnation | undefined) =>
+        const landedOn = (
+          incarnation: Incarnation | undefined,
+          chosen: AgentSession | null = null,
+        ) =>
           Effect.gen(function* () {
             const landed: Types.Mutable<Launched> = {
               agent,
@@ -2204,31 +2414,23 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               landed.terminalId = incarnation.terminalId;
               if (incarnation.agentSession !== null) landed.agentSession = incarnation.agentSession;
             }
+            if (chosen !== null) landed.agentSession = chosen;
             return landed;
           });
         // Stopped while it waited for memory: nothing started, and the caller sees the stop.
         if (memory === "stopped") return yield* landedOn(undefined);
-        const recorded = (incarnation: Incarnation | undefined) =>
+        const recorded = (
+          incarnation: Incarnation | undefined,
+          chosen: AgentSession | null = null,
+        ) =>
           Effect.gen(function* () {
-            const landed = yield* landedOn(incarnation);
+            const landed = yield* landedOn(incarnation, chosen);
             // Beside it, the agent this work landed on, so a stop and a human steering this
             // run later reach the agent that has it rather than one derived from a name again.
             yield* write(launchPath(ask.runId, stemOf(ask)), encodeLaunched(landed));
             return landed;
           });
-        // Started and recorded as one step, so a stop never misses an agent this started.
-        const launched = alive
-          ? yield* recorded(
-              live.terminalId === null
-                ? undefined
-                : { terminalId: live.terminalId, agentSession: live.agentSession },
-            )
-          : yield* Effect.uninterruptible(
-              start(ask, agent, { agents: listing.success, listedAt }).pipe(
-                Effect.flatMap(recorded),
-              ),
-            );
-        const adapter = adapterFor(launched.harness);
+        const adapter = adapterFor(ask.harness ?? host.harness);
         const prefix = personaPrefix(adapter, yield* personaOf(ask.persona ?? ask.role));
         const file = promptFile(ask);
         const notes =
@@ -2242,6 +2444,51 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           file,
           `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
         );
+        const pointer = stepText(adapter, ask, file);
+        const backend = yield* terminalBackend(host.env.userDir);
+        // OpenCode reports no readiness, so on core its first prompt goes in at launch.
+        const atLaunch = !alive && backend === "core" && adapter.id === "opencode";
+        // On core, one it had is resumed. Claude's and pi's are chosen here so a full stop
+        // can resume them; Codex's and OpenCode's are read once they have opened one.
+        const had =
+          !alive && backend === "core" ? yield* sessionHad(ask.runId, agent, adapter.kind) : null;
+        const session: StartSession | null =
+          had !== null
+            ? { id: had, resumed: true }
+            : !alive && backend === "core" && (adapter.id === "pi" || adapter.id === "claude")
+              ? { id: yield* (yield* SecureRandom.SecureRandom).uuidV4(), resumed: false }
+              : null;
+        const chosen = session === null ? null : { kind: adapter.kind, value: session.id };
+        // Started and recorded as one step, so a stop never misses an agent this started.
+        const launched = alive
+          ? yield* recorded(
+              live.terminalId === null
+                ? undefined
+                : { terminalId: live.terminalId, agentSession: live.agentSession },
+            )
+          : yield* Effect.uninterruptible(
+              start(
+                ask,
+                agent,
+                { agents: listing.success, listedAt },
+                backend,
+                atLaunch ? pointer : null,
+                session,
+              ).pipe(Effect.flatMap((incarnation) => recorded(incarnation, chosen))),
+            );
+        if (atLaunch) {
+          if (!replayed) yield* append(launchOrder(ask.runId), stemOf(ask));
+          yield* write(sentPath(launched, "step"), pointer);
+          yield* log(
+            ask.runId,
+            `${agent}: launched for ${ask.operation}, given its prompt at launch`,
+          );
+          return yield* withSession(
+            launched,
+            openedSession(launched),
+            "OpenCode opened no session",
+          );
+        }
         if (!alive || !replayed) {
           const late = yield* awaitReady(
             compactionDeps(host, ask.runId),
@@ -2269,11 +2516,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           }
         }
         if (!replayed) yield* append(launchOrder(ask.runId), stemOf(ask));
-        // The work is the file, and the message says where it is: one send is one
-        // message and not a transcript, and a step's prompt carries a whole contract.
-        // A skill marked `disable-model-invocation` refuses an agent that invokes it
-        // itself; this is the human's channel, so a slash command here runs.
-        const pointer = stepText(adapter, ask, file);
+        // One send is one message and not a transcript, and a step's prompt carries a
+        // whole contract. A skill marked `disable-model-invocation` refuses an agent that
+        // invokes it itself; this is the human's channel, so a slash command here runs.
         yield* write(sentPath(launched, "step"), pointer);
         let asked = yield* deliver(launched, pointer, {
           kind: "step",
@@ -2305,6 +2550,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ask.runId,
           `${agent}: ${alive ? "reattached to" : "launched for"} ${ask.operation}`,
         );
+        if (!alive && backend === "core" && adapter.id === "codex" && session === null)
+          return yield* withSession(
+            launched,
+            boundThreadOf(launched),
+            "Codex's App Server named no thread",
+          );
         return launched;
       }).pipe(
         Effect.mapError((cause) => (isParked(cause) ? cause : asUncertain(ask.operation, cause))),
@@ -2423,6 +2674,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const closings = [closedAnswer(launched.operation), goneAnswer(launched.agent)];
       return (closing: string | null) =>
         Effect.gen(function* () {
+          yield* takeHarnessQuestions(host.env.stateDir, ports, launched.agent);
           let n = 0;
           const calls = Arr.map(
             Arr.filter(yield* questionsSince(dir, launched.at ?? 0), (call) => call.at < until),
@@ -2435,6 +2687,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const answers = new Map(Arr.map(asked, (one) => [one.name, one.answer]));
           const answerers = new Map(Arr.map(asked, (one) => [one.name, one.by]));
           let open = false;
+          const opened = openQuestions.get(launched.agent) ?? new Set<string>();
+          openQuestions.set(launched.agent, opened);
           for (const { call, names } of calls) {
             for (const [at, question] of call.questions.entries()) {
               const name = names[at] ?? "";
@@ -2446,21 +2700,31 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               answers.set(name, null);
             }
             const given = Arr.map(names, (name) => answers.get(name) ?? null);
+            const key = `${launched.agent}\n${call.id}`;
+            // Until its answers are sent, so Collie's next prompt cannot reach it first.
+            const holds = (holding: boolean) => {
+              for (const name of names)
+                if (holding) opened.add(`${name} on ${launched.runId}`);
+                else opened.delete(`${name} on ${launched.runId}`);
+            };
             if (closing !== null) {
               for (const [at, name] of names.entries())
                 if (given[at] === null) yield* questions.close(name, closing);
+              holds(false);
               continue;
             }
             if (Arr.some(given, (answer) => answer === null)) {
               open = true;
+              holds(true);
               continue;
             }
-            const key = `${launched.agent}\n${call.id}`;
             if (
               Arr.some(given, (answer) => closings.includes(answer ?? "")) ||
               answeredCalls.has(key)
-            )
+            ) {
+              holds(false);
               continue;
+            }
             let sentAll = true;
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
@@ -2498,6 +2762,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               }
             }
             if (sentAll) answeredCalls.add(key);
+            holds(!answeredCalls.has(key));
           }
           return open;
         }).pipe(Effect.orElseSucceed(() => false));
@@ -2525,6 +2790,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const named = yield* fs
           .readDirectory(yield* controlDir(host.env.stateDir, ""))
           .pipe(Effect.orElseSucceed(() => []));
+        yield* Effect.forEach(named, (agent) =>
+          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(Effect.ignore),
+        );
         const asking = yield* Effect.filter(named, (agent) =>
           Effect.map(
             Effect.flatMap(controlDir(host.env.stateDir, agent), (dir) => questionsSince(dir, 0)),
@@ -2679,6 +2947,222 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   const launchesOf = (runId: string) => readLaunches(host.dir, runId);
 
+  /** The latest session of this kind recorded for this agent of the Run, where one is. */
+  const sessionHad = (runId: string, agent: string, kind: string) =>
+    Effect.map(launchesOf(runId), (launches) =>
+      Option.getOrNull(
+        Arr.findLast(
+          launches,
+          (one) => one.agent === agent && one.agentSession?.kind === kind,
+        ).pipe(Option.map((one) => one.agentSession?.value ?? null)),
+      ),
+    );
+
+  const startedPath = (runId: string, agent: string) =>
+    `${startedDir(host.env.stateDir, runId)}/${agent}.json`;
+
+  /** The agents the host is starting again after core lost them, until each has started. */
+  const comingBack = new Map<string, Deferred.Deferred<void>>();
+  const resuming = Semaphore.makeUnsafe(1);
+
+  /**
+   * One agent core lost, started again in the session it had. What it is then told, where
+   * its work is still out, is handed back to go once every lost agent of the Run is back.
+   */
+  /** The host's herdr, but prompting an OpenCode agent's own server instead of its TUI. */
+  const posting = (base: string, session: string): DeliveringHerdr => ({
+    agentList: () => host.herdr.agentList(),
+    agentSendKeys: (target, keys, backend) => host.herdr.agentSendKeys(target, keys, backend),
+    restoreAgentName: (entry) => host.herdr.restoreAgentName(entry),
+    agentStatus: (target, backend) => host.herdr.agentStatus(target, backend),
+    promptBox: (target, backend) => host.herdr.promptBox(target, backend),
+    agentPressEnter: (target, backend) => host.herdr.agentPressEnter(target, backend),
+    agentPrompt: (_target, text) =>
+      promptAsync(base, session, text).pipe(
+        Effect.as("unobserved" as const),
+        Effect.mapError((cause) => new HerdrError({ message: cause.message, detail: "" })),
+      ),
+  });
+
+  const relaunch = (
+    runId: string,
+    agent: string,
+    launches: ReadonlyArray<Launched>,
+    listed: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
+    run: RunNow,
+  ) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = startedPath(runId, agent);
+      // Ended on purpose since the Run's agents were read.
+      if (!(yield* fs.exists(path))) return [];
+      const started = yield* fs.readFileString(path).pipe(Effect.flatMap(decodeStarted));
+      const own = Arr.filter(launches, (one) => one.agent === agent);
+      const latest = own.at(-1);
+      if (latest === undefined) return [];
+      const adapter = adapterFor(started.harness ?? host.harness);
+      const had = yield* sessionHad(runId, agent, adapter.kind);
+      const out =
+        Str.trim(yield* fs.readFileString(latest.output).pipe(Effect.orElseSucceed(() => ""))) ===
+        "";
+      const asking = out && (yield* (yield* questionsOf(latest, run.questions))(null));
+      const pointer = yield* fs.readFileString(sentPath(latest, "step")).pipe(Effect.option);
+      // A fresh conversation has nothing to carry on from, so it is given the step as it was.
+      const told =
+        !out || asking || Option.isNone(pointer)
+          ? null
+          : had === null
+            ? pointer.value
+            : `${RESUMED}\n\n${pointer.value}`;
+      // OpenCode drops a --prompt given with a session that has a conversation.
+      const atLaunch = told !== null && adapter.id === "opencode" && had === null;
+      const ask: AgentAsk = {
+        ...started,
+        prompt: yield* fs
+          .readFileString(`${dirFor(runId)}/${stemOf(started)}.prompt.md`)
+          .pipe(Effect.orElseSucceed(() => "")),
+        authority: yield* run.authority,
+      };
+      const session: StartSession | null =
+        had !== null
+          ? { id: had, resumed: true }
+          : adapter.id === "pi" || adapter.id === "claude"
+            ? { id: yield* (yield* SecureRandom.SecureRandom).uuidV4(), resumed: false }
+            : null;
+      const incarnation = yield* Effect.uninterruptible(
+        start(ask, agent, listed, "core", atLaunch ? told : null, session),
+      );
+      if (incarnation === undefined) return [];
+      // Every record of its work names this incarnation now, so a stop and a send reach it.
+      let now = latest;
+      for (const one of own) {
+        const updated: Launched =
+          one === latest && had === null && session !== null
+            ? {
+                ...one,
+                terminalId: incarnation.terminalId,
+                agentSession: { kind: adapter.kind, value: session.id },
+              }
+            : { ...one, terminalId: incarnation.terminalId };
+        yield* write(launchPath(runId, stemOf(one)), encodeLaunched(updated));
+        if (one === latest) now = updated;
+      }
+      yield* log(
+        runId,
+        `${agent}: started again on core after core lost it, ${had === null ? "in a new session: none was recorded to resume" : `resuming its ${adapter.id} session ${had}`}`,
+      );
+      if (told === null || atLaunch) return [];
+      const tell = Effect.gen(function* () {
+        if (adapter.id === "opencode") {
+          // Its reporter's idle, never a timer: text typed before the TUI is up is lost.
+          const budgetMs = host.readyMs ?? READY_TIMEOUT_MS;
+          const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
+          const idle = yield* Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
+            Effect.map(isSettled),
+            Effect.orElseSucceed(() => false),
+            Effect.repeat({
+              until: (settled) => settled,
+              schedule: Schedule.spaced(host.pollMs ?? DEFAULT_POLL_MS).pipe(
+                Schedule.while(({ now }) => now < deadline),
+              ),
+            }),
+          );
+          if (!idle)
+            return yield* log(
+              runId,
+              `${agent}: not resumed: OpenCode reported no idle within ${Math.round(budgetMs / 1000)}s, so it was not told to carry on with ${latest.operation}`,
+            );
+        }
+        const late = yield* awaitReady(
+          compactionDeps(host, runId),
+          agent,
+          host.readyMs ?? READY_TIMEOUT_MS,
+        );
+        if (late !== null)
+          return yield* log(runId, `${agent}: was not told to carry on with its step: ${late}`);
+        let delivery: Parameters<typeof deliver>[2] = { kind: "step", ref: stemOf(latest) };
+        // Its server where compaction gave it one; otherwise core, now that its reporter is idle.
+        const base =
+          adapter.id === "opencode"
+            ? ((yield* readControl(host.env.stateDir, agent))?.endpoint ?? null)
+            : null;
+        if (base !== null && had !== null) delivery = { ...delivery, herdr: posting(base, had) };
+        const sent = yield* deliver(now, told, delivery);
+        yield* log(
+          runId,
+          sent.sent
+            ? `${agent}: told to carry on with ${latest.operation}`
+            : adapter.id === "opencode"
+              ? `${agent}: not resumed: its carry-on for ${latest.operation} was not taken (${sent.why})`
+              : `${agent}: was not told to carry on with ${latest.operation} (${sent.why})`,
+        );
+      }).pipe(
+        Effect.catch((cause) =>
+          log(runId, `${agent}: was not told to carry on with its step (${reason(cause)})`),
+        ),
+      );
+      return [tell];
+    });
+
+  const resumeLost = (runId: string, run: RunNow) =>
+    under(
+      resuming.withPermits(1)(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const agents = Arr.map(
+            Arr.filter(
+              yield* fs
+                .readDirectory(startedDir(host.env.stateDir, runId))
+                .pipe(Effect.orElseSucceed(() => [])),
+              (name) => pipe(name, Str.endsWith(".json")),
+            ),
+            (name) => pipe(name, Str.slice(0, -".json".length)),
+          );
+          if (agents.length === 0 || !(yield* run.running)) return;
+          const backs = Arr.map(agents, (agent) => ({ agent, back: Deferred.makeUnsafe<void>() }));
+          for (const { agent, back } of backs) comingBack.set(agent, back);
+          const released = Effect.forEach(backs, ({ agent, back }) =>
+            Effect.suspend(() => {
+              if (comingBack.get(agent) === back) comingBack.delete(agent);
+              return Deferred.succeed(back, undefined);
+            }),
+          );
+          yield* Effect.gen(function* () {
+            const listedAt = yield* nowIso;
+            const listing = yield* host.herdr.agentList().pipe(Effect.option);
+            // Nothing is started on a list core did not give.
+            if (Option.isNone(listing)) return;
+            const launches = yield* launchesOf(runId);
+            const tells: Array<Effect.Effect<void, never, AgentServices>> = [];
+            for (const agent of agents) {
+              if (Arr.some(listing.value, (one) => one.name === agent)) continue;
+              // A launch already under way starts it.
+              if (stepsGoingOut.has(agent)) continue;
+              tells.push(
+                ...(yield* withRelaunchLock(
+                  host.env.stateDir,
+                  runId,
+                  log(
+                    runId,
+                    `${agent}: not started again on core: an end of it is still under way`,
+                  ).pipe(Effect.as([])),
+                  relaunch(runId, agent, launches, { agents: listing.value, listedAt }, run),
+                ).pipe(
+                  Effect.catch((cause) =>
+                    log(
+                      runId,
+                      `${agent}: could not be started again on core (${reason(cause)})`,
+                    ).pipe(Effect.as([])),
+                  ),
+                )),
+              );
+            }
+            for (const tell of tells) yield* tell;
+          }).pipe(Effect.ensuring(released));
+        }),
+      ),
+    );
+
   const revive = (ask: AgentAsk, unless?: string | null) =>
     under(
       Effect.gen(function* () {
@@ -2686,6 +3170,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
         if (Str.trim(written) !== "" && written !== unless) return false;
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+        // The host starts an agent on core again, in the session it had.
+        if (yield* fs.exists(startedPath(ask.runId, agent)).pipe(Effect.orElseSucceed(() => false)))
+          return false;
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
         if (listing._tag === "None") return false;
         // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
@@ -3207,6 +3694,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     repair,
     steer,
     tendQuestions,
+    resumeLost,
+    onLosses: (resumed) => under(Stream.runForEach(host.herdr.agentsEnded(), () => resumed)),
     atWork: (runId) =>
       under(candidatesOf(runId).pipe(Effect.map((all) => steerTarget(all, {}) ?? null))).pipe(
         Effect.orElseSucceed(() => null),
@@ -3298,6 +3787,15 @@ const encodeLaunched = flow(
   Schema.encodeResult(Schema.fromJsonString(Launched)),
   Result.getOrThrow,
 );
+const encodeStarted = flow(
+  Schema.encodeResult(Schema.fromJsonString(StartedWith)),
+  Result.getOrThrow,
+);
+const decodeStarted = Schema.decodeUnknownEffect(Schema.fromJsonString(StartedWith));
+
+/** What an agent started again is told first, where its work is still out. */
+const RESUMED =
+  "You were restarted after a stop, and this conversation was resumed. Carry on with your step from where you were; do not start it over.";
 
 /** What a delivery is called in a log: one line of it, so the log stays readable. */
 const firstLine = (text: string) => Str.split(text, "\n")[0] ?? "";
@@ -3475,6 +3973,8 @@ const waitForOutput = <R>(
       if (yield* every.counts) spent += (yield* Clock.currentTimeMillis) - before;
     }
   }).pipe(Effect.orDie);
+
+const isJsonArray = Schema.is(Schema.Array(Schema.Json));
 
 const write = (path: string, text: string) =>
   Effect.gen(function* () {

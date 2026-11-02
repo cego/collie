@@ -30,6 +30,7 @@ import {
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   agentThreads,
+  askedQuestions,
   boundThread,
   compactionItems,
   interruptTurn,
@@ -69,6 +70,7 @@ import {
   type StopTarget,
   type SeenProcess,
   type Stopped,
+  readControl,
 } from "./compaction";
 import {
   processOf,
@@ -109,6 +111,7 @@ const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
 import { selfCommand } from "./env";
 import { shell } from "./mr";
 import { reason } from "./naming";
+import type { JsonObject } from "./schema";
 
 /**
  * The harness releases these adapters were verified against. The gate refuses an older
@@ -700,9 +703,25 @@ export const AgentQuestion = Schema.Struct({
 });
 export type AgentQuestion = typeof AgentQuestion.Type;
 
-const decodeAsked = Schema.decodeUnknownOption(
-  Schema.Struct({ questions: Schema.NonEmptyArray(AgentQuestion) }),
-);
+const AskedQuestions = Schema.Struct({ questions: Schema.NonEmptyArray(AgentQuestion) });
+const decodeAsked = Schema.decodeUnknownOption(AskedQuestions);
+
+/**
+ * pi's question tool, which it does not have itself: `AskUserQuestion`'s shape, handed to
+ * the host by the helper Claude's hook runs, with the agent's control directory `dir`.
+ */
+export const piQuestionTool = (self: ReadonlyArray<string>, dir: string) => {
+  const document = Schema.toJsonSchemaDocument(AskedQuestions);
+  return {
+    name: "ask_user_question",
+    label: "Ask the human",
+    description:
+      "Ask the human one or more questions, each with options to choose from; they can also answer in their own words. The questions go on your Run, and the answers arrive as your next message.",
+    // SAFETY: a JSON Schema document is JSON.
+    parameters: { ...document.schema, $defs: document.definitions } as JsonObject,
+    helper: [...self, "herdr", "compaction", dir],
+  };
+};
 
 /** One `AskUserQuestion` call, as the hook recorded it for the agent's Run. */
 export const AskedCall = Schema.Struct({
@@ -745,6 +764,33 @@ export const questionsSince = Effect.fn("Compactors.questionsSince")(function* (
     Arr.flatMap(Str.split(text, "\n"), (line) => Option.toArray(decodeAskedCall(line))),
     (call) => call.at >= since,
   );
+});
+/**
+ * Records each question the agent's harness reports through its controls that is not
+ * recorded yet, for a harness with no hook to record it as it is asked. A harness that
+ * cannot be read now has asked nothing yet as far as anyone can tell.
+ */
+export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")(function* (
+  stateDir: string,
+  ports: CompactionPorts,
+  agent: string,
+) {
+  const record = yield* readControl(stateDir, agent);
+  const read = record === null ? undefined : ports[record.harness]?.questions;
+  if (record === null || read === undefined) return;
+  const asked = yield* read(record).pipe(Effect.orElseSucceed(() => []));
+  const known = new Set(Arr.map(yield* questionsSince(record.dir, 0), (call) => call.id));
+  const fresh = Arr.filter(asked, (call) => !known.has(call.id));
+  if (fresh.length === 0) return;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const at = yield* Clock.currentTimeMillis;
+  const lines = Arr.map(fresh, (call) =>
+    encodeAskedCall({ at, session: null, id: call.id, questions: call.questions }),
+  );
+  yield* fs.writeFileString(path.join(record.dir, QUESTIONS), `${Arr.join(lines, "\n")}\n`, {
+    flag: "a",
+  });
 });
 const decodeLimits = Schema.decodeUnknownOption(StatusLineLimits);
 
@@ -1197,7 +1243,7 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
 });
 
 /** The endpoint this agent's controls talk to, or a failure naming what is missing. */
-const codexAt = (ctx: AgentContext) =>
+const codexAt = (ctx: ReadyContext) =>
   ctx.endpoint === null
     ? Effect.fail(
         new Cause.NoSuchElementError(`${ctx.agent} has no Codex App Server endpoint recorded`),
@@ -1429,6 +1475,23 @@ export const codexPort = (server: string): CompactionPort => ({
       })),
     ),
   stop: stopCodex,
+  questions: (ctx) =>
+    Effect.gen(function* () {
+      const url = yield* codexAt(ctx);
+      return yield* withCodex(url, (client) =>
+        Effect.gen(function* () {
+          const threadId = yield* boundThread(client, ctx.cwd);
+          if (threadId === null) return [];
+          return Arr.map(yield* askedQuestions(client, threadId), (asked) => ({
+            id: asked.id,
+            questions: Arr.map(asked.questions, (one) => ({
+              question: one.title,
+              options: Arr.map(one.options ?? [], (label) => ({ label })),
+            })),
+          }));
+        }),
+      );
+    }),
   usage: (ctx) =>
     Effect.gen(function* () {
       const url = yield* codexAt(ctx);
@@ -1555,7 +1618,8 @@ const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
 
 /**
  * The launch: a port, a session created on a server that lives just long enough to
- * make it, and the ordinary TUI told to host that port and continue that session.
+ * make it, or the one an agent started again had, and the ordinary TUI told to host that
+ * port and continue that session.
  *
  * The temporary server is what buys exact identity. `opencode --port N` makes the TUI
  * its own server, so there is nothing to create a session on before it starts — and
@@ -1570,16 +1634,19 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
   // This server exists only to make the session, so it is stopped the moment it has —
   // including when creating the session fails, because the agent's own TUI is about to
   // want this port back.
-  const served = yield* servedEndpoint({
-    cwd: ctx.cwd,
-    log: path.join(ctx.dir, OPENCODE_LOG),
-    command: `opencode serve --hostname 127.0.0.1 --port ${port}`,
-    listening: OPENCODE_LISTENING,
-    startMs: OPENCODE_START_MS,
-    what: "opencode serve",
-    env: ctx.env,
+  const created = Effect.gen(function* () {
+    const served = yield* servedEndpoint({
+      cwd: ctx.cwd,
+      log: path.join(ctx.dir, OPENCODE_LOG),
+      command: `opencode serve --hostname 127.0.0.1 --port ${port}`,
+      listening: OPENCODE_LISTENING,
+      startMs: OPENCODE_START_MS,
+      what: "opencode serve",
+      env: ctx.env,
+    });
+    return yield* createSession(base).pipe(Effect.ensuring(terminate(served.pid)));
   });
-  const session = yield* createSession(base).pipe(Effect.ensuring(terminate(served.pid)));
+  const session = ctx.session ?? (yield* created);
 
   // Recorded before the agent starts, so the very first boundary reads the session
   // Collie made rather than guessing among the project's.

@@ -19,14 +19,14 @@ jobs:
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: desktop
       - run: bun run check:static
       # `bun test` runs the sources; this runs the compiled entrypoint and JSON envelope.
       - run: bun run build
       - run: bun run smoke
       # Proves the committed snapshot is what the pinned herdr really prints.
       - run: bun run contract:check
+      # The decoders in src/hc.ts against the hc that hc-pin.json names, run live.
+      - run: bun run probe:hc
 
   # No timings cache: every shard balances on the committed seed, so they partition alike.
   suite:
@@ -41,8 +41,6 @@ jobs:
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: desktop
       - run: bun run test --shard=${{ matrix.shard }}/3
         # 4 workers: a dedicated runner needs no reserve for targeted runs (budget ADR, D2).
         env:
@@ -91,8 +89,6 @@ jobs:
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: desktop
       - run: bun run build
         working-directory: desktop
         env:
@@ -109,8 +105,6 @@ jobs:
           bun-version: "1.4"
       # Desktop's Effect is the root's, so the board's Schemas exist once.
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: desktop
       - run: bun run typecheck
         working-directory: desktop
       # The release builds the view on a fresh checkout, so CI does too.

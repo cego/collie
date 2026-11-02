@@ -67,7 +67,7 @@ import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
 import { peersOf } from "./peers";
 import { cleanupLines } from "./cleanup";
-import { taskOfWorkspace } from "./task";
+import { isOpen, taskOfWorkspace } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
@@ -79,10 +79,9 @@ import { findRun, listRuns, type RunFacts } from "./runs";
 import { readyLines } from "./following";
 import { donePasses, markersOf, runningCheck } from "./checks";
 import { memoryWaitOf, waitLine } from "./memory-wait";
-import { deliveriesOf, herdOf } from "./steering";
+import { deliveriesOf, machineHerd } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
-import { closable, decide, homePath, readHome, UNREADABLE } from "./home";
 import { doctor } from "./doctor";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeKey } from "./registry";
@@ -195,7 +194,7 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     collie_propose: (input) =>
       answer(
         Effect.gen(function* () {
-          const herd = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+          const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
           const requestId = input.request_id ?? (yield* newRequestId());
           const done = yield* proposeActions(env, {
             door: yield* toolDoor(env),
@@ -291,7 +290,7 @@ export const TOOLS = Arr.map(Rec.values(CollieTools.tools), (tool) => {
  * Every caller treats those three the same way: nothing is selected.
  */
 const selectionOf = Effect.fn("Tools.selection")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return null;
   return yield* readSelection(yield* selectionPath(env.stateDir, key)).pipe(
     Effect.orElseSucceed(() => null),
@@ -617,7 +616,7 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   const open = new Set(Arr.map(all, (workspace) => workspace.workspaceId));
   const tasks = Arr.filter(
     yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => [])),
-    (task) => open.has(task.workspace),
+    (task) => isOpen(task, open),
   );
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return Arr.join(
@@ -626,7 +625,8 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
       "",
       ...Arr.map(
         tasks,
-        (task) => `- task ${task.id} (${task.label}) in workspace ${task.workspace}`,
+        (task) =>
+          `- task ${task.id} (${task.label})${task.workspace === null ? "" : ` in workspace ${task.workspace}`}`,
       ),
       ...(tasks.length === 0 ? ["- (no Tasks with an open workspace)"] : []),
       "",
@@ -672,7 +672,7 @@ const reportFacts = Effect.fn("Tools.reportFacts")(function* (
  * the moment it demonstrably reached the model — it is in the answer.
  */
 const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (key === null) return "Collie cannot reach herdr, so it has nothing to report.";
   const read = yield* settleNewsFor(env, {
     door: yield* toolDoor(env),
@@ -688,7 +688,7 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
 const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
   const found = yield* findRun(env, run);
   if (found === null) return `No Run "${run}".`;
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const now = yield* Clock.currentTimeMillis;
   const proposals =
     key === null
@@ -829,13 +829,10 @@ const shortened = (text: string, most: number) => {
 /** What `collie_installation` answers with: everything that is not about a Run. */
 const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {
   const herdr = new Herdr(env);
-  const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const panes = yield* herdr.paneList().pipe(Effect.orElseSucceed(() => []));
   const workspaces = yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => []));
   const health = yield* doctor(env).pipe(Effect.orElseSucceed(() => null));
-  const record = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
-  const ownership = key === null ? null : decide(record, workspaces, panes, key);
-  const { close, listed } = closable(panes);
   // Per workspace, because that is how a Run reads them: what a new Run begins with is
   // the file under the workspace it was started in, never under whichever one this
   // process happens to be serving from.
@@ -861,15 +858,6 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
     [
       `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,
       "",
-      `home: ${
-        record === null
-          ? "none recorded"
-          : record === UNREADABLE
-            ? "the record is unreadable"
-            : `${record.workspaceId} (${record.state})`
-      }`,
-      `ownership: ${ownership === null ? "herdr could not be asked" : ownership.kind}`,
-      `panes an older release left: ${close.length} closable, ${listed.length} sharing a tab`,
       sweepable === null
         ? "cleanup: nothing swept here yet"
         : sweepable.ok

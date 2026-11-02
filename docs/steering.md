@@ -151,7 +151,9 @@ Run the same way, and is reconciled the same way; `not-sent` has the resume send
 `deferred` is the one refusal that is retried, because it is the one that proves the prompt
 was not delivered and says why the next try may land. Which refusals count is decided by
 herdr's code, recorded on the line as `code` — today only `agent_blocked`, an agent with a
-dialog up — and never by its message. A step's prompt and its repair are tried again with
+dialog up — and never by its message. A step's prompt or repair to an agent whose question is
+open on a Run is refused by the Dispatcher itself with the same code, before herdr is asked,
+so the answers reach the agent first. A step's prompt and its repair are tried again with
 a backoff from two seconds to thirty, each try reserved again under the same id, so every
 attempt is on the ledger and a second copy of the work stays blocked meanwhile. Ten minutes
 after the first refusal the delivery is settled `failed` with the note
@@ -279,9 +281,9 @@ the agent that made it, and never as evidence.
 A **verification** is a command whose exit Collie watched, bound to the tree it ran on:
 `collie verify -- <command>` from the Run's agent pane, or with `--run <id>` from anywhere
 else ([CLI](cli.md#verify)). The tree is fingerprinted
-before and after — the commit, the porcelain status, the diff against HEAD, and the
-content of every untracked file git is not ignoring — and a result whose two snapshots
-differ is `unstable`, never `pass`. So is one where either snapshot says the tree was too
+before and after as its content — the Git tree the working tree would commit as, untracked
+files git is not ignoring included — so a commit of the same bytes keeps the result, and a
+result whose two snapshots differ is `unstable`, never `pass`. So is one where either snapshot says the tree was too
 large to look at: two unmeasured trees are not one tree.
 
 Collie will also run a verification itself, but only one of the run's checks, matched

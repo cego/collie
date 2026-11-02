@@ -22,6 +22,11 @@ export const remoteCollie = (args: ReadonlyArray<string>) =>
  * `ProxyCommand=false`, ssh would fall back to a login of its own.
  */
 export const riderArgv = (path: string, target: string, remote: string, ssh = "ssh") => [
+  ...rider(path, target, ssh),
+  remote,
+];
+
+const rider = (path: string, target: string, ssh: string) => [
   ssh,
   "-S",
   path,
@@ -31,8 +36,34 @@ export const riderArgv = (path: string, target: string, remote: string, ssh = "s
   "ProxyCommand=false",
   "-T",
   target,
-  remote,
 ];
+
+/** Core's `via` for a Machine: a rider, given core's shell line last. */
+export const viaCommand = (path: string, target: string, ssh = "ssh") =>
+  Result.getOrThrow(CommandLine.join(rider(path, target, ssh)));
+
+/** The ssh target a `via` from `viaCommand` ends with: its last word, unquoted. */
+export const viaTarget = (via: string) => {
+  const words: Array<string> = [];
+  let word: string | undefined;
+  let quoted = false;
+  for (let at = 0; at < via.length; at++) {
+    const char = via[at]!;
+    if (quoted) {
+      if (char === "'") quoted = false;
+      else word += char;
+    } else if (char === "'") {
+      quoted = true;
+      word ??= "";
+    } else if (char === "\\") word = (word ?? "") + (via[++at] ?? "");
+    else if (/\s/.test(char)) {
+      if (word !== undefined) words.push(word);
+      word = undefined;
+    } else word = (word ?? "") + char;
+  }
+  if (word !== undefined) words.push(word);
+  return words.at(-1) ?? "";
+};
 
 export type Verb = "check" | "forward" | "cancel" | "exit";
 

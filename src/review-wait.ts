@@ -6,7 +6,7 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Schema } from "effect";
-import { mrLabel } from "./board-model";
+import { mrLabel, type Mergeability } from "./board-model";
 import type { ReviewRead } from "./forge/review";
 
 /** An external comment nobody has answered yet. */
@@ -98,7 +98,9 @@ export function standingOf(
         : [`the pipeline at ${short}`]),
     ...(read.mergeable?.state === "mergeable"
       ? []
-      : [`mergeability (${read.mergeable?.said || "the forge has not said"})`]),
+      : conflictsWithTarget(read.mergeable)
+        ? [CONFLICTS]
+        : [`mergeability (${read.mergeable?.said || "the forge has not said"})`]),
   ];
   return why.length === 0
     ? { _tag: "Ready", head: read.head, approvers: read.approvers }
@@ -193,6 +195,14 @@ const HELD_FOR = new Map<string, string | null>([
   ["blocked", null],
 ]);
 
+/** The forge's words for a merge request whose branch conflicts with its target branch. */
+const CONFLICTING = new Set(["conflicting", "dirty", "conflict", "cannot be merged"]);
+
+export const conflictsWithTarget = (mergeable: Mergeability | null | undefined) =>
+  mergeable?.state === "blocked" && CONFLICTING.has(mergeable.said);
+
+export const CONFLICTS = "it conflicts with its target branch, and its branch must take the target";
+
 export function reviewWaitOf(mr: string, read: ReviewRead): ReviewWait {
   const label = mrLabel(mr);
   if (!read.ok)
@@ -208,9 +218,11 @@ export function reviewWaitOf(mr: string, read: ReviewRead): ReviewWait {
       ? [`the pipeline at ${pipe(read.head, Str.slice(0, 8))} failed (${read.pipeline.name})`]
       : []),
     ...(read.changesRequested ? ["changes are requested"] : []),
-    ...(mergeable?.state === "blocked" && held === undefined
-      ? [`the forge will not merge it: ${mergeable.said}`]
-      : []),
+    ...(conflictsWithTarget(mergeable)
+      ? [CONFLICTS]
+      : mergeable?.state === "blocked" && held === undefined
+        ? [`the forge will not merge it: ${mergeable.said}`]
+        : []),
   ];
   const open = Arr.filter(read.comments, (one) => one.external && !one.answered).length;
   const on = [

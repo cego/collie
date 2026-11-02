@@ -26,7 +26,8 @@ const list = Command.make("list", {}, () =>
           Arr.join(
             Arr.map(
               data,
-              (task) => `${task.id}\t${task.label}\t${task.workspace}\t${task.runs.length} run(s)`,
+              (task) =>
+                `${task.id}\t${task.label}\t${task.workspace ?? "-"}\t${task.runs.length} run(s)`,
             ),
             "\n",
           ) || "No tasks found.",

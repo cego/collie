@@ -7,7 +7,8 @@ import { Effect, Schedule, Stream } from "effect";
 import type { PaneAt } from "./board-model";
 import type { PluginEnv } from "./env";
 import type { AgentInfo, Herdr, PaneInfo } from "./herdr";
-import { herdOf } from "./steering";
+import { terminalBackend } from "./config";
+import { herdOf, machineHerd } from "./steering";
 
 /** One Herd the host reads: its herdr session, under the key its Tasks record. */
 export interface LiveHerd {
@@ -29,12 +30,12 @@ export const PANE_EVENTS = [
 
 /**
  * Every running herdr session, or only the one this process inherited where herdr cannot
- * list its sessions.
+ * list its sessions; on a Machine set to core, its core Herd too.
  */
 export const liveHerds = Effect.fn("Herds.live")(function* (herdr: Herdr, env: PluginEnv) {
   const listed = yield* herdr.sessionList().pipe(Effect.orElseSucceed(() => []));
   if (listed.length === 0) {
-    const herd = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+    const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
     return [{ herd, herdr }];
   }
   const sessions: LiveHerd[] = [];
@@ -47,13 +48,18 @@ export const liveHerds = Effect.fn("Herds.live")(function* (herdr: Herdr, env: P
       herdr: herdr.inSession(one.socketPath),
     });
   }
+  if ((yield* terminalBackend(env.userDir)) === "core") {
+    const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
+    if (herd !== null && !Arr.some(sessions, (one) => one.herd === herd))
+      sessions.push({ herd, herdr });
+  }
   return sessions;
 });
 
 /**
  * Focuses the first of `agents` a session still has, else `workspace` in the Task's own
  * `herd` (undefined where the Task recorded none), in the first session that holds either;
- * null where none does.
+ * null where none does. An agent on core has nothing to focus, and is named by its terminal.
  */
 export const focusPane = Effect.fn("Herds.focusPane")(function* (
   sessions: ReadonlyArray<LiveHerd>,
@@ -65,6 +71,15 @@ export const focusPane = Effect.fn("Herds.focusPane")(function* (
     const { herdr } = session;
     const live = yield* herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => []));
     const agent = Arr.flatMap(agents, (name) => Arr.filter(live, (one) => one.name === name))[0];
+    if (agent?.backend === "core")
+      return {
+        session: null,
+        workspace: agent.name,
+        tab: null,
+        pane: agent.paneId,
+        agent: agent.name,
+        core: agent.paneId,
+      } satisfies PaneAt;
     const pane =
       agent === undefined
         ? undefined

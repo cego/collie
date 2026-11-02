@@ -34,7 +34,9 @@ import {
   type HostServices,
 } from "../src/engine";
 import { Store } from "../src/store";
-import { sweep, worktreesSweeper } from "../src/cleanup";
+import { sweep, taskWorkspacesSweeper, worktreesSweeper } from "../src/cleanup";
+import { listTasks } from "../src/task";
+import { task as taskView } from "./support/task";
 import { factsOfView } from "../src/runs";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import { SqlClient } from "effect/sql";
@@ -59,6 +61,7 @@ beforeEach(() =>
       rig = yield* Rig.make();
       helleUrl = HELLE_URL;
       sessions = [rig.socketPath];
+      onCore = false;
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
       yield* installFakeSkills(rig.root);
@@ -97,8 +100,11 @@ const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
 /** The sockets `session list` names, or null for a herdr that will not list them. */
 let sessions: ReadonlyArray<string> | null;
 let helleUrl = HELLE_URL;
+/** Whether this Machine runs on core, with no herdr session to reach. */
+let onCore = false;
 const env = () =>
   rig.pluginEnv({
+    HERDR_SOCKET_PATH: onCore ? "" : rig.socketPath,
     HERDR_PLUGIN_ROOT: ROOT,
     GITLAB_USER_LOGIN: LOGIN,
     GITLAB_HOST: FORGE_HOST.gitlab,
@@ -168,7 +174,7 @@ const hosted = <A, E>(
     Effect.orDie,
   );
 
-const worktreeOf = (branch: string) => `${rig.root}/.herdr/worktrees/project/${LOGIN}/${branch}`;
+const worktreeOf = (branch: string) => `${rig.root}/.collie/worktrees/project/${LOGIN}/${branch}`;
 
 /** A Task whose workspace herdr has open, as a start inside one continues it. */
 const aTask = Effect.gen(function* () {
@@ -467,7 +473,7 @@ test(
         expect(refusedWith(outcome.refused)).toContain(container);
         // Nothing exists to clean up: no Run, no Task, no worktree, no workspace, no agent.
         expect(outcome.rows).toEqual([]);
-        expect(yield* fs.exists(`${rig.root}/.herdr/worktrees`)).toBe(false);
+        expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
         expect(yield* fs.exists(`${env().stateDir}/tasks`)).toBe(false);
         expect(yield* rig.cmds()).toEqual([]);
       }),
@@ -726,7 +732,7 @@ test(
         expect(yield* claimCut()).toBeNull();
 
         const view = yield* hosted(finished("run-cut"));
-        expect(view?.cwd).toStartWith(`${rig.root}/.herdr/worktrees/`);
+        expect(view?.cwd).toStartWith(`${rig.root}/.collie/worktrees/`);
         expect(view?.worktree?.path).toBe(view?.cwd);
         expect(view?.task).not.toBeNull();
         expect(view?.status.status).toBe("complete");
@@ -801,7 +807,7 @@ test(
         expect(refusedWith(again.started)).toContain("may have been cut for run-cut");
         expect(again.row?.checkout).toBeNull();
         const fs = yield* FileSystem.FileSystem;
-        expect(yield* fs.exists(`${rig.root}/.herdr/worktrees`)).toBe(false);
+        expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
       }),
     ),
   120_000,
@@ -873,7 +879,7 @@ test(
         expect(seen.parent?.worktree).toBeNull();
         expect(seen.parent?.cwd).toBe(rig.projectDir);
         expect(seen.api?.options).toMatchObject({ repo: "api" });
-        expect(seen.api?.worktree?.path).toStartWith(`${rig.root}/.herdr/worktrees/api/`);
+        expect(seen.api?.worktree?.path).toStartWith(`${rig.root}/.collie/worktrees/api/`);
         expect(seen.api?.branch).toBe(`${LOGIN}/${seen.runId}`);
         // Held to what its own repository approved, not the project it was started from.
         expect(seen.approved).toContain('"api-unit"');
@@ -1148,7 +1154,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* claimCut({}, "roams");
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         yield* exec(["git", "worktree", "add", "--quiet", "--detach", roaming, "master"], {
           cwd: rig.projectDir,
         });
@@ -1171,7 +1177,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const views = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -1209,7 +1215,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const git = (cwd: string, ...args: string[]) =>
           exec(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd });
@@ -1258,7 +1264,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const refusals = yield* hosted(
           Effect.gen(function* () {
@@ -1342,7 +1348,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const seen = yield* hosted(
           Effect.gen(function* () {
@@ -1378,7 +1384,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         yield* withOrigin;
         const runs = yield* hosted(
@@ -1440,7 +1446,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const seen = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -1472,7 +1478,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const seen = yield* hosted(
           Effect.gen(function* () {
@@ -1505,7 +1511,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const seen = yield* hosted(
           Effect.gen(function* () {
@@ -1561,7 +1567,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const other = `${rig.root}/elsewhere/project`;
         yield* committing(rig.root, "clone", "--quiet", yield* withOrigin, other);
@@ -1599,7 +1605,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const seen = yield* hosted(
           Effect.gen(function* () {
@@ -1640,7 +1646,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const origin = yield* withOrigin;
         const seen = yield* hosted(
@@ -1661,11 +1667,11 @@ test(
               yield* start(roams!, { request: "r2", text: { work: "next" } }),
             );
             yield* committing(rig.projectDir, "remote", "set-url", "origin", origin);
-            yield* fs.chmod(`${rig.root}/.herdr/worktrees/project`, 0o555);
+            yield* fs.chmod(`${rig.root}/.collie/worktrees/project`, 0o555);
             const unadded = refusedWith(
               yield* start(roams!, { request: "r3", text: { work: "next" } }),
             );
-            yield* fs.chmod(`${rig.root}/.herdr/worktrees/project`, 0o755);
+            yield* fs.chmod(`${rig.root}/.collie/worktrees/project`, 0o755);
             const recorded = Arr.flatMap(yield* registry.views(null), (view) =>
               view.worktree === null ? [] : [view.worktree.path],
             );
@@ -1689,7 +1695,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const refusals = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -1772,7 +1778,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const link = `${rig.root}/roaming-link`;
         const refused = yield* hosted(
           Effect.gen(function* () {
@@ -1811,7 +1817,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const fs = yield* FileSystem.FileSystem;
         const git = (...args: string[]) =>
           exec(["git", ...args], {
@@ -1859,7 +1865,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const other = `${rig.root}/other.sock`;
         sessions = [rig.socketPath, other];
         const refused = yield* hosted(
@@ -1885,7 +1891,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         sessions = null;
         const refused = yield* hosted(
           Effect.gen(function* () {
@@ -1910,7 +1916,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const refused = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -1936,7 +1942,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
         const refused = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -2473,7 +2479,7 @@ for (const chain of CHAINS) {
           expect(seen.child).toBeNull();
           const status = seen.parent?.status;
           expect(status?.status === "failed" ? status.reason : "").toContain(container);
-          expect(yield* fs.exists(`${rig.root}/.herdr/worktrees`)).toBe(false);
+          expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
           expect(tabs(yield* rig.calls())).toEqual([{ workspace: "wT", cwd: container }]);
         }),
       ),
@@ -3034,7 +3040,7 @@ test(
         );
 
         const parent = view?.cwd ?? "";
-        expect(parent).toStartWith(`${rig.root}/.herdr/worktrees/project/${LOGIN}/`);
+        expect(parent).toStartWith(`${rig.root}/.collie/worktrees/project/${LOGIN}/`);
         expect(view?.status).toEqual({ status: "complete", value: `${parent} ${parent}` });
         const [list, branches] = yield* cutsOf();
         expect(
@@ -3076,7 +3082,7 @@ test(
         const parent = view?.cwd ?? "";
         expect(view?.status).toEqual({
           status: "complete",
-          value: `${parent} ${rig.root}/.herdr/worktrees/project/feature`,
+          value: `${parent} ${rig.root}/.collie/worktrees/project/feature`,
         });
       }),
     ),
@@ -3121,7 +3127,7 @@ test.each([
 
         expect(view?.status).toEqual({
           status: "complete",
-          value: `${rig.root}/.herdr/worktrees/project/feature`,
+          value: `${rig.root}/.collie/worktrees/project/feature`,
         });
       }),
     ),
@@ -3148,7 +3154,7 @@ test.each([
           "HELLE_API_TOKEN=fixture-token\n",
         );
         yield* git("branch", "feature");
-        const first = `${rig.root}/.herdr/worktrees/project/feature`;
+        const first = `${rig.root}/.collie/worktrees/project/feature`;
         for (const slot of [first, `${first}-2`, `${first}-3`])
           yield* fs.makeDirectory(slot, { recursive: true });
         const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
@@ -3214,6 +3220,133 @@ test.each([
         expect(held).toBe(`no worktree for feature: ${occupants}; free one of them and retry`);
         expect(freed).toBeNull();
       }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+/** This Machine set to core, with no herdr session open and `settings` beside the backend. */
+const aCoreMachine = (settings = "") =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* rig.startCore();
+    onCore = true;
+    sessions = [];
+    yield* fs.makeDirectory(rig.userDir, { recursive: true });
+    yield* fs.writeFileString(
+      `${rig.userDir}/config.json`,
+      `{ "terminal_backend": "core"${settings === "" ? "" : `, ${settings}`} }`,
+    );
+  });
+
+/** herdr calls that make, list, focus, rename or close a workspace, a tab or a worktree. */
+const layoutCalls = (calls: ReadonlyArray<Call>) =>
+  Arr.filter(
+    calls,
+    (call) => call.transport !== "core" && /^(workspace|tab|worktree)[ .]/.test(call.cmd),
+  );
+
+test(
+  "a mutating Run on a core Machine works in a checkout git made under the worktrees directory, its agent labelled with its Task, and herdr is asked for no workspace, tab or worktree",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* aCoreMachine(`"worktrees_directory": "${rig.root}/trees"`);
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        const view = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const started = yield* start(builds!, {
+              request: "r1",
+              text: { work: "Add a picker" },
+              taskLabel: "Project | Picker",
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            return yield* finished(started.success.runId);
+          }),
+        );
+
+        const worktree = `${rig.root}/trees/project/${LOGIN}/add-a-picker`;
+        expect(view).toMatchObject({ cwd: worktree, workspace: null });
+        expect(view?.status.status).toBe("complete");
+        const task = yield* readTask(env().stateDir, view?.task ?? "");
+        expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree, workspace: null });
+        const calls = yield* rig.calls();
+        const launched = Arr.filter(
+          calls,
+          (call) => call.transport === "core" && call.cmd === "terminal.run",
+        );
+        expect(Arr.map(launched, (call) => call.params)).toEqual([
+          expect.objectContaining({
+            cwd: worktree,
+            labels: expect.objectContaining({ task: task?.id }),
+          }),
+        ]);
+        expect(layoutCalls(calls)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a start on the branch of a core Task joins it until an hour after it is Finished, and begins a Task of its own after",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* aCoreMachine();
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        const seen = new Map<string, number>();
+        /** Cleanup's pass over the Tasks, with the first one Finished on the board. */
+        const cleanup = (first: string) =>
+          Effect.gen(function* () {
+            return yield* sweep(
+              [
+                taskWorkspacesSweeper({
+                  stateDir: dir(),
+                  sessions: [],
+                  tasks: yield* listTasks(dir()),
+                  views: [taskView({ id: first, state: "done", landed: true })],
+                  runs: [],
+                  seen,
+                }),
+              ],
+              dir(),
+              "host",
+            );
+          });
+        /** The Task a start ends in, on a host of its own over the same state. */
+        const taskOf = (workflow: string, request: string, text: Record<string, string>) =>
+          hosted(
+            Effect.gen(function* () {
+              const [generation] = yield* loaded(yield* Registry, [
+                `${fixtures}/${workflow}.workflow.ts`,
+              ]);
+              const started = yield* start(generation!, {
+                request,
+                text,
+                taskLabel: `Project | ${request}`,
+              });
+              if (started._tag === "Failure") return yield* Effect.die(started.failure);
+              return (yield* finished(started.success.runId))?.task ?? "";
+            }),
+          );
+        const review = { target: `branch:master...${LOGIN}/add-a-picker` };
+
+        const first = yield* taskOf("builds", "r1", { work: "Add a picker" });
+        expect((yield* cleanup(first)).keep).toEqual([
+          { kind: "workspace", target: first, reason: "Finished 0 min ago" },
+        ]);
+        expect(yield* taskOf("targeted", "r2", review)).toBe(first);
+
+        seen.set(first, seen.get(first)! - 60 * 60_000);
+        const closed = yield* cleanup(first);
+        expect(Arr.map(closed.remove, (item) => item.target)).toEqual([first]);
+        expect((yield* readTask(dir(), first))?.closed_at).toBeString();
+        const after = yield* taskOf("targeted", "r3", review);
+        expect(after).not.toBe("");
+        expect(after).not.toBe(first);
+        expect(layoutCalls(yield* rig.calls())).toEqual([]);
+      }),
     ),
   120_000,
 );

@@ -14,7 +14,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Clock, Data, Effect, FileSystem, Path, Schema, Option, flow, Result } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { budgetPath, herdOf, reserve, settle } from "./steering";
+import { budgetPath, reserve, settle, machineHerd } from "./steering";
 import { isArray, isRecord, isString } from "./schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
@@ -512,10 +512,8 @@ function refusalFor(action: Action, ctx: ValidationContext): string | null {
  * the next one.
  */
 export const evaluationDeps = Effect.fn("Evaluator.evaluationDeps")(function* (env: {
-  readonly socketPath: string | null;
   readonly pluginRoot: string;
-  /** The Herd to record against, where it is not the one this process's socket names. */
-  readonly herdKey?: string | undefined;
+  readonly herdKey: string;
 }) {
   const path = yield* Path.Path;
   const limits = {
@@ -525,7 +523,7 @@ export const evaluationDeps = Effect.fn("Evaluator.evaluationDeps")(function* (e
     effort: "medium",
   };
   return {
-    herdKey: env.herdKey ?? (yield* herdOf(env.socketPath)),
+    herdKey: env.herdKey,
     evaluator: {
       help: helpOf(["claude"]),
       systemPromptFile: path.join(env.pluginRoot, "prompts", "steward.md"),
@@ -549,6 +547,8 @@ export interface BudgetedDeps {
 export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
   env: {
     readonly socketPath: string | null;
+    readonly userDir: string;
+    readonly raw: Readonly<Record<string, string | undefined>>;
     readonly pluginRoot: string;
     readonly stateDir: string;
   },
@@ -557,11 +557,11 @@ export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const herd = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+  const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   if (herd === null) return null;
   const systemPromptFile = path.join(env.pluginRoot, "prompts", prompt);
   if (!(yield* fs.exists(systemPromptFile).pipe(Effect.orElseSucceed(() => false)))) return null;
-  const evaluation = yield* evaluationDeps(env);
+  const evaluation = yield* evaluationDeps({ pluginRoot: env.pluginRoot, herdKey: herd });
   return {
     evaluator: {
       ...evaluation.evaluator,

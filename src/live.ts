@@ -62,11 +62,6 @@ export interface Live {
    */
   pending: DriftReport[];
   /**
-   * The Home's ownership question, when Collie has refused to settle one. Passed in
-   * rather than read here: it is a herdr answer, not a journal.
-   */
-  ownership: { readonly why: string; readonly candidates: ReadonlyArray<string> } | null;
-  /**
    * What Collie has noticed that has not reached the conversation: how many items are
    * waiting, and how many of those nobody can account for having sent. Drawn because a
    * chat that cannot be pushed to — Claude, on an installation without channels — leaves
@@ -166,7 +161,6 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
   run: LiveRun | null;
   /** Every Run on the board: what the marks are for, and the Herd-wide cards. */
   runs: ReadonlyArray<MarkedRun>;
-  ownership: Live["ownership"];
   /** Whether the Live region is on screen. The marks are read either way. */
   region: boolean;
 }) {
@@ -219,7 +213,6 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
         deliveries: [],
         proposals: herdWide,
         pending: [],
-        ownership: opts.ownership,
       };
     } else {
       // The Selection may be a History row, off the board and so without marks of its own.
@@ -232,7 +225,6 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
         deliveries: Arr.map(yield* deliveriesOf(opts.stateDir, one.id), (found) => found.delivery),
         proposals: [...pendingFor(lines, one.id, now), ...herdWide],
         pending: key === null ? [] : yield* readPendingReports(opts.stateDir, key, one.id),
-        ownership: opts.ownership,
       };
     }
   }

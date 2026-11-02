@@ -70,8 +70,12 @@ export function checkProof(
           ? check.argv === undefined || sameCommand(v, { ...v, argv: check.argv })
           : sameCommand(v, { ...command, executable: command.executable ?? v.executable })),
     );
+    // A pipeline job ran on its commit, so its pass is bound to that head, not only to the bytes.
     const proof = Option.getOrUndefined(
-      Arr.findLast(jobs, (v) => !staleAgainst(v, got.final) && passed(v)),
+      Arr.findLast(
+        jobs,
+        (v) => v.end.head_sha === got.final.head_sha && !staleAgainst(v, got.final) && passed(v),
+      ),
     );
     return { state: proof === undefined ? "waiting" : "proved", runs: jobs, last: proof };
   }

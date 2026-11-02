@@ -5,7 +5,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 
 | File                   | What it owns                                                                                                                |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `main.ts`              | Entry: the `collie` CLI, or the actions and pane entrypoints under `herdr`                                                  |
+| `main.ts`              | Entry: the `collie` CLI, and `herdr compaction` for a harness's hook                                                        |
 | `platform.ts`          | The platform services every program runs on: Bun's, plus the ids and hashes Effect 4.1 took out of them                     |
 | `collie.ts`            | CLI assembly, help behavior, and process exit handling                                                                      |
 | `commands/`            | Workflow, Persona, and Run command handlers plus their shared resolution context                                            |
@@ -13,9 +13,10 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `operations.ts`        | Workspace resolution and Run mutations shared by both front doors                                                           |
 | `doctor.ts`            | Every prerequisite an installation needs, checked in one pass, each with its fix                                            |
 | `doctor-check.ts`      | What a doctor check is, shared by the doctor and each forge's own checks                                                    |
-| `flows.ts`             | What each action and pane entrypoint does                                                                                   |
-| `env.ts`               | The plugin environment herdr provides                                                                                       |
+| `flows.ts`             | What the board does: drawing it, and its pick, continue, resume and fork flows                                              |
+| `env.ts`               | The environment a Collie process runs in: herdr's, core's and Collie's own                                                  |
 | `herdr.ts`             | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest, and its config                                     |
+| `hc.ts`                | The client for herdr-core: its JSON-RPC and frames, a decoder per method, and the events snapshot                           |
 | `definitions.ts`       | Layers, personas, and the `extends:` override a persona fork writes                                                         |
 | `yaml.ts`              | Frontmatter split and write-back over Effect's YAML parser                                                                  |
 | `schema.ts`            | Shared Schema predicates used across boundary decoders                                                                      |
@@ -23,8 +24,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `harness.ts`           | Per-harness start, model and effort flags, persona injection, and the Collie MCP tools it wires in                          |
 | `inputs.ts`            | Input inference from branch, cwd, earlier runs and glab                                                                     |
 | `strategies.ts`        | Which Input carries which strategy, and how a settled Run is read through one                                               |
-| `workspace.ts`         | The Control Plane: what the Session's board shows, and the text fallback that draws it                                      |
-| `ui/`                  | The Collie tab: the card board and its drawer, plain state and commands, and the bridge                                     |
+| `workspace.ts`         | The Control Plane: what the board shows, and the text fallback that draws it                                                |
+| `ui/`                  | The board app: the card board and its drawer, plain state and commands, and the bridge                                      |
 | `views.ts`             | History, Workflows, Settings and a Run's detail, as state the app renders                                                   |
 | `board.ts`             | Builds the board from the files: one TaskView per Task and a card's sentence                                                |
 | `board-model.ts`       | The board's Schemas, `FrontDoorRpcs`, pure rules, and the one reading of a merge request reference                          |
@@ -68,7 +69,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `disposition.ts`       | What became of a Run's work, recorded beside its status and never over it                                                   |
 | `conversation.ts`      | What the human and Collie have said about this Herd, redacted and reference-checked                                         |
 | `redact.ts`            | Credential-shaped values replaced by their kind, the one list chat, cards and every front door use                          |
-| `chat.ts`              | The Home's native conversation: which harness, which session, and how it is launched                                        |
+| `chat.ts`              | The Home's native conversation: which harness, which session, and how its terminal is started                               |
 | `toolkit.ts`           | `CollieTools`, the Effect Toolkit of everything a chat may ask, and nothing else                                            |
 | `actions.ts`           | The closed union of everything a model may propose, with no effects                                                         |
 | `tools.ts`             | Native chat's answers to that Toolkit, read from this Machine's own files and host                                          |
@@ -88,7 +89,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `flow-read.ts`         | A Run's Flow as the host reads it: those records gathered from its directory and the engine                                 |
 | `run-links.ts`         | Notices of agent-requested Runs and the recorded delivery of each notice                                                    |
 | `run-link-delivery.ts` | Admission and settlement notices sent to a requesting Run's paired host                                                     |
-| `side-jobs.ts`         | What the host does with no pane open: the merge watch, each Herd's News, cleanup and Home tokens                            |
+| `side-jobs.ts`         | What the host does with no pane open: the merge watch, each Herd's News, cleanup, and the Home's terminals                  |
 | `cleanup.ts`           | What a sweep removes and keeps, one sweeper per kind, and the journal of what went (ADR-0045)                               |
 | `bytes.ts`             | A size as `collie cleanup` and Desktop say it (pure)                                                                        |
 | `discovery.ts`         | Where a workflow module is looked for, which layer wins, and what counts as an edit                                         |
@@ -109,7 +110,6 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `launches.ts`          | What each of a Run's agents was launched on, read back in launch order                                                      |
 | `proactive.ts`         | What is worth Collie starting a turn about, and what it has already said                                                    |
 | `news.ts`              | What it noticed, per conversation: deduped, batched, superseded; sent is never read                                         |
-| `home.ts`              | Which workspace is this Herd's Home, decided by proof and never by a label                                                  |
 | `live.ts`              | The board's Live region and every row's marks, from one pass. Read-only                                                     |
 | `lines.ts`             | A card, a report, a delivery, a row's marks and an action, as the same words everywhere                                     |
 | `plan.ts`              | A plan directory as repositories and waves, and the refusals that stop a fan-out                                            |
@@ -170,7 +170,7 @@ keeping paired Machines level. `peer-transport.ts` is the way to a peer this Mac
 dials: direct, then through the Machine's SSH connection, with its bounds and its words.
 `ssh-connection.ts` runs every ssh command against a Machine: its control path, the one
 opener a front door runs, the host's `-O`-only handle and the sweep that closes what herdr
-no longer names, and `-G`. `ssh-argv.ts` holds the argv and bounds Desktop shares with it, the rider
+no longer names, and `-G`. `ssh-argv.ts` holds the argv and bounds Desktop shares with it, core's `via` for a Machine, the rider
 a session through the connection uses among them, so Desktop never loads the host's lock. `peers-model.ts` holds the peer records and states
 Desktop shares. `flock-settings.ts` holds the latest-edit rule and merge both hosts and
 Desktop use. `shared-definitions.ts` reads and writes the user Layer's files a Flock

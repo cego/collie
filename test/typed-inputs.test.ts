@@ -509,7 +509,7 @@ test(
         // The picker asks only for the launch Input and infers the rest, so a required
         // Input nothing can infer is refused with its name rather than asked for.
         const { prompts, asked } = answering(["typed", "the spec"]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
+        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
         expect(asked.slice(1, 2)).toEqual(["What do you want?"]);
         expect(asked.at(-1)).toContain('typed needs "note"');
 

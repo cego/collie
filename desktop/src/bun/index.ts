@@ -124,6 +124,7 @@ import {
   definitionsIn,
   endChildren,
   flockStream,
+  forgetMachine,
   type HerdrMachine,
   herdrMachines,
   localRoute,
@@ -132,6 +133,7 @@ import {
   type ShellRoute,
   remoteRoute,
   removeFromHerdr,
+  rosterOf,
   type RouteChange,
   syncNow,
 } from "./machine";
@@ -142,6 +144,7 @@ import { connectionsOn, githubLogin, readBack, reuseGitlab } from "./connection-
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, openTerminal } from "./terminal";
 import {
+  addToCore,
   addToHerdr,
   doctorOn,
   NOT_STARTED,
@@ -386,8 +389,12 @@ const main = Effect.gen(function* () {
   );
   // An older Desktop that was killed left its own masters behind.
   yield* sweepSshControls(tmpdir(), childEnv()).pipe(Effect.ignore);
-  // herdr's list is the only list of Machines there is.
-  const listed = yield* herdrMachines("herdr", manifest.min_herdr_version).pipe(Effect.result);
+  // The Machines this computer's backend lists: core's, or herdr's while it is set to herdr.
+  const roster = yield* rosterOf(collie).pipe(Effect.option);
+  const onCore = Option.isSome(roster) && roster.value.backend === "core";
+  const listed = onCore
+    ? Result.succeed(roster.value.roster)
+    : yield* herdrMachines("herdr", manifest.min_herdr_version).pipe(Effect.result);
   const now = yield* Clock.currentTimeMillis;
   const [enabled, unlisted] = Result.match(listed, {
     onSuccess: (machines) => [machines, []] as const,
@@ -623,13 +630,38 @@ const main = Effect.gen(function* () {
     Effect.sync(() => {
       if (onboarding.get(profile)?.job === job) onboarding.set(profile, { job, fiber });
     });
-  /** Onboards through `route` under `job`, then keeps how it ended and has it tried at once. */
+  /** The run, with core's adding of the Machine once onboarding placed the `hc` it needs there. */
+  const addedToCore = (job: string, machine: KnownMachine, run: OnboardRun, target: string) =>
+    Effect.gen(function* () {
+      const title = `Added to core as ${machine.name}`;
+      const added = yield* addToCore(collie, machine.name, target).pipe(Effect.result);
+      const step: OnboardStep = Result.isSuccess(added)
+        ? {
+            step: "core",
+            title,
+            status: "done",
+            detail: "core rides this computer's SSH connection",
+          }
+        : { step: "core", title, status: "failed", detail: added.failure };
+      const after: OnboardRun = {
+        ...run,
+        steps: [...run.steps, step],
+        ready: Result.isSuccess(added) ? run.ready : false,
+      };
+      yield* tell(job, machine)(after);
+      return after;
+    });
+  /**
+   * Onboards through `route` under `job`, then keeps how it ended and has it tried at once.
+   * With `adding`, the ssh target of a Machine new to core, core adds it after.
+   */
   const onboardAs = (
     job: string,
     route: ShellRoute,
     start: OnboardRun = NOT_STARTED,
     skipping: ReadonlyArray<Skippable> = [],
     restoring?: Skippable,
+    adding?: string,
   ) => {
     const { machine } = route;
     onboarding.set(machine.profile, { job });
@@ -644,7 +676,7 @@ const main = Effect.gen(function* () {
         ),
       );
       const skip = onboardingSkips(before?.run.steps ?? [], skipping, restoring);
-      const run = yield* onboardThrough(
+      const onboarded = yield* onboardThrough(
         route,
         {
           version: manifest.version,
@@ -659,6 +691,8 @@ const main = Effect.gen(function* () {
         tell(job, machine),
         start,
       );
+      const run =
+        adding === undefined ? onboarded : yield* addedToCore(job, machine, onboarded, adding);
       if (run.ready === true && secrets !== "") yield* given.handed(machine, handed, run.steps);
       // Kept as skipped where the run ended before it, so the next run skips it too.
       const unreached = Arr.map(
@@ -677,9 +711,21 @@ const main = Effect.gen(function* () {
       Effect.tap(recorded(job, machine.profile)),
     );
   };
+  /**
+   * On a computer set to core: opens the Machine's SSH connection, onboards it, then has core
+   * add it with a `via` riding that connection, so its one login is the only one.
+   */
+  const addToCoreAs = (job: string, target: string, label: string) =>
+    Effect.gen(function* () {
+      const route = yield* open({ id: label, label, target, session: "default", enabled: true });
+      yield* PubSub.publish(news, { _tag: "Routed", machine: route.machine });
+      yield* PubSub.publish(changes, { _tag: "Add", route });
+      yield* Fiber.join(yield* onboardAs(job, route, NOT_STARTED, [], undefined, target));
+    });
   /** Saves the machine in herdr, asking herdr's questions of the human, then onboards it. */
   const addAs = (job: string, target: string, label: string, session: string) =>
     Effect.gen(function* () {
+      if (onCore) return yield* addToCoreAs(job, target, label);
       const run = tracked(tell(job, { profile: `adding:${job}`, name: label, target }));
       const saved = { step: "herdr", title: `Saved in herdr as ${label}` } as const;
       yield* run.step(saved);
@@ -984,6 +1030,7 @@ const main = Effect.gen(function* () {
                     doors,
                     manifest.version,
                     Stream.fromSubscription(changed),
+                    Utils.showNotification,
                   ).pipe(Stream.tap(doctorOnceLive), Stream.tap(syncOnceLive)),
                   Stream.fromSubscription(told),
                 ],
@@ -1183,9 +1230,11 @@ const main = Effect.gen(function* () {
           return yield* new ActionFailed({
             reason: "only a machine in herdr's list can be removed",
           });
-        yield* removeFromHerdr("herdr", profile, collie).pipe(
-          Effect.mapError((reason) => new ActionFailed({ reason })),
-        );
+        yield* (
+          onCore
+            ? forgetMachine(collie, known.route.machine.name)
+            : removeFromHerdr("herdr", profile, collie)
+        ).pipe(Effect.mapError((reason) => new ActionFailed({ reason })));
         const done = yield* Deferred.make<void>();
         yield* PubSub.publish(changes, { _tag: "Remove", profile, done });
         // Without a board open there is no stream to end.

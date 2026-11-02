@@ -1,5 +1,7 @@
 # 0001 — Runner is a Bun-compiled binary fetched from a release
 
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): Collie's signed release carries the `hc` it is verified against.
+
 **Status:** accepted, 2026-08-27. Amended by [ADR-draft-an-installation-is-the-release-its-runner-carries](draft-an-installation-is-the-release-its-runner-carries.md): an install is no longer a clone, and the runner carries the shipped definitions and writes them out.
 
 ## Context

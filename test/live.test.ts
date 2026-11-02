@@ -84,7 +84,6 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
         socketPath: null,
         run: { id: "r1", dir: runDir },
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
-        ownership: null,
         region: true,
       });
 
@@ -120,7 +119,6 @@ test("one pass answers both: the region and the row's marks", () =>
         socketPath: null,
         run: { id: "r1", dir: runDir },
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
-        ownership: null,
         region: true,
       });
 
@@ -183,7 +181,6 @@ test("a Run's marks come from its own journals and nowhere else", () =>
         socketPath: null,
         run: null,
         runs: [{ id: "r1", dir: runDir, held: true, harnesses: [] }],
-        ownership: null,
         region: false,
       });
       expect(live).toBeNull();
@@ -221,7 +218,6 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
         socketPath: null,
         run: null,
         runs: [marked],
-        ownership: null,
         region: false,
       });
       expect(on.marks.r1?.unattributed).toBe(true);
@@ -236,7 +232,6 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
         socketPath: null,
         run: null,
         runs: [marked],
-        ownership: null,
         region: false,
       });
       expect(off.marks.r1).toBeUndefined();
@@ -252,7 +247,6 @@ test("a Run with nothing recorded about it has no marks at all", () =>
         socketPath: null,
         run: null,
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
-        ownership: null,
         region: false,
       });
       expect(marks.r1).toBeUndefined();
@@ -321,7 +315,6 @@ test("a proposal about the installation is drawn whatever row is selected", () =
           socketPath,
           run: selected,
           runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
-          ownership: null,
           region: true,
         });
         expect(Arr.map(live!.proposals, (p) => p.id)).toEqual([herdWide.id]);

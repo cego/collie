@@ -18,7 +18,15 @@ import { Data, Effect, FileSystem, Result } from "effect";
 import type { PlatformServices } from "./platform";
 import { STOP_WAIT_MS, notStopped, stopAgent, type CompactionDeps } from "./compaction";
 import type { AgentInfo, Herdr, HerdrError, PaneInfo } from "./herdr";
-import { launchDir, sameSession, type Launched } from "./launches";
+import {
+  launchDir,
+  readLaunches,
+  sameSession,
+  startedDir,
+  stemOf,
+  withRelaunchLock,
+  type Launched,
+} from "./launches";
 import { reason } from "./naming";
 import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 
@@ -61,7 +69,64 @@ export class PaneOpen extends Data.TaggedError("PaneOpen")<{
  */
 export const endAgent = Effect.fn("AgentEnd.end")(function* (
   deps: EndDeps,
-  launched: Pick<Launched, "agent" | "terminalId" | "agentSession"> & { readonly harness?: string },
+  launched: Ending,
+  why: string,
+  closes: Closes,
+  listed?: ReadonlyArray<AgentInfo>,
+) {
+  const runId = launched.runId;
+  if (runId === undefined) return yield* ending(deps, launched, why, closes, listed);
+  return yield* withRelaunchLock(
+    deps.stateDir,
+    runId,
+    Effect.succeed<Ended>({
+      _tag: "NotQuiet",
+      reason: `${launched.agent} could not be stopped while core's recovery starts it again`,
+    }),
+    Effect.gen(function* () {
+      // Recovery rewrites the record with the incarnation it started.
+      const operation = launched.operation;
+      const stem = operation === undefined ? null : stemOf({ ...launched, operation });
+      const now = Option.getOrUndefined(
+        Arr.findLast(
+          yield* readLaunches(deps.stateDir, runId).pipe(Effect.orElseSucceed(() => [])),
+          (one) => stemOf(one) === stem,
+        ),
+      );
+      if (now === undefined || now.terminalId === launched.terminalId)
+        return yield* ending(deps, launched, why, closes, listed);
+      return yield* ending(
+        deps,
+        { ...launched, terminalId: now.terminalId, agentSession: now.agentSession },
+        why,
+        closes,
+      );
+    }),
+  ).pipe(
+    Effect.catchTags({
+      PlatformError: (cause) => unlocked(launched.agent, cause),
+      SchemaError: (cause) => unlocked(launched.agent, cause),
+    }),
+  );
+});
+
+const unlocked = (agent: string, cause: unknown) =>
+  Effect.succeed<Ended>({
+    _tag: "NotQuiet",
+    reason: `${agent} could not be stopped (${reason(cause)})`,
+    locked: reason(cause),
+  });
+
+type Ending = Pick<Launched, "agent" | "terminalId" | "agentSession"> & {
+  readonly harness?: string;
+  readonly runId?: string;
+  readonly operation?: string;
+  readonly sequence?: number;
+};
+
+const ending = Effect.fnUntraced(function* (
+  deps: EndDeps,
+  launched: Ending,
   why: string,
   closes: Closes,
   listed?: ReadonlyArray<AgentInfo>,
@@ -117,11 +182,21 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
 
+  // Ended on purpose, so nothing starts it again.
+  if (launched.runId !== undefined)
+    yield* (yield* FileSystem.FileSystem)
+      .remove(`${startedDir(deps.stateDir, launched.runId)}/${launched.agent}.json`, {
+        force: true,
+      })
+      .pipe(Effect.ignore);
   if (paneId !== undefined && closes === "close") {
-    const panes = yield* deps.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-    yield* keepWorkspace(deps, paneId, panes);
+    // Core has no workspace to keep.
+    if (one?.backend === undefined) {
+      const panes = yield* deps.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+      yield* keepWorkspace(deps, paneId, panes);
+    }
     yield* deps.herdr
-      .paneClose(paneId)
+      .paneClose(paneId, restored === undefined ? one?.backend : undefined)
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId, cause })));
   }
   const ended = paneId !== undefined || reached.success !== null;

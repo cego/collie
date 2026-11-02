@@ -38,17 +38,11 @@ export interface PluginEnv {
   stateDir: string;
   binPath: string;
   socketPath: string | null;
-  /**
-   * herdr's own `config.toml`, where `HERDR_CONFIG_PATH` names one. Null means herdr
-   * is reading its default, and so is anything here that asks its config a question.
-   */
-  herdrConfigPath: string | null;
   workspaceId: string | null;
   tabId: string | null;
   paneId: string | null;
   actionId: string | null;
   entrypointId: string | null;
-  collieMode: string | null;
   /** The GitLab login a generated branch is namespaced under; null leaves it to glab. */
   gitlabLogin: string | null;
   /** `GITHUB_ACTOR`: who a generated branch is namespaced under on GitHub. */
@@ -141,14 +135,12 @@ export function readEnv(
       first(env, "HERDR_PLUGIN_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
     binPath: first(env, "HERDR_BIN_PATH") ?? "herdr",
     socketPath: first(env, "HERDR_SOCKET_PATH"),
-    herdrConfigPath: first(env, "HERDR_CONFIG_PATH"),
     workspaceId:
       first(env, "HERDR_WORKSPACE_ID", "HERDR_ACTIVE_WORKSPACE_ID") ?? context.workspace_id ?? null,
     tabId: first(env, "HERDR_TAB_ID", "HERDR_ACTIVE_TAB_ID") ?? context.tab_id ?? null,
     paneId: first(env, "HERDR_PANE_ID", "HERDR_ACTIVE_PANE_ID") ?? context.focused_pane_id ?? null,
     actionId: first(env, "HERDR_PLUGIN_ACTION_ID"),
     entrypointId: first(env, "HERDR_PLUGIN_ENTRYPOINT_ID"),
-    collieMode: first(env, "COLLIE_MODE"),
     gitlabLogin: first(env, "GITLAB_USER_LOGIN"),
     githubLogin: first(env, "GITHUB_ACTOR"),
     cwd,
@@ -179,7 +171,6 @@ const environmentKeys = [
   "PATH",
   "COLLIE_BIN_DIR",
   "COLLIE_CWD",
-  "COLLIE_MODE",
   "COLLIE_RUN",
   "COLLIE_AGENT",
   "OPENCODE_CONFIG_CONTENT",
@@ -194,9 +185,6 @@ const environmentKeys = [
   "COLLIE_PROC",
   "HERDR_BIN_PATH",
   "HERDR_SOCKET_PATH",
-  // Which config.toml herdr itself is reading, which is the one that says where a
-  // repository's worktrees go.
-  "HERDR_CONFIG_PATH",
   "HERDR_PLUGIN_ROOT",
   "COLLIE_DIR",
   // Where releases are published, for a mirror or a test's fake.
@@ -220,6 +208,13 @@ const environmentKeys = [
   // Where Desktop keeps its own on this computer, which cleanup reads.
   "XDG_DATA_HOME",
   "XDG_STATE_HOME",
+  // Which core this Machine's agents run on, as `hc` itself finds it.
+  "HC_SOCKET",
+  "HC_SESSION",
+  "XDG_RUNTIME_DIR",
+  "XDG_CONFIG_HOME",
+  // Where upstream's installer put hc.
+  "HC_INSTALL_DIR",
 ] as const;
 
 export const currentEnv = Effect.gen(function* () {

@@ -1,5 +1,4 @@
 import { pipe as pipe_ } from "effect/Function";
-import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -31,43 +30,6 @@ const workflow = Effect.promise(() =>
     flow(Schema.decodeUnknownResult(workflowSchema), Result.getOrThrow)(Bun.YAML.parse(text)),
   ),
 );
-
-test("every CI job that checks the root installs Desktop's dependencies before it", () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const { jobs } = yield* workflow;
-      const checking = Arr.filter(Rec.values(jobs), (job) =>
-        Arr.some(job.steps, (step) => /^bun run (check|test)\b/.test(step.run ?? "")),
-      );
-      expect(checking.length).toBeGreaterThan(0);
-      for (const { steps } of checking) {
-        const rootInstall = Option.getOrElse(
-          Arr.findFirstIndex(
-            steps,
-            (step) => step.run === "bun install --frozen-lockfile" && !step["working-directory"],
-          ),
-          () => -1,
-        );
-        const desktopInstall = Option.getOrElse(
-          Arr.findFirstIndex(
-            steps,
-            (step) =>
-              step.run === "bun install --frozen-lockfile" &&
-              step["working-directory"] === "desktop",
-          ),
-          () => -1,
-        );
-        const check = Option.getOrElse(
-          Arr.findFirstIndex(steps, (step) => /^bun run (check|test)\b/.test(step.run ?? "")),
-          () => -1,
-        );
-
-        expect(rootInstall).toBeGreaterThanOrEqual(0);
-        expect(desktopInstall).toBeGreaterThan(rootInstall);
-        expect(check).toBeGreaterThan(desktopInstall);
-      }
-    }),
-  ));
 
 test("Collie's own check is left to the CI job whose needs run each part of it", () =>
   runEffect(

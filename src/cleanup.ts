@@ -36,7 +36,7 @@ import {
   type Herdr,
   type PaneInfo,
 } from "./herdr";
-import { removeTask, withTaskLock, type TaskRecord } from "./task";
+import { isOpen, readTask, removeTask, withTaskLock, writeTask, type TaskRecord } from "./task";
 import { appendJournal, readJournal } from "./journal";
 import { shell } from "./mr";
 import type { AgentEntry } from "./registry";
@@ -437,7 +437,9 @@ export const settlingOf = (opts: {
       if (run.worktree?.created_by_collie !== true || run.task === null) continue;
       const task = Option.getOrUndefined(Arr.findFirst(opts.tasks, (one) => one.id === run.task));
       if (task === undefined) continue;
-      if (unknown)
+      if (task.workspace === null) {
+        if (isOpen(task, open)) workspaceHolds.set(run.worktree.path, "its Task is still open");
+      } else if (unknown)
         workspaceHolds.set(run.worktree.path, "could not ask herdr which workspaces are open");
       else if (open.has(task.workspace))
         workspaceHolds.set(run.worktree.path, "its Task's workspace is still open");
@@ -535,6 +537,7 @@ const KEPT_KINDS = new Set([
   "files",
   "claude.json.bak",
   "running-checks",
+  "check-output",
 ]);
 const MARKER_KINDS = ["stop", "hold", "parked", "awaiting", "notified"];
 const MARKER = new RegExp(`^(?:${Arr.join(MARKER_KINDS, "|")})\\.(.+)$`);
@@ -894,6 +897,8 @@ export const taskWorkspacesSweeper = (opts: {
   stopMs?: number;
 }): Sweeper => {
   const kind = "workspace";
+  /** A Task with no workspace is its own item. */
+  const targetOf = (task: TaskRecord) => task.workspace ?? task.id;
   /** Each agent a Task's Runs launched, as its latest launch recorded it. */
   const launchesOf = (task: TaskRecord) =>
     Effect.forEach(
@@ -917,13 +922,44 @@ export const taskWorkspacesSweeper = (opts: {
       return null;
     });
   const named = new Map<string, number>();
-  for (const task of opts.tasks) named.set(task.workspace, (named.get(task.workspace) ?? 0) + 1);
+  for (const { workspace } of opts.tasks)
+    if (workspace !== null) named.set(workspace, (named.get(workspace) ?? 0) + 1);
 
   /** The session a Task's workspace is in: its recorded Herd's, else this host's own. */
   const sessionOf = (task: TaskRecord) =>
     task.herd === undefined || task.herd === null
       ? opts.sessions[0]
       : Option.getOrUndefined(Arr.findFirst(opts.sessions, (one) => one.herd === task.herd));
+
+  /** How long a Task has been Finished, or why it is not. */
+  const finishedFor = (
+    task: TaskRecord,
+  ): Effect.Effect<{ keep: string } | { ms: number; said: string } | null> =>
+    Effect.gen(function* () {
+      const view = Option.getOrUndefined(Arr.findFirst(opts.views, (one) => one.id === task.id));
+      if (view === undefined) return null;
+      const now = yield* Clock.currentTimeMillis;
+      const section = sectionOf(view);
+      if (section !== "finished") {
+        opts.seen.delete(task.id);
+        return { keep: SECTION_SAID[section] };
+      }
+      const since = opts.seen.get(task.id) ?? now;
+      opts.seen.set(task.id, since);
+      return { ms: now - since, said: `Finished ${Math.floor((now - since) / 60_000)} min ago` };
+    });
+
+  /** Whether a Task with no workspace closes now: its record is all there is to close. */
+  const closing = (
+    task: TaskRecord,
+  ): Effect.Effect<{ keep: string } | { remove: string; writing: null } | null> =>
+    Effect.gen(function* () {
+      if (task.closed_at !== undefined) return null;
+      const finished = yield* finishedFor(task);
+      if (finished === null || "keep" in finished) return finished;
+      if (finished.ms < FINISHED_GRACE_MS) return { keep: finished.said };
+      return { remove: finished.said, writing: null };
+    });
 
   /** What becomes of one Task's workspace now, or null where it has none open to close. */
   const verdict = (
@@ -942,17 +978,9 @@ export const taskWorkspacesSweeper = (opts: {
   > =>
     Effect.gen(function* () {
       const session = sessionOf(task);
-      if (session === undefined) return null;
-      const view = Option.getOrUndefined(Arr.findFirst(opts.views, (one) => one.id === task.id));
-      if (view === undefined) return null;
-      const now = yield* Clock.currentTimeMillis;
-      const section = sectionOf(view);
-      if (section !== "finished") {
-        opts.seen.delete(task.id);
-        return { keep: SECTION_SAID[section] };
-      }
-      const since = opts.seen.get(task.id) ?? now;
-      opts.seen.set(task.id, since);
+      if (session === undefined || task.workspace === null) return null;
+      const finished = yield* finishedFor(task);
+      if (finished === null || "keep" in finished) return finished;
       const workspaces = yield* session.herdr.workspaceList().pipe(Effect.option);
       const panes = yield* session.herdr.paneList().pipe(Effect.option);
       if (Option.isNone(workspaces) || Option.isNone(panes))
@@ -963,8 +991,7 @@ export const taskWorkspacesSweeper = (opts: {
       if (open === undefined) return null;
       if ((named.get(task.workspace) ?? 0) > 1) return { keep: "another Task names it too" };
       if ("collie_home" in open.tokens) return { keep: "it is the Home" };
-      const minutes = Math.floor((now - since) / 60_000);
-      if (now - since < FINISHED_GRACE_MS) return { keep: `Finished ${minutes} min ago` };
+      if (finished.ms < FINISHED_GRACE_MS) return { keep: finished.said };
       if (open.focused) return { keep: "in focus" };
       const launched = yield* launchedPanes(
         opts.stateDir,
@@ -978,11 +1005,11 @@ export const taskWorkspacesSweeper = (opts: {
         return { keep: `holds a pane Collie did not open (${foreign.paneId})` };
       // Kept in a listing, while a sweep stops it again.
       const writing = yield* stillWriting(task);
-      return { remove: `Finished ${minutes} min ago`, launched, panes: panes.value, writing };
+      return { remove: finished.said, launched, panes: panes.value, writing };
     });
 
   const taskAt = (target: string) =>
-    Option.getOrUndefined(Arr.findFirst(opts.tasks, (task) => task.workspace === target));
+    Option.getOrUndefined(Arr.findFirst(opts.tasks, (task) => targetOf(task) === target));
 
   return {
     kind,
@@ -991,21 +1018,37 @@ export const taskWorkspacesSweeper = (opts: {
       const keep: CleanupKept[] = [];
       const retry: CleanupItem[] = [];
       for (const task of opts.tasks) {
-        const judged = yield* verdict(task);
+        const judged = task.workspace === null ? yield* closing(task) : yield* verdict(task);
         if (judged === null) continue;
-        if ("keep" in judged) keep.push({ kind, target: task.workspace, reason: judged.keep });
+        const target = targetOf(task);
+        if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
         else if (judged.writing !== null) {
-          keep.push({ kind, target: task.workspace, reason: judged.writing });
-          retry.push({ kind, target: task.workspace, bytes: 0, reason: judged.writing });
-        } else remove.push({ kind, target: task.workspace, bytes: 0, reason: judged.remove });
+          keep.push({ kind, target, reason: judged.writing });
+          retry.push({ kind, target, bytes: 0, reason: judged.writing });
+        } else remove.push({ kind, target, bytes: 0, reason: judged.remove });
       }
       return { remove, keep, retry };
     }),
     remove: (item) =>
       Effect.gen(function* () {
         const task = taskAt(item.target);
+        if (task?.workspace === null) {
+          const judged = yield* closing(task);
+          if (judged === null) return { kept: "already closed" };
+          if ("keep" in judged) return { kept: judged.keep };
+          const closed = yield* withTaskLock(
+            opts.stateDir,
+            task.id,
+            Effect.gen(function* () {
+              const now = yield* readTask(opts.stateDir, task.id);
+              if (now !== null)
+                yield* writeTask(opts.stateDir, { ...now, closed_at: yield* nowIso });
+            }),
+          ).pipe(Effect.result);
+          return closed._tag === "Failure" ? { kept: "its Task is busy" } : { freed: 0 };
+        }
         const session = task === undefined ? undefined : sessionOf(task);
-        if (task === undefined || session === undefined)
+        if (task === undefined || task.workspace === null || session === undefined)
           return { kept: "no Task names it any more" };
         const judged = yield* verdict(task);
         if (judged === null) return { kept: "already closed" };
@@ -1614,7 +1657,8 @@ export const retentionSweeper = (opts: {
       if (section !== "finished") return { keep: SECTION_SAID[section] };
       const seen = yield* open;
       if (seen === null) return { keep: "could not ask herdr what is open" };
-      if (seen.workspaces.includes(task.workspace)) return { keep: "its workspace is open" };
+      if (task.workspace !== null && seen.workspaces.includes(task.workspace))
+        return { keep: "its workspace is open" };
       const mine = Arr.filter(facts.runs, (run) => run.task === task.id);
       const ids = Arr.map(mine, (run) => run.id);
       const launched = yield* launchedPanes(opts.stateDir, ids);

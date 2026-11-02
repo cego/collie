@@ -93,6 +93,8 @@ SQLite file. The registry in `engine.ts` loads a module into a generation of its
 value came from, its options, its decisions and its receipts. The request id is the claim:
 the same request twice is one Run, and a Run recorded and not yet handed to the engine is
 handed over when the host starts again ([ADR-0017](adr/0017-one-request-is-one-run.md)).
+A starting host registers every saved generation before a Run it recovers looks one up, so a
+parent resumed in the swap reads a child of any generation.
 
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one recorded under `running-checks/`, or a process marked with this
@@ -102,6 +104,15 @@ Run's log and `host.log` name the check and the host that left it, and the step 
 runs it once more. No check of a Run starts while one a previous host left of that Run is
 still running: one that survives SIGKILL is ended again a second later, and named again,
 until it is gone.
+
+What a check's Verification is finished from is written to `check-output/<id>.json`
+before it is spawned: which check of which Run, the command as resolved, the tree it
+started on, when, what it expects and where its evidence goes. The host reads its stdout
+and stderr through pipes, as they arrive, for its log and a watching client, and keeps the
+last 16 KiB of each, which it writes to `check-output/<id>.stdout` and `.stderr` once that
+stream ends. The host that ran it finishes it from what it kept; another host on the state
+directory could finish it from those files, and one that could not be written leaves none.
+They go with its record, `running-checks/<id>.json`.
 
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no
@@ -462,11 +473,27 @@ second failure as it is. Everything else — reports (`pairs: false`), Schedules
 the dialler through the host's own `connectPeer` — gets the typed refusal and opens
 nothing.
 
-**Closing.** `reconcileMachines` runs `closeConnections` each time it reads herdr's list:
+**Closing.** On a Machine set to `herdr`, `reconcileMachines` runs `closeConnections` each
+time it reads herdr's list:
 every 16-hex path under `<state dir>/ssh/` that is not `controlPathOf` a machine herdr
 lists now is ended with `-O exit` (the path no longer names its Machine, so the
 destination is `collie`) and removed. A forgotten peer is told and dropped first. Where
-herdr cannot say, nothing is closed.
+herdr cannot say, nothing is closed. On a Machine set to `core` (the link's
+`forgetsUnlisted` is false), it does nothing: a pairing core does not keep yet, as one made
+on herdr before the switch, stays paired, and `machine list` says it is not added. Only
+`collie machine forget` (`machineForget`) removes one: the host's `unpair` tells the peer,
+forgets it and ends its connection, then core is asked `machine.rm`.
+
+**Core's machines.** On a Machine set to `core`, `Herdr.machineList` reads core's
+`machine.list`, each machine by core's name, its ssh target the last word of the `via`
+Collie gave it (`viaTarget` in `src/ssh-argv.ts`). `collie machine add` opens the Machine's
+connection with `openConnection`, then calls `machine.add {name, via}` with
+`viaCommand`: the rider's own argv (`-S <control path>`, `ControlMaster=no`,
+`ProxyCommand=false`) without its remote line, which core appends. With no master on that
+path it exits 255 at once, logging in nowhere, so core's own retries never raise an SSO
+prompt; `collie machine connect` reopens the master and calls `machine.connect`, which
+dials at once. `test/machines-core.test.ts` proves it with a fake core that runs each `via`
+through the fake `ssh`.
 
 The listener sends a heartbeat every fifteen seconds. Silence past that interval ends a
 control link. Reconnection backs off from one second to one minute, resetting after a
@@ -542,12 +569,15 @@ state, and a binary in a temp directory rather than the one the user is running.
 nothing above it to fake, and routing it through `herdr.ts` would mean asking the running
 herdr what some other version's schema says.
 
-The host and the CLI read herdr's list of saved machines through `herdr.ts` too
-(`machineList`, `herdr machine list --json`): it is the list of Machines a pairing may be
-made with, and a peer it no longer names is forgotten
-([Reaching another Machine](#reaching-another-machine)).
+The host and the CLI read the list of Machines through `herdr.ts` too (`machineList`):
+`herdr machine list --json` on a Machine set to `herdr`, core's `machine.list` on one set to
+`core`. It is the list of Machines a pairing may be made with, and on herdr a peer it no
+longer names is forgotten ([Reaching another Machine](#reaching-another-machine)).
 
-Desktop's main process runs three more, all on herdr's list of saved machines:
+Desktop's main process runs three more, all on herdr's list of saved machines, while the
+Local Machine is set to `herdr`; set to `core`, it reads the list from `collie machine list`
+(`rosterOf`), adds with `collie machine add` and removes with `collie machine forget`, and
+runs none of these:
 `herdr machine list --json`, which machines to reach, and `herdr machine remove`
 (`desktop/src/bun/machine.ts`), and `herdr machine add` (`desktop/src/bun/onboarding.ts`),
 run in Bun's terminal so herdr has the terminal its questions need. Local Claude and Linear
@@ -595,6 +625,18 @@ to the renderer, and decides nothing from what the pane shows. Where there is no
 control, and for **Open in herdr**, it opens `herdr --remote <target> --session <name>` in
 a terminal of this computer's instead, a client the human then drives. The focus before
 either is the host's, through `herdr.ts`; its reply names the pane it focused.
+
+An agent on core has no pane: the host's focus names its core terminal (`core` in its
+reply), and Desktop runs `herdr-core connect` through the same route instead, core's API on
+its stdin and stdout, so a local agent is reached through this computer's own core and a
+remote one through that Machine's until Machines reach each other's core. On it Desktop
+says `hello {framed: true}` and `terminal.attach`, with 1000 lines of history, and draws
+the first paint and every DATA after it (`attachCore` in `desktop/src/bun/terminal.ts`).
+Keys go back as DATA and a resize as RESIZE; xterm.js keeps the history and sends its own
+mouse reports. Each DATA is credited once it is handed on to be drawn. Core streams no more
+than 256 KiB ahead of that credit, so a terminal holding a whole window undrawn is that far
+behind: Desktop closes the stream and attaches again for a fresh paint rather than draw
+core's backlog. Core's CLOSE ends the terminal with its reason and exit code.
 
 ### Settings shared across a Flock
 
@@ -697,13 +739,8 @@ change what reads it. Bumping the pin afterwards is editing the version and chec
 `herdr-pin.json` and running `bun run contract:regen`. A red `preview` is the same
 news weeks early, and nothing to stop for.
 
-It also owns the one fact herdr settles but answers no command about: where a
-repository's worktrees go (`worktreesDirectory`, from `[worktrees] directory` in the
-`config.toml` herdr is actually reading — `HERDR_CONFIG_PATH` where it names one, herdr's
-own default otherwise). Reading that config elsewhere would be a second
-channel to herdr, and "where would herdr have put this checkout" has to have one answer
-whoever asks — the checkout Collie makes with git is found by herdr's own "open worktree"
-UI precisely because it is at that path.
+Where a checkout goes is Collie's own setting, `worktrees_directory`
+(`worktreesDirectory` in `src/config.ts`), not herdr's config.
 
 One gotcha the engine works around rather than reports: `tab create --cwd` and
 `pane split --cwd` echo the directory back but leave the pane's shell in the workspace
@@ -792,6 +829,109 @@ Without the pin the compiled runner falls back to its own installation (`process
 is the binary when bun runs it from `/$bunfs/`), so a `bin/collie` started from another
 directory still finds its workflows and the host it starts. Only `bun src/main.ts` in development
 falls all the way through to the current directory.
+
+### Checking core against its schema and live
+
+Collie is moving its agents to herdr-core (`hc`,
+[ADR-draft-collie-runs-its-agents-in-herdr-core](adr/draft-collie-runs-its-agents-in-herdr-core.md)).
+`src/hc.ts` is its client: plain JSON-RPC on the session socket, frames after
+`hello {framed: true}`, and one decoder per method it calls, in `replies`. A Machine whose
+`terminal_backend` is `core` runs its Runs' agents there ([Agents on core](#agents-on-core)).
+`hc-pin.json` names the `hc` release and its archive checksums, and the
+`released.openrpc.json` of that release, committed as `hc.openrpc.json`.
+
+The wire is checked twice, because each check misses what the other catches:
+
+- `test/hc-contract.test.ts` builds every reply `hc.openrpc.json` allows for each method in
+  `replies` — each object with only its required fields and with all of them, and each
+  alternative of each field — and every one has to decode.
+- `bun run probe:hc` (`tools/hc-probe.ts`, in the `ci` workflow's `static` job) downloads the
+  pinned `hc`, checks it against the pin, starts it on `HC_SESSION=collie-probe` with
+  scratch XDG directories, and drives run, list, get, read, send, keys, events and attach
+  through the decoders. It fails if a reply does not decode, if a process of that binary
+  outlives the core it stopped, or if an entry appeared in or left core's default state,
+  config or runtime directory. Only this caught hc 0.1.14's `terminal.list` without the
+  `machines` its schema requires, which `replies` therefore allows to be missing.
+- `bun tools/hc-probe.ts --harness claude|codex|pi`, run by hand, starts that installed
+  harness in a terminal of the same scratch core and sends it a prompt as Collie does, with
+  no `caller` to a terminal started with `no_parent`. It passes once the prompt is on the
+  harness's screen without core's `<hc from="…">` mark, which 0.1.14 puts on no plain send,
+  and the harness has answered it and reported `idle`, `working` and `done`. A pin that
+  starts marking sends fails it. It costs one turn of the harness's model, and asks for an
+  answer rather than a file because Codex's sandbox cannot write where the host restricts
+  unprivileged user namespaces.
+
+The test rig's fake core (`rig.startCore()`, `test/support/fake-hc.ts`) records each call in
+the rig's log beside the fake herdr's, and checks each of its own replies against
+`hc.openrpc.json`: one the schema forbids is answered as an error naming it, so the test
+that caused it fails. Bumping the pin is editing `hc-pin.json`, copying that release's
+`released.openrpc.json` over `hc.openrpc.json`, and passing both checks.
+
+### Agents on core
+
+`terminal_backend` is read when an agent is launched, so switching it mid-Run moves the
+next agent and leaves the running ones where they are. The core socket is `HC_SOCKET`,
+else the `socket` core's own `config.toml` names (under `XDG_CONFIG_HOME`, else
+`~/.config/herdr-core`), else `<session>.sock` under core's runtime directory, `HC_SESSION`
+naming the session (`default` when unset). All of it goes through `src/herdr.ts`, as herdr's calls do:
+
+- **Launch** is one `terminal.run` with the agent's name, the labels `run`, `operation`
+  and `task`, its cwd and `no_parent`: it is the Run's agent, not a child of whatever
+  started core. Its env is the launch env herdr's agents get, with the profile's file-held
+  values read in, and `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` blanked, so `collie` in that
+  terminal knows itself by `COLLIE_AGENT`, which the host confirms against its Runs.
+- **Delivery** is `terminal.send`. One that answers `started: false` gets one Enter
+  (`terminal.keys`), and the Run's log says so. Core's `blocked` refusal is herdr's
+  `agent_blocked`, so the Dispatcher holds the send as it does on herdr.
+- **Status** is read from one `events.subscribe` per socket, kept for the host's life.
+  OpenCode reports none of its own, so its launch adds Collie's reporter plugin
+  (`opencodeReporter` in `src/harness.ts`) to `OPENCODE_CONFIG_CONTENT`, after the
+  operator's plugins, and edits no settings file. It reports its own session's OSC 7501,
+  and writes that session's id once to `<step>.session` in the Run's directory, skipping a
+  subagent's. Collie records the id as the launch record's `agentSession`.
+- **The first prompt** of an OpenCode agent goes in at launch, as `--prompt`, since it
+  reports no readiness to wait for. Its later prompts are sends.
+- **A Claude or pi agent** is launched with `--session-id` and a fresh id, which the launch
+  record keeps as its `agentSession`; the registry's incarnation keeps none, since core
+  lists none. A Codex agent's is the thread its App Server has for it, read once its first
+  prompt is in; an OpenCode agent's is the one its reporter writes.
+  pi has no question tool, so its per-launch `.tools.ts` registers Collie's
+  `ask_user_question` (`piQuestionTool` in `src/compactors.ts`). The tool hands its call to
+  `collie herdr compaction <control dir>` as the payload Claude's `AskUserQuestion` hook
+  gets, so it is recorded in the same `questions.jsonl` and becomes the same Decisions.
+- **Stop** at the Run's end is `terminal.kill`.
+- **Resume.** What each agent was started with, less its credentials and its Run's
+  authority, is kept in `relaunch/<run>/<agent>.json` under the state directory until it is
+  ended. The host follows core's events, and on subscribing and on each terminal that ends,
+  starts again every agent of a running Run that `terminal.list` no longer has: a new
+  `terminal.run` under its name, in its cwd, with its harness's resume of the recorded
+  session (`claude --resume`, `codex resume`, pi's `--session-id`, `opencode --session`).
+  Codex gets a new App Server, and no permission flags: the thread keeps its own, and
+  Codex 0.166 refuses them on a remote resume. Once every lost agent is back, one whose
+  Output is still out and that has no question open is told it was restarted and to carry
+  on, then its step's pointer. OpenCode 1.18.30 ignores `--prompt` beside `--session` on a
+  session with a conversation, and its TUI takes no keys for a while after its server is
+  up, so its reporter, loaded on the resumed session, reports it idle first. The message is
+  then posted to `/session/<id>/prompt_async` on its own server where compaction gave it
+  one, or sent through core where it has none, and kept in the Dispatcher's ledger like any
+  delivery. No idle within the launch wait, or a refused post: the Run's log says it was
+  not resumed, and nothing is typed. The Run's own revival leaves such an agent to the host.
+  Starting one again and ending one take the Run's `relaunch/<run>.lock`: an end waits out
+  a start already under way and ends the terminal it started, read from the operation's
+  launch record, and a start after an end finds no record and starts nothing.
+- **A Task** is its record and the `task` label: placement opens no workspace, and a
+  Task's `workspace` is null. Cleanup's pass over Task workspaces writes the record's
+  `closed_at` an hour after the Task is Finished, which ends a start's join by branch;
+  rename, focus and close ask neither herdr nor core. A Run that asked for a workspace of
+  its own gets a git checkout (`checkoutFor` in `src/worktree.ts`).
+
+The incarnation of an agent launched on core is its terminal's address, marked `core`, and
+what is sent to it goes to core. A Machine set to core also lists herdr's agents while
+`HERDR_SOCKET_PATH` is set, so an agent launched on herdr before the switch is still
+reached there; one set back to herdr lists only herdr's, and its agents on core are gone
+to it. The host's Herds on a Machine set to core are its core Herd as well as each herdr
+session still running, so its board and News keep the core Herd's Runs while Herdr 1 stays
+open.
 
 ## The forge boundary
 
@@ -998,7 +1138,8 @@ checkouts belong to the Run's own repository. Remote paths and host-qualified id
 are checked, including URLs with ports and SCP syntax. The registry lends each workflow
 its Machine report using the same Run views and `reportOf` reading as the CLI, including
 Run identity, parent and status.
-Recovered workflows read reports after every saved generation has been registered.
+Recovered workflows read reports after every saved generation has been registered, the same
+gate a Run's lookup of its own generation waits on.
 
 An adapter runs its commands through a `Runner` (`src/mr.ts`), the same seam the tests
 fake. `test/support/forge.ts` is a fake of each forge built on one model of a forge, with
@@ -1141,7 +1282,8 @@ result to a live agent of the Run it came from rather than starting a second one
 never to an unrelated Run's agent in the same role.
 
 Each entry also records an **incarnation**: herdr's own `terminal_id` for the process in
-the pane, and the harness session it is driving where herdr knows one. An agent name is
+the pane, and the harness session it is driving where herdr knows one; for an agent on
+core, its terminal's address and `backend: "core"`. An agent name is
 reused by whatever takes that role next and a pane outlives what ran in it, so neither
 names a process — which is why a delivery is checked against the incarnation and not
 against the name. `verifyIncarnation` requires name, pane and workspace to match as
@@ -1202,32 +1344,29 @@ on another Run's behalf.
 ## The Herd and its Home
 
 A **Herd** is one herdr session — every workspace in it — keyed by the canonical path of
-its socket. Never by a directory: a cwd would key two sessions in one repository to the
+its socket. On a Machine set to core, it is that Machine's core session, keyed by core's
+socket. Never by a directory: a cwd would key two sessions in one repository to the
 same Herd, and one session across two repositories to different ones. Everything shared
 across a session's workspaces lives under `<state>/herd/<herdKey>/`: the conversation, the
-proposals, the budget, the elections, and `home.json`.
+proposals, the budget and the elections. That directory has no checkout, and it is where
+the Home works.
 
-The **Home** is the one workspace that Herd's board lives in. Ownership is a **record**
-Collie wrote plus **proof** that what it names is still what it meant — either a live
-`collie_home` token on the workspace, or the recorded pane still carrying the recorded
-`terminal_id`. Either proof alone is enough, and the second is what heals an expired
-token: the pane Collie opened is still there, so the claim was true and the TTL merely
-lapsed. While either proof holds, the host restates the token on the workspace and on both
-of the Home's panes every four hours, well inside the token's 24-hour TTL, so a board left
-open for days does not let it lapse.
+The **Home** is two core terminals the Machine's host keeps, whatever its
+`terminal_backend`: `collie-board`, which runs `collie board --draw`, and `collie-chat`,
+which runs the chat's harness. `keepTerminals` in `src/side-jobs.ts` starts each that core
+does not list as live, once when the host starts and again on every tick of
+`terminalsEnded`, core's event stream, so one that ends — a crash, a rebuilt binary, a
+human quitting it — is started again under the same name, with `no_parent`, so it is no
+other terminal's child. Chat starts on a new session each time, with the harness
+`chat_harness` names then. There is no layout, record or proof: a name core lists as live
+is the terminal. Both need core answering and a Herd;
+without either, the host logs a warning and keeps going. A start drawn on the board runs
+with the Herd's directory as its cwd, and that is what places it
+([ADR-0033](adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)).
 
-A herdr restart loses both proofs at once. herdr 0.9.3 saves each session to
-`~/.config/herdr/session.json`: workspace ids, tabs, and each pane with its cwd, label,
-launch command and agent session, so it relaunches the board and resumes the chat. It saves
-nothing reported with `report_metadata`, so every token is gone when the server comes back,
-and each restored pane has a new terminal. A recorded workspace that is still there, with a
-`ready` record, no other Herd's token and no other workspace carrying this one's, is
-therefore **healed** rather than refused: the panes still under their recorded ids are
-taken back with their new terminals, any that are gone are reopened, and the tokens are
-written again. The record keeps when and why, and `collie home show` prints it as `healed`.
-This rests on herdr never handing a workspace id to a different workspace.
+A herdr restart cannot take the Home away, because none of it is herdr's.
 
-A Run's agents come back the same way, each resumed in its harness session on a new
+A Run's agents on herdr come back when herdr restores its session, each resumed in its harness session on a new
 terminal, and sometimes without its name. A launch record keeps the terminal and the
 harness session herdr reported for its agent, and the Cleanup sweep fills the session in
 while the agent is still on that terminal. A restored pane is proved to be that agent by
@@ -1238,48 +1377,6 @@ started on its name, its stop controls are that agent's: a restored pane whose h
 outside the pane cannot be made Quiet, and is left open. A pane with no session, or one no
 launch recorded, proves nothing
 ([ADR-draft-a-finished-runs-idle-agent-is-closed](adr/draft-a-finished-runs-idle-agent-is-closed.md), D4).
-
-A **label is never proof**. Two workspaces can be called the same thing, and a home test
-reads `home.ts` to keep it that way. A live token with no record is not proof either — it
-is a previous Collie's Home or another state directory's, and adopting it silently would
-be one Herd taking over another's board.
-
-Anything uncertain — another workspace carrying this Herd's token, more than one
-candidate, a token with no record — is `ownership_unknown` and stops: `collie home show` says what was
-recorded, what herdr has, and which candidates there are; `collie home reconcile --adopt`
-or `--forget` is how a person settles it. Two things this must never do are creating a
-second Home because a token expired, and adopting one because it looks right.
-
-The record is written **before** the pane is opened, so a crash in that window leaves
-something attributable rather than a workspace nobody can explain. `server.json` records
-the socket, version and protocol at every ensure and logs when they move; no start time
-and no pid, because `status server` exposes neither and inventing one would be worse than
-re-checking.
-
-The **runtime gate** is a different question from the pinned contract. `herdr-pin.json`
-and `test/herdr-contract.test.ts` say what Collie was _built_ against; `home.capabilityGate`
-parses the installed binary's own `herdr api schema --json` and requires
-`workspace.report_metadata`, `pane.report_metadata`, `workspace.create`,
-`WorkspaceInfo.tokens`, `PaneInfo.tokens` and `PaneInfo.terminal_id`. A binary older than
-the pin runs this code, and the only honest answer then is `herdr_capability_missing:<name>`
-and an exit — there is deliberately no label-only path to fall back to. The schema is asked
-for once per process and remembered by binary path: a capability declaration cannot change
-while that binary is the one on disk, and it is a quarter of a megabyte down a pipe.
-
-The shortcut writes `origin.json` beside the record — the workspace and directory it was
-pressed in, or `filter: "all"` when it was pressed inside the Home — with a 60-second TTL.
-The board reads it once at startup for its opening filter. Short on purpose: it exists so
-the board opens on the work you came from, and a note from an hour ago says nothing about
-the board in front of you.
-
-The board tab and the tab-ordering anchor are separate: `RunCtx.boardTabId` comes from
-`ensureHome` and is where a pending question goes — it may be in another workspace
-entirely — while `RunCtx.orderAnchorTabId` is a tab in the Run's _own_ workspace: the first
-one in that strip any Run of that workspace opened. Conflating them made a Run in one
-workspace reorder the tabs of another. The anchor is resolved again while it is still null,
-because the first tab Collie opens in a workspace is the anchor for the ones after it; with
-no anchor at all nothing is reordered, which is a strip Collie has no business touching.
-Only a pending question ever focuses anything, and only under `questions: focus`.
 
 ## Steering ledgers
 
@@ -1320,10 +1417,17 @@ manifest, `install.sh`, `prepare.sh`, the shipped workflows, personas, prompts, 
 skill, the notification logo and `release-p256.pub`. `tools/build.ts` stages that list as
 one directory and passes it to Bun's compile `assets`, so a compiled runner reads it at
 `/$bunfs/root/release`. The build refuses an artifact that does not carry every staged file,
-as it refuses one without its native renderer. `placeRelease` in `src/release.ts` writes the
+as it refuses one without its native renderer. It also stages the `hc` archive that
+`hc-pin.json` names for the target, as `hc/herdr-core.tar.gz` (`bundleHc` in
+`tools/hc-release.ts`): fetched from `HERDR_RELEASES_URL` (upstream's by default), kept in
+`node_modules/.cache/collie-hc`, and refused, failing the build, where it does not hash to
+the pin or the pin names no `hc` for the target. hc's licence notices travel inside its
+binary (`hc --licenses`). `placeRelease` in `src/release.ts` writes the
 tree and the runner into `<Collie directory>/release.new` with `placed.json`, each file's
 sha256, copies every file of the current `release/` that differs from its own record into
-`kept/`, then swaps the two. In a placed release `install.sh` and `prepare.sh` leave
+`kept/`, then swaps the two. `placeHc` in `src/hc-install.ts` then installs the carried
+`hc` where upstream's installer would, or, where the archive it last placed without a
+failure (`<Collie directory>/hc-placed.sha256`) is another, runs `herdr-core update --from` it. In a placed release `install.sh` and `prepare.sh` leave
 `bin/collie` as it was placed. `tools/smoke.sh` checks the built runner places its release
 at its own version. Its forge check asks the compiled runner for a missing review target
 against a temporary checkout: the missing-input response must offer the pull request
@@ -1433,7 +1537,6 @@ prerequisite rather than a preference.
 
 ```sh
 bun install
-(cd desktop && bun install)
 bun run check          # formatting, lint, types, then the full test suite
 bun run build          # bin/collie for this platform
 bun run smoke          # bin/collie answers --help and returns typed envelopes
@@ -1479,8 +1582,10 @@ The suite builds its SSH and Codex protocol fixtures with the runner and forward
 fixture. A focused source test builds each needed protocol fixture once under its
 isolated home. This keeps repeated process starts within their existing test budgets.
 
-Root tests import Desktop modules and libraries, so install both sets of dependencies
-before running root checks. CI installs both with `--frozen-lockfile` before its root gate.
+Root tests import Desktop modules and libraries, so the root `bun install` installs
+Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
+dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
+Desktop lockfile. CI relies on that one install before its root gate.
 Desktop's full typecheck, including its Vue views, runs separately with
 `cd desktop && bun run typecheck`; CI runs that as a job of its own.
 Desktop installs TypeScript twice. `@typescript/native` is TypeScript 7, the `tsc` that
@@ -1769,8 +1874,8 @@ its time.
   waits out its own timers runs under `fastForward`, test by test: a file whose time goes
   to real IO runs slower under a fast clock, because its polling keeps firing.
   Before adjusting `TestClock`, wait for the actual sleep to be registered. A lock
-  release can precede that registration; the Home proof observes the Clock service's
-  sleep rather than assuming a filesystem event means the timer is ready.
+  release can precede that registration, so observe the Clock service's sleep rather than
+  assuming a filesystem event means the timer is ready.
 - **A test starts the build.** A helper that starts `collie` or its host runs
   `COLLIE_TEST_BINARY` when it is set, as `test/support/host.ts` does, and the sources only
   without it. A start from source is most of a second of CPU, and the suite makes over a
@@ -1779,7 +1884,7 @@ its time.
   fixture hosts use 500 ms. Cleanup waits for process exit as well as lock release: a
   host can give back its lock before its final write finishes.
   On Linux, a world's cleanup also waits for processes carrying its exact fake-herdr log
-  binding: a notification can outlive its host and recreate a removed log directory. This
+  binding: a herdr call can outlive its host and recreate a removed log directory. This
   uses the preload's existing `/proc` process markers; its marker-specific regression runs
   on Linux.
 - **A fixture runs a command.** `test/support/command.ts` uses asynchronous `Bun.spawn`,

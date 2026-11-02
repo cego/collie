@@ -220,7 +220,9 @@ test(
             ).toEqual([]);
             const locally = yield* local.asked;
             expect(
-              Arr.filter(locally, (line) => pipe_(line, Str.endsWith("machine connect second"))),
+              Arr.filter(locally, (line) =>
+                pipe_(line, Str.endsWith("machine connect second --target mk@second")),
+              ),
             ).toHaveLength(1);
             expect(
               Arr.filter(locally, (line) => pipe_(line, Str.endsWith("--machine second board"))),
@@ -341,7 +343,9 @@ test(
               from: { machine: { installation: incoming!.installation }, client: "desktop-test" },
             });
             yield* Effect.scoped(route.forward(yield* freePort));
-            expect(yield* local.asked).toEqual(["control= --json machine connect second"]);
+            expect(yield* local.asked).toEqual([
+              "control= --json machine connect second --target mk@second",
+            ]);
           }),
         ["attended.workflow.ts"],
       ),

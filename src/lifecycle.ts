@@ -46,7 +46,9 @@ import {
   type HostUnavailable,
   type HostVersionMismatch,
 } from "./host";
-import { Herdr } from "./herdr";
+import { Herdr, type HerdrError } from "./herdr";
+import { viaCommand } from "./ssh-argv";
+import { terminalBackend } from "./config";
 import { machineName, pairWith, peersOf } from "./peers";
 import { openConnection } from "./ssh-connection";
 import { type HerdrMachine, MachineUnreachable, type RelayHeader } from "./peers-model";
@@ -230,8 +232,9 @@ const declaring = (door: Door, session: string | null, stamp?: string): Declarat
 const toStderr = (text: string) => Effect.sync(() => void process.stderr.write(text));
 
 /**
- * A paired Machine by herdr's name for it: kept as it is, or paired now through its SSH
- * connection, opened by a front door that can show its login. A host's own jobs never pair.
+ * A paired Machine by its name in this Machine's list: kept as it is, or paired now through
+ * its SSH connection, opened by a front door that can show its login. A host's own jobs never
+ * pair.
  */
 export const ensurePaired = Effect.fn("Lifecycle.ensurePaired")(function* (
   env: PluginEnv,
@@ -263,30 +266,67 @@ export const ensurePaired = Effect.fn("Lifecycle.ensurePaired")(function* (
 
 const notListed = (name: string) =>
   new HostRefused({
-    reason: `${REFUSED_INPUT}: no Machine "${name}": herdr lists no machine by that name`,
+    reason: `${REFUSED_INPUT}: no Machine "${name}": this Machine's list names none by that name`,
   });
 
-/** herdr's saved machines, or none where herdr could not say. */
+/** This Machine's Machines, core's or herdr's as its backend says, or none where it could not say. */
 const herdrMachines = (env: PluginEnv) =>
   new Herdr(env).machineList().pipe(
     Effect.orElseSucceed((): ReadonlyArray<HerdrMachine> => []),
     Effect.provide(Path.layer),
   );
 
+const named = (machines: ReadonlyArray<HerdrMachine>, name: string) =>
+  Option.getOrUndefined(Arr.findFirst(machines, (one) => one.label === name));
+
+const coreRefused = (name: string) => (cause: HerdrError) =>
+  new HostRefused({ reason: `core did not take ${name}: ${cause.detail || cause.message}` });
+
+/** Has core keep `name`, reached through the SSH connection at `path`. */
+const addToCore = (env: PluginEnv, name: string, target: string, path: string) =>
+  new Herdr(env)
+    .machineAdd(name, viaCommand(path, target))
+    .pipe(Effect.mapError(coreRefused(name)), Effect.provide(Path.layer));
+
 /**
- * Opens this computer's SSH connection to herdr's machine `name`, where none is open, and
- * wakes this host's link to it.
+ * Opens this computer's SSH connection to the Machine `name`, where none is open, and wakes
+ * this host's link to it. On a Machine set to core, core is told to dial it now, or, for a
+ * paired Machine core does not keep yet, to add it. `target` reaches a Machine no list names.
  */
-const openAndWake = (env: PluginEnv, name: string, said: (text: string) => Effect.Effect<void>) =>
+const openAndWake = (
+  env: PluginEnv,
+  name: string,
+  said: (text: string) => Effect.Effect<void>,
+  target?: string,
+) =>
   Effect.gen(function* () {
-    const machine = Option.getOrUndefined(
-      Arr.findFirst(yield* herdrMachines(env), (one) => one.label === name),
-    );
+    const onCore = (yield* terminalBackend(env.userDir)) === "core";
+    const listed = named(yield* herdrMachines(env), name);
+    // A pairing made on herdr, before this Machine was set to core.
+    const saved = onCore
+      ? named(
+          yield* new Herdr(env).herdrMachineList().pipe(
+            Effect.orElseSucceed((): ReadonlyArray<HerdrMachine> => []),
+            Effect.provide(Path.layer),
+          ),
+          name,
+        )
+      : undefined;
+    const machine = listed ?? (target === undefined ? saved : { label: name, target });
     if (machine === undefined) return yield* notListed(name);
     const opened = yield* openConnection(env.stateDir, machine, { said });
+    let added = false;
+    if (onCore && listed !== undefined)
+      yield* new Herdr(env)
+        .machineDial(name)
+        .pipe(Effect.mapError(coreRefused(name)), Effect.provide(Path.layer));
+    else if (onCore && Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name)) {
+      yield* addToCore(env, name, machine.target, opened.path);
+      added = true;
+    }
     yield* asks({ ...env, machine: undefined }, (client) => client.wake({ machine: name }));
-    return opened;
-  });
+    return { ...opened, added };
+  }).pipe(Effect.provide(Path.layer));
 
 /**
  * `reaching` the Machine `name`, and where its link waits on an SSH connection, the same
@@ -1502,6 +1542,10 @@ export const catalogueReadings = (env: PluginEnv, door: Door) =>
 export const connectionReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.connections(), door);
 
+/** `script`, run by the host of the Machine `--machine` names. */
+export const machineShell = (env: PluginEnv, script: string, request: string, door: Door) =>
+  asks(env, (client) => client.shell({ script, request }), door);
+
 /** This Machine's Usage readings, as its host last read them. */
 export const usageReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.usage(), door);
@@ -1847,24 +1891,95 @@ export const restartHostAt = (dir: string): Effect.Effect<OpResult, never, Clien
 export const machineList = (env: PluginEnv) => asks(env, (client) => client.peers());
 
 /**
- * Opens this computer's SSH connection to herdr's machine `name`, where none is open, and
- * wakes this host's link to it. What ssh says goes to `said`, where the person who has to
- * answer a login is.
+ * The Machines paired with this one, each saying whether core keeps it where this Machine is
+ * set to core, with this Machine's backend and the Machines its backend lists.
+ */
+export const machinesListed = (env: PluginEnv) =>
+  Effect.gen(function* () {
+    const read = yield* asks(env, (client) => client.peers());
+    if (!read.ok) return read;
+    const backend = yield* terminalBackend(env.userDir);
+    const roster = yield* herdrMachines(env);
+    const listed = new Set(Arr.map(roster, (machine) => machine.label));
+    return {
+      ...read,
+      value: {
+        backend,
+        roster,
+        peers: Arr.map(read.value, (peer) => ({
+          ...peer,
+          added: backend === "core" && peer.dials === "out" ? listed.has(peer.name) : null,
+        })),
+      },
+    };
+  }).pipe(Effect.provide(Path.layer));
+
+const answered = <A>(effect: Effect.Effect<A, HostFailure, Client | FileSystem.FileSystem>) =>
+  effect.pipe(
+    Effect.map((value) => ({ ok: true as const, value, machine: null }) satisfies Answered<A>),
+    Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause))),
+  );
+
+/**
+ * Opens this computer's SSH connection to the Machine `name`, where none is open, and wakes
+ * this host's link to it. What ssh says goes to `said`, where the person who has to answer a
+ * login is.
  */
 export const machineConnect = (
   env: PluginEnv,
   name: string,
   said: (text: string) => Effect.Effect<void>,
+  target?: string,
 ) =>
-  Effect.gen(function* () {
-    const opened = yield* openAndWake(env, name, said).pipe(Effect.result);
-    if (opened._tag === "Failure") return refusal(opened.failure);
-    return {
-      ok: true as const,
-      value: { machine: name, ...opened.success },
-      machine: null,
-    } satisfies Answered<unknown>;
-  });
+  answered(
+    Effect.map(openAndWake(env, name, said, target), (opened) => ({ machine: name, ...opened })),
+  );
+
+/**
+ * Adds the Machine `name` to core, on a Machine set to core: its `via` rides this computer's
+ * SSH connection to `target`, opened here where none is, so core never logs in by itself.
+ */
+export const machineAdd = (
+  env: PluginEnv,
+  name: string,
+  target: string,
+  said: (text: string) => Effect.Effect<void>,
+) =>
+  answered(
+    Effect.gen(function* () {
+      if ((yield* terminalBackend(env.userDir)) !== "core")
+        return yield* new HostRefused({
+          reason: `invalid_state: this Machine's terminal backend is herdr, which keeps its own machines: herdr machine add saves one`,
+        });
+      const opened = yield* openConnection(env.stateDir, { label: name, target }, { said });
+      yield* addToCore(env, name, target, opened.path);
+      return { machine: name, ...opened };
+    }).pipe(Effect.provide(Path.layer)),
+  );
+
+/**
+ * Forgets the Machine `name`: this host and the Machine unpair, the SSH connection to it ends,
+ * and on a Machine set to core, core forgets it too. Nothing on it is stopped.
+ */
+export const machineForget = (env: PluginEnv, name: string) =>
+  answered(
+    Effect.gen(function* () {
+      const unpaired = yield* asks({ ...env, machine: undefined }, (client) =>
+        client.unpair({ machine: name }),
+      );
+      if (!unpaired.ok) return yield* new HostRefused({ reason: unpaired.error.message });
+      if ((yield* terminalBackend(env.userDir)) === "core")
+        yield* new Herdr(env).machineRemove(name).pipe(
+          Effect.catchIf(
+            (cause) => cause.code === "machine_unknown",
+            () => Effect.void,
+          ),
+          Effect.mapError(coreRefused(name)),
+          Effect.provide(Path.layer),
+        );
+      return { machine: name };
+    }).pipe(Effect.provide(Path.layer)),
+  );
 
 /** Pairs this Machine with the installation asking, which `pairWith` runs over SSH. */
 export const inviteFrom = (
@@ -1893,6 +2008,7 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
     argv: ReadonlyArray<string>;
     cwd?: string;
     expect: "pass" | "fail";
+    again?: boolean;
   },
   door: Door,
 ) {

@@ -22,6 +22,16 @@ here are in [`src/README.md`](src/README.md).
 - **CLI surface, error codes, `--json`** → [`docs/cli.md`](docs/cli.md), `src/envelope.ts`, `src/operations.ts`.
 - **herdr calls, red `contract`** → [`docs/internals.md`](docs/internals.md#checking-the-boundary-against-herdr),
   `herdr-pin.json`, `test/herdr-contract.test.ts`.
+- **herdr-core (`hc`) client, red `probe:hc`** → [`docs/internals.md`](docs/internals.md#checking-core-against-its-schema-and-live),
+  [ADR-draft-collie-runs-its-agents-in-herdr-core](docs/adr/draft-collie-runs-its-agents-in-herdr-core.md),
+  `src/hc.ts`, `hc-pin.json`, `test/hc-contract.test.ts`, `tools/hc-probe.ts`, `test/support/fake-hc.ts`;
+  a Run's agents on core ([`docs/internals.md`](docs/internals.md#agents-on-core)): `terminal_backend`,
+  `src/herdr.ts`, `machineHerd` in `src/steering.ts`, `test/core-agents.test.ts`, `test/core-cli.test.ts`;
+  OpenCode's reporter: `opencodeReporter` in `src/harness.ts`, `test/opencode-reporter.test.ts`;
+  pi's question tool: `piQuestionTool` in `src/compactors.ts`, `piExtension` in `src/chat.ts`,
+  `test/pi-question.test.ts`; the `hc` a release carries: `tools/hc-release.ts`,
+  `src/hc-install.ts`, the `hc`, `core` and `herdr 1` checks in `src/doctor.ts`,
+  `test/hc-release.test.ts`, `test/upgrade-release.test.ts`, `test/doctor.test.ts`.
 - **Compaction** → [`docs/using.md`](docs/using.md#compaction-between-pieces-of-work),
   [`docs/internals.md`](docs/internals.md#compaction-at-a-work-boundary),
   [ADR-0007](docs/adr/0007-compact-a-reused-agent-at-a-work-boundary.md), `src/compaction.ts`, `src/compactors.ts`.
@@ -35,14 +45,18 @@ here are in [`src/README.md`](src/README.md).
 - **Board** → [`docs/using.md`](docs/using.md#the-control-plane),
   [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md), [ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md)
   (supersedes [ADR-0005](docs/adr/0005-collie-tab-is-an-application.md) on what it draws),
-  `src/board-model.ts`, `src/board.ts`, `src/ui/Board.tsx`, `src/ui/Drawer.tsx`, `src/home.ts`.
+  `src/board-model.ts`, `src/board.ts`, `src/ui/Board.tsx`, `src/ui/Drawer.tsx`; the Home's board and chat
+  terminals: `keepTerminals` in `src/side-jobs.ts`, `test/board-chat-terminals.test.ts`.
 - **Agent to agent, agent reports** → [ADR-0058](docs/adr/0058-an-agent-speaks-to-another-as-itself.md),
   `src/harness.ts`, `src/tools.ts`, `asksRun` in `src/lifecycle.ts`, `src/dispatcher.ts`, `src/handoff.ts`,
   `src/reports.ts`, `requestedBy` in `src/engine.ts`, `src/agent-start.ts`, `workflows/investigate.workflow.ts`,
   `test/agent-origin.test.ts`, `test/mcp.test.ts`, `test/reports.test.ts`.
 - **Machine to Machine** → [ADR-0057](docs/adr/0057-a-machine-reaches-another-over-a-paired-link.md),
   [`docs/internals.md`](docs/internals.md#reaching-another-machine), `src/peers.ts`, `src/peers-model.ts`,
-  `src/channel.ts`, `connectPeer` in `src/host.ts`, `test/peers.test.ts`, `test/support/peers.ts`.
+  `src/channel.ts`, `connectPeer` in `src/host.ts`, `test/peers.test.ts`, `test/support/peers.ts`;
+  core's machines as the Machines, added with a `via` riding the SSH master: `machineList` in
+  `src/herdr.ts`, `viaCommand` in `src/ssh-argv.ts`, `machineAdd` and `machineForget` in
+  `src/lifecycle.ts`, `test/machines-core.test.ts`.
 - **Desktop**, its Flock chat, record and Diff tab → [`desktop/README.md`](desktop/README.md),
   [`docs/using.md`](docs/using.md#collie-desktop), `test/desktop-*.test.ts`, `test/flock-*.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),
@@ -158,7 +172,7 @@ here are in [`src/README.md`](src/README.md).
   [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md),
   `test/workflow-names.test.ts`, `test/baseline-unrelated-*.test.ts`.
 - **Execution, coordination, records** → [`docs/internals.md`](docs/internals.md), [`docs/adr/`](docs/adr).
-- **Install, keybindings, Control Plane** → [`docs/using.md`](docs/using.md).
+- **Install, Control Plane** → [`docs/using.md`](docs/using.md).
 - **Release signing, installers, macOS** → [ADR-0048](docs/adr/0048-collie-is-released-for-macos-on-apple-silicon.md),
   `tools/sign.ts`, `src/signing.ts`, `install.sh`, `install-desktop.sh`, `src/script.ts`,
   `test/signing.test.ts`, `test/prepare.test.ts`.
