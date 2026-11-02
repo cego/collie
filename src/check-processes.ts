@@ -27,12 +27,16 @@ import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { Scope } from "effect";
 import { boundProcesses, groupOf, startedOf, stillRunning } from "./processes";
+import { StepPlace } from "./steps";
 import { epochMs, nowIso } from "./time";
+import { FailedTestSchema, VerificationSchema } from "./verify-model";
 
 export const CHECK_INSTALLATION = "COLLIE_CHECK_INSTALLATION";
 export const CHECK_ID = "COLLIE_CHECK_ID";
 const KILL_AFTER = "2 seconds";
 const KILL_WAIT = 1_000;
+/** Enough of a stream's end for its last 4 KiB of characters. */
+const KEPT_BYTES = 16 * 1024;
 
 /** Which check of which Run, as its record and the host's log name it. */
 export interface CheckOf {
@@ -42,13 +46,61 @@ export interface CheckOf {
   readonly by: "agent" | "collie";
 }
 
+/** What finishing a check's Verification takes beside its command, record and output, known before it is spawned. */
+const SpecSchema = Schema.Struct({
+  /** The run directory its Verification is appended to. */
+  evidence: Schema.String,
+  asked: Schema.String,
+  start: VerificationSchema.fields.start,
+  began: Schema.String,
+  expect: Schema.Literals(["pass", "fail"]),
+  step: Schema.NullOr(Schema.Struct({ step: Schema.String, place: Schema.NullOr(StepPlace) })),
+  log: Schema.optionalKey(Schema.String),
+  test: Schema.optionalKey(FailedTestSchema),
+  environment: Schema.optionalKey(Schema.String),
+});
+type CheckSpec = typeof SpecSchema.Type;
+
+/** A check's facts and command, written before it is spawned. */
+const FinishingSchema = Schema.Struct({
+  check: Schema.Struct({
+    run: Schema.String,
+    name: Schema.String,
+    pass: Schema.optionalKey(
+      Schema.Struct({ pass: Schema.String, round: Schema.optionalKey(Schema.Finite) }),
+    ),
+    by: Schema.Literals(["agent", "collie"]),
+  }),
+  command: Schema.Struct({
+    executable: Schema.String,
+    argv: Schema.Array(Schema.String),
+    cwd: Schema.String,
+    spec: SpecSchema,
+  }),
+});
+const encodeFinishing = flow(
+  Schema.encodeResult(Schema.fromJsonString(FinishingSchema)),
+  Result.getOrThrow,
+);
+const decodeFinishing = Schema.decodeUnknownOption(Schema.fromJsonString(FinishingSchema));
+
 export interface CheckCommand {
   readonly executable: string;
   readonly argv: ReadonlyArray<string>;
   readonly cwd: string;
+  readonly spec?: CheckSpec;
+}
+
+type Finishing = Schema.Schema.Type<typeof FinishingSchema>;
+
+/** What a check that exited is finished from: its facts, and the end of each of its streams. */
+export interface FinishedCheck extends Finishing {
+  readonly output: { readonly stdout: string; readonly stderr: string };
 }
 
 export interface RunningCheck {
+  /** Null where this host would not start it. */
+  readonly id: string | null;
   /** Its leader's, where it was spawned. */
   readonly pid: number | null;
   readonly stdout: Stream.Stream<Uint8Array, PlatformError>;
@@ -96,8 +148,10 @@ export interface CheckProcessesApi {
   ) => Effect.Effect<
     RunningCheck,
     PlatformError | CheckRefused,
-    Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
+    Scope.Scope | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
   >;
+  /** A check still recorded with what its Verification needs; null where it is not. */
+  readonly finished: (id: string) => Effect.Effect<FinishedCheck | null>;
   /**
    * As `run`, for a process the caller spawns itself, with `markers` in its environment, and
    * ends in the caller's Scope. Null where this host has begun to end, and nothing spawned.
@@ -139,6 +193,39 @@ const decodeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(RecordSche
 
 export const runningChecksDir = (stateDir: string) => `${stateDir}/running-checks`;
 const recordPath = (stateDir: string, id: string) => `${runningChecksDir(stateDir)}/${id}.json`;
+const checkOutputDir = (stateDir: string) => `${stateDir}/check-output`;
+const outputsOf = (stateDir: string, id: string) => ({
+  stdout: `${checkOutputDir(stateDir)}/${id}.stdout`,
+  stderr: `${checkOutputDir(stateDir)}/${id}.stderr`,
+});
+
+const finishingPath = (stateDir: string, id: string) => `${checkOutputDir(stateDir)}/${id}.json`;
+
+const removeRecord = (fs: FileSystem.FileSystem, stateDir: string, id: string) => {
+  const outputs = outputsOf(stateDir, id);
+  return Effect.forEach(
+    [recordPath(stateDir, id), finishingPath(stateDir, id), outputs.stdout, outputs.stderr],
+    (path) => fs.remove(path, { force: true }).pipe(Effect.ignore),
+    { discard: true },
+  );
+};
+
+const writeFinishing = (
+  fs: FileSystem.FileSystem,
+  stateDir: string,
+  id: string,
+  finishing: Finishing,
+) =>
+  fs
+    .writeFileString(`${finishingPath(stateDir, id)}.new`, encodeFinishing(finishing))
+    .pipe(
+      Effect.andThen(fs.rename(`${finishingPath(stateDir, id)}.new`, finishingPath(stateDir, id))),
+    );
+
+const readFinishing = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
+  fs
+    .readFileString(finishingPath(stateDir, id))
+    .pipe(Effect.map((text) => Option.getOrNull(decodeFinishing(text))));
 
 /** The records of the checks running in this state directory, as their hosts wrote them. */
 export const recordsIn = Effect.fn("CheckProcesses.recordsIn")(function* (stateDir: string) {
@@ -168,16 +255,84 @@ const spawnCheck = (command: CheckCommand, env?: Readonly<Record<string, string>
     ),
   );
 
-/** Outside a host: its own group, ended with its Scope, and nothing recorded. */
+/** The last `KEPT_BYTES` of each of a check's streams, as read so far. */
+interface Kept {
+  stdout: Uint8Array;
+  stderr: Uint8Array;
+}
+const nothingKept = (): Kept => ({ stdout: new Uint8Array(), stderr: new Uint8Array() });
+const textOf = (kept: Kept) => ({
+  stdout: new TextDecoder().decode(kept.stdout),
+  stderr: new TextDecoder().decode(kept.stderr),
+});
+
+/** Kept in memory as it is read, so neither the log nor the tail waits on `store`, which gets it once it ends. */
+const keptOf = (
+  stream: Stream.Stream<Uint8Array, PlatformError>,
+  kept: Kept,
+  name: keyof Kept,
+  store: (name: keyof Kept, bytes: Uint8Array) => Effect.Effect<void>,
+) =>
+  stream.pipe(
+    Stream.tap((chunk) =>
+      Effect.sync(() => {
+        kept[name] = Buffer.concat([kept[name], chunk]).subarray(-KEPT_BYTES);
+      }),
+    ),
+    Stream.onEnd(Effect.suspend(() => store(name, kept[name]))),
+  );
+
+const runningOf = (
+  id: string,
+  handle: ChildProcessSpawner.ChildProcessHandle,
+  kept: Kept,
+  store: (name: keyof Kept, bytes: Uint8Array) => Effect.Effect<void>,
+  collected: RunningCheck["collected"],
+): RunningCheck => ({
+  id,
+  pid: handle.pid,
+  stdout: keptOf(handle.stdout, kept, "stdout", store),
+  stderr: keptOf(handle.stderr, kept, "stderr", store),
+  exit: Effect.map(handle.exitCode, Number),
+  collected,
+});
+
+const newId = (run: string, began: string) =>
+  Effect.map(
+    Random.next,
+    (salt) => `${run}@${epochMs(began)}-${pipe_(salt.toString(16), Str.slice(2))}`,
+  );
+
+// ponytail: in memory, as nothing outside this process could finish one.
+const unrecordedChecks = new Map<string, { readonly finishing: Finishing; readonly kept: Kept }>();
+
+/** Outside a host: its own group, and nothing of it kept past its Scope. */
 const unrecorded: CheckProcessesApi = {
-  run: (_check, command) =>
-    Effect.map(spawnCheck(command), (handle) => ({
-      pid: handle.pid,
-      stdout: handle.stdout,
-      stderr: handle.stderr,
-      exit: Effect.map(handle.exitCode, Number),
-      collected: (collecting) => collecting,
-    })),
+  run: (check, command) =>
+    Effect.gen(function* () {
+      const id = yield* newId(check.run, yield* nowIso);
+      const kept = nothingKept();
+      const handle = yield* spawnCheck(command);
+      if (command.spec !== undefined) {
+        const finishing = { check, command: { ...command, spec: command.spec } };
+        yield* Effect.acquireRelease(
+          Effect.sync(() => unrecordedChecks.set(id, { finishing, kept })),
+          () => Effect.sync(() => unrecordedChecks.delete(id)),
+        );
+      }
+      return runningOf(
+        id,
+        handle,
+        kept,
+        () => Effect.void,
+        (collecting) => collecting,
+      );
+    }),
+  finished: (id) =>
+    Effect.sync(() => {
+      const found = unrecordedChecks.get(id);
+      return found === undefined ? null : { ...found.finishing, output: textOf(found.kept) };
+    }),
   adopt: (_check, spawn) =>
     Effect.map(spawn({}), (handle) => ({ handle, collected: (collecting) => collecting })),
   endAll: Effect.succeed([]),
@@ -190,6 +345,7 @@ const unrecorded: CheckProcessesApi = {
 
 /** A check this host ended, or would not start once it began to end. */
 const endedCheck: RunningCheck = {
+  id: null,
   pid: null,
   stdout: Stream.empty,
   stderr: Stream.empty,
@@ -342,8 +498,8 @@ interface Collecting extends Ending {
 
 /**
  * The host's adapter for the state directory `dir`, whose installation id is `installation`.
- * Building it ends every check a previous host left, unless `sweep` is false and the caller
- * does. `onRun` is what ending one does on its Run, given the line `host.log` gets.
+ * Building it ends every check a previous host left where `sweep` is true; where false, the
+ * caller does. `onRun` is what ending one does on its Run, given the line `host.log` gets.
  */
 export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (options: {
   readonly dir: string;
@@ -354,7 +510,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     line: string,
   ) => Effect.Effect<void, never, FileSystem.FileSystem>;
   readonly kill?: Kill;
-  readonly sweep?: boolean;
+  readonly sweep: boolean;
 }) {
   const { dir, installation, kill = processKill } = options;
   const fs = yield* FileSystem.FileSystem;
@@ -366,6 +522,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     ),
   );
   const collecting = new Map<string, Collecting>();
+  const kept = new Map<string, Kept>();
   let stopping = false;
   let killing = false;
   // Their processes carry their markers before their record is read.
@@ -375,10 +532,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const host = { pid: process.pid, started: (yield* startedOf(process.pid)) ?? "" };
 
   const untrack = (id: string) => Effect.sync(() => collecting.delete(id));
-  const forget = (id: string) =>
-    fs
-      .remove(recordPath(dir, id), { force: true })
-      .pipe(Effect.ignore, Effect.andThen(untrack(id)));
+  const forget = (id: string) => removeRecord(fs, dir, id).pipe(Effect.andThen(untrack(id)));
 
   const left = Effect.gen(function* () {
     const found = new Map<string, Leftover>();
@@ -441,8 +595,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         : (yield* endCheck(proof, installation, kill))
           ? "ended"
           : "still running";
-      if (outcome !== "still running")
-        yield* fs.remove(recordPath(dir, leftover.id), { force: true }).pipe(Effect.ignore);
+      if (outcome !== "still running") yield* removeRecord(fs, dir, leftover.id);
       const line = saidOf(leftover, outcome);
       yield* Effect.logInfo(line);
       if (options.onRun !== undefined) yield* options.onRun(leftover, outcome, line);
@@ -527,14 +680,16 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   /** Spawns it marked, records its leader, and ends it with the caller's Scope; null where this host is ending. */
   const begin = <H extends { readonly pid: number }, E>(
     check: CheckOf,
-    spawn: (markers: Readonly<Record<string, string>>) => Effect.Effect<H, E, Scope.Scope>,
+    spawn: (
+      markers: Readonly<Record<string, string>>,
+      id: string,
+    ) => Effect.Effect<H, E, Scope.Scope>,
     say: (line: string) => Effect.Effect<void>,
   ) =>
     Effect.gen(function* () {
       if (stopping) return null;
       const began = yield* nowIso;
-      const salt = pipe_((yield* Random.next).toString(16), Str.slice(2));
-      const id = `${check.run}@${epochMs(began)}-${salt}`;
+      const id = yield* newId(check.run, began);
       ours.add(id);
       yield* Effect.addFinalizer(() => Effect.sync(() => ours.delete(id)));
       yield* clearOf(check.run, say);
@@ -544,10 +699,13 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           if (stopping) return null;
           spawning.set(id, { check, ended: false, settled: false });
           const { handle, record, entry } = yield* Effect.gen(function* () {
-            const handle = yield* spawn({
-              [CHECK_INSTALLATION]: installation,
-              [CHECK_ID]: id,
-            });
+            const handle = yield* spawn(
+              {
+                [CHECK_INSTALLATION]: installation,
+                [CHECK_ID]: id,
+              },
+              id,
+            );
             const record: CheckRecord = {
               id,
               run: check.run,
@@ -566,7 +724,10 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
             const entry: Collecting = { check, record, ended: stopping, settled: false };
             collecting.set(id, entry);
             return { handle, record, entry };
-          }).pipe(Effect.ensuring(Effect.sync(() => spawning.delete(id))));
+          }).pipe(
+            Effect.onError(() => removeRecord(fs, dir, id)),
+            Effect.ensuring(Effect.sync(() => spawning.delete(id))),
+          );
           yield* Effect.addFinalizer(() =>
             endCheck(record, installation, kill).pipe(
               // Its record is its only proof where /proc cannot be read, so it stays until it is gone.
@@ -602,21 +763,56 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const run: CheckProcessesApi["run"] = (check, command, say = () => Effect.void) =>
     begin(
       check,
-      (markers) => spawnCheck(command, markers).pipe(Effect.provideContext(services)),
+      (markers, id) =>
+        fs.makeDirectory(checkOutputDir(dir), { recursive: true }).pipe(
+          Effect.ignore,
+          Effect.andThen(
+            command.spec === undefined
+              ? Effect.void
+              : writeFinishing(fs, dir, id, {
+                  check,
+                  command: { ...command, argv: [...command.argv], spec: command.spec },
+                }),
+          ),
+          Effect.andThen(spawnCheck(command, markers)),
+          Effect.provideContext(services),
+        ),
       say,
     ).pipe(
-      Effect.map((begun): RunningCheck => {
-        if (begun === null) return endedCheck;
+      Effect.flatMap((begun) => {
+        if (begun === null) return Effect.succeed(endedCheck);
         const { handle, entry } = begun;
-        return {
-          pid: handle.pid,
-          stdout: handle.stdout,
-          stderr: handle.stderr,
-          exit: Effect.map(handle.exitCode, Number),
-          collected: collectedOf(entry),
+        const { id } = entry.record;
+        const ends = nothingKept();
+        const store = (name: keyof Kept, bytes: Uint8Array) => {
+          const path = outputsOf(dir, id)[name];
+          // A file that may be cut short is worse than none: without it, only this host finishes it.
+          return fs.writeFile(path, bytes).pipe(
+            Effect.catch(() => fs.remove(path, { force: true })),
+            Effect.ignore,
+          );
         };
+        return Effect.acquireRelease(
+          Effect.sync(() => kept.set(id, ends)),
+          () => Effect.sync(() => kept.delete(id)),
+        ).pipe(Effect.as(runningOf(id, handle, ends, store, collectedOf(entry))));
       }),
     );
+
+  /** From what this host kept of a check it runs, or else from the files its host stored. */
+  const finished: CheckProcessesApi["finished"] = (id) =>
+    Effect.gen(function* () {
+      const finishing = yield* readFinishing(fs, dir, id);
+      if (finishing === null) return null;
+      const own = kept.get(id);
+      if (own !== undefined) return { ...finishing, output: textOf(own) };
+      const outputs = outputsOf(dir, id);
+      const [stdout, stderr] = yield* Effect.all([
+        fs.readFile(outputs.stdout),
+        fs.readFile(outputs.stderr),
+      ]);
+      return { ...finishing, output: textOf({ stdout, stderr }) };
+    }).pipe(Effect.orElseSucceed(() => null));
 
   const adopt: CheckProcessesApi["adopt"] = (check, spawn, say = () => Effect.void) =>
     begin(check, spawn, say).pipe(
@@ -658,10 +854,11 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     }
   }).pipe(Effect.provideContext(services));
 
-  if (options.sweep !== false)
+  if (options.sweep)
     yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
   return {
     run,
+    finished,
     adopt,
     endAll,
     killEnded,
