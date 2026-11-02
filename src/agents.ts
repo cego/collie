@@ -2148,6 +2148,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             harness: adapter.id,
             cwd: ask.cwd,
             runLog: `${dirFor(ask.runId)}/agents.log`,
+            resumesThrough: backend === "core" && adapter.id === "opencode",
           },
           env,
           mcp.args,
