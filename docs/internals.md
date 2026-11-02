@@ -130,7 +130,8 @@ started on, when, what it expects and where its evidence goes. A host runs the c
 a supervisor, `collie supervise-check` (`src/check-supervisor.ts`), which is the host's
 child, leads the check's process group outside the host's, and carries the check's markers,
 as the command does. Its record names the supervisor as the leader, so a stop, `stillRuns`
-and the sweep end both. The supervisor holds the command's pipes and reads both to their end,
+and the sweep end both. Once it has spawned the command, the supervisor writes the
+command's own pid to `check-output/<id>.pid`, the one `collie verify` says it started as. The supervisor holds the command's pipes and reads both to their end,
 including a child that left the group and still holds one; it writes the check's log in the
 order the two streams arrived, relays both to the host for a watching client, and keeps the
 last 16 KiB of each. Once both close and the command has exited, it writes them to

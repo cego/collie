@@ -31,6 +31,7 @@ export const logged = (chunk: string, already: number) => {
 export const checkFiles = (outputs: string, id: string) => ({
   stdout: `${outputs}/${id}.stdout`,
   stderr: `${outputs}/${id}.stderr`,
+  pid: `${outputs}/${id}.pid`,
   exit: `${outputs}/${id}.exit`,
 });
 
@@ -51,6 +52,9 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
   const kept = { stdout: new Uint8Array(), stderr: new Uint8Array() };
   const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
   let already = 0;
+  const files = checkFiles(outputs, id);
+  const whole = (path: string, data: Uint8Array) =>
+    fs.writeFile(`${path}.new`, data).pipe(Effect.andThen(fs.rename(`${path}.new`, path)));
   const take = (name: Name, chunk: Uint8Array) =>
     Effect.gen(function* () {
       kept[name] = Buffer.concat([kept[name], chunk]).subarray(-KEPT_BYTES);
@@ -73,6 +77,7 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
           detached: false,
         }),
       );
+      yield* whole(files.pid, Buffer.from(String(handle.pid))).pipe(Effect.ignore);
       const tagged = (name: Name) => Stream.map(handle[name], (chunk) => ({ name, chunk }));
       // One stream, so the log takes the two in the order they arrived.
       yield* Stream.merge(tagged("stdout"), tagged("stderr")).pipe(
@@ -89,9 +94,6 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
       }),
     ),
   );
-  const files = checkFiles(outputs, id);
-  const whole = (path: string, data: Uint8Array) =>
-    fs.writeFile(`${path}.new`, data).pipe(Effect.andThen(fs.rename(`${path}.new`, path)));
   yield* whole(files.stdout, kept.stdout);
   yield* whole(files.stderr, kept.stderr);
   yield* whole(files.exit, Buffer.from(String(exit)));

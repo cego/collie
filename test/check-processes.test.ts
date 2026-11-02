@@ -1408,7 +1408,7 @@ test("a check claimed from the host it was handed over by keeps what its log alr
         run: () =>
           Effect.succeed({
             id: "handed",
-            pid: null,
+            pid: Effect.succeed(null),
             stdout: Stream.empty,
             stderr: Stream.empty,
             exit: Effect.succeed(0),

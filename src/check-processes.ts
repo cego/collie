@@ -100,8 +100,8 @@ export interface FinishedCheck extends Finishing {
 export interface RunningCheck {
   /** Null where this host would not start it. */
   readonly id: string | null;
-  /** Its leader's, where it was spawned. */
-  readonly pid: number | null;
+  /** Its command's, where it was spawned. */
+  readonly pid: Effect.Effect<number | null>;
   readonly stdout: Stream.Stream<Uint8Array, PlatformError>;
   readonly stderr: Stream.Stream<Uint8Array, PlatformError>;
   readonly exit: Effect.Effect<number, PlatformError>;
@@ -216,6 +216,7 @@ const removeRecord = (fs: FileSystem.FileSystem, stateDir: string, id: string) =
       finishingPath(stateDir, id),
       outputs.stdout,
       outputs.stderr,
+      outputs.pid,
       outputs.exit,
     ],
     (path) => fs.remove(path, { force: true }).pipe(Effect.ignore),
@@ -304,6 +305,21 @@ const spawnSupervised = (
       .pipe(Effect.tap((handle) => handle.unref)),
   );
 
+const pidIn = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
+  fs.readFileString(outputsOf(stateDir, id).pid).pipe(Effect.map((text) => Number(Str.trim(text))));
+
+/** The pid a check's supervisor runs its command as, once it says; null where it never ran it. */
+const commandPid = (
+  fs: FileSystem.FileSystem,
+  stateDir: string,
+  id: string,
+  supervisor: ChildProcessSpawner.ChildProcessHandle,
+) =>
+  Effect.raceFirst(
+    pidIn(fs, stateDir, id).pipe(Effect.retry(Schedule.spaced("10 millis"))),
+    supervisor.exitCode.pipe(Effect.ignore, Effect.andThen(pidIn(fs, stateDir, id))),
+  ).pipe(Effect.orElseSucceed(() => null));
+
 /** The exit status a check's supervisor wrote. */
 const exitIn = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
   fs
@@ -369,7 +385,7 @@ const runningOf = (
   collected: RunningCheck["collected"],
 ): RunningCheck => ({
   id,
-  pid: handle.pid,
+  pid: Effect.succeed(handle.pid),
   stdout: keptOf(handle.stdout, kept, "stdout", store),
   stderr: keptOf(handle.stderr, kept, "stderr", store),
   exit: Effect.map(handle.exitCode, Number),
@@ -429,7 +445,7 @@ const unrecorded: CheckProcessesApi = {
 /** A check this host ended, or would not start once it began to end. */
 const endedCheck: RunningCheck = {
   id: null,
-  pid: null,
+  pid: Effect.succeed(null),
   stdout: Stream.empty,
   stderr: Stream.empty,
   exit: Effect.never,
@@ -953,6 +969,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
             entry.supervised
               ? {
                   ...running,
+                  pid: commandPid(fs, dir, id, handle),
                   exit: handle.exitCode.pipe(Effect.andThen(exitIn(fs, dir, id))),
                   logged: true,
                 }
@@ -970,7 +987,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       yield* Effect.addFinalizer(() => endOwn(entry));
       return {
         id,
-        pid: entry.record.leader.pid,
+        pid: pidIn(fs, dir, id).pipe(Effect.orElseSucceed(() => entry.record.leader.pid)),
         stdout: Stream.empty,
         stderr: Stream.empty,
         exit: exitOf(entry.record),

@@ -558,8 +558,10 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
     );
   if (handle.id === null) return yield* Effect.never;
   if (echo?.started !== undefined) yield* echo.started(handle.id);
-  if (handle.pid !== null && echo?.said !== undefined)
-    yield* echo.said(`"${what.name}" started, pid ${handle.pid}`);
+  if (echo?.said !== undefined) {
+    const pid = yield* handle.pid;
+    if (pid !== null) yield* echo.said(`"${what.name}" started, pid ${pid}`);
+  }
   // Never folded whole: only each stream's end is kept, and a verification that prints for
   // an hour must not allocate for an hour to say so.
   const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>

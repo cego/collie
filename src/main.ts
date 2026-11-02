@@ -1,6 +1,5 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import { Config, Console, Effect } from "effect";
-import { SUPERVISE } from "./check-supervisor";
 
 /**
  * The front doors share one entry point, and each imports only what it runs: a start
@@ -47,7 +46,8 @@ const cliProgram = Effect.promise(() => import("./collie")).pipe(
 
 const chosen = args[0] === "herdr" && args[1] === "compaction" ? compactionProgram : cliProgram;
 
-if (args[0] === SUPERVISE) {
+// `SUPERVISE` in ./check-supervisor, written out so this file loads none of Collie's modules.
+if (args[0] === "supervise-check") {
   // A check's supervisor outlives the host reading its output, so a closed pipe does not end it.
   const [{ supervise }, { platformLayer }] = await Promise.all([
     import("./check-supervisor"),
