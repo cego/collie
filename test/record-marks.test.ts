@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
+import { Option } from "effect";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import { relayedRecords } from "../src/record-marks";
@@ -32,7 +35,7 @@ test("the bridge names a record once, at the first answer to its runDetail reque
 
 test("the bridge names a record whose request and answer arrive in fragments", () => {
   const relay = relayedRecords();
-  const pieces = (text: string) => text.match(/[\s\S]{1,5}/g) ?? [];
+  const pieces = (text: string) => Option.getOrElse(Str.match(/[\s\S]{1,5}/g)(text), () => []);
   for (const piece of pieces(
     line({
       _tag: "Request",
@@ -43,7 +46,8 @@ test("the bridge names a record whose request and answer arrive in fragments", (
     }),
   ))
     relay.asked(piece);
-  const named = pieces(line({ _tag: "Chunk", requestId: "7", values: [{ id: "run-a" }] })).flatMap(
+  const named = Arr.flatMap(
+    pieces(line({ _tag: "Chunk", requestId: "7", values: [{ id: "run-a" }] })),
     (piece) => relay.answered(piece),
   );
   expect(named).toEqual(["run-a"]);

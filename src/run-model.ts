@@ -176,7 +176,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       // A Run's directory or control file coming or going changes the listing above it.
       if (Str.split(below, "/").length <= 2) groups.delete("shared");
     });
-  const disable = Effect.gen(function* () {
+  const disable = Effect.sync(() => {
     enabled = false;
     generation++;
     groups.clear();

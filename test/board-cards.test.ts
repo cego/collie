@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { DateTime, Effect, FileSystem, Queue, Stream } from "effect";
+import { DateTime, Effect, FileSystem, Option, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { buildBoard, type KeptCards } from "../src/board";
 import { shareBoard } from "../src/board-stream";
@@ -134,7 +135,7 @@ test("a build reads only the check markers of Runs that moved since the last", (
       const counting: FileSystem.FileSystem = {
         ...model.reading,
         readFileString: (path, encoding) => {
-          if (path.endsWith(`/${VERIFYING_FILE}`)) read.push(path);
+          if (Str.endsWith(`/${VERIFYING_FILE}`)(path)) read.push(path);
           return model.reading.readFileString(path, encoding);
         },
       };
@@ -157,7 +158,12 @@ test("a build reads only the check markers of Runs that moved since the last", (
       yield* model.writing.writeFileString(`${checking.dir}/${VERIFYING_FILE}`, "lint\n");
       const board = yield* build;
       expect(read).toEqual([`${checking.dir}/${VERIFYING_FILE}`]);
-      expect(board.find((view) => view.runs.includes(checking.id))?.check?.name).toBe("lint");
+      expect(
+        Arr.findFirst(board, (view) => view.runs.includes(checking.id)).pipe(
+          Option.map((view) => view.check?.name),
+          Option.getOrUndefined,
+        ),
+      ).toBe("lint");
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 

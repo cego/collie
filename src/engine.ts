@@ -7501,6 +7501,7 @@ const makeRegistry: (
             : Effect.void,
         { concurrency, discard: true },
       );
+      // SAFETY: every slot a hit left empty was filled by its keepView above.
       return views as Array<RunView>;
     });
 

@@ -13,7 +13,18 @@
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Context, Effect, Layer, Schedule, type Scope, Schema, Stream, flow, Result } from "effect";
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Schedule,
+  type Scope,
+  Schema,
+  Stream,
+  flow,
+  Result,
+} from "effect";
 import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
 import * as Migrator from "effect/sql/Migrator";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -56,7 +67,7 @@ const RUN_FIELDS = Struct.keys(Run.fields);
 
 /** The Run's Task's rows, their parents and children, and every Run another asked for. */
 const nearOf = (rows: ReadonlyArray<RunRow>, run: string) => {
-  const self = rows.find((row) => row.run === run);
+  const self = Option.getOrUndefined(Arr.findFirst(rows, (row) => row.run === run));
   const own = Arr.filter(rows, (row) =>
     self?.task == null ? row === self : row.task === self.task,
   );
@@ -74,7 +85,7 @@ const nearOf = (rows: ReadonlyArray<RunRow>, run: string) => {
 
 /** Whether two reads of a Run's row read the same. */
 export const sameRow = (one: RunRow, other: RunRow) =>
-  one === other || RUN_FIELDS.every((field) => one[field] === other[field]);
+  one === other || Arr.every(RUN_FIELDS, (field) => one[field] === other[field]);
 
 /**
  * A question one run is waiting on: what was asked, what may answer it, and the answer it
