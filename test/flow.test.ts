@@ -746,6 +746,27 @@ test(
 );
 
 test(
+  "a Run stopped at its declared question keeps the question but offers no answer",
+  () =>
+    flowing(
+      "collie-flow-stop-asking-",
+      (world) =>
+        Effect.gen(function* () {
+          const runId = yield* stepped(world, "declared");
+          yield* until_(world, runId, (flow) => nodeOf(flow, "decide")?.state === "needs-you");
+          yield* cli(world, ["run", "stop", runId]);
+          const flow = yield* until_(world, runId, (one) => laneOf(one).execution === "stopped");
+          const decide = nodeOf(flow, "decide")!;
+          expect(decide.state).toBe("stopped");
+          expect(decide.primary).not.toBe("answer");
+          expect(decide.questions).toMatchObject([{ id: "go", open: false, answered: null }]);
+        }),
+      0,
+    ),
+  120_000,
+);
+
+test(
   "a Run stopped at a question no Step declared draws it stopped, with no answer offered",
   () =>
     flowing(
