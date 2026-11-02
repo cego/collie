@@ -42,6 +42,7 @@ import {
   RELEASE_TAG,
   type Carried,
 } from "./release";
+import { BUNDLED_HC, placeHc } from "./hc-install";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, liveCheckouts, type Asked, type RunFacts } from "./runs";
@@ -54,9 +55,9 @@ import {
   ledgerPath,
   overrideActive,
   readLedger,
-  herdOf,
   reserve,
   settle as settleBudget,
+  machineHerd,
 } from "./steering";
 import { append, conversationPath, tail, type NewTurn } from "./conversation";
 import {
@@ -579,8 +580,9 @@ const placeOwn = Effect.fn("operations.placeOwn")(function* (
       output: placed.failure.message,
     });
   }
-  const { root, kept } = placed.success;
+  const { root, kept, is } = placed.success;
   yield* (yield* FileSystem.FileSystem).makeDirectory(env.userDir, { recursive: true });
+  const hc = yield* placeHc(env, root, is[BUNDLED_HC] ?? null, run);
   const prepared = yield* prepareAndDesktop(env, root, manifest.version, run);
   if (!prepared.ok) return prepared;
   const data = {
@@ -588,7 +590,7 @@ const placeOwn = Effect.fn("operations.placeOwn")(function* (
     checkout: false,
     release: manifest.version,
     kept,
-    steps: prepared.steps,
+    steps: [...(hc === null ? [] : [hc]), ...prepared.steps],
     ...(to && { version: to }),
   };
   return { ok: true as const, data, human: placedReport(env, data) };
@@ -799,7 +801,7 @@ const taskHere = Effect.fn("operations.taskHere")(function* (env: PluginEnv, abo
     .workspaceList()
     .pipe(Effect.orElseSucceed((): WorkspaceInfo[] => []));
   const task = yield* newTask({
-    herd: yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null)),
+    herd: yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null)),
     workspace: env.workspaceId,
     label:
       Option.getOrUndefined(Arr.findFirst(open, (one) => one.workspaceId === env.workspaceId))

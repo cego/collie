@@ -108,6 +108,7 @@ const send = Effect.fn("OpenCode.send")(function* (
     const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
     return yield* failed(`${what} answered ${response.status}: ${pipe_(body, Str.slice(0, 200))}`);
   }
+  if (response.status === 204) return null;
   return yield* response.json.pipe(Effect.mapError((cause) => failed(`${what}: ${reason(cause)}`)));
 }, Effect.provide(FetchHttpClient.layer));
 
@@ -209,6 +210,24 @@ export function sessionModel(
   }
   return null;
 }
+
+/**
+ * Prompts the session through the server rather than the TUI: an agent started again
+ * on its session serves before its TUI takes keys, and keys typed before then are lost.
+ */
+export const promptAsync = Effect.fn("OpenCode.promptAsync")(function* (
+  base: string,
+  session: string,
+  text: string,
+) {
+  const what = `POST /session/${session}/prompt_async`;
+  yield* send(
+    what,
+    HttpClientRequest.post(`${base}/session/${session}/prompt_async`).pipe(
+      HttpClientRequest.bodyJsonUnsafe({ parts: [{ type: "text", text }] }),
+    ),
+  );
+});
 
 /**
  * Asks the session to summarize itself. A 200 is not proof of compaction: the handler

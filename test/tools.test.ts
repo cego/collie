@@ -1343,9 +1343,7 @@ test("the definitions tool answers with the module an id runs, not the file belo
 const chatting = Effect.fn("test.chatting")(function* () {
   yield* writeChat(yield* chatPath(stateDir, KEY), {
     harness: "claude",
-    agent: "collie-chat-1",
-    paneId: "p1",
-    terminalId: null,
+    agent: "collie-chat",
     sessions: { claude: "s-1" },
     startedAt: "2026-10-02T09:00:00Z",
   });

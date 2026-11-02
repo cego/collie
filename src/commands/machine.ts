@@ -1,18 +1,24 @@
 // `collie machine`: the Machines this one is paired with (ADR-0057). Pairing happens by
-// itself on first reach and forgetting follows herdr's list, so `list` and `connect`, which
-// opens the SSH connection a blocked link rides, are what a human has a use for; `invite`
-// is what pairing runs on the other Machine over SSH.
+// itself on first reach. `list`, `connect`, which opens the SSH connection a blocked link and
+// core ride, `add` and `forget` are what a human has a use for; `invite` is what pairing runs
+// on the other Machine over SSH. On a Machine set to herdr, forgetting follows herdr's list.
 
 import * as Arr from "effect/Array";
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { inviteFrom, machineConnect, machineList } from "../lifecycle";
+import {
+  inviteFrom,
+  machineAdd,
+  machineConnect,
+  machineForget,
+  machinesListed,
+} from "../lifecycle";
 import type { PeerView } from "../peers-model";
 import { BUILD } from "../host";
 import { answering } from "./shared";
 
 /** How a link stands, and which way it went or what each way saw. */
-const standing = (peer: PeerView) => {
+const standing = (peer: PeerView & { readonly added: boolean | null }) => {
   const state =
     peer.state === "away" && peer.since !== null ? `away since ${peer.since}` : peer.state;
   if (peer.state === "live")
@@ -35,15 +41,18 @@ const standing = (peer: PeerView) => {
   ];
 };
 
+const toCore = (peer: { readonly name: string; readonly added: boolean | null }) =>
+  peer.added === false ? [`not added to core: collie machine connect ${peer.name} adds it`] : [];
+
 const list = Command.make("list", {}, () =>
   answering((env) =>
-    machineList(env).pipe(
+    machinesListed(env).pipe(
       Effect.map((read) => {
         if (!read.ok) return read;
-        const peers = read.value;
+        const { peers, backend, roster } = read.value;
         return {
           ok: true as const,
-          data: { build: BUILD, machines: peers },
+          data: { build: BUILD, machines: peers, backend, roster },
           human:
             `This Machine: collie ${BUILD}\n` +
             (peers.length === 0
@@ -56,6 +65,7 @@ const list = Command.make("list", {}, () =>
                         peer.dials === "out" ? "dialled from here" : "dials in",
                         peer.build === null ? "build not read" : `collie ${peer.build}`,
                         ...standing(peer),
+                        ...toCore(peer),
                       ],
                       "\t",
                     ),
@@ -68,20 +78,37 @@ const list = Command.make("list", {}, () =>
   ),
 ).pipe(Command.withDescription("The Machines paired with this one, and whether each is live"));
 
+const said = (text: string) => Effect.sync(() => void process.stderr.write(text));
+const machineName = Argument.String("name").pipe(
+  Argument.withDescription("The Machine's name: core's on a Machine set to core, else herdr's"),
+);
+
 const connect = Command.make(
   "connect",
-  { name: Argument.String("name").pipe(Argument.withDescription("herdr's name for the Machine")) },
-  ({ name }) =>
+  {
+    name: machineName,
+    target: Flag.String("target").pipe(
+      Flag.withDescription("How ssh reaches it, for a Machine no list names yet"),
+      Flag.optional,
+    ),
+  },
+  ({ name, target }) =>
     answering((env) =>
-      machineConnect(env, name, (text) => Effect.sync(() => void process.stderr.write(text))).pipe(
+      machineConnect(env, name, said, Option.getOrUndefined(target)).pipe(
         Effect.map((read) =>
           read.ok
             ? {
                 ok: true as const,
                 data: read.value,
-                human: read.value.opened
-                  ? `Opened an SSH connection to ${name} at ${read.value.path}.`
-                  : `${name} already has an SSH connection at ${read.value.path}.`,
+                human: Arr.join(
+                  [
+                    read.value.opened
+                      ? `Opened an SSH connection to ${name} at ${read.value.path}.`
+                      : `${name} already has an SSH connection at ${read.value.path}.`,
+                    ...(read.value.added ? [`Added ${name} to core.`] : []),
+                  ],
+                  " ",
+                ),
               }
             : read,
         ),
@@ -89,8 +116,52 @@ const connect = Command.make(
     ),
 ).pipe(
   Command.withDescription(
-    "Open this computer's SSH connection to a Machine, which a link its network blocks rides",
+    "Open this computer's SSH connection to a Machine, which a link its network blocks and core ride",
   ),
+);
+
+const add = Command.make(
+  "add",
+  {
+    name: Argument.String("name").pipe(Argument.withDescription("What core will call it")),
+    target: Flag.String("target").pipe(Flag.withDescription("How ssh reaches it")),
+  },
+  ({ name, target }) =>
+    answering((env) =>
+      machineAdd(env, name, target, said).pipe(
+        Effect.map((read) =>
+          read.ok
+            ? {
+                ok: true as const,
+                data: read.value,
+                human: `Added ${name} to core; it rides the SSH connection at ${read.value.path}.`,
+              }
+            : read,
+        ),
+      ),
+    ),
+).pipe(
+  Command.withDescription(
+    "Add a Machine to core, reached through this computer's SSH connection to it, on a Machine set to core",
+  ),
+);
+
+const forget = Command.make("forget", { name: machineName }, ({ name }) =>
+  answering((env) =>
+    machineForget(env, name).pipe(
+      Effect.map((read) =>
+        read.ok
+          ? {
+              ok: true as const,
+              data: read.value,
+              human: `Forgot ${name}; nothing on it was stopped.`,
+            }
+          : read,
+      ),
+    ),
+  ),
+).pipe(
+  Command.withDescription("Unpair a Machine and remove it from core; nothing on it is stopped"),
 );
 
 const invite = Command.make(
@@ -127,5 +198,5 @@ const invite = Command.make(
 
 export const machine = Command.make("machine").pipe(
   Command.withDescription("The Machines paired with this one"),
-  Command.withSubcommands([list, connect, invite]),
+  Command.withSubcommands([list, connect, add, forget, invite]),
 );

@@ -42,7 +42,7 @@ beforeEach(() =>
       origin = `${rig.root}/origin.git`;
       cloneA = `${rig.root}/a/monorepo`;
       cloneB = `${rig.root}/b/monorepo`;
-      first = `${rig.root}/.herdr/worktrees/monorepo/${BRANCH}`;
+      first = `${rig.root}/.collie/worktrees/monorepo/${BRANCH}`;
       const seed = `${rig.root}/seed`;
       yield* exec(["git", "init", "--bare", "-q", "-b", "master", origin]);
       yield* exec(["git", "init", "-q", "-b", "master", seed]);
@@ -451,7 +451,7 @@ const herdrWith = (panes: ReadonlyArray<PaneInfo>) =>
 /** The starting Run's checkout: clone A's, on a branch of its own name, at `at`. */
 const startedAt = (at: string) =>
   Effect.gen(function* () {
-    const checkout = `${rig.root}/.herdr/worktrees/monorepo/implement`;
+    const checkout = `${rig.root}/.collie/worktrees/monorepo/implement`;
     yield* git(cloneA, "fetch", "-q", "origin");
     yield* git(cloneA, "worktree", "add", "-q", "-b", "mk/implement", checkout, at);
     return checkout;

@@ -1,5 +1,7 @@
 # A Machine reaches another over a paired link
 
+Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): core's machine list replaces herdr's as the list of Machines.
+
 **Status: accepted.** Drafted by the architecture step of run-372b88e4, and built with it.
 Amended by [ADR-draft-a-blocked-link-rides-the-machines-ssh-connection](draft-a-blocked-link-rides-the-machines-ssh-connection.md):
 a link the network refuses rides the Machine's SSH connection.

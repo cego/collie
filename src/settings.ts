@@ -27,16 +27,16 @@ export function isDensity(value: string): value is Density {
   return Arr.some(DENSITIES, (density) => density === value);
 }
 export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
+
+/** What runs a Machine's agents: Herdr 1, or herdr-core. */
+export type TerminalBackend = "herdr" | "core";
+export const WORKTREES_DIRECTORY = "~/.collie/worktrees";
+export const TERMINAL_BACKENDS: ReadonlyArray<TerminalBackend> = ["herdr", "core"];
 export function isScope(value: string): value is Scope {
   return Arr.some(SCOPES, (scope) => scope === value);
 }
 
-/**
- * How a Run's question reaches the human. `focus` brings the Session's Collie tab to
- * the front the moment a Choice opens — the behavior every install has had. `notify`
- * leaves the toast and the board's own `asks you` alone but takes no focus, so a
- * question arriving mid-thought does not move the human off what they are doing.
- */
+/** Left over from the Collie tab, which `focus` brought to the front; it changes nothing now. */
 export type Questions = "focus" | "notify";
 export const QUESTION_MODES: ReadonlyArray<Questions> = ["focus", "notify"];
 export function isQuestionMode(value: string): value is Questions {
@@ -196,6 +196,8 @@ export interface Setting {
   /** What it changes, in a sentence or two. */
   readonly description: string;
   readonly unit?: SettingUnit;
+  /** This Machine's alone: never shared with the Flock. */
+  readonly machine?: true;
 }
 
 export const SettingValue = Schema.Union([
@@ -206,7 +208,7 @@ export const SettingValue = Schema.Union([
 ]);
 export type SettingValue = typeof SettingValue.Type;
 
-type Explained = Pick<Setting, "group" | "label" | "description" | "unit">;
+type Explained = Pick<Setting, "group" | "label" | "description" | "unit" | "machine">;
 
 const choice = (
   key: string,
@@ -307,6 +309,13 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description: `Where Claude Code compacts by itself: a whole number of tokens from ${AUTO_COMPACT_LEAST} to ${AUTO_COMPACT_MOST}, or auto for the model's own window. Claude Code agents only, from the next one started.`,
     unit: "tokens",
   }),
+  choice("terminal_backend", TERMINAL_BACKENDS, "herdr", {
+    group: "Agents",
+    label: "Terminal backend",
+    description:
+      "Where this Machine starts its next agents: herdr, or herdr-core. Agents already running finish where they started. This Machine only.",
+    machine: true,
+  }),
   of("quiet_ms", "number", String(D.quietMs), {
     group: "Agents",
     label: "Quiet before a nudge",
@@ -332,6 +341,13 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     label: "Claude subagents",
     description:
       "Claude's nested agents: enabled, model, forceModel, cacheTtl (5m or 1h), maxDepth and maxConcurrent. Empty keeps native behavior.",
+  }),
+  of("worktrees_directory", "text", WORKTREES_DIRECTORY, {
+    group: "Runs",
+    label: "Worktrees",
+    description:
+      "Where Collie makes a Run's checkout, under the repository's name and the branch's. A checkout made elsewhere before is found where it is. This Machine only.",
+    machine: true,
   }),
   of("max_iterations", "number", String(D.maxIterations), {
     group: "Runs",
@@ -409,7 +425,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     group: "Notifications",
     label: "A new question",
     description:
-      "Whether a Run's question brings the TUI's Collie tab to the front (focus) or only says so (notify).",
+      "Left over from the TUI's Collie tab, which a question once brought to the front; changes nothing.",
   }),
   ...Arr.map(NOTIFICATION_KINDS, (kind) =>
     of(`notifications.${kind}`, "boolean", "true", {

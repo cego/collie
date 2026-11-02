@@ -2,6 +2,7 @@ import * as Cause from "effect/Cause";
 // User defaults from the plugin config dir. Optional; the baseline is neutral.
 
 import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Data, Effect, FileSystem, Option, Path, Schema } from "effect";
@@ -19,6 +20,8 @@ import {
   parseShared,
   SETTINGS,
   type SettingValue,
+  type TerminalBackend,
+  WORKTREES_DIRECTORY,
 } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
@@ -159,7 +162,8 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
     Effect.map((info) => Option.getOrUndefined(info.mtime)?.toISOString()),
     Effect.orElseSucceed(() => undefined),
   );
-  const settings = Arr.flatMap(SETTINGS, ({ key }): ReadonlyArray<SharedSetting> => {
+  const shared = Arr.filter(SETTINGS, (setting) => setting.machine !== true);
+  const settings = Arr.flatMap(shared, ({ key }): ReadonlyArray<SharedSetting> => {
     const value = configValue(raw, key) ?? null;
     const at = stamps.set[key] ?? (value === null ? undefined : written);
     return at === undefined ? [] : [{ key, value, at }];
@@ -217,6 +221,24 @@ export const takeShared = (
           flock: { by, at: now },
         });
       return yield* readShared(userDir);
+    }),
+  );
+
+/** What runs this Machine's next agents, `herdr` where the setting is unset or unreadable. */
+export const terminalBackend = (userDir: string) =>
+  readConfig(userDir).pipe(
+    Effect.map((raw): TerminalBackend => (raw.terminal_backend === "core" ? "core" : "herdr")),
+    Effect.orElseSucceed((): TerminalBackend => "herdr"),
+  );
+
+/** Where this Machine's new checkouts go, `~/` being `home`. */
+export const worktreesDirectory = (env: { readonly home: string; readonly userDir: string }) =>
+  readConfig(env.userDir).pipe(
+    Effect.map((raw) => raw.worktrees_directory),
+    Effect.orElseSucceed(() => undefined),
+    Effect.map((set) => {
+      const dir = isString(set) && set !== "" ? set : WORKTREES_DIRECTORY;
+      return pipe_(dir, Str.startsWith("~/")) ? `${env.home}/${pipe_(dir, Str.slice(2))}` : dir;
     }),
   );
 

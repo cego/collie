@@ -53,7 +53,6 @@ function live(over: Partial<Live> = {}): Live {
     deliveries: [],
     proposals: [],
     pending: [],
-    ownership: null,
     news: { waiting: 0, uncertain: 0 },
     ...over,
   };
@@ -156,7 +155,7 @@ test("drift and deliveries say what state they are in", () =>
     }),
   ));
 
-test("an undelivered report says so, and the ownership question names its remedy", () =>
+test("an undelivered report says so", () =>
   runEffect(
     Effect.gen(function* () {
       const said = yield* shown(() => (
@@ -176,15 +175,12 @@ test("an undelivered report says so, and the ownership question names its remedy
                 resolution: "open",
               },
             ],
-            ownership: { why: "two workspaces carry this Herd's token", candidates: ["w1", "w2"] },
           })}
         />
       ));
 
       expect(said).toContain("pending report (undelivered)");
       expect(said).toContain("the sibling's API must not change");
-      expect(said).toContain("collie home reconcile");
-      expect(said).toContain("two workspaces carry this Herd's token");
     }),
   ));
 

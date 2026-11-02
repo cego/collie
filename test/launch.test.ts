@@ -11,9 +11,8 @@ import { currentEnv, type PluginEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import type { PickItem } from "../src/inputs";
-import { homePath, writeHome } from "../src/home";
 import { runViews } from "../src/lifecycle";
-import { budgetPath, herdOf, readBudget } from "../src/steering";
+import { budgetPath, herdDir, herdOf, readBudget } from "../src/steering";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { forgeOnPath, serveForges } from "./support/forge";
@@ -101,22 +100,13 @@ const onBranch = Effect.fn("test.onBranch")(function* (world: World, branch: str
     yield* exec(["git", ...args], { cwd: world.project });
 });
 
-/** The flow opened from the Herd's Home, whose own directory is no checkout. */
-const atHome = Effect.fn("test.atHome")(function* (world: World) {
+/** The flow drawn by the board terminal, in the Herd's own directory, which is no checkout. */
+const onTheBoard = Effect.fn("test.onTheBoard")(function* (world: World) {
   const env = yield* currentEnv;
   const socket = `${world.home}/herdr.sock`;
-  const key = yield* herdOf(socket);
-  yield* writeHome(yield* homePath(world.state, key), {
-    workspaceId: "w-home",
-    tabId: null,
-    paneId: null,
-    terminalId: null,
-    createdAt: "2026-09-30T00:00:00.000Z",
-    token: "t",
-    state: "ready",
-    previous: [],
-  });
-  return { ...env, socketPath: socket, workspaceId: "w-home" } satisfies PluginEnv;
+  const cwd = yield* herdDir(world.state, yield* herdOf(socket));
+  yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
+  return { ...env, socketPath: socket, workspaceId: null, cwd } satisfies PluginEnv;
 });
 
 const Shown = Schema.Struct({
@@ -136,12 +126,12 @@ test(
           const env = yield* currentEnv;
 
           const cancelled = answering(["targeted", ""]);
-          expect(yield* pickFlow(new Herdr(env), env, cancelled.prompts, "inline")).toBe(0);
+          expect(yield* pickFlow(new Herdr(env), env, cancelled.prompts)).toBe(0);
           expect(cancelled.asked).toHaveLength(3);
           expect((yield* runViews(env, null)).runs).toEqual([]);
 
           const { prompts, asked, rows } = answering(["targeted", "", "start"]);
-          expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
+          expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
           expect(asked.slice(1)).toEqual([QUESTION, "A workflow pointed at a change"]);
           expect(rows.at(-1)).toEqual({
             id: "start",
@@ -169,7 +159,7 @@ test(
       Effect.gen(function* () {
         const env = yield* currentEnv;
         const { prompts, asked } = answering(["planned", "one registry"]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
+        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
         expect(asked).toHaveLength(2);
         expect(asked[1]).toBe(QUESTION);
         const runs = (yield* runViews(env, null)).runs;
@@ -185,7 +175,7 @@ test(
 );
 
 test(
-  "no checkout is asked for from the Home: a goal starts at the Projects root",
+  "no checkout is asked for from the board: a goal starts at the Projects root",
   () =>
     launching("collie-launch-home-", (world) =>
       Effect.gen(function* () {
@@ -193,10 +183,10 @@ test(
         const root = `${world.home}/projects`;
         yield* fs.makeDirectory(`${root}/app/.git`, { recursive: true });
         yield* writeConfigValue(world.config, "projects.root", root);
-        const env = yield* atHome(world);
+        const env = yield* onTheBoard(world);
 
         const { prompts, asked } = answering(["planned", "one registry"]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
+        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
         expect(asked.slice(1)).toEqual([QUESTION]);
         const runs = (yield* runViews(env, null)).runs;
         expect(runs[0]).toMatchObject({
@@ -216,7 +206,7 @@ test(
       Effect.gen(function* () {
         const env = yield* currentEnv;
         const here = answering(["sourced", "make the board faster"]);
-        expect(yield* pickFlow(new Herdr(env), env, here.prompts, "inline")).toBe(0);
+        expect(yield* pickFlow(new Herdr(env), env, here.prompts)).toBe(0);
         expect(here.asked).toHaveLength(2);
         expect((yield* runViews(env, null)).runs[0]).toMatchObject({
           cwd: world.project,
@@ -238,7 +228,7 @@ test(
         const env = { ...(yield* currentEnv), cwd: plain };
 
         const { prompts, asked } = answering(["targeted", ""]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
+        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
         expect(asked).toHaveLength(3);
         expect(asked[1]).toBe(QUESTION);
         expect(asked[2]).toContain(`targeted needs "target"`);
@@ -328,16 +318,16 @@ test.each([
   ],
   ["pull request", "github.com", "https://github.com/team/app/pull/42"],
 ])(
-  "from the Home, a %s URL is placed in the checkout whose remote it names, with no model asked",
+  "from the board, a %s URL is placed in the checkout whose remote it names, with no model asked",
   (_, host, url) =>
     launching("collie-launch-url-", (world) =>
       Effect.gen(function* () {
         const tree = yield* projectsTree(world, host);
-        const home = yield* atHome(world);
+        const home = yield* onTheBoard(world);
         yield* withRouter(world, { answer: "one", checkouts: [tree.api] }, (calls) =>
           Effect.gen(function* () {
             const { prompts, rows } = answering(["targeted", url, "start"]);
-            expect(yield* pickFlow(new Herdr(home), home, prompts, "inline")).toBe(0);
+            expect(yield* pickFlow(new Herdr(home), home, prompts)).toBe(0);
             expect(rows.at(-1)?.title).toBe(`Starting in ${tree.app}`);
             expect(yield* calls).toEqual([]);
             const run = (yield* runViews(home, null)).runs[0];
@@ -354,21 +344,21 @@ test.each([
 );
 
 test(
-  "a start from the Home is placed, never asked where: one routing call over every checkout, confirmed with Enter",
+  "a start from the board is placed, never asked where: one routing call over every checkout, confirmed with Enter",
   () =>
     launching("collie-launch-routed-", (world) =>
       Effect.gen(function* () {
         const tree = yield* projectsTree(world);
-        const home = yield* atHome(world);
+        const home = yield* onTheBoard(world);
         yield* withRouter(world, { answer: "one", checkouts: [tree.app] }, (calls) =>
           Effect.gen(function* () {
             const words = "make the app board faster";
             const cancelled = answering(["sourced", words, ""]);
-            expect(yield* pickFlow(new Herdr(home), home, cancelled.prompts, "inline")).toBe(0);
+            expect(yield* pickFlow(new Herdr(home), home, cancelled.prompts)).toBe(0);
             expect((yield* runViews(home, null)).runs).toEqual([]);
 
             const { prompts, asked, rows } = answering(["sourced", words, "start"]);
-            expect(yield* pickFlow(new Herdr(home), home, prompts, "inline")).toBe(0);
+            expect(yield* pickFlow(new Herdr(home), home, prompts)).toBe(0);
             expect(asked.slice(1)).toEqual([QUESTION, "Build from a work source"]);
             expect(rows.at(-1)?.title).toBe(`Starting in ${tree.app}`);
 
@@ -411,12 +401,12 @@ for (const [what, route] of [
       launching("collie-launch-instead-", (world) =>
         Effect.gen(function* () {
           const tree = yield* projectsTree(world);
-          const home = yield* atHome(world);
+          const home = yield* onTheBoard(world);
           yield* withRouter(world, route, () =>
             Effect.gen(function* () {
               const words = "one registry for every service";
               const { prompts, rows } = answering(["sourced", words, "plan-instead"]);
-              expect(yield* pickFlow(new Herdr(home), home, prompts, "inline")).toBe(0);
+              expect(yield* pickFlow(new Herdr(home), home, prompts)).toBe(0);
               expect(rows.at(-1)?.title).toBe("Plan it instead");
               const run = (yield* runViews(home, null)).runs[0];
               expect(run).toMatchObject({

@@ -11,11 +11,13 @@ import * as Rec from "effect/Record";
 import type { PlatformServices } from "./platform";
 import {
   Data,
+  Deferred,
   Duration,
   Effect,
   FileSystem,
   Option,
   Path,
+  Queue,
   Result,
   Schedule,
   Schema,
@@ -32,6 +34,20 @@ import { PLUGIN_ID } from "./env";
 import { reason } from "./naming";
 import { verifyIncarnation, type AgentEntry } from "./registry";
 import { HerdrMachine } from "./peers-model";
+import { viaTarget } from "./ssh-argv";
+import { terminalBackend } from "./config";
+import type { TerminalBackend } from "./settings";
+import {
+  applyNote,
+  connect as connectCore,
+  coreSocket,
+  snapshotOf,
+  type HcError,
+  type HcMachine,
+  type HcMethod,
+  type HcSnapshot,
+  type HcTerminal,
+} from "./hc";
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
@@ -238,11 +254,6 @@ const HerdrStatusReply = Schema.Struct({
   protocol: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
 
-/** herdr's `config.toml`, as far as this plugin has any business reading it. */
-const HerdrConfig = Schema.Struct({
-  worktrees: Schema.optionalKey(Schema.Struct({ directory: Schema.optionalKey(Schema.String) })),
-});
-
 const PluginPaneReply = Schema.Struct({
   result: Schema.Struct({
     plugin_pane: Schema.Struct({
@@ -335,8 +346,9 @@ const SUBMIT_TIMEOUT_MS = 15_000;
 /**
  * What herdr could tell us about a submission: a turn it saw start after this prompt, or
  * no evidence — the text and the Enter were written, and it cannot say they were read.
+ * `pressed` is core's: no turn started, so one Enter was pressed after it.
  */
-export type Submission = "observed" | "unobserved";
+export type Submission = "observed" | "unobserved" | "pressed";
 
 /** Between turns, as herdr itself says so: anything else may be hiding a turn. */
 export const isSettled = (status: AgentStatus) => status === "idle" || status === "done";
@@ -560,6 +572,8 @@ export interface AgentInfo {
   terminalId: string | null;
   /** The harness session it is driving, where herdr knows one. */
   agentSession: AgentSession | null;
+  /** Absent for Herdr 1's. */
+  backend?: "core";
 }
 
 /**
@@ -642,10 +656,199 @@ export const decodeWorkspaceList = (res: BoundaryValue) =>
  */
 export type AgentsAlive = "unasked" | "absent" | "live" | "unverified";
 
+export type Backend = TerminalBackend;
+
+/** Core's refusals as the codes herdr gives the same ones, which the callers already read. */
+const coreCode = (kind: string) =>
+  kind === "blocked"
+    ? "agent_blocked"
+    : kind === "not_found" || kind === "finished"
+      ? "agent_not_found"
+      : kind;
+
+const coreFailure = (cause: HcError) => {
+  const failed = {
+    message: `core ${cause.method} failed`,
+    detail: cause.message,
+    code: coreCode(cause.kind),
+  };
+  return cause.kind === "unreachable"
+    ? new HerdrError(failed)
+    : new HerdrError({ ...failed, answered: true });
+};
+
+const coreCall = <M extends HcMethod>(socket: string, method: M, params: Schema.JsonObject) =>
+  Effect.scoped(Effect.flatMap(connectCore(socket), (hc) => hc.call(method, params))).pipe(
+    Effect.mapError(coreFailure),
+  );
+
+/** A machine core keeps, as the Machine Collie pairs with by core's name for it. */
+const rosterEntry = (machine: HcMachine): HerdrMachine => ({
+  id: machine.name,
+  label: machine.name,
+  target: machine.via === true ? viaTarget(machine.target) : machine.target,
+  session: machine.session ?? "default",
+  enabled: true,
+});
+
+/** The label that marks a core terminal as one of Collie's agents, naming its Run. */
+export const RUN_LABEL = "run";
+
+const isAgentTerminal = (terminal: HcTerminal) =>
+  terminal.state === "live" && Boolean(terminal.name) && terminal.labels[RUN_LABEL] !== undefined;
+
+const coreStatus = (terminal: HcTerminal) => agentStatus(terminal.status?.state ?? "");
+
+const coreAgent = (terminal: HcTerminal): AgentInfo => ({
+  name: terminal.name ?? terminal.address,
+  paneId: terminal.address,
+  workspaceId: null,
+  status: coreStatus(terminal),
+  title: null,
+  terminalId: terminal.address,
+  agentSession: null,
+  backend: "core",
+});
+
+/** Each core's terminals as its events describe them, for as long as the stream lasts. */
+const watching = new Map<string, Deferred.Deferred<{ current: HcSnapshot }, HerdrError>>();
+
+const watched = (socket: string) =>
+  Effect.suspend(() => {
+    const found = watching.get(socket);
+    if (found !== undefined) return Deferred.await(found);
+    const ready = Deferred.makeUnsafe<{ current: HcSnapshot }, HerdrError>();
+    watching.set(socket, ready);
+    const follow = Effect.gen(function* () {
+      const hc = yield* connectCore(socket);
+      const view = { current: snapshotOf(yield* hc.call("events.subscribe", {})) };
+      yield* Deferred.succeed(ready, view);
+      for (;;) view.current = applyNote(view.current, yield* Queue.take(hc.notes));
+    }).pipe(
+      Effect.scoped,
+      Effect.mapError(coreFailure),
+      Effect.onExit((exit) =>
+        Effect.suspend(() => {
+          if (watching.get(socket) === ready) watching.delete(socket);
+          return exit._tag === "Failure"
+            ? Deferred.failCause(ready, exit.cause).pipe(Effect.asVoid)
+            : Effect.void;
+        }),
+      ),
+    );
+    return Effect.forkDetach(follow).pipe(Effect.andThen(Deferred.await(ready)));
+  });
+
 export class Herdr {
   private seq = 0;
 
-  constructor(private readonly env: PluginEnv) {}
+  constructor(readonly env: PluginEnv) {}
+
+  /**
+   * Where `target` runs: `given`, which is what its incarnation recorded, or else core on a
+   * Machine set to core, unless herdr is open there and core's events do not name it.
+   */
+  private backendOf(
+    target: string,
+    given?: Backend,
+  ): Effect.Effect<Backend, never, PlatformServices> {
+    const env = this.env;
+    if (given !== undefined) return Effect.succeed(given);
+    return Effect.gen(function* () {
+      if ((yield* terminalBackend(env.userDir)) === "herdr") return "herdr";
+      if (env.socketPath === null) return "core";
+      // ponytail: an agent launched a moment ago may not be in the events yet; it reads as herdr's.
+      const view = yield* watched(yield* coreSocket(env.raw)).pipe(Effect.option);
+      return Option.isSome(view) &&
+        Arr.some(
+          [...view.value.current.terminals.values()],
+          (one) => isAgentTerminal(one) && one.name === target,
+        )
+        ? "core"
+        : "herdr";
+    });
+  }
+
+  private routed<A>(
+    target: string,
+    given: Backend | undefined,
+    onHerdr: HerdrEffect<A>,
+    onCore: (socket: string) => HerdrEffect<A>,
+  ): HerdrEffect<A> {
+    const raw = this.env.raw;
+    return Effect.flatMap(this.backendOf(target, given), (backend) =>
+      backend === "herdr" ? onHerdr : Effect.flatMap(coreSocket(raw), onCore),
+    );
+  }
+
+  /** An agent started as a core terminal of its own, which ends with nothing that started it. */
+  agentLaunch(opts: {
+    readonly name: string;
+    readonly argv: ReadonlyArray<string>;
+    readonly cwd: string;
+    readonly env: Readonly<Record<string, string>>;
+    readonly labels: Readonly<Record<string, string>>;
+  }): HerdrEffect<string> {
+    const raw = this.env.raw;
+    return Effect.gen(function* () {
+      const started = yield* coreCall(yield* coreSocket(raw), "terminal.run", {
+        name: opts.name,
+        argv: [...opts.argv],
+        cwd: opts.cwd,
+        env: { ...opts.env },
+        labels: { ...opts.labels },
+        no_parent: true,
+      });
+      return started.address;
+    });
+  }
+
+  /**
+   * A tick whenever an agent on core may have gone, whatever the Machine's setting: one set
+   * to herdr may switch to core while the host runs.
+   */
+  agentsEnded(): Stream.Stream<void, never, PlatformServices> {
+    return this.terminalsEnded();
+  }
+
+  /**
+   * A tick whenever a terminal on this Machine's core may have gone: each time core's events
+   * are followed from the start, which a holder that came back is, and each time one ends.
+   */
+  terminalsEnded(): Stream.Stream<void, never, PlatformServices> {
+    const env = this.env;
+    const followed = Stream.unwrap(
+      Effect.gen(function* () {
+        const hc = yield* connectCore(yield* coreSocket(env.raw));
+        yield* hc.call("events.subscribe", {});
+        return Stream.concat(
+          Stream.succeed(undefined),
+          Stream.fromQueue(hc.notes).pipe(
+            Stream.filter(
+              (note) =>
+                note.method === "missed" ||
+                (note.method === "event" &&
+                  ["finished", "lost", "removed"].includes(note.params.type)),
+            ),
+            Stream.as(undefined),
+          ),
+        );
+      }),
+    );
+    return followed.pipe(
+      Stream.catch(() => Stream.empty),
+      Stream.repeat(Schedule.spaced("1 second")),
+    );
+  }
+
+  /** Whether this Machine's core has a live terminal named `name`. */
+  coreTerminalLive(name: string): HerdrEffect<boolean> {
+    const raw = this.env.raw;
+    return Effect.gen(function* () {
+      const listed = yield* coreCall(yield* coreSocket(raw), "terminal.list", {});
+      return Arr.some(listed.terminals, (one) => one.state === "live" && one.name === name);
+    });
+  }
 
   /** Runs the herdr CLI; parses stdout as JSON when it is JSON. */
   cli(args: string[]): Effect.Effect<Schema.Json | string, HerdrError, CliServices> {
@@ -958,7 +1161,19 @@ export class Herdr {
    * of the agent; see [Internals](../docs/internals.md#checking-the-boundary-against-herdr)
    * for why a written submission is not a delivered one.
    */
-  agentPrompt(target: string, text: string): HerdrEffect<Submission> {
+  agentPrompt(target: string, text: string, backend?: Backend): HerdrEffect<Submission> {
+    return this.routed(target, backend, this.herdrPrompt(target, text), (socket) =>
+      Effect.gen(function* () {
+        const sent = yield* coreCall(socket, "terminal.send", { terminal: target, text });
+        if (sent.started === true) return "observed";
+        if (sent.started !== false) return "unobserved";
+        yield* coreCall(socket, "terminal.keys", { terminal: target, keys: ["enter"] });
+        return "pressed";
+      }),
+    );
+  }
+
+  private herdrPrompt(target: string, text: string): HerdrEffect<Submission> {
     const statusNow = () =>
       this.agentStatus(target).pipe(Effect.orElseSucceed(() => "unknown" as const));
     const submit = this.cli([
@@ -1012,8 +1227,16 @@ export class Herdr {
   }
 
   /** One Enter, for text already in the agent's prompt box. */
-  agentPressEnter(target: string): HerdrEffect<void> {
-    return this.cli(["agent", "send-keys", target, "enter"]).pipe(Effect.asVoid);
+  agentPressEnter(target: string, backend?: Backend): HerdrEffect<void> {
+    return this.routed(
+      target,
+      backend,
+      this.cli(["agent", "send-keys", target, "enter"]).pipe(Effect.asVoid),
+      (socket) =>
+        coreCall(socket, "terminal.keys", { terminal: target, keys: ["enter"] }).pipe(
+          Effect.asVoid,
+        ),
+    );
   }
 
   /**
@@ -1021,7 +1244,12 @@ export class Herdr {
    * `prompt_box_body` region, which herdr cuts off after a few hundred bytes. Null where
    * the manifest has no such region, or herdr answered nothing Collie can read.
    */
-  promptBox(target: string): HerdrEffect<string | null> {
+  promptBox(target: string, backend?: Backend): HerdrEffect<string | null> {
+    // Core has no prompt box to read: a send it saw not start is pressed once instead.
+    return this.routed(target, backend, this.herdrPromptBox(target), () => Effect.succeed(null));
+  }
+
+  private herdrPromptBox(target: string): HerdrEffect<string | null> {
     return this.cli(["agent", "explain", target, "--json"]).pipe(
       Effect.map((res) =>
         Option.match(Schema.decodeUnknownOption(ExplainReply)(res), {
@@ -1045,14 +1273,57 @@ export class Herdr {
     return this.cli(args).pipe(Effect.asVoid);
   }
 
+  /** Herdr 1's agents, and on a Machine set to core, core's, with herdr's where it is open. */
   agentList(): HerdrEffect<AgentInfo[]> {
-    return this.cli(["agent", "list"]).pipe(Effect.flatMap(decodeAgentList));
+    const herdr = this.cli(["agent", "list"]).pipe(Effect.flatMap(decodeAgentList));
+    const env = this.env;
+    return Effect.gen(function* () {
+      if ((yield* terminalBackend(env.userDir)) === "herdr") return yield* herdr;
+      const listed = yield* coreCall(yield* coreSocket(env.raw), "terminal.list", {});
+      const onCore = Arr.map(Arr.filter(listed.terminals, isAgentTerminal), coreAgent);
+      return env.socketPath === null ? onCore : [...onCore, ...(yield* herdr)];
+    });
   }
 
-  /** herdr's saved SSH machines, which are the Machines this one may pair with. */
-  machineList(): Effect.Effect<ReadonlyArray<HerdrMachine>, HerdrError, CliServices> {
+  /** herdr's saved SSH machines. */
+  herdrMachineList(): Effect.Effect<ReadonlyArray<HerdrMachine>, HerdrError, CliServices> {
     return this.cli(["machine", "list", "--json"]).pipe(
       Effect.flatMap((reply) => decodeBoundary("machine list", Schema.Array(HerdrMachine), reply)),
+    );
+  }
+
+  /**
+   * The Machines this one may pair with: core's, by core's name, on a Machine set to core;
+   * herdr's saved ones on a Machine set to herdr.
+   */
+  machineList(): Effect.Effect<ReadonlyArray<HerdrMachine>, HerdrError, CliServices> {
+    const env = this.env;
+    const herdr = this.herdrMachineList();
+    return Effect.gen(function* () {
+      if ((yield* terminalBackend(env.userDir)) === "herdr") return yield* herdr;
+      const listed = yield* coreCall(yield* coreSocket(env.raw), "machine.list", {});
+      return Arr.map(listed.machines, rosterEntry);
+    });
+  }
+
+  /** Adds a Machine to core, which reaches it with `via` and never installs hc there. */
+  machineAdd(name: string, via: string) {
+    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
+      coreCall(socket, "machine.add", { name, via }),
+    );
+  }
+
+  /** Has core dial a Machine now rather than at its next retry. */
+  machineDial(name: string) {
+    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
+      coreCall(socket, "machine.connect", { machine: name }),
+    );
+  }
+
+  /** Has core forget a Machine; its terminals keep running there. */
+  machineRemove(name: string) {
+    return Effect.flatMap(coreSocket(this.env.raw), (socket) =>
+      coreCall(socket, "machine.rm", { machine: name }),
     );
   }
 
@@ -1125,7 +1396,8 @@ export class Herdr {
 
   /** Restore only a lost alias, never a human rename or another session in this pane. */
   restoreAgentName(entry: AgentEntry): HerdrEffect<boolean> {
-    if (!entry.incarnation?.agentSession) return Effect.succeed(false);
+    if (!entry.incarnation?.agentSession || entry.incarnation.backend === "core")
+      return Effect.succeed(false);
     const inspect = this.cli(["agent", "get", entry.paneId]).pipe(
       Effect.flatMap((res) => decodeOrNamed("herdr agent get", AgentIdentityReply, res)),
     );
@@ -1192,7 +1464,34 @@ export class Herdr {
     });
   }
 
-  agentStatus(target: string): HerdrEffect<AgentStatus> {
+  /** On core, as its events last said: the status its harness reported through OSC 7501. */
+  agentStatus(target: string, backend?: Backend): HerdrEffect<AgentStatus> {
+    return this.routed(target, backend, this.herdrStatus(target), (socket) =>
+      Effect.gen(function* () {
+        const view = yield* watched(socket);
+        const named = Arr.filter(
+          [...view.current.terminals.values()],
+          (one) => one.name === target,
+        );
+        // An agent started again shares its name with the incarnation core lost.
+        const seen = Arr.findFirst(named, (one) => one.state === "live").pipe(
+          Option.orElse(() => Arr.head(named)),
+          Option.getOrUndefined,
+        );
+        const terminal = seen ?? (yield* coreCall(socket, "terminal.get", { terminal: target }));
+        if (terminal.state !== "live")
+          return yield* new HerdrError({
+            message: `core has no live ${target}`,
+            detail: terminal.state,
+            code: "agent_not_found",
+            answered: true,
+          });
+        return coreStatus(terminal);
+      }),
+    );
+  }
+
+  private herdrStatus(target: string): HerdrEffect<AgentStatus> {
     return this.cli(["agent", "get", target]).pipe(
       Effect.flatMap((res) => {
         // An agent herdr does not have is answered, not failed: exit 0 with an error
@@ -1221,41 +1520,6 @@ export class Herdr {
         source: result.source?.source_checkout_path ?? result.source?.repo_root ?? null,
       })),
     );
-  }
-
-  /**
-   * Where herdr keeps a repository's worktrees: what its own `config.toml` says, and
-   * herdr's default otherwise. There is no command to ask, so this is the one thing
-   * about herdr that is read from its config rather than from herdr — and it lives
-   * here so that "where would herdr have put this checkout" is a question with one
-   * answer, whoever is asking. A caller Collie makes a checkout for needs that answer
-   * for herdr's own "open worktree" UI to still list it.
-   *
-   * `HERDR_CONFIG_PATH` moves that file, and herdr honours it, so this follows it.
-   * XDG_CONFIG_HOME is not consulted: the fallback is herdr's own default, and a
-   * machine that keeps its config elsewhere says so with `HERDR_CONFIG_PATH`.
-   */
-  worktreesDirectory(): Effect.Effect<string, never, PlatformServices> {
-    const { home, herdrConfigPath } = this.env;
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      // The config herdr is reading, which `HERDR_CONFIG_PATH` may move: asking the
-      // default while herdr honours an override would put the checkout somewhere herdr
-      // never configured, which is the one thing this must not do.
-      const configured = yield* fs
-        .readFileString(herdrConfigPath ?? path.join(home, ".config", "herdr", "config.toml"))
-        .pipe(
-          Effect.flatMap((text) => Effect.try(() => Bun.TOML.parse(text))),
-          Effect.map((parsed) =>
-            Schema.decodeOption(HerdrConfig)(parsed).pipe(Option.getOrUndefined),
-          ),
-          // No config file, one that will not parse, and one herdr itself would reject
-          // are the same answer: nothing here has moved the worktrees.
-          Effect.catch(() => Effect.void),
-        );
-      return configured?.worktrees?.directory ?? path.join(home, ".herdr", "worktrees");
-    });
   }
 
   worktreeCreate(opts: {
@@ -1315,18 +1579,13 @@ export class Herdr {
     );
   }
 
-  paneClose(paneId: string): HerdrEffect<void> {
-    return this.cli(["pane", "close", paneId]).pipe(Effect.asVoid);
-  }
-
-  notify(
-    title: string,
-    body?: string,
-    sound: "none" | "done" | "request" = "done",
-  ): HerdrEffect<void> {
-    const args = ["notification", "show", title, "--sound", sound];
-    if (body) args.push("--body", body);
-    return this.cli(args).pipe(Effect.asVoid);
+  /** On core, `paneId` is the agent's terminal, and closing it ends its program. */
+  paneClose(paneId: string, backend: Backend = "herdr"): HerdrEffect<void> {
+    if (backend === "herdr") return this.cli(["pane", "close", paneId]).pipe(Effect.asVoid);
+    const raw = this.env.raw;
+    return Effect.gen(function* () {
+      yield* coreCall(yield* coreSocket(raw), "terminal.kill", { terminal: paneId });
+    });
   }
 
   pluginPaneOpen(opts: {
@@ -1385,8 +1644,16 @@ export class Herdr {
    * which is not the same as the harness having acted on them. Nothing here ever reports
    * an agent as stopped: no proof of quiescence exists at this boundary.
    */
-  agentSendKeys(target: string, keys: ReadonlyArray<string>): HerdrEffect<void> {
-    return this.rpc("agent.send_keys", { target, keys: [...keys] }).pipe(Effect.asVoid);
+  agentSendKeys(target: string, keys: ReadonlyArray<string>, backend?: Backend): HerdrEffect<void> {
+    return this.routed(
+      target,
+      backend,
+      this.rpc("agent.send_keys", { target, keys: [...keys] }).pipe(Effect.asVoid),
+      (socket) =>
+        coreCall(socket, "terminal.keys", { terminal: target, keys: [...keys] }).pipe(
+          Effect.asVoid,
+        ),
+    );
   }
 
   /**
@@ -1444,11 +1711,7 @@ export class Herdr {
    * what Collie was built against; this says what is actually there, which is the only
    * one that can refuse a feature at runtime.
    */
-  /**
-   * Which herdr this is, as its own CLI reports it. Recorded in the Herd's `server.json`
-   * at every ensure, so a version or protocol change is something the log can name
-   * rather than something a human works out from a call that started failing.
-   */
+  /** Which herdr this is, and where its server listens, as its own CLI reports it. */
   serverInfo(): HerdrEffect<{
     running: boolean;
     socket: string;
@@ -1479,3 +1742,10 @@ export class Herdr {
     return this.rpc("popup.close", {}).pipe(Effect.asVoid);
   }
 }
+
+/** Where herdr says its running server listens, or null where it cannot say. */
+export const serverSocket = (herdr: Herdr) =>
+  herdr.serverInfo().pipe(
+    Effect.map((server) => (server.socket === "" ? null : server.socket)),
+    Effect.orElseSucceed(() => null),
+  );

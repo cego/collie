@@ -67,6 +67,9 @@ process.env.COLLIE_HOST_STOP_GRACE ??= "500 millis";
 for (const key of Struct.keys(process.env))
   if (pipe(key, Str.startsWith("HERDR_")) && key !== "HERDR_API_SCHEMA") delete process.env[key];
 delete process.env.COLLIE_USER_DIR;
+// Never the human's core: a host a test starts keeps its board and chat terminals there.
+process.env.HC_SOCKET = "/nonexistent/collie-test/hc.sock";
+delete process.env.HC_SESSION;
 // Never GitHub's: a release source nothing listens on, refused at once.
 process.env.COLLIE_RELEASES = "http://127.0.0.1:9";
 delete process.env.COLLIE_CWD;

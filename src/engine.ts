@@ -95,7 +95,15 @@ import {
   type WorkflowDefinition,
   type WorkflowEntry,
 } from "./sdk";
-import { FALLBACK_DEFAULTS, configValue, gitlabHostOf, loadDefaults, readConfig } from "./config";
+import {
+  FALLBACK_DEFAULTS,
+  configValue,
+  gitlabHostOf,
+  loadDefaults,
+  readConfig,
+  terminalBackend,
+  worktreesDirectory,
+} from "./config";
 import { unlistedServers } from "./compaction";
 import { foldPreferences, preferencesFromOptions, resolveChoice } from "./harness";
 import type { MachineCatalogue } from "./harness-choice";
@@ -181,7 +189,7 @@ import {
   type Watched,
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
-import { budgetPath, herdOf } from "./steering";
+import { budgetPath, herdOf, machineHerd } from "./steering";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
@@ -232,7 +240,7 @@ import { slackToken } from "./slack-credentials";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
-import { listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
+import { isOpen, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs } from "./time";
 import {
   pauseBefore,
@@ -3417,7 +3425,8 @@ export const hostLayer = (options: {
               task === null ? runId : taskTitleOf(task.label),
               about.subject,
             );
-            if (toast !== undefined) yield* toast(title, body, SOUND[kind]).pipe(Effect.ignore);
+            if (toast !== undefined)
+              yield* toast(title, body, SOUND[kind], runId).pipe(Effect.ignore);
             if (channel === "" || row === null) return;
             yield* Effect.gen(function* () {
               const reading = yield* host.connection("slack");
@@ -3729,11 +3738,12 @@ export const hostLayer = (options: {
       const walks = yield* Cache.makeWith(
         (root: string) =>
           Effect.gen(function* () {
-            const { herdr } = yield* placing;
-            const worktrees = yield* herdr.worktreesDirectory();
-            return yield* publicationCheckouts(
-              (yield* fs.exists(worktrees)) ? [root, worktrees] : [root],
-            );
+            const { env } = yield* placing;
+            const roots = [root];
+            // Checkouts made before the setting stay where herdr put them.
+            for (const dir of [yield* worktreesDirectory(env), `${env.home}/.herdr/worktrees`])
+              if (yield* fs.exists(dir)) roots.push(dir);
+            return yield* publicationCheckouts(roots);
           }).pipe(Effect.provideContext(bun)),
         { capacity: 4, timeToLive: (exit) => (Exit.isSuccess(exit) ? "2 minutes" : 0) },
       );
@@ -5045,8 +5055,13 @@ export const hostLayer = (options: {
     }),
   );
 
-/** Where a toast is raised: herdr's, in a host. */
-export type Toast = (title: string, body: string, sound: Sound) => Effect.Effect<void>;
+/** Where a toast is raised: to each connected Desktop, in a host. */
+export type Toast = (
+  title: string,
+  body: string,
+  sound: Sound,
+  runId: string,
+) => Effect.Effect<void>;
 
 /** The Herd a host works for: whose budget a judgement is charged to, and whose prompts it reads. */
 export interface Herd {
@@ -6671,7 +6686,9 @@ const makeRegistry: (
         ? { workspace: opened.id, rootPane: placed.worktree?.root_pane_id ?? null }
         : ask.workspace !== undefined && ask.workspace !== null
           ? { workspace: ask.workspace, rootPane: null }
-          : yield* openWorkspace;
+          : (yield* terminalBackend(placing.env.userDir)) === "core"
+            ? { workspace: null, rootPane: null }
+            : yield* openWorkspace;
     // A workspace an earlier attempt recorded may already have its Task.
     const known =
       ask.workspace === undefined
@@ -6684,7 +6701,7 @@ const makeRegistry: (
         label,
         cwd: placed.cwd,
         rootPane,
-        herd: yield* herdOf(placing.env.socketPath).pipe(Effect.orElseSucceed(() => null)),
+        herd: yield* machineHerd(placing.env).pipe(Effect.orElseSucceed(() => null)),
       }).pipe(
         Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
         Effect.orDie,
@@ -6720,7 +6737,7 @@ const makeRegistry: (
     const mr = mrKeyOf(pointedAt(generation, ask.input));
     if (branch === null && mr === null) return null;
     const open = new Set(
-      branch === null
+      branch === null || (yield* terminalBackend(placing.env.userDir)) === "core"
         ? []
         : Arr.map(
             yield* placing.herdr
@@ -6750,7 +6767,7 @@ const makeRegistry: (
         );
         if (mrs.includes(mr)) return task;
       }
-      if (branch === null || !open.has(task.workspace) || unplaced(row)) continue;
+      if (branch === null || !isOpen(task, open) || unplaced(row)) continue;
       const at = placedOf(row, {});
       if (at.branch === null) continue;
       if ((yield* about({ cwd: at.cwd, branch: at.branch, name: row.run, inputs: {} })) === branch)
@@ -6910,10 +6927,7 @@ const makeRegistry: (
               inputs: launch === undefined ? {} : { [launch]: settled.input[launch] ?? null },
             },
             options?.namesTasks === true,
-          ).pipe(
-            Effect.provideContext(bun),
-            Effect.mapError((cause) => refused(`no Task could be named: ${cause.message}`)),
-          )
+          ).pipe(Effect.provideContext(bun))
         : null;
     const claimed = yield* claimAndPlace({
       // The invocation is the claim, so replaying the parent admits nothing new and
@@ -8035,6 +8049,32 @@ const makeRegistry: (
       for (const row of yield* store.pending) yield* recoverAdmission(row);
       yield* reconcileAnswers();
     }),
+  );
+
+  // The agents of a running Run that core lost, started again: once now, and whenever core
+  // says one may have gone.
+  const hosted = yield* Effect.context<HostServices>();
+  yield* Effect.forkScoped(
+    (yield* Agents).onLosses(
+      Effect.gen(function* () {
+        const host = yield* Host;
+        const agents = yield* Agents;
+        for (const { run } of yield* store.runs)
+          yield* agents.resumeLost(run, {
+            running: hasEnded(run).pipe(
+              Effect.map((ended) => !ended),
+              Effect.orElseSucceed(() => false),
+              Effect.provideContext(hosted),
+            ),
+            authority: host.place(run).pipe(Effect.map((place) => place.authority)),
+            questions: {
+              ask: (question, asker) => host.asking(run, question, asker),
+              asked: host.asked(run),
+              close: (decision, value) => host.close(run, decision, value),
+            },
+          });
+      }).pipe(Effect.provideContext(hosted)),
+    ),
   );
 
   return {

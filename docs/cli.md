@@ -27,7 +27,7 @@ collie --json --workspace wT run start plan --input goal="ship it" --input then=
 ```
 
 `--machine` is for a command that names no Run: `board`, `run start`, `run list`,
-`schedule`, `cleanup`, `models` and `connections`. A
+`schedule`, `cleanup`, `models`, `connections` and `doctor`. A
 command that names a Run needs none (see [Another Machine's Runs](#another-machines-runs)).
 A start on another Machine opens its own Task there, so `--task`, `--continue-task` and
 `--here` are refused with it, and the module is the one that Machine has saved.
@@ -47,13 +47,15 @@ Intent edits, override clearing and remembered checks execute on the owning host
 the caller recorded. `verify` runs inside its checkout and streams output back.
 `run checks --follow` streams that host's live log; paths it returns belong to that Machine.
 
-Adding a Machine to herdr (`herdr machine add`) is all it takes. The first command that
+Adding a Machine is all it takes: to core with [`collie machine add`](#collie-machine) on a
+Machine set to `core`, to herdr with `herdr machine add` on one set to `herdr`. The first command that
 reaches it opens this computer's SSH connection to it, as
 [`collie machine connect`](#collie-machine) does, which asks for that login's approval
 once, where the command runs, and pairs the two through it; from then on the Machines talk
 over a TLS WebSocket the dialled one listens for on port 47217. A connection already
 open, as one Desktop opened, is ridden and nothing is asked. A pairing whose connection has gone before it asks fails with what ssh said; it never logs
-in by itself. Removing the Machine from herdr forgets the pairing on both sides. A host's
+in by itself. [`collie machine forget`](#collie-machine), or removing the Machine from
+herdr's list on a Machine set to `herdr`, forgets the pairing on both sides. A host's
 own jobs never start an SSH login, so a Machine no command has reached yet is
 `invalid_state` for them: not paired yet.
 
@@ -71,9 +73,16 @@ The receiving host records each operation as the front door that asked — `cli`
 
 ```sh
 collie machine list
-collie machine connect <name>
+collie machine connect <name> [--target <ssh target>]
+collie machine add <name> --target <ssh target>
+collie machine forget <name>
 collie machine invite --for <installation> --name <name> [--address <host>]
 ```
+
+The Machines are core's machine list, by core's name for each, on a Machine whose
+`terminal_backend` is `core`, and herdr's machine list on one set to `herdr`. `data.backend`
+says which, and `data.roster` is that list: each Machine's `label` (its name), `target` (how
+ssh reaches it) and `session`.
 
 `list` names each Machine paired with this one, which side dials (`out`: this one dials it;
 `in`: it dials this one), and whether it answers now. Its `data.machines` is each one's
@@ -90,6 +99,9 @@ and `failure`, never the secret. `data.build` is this Machine's build. A listene
   connection to it; null for one that dials in.
 - `waits`: `ssh_connection` while the link is not up because direct failed and no SSH
   connection is open, else null.
+- `added`: on a Machine set to `core`, whether core keeps a Machine this one dials; null
+  otherwise. A pairing core does not keep, as one made before the Machine was set to core,
+  is kept, and its human line says `not added to core: collie machine connect <name> adds it`.
 
 Each is null in an older Machine's answer. The human line puts the transport after the
 state, as `live	ssh (direct: <why>)` or `live	direct`, and a link not up as
@@ -102,20 +114,37 @@ Its channels and dial-backs go the same way while it is up, and its next connect
 direct again. The host never logs in: with no connection open, the link waits, and
 `machine list` says what opens one.
 
-`connect` opens this computer's SSH connection to herdr's machine by that name, where
+`connect` opens this computer's SSH connection to the Machine by that name, where
 none is open: one `ssh` master with `ControlPersist`, under the user's SSH config, whose
 login prompt or SSO banner shows on this command's stderr. ssh keeps it open after the
 command returns. It is bounded to two minutes, after which it is `machine_unreachable`
 naming the Machine and the last thing ssh said. It then wakes this host's link to that
-Machine, so the link does not wait out its backoff. Its `data` is `machine`, `path` (the
-control path) and `opened`, false where a connection was already open. A name herdr does
-not list is `invalid_input`.
+Machine, so the link does not wait out its backoff. On a Machine set to core, it also has
+core dial the Machine now (`machine.connect`), which connects at once now that the
+connection is open; for a paired Machine core does not keep yet, it adds it as `add` does.
+Its `data` is `machine`, `path` (the control path), `opened`, false where a connection was
+already open, and `added`. A Machine no list names is reached at `--target`, as onboarding
+reaches a VM before it is added; with neither it is `invalid_input`. On a Machine set to
+core, a pairing herdr still lists is reached at herdr's target.
 
-**Closing.** Each time the host reads herdr's machines — at start, at `machine list`, and
+`add`, on a Machine set to `core`, opens the SSH connection to `--target` as `connect` does,
+then adds the Machine to core under `<name>` (`machine.add`) with a `via` that rides that
+connection: `ssh -S <control path> -o ControlMaster=no -o ProxyCommand=false -T <target>`.
+That command fails at once where the connection has gone, so core never starts a login
+nobody sees: core retries, and connects once a front door opens the connection again. It
+never asks core to install `hc`; the release onboarding places carries it. Core refusing,
+as `hc_missing` or `already_added`, is `operation_failed` with core's words. On a Machine set
+to `herdr` it is `invalid_state`.
+
+`forget` unpairs the Machine on both sides, ends this computer's SSH connection to it, and on
+a Machine set to `core` has core forget it (`machine.rm`). Nothing on it is stopped.
+
+**Closing.** On a Machine set to `herdr`, each time the host reads herdr's machines — at start, at `machine list`, and
 when a link comes up — it ends every SSH connection under its state directory that is not
 the one for a machine herdr lists now, with `ssh -O exit`: a Machine herdr forgot, after it
 is told and forgotten, and one herdr lists at another target. It opens none for the new
-target. Where herdr cannot say, nothing is closed.
+target. Where herdr cannot say, nothing is closed. On a Machine set to `core`, a reading of
+core's list forgets and closes nothing: only `forget` does.
 
 `live` means the control link is up. `connecting` names the dialler's last failure while
 it retries. `away` says when the listener lost its peer's control link and why. A call
@@ -381,7 +410,13 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   and its answer sent back all the same, numbered under the work it was given last. One still
   open once its agent is gone is closed with `closed: <agent> is gone`. With no host
   running for the state directory, nothing can put it on the Run, so the agent is let ask
-  in its pane instead.
+  in its pane instead. A Codex agent's question tool returns at once and leaves the agent
+  `done` rather than `blocked`, so Collie reads its questions from the App Server it runs
+  that agent through and puts them on the Run the same way, with compaction off too. pi has no question tool, so a pi agent a Run launches is given Collie's
+  `ask_user_question`, which takes `AskUserQuestion`'s questions and puts them on the Run
+  the same way, and says the same. Native chat's pi has none: the human is in its pane.
+  While a question is open, the next step's prompt or a repair to that agent
+  waits as one to an agent in a dialog does, and goes once the answers have.
 - **A control reaches one Run.** Its siblings and the host carry on. A control over a Run
   whose module is not loaded here is recorded and says so, naming the file to repair,
   rather than reporting a success nothing can stand behind.
@@ -780,9 +815,11 @@ nothing in the `fallbacks` chain had room, the work stays on its preferred agent
 
 ```sh
 collie --json board
+collie board --draw
 ```
 
-The first snapshot of the board the host serves
+`--draw` draws the board itself in the terminal it runs in: what the host's `collie-board`
+core terminal runs, and a start made from it is placed as one from the Home. Without it, the first snapshot of the board the host serves
 ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
 board, in the order the Home draws them: **Needs you** first, then **Waiting on you** (work
 that ended and has not landed, what is `ready` to release first), then **Working** (`active`
@@ -1007,7 +1044,7 @@ Defaults are per workspace: every run started there begins with them.
 
 ## Talk to Collie
 
-The Home's right-hand pane is an ordinary Claude Code (or Pi) session with Collie's role
+The Home's `collie-chat` terminal is an ordinary Claude Code (or Pi) session with Collie's role
 and Collie's tools — that is where questions about the flock are asked, and it is
 [docs/using.md](using.md#talking-to-collie-about-a-herd). From a terminal:
 
@@ -1030,7 +1067,7 @@ the default, on an existing installation as much as a new one.
 `chat status-line` prints `board selection: <name>`, or `board selection: none · whole
 herd`, which is what Claude Code shows under the prompt so that chat and board agree on
 what "it" means. `--install` is what `setup.sh` runs: it configures `statusLine` in your
-own Claude Code settings — never `prepare.sh`, exactly like the keybindings — and leaves a
+own Claude Code settings — never `prepare.sh` — and leaves a
 status line you already have alone, naming it instead. `collie doctor` reports which of
 those it found. Outside a herdr session the command prints nothing, so a Claude Code you
 opened somewhere else carries no line about a board it is nowhere near.
@@ -1054,7 +1091,7 @@ through a generated extension; this is the third way in.
 | `collie_workspaces`   | The workspaces this session has (the Home marked as no checkout), the Tasks whose workspace is open, the Projects root, and each workflow with its Inputs                                                                                    |
 | `collie_receipts`     | What one run waits on the human for — its Choice and proposals — and what state each message to its agents actually reached                                                                                                                  |
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                        |
-| `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults                                                                                                                                                     |
+| `collie_installation` | What Collie needs, the defaults                                                                                                                                                                                                              |
 | `collie_connections`  | Each Machine's service logins, accounts, absent or broken states, and fixes; `machine` keeps one Machine                                                                                                                                     |
 | `collie_news`         | What this conversation has not been told; reading it settles those items for it                                                                                                                                                              |
 | `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it                                                                                                                                                                |
@@ -2528,11 +2565,12 @@ left, and the exit status is 1. Re-running is the retry.
 collie doctor
 collie doctor --json
 collie doctor --gitlab-host gitlab.example.com
+collie --machine vm-mk doctor
 ```
 
 Every prerequisite in one pass, each with the command that fixes it: herdr present and at
 least the `min_herdr_version` the plugin manifest declares, and a running herdr server, when
-there is one, at least that too; the plugin linked from this
+there is one, at least that too; `hc` and its core (below); the plugin linked from this
 installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
 its own reported state); every skill and every harness
 the loaded workflows and personas name; whether the checkout is behind its remote; the
@@ -2559,6 +2597,18 @@ running server must stop once, which ends every program in its panes: `herdr upd
 panes alone, and a **herdr server** line fails while the server still runs an older herdr,
 until it is restarted when nothing is running. Each fix also offers the package manager
 that installed herdr. Collie never runs `herdr update` or `herdr server stop` itself.
+
+**hc** is `herdr-core` on PATH, else where upstream's installer puts it
+(`~/.local/bin/herdr-core`, or `HC_INSTALL_DIR`), at the version `hc-pin.json` pins. One
+missing or at another version fails, with upstream's installer for the pinned version as
+the fix. **Core** fails where the default core session (`HC_SOCKET`, else the `socket`
+core's `config.toml` names, else `HC_SESSION`'s socket) does not answer `hello` within 5 seconds, with `hc server start` as the fix.
+**Herdr 1** says what on this Machine still uses Herdr 1: its `terminal_backend` setting
+where it is `herdr`, with `collie settings set terminal_backend core` as the fix, and each
+agent whose registry entry has no core backend, older entries included, and whose pane is
+still open in any running herdr session. Where herdr cannot list its sessions or their panes it warns that
+what still runs there is unknown, rather than reporting nothing. It never fails the run. Doctor reports the Machine it runs on; `--machine <name>` runs it on a paired
+Machine, through that Machine's host.
 
 **Disk** covers each filesystem holding the state directory, `~/.cache/collie`, herdr's
 worktrees and the temporary directory, once each. One with less than 10% or 5 GiB free is a
@@ -2638,7 +2688,7 @@ step that was cut short runs again. A check the old host was running is ended wi
 runs again on the new one. One a host left without ending it, because it was killed or
 crashed, is ended by the next host to start, named in the Run's log, and runs once more.
 The herdr action "Restart the Collie host" does the
-same and says what it did as a notification.
+same and prints what it did.
 
 A host works for one Herd: the herdr session a judgement is charged to and its cross-run
 checks are held in. It is the one `HERDR_SOCKET_PATH` names, which a client that starts a

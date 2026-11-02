@@ -643,7 +643,7 @@ test(
       Effect.gen(function* () {
         const env = yield* currentEnv;
         const { prompts, asked } = answering(["proof", "picked"]);
-        expect(yield* pickFlow(new Herdr(env), env, prompts, "inline")).toBe(0);
+        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
         // Offered by the picker, and the one question is what the human wants.
         expect(Arr.some(asked, (question) => pipe_(question, Str.includes("Workflows")))).toBe(
           true,

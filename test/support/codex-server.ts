@@ -49,6 +49,8 @@ export interface StandIn {
     status?: "idle" | "active";
     /** A refusal `thread/turns/list` answers with in place of its turns. */
     turnsRefusal?: { code: number; message: string };
+    /** What `thread/items/list` answers with, newest first. */
+    items?: ReadonlyArray<unknown>;
   }>;
   /** Answer `turn/interrupt` and keep the turn running. */
   ignoreInterrupt?: boolean;
@@ -81,6 +83,7 @@ const Thread = Schema.Struct({
   readTurns: Schema.optionalKey(Schema.Array(Schema.Json)),
   status: Schema.optionalKey(Schema.Literals(["idle", "active"])),
   turnsRefusal: Schema.optionalKey(Schema.Struct({ code: Schema.Finite, message: Schema.String })),
+  items: Schema.optionalKey(Schema.Array(Schema.Json)),
 });
 const StandInFile = Schema.fromJsonString(
   Schema.Struct({
@@ -287,6 +290,8 @@ const main = Effect.gen(function* () {
             nextCursor: null,
           });
         }
+        case "thread/items/list":
+          return thread?.items ? reply({ data: thread.items, nextCursor: null }) : reply({});
         case "turn/interrupt": {
           const held = threadId === undefined ? [] : (turns.get(threadId) ?? []);
           const turn = Option.getOrUndefined(

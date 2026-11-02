@@ -102,8 +102,8 @@ const filesUnder = Effect.fn("release.filesUnder")(function* (dir: string) {
 /**
  * Writes `carried` into `<collieDir>/release` whole: beside the current one, recorded, then
  * swapped. Every file of the current release that differs from its own record is copied into
- * `kept/<when>/` first; the result names each, relative to `collieDir`. Unlocked: callers go
- * through `placeLocked`.
+ * `kept/<when>/` first; the result names each, relative to `collieDir`, with the sha256 of each
+ * file placed. Unlocked: callers go through `placeLocked`.
  */
 export const placeRelease = Effect.fn("release.place")(function* (
   carried: Carried,
@@ -156,5 +156,5 @@ export const placeRelease = Effect.fn("release.place")(function* (
   }
   yield* fs.rename(next, current);
   yield* fs.remove(old, { recursive: true, force: true });
-  return { root: current, kept };
+  return { root: current, kept, is: files };
 });

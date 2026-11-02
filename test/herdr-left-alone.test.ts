@@ -17,7 +17,15 @@ const RUNS_IN_SHELL = [
   /[;&|(]\s*herdr\s+(update|server\s+stop)\b/,
 ];
 
-const sources = (pattern: string) => Array.from(new Bun.Glob(pattern).scanSync({ cwd: root }));
+// They run hc, not herdr: `hc update --from` keeps core's terminals running, and the probe
+// stops only the core it started in its own directory.
+const RUN_HC = new Set(["src/hc-install.ts", "tools/hc-probe.ts"]);
+
+const sources = (pattern: string) =>
+  Arr.filter(
+    Array.from(new Bun.Glob(pattern).scanSync({ cwd: root })),
+    (file) => !RUN_HC.has(file),
+  );
 
 const offenders = Effect.fn("herdrLeftAlone.offenders")(function* (
   pattern: string,

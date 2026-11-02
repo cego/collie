@@ -32,7 +32,7 @@ import {
 import { claudeSettingsPath, installStatusLine, promptLineFor, statusLineFor } from "../statusline";
 import { err, newRequestId } from "../operations";
 import { settleNewsFor } from "../lifecycle";
-import { herdOf } from "../steering";
+import { machineHerd } from "../steering";
 import { isJsonObject } from "../schema";
 import { TOOLS, toolNamed } from "../tools";
 import { UnknownJson, answering, requestIdFlag, stdinText } from "./shared";
@@ -47,7 +47,7 @@ const status = Command.make("status", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
       const chosen = yield* chatHarnessOf(env.userDir);
-      const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+      const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
       const record = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
       const unavailable = whyUnavailable(chosen, Bun.which(chosen));
       const delivery = pushable(chosen);
@@ -146,7 +146,7 @@ const news = Command.make(
   ({ sent, uncertain: unsure }) =>
     answering((env) =>
       Effect.gen(function* () {
-        const key = yield* herdOf(env.socketPath).pipe(Effect.orElseSucceed(() => null));
+        const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
         if (key === null) return err("invalid_state", "Collie cannot reach herdr.");
         // `sent` and `uncertain` are facts about a transport, never about a conversation.
         // Only `collie_news` being read settles an item, because only that shows it
