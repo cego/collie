@@ -506,7 +506,8 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   let already = 0;
   if (what.log !== undefined) {
     yield* fs.makeDirectory(path.dirname(what.log), { recursive: true }).pipe(Effect.orDie);
-    yield* fs.writeFileString(what.log, "").pipe(Effect.orDie);
+    // Never emptied: a check taken over from another host may already have written to it.
+    yield* fs.writeFileString(what.log, "", { flag: "a" }).pipe(Effect.orDie);
   }
   /** One chunk into the log, in the order the two streams delivered them. */
   const toLog = (chunk: string): Effect.Effect<void> => {

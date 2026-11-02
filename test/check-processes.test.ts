@@ -31,6 +31,7 @@ import {
   hostCheckProcesses,
   KILL_CEILING,
   runningChecksDir,
+  type RunningCheck,
 } from "../src/check-processes";
 import {
   bindingsOf,
@@ -1392,6 +1393,40 @@ test("a check's two streams reach its log in the order they were written", () =>
         { cwd: one.notes, log },
       );
       expect(yield* fs.readFileString(log)).toBe("0\n1\n2\n3\n4\n5\n6\n7\n");
+    }),
+  ));
+
+test("a check claimed from the host it was handed over by keeps what its log already holds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { root, notes, checks } = yield* world;
+      const log = `${root}/check.log`;
+      yield* fs.writeFileString(log, "before the handover\n");
+      const claimed = {
+        ...checks,
+        run: () =>
+          Effect.succeed({
+            id: "handed",
+            pid: null,
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            exit: Effect.succeed(0),
+            logged: true,
+            collected: (collecting) => collecting,
+          } satisfies RunningCheck),
+      };
+
+      yield* Effect.scoped(
+        startCheck(`${root}/evidence`, {
+          ...check,
+          executable: "sh",
+          argv: [],
+          cwd: notes,
+          log,
+        }).pipe(Effect.provideService(CheckProcesses, claimed)),
+      );
+      expect(yield* fs.readFileString(log)).toBe("before the handover\n");
     }),
   ));
 
