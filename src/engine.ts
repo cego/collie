@@ -8354,9 +8354,7 @@ const makeRegistry: (
         const executionId = found.success.execution;
         yield* untilStopped(registration, executionId).pipe(
           Effect.andThen(
-            answerDecision(registration, { name, executionId, value }).pipe(
-              waking.withPermits(1),
-            ),
+            answerDecision(registration, { name, executionId, value }).pipe(waking.withPermits(1)),
           ),
           Effect.forkIn(hostScope),
         );

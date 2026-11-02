@@ -454,10 +454,11 @@ test("an answer given before its Run waits on the question is handed over only o
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-answer-" });
-      // Typed as the host types the workflows it registers.
       const asking: HostWorkflow = Workflow.make("asking", {
+        // SAFETY: a struct of schemas with no services, as the host's own envelope is.
         payload: Schema.Struct({ runId: Schema.String }) as HostPayload,
         idempotencyKey: (payload) => String(payload["runId"]),
+        // SAFETY: a string codec needs no services.
         success: Schema.String as HostCodec,
       });
       const payload = { runId: "r1" };
@@ -505,9 +506,9 @@ test("an answer given before its Run waits on the question is handed over only o
       );
 
       expect(early).toBe(false);
-      expect(Option.isSome(result) && result.value._tag === "Complete" && result.value.exit).toEqual(
-        Exit.succeed("yes"),
-      );
+      expect(
+        Option.isSome(result) && result.value._tag === "Complete" && result.value.exit,
+      ).toEqual(Exit.succeed("yes"));
     }).pipe(Effect.scoped),
   ));
 
