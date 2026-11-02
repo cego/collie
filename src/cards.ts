@@ -20,7 +20,7 @@ import { Significance, mrWords, readMrRef } from "./board-model";
 import { forgeOf } from "./forge/forge";
 import { appendJournal, readJournal } from "./journal";
 import { redact } from "./redact";
-import type { Verification } from "./verify";
+import { sameTree, type Verification } from "./verify";
 
 const RevisionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
@@ -185,9 +185,7 @@ export function verificationOn(
   verification: Verification,
   revision: { readonly head_sha: string; readonly fingerprint: string },
 ): Card["verifications"][number] {
-  const here =
-    verification.end.head_sha === revision.head_sha &&
-    verification.end.fingerprint === revision.fingerprint;
+  const here = sameTree(verification.end, revision);
   return {
     id: verification.id,
     name: verification.name,
