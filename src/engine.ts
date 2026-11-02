@@ -136,7 +136,13 @@ import {
   type RollbackRead,
   type StageRead,
 } from "./releasing";
-import { blockedLine, reviewWaitOf, standingOf, type ReviewStanding } from "./review-wait";
+import {
+  blockedLine,
+  conflictsWithTarget,
+  reviewWaitOf,
+  standingOf,
+  type ReviewStanding,
+} from "./review-wait";
 import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
@@ -269,6 +275,7 @@ import {
   ranCommand,
   readVerifications,
   recordFor,
+  recordedFor,
   reliedFor,
   rerunTest,
   resolveExecutable,
@@ -476,31 +483,30 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   }
   export const IntegrationSchema: Schema.Codec<Integration, unknown, never, never>;
 
-  /** One command a benchmark plan runs, with no shell between. */
-  export interface BenchmarkCommand {
-    readonly name: string;
-    readonly executable: string;
-    readonly argv: ReadonlyArray<string>;
-  }
-  /** A metric a plan judges: \`<command>.wall_ms\`, \`.cpu_ms\`, \`.peak_kb\`, or a key of its last stdout line's JSON. */
-  export interface BenchmarkMetric {
-    readonly name: string;
-    readonly direction: "lower" | "higher";
-    readonly role: "primary" | "guardrail";
-  }
+  /** What a Run measures with, frozen: a changed plan is a new comparison. */
+  export const BenchmarkPlan: Schema.Struct<{
+    /** Commits applied on the base commit, each touching only \`paths\`. */
+    readonly harness: Schema.Struct<{ readonly commits: Schema.$Array<Schema.String>; readonly paths: Schema.$Array<Schema.String> }>;
+    /** Run once per tree before its samples. */
+    readonly prepare: Schema.withDecodingDefaultKey<Schema.NullOr<Schema.Struct<{ readonly executable: Schema.String; readonly argv: Schema.$Array<Schema.String> }>>>;
+    /** Each sample runs every one, in order, in the tree's root, with no shell between. */
+    readonly commands: Schema.NonEmptyArray<Schema.Struct<{ readonly name: Schema.String; readonly executable: Schema.String; readonly argv: Schema.$Array<Schema.String> }>>;
+    /** \`<command>.wall_ms\`, \`<command>.cpu_ms\`, \`<command>.peak_kb\`, which the host reads, or \`<command>.<key>\` of its last stdout line's JSON. */
+    readonly metrics: Schema.NonEmptyArray<Schema.Struct<{ readonly name: Schema.String; readonly direction: Schema.Literals<readonly ["lower", "higher"]>; readonly role: Schema.Literals<readonly ["primary", "guardrail"]> }>>;
+    readonly warmup: Schema.withDecodingDefaultKey<Schema.Int>;
+    readonly samples: Schema.withDecodingDefaultKey<Schema.Int>;
+    /** Seconds one sample, all its commands, or one tree's prepare may take. */
+    readonly limit: Schema.withDecodingDefaultKey<Schema.Finite>;
+    /** Percent. */
+    readonly threshold: Schema.withDecodingDefaultKey<Schema.Finite>;
+    readonly tolerance: Schema.withDecodingDefaultKey<Schema.Finite>;
+  }>;
   /** A Run's frozen benchmark plan; a key left out takes its default. */
-  export interface BenchmarkPlan {
-    readonly harness: { readonly commits: ReadonlyArray<string>; readonly paths: ReadonlyArray<string> };
-    readonly prepare?: { readonly executable: string; readonly argv: ReadonlyArray<string> } | null;
-    readonly commands: readonly [BenchmarkCommand, ...Array<BenchmarkCommand>];
-    readonly metrics: readonly [BenchmarkMetric, ...Array<BenchmarkMetric>];
-    readonly warmup?: number;
-    readonly samples?: number;
-    /** Seconds one command of a sample, or prepare, may take. */
-    readonly limit?: number;
-    readonly threshold?: number;
-    readonly tolerance?: number;
-  }
+  export type BenchmarkPlan = typeof BenchmarkPlan.Encoded;
+  export type BenchmarkCommand = BenchmarkPlan["commands"][number];
+  export type BenchmarkMetric = BenchmarkPlan["metrics"][number];
+  /** The plan input declares, or the reason it is not one, in \`collie measure\`'s words. */
+  export const decodeBenchmarkPlan: (input: unknown) => Effect.Effect<typeof BenchmarkPlan.Type, string>;
   /** One tree a Measurement sampled. */
   export interface MeasuredTree {
     readonly cwd: string;
@@ -516,7 +522,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly run: string;
     readonly pass: string;
     readonly machine: string;
-    readonly plan: Required<BenchmarkPlan>;
+    readonly plan: typeof BenchmarkPlan.Type;
     readonly plan_digest: string;
     readonly plan_reason: string | null;
     readonly base: MeasuredTree & { readonly commit: string };
@@ -709,6 +715,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly log: string | null;
         /** It failed where the branch leaves its target too: not this Run's to fix. */
         readonly before?: { readonly at: string; readonly url: string | null };
+        /** Missing because the merge request conflicts with its target branch. */
+        readonly conflicts?: true;
       };
 
   /** One of this Run's checks, named by a human, chat or the Run's agent. */
@@ -965,6 +973,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly seen: ReadonlyArray<string>;
       /** Also return a \`Waiting\` review that needs a repair, rather than wait for it. */
       readonly untilBlocked?: boolean;
+      /**
+       * Wait only while the forge says the merge request conflicts with its target branch,
+       * parked with the line that says its branch must take the target, and return the
+       * standing at \`proved\` once it no longer does, or it is merged or closed, or a Hold or
+       * Stop ends it.
+       */
+      readonly whileConflicting?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
@@ -2150,6 +2165,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** The fingerprint of a tree too large to measure: two of them are not the same tree. */
   export const TOO_LARGE: "unstable:too-large";
+  /** Whether two snapshots are the same bytes, whatever commit each was on. A tree too large to look at is never the same as another. */
+  export function sameTree(
+    one: { readonly fingerprint: string },
+    other: { readonly fingerprint: string },
+  ): boolean;
 
   /** A Run's checks read against its journal, for which tests failed and how each rerun went. */
   type FailedChecks = CheckEvidence & { readonly approved: ReadonlyArray<VerifySpec> };
@@ -3214,6 +3234,11 @@ export class Reliance extends Context.Service<
       runId: string,
       command: Pick<Verification, "executable" | "argv" | "cwd">,
     ) => Effect.Effect<{ readonly check: string; readonly record: Verification | null } | null>;
+    /** The record that answers a command that is none of the Run's Checks, or null where it runs. */
+    readonly recorded: (
+      runId: string,
+      command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
+    ) => Effect.Effect<Verification | null>;
   }
 >()("collie/Reliance") {}
 
@@ -4644,9 +4669,16 @@ export const hostLayer = (options: {
             const polled = Effect.gen(function* () {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
-                if (standing._tag !== "Waiting" && standing._tag !== "Unreadable") return standing;
                 const wait = reviewWaitOf(mr, read);
-                if (wait._tag === "Blocked" && asked.untilBlocked === true) return standing;
+                if (asked.whileConflicting === true) {
+                  const conflicting =
+                    read.ok && read.state === "open" && conflictsWithTarget(read.mergeable);
+                  if (!conflicting && standing._tag !== "Unreadable") return standing;
+                } else {
+                  if (standing._tag !== "Waiting" && standing._tag !== "Unreadable")
+                    return standing;
+                  if (wait._tag === "Blocked" && asked.untilBlocked === true) return standing;
+                }
                 yield* waitOn(
                   asked.runId,
                   wait._tag === "Awaiting" ? wait : { repair: blockedLine(mr, wait.why) },
@@ -5044,10 +5076,28 @@ export const hostLayer = (options: {
             return null;
           }),
         ).pipe(Effect.orElseSucceed(() => null));
+      const recorded: Reliance["Service"]["recorded"] = (runId, command) =>
+        under(
+          Effect.gen(function* () {
+            const executable = yield* resolveExecutable(command.executable, command.cwd);
+            if (executable === null) return null;
+            const record = yield* recordedFor(
+              evidenceDir(dir, runId),
+              { ...command, executable },
+              hostStarted,
+            );
+            if (record !== null)
+              yield* appendLog(
+                runDir(dir, runId),
+                `verify: ${command.name} answered by verification ${record.id}`,
+              ).pipe(Effect.orDie);
+            return record;
+          }),
+        ).pipe(Effect.orElseSucceed(() => null));
       return Context.make(Host, host).pipe(
         Context.add(Notifier, Notifier.of({ notify })),
         Context.add(Oversight, oversight),
-        Context.add(Reliance, Reliance.of({ relied })),
+        Context.add(Reliance, Reliance.of({ relied, recorded })),
       );
     }),
   );
@@ -6329,7 +6379,7 @@ const makeRegistry: (
    * instance and scope in place — which is the whole linkage between the two.
    */
   const hostServices = yield* Effect.context<HostServices>();
-  const reportsReady = yield* Deferred.make<void>();
+  const generationsRegistered = yield* Deferred.make<void>();
   /** Every other Run's landing and how it ended, weighed by `takeOver`. */
   const landingTakeover = Effect.fn("Host.takeOverLanding")(function* (asked: {
     readonly runId: string;
@@ -6359,7 +6409,7 @@ const makeRegistry: (
     );
   });
   const machineReport = Effect.fn("Host.report")(function* (since: string) {
-    yield* Deferred.await(reportsReady);
+    yield* Deferred.await(generationsRegistered);
     const from = epochMs(since);
     if (!Number.isFinite(from))
       return yield* new WorkflowError({ reason: `since is not a date: ${since}` });
@@ -7465,6 +7515,8 @@ const makeRegistry: (
   });
 
   const routed = Effect.fn("Engine.routed")(function* (runId: string) {
+    // A Run recovered at startup may resume before its child's generation is registered.
+    yield* Deferred.await(generationsRegistered);
     const row = yield* store.run(runId);
     if (row === null) {
       return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
@@ -8041,7 +8093,7 @@ const makeRegistry: (
     );
   }
 
-  yield* Deferred.succeed(reportsReady, undefined);
+  yield* Deferred.succeed(generationsRegistered, undefined);
 
   // What a host admitted and did not live to hand over. Every crash window ends here.
   // Forked, so a hand-over that stalls does not keep the host from serving.

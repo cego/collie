@@ -103,7 +103,7 @@ test("what is missing is said, every piece of it", () => {
     why: [
       "the approval (1 of 2 approvals)",
       "the pipeline at 1a2b3c4d, whose lint failed",
-      "mergeability (conflict)",
+      "it conflicts with its target branch, and its branch must take the target",
     ],
   });
   expect(standingOf(read({ pipeline: { state: "running" }, mergeable: null }), at)).toEqual({
@@ -191,12 +191,27 @@ test("a red pipeline, changes requested or a merge the forge refuses blocks, wha
     why: [
       "the pipeline at 1a2b3c4d failed (lint)",
       "changes are requested",
-      "the forge will not merge it: conflict",
+      "it conflicts with its target branch, and its branch must take the target",
     ],
   });
   expect(reviewWaitOf(MR, read({ mergeable: { state: "blocked", said: "blocked" } }))._tag).toBe(
     "Blocked",
   );
+});
+
+test("each forge's word for a conflict with the target is the same conflict, and no other blocked word is", () => {
+  const CONFLICTS = "it conflicts with its target branch, and its branch must take the target";
+  for (const said of ["conflicting", "dirty", "cannot be merged"]) {
+    const conflicting = read({ mergeable: { state: "blocked", said } });
+    expect(reviewWaitOf(MR, conflicting)).toEqual({ _tag: "Blocked", why: [CONFLICTS] });
+    expect(standingOf(conflicting, at)).toEqual({ _tag: "Waiting", why: [CONFLICTS] });
+  }
+  const draft = read({ mergeable: { state: "blocked", said: "draft status" } });
+  expect(reviewWaitOf(MR, draft)).toEqual({
+    _tag: "Blocked",
+    why: ["the forge will not merge it: draft status"],
+  });
+  expect(standingOf(draft, at)).toEqual({ _tag: "Waiting", why: ["mergeability (draft status)"] });
 });
 
 test("a forge that cannot be read is awaited on nobody", () => {

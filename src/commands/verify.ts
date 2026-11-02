@@ -57,12 +57,18 @@ export const verify = Command.make(
       ),
       Flag.optional,
     ),
+    again: Flag.Boolean("again").pipe(
+      Flag.withDescription(
+        "Run it even where this tree already has a record of it, to look for a flake; never runs one of the Run's Checks",
+      ),
+      Flag.withDefault(false),
+    ),
     command: Argument.String("command").pipe(
       Argument.withDescription("The executable and its arguments, after `--`"),
       Argument.variadic({ min: 1 }),
     ),
   },
-  ({ runId, cwd, name, expect, command }) => {
+  ({ runId, cwd, name, expect, again, command }) => {
     const [executable, ...argv] = command;
     if (executable === undefined)
       return printResult(err("invalid_input", "verify needs a command to run."), true);
@@ -87,6 +93,7 @@ export const verify = Command.make(
             executable,
             argv,
             expect: wanted,
+            again,
           } satisfies Parameters<typeof verifyRun>[1];
           const where = Option.getOrUndefined(cwd);
           const opened = yield* verifyRun(
@@ -147,6 +154,10 @@ export const verify = Command.make(
     {
       command: "collie verify --name regression --expect fail -- bun test test/bug.test.ts",
       description: "Prove a bug exists: the record passes because the command failed",
+    },
+    {
+      command: "collie verify --again -- bun test test/flaky.test.ts",
+      description: "Run it again although this tree has a record of it, for a suspected flake",
     },
   ]),
 );

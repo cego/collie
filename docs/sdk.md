@@ -873,7 +873,12 @@ notification ("Waiting for CI and a teammate's approval on `<mr>`."), until it h
 hours (2 days for a person) and parks; a red pipeline, changes requested or a merge the
 forge refuses parks it as Needs you while it keeps reading. Both are cleared when it returns.
 With `untilBlocked: true` it returns that `Waiting` standing instead of waiting for the
-repair, as the release's re-reading of a go does. Take either inside an Activity, and suspend on `Held`
+repair, as the release's re-reading of a go does. With `whileConflicting: true` it waits
+only while the forge says the merge request conflicts with its target branch, parked as Needs
+you with the line that says its branch must take the target, and returns the standing at
+`proved` as soon as the forge no longer says so, the merge request is merged or closed, or a
+Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting. The
+release takes it before it proves a head and when a check left to CI finds the conflict. Take either inside an Activity, and suspend on `Held`
 there, so a resume waits again.
 
 `host.shareForApproval({ runId, cwd, channel })` posts the Run's recorded merge request through its host's Slack Connection.
@@ -1305,7 +1310,8 @@ rally converges, stands on a dispute and runs out of rounds where these three de
   the previous round's `keys`; without it nothing can notice a rally going round.
 - **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
   fix's own account is what is left. Every blocking finding needs a disposition, and every
-  check it names needs a passing verification on the tree as it stands. A fix that holds up
+  check it names needs a passing verification on the tree as it stands, or is left to the
+  gate, which runs the Run's Checks on the final tree. A fix that holds up
   but disputes a blocking finding comes back `dispute_unresolved`, with the same
   `attestation` a fix that stands carries, since the human reads both.
 
@@ -1326,9 +1332,15 @@ goes in `disputed`. With nothing left unresolved its verdict is `clean`. The fix
 
 `host.evidence(runId, cwd)` is what has been verified for your Run and what the tree is
 now. `settleFinalFix` reads it: a check an Output names is a claim until the journal has a
-passing record of it, collected on this exact revision. A commit or an edit since makes an
-earlier pass history — it is not that the result went off, it is that it is about another
-tree.
+passing record of it, collected on these exact bytes. A commit of the same bytes keeps it;
+an edit since makes an earlier pass history — it is not that the result went off, it is that
+it is about another tree. `sameTree(one, other)` is that test for two snapshots, or two
+`{ fingerprint }`s: the same bytes at any commit, and never a tree too large to look at.
+A check the last fix names that passed only on an earlier tree, or one of the Run's Checks
+with no record yet, does not halt it: the attestation names it as left to the gate, and
+counts as verified on this tree only the checks that passed here or are left to CI. A
+check that failed or ran on a tree that moved under it still halts the fix, and so does a
+check that is not one of the Run's Checks and has no record, since the gate never runs it.
 
 `host.verify({ runId, name, cwd })` runs one of your Run's checks, in the directory the
 check names, resolved from `cwd` — which has to be the Run's own checkout — and records
@@ -1479,7 +1491,12 @@ every check run on the head has completed; GitLab creates every job up front. A 
 check's `ci` pass, with `job` (`{ name, url, merge? }`, `merge` being the merged-results
 commit) beside its command, start and end tree. That Verification answers `{ proved }`; anything
 else answers `{ unproved, state, url }`, the sentence naming the check, the job and the
-commit. With `wait: true` a pending or running job is read again every 30 s for up to 2
+commit. A job `missing` from the pipeline of a merge request the forge says conflicts with its
+target branch answers `{ unproved, state: "missing", url, conflicts: true }` instead, the
+sentence saying the merge request conflicts with its target branch and its branch must take
+the target, and naming no job: the forge runs no pipeline for a merge request it cannot
+merge. With `wait: true`, a missing job while the forge has not yet said whether it can merge
+is read again, as pending. With `wait: true` a pending or running job is read again every 30 s for up to 2
 hours, the Run's log and `collie run checks` saying which check, job and commit it waits
 on, and a stop ends the wait. `renderRecordedChecks(evidence, leftToCi)` tells a reviewer
 each such check as `left to CI: proved by <job> on the merge request's head`, with the
@@ -1515,7 +1532,9 @@ Machine at a time, and none while it is Short of memory; a Stop ends the wait or
 and suspends the Run. `pass` is `calibration`, `cycle N` or `final`. `reason` says why the
 plan changed, and a Run already measured under another plan is refused a new one without it. The plan, the record and
 every refusal are [`collie measure`](cli.md#measure)'s, since both go through one host
-operation. Take it inside an Activity, journaled with `MeasurementSchema`, which keeps an
+operation. `BenchmarkPlan` is the plan's schema, and `decodeBenchmarkPlan(input)` decodes a
+plan file as the host will: the plan with its defaults, or a failure with the reason
+`measure` would refuse it. Take it inside an Activity, journaled with `MeasurementSchema`, which keeps an
 infinite ratio as JSON:
 
 ```ts
@@ -1692,7 +1711,7 @@ answer a criterion has: one to its whole wording, where a copy that dropped the 
 formatting still counts, so an answer to earlier wording does not answer an amended criterion. Shipped
 `implement` hands what is unmet back to the builder before any reviewer is launched, and
 asks about any still unmet after two hand-backs (`<ticket>.criteria-unmet-<n>`), so no
-reviewer starts on it. A hand-back that leaves the head and fingerprint unchanged and
+reviewer starts on it. A hand-back that leaves the tree's content unchanged and
 reports a blocking finding is asked about sooner (`<ticket>.criteria-stalled-<n>`). To
 either, `Hand back` reads the ticket again and, if any criterion is still unmet, hands it
 back with two tries fresh; `Stop` stops the work. A text work

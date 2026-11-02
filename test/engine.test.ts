@@ -375,6 +375,8 @@ test(
           "renovate",
           "release",
           "general",
+          // Its benchmark plan is built from the declared schema's fields.
+          "tune-up",
         ];
         const checked = yield* host.ask({
           op: "checks",

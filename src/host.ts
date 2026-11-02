@@ -2350,7 +2350,7 @@ const frontDoorHandlers = (
               );
             }),
           ),
-        verify: ({ runId, name, executable, argv, cwd, expect }, { client }) =>
+        verify: ({ runId, name, executable, argv, cwd, expect, again }, { client }) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const view = yield* known(runId);
@@ -2376,6 +2376,27 @@ const frontDoorHandlers = (
                     text: `not run again: verification ${record.id} of "${check.check}" ${record.result === "pass" ? "passed" : "failed"} on this tree${log}\n`,
                   },
                   { _tag: "Result" as const, verification: record, ran: false },
+                );
+              }
+              const recorded =
+                again === true
+                  ? null
+                  : yield* reliance.recorded(runId, {
+                      name,
+                      executable,
+                      argv,
+                      cwd: where,
+                      expect,
+                    });
+              if (recorded !== null) {
+                const log = recorded.log === undefined ? "" : `; its log is ${recorded.log}`;
+                return Stream.make(
+                  {
+                    _tag: "Output" as const,
+                    stream: "stderr" as const,
+                    text: `not run again: verification ${recorded.id} of "${name}" ${recorded.result === "pass" ? "passed" : "failed"} on this tree${log}; --again runs it anyway\n`,
+                  },
+                  { _tag: "Result" as const, verification: recorded, ran: false },
                 );
               }
               return Stream.callback<typeof import("./verify-model").VerifyEvent.Type, HostRefused>(
@@ -3265,14 +3286,23 @@ const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
 /** Long enough for the log's next flush, which an exit does not wait for. */
 const LOG_FLUSH = "200 millis";
 
+/** Why a host stops; every one of them ends its Checks within the grace. */
+type StopReason = Data.TaggedEnum<{ Asked: {}; LockGone: {}; WatchedGone: {} }>;
+const StopReason = Data.taggedEnum<StopReason>();
+const stopSaid = StopReason.$match({
+  Asked: () => "asked to stop",
+  LockGone: () => "its lock is gone; stopping",
+  WatchedGone: () => "the process it watches has exited; stopping",
+});
+
 /** Any end of a host gives the shutdown the grace, then exits however far it got (ADR-0014). */
 const boundedStop = (lock: string, checks: CheckProcessesApi) =>
   Effect.gen(function* () {
     const grace = yield* stopGrace;
-    const stopping = yield* Deferred.make<string>();
+    const stopping = yield* Deferred.make<StopReason>();
     // In the outer scope, which closes only once the shutdown it bounds has finished.
     yield* Deferred.await(stopping).pipe(
-      Effect.flatMap(Effect.logInfo),
+      Effect.flatMap((why) => Effect.logInfo(stopSaid(why))),
       Effect.andThen(
         endAllWithin(checks, grace, (ended) =>
           Effect.forEach(
@@ -3295,7 +3325,7 @@ const boundedStop = (lock: string, checks: CheckProcessesApi) =>
       Effect.andThen(Effect.sync(() => process.exit(1))),
       Effect.forkScoped,
     );
-    const signalled = () => Deferred.doneUnsafe(stopping, Effect.succeed("asked to stop"));
+    const signalled = () => Deferred.doneUnsafe(stopping, Effect.succeed(StopReason.Asked()));
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         for (const signal of STOP_SIGNALS) process.once(signal, signalled);
@@ -3305,7 +3335,7 @@ const boundedStop = (lock: string, checks: CheckProcessesApi) =>
           for (const signal of STOP_SIGNALS) process.off(signal, signalled);
         }),
     );
-    return (why: string) => Deferred.succeed(stopping, why).pipe(Effect.asVoid);
+    return (why: StopReason) => Deferred.succeed(stopping, why).pipe(Effect.asVoid);
   });
 
 /**
@@ -3334,10 +3364,10 @@ const orphaned = (dir: string) =>
     for (;;) {
       yield* Effect.sleep("1 second");
       if (!(yield* fs.exists(lockOf(dir)).pipe(Effect.orElseSucceed(() => true)))) {
-        return "its lock is gone; stopping";
+        return StopReason.LockGone();
       }
       if (Option.isSome(watched) && !alive(watched.value)) {
-        return "the process it watches has exited; stopping";
+        return StopReason.WatchedGone();
       }
     }
   });

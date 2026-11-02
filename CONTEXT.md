@@ -302,8 +302,10 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 **Disposition** — What became of a Run's work, which is not how its execution ended. Recorded by a human beside the Run's status and never over it — `merged`, `abandoned` or `superseded`, with the merge request, commit or Run that backs it up. A Run that failed still failed; its disposition says whether the work landed anyway. Append-only, so a correction keeps what was believed before. Nothing to do with **Delivery**, which is one message to one agent.
 
 **Verification** — An independently collected command result bound to the tree it ran on,
-before and after. A result whose snapshots differ is `unstable`, never `pass`. An agent's
-statement about tests is a **claim**, and is shown as one.
+before and after. A tree is its content: committing exactly the bytes a Verification ran on
+leaves it on the same tree, and changing any of them does not. A result whose snapshots
+differ is `unstable`, never `pass`. An agent's statement about tests is a **claim**, and is
+shown as one.
 
 **Measurement** — The host's comparison of a base tree and a candidate tree on one Machine.
 It is a Run's declared benchmark commands, sampled alternately on each tree for a fixed
