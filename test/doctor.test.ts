@@ -316,7 +316,7 @@ test("an hc that names no version fails, with the pinned installer as its fix", 
 
       expect(check(result, "hc")).toMatchObject({
         ok: false,
-        detail: `the hc at ${rig.root}/bin/herdr-core names no version; this Collie needs ${hcPin.version} or newer`,
+        detail: `the hc at ${rig.root}/bin/herdr-core names no version, so it is taken as older than the ${hcPin.version} this Collie needs`,
       });
       expect(check(result, "hc").fix).toContain(`HC_VERSION=${hcPin.version}`);
     }),

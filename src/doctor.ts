@@ -128,7 +128,7 @@ const hcInstalled = Effect.fn("Doctor.hcInstalled")(function* (
   if (hcMeets(said, hcPin.version)) return passed(`${version} at ${bin}`);
   return failed(
     version === null
-      ? `the hc at ${bin} names no version; this Collie needs ${hcPin.version} or newer`
+      ? `the hc at ${bin} names no version, so it is taken as older than the ${hcPin.version} this Collie needs`
       : `hc ${version} is installed, older than the ${hcPin.version} this Collie needs`,
     HC_INSTALL,
   );
