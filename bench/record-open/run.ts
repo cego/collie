@@ -249,7 +249,12 @@ const body = (
           if (yield* ev<boolean>(expression)) return;
           yield* Effect.sleep("50 millis");
         }
-        return yield* Effect.die(new Error(`waited ${limitMs} ms for ${expression}`));
+        const shown = yield* ev<string>(
+          `location.href + "\\n" + (document.body?.innerText ?? "").slice(0, 2000)`,
+        );
+        return yield* Effect.die(
+          new Error(`waited ${limitMs} ms for ${expression}; the window showed:\n${shown}`),
+        );
       });
     /** The board painted with every card, the folded ones unfolded. */
     const boardSettled = Effect.gen(function* () {
