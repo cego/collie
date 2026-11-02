@@ -463,3 +463,108 @@ test("a GitHub job missing right after its retry is waited on, and its pass is a
       1_000,
     ),
   ));
+
+const CONFLICT = (at: string) =>
+  `nuxi is left to CI and unproved: the merge request conflicts with its target branch at ${pipe_(at, Str.slice(0, 12))}, and its branch must take the target`;
+const jobReads = (requests: ReadonlyArray<FakeRequest>) =>
+  Arr.filter(requests, (one) => /check-runs\?check_name=|\/pipelines\/\d+\/jobs/.test(one.url));
+
+for (const [name, mr, spec] of [
+  ["github", PULL, GATE],
+  ["gitlab", MR, NUXI],
+] as const)
+  test(`a ${name} job missing from a merge request that conflicts with its target says so, and is not waited on`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { asked, at, forge } = yield* waiting(
+          "passed",
+          mr,
+          undefined,
+          {
+            jobs: [{ name: "static", state: "passed" }],
+            mergeable: "conflict",
+          },
+          name,
+        );
+        expect(yield* read({ ...asked, spec }, forge)).toEqual({
+          unproved: CONFLICT(at),
+          state: "missing",
+          url: null,
+          log: null,
+          conflicts: true,
+        });
+        expect(jobReads(forge.requests)).toHaveLength(1);
+      }),
+    ));
+
+for (const [name, mr, spec, none] of [
+  ["github", PULL, GATE, { jobs: [] }],
+  ["gitlab", MR, NUXI, { jobs: undefined }],
+] as const)
+  test(`a ${name} merge request with no pipeline that conflicts with its target says so, and is not waited on`, () =>
+    runEffect(
+      fastForward(
+        Effect.gen(function* () {
+          const { asked, at, forge } = yield* waiting(
+            "passed",
+            mr,
+            undefined,
+            { ...none, mergeable: "conflict" },
+            name,
+          );
+          expect(yield* read({ ...asked, spec }, forge)).toMatchObject({
+            unproved: CONFLICT(at),
+            conflicts: true,
+          });
+        }),
+        600_000,
+      ),
+    ));
+
+test("a job running in its pipeline while its merge request conflicts is still the job's to finish", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, forge } = yield* waiting("running", MR, undefined, {
+        mergeable: "conflict",
+      });
+      const got = yield* read({ ...asked, wait: false }, forge);
+      expect(got).toMatchObject({
+        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} is running`,
+        state: "running",
+      });
+      expect(got).not.toHaveProperty("conflicts");
+    }),
+  ));
+
+test("a job missing while the forge has not said whether it can merge is waited on, and its pass proves the check", () =>
+  runEffect(
+    fastForward(
+      Effect.gen(function* () {
+        const { asked, at, forge } = yield* waiting(
+          "passed",
+          PULL,
+          undefined,
+          {
+            jobs: [{ name: "static", state: "passed" }],
+            mergeable: "checking",
+          },
+          "github",
+        );
+        const later = forgeOn("github", at, {
+          jobs: [
+            { name: "static", state: "passed" },
+            { name: "test", state: "passed" },
+          ],
+        });
+        let reads = 0;
+        const fetch: FetchLike = (input, init) => {
+          if (pipe_(input, Str.includes("check-runs?check_name="))) reads++;
+          return (reads < 2 ? forge : later).fetch(input, init);
+        };
+        expect(yield* read({ ...asked, spec: GATE }, { fetch })).toMatchObject({
+          proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
+        });
+      }),
+      1_000,
+    ),
+  ));
