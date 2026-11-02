@@ -17265,7 +17265,6 @@ scenario(
         ])
           expect(occurrences(log, decided)).toBe(1);
 
-        // Yes: the branch ships without the harness, and the final Measurement is of that tree.
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${rig.projectDir}/bench`)).toBe(false);
         expect(yield* wasAsked(runId, "cleanup")).toBe(true);
@@ -17275,7 +17274,6 @@ scenario(
         expect(final!.candidate.harness_applied).toEqual([commit]);
         expect(verdictsOf(final!)).toEqual(["bench.count gain", "bench.size no-change"]);
 
-        // The archive, in the Run's record.
         const archive = `${runDir(dir, runId)}/archive`;
         const patches = yield* fs.readDirectory(`${archive}/harness`);
         expect(patches).toHaveLength(1);
