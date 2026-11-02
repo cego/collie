@@ -169,7 +169,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       asked: one.asked ?? null,
       answered: one.answered ?? null,
       by: one.by ?? null,
-      open: one.answer === null,
+      open: one.answer === null && !settled({ state: stateOf(view) }),
       text: one.prompt,
       options: Arr.map(one.options, (value) => ({ id: value, title: value, subtitle: null })),
     })),

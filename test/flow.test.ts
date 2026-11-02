@@ -744,3 +744,26 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a Run stopped at a question no Step declared draws it stopped, with no answer offered",
+  () =>
+    flowing(
+      "collie-flow-stop-undeclared-",
+      (world) =>
+        Effect.gen(function* () {
+          const runId = yield* start(world, "attended", { work: "it" });
+          yield* until_(world, runId, (flow) => nodeOf(flow, "go")?.state === "needs-you");
+          yield* cli(world, ["run", "stop", runId]);
+          const flow = yield* until_(world, runId, (one) => laneOf(one).execution === "stopped");
+          expect(statesOf(flow)).toEqual([
+            { id: "build", state: "done" },
+            { id: "go", state: "stopped" },
+          ]);
+          expect(nodeOf(flow, "go")?.primary).not.toBe("answer");
+        }),
+      2,
+      ["attended.workflow.ts"],
+    ),
+  120_000,
+);
