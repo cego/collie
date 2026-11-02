@@ -113,7 +113,7 @@ import {
 } from "../../src/engine";
 import { declaredBy } from "../../src/discovery";
 import { readMeasurements } from "../../src/measurement";
-import type { Measurement } from "../../src/measurement-model";
+import type { BenchmarkPlan, Measurement } from "../../src/measurement-model";
 import { nothingToLandFile } from "../../src/standing";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
@@ -1622,6 +1622,207 @@ scenario(
         );
         expect(yield* questions("r-plan-alone-bad")).toEqual([]);
         expect(started).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+/** A ticket the planner wrote, and the benchmark plan beside it where it names one. */
+const ticketed = (
+  runId: string,
+  file: string,
+  title: string,
+  benchmark?: typeof BenchmarkPlan.Encoded,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const issues = `${runDir(dir, runId)}/plan/issues`;
+    yield* fs.makeDirectory(issues, { recursive: true });
+    yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
+    const named = pipe(file, Str.replace(/\.md$/, ".benchmark.json"));
+    if (benchmark !== undefined) yield* fs.writeFileString(`${issues}/${named}`, asJson(benchmark));
+    yield* fs.writeFileString(
+      `${issues}/${file}`,
+      Arr.join(
+        [
+          `# ${title}`,
+          "",
+          "**Blocked by:** None",
+          ...(benchmark === undefined ? [] : ["", `**Benchmark:** ${named}`]),
+          "",
+          "**Checks:** unit",
+          "",
+          `- [ ] ${title}`,
+          "",
+        ],
+        "\n",
+      ),
+    );
+    return `${issues}/${named}`;
+  }).pipe(Effect.orDie);
+
+/** A benchmark plan as a planner writes one: the harness's paths, and no commits yet. */
+const speedUp = (metrics: typeof BenchmarkPlan.Encoded.metrics): typeof BenchmarkPlan.Encoded => ({
+  harness: { commits: [], paths: ["bench"] },
+  commands: [
+    { name: "bench", executable: "sh", argv: ["bench/bench.sh", `${rig.root}/bench-runs`] },
+  ],
+  metrics,
+  samples: 4,
+});
+
+/** A step's own text, from its work source on, with this rig's directories named the same in every rig. */
+const unrooted = (prompt: string) =>
+  pipe(
+    prompt,
+    Str.slice(Option.getOrElse(pipe(prompt, Str.indexOf("Work source")), () => 0)),
+    Str.replaceAll(dir, "<state>"),
+    Str.replaceAll(rig.root, "<root>"),
+  );
+
+scenario(
+  "a plan chained into implement writes a speed-up ticket's criterion as a Measurement, which its builder takes with collie measure, and a plain ticket as before",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        const harness = yield* harnessCommit({ "bench/bench.sh": CYCLE_BENCH });
+        const benchmark = yield* ticketed(
+          "r-plan-speed",
+          "01-faster.md",
+          "search answers in less time",
+          speedUp([STEADY_PRIMARY, SIZE_GUARDRAIL]),
+        );
+        yield* ticketed("r-plan-speed", "02-plain.md", "search reads its own index");
+        const builtFor = (criterion: string) => ({
+          ...BUILT,
+          criteria: [{ criterion, met: "the scenario shows it" }],
+        });
+        // The faster ticket's Output is written by hand, once its builder has measured.
+        yield* rig.queueOutputs([
+          GRILLED,
+          SPEC,
+          TICKETS,
+          null,
+          builtFor("search reads its own index"),
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        yield* ran({
+          entry: shipped("plan"),
+          runId: "r-plan-speed",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
+          input: { ...GOAL, then: "implement" },
+        });
+        const input = { plan: `${runDir(dir, "r-plan-speed")}/plan`, ...FINISH };
+        expect(Arr.map(started, (one) => [one.workflow, one.input])).toEqual([
+          ["implement", input],
+        ]);
+
+        const build = "r-plan-speed-implement";
+        yield* approve(build, ["unit"]);
+        const running = yield* Effect.forkChild(
+          ran({
+            entry: shipped("implement"),
+            runId: build,
+            input,
+            options: started[0]!.options,
+          }),
+        );
+        const agents = `${dir}/agents/${build}`;
+        yield* until(
+          () =>
+            fs.exists(`${agents}/01-faster.md.prompt.md`).pipe(Effect.orElseSucceed(() => false)),
+          (there) => there,
+        );
+        const faster = pipe(yield* asked(build, "01-faster.md"), Str.replace(/\s+/g, " "));
+        for (const pass of ["calibration", "final"])
+          expect(faster).toMatch(
+            new RegExp(`collie measure --base \\S+ --plan ${benchmark} --pass ${pass}`),
+          );
+
+        // The builder: the harness's commit added to the plan, then both passes measured.
+        const plan = { ...speedUp([STEADY_PRIMARY, SIZE_GUARDRAIL]) };
+        yield* fs.writeFileString(
+          benchmark,
+          asJson({ ...plan, harness: { ...plan.harness, commits: [harness] } }),
+        );
+        const base = yield* originHead();
+        const measured = (pass: string) =>
+          session(
+            Host.pipe(
+              Effect.flatMap((host) =>
+                host.measure({
+                  runId: build,
+                  base,
+                  cwd: rig.projectDir,
+                  plan: { ...plan, harness: { ...plan.harness, commits: [harness] } },
+                  pass,
+                }),
+              ),
+            ),
+          );
+        yield* measured("calibration");
+        yield* exec(["sh", "-c", "echo 3 > count && git add count && git commit -qm faster"], {
+          cwd: rig.projectDir,
+        });
+        const { measurement: final } = yield* measured("final");
+        yield* fs.writeFileString(
+          `${agents}/01-faster.md.json`,
+          asJson(builtFor("search answers in less time")),
+        );
+        yield* Fiber.join(running);
+        yield* bin.restore();
+
+        const plain = yield* asked(build, "02-plain.md");
+        expect(plain).not.toContain("collie measure");
+        // Rendered by 7d15bed3, before tickets named a benchmark plan.
+        expect(unrooted(plain)).toBe(
+          yield* readText(`${ROOT}test/fixtures/plain-ticket-build.prompt.txt`),
+        );
+
+        const mr = pipe(yield* asked(build, "mr"), Str.replace(/\s+/g, " "));
+        expect(verdictsOf(final)).toEqual(["bench.count gain", "bench.size no-change"]);
+        expect(mr).toContain(`final Measurement ${final.id}: bench.count gain`);
+        expect(mr).toContain("bench.size no-change");
+        expect(mr).toContain(
+          "Where the evidence names a `final` Measurement, put its id and each metric's verdict in the description.",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a ticket's benchmark plan the decoder refuses fails the plan's tickets step with its reason, before any implement Run starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* ticketed(
+          "r-plan-two-primaries",
+          "01-faster.md",
+          "search answers in less time",
+          speedUp([STEADY_PRIMARY, { ...SIZE_GUARDRAIL, role: "primary" }]),
+        );
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+
+        const result = yield* ran({
+          entry: shipped("plan"),
+          runId: "r-plan-two-primaries",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
+          input: { ...GOAL, then: "implement" },
+        });
+
+        expect(reasonOf(result)).toContain(
+          "01-faster.benchmark.json: a plan declares exactly one primary metric, not 2",
+        );
+        expect(started).toEqual([]);
+        expect(statesOf(yield* laneNow("r-plan-two-primaries", "failed"))).toContainEqual([
+          "tickets",
+          "failed",
+        ]);
       }),
     ),
   120_000,

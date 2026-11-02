@@ -85,6 +85,15 @@ as the test files the ticket touches.{{checks}}
 
 A text search is never a criterion.
 
+A criterion that something is faster, smaller or lighter is a Measurement, never a timing
+script. Write its benchmark plan beside the ticket, `{{run.dir}}/plan/issues/NN-<slug>.benchmark.json`,
+as the JSON `collie measure --plan` takes: the commands that exercise the work, its metrics
+with exactly one `primary`, and the harness's `paths` with no `commits` yet. Name it on the
+ticket's own line, `**Benchmark:** NN-<slug>.benchmark.json`, and write the criterion as
+the verdict its `final` Measurement gives: a `gain` on the primary metric with every
+guardrail held. The ticket says whether the harness stays once the work lands. The builder
+is told how to measure it. A benchmark plan `collie measure` would refuse stops this step.
+
 Every ticket also carries a fifth header line, `**Repo:** <path>`, between "Blocked by"
 and "Status" — always, one repository per ticket. The path is the checkout the ticket
 changes, relative to the project root above and as it is on disk; write `.` when the root

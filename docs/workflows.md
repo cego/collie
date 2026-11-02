@@ -56,6 +56,13 @@ the base", naming the failures already present. The second opinion raises a crit
 by construction, a guard not labelled as one, and one whose only proof is a text search
 ([ADR-draft-a-tautology-proves-nothing](adr/draft-a-tautology-proves-nothing.md)).
 
+A criterion that something is faster, smaller or lighter is a Measurement, never a timing
+script. The planner writes a benchmark plan beside the ticket, `NN-<slug>.benchmark.json`
+in `plan/issues/`, as the JSON [`collie measure --plan`](cli.md#measure) takes: the harness's
+`paths` and no `commits` yet. The ticket names it on a `**Benchmark:**` line. A benchmark
+plan `collie measure` would refuse fails the Tickets step with its reason, before any
+`implement` starts.
+
 **Ends with a menu:** and you can answer it in conversation. Telling the planner
 "proceed", "implement", "build" or "go" makes it answer the menu with
 `collie run answer <run id> "Implement now"` — it starts nothing itself.
@@ -135,6 +142,12 @@ criterion and the reason under the same heading
 The builder records each new test failing before the code that makes it pass, never offers a
 text search as a verification, and does not count as met a criterion only a
 [Tautology](../CONTEXT.md) shows.
+A ticket with a `**Benchmark:**` line is proved by the host's Measurement. Its build step
+tells the builder to commit the harness and add its commits to the plan, run
+[`collie measure`](cli.md#measure) with `--pass calibration` and then `--pass final` on the
+finished tree, and read the verdict per metric. It forbids timing an A/B comparison by hand
+and taking a lock of its own. The merge request names the `final` Measurement's id and each
+metric's verdict. Every other ticket's step is unchanged.
 The merge request is opened or updated last, and not at
 all only where there is no GitLab to open one on. Missing evidence does not keep it
 closed: an opened merge request is not a gate that passed, and what is unproved is

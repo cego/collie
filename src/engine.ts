@@ -2009,10 +2009,26 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly checks: ReadonlyArray<string>;
     /** Its acceptance criteria, which the builder answers one by one. */
     readonly criteria: ReadonlyArray<string>;
+    /** The benchmark plan its speed-up criterion is measured by, as benchmarkIn reads it. */
+    readonly benchmark: string | null;
   }
 
   /** The verification names a ticket's **Checks:** line promises. */
   export function checksIn(text: string): string[];
+
+  /** The benchmark plan a ticket's **Benchmark:** line names, beside the ticket; null where it names none. */
+  export function benchmarkIn(text: string): string | null;
+
+  /** Where a ticket's benchmark plan is: in the plan's issues/, beside the ticket. */
+  export function benchmarkFile(planDir: string, benchmark: string): string;
+
+  /**
+   * Why a ticket's benchmark plan is not one collie measure takes, naming the ticket and the
+   * file; null where every ticket's is, or none names one.
+   */
+  export function benchmarkRefusalOf(
+    planDir: string,
+  ): Effect.Effect<string | null, never, FileSystem.FileSystem | Path.Path>;
 
   /**
    * A ticket's acceptance criteria: each checkbox item with its wrapped lines, under its

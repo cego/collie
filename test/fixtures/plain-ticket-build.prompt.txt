@@ -1,0 +1,257 @@
+Work source (plan-dir): <state>/runs/r-plan-speed/plan
+Repository: not given
+Project root: <root>/project
+This run's directory: <state>/runs/r-plan-speed-implement
+
+A note you hand on — to a later step, another agent or a human — goes in
+`<state>/runs/r-plan-speed-implement/handoffs/`, never `/tmp`: the Run's record lists it, and it is kept as long
+as the Run is.
+
+Outcome to prove (not given means unclassified): feature
+
+The verifications this run is held to — Collie runs exactly these itself, and nothing
+else it may be told to run, before it will open the merge request:
+
+- unit: true (in <root>/project)
+
+Where the list of verifications at the top says no check is named, name them before you
+change anything: the commands that prove work in this repository, from what it says
+proves its work — `package.json` scripts such as `check`, `test` and `typecheck`, a
+Makefile, the CI config — each in the directory it belongs to. Name each one with
+`collie run intent verification r-plan-speed-implement --name <name> [--cwd <dir>] -- <command>`.
+Collie runs them itself at the gate, and the merge request lists each with its command.
+
+The work source above is a `plan-dir`:
+
+A plan is already written. `<state>/runs/r-plan-speed/plan/SPEC.md` is the spec and
+`<state>/runs/r-plan-speed/plan/issues/` holds the tickets. Where the spec or a ticket names a local copy
+of a design artifact, under `<state>/runs/r-plan-speed/plan/design/`, work from that copy and open its URL
+only for what the copy lacks. Where the repository above is not empty, this plan spans
+several and you own one of them: only the tickets whose `**Repo:**` line names it are
+yours, and the rest are another run's. Which ticket you are on is under **This slice**
+below; Collie hands them to you one at a time, in an order their `Blocked by` lines allow.
+
+Where a ticket's `**Checks:**` line names one of this run's checks above, it is not a
+command for you to run: the gate proves it on the final tree.
+
+This run has a checkout of its own, on the branch it is building: Collie resolved the
+branch and opened the worktree before you started, so never create a branch or switch
+one. It is a fresh checkout, so install the project's dependencies before you run its
+tests for the first time.
+
+### This slice
+
+Ticket: 02-plain.md — search reads its own index
+
+Where a ticket is named above, **build that one ticket and no other**. The tickets before
+it are already built and committed on this branch; do not re-survey the repository and do
+not redo their work. What they left:
+
+- 01-faster.md — search answers in less time
+    made the registry one
+    verified: nothing
+
+Where no ticket is named, the work source is not a plan of several tickets and the whole
+of it is yours.
+
+The acceptance criteria this work is held to, one by one:
+
+- search reads its own index
+
+In your Output, `criteria` has one entry for each of them: `criterion` copied from the list
+above, and `met` saying how it is met (the test or the file that shows it), or
+`not met: <reason>`. A criterion left out, or not met, comes back to you before any
+reviewer sees the work, and the reviewer is shown every answer and every assumption.
+Where only CI, a merge or a deploy can show a criterion, answer `after merge: <reason>`,
+saying what will show it and why this Run cannot: the merge request names it as unsettled,
+and the reviewer blocks one the Run could have shown. `not met: <reason>` is for one that
+cannot be met at all.
+
+Build it test first, with the `tdd` skill (read `<root>/.agents/skills/tdd/SKILL.md` and follow it) at the seams the spec names: the failing test,
+then the code that makes it pass. As you go, run the typecheck and the test files you
+touched, each through `collie verify` as below, and never the whole suite: it is the
+gate's, and Collie runs this run's checks itself once the review is done.
+Commit to this branch as you go — one commit per ticket. There is no separate commit step.
+
+Record each new test failing, through `collie verify --name <name> --expect fail -- <command>`,
+before you write the code that makes it pass. Never offer a text search as a verification.
+
+Collie reviews this work in its own rally once you are done. Do not run a review skill,
+and do not start review sub-agents or threads.
+
+Apply the **Code comment hygiene** rules you were given to comments this branch added or
+changed: make the code self-explanatory, delete unnecessary comments, and reduce each
+essential comment to the fewest words that preserve its meaning.
+
+Build the complete approved scope before you report the step done. A ticket or a
+required behaviour you did not build is not an optional follow-up, and the size of the
+work is not a reason to leave it out or to dispute it. Where the spec conflicts with itself
+or with the code, choose, and record the choice and why under `assumptions` in your Output:
+the human reads each one in the merge request before it lands.
+
+Push before you finish: `git push -u origin HEAD -o ci.skip` on GitLab, or
+`git push -u origin HEAD` on GitHub, onto the branch the work
+source named where there is one. The reviewers read the merge request when there is one,
+and a merge request shows the remote — so anything you want reviewed has to be on the
+remote before the review step runs. `ci.skip` because this state is for the reviewers;
+the `mr` step's push is the one that should build.
+
+If the push fails — no remote, no permission, a protected branch, a rejected
+non-fast-forward — say what failed, report `"pushed": false`, and carry on to your
+Output. The commits are still good and the Run is still worth finishing.
+
+Run every test, lint and typecheck command through
+`collie verify -- <command>`; Collie records the result
+against the tree it ran on, and only that is a verification — an Output that says the
+tests pass is a claim. Say in your Output which verifications you ran, by name.
+
+A `collie verify` you started in the background is reported to you when it ends,
+so you may end your turn waiting on it. Never end a turn waiting on any other
+background job.
+
+
+
+### What this run has to prove
+
+A feature: every ticket you were given is built and named in `tickets_done`, and the
+review has to be able to say the agreed scope was met.
+
+The planner that wrote this plan is still live as agent `r-plan-speed-grill-r1` of Run `r-plan-speed`. If you need a decision the plan does not cover, ask with collie_do deliver to r-plan-speed, agent r-plan-speed-grill-r1, or `collie run steer r-plan-speed --operation r-plan-speed-grill-r1 "<your question>"`. Its answer comes back as a Delivery. If it cannot answer, decide, and record it under `assumptions` in your Output. Ask it for one authority: an answer in the pane with the tickets left alone, or the answer written into the ticket and the pane saying only that it amended it. Its pane answer may be narrower than what it wrote, so where it says it changed a ticket, re-read that ticket and build from it.
+
+Then write your Output, plus the outcome fields above where they name any. `clean` means
+the whole scope is built and the tests pass; anything else is `findings`, one entry per
+thing that is not, each with a `severity` of `blocker`, `major` or `minor` — a failure
+that pre-dates this branch is `minor`.
+
+When you are done, write your result as JSON to the path below. Nothing else may go in that file.
+OUTPUT_PATH: <state>/agents/r-plan-speed-implement/02-plain.md.json
+
+That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "clean",
+        "findings"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "number"
+          },
+          "severity": {
+            "type": "string",
+            "description": "blocker, major or minor; any other word is treated as blocking"
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "rebuttal": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "title"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "branch": {
+      "type": "string"
+    },
+    "pushed": {
+      "type": "boolean"
+    },
+    "tickets_done": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "the tickets you built, by title"
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "the commit subjects you left behind"
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion": {
+            "type": "string",
+            "description": "the criterion, copied from the ticket"
+          },
+          "met": {
+            "type": "string",
+            "description": "how it is met — the test or the file that shows it — \"not met: <reason>\", or \"after merge: <reason>\" where only CI, a merge or a deploy can show it"
+          }
+        },
+        "required": [
+          "criterion",
+          "met"
+        ],
+        "additionalProperties": true
+      },
+      "description": "one entry per acceptance criterion you were given"
+    },
+    "tests": {
+      "type": "string"
+    },
+    "reproduced": {
+      "type": "string"
+    },
+    "conclusion": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "patch": {
+      "type": "boolean"
+    },
+    "documented_commands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "each decision you made that the spec did not settle, and why, one sentence each"
+    }
+  },
+  "required": [
+    "verdict"
+  ],
+  "additionalProperties": true,
+  "$defs": {}
+}
+```
