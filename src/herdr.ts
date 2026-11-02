@@ -804,15 +804,11 @@ export class Herdr {
   }
 
   /**
-   * A tick whenever an agent on core may have gone. Nothing on a Machine set to herdr.
+   * A tick whenever an agent on core may have gone, whatever the Machine's setting: one set
+   * to herdr may switch to core while the host runs.
    */
   agentsEnded(): Stream.Stream<void, never, PlatformServices> {
-    const env = this.env;
-    return Stream.unwrap(
-      Effect.map(terminalBackend(env.userDir), (backend) =>
-        backend === "core" ? this.terminalsEnded() : Stream.empty,
-      ),
-    );
+    return this.terminalsEnded();
   }
 
   /**
