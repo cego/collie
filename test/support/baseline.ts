@@ -9778,6 +9778,8 @@ const agentPush = (
         { path: `${rig.root}/reviewed/pushed.txt`, text: `${parent}\n` },
         forge.holding(moved),
       ],
+      // A commit leaves the index at what it committed, so the checkout reads clean.
+      sh: `git -C '${rig.root}/reviewed' read-tree ${sha}`,
     };
   });
 
@@ -10828,6 +10830,7 @@ for (const name of ["gitlab", "github"] as const) {
                   PACKAGED,
                   {
                     writes: pushed.writes,
+                    sh: pushed.sh,
                     output: {
                       verdict: "clean",
                       answers: [
@@ -11247,6 +11250,7 @@ for (const name of ["gitlab", "github"] as const) {
             PACKAGED,
             {
               writes: [...pushed.writes, { path: flag, text: "broken\n" }],
+              sh: pushed.sh,
               output: {
                 verdict: "clean",
                 answers: [{ id: "81", answer: "fixed", commit: pushed.sha, note: "renamed" }],
