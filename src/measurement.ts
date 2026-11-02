@@ -28,6 +28,7 @@ import { ensureLockDir, withLock } from "./lock";
 import { judge, MeasurementRefused } from "./measurement-verdict";
 import {
   BenchmarkPlan,
+  decodeBenchmarkPlan,
   MeasurementJson,
   PASS_LABEL,
   type Measurement,
@@ -395,16 +396,9 @@ export const measure = Effect.fn("Measurement.measure")(function* (
     return yield* new MeasureRefused({
       why: `the pass is "calibration", "cycle N" or "final", not "${ask.pass}"`,
     });
-  const plan = yield* Schema.decodeUnknownEffect(BenchmarkPlan)(ask.plan).pipe(
-    Effect.mapError(
-      (cause) => new MeasureRefused({ why: `the plan is not one: ${cause.message}` }),
-    ),
+  const plan = yield* decodeBenchmarkPlan(ask.plan).pipe(
+    Effect.mapError((why) => new MeasureRefused({ why })),
   );
-  const primaries = Arr.filter(plan.metrics, (one) => one.role === "primary").length;
-  if (primaries !== 1)
-    return yield* new MeasureRefused({
-      why: `a plan declares exactly one primary metric, not ${primaries}`,
-    });
   const digest = digestOf(
     yield* Schema.encodeEffect(Schema.fromJsonString(BenchmarkPlan))(plan).pipe(Effect.orDie),
   );
@@ -562,7 +556,8 @@ const taking = Effect.fn("Measurement.taking")(function* (
   const environment: Record<string, string | null> = {};
   for (const command of plan.commands) {
     const absolute = yield* resolveExecutable(command.executable, candidate.cwd);
-    environment[command.name] = absolute === null ? null : yield* environmentOf(absolute);
+    environment[command.name] =
+      absolute === null ? null : yield* environmentOf(absolute, candidate.cwd);
   }
   const prepared: Array<Measurement["prepare"][number]> = [];
   const samples: Array<Sample> = [];

@@ -86,8 +86,6 @@ jobs:
           bun-version: "1.4"
       # Desktop's Effect is the root's, so the board's Schemas exist once.
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: desktop
       # The stable channel, the only one that updates itself, under herdr-plugin.toml's version.
       - run: bun run build
         working-directory: desktop
@@ -112,8 +110,6 @@ jobs:
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: desktop
       # The Developer ID certificate, in a keychain of this job's own, only where it is set.
       - run: |
           [ -n "$CERTIFICATE" ] || exit 0

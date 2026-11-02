@@ -1563,7 +1563,11 @@ are for reading; the recorded argv retains the original values.
 
 Every record carries the **environment** it ran in: a digest of the executable's real path
 and content, the `node` and `bun` that `PATH` resolves to, again by path and content, and
-`PATH`, `NODE_ENV` and `NODE_OPTIONS`. A gate relies on an earlier pass only where this
+`PATH`, `NODE_ENV` and `NODE_OPTIONS`. It also covers the dependencies installed in the
+checkout: the entries of the `node_modules` of every directory holding a tracked
+`package.json`, by name and file identity, leaving out caches such as `.cache` and `.vite`.
+Installing, removing or replacing a package makes an earlier record stale, and the command
+runs again. A gate relies on an earlier pass only where this
 matches, so an upgraded toolchain is a fresh run. A record from before environments were
 recorded has none, and is never relied on.
 
