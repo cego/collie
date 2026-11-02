@@ -2209,6 +2209,42 @@ invalidation, and the interruption assessment remain under
 retried or discarded. Both original performance requirements remain unmet or
 unproved; the full correctness gate remains CI job `test`.
 
+### Test-suite measurements, 2 November 2026
+
+Run `run-40796ebf` followed up `run-af99447d` on vm-mk (24 cores, Bun 1.4) at
+`956e73dbee4658d356418664c7ba2e6982937034`, against the same targets: a whole
+`bun run test` alone in at most 360 s, green (#215), and the probe's p95 with four whole
+suites queued at most twice its idle p95 (#216). The driver (`drive.ts`, the 29 October
+method) and raw samples are in that Run's `handoffs/measure/`. Each window held the
+Measurement lock; other Runs' work outside the lock continued. Suites ran from four
+separate checkouts of the same commit.
+
+Attribution on e95d5fd8 showed the suite's CPU going to child processes and SQLite
+rather than test code: 6,473 CPU-s and 13,520 process starts in one suite, and 44,616 SQL
+statements in `test/baseline-01.test.ts` alone, 13,500 of them per-shard lock deletes.
+The branch therefore runs the engine on one shard
+([ADR-draft-one-runner-holds-one-shard](adr/draft-one-runner-holds-one-shard.md)).
+
+| Window (UTC)                          | Samples | Probe p50 | Probe p95 | Result                              |
+| ------------------------------------- | ------: | --------: | --------: | ----------------------------------- |
+| q1 idle, 09:48:09–09:53:08            |     300 |   5.32 ms |   9.03 ms |                                     |
+| q1 alone, 09:53–10:03:43              |     633 |   5.39 ms |   8.89 ms | 633.56 s, 5,342 pass, 0 fail        |
+| q1 four, ≥ 4 suites 10:03:44–10:15:53 |     729 |   6.28 ms |  12.31 ms | interrupted 10:17:31                |
+| q2 idle, 10:19:43–10:24:43            |     300 |   5.11 ms |   9.33 ms |                                     |
+| q2 four, ≥ 4 suites 10:24:45–10:34:03 |     559 |   5.59 ms |  10.07 ms | still running when this was written |
+
+The alone suite used 6,594.9 CPU-s, 13,561 process starts, and per-file time summing to
+6,894 s at 12 workers; `test/agents.test.ts` was the longest file at 200 s. At 12 workers
+that sum alone is about 575 s, so #215 needs roughly a third less work in the suite, not
+better scheduling. **#215 remains unmet.**
+
+The q1 four-suite window ended when the host restarted for Collie 0.110.1; suite 1
+finished green (5,342 pass) and suites 2–4 were cut off. Over its 729 samples the ratio
+was 1.36. The q2 rerun's first 559 qualifying samples give 1.08 (mean 18.8 busy cores,
+39 % CPU stall). Both are under 2×, but neither window had completed when the branch was
+wrapped up for the herdr-core migration. **#216 is supported by partial windows, not yet
+qualified by a completed one.**
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
