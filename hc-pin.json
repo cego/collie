@@ -1,5 +1,5 @@
 {
-  "comment": "The hc Collie is verified against, and the one each release carries. To bump: set version and every target's sha256 from https://releases.herdr.dev/core/<version>/manifest.json, copy that release's released.openrpc.json to hc.openrpc.json, then pass the contract test and `bun run probe:hc`.",
+  "comment": "The oldest hc Collie works with: the one it is verified against, each release carries and doctor's fix installs. A newer hc passes and is never downgraded. To bump: set version and every target's sha256 from https://releases.herdr.dev/core/<version>/manifest.json, copy that release's released.openrpc.json to hc.openrpc.json, then pass the contract test and `bun run probe:hc`.",
   "version": "0.1.14",
   "schema": "hc.openrpc.json",
   "sha256": {

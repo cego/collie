@@ -54,7 +54,7 @@ import {
 } from "./doctor-check";
 import { gitlabChecks } from "./forge/gitlab-checks";
 import { connect, coreSocket } from "./hc";
-import { hcInstallDir } from "./hc-install";
+import { hcInstallDir, hcMeets, hcVersion } from "./hc-install";
 import { everyRegistered } from "./registry";
 import hcPin from "../hc-pin.json";
 import { githubChecks } from "./forge/github-checks";
@@ -111,7 +111,7 @@ function older(version: string, than: string): boolean {
 
 const HC_INSTALL = `curl -fsSL https://releases.herdr.dev/core/install.sh | HC_VERSION=${hcPin.version} sh`;
 
-/** The hc on PATH, else where upstream's installer puts it, at the version this Collie pins. */
+/** The hc on PATH, else where upstream's installer puts it, at least at the version this Collie pins. */
 const hcInstalled = Effect.fn("Doctor.hcInstalled")(function* (
   env: PluginEnv,
   search: string,
@@ -123,13 +123,15 @@ const hcInstalled = Effect.fn("Doctor.hcInstalled")(function* (
   const bin =
     dir !== null ? path.join(dir, "herdr-core") : (yield* runnable(installed)) ? installed : null;
   if (bin === null) return failed("not installed", HC_INSTALL);
-  const version = VERSION.exec((yield* answered(run(bin, ["--version"], env.home))).stdout)?.[0];
-  return version === hcPin.version
-    ? passed(`${version} at ${bin}`)
-    : failed(
-        `hc ${version ?? "of no version"} is installed, but this Collie is pinned to ${hcPin.version}`,
-        HC_INSTALL,
-      );
+  const said = (yield* answered(run(bin, ["--version"], env.home))).stdout;
+  const version = hcVersion(said);
+  if (hcMeets(said, hcPin.version)) return passed(`${version} at ${bin}`);
+  return failed(
+    version === null
+      ? `the hc at ${bin} names no version; this Collie needs ${hcPin.version} or newer`
+      : `hc ${version} is installed, older than the ${hcPin.version} this Collie needs`,
+    HC_INSTALL,
+  );
 });
 
 /** Whether this Machine's default core session says hello. */

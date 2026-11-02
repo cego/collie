@@ -273,7 +273,7 @@ test("a missing hc fails, with upstream's installer for the pinned version as it
     }),
   ));
 
-test("an hc off the pin fails, naming both versions", () =>
+test("an hc older than the pin fails, naming both versions", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
@@ -283,7 +283,40 @@ test("an hc off the pin fails, naming both versions", () =>
 
       expect(check(result, "hc")).toMatchObject({
         ok: false,
-        detail: `hc 0.1.13 is installed, but this Collie is pinned to ${hcPin.version}`,
+        detail: `hc 0.1.13 is installed, older than the ${hcPin.version} this Collie needs`,
+      });
+      expect(check(result, "hc").fix).toContain(`HC_VERSION=${hcPin.version}`);
+    }),
+  ));
+
+test("an hc newer than the pin passes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* hc("99.0.0");
+
+      const result = yield* report();
+
+      expect(check(result, "hc")).toEqual({
+        name: "hc",
+        ok: true,
+        detail: `99.0.0 at ${rig.root}/bin/herdr-core`,
+        fix: "",
+      });
+    }),
+  ));
+
+test("an hc that names no version fails, with the pinned installer as its fix", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* hc("unknown");
+
+      const result = yield* report();
+
+      expect(check(result, "hc")).toMatchObject({
+        ok: false,
+        detail: `the hc at ${rig.root}/bin/herdr-core names no version; this Collie needs ${hcPin.version} or newer`,
       });
       expect(check(result, "hc").fix).toContain(`HC_VERSION=${hcPin.version}`);
     }),

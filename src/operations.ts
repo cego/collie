@@ -43,6 +43,7 @@ import {
   type Carried,
 } from "./release";
 import { BUNDLED_HC, placeHc } from "./hc-install";
+import hcPin from "../hc-pin.json";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, liveCheckouts, type Asked, type RunFacts } from "./runs";
@@ -582,7 +583,7 @@ const placeOwn = Effect.fn("operations.placeOwn")(function* (
   }
   const { root, kept, is } = placed.success;
   yield* (yield* FileSystem.FileSystem).makeDirectory(env.userDir, { recursive: true });
-  const hc = yield* placeHc(env, root, is[BUNDLED_HC] ?? null, run);
+  const hc = yield* placeHc(env, root, is[BUNDLED_HC] ?? null, hcPin.version, run);
   const prepared = yield* prepareAndDesktop(env, root, manifest.version, run);
   if (!prepared.ok) return prepared;
   const data = {
