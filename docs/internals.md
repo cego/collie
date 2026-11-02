@@ -2317,25 +2317,29 @@ statements in `test/baseline-01.test.ts` alone, 13,500 of them per-shard lock de
 The branch therefore runs the engine on one shard
 ([ADR-draft-one-runner-holds-one-shard](adr/draft-one-runner-holds-one-shard.md)).
 
-| Window (UTC)                          | Samples | Probe p50 | Probe p95 | Result                              |
-| ------------------------------------- | ------: | --------: | --------: | ----------------------------------- |
-| q1 idle, 09:48:09–09:53:08            |     300 |   5.32 ms |   9.03 ms |                                     |
-| q1 alone, 09:53–10:03:43              |     633 |   5.39 ms |   8.89 ms | 633.56 s, 5,342 pass, 0 fail        |
-| q1 four, ≥ 4 suites 10:03:44–10:15:53 |     729 |   6.28 ms |  12.31 ms | interrupted 10:17:31                |
-| q2 idle, 10:19:43–10:24:43            |     300 |   5.11 ms |   9.33 ms |                                     |
-| q2 four, ≥ 4 suites 10:24:45–10:34:03 |     559 |   5.59 ms |  10.07 ms | still running when this was written |
+| Window (UTC)                          | Samples | Probe p50 | Probe p95 | Result                        |
+| ------------------------------------- | ------: | --------: | --------: | ----------------------------- |
+| q1 idle, 09:48:09–09:53:08            |     300 |   5.32 ms |   9.03 ms |                               |
+| q1 alone, 09:53–10:03:43              |     633 |   5.39 ms |   8.89 ms | 633.56 s, 5,342 pass, 0 fail  |
+| q1 four, ≥ 4 suites 10:03:44–10:15:53 |     729 |   6.28 ms |  12.31 ms | interrupted 10:17:31          |
+| q2 idle, 10:19:43–10:24:43            |     300 |   5.11 ms |   9.33 ms |                               |
+| q2 four, ≥ 4 suites 10:24:45–10:35:59 |     674 |   5.59 ms |  10.27 ms | completed 11:09:10, see below |
 
 The alone suite used 6,594.9 CPU-s, 13,561 process starts, and per-file time summing to
 6,894 s at 12 workers; `test/agents.test.ts` was the longest file at 200 s. At 12 workers
 that sum alone is about 575 s, so #215 needs roughly a third less work in the suite, not
 better scheduling. **#215 remains unmet.**
 
-The q1 four-suite window ended when the host restarted for Collie 0.110.1; suite 1
-finished green (5,342 pass) and suites 2–4 were cut off. Over its 729 samples the ratio
-was 1.36. The q2 rerun's first 559 qualifying samples give 1.08 (mean 18.8 busy cores,
-39 % CPU stall). Both are under 2×, but neither window had completed when the branch was
-wrapped up for the herdr-core migration. **#216 is supported by partial windows, not yet
-qualified by a completed one.**
+The q1 four-suite window ended when the host restarted for Collie 0.110.1, with suite 1
+green and suites 2–4 cut off; over its 729 samples the ratio was 1.36. The q2 rerun
+completed: its 674 samples with four whole suites held or waiting give a p95 of 10.27 ms,
+1.10 times its idle 9.33 ms (mean 18.4 busy cores, 38 % CPU stall), so **#216 is met at
+956e73db**. Its suites took 675, 1,372, 2,039 and 2,666 s, queued one behind another.
+Three passed 5,342; one failed 1 of 5,342: `test/verify.test.ts`'s "a tree git cannot
+stage is no tree" test, which is master's (#284) and passed in the other four suites.
+
+The branch later took master's herdr-core migration (#289), which rewrote the fakes most
+of the suite runs on. Neither window above measured that tree.
 
 ### Test-suite measurements, 12 October 2026
 
