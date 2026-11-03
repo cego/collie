@@ -3,7 +3,7 @@ import { Effect, Fiber, FileSystem, flow, Result, Schema } from "effect";
 import * as Arr from "effect/Array";
 import type { Flow } from "../src/board-model";
 import { processStartTime } from "../src/lock";
-import { measuring, refusal } from "../bench/record-open/guards";
+import { filledSinceStart, measuring, refusal } from "../bench/record-open/guards";
 import {
   differences,
   type Painted,
@@ -193,4 +193,13 @@ describe("the record-open benchmark's guards", () => {
         expect(yield* fs.exists(lock)).toBe(false);
       }).pipe(Effect.scoped),
     ));
+});
+
+test("the benchmark waits for the fill of the host it times, not of one it stopped", () => {
+  const started = (pid: number) => `message="collie 0.111.2 host started, pid ${pid}"`;
+  const filled = (runs: number) => `message="the Run model holds ${runs} Runs, filled in 9 ms"`;
+  const log = (lines: ReadonlyArray<string>) => Arr.join(lines, "\n");
+  expect(filledSinceStart(log([started(1), filled(16), started(2)]))).toBe(false);
+  expect(filledSinceStart(log([started(1), filled(16), started(2), filled(520)]))).toBe(true);
+  expect(filledSinceStart("")).toBe(false);
 });

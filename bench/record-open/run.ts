@@ -15,7 +15,7 @@ import { openPage, type Page } from "./cdp";
 import { differences, type Painted, paintedOf } from "./compare";
 import { buildView, launchChrome, startDesktop, VIEW_PORT, viewUp, WINDOW } from "./desktop";
 import { COUNTS, type Fixture, prepare } from "./fixture";
-import { measuring, refusal, userStateDir } from "./guards";
+import { filledSinceStart, measuring, refusal, userStateDir } from "./guards";
 import { barFailures, type CellSummary, summaryOf } from "./stats";
 import { enterWorld, live, recordMarksFile, root, socket, userEnv, world } from "./world";
 
@@ -159,7 +159,7 @@ const lagOver = <R>(
 const modelFilled = Effect.suspend(() =>
   Effect.sync(() => {
     try {
-      return readFileSync(`${world.state}/host.log`, "utf8").includes("the Run model holds");
+      return filledSinceStart(readFileSync(`${world.state}/host.log`, "utf8"));
     } catch {
       return false;
     }

@@ -1,6 +1,6 @@
 // What keeps the benchmark off the human's own host and out of another Measurement's way.
 
-import { Effect, FileSystem, Option, Path } from "effect";
+import { Effect, FileSystem, Option, Path, pipe } from "effect";
 import * as Str from "effect/String";
 import { ensureLockDir, lockHolder, withLock } from "../../src/lock";
 
@@ -72,4 +72,11 @@ export const measuring = <A, E, R>(
       }
       yield* Effect.sleep("1 second");
     }
+  });
+
+/** Whether the host that started last in `log` has filled its Run model. */
+export const filledSinceStart = (log: string) =>
+  Option.match(pipe(log, Str.lastIndexOf(" host started, pid ")), {
+    onNone: () => false,
+    onSome: (since) => pipe(log, Str.slice(since), Str.includes("the Run model holds")),
   });
