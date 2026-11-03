@@ -132,7 +132,6 @@ export const secretsFor = (keyring: Keyring) =>
     const lines: Array<readonly [string, KeyringEntry]> = [
       ["GITLAB_TOKEN", "gitlab-token"],
       ["HELLE_API_TOKEN", "helle-token"],
-      ["SLACK_BOT_TOKEN", "slack-token"],
     ];
     let text = "";
     for (const [name, key] of lines) {
@@ -263,13 +262,13 @@ const COLLIE_CONFIG = '"${XDG_CONFIG_HOME:-$HOME/.config}/collie"';
 const writeCollieFile = (file: string) =>
   `umask 077 && mkdir -p ${COLLIE_CONFIG} && rm -f ${COLLIE_CONFIG}/${file}.new && cat > ${COLLIE_CONFIG}/${file}.new && mv ${COLLIE_CONFIG}/${file}.new ${COLLIE_CONFIG}/${file}`;
 
-export const giveSlack = (routes: ReadonlyArray<ShellRoute>, token: string) =>
-  token === ""
-    ? clearSlack(routes)
-    : onEvery(routes, writeCollieFile("slack.env"), `SLACK_BOT_TOKEN=${token}\n`, token);
-
-export const clearSlack = (routes: ReadonlyArray<ShellRoute>) =>
-  onEvery(routes, `rm -f ${COLLIE_CONFIG}/slack.env`, "", "<no-token>");
+/** An older Collie's bot token is never written; "" removes the Machine's `slack.env`. */
+export const giveSlackBot = (route: ShellRoute, text: string) =>
+  text === ""
+    ? onEvery([route], `rm -f ${COLLIE_CONFIG}/slack.env`, "", "<no-token>").pipe(
+        Effect.map((all) => all[0]!.failed),
+      )
+    : Effect.succeed(null);
 
 /** Each Machine's `slack-user.env` from the grant Desktop keeps, or removed for "". */
 export const giveSlackUser = (routes: ReadonlyArray<ShellRoute>, text: string) => {

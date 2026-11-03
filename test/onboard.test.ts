@@ -2,7 +2,6 @@
 // carried tree on disk; every installer and system tool that would reach the network or need
 // root is a stub on PATH.
 
-import { pipe as pipe_ } from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";

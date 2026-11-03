@@ -33,7 +33,7 @@ export interface DesktopHolds {
 export const CREDENTIAL_SAID = {
   gitlab: { lacks: "the GitLab token", none: "GitLab token" },
   helle: { lacks: "Helle's token", none: "Helle token" },
-  slack: { lacks: "Slack's token", none: "Slack token" },
+  slack: { lacks: "the old Slack bot token removed", none: "Slack bot token" },
   "slack-user": { lacks: "your Slack sign-in", none: "Slack sign-in" },
 } satisfies Record<Credential, { lacks: string; none: string }>;
 

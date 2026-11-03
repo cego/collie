@@ -189,6 +189,7 @@ test("the secrets Desktop holds are handed to collie onboard as stdin lines", ()
       expect(yield* secretsFor(keyring)).toBe("");
       yield* keyring.store("gitlab-token", "token", "glpat-good");
       yield* keyring.store("helle-token", "token", "h-1");
+      yield* keyring.store("slack-token", "an older Collie's bot token", "xoxb-old");
       expect(yield* secretsFor(keyring)).toBe("GITLAB_TOKEN=glpat-good\nHELLE_API_TOKEN=h-1\n");
     }),
   ));

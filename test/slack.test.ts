@@ -6,27 +6,28 @@ import { slackApi } from "../src/slack";
 import { fakeSlack } from "./support/slack";
 import { runEffect } from "./support/effect";
 
-test("a bot token reads its workspace and posting user; invalid_auth refuses without logging it", () =>
+test("a user token reads its workspace and user; invalid_auth refuses without logging it", () =>
   runEffect(
     Effect.gen(function* () {
       const fake = fakeSlack();
-      const token = "xoxb-fixture-secret";
+      const token = "xoxp-fixture-secret";
       const logs: unknown[] = [];
       const api = slackApi(token, fake.client);
       const logger = Logger.make(({ message }) => {
         logs.push(message);
       });
-      const identity = yield* api.auth().pipe(Effect.provide(Logger.layer([logger])));
+      const identity = yield* api.tokenOwner().pipe(Effect.provide(Logger.layer([logger])));
       expect(identity).toEqual({
         team: "Example Co",
-        user: "collie",
+        user: "sam",
         team_id: "T123",
-        user_id: "U234",
-        bot_id: "B345",
+        user_id: "U456",
         url: "https://example.slack.com/",
       });
       fake.refuse("invalid_auth");
-      const refused = yield* api.auth().pipe(Effect.flip, Effect.provide(Logger.layer([logger])));
+      const refused = yield* api
+        .tokenOwner()
+        .pipe(Effect.flip, Effect.provide(Logger.layer([logger])));
       expect(refused).toBe("Slack auth.test: invalid_auth");
       expect(Arr.map(fake.calls, (call) => call.method)).toEqual(["auth.test", "auth.test"]);
       expect(inspect({ logs, calls: fake.calls, refused })).not.toContain(token);
@@ -55,27 +56,12 @@ test("the adapter posts, and asks for a permalink with Slack's returned channel 
     }),
   ));
 
-test("people follow both users.list pages and omit bots and deleted users", () =>
+test("channels follow both cursor pages and only offer conversations the human belongs to", () =>
   runEffect(
     Effect.gen(function* () {
       const fake = fakeSlack();
-      expect(yield* slackApi("xoxb-fixture", fake.client).people()).toEqual([
-        { id: "U456", name: "Sam" },
-        { id: "U789", name: "Alex Example" },
-      ]);
-      expect(fake.calls).toEqual([
-        { method: "users.list", parameters: { limit: "200", cursor: "" } },
-        { method: "users.list", parameters: { limit: "200", cursor: "people-next" } },
-      ]);
-    }),
-  ));
-
-test("channels follow both cursor pages and only offer conversations Collie belongs to", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fake = fakeSlack();
-      expect(yield* slackApi("xoxb-fixture", fake.client).channels()).toEqual([
-        { id: "C123", name: "engineering", is_private: false },
+      expect(yield* slackApi("xoxp-fixture", fake.client).channels()).toEqual([
+        { id: "C456", name: "design", is_private: false },
         { id: "G234", name: "releases", is_private: true },
       ]);
       expect(fake.calls).toEqual([

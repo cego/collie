@@ -4,7 +4,6 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { ConnectionId } from "../../../../src/connection-model";
-import type { SlackChoices } from "../../../../src/slack";
 import {
   connectionUses,
   type ConnectionWorkflow,
@@ -16,8 +15,6 @@ const props = defineProps<{
   workflows: ReadonlyArray<ConnectionWorkflow>;
   reading: boolean;
   trouble: string | null;
-  slack: SlackChoices | null;
-  slackTrouble: string | null;
   slackLoading: boolean;
 }>();
 const emit = defineEmits<{ refresh: []; refreshSlack: [] }>();
@@ -205,21 +202,16 @@ watch(
       :aria-label="`${current.name} details`"
     >
       <h4 class="font-semibold">{{ current.name }} · {{ current.state }}</h4>
-      <SlackConnection
+      <SlackUserConnection
         v-if="current.id === 'slack'"
-        :choices="slack"
-        :trouble="slackTrouble"
         :loading="slackLoading"
         @refresh="emit('refreshSlack')"
-        ><slot name="slack-destination"
-      /></SlackConnection>
-      <SlackUserConnection
-        v-if="current.id === 'slack-user'"
         @changed="
           emit('refresh');
           emit('refreshSlack');
         "
-      />
+        ><slot name="slack-destination"
+      /></SlackUserConnection>
       <div class="overflow-x-auto rounded-md border border-default">
         <table class="w-full text-left text-sm">
           <caption class="sr-only">

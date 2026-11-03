@@ -383,7 +383,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     group: "Notifications",
     label: "Post notifications to",
     description:
-      "The toasts you keep on also go to this Slack channel or person. Empty keeps toasts only.",
+      "The toasts you keep on also go to this Slack channel, posted as you. Empty keeps toasts only.",
   }),
   choice("scope", SCOPES, D.scope, {
     group: "Board",

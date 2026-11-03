@@ -1543,7 +1543,7 @@ that Machine skips it too.
 
 ### Connections
 
-**Settings → Every Machine → Connections** shows GitLab, GitHub, Linear, Helle, Slack, and Slack as you.
+**Settings → Every Machine → Connections** shows GitLab, GitHub, Linear, Helle and Slack.
 Each card names its account and the Machines that can reach it. The index counts cards that need you.
 **Details** lists each Machine's reading and fix, plus the workflows that declare the Connection.
 The **With it** and **Without it** text comes from those declarations; a **needs** row says **Does not start**.
@@ -1572,7 +1572,7 @@ unless that is set), readable by you alone and replaced whole on every save — 
 gh and Helle already keep the same tokens on every Machine, so nothing has to be installed
 for it. A Desktop that kept them in the Secret Service through `secret-tool` before has them
 copied into that file the first time, where `secret-tool` is there. It keeps the GitLab token,
-Helle's token, and Slack's bot token. **Make one on GitLab** opens GitLab's token page with the
+Helle's token, and your Slack sign-in. **Make one on GitLab** opens GitLab's token page with the
 `api` and `write_repository` scopes filled in. Helle's URL is always
 `https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab
 accepts it with those scopes, and gives it at once to glab on every Machine it reaches
@@ -1601,96 +1601,85 @@ Machine's.
 
 #### Slack
 
-Open **Connections → Slack → Connect**. One shared **Collie** app serves your Slack workspace.
-Choose **Add Collie to your Slack** and install the prefilled app.
-Skip this step if a teammate already installed it.
-Under the app's **OAuth & Permissions**, copy the **Bot User OAuth Token** (`xoxb-…`).
-Paste it into **Bot token** and choose **Connect**.
-
-Collie checks the token with Slack before keeping it. A refusal appears beside the field with Slack's reason.
-The card reads, for example, **Posts as collie in Example Co**, from Slack's answer.
-Slack does not identify the installer, so Collie does not name one.
-The app has only five bot scopes: `chat:write`, `im:write`, `channels:read`, `groups:read`, and `users:read`.
-It has no event subscriptions, Socket Mode or hosted relay. Its one sign-in callback is [Slack as you](#slack-as-you)'s, on this computer.
-Talking to Collie in Slack is not built.
-
-Desktop keeps the token with its other credentials and gives it to every Machine on stdin.
-Each Machine keeps it in `$XDG_CONFIG_HOME/collie/slack.env` (`~/.config/collie/slack.env` by default), readable by its owner alone.
-An unreachable Machine gets it when it connects.
-**Disconnect** removes the token Desktop gave each Machine, including when it next reconnects.
-It does not uninstall the shared app or revoke a teammate's token.
-For a Machine configured without Desktop, give `SLACK_BOT_TOKEN=…` through `collie onboard --secrets-stdin`.
-An explicit `SLACK_BOT_TOKEN` in the host's environment takes precedence over the file.
-
-**Runs → Slack channel for approval requests** offers the channels you are in, public and private, read with [Slack as you](#slack-as-you).
-Those are the channels where a post as you can succeed, so Collie needs no invitation there.
-It stores the chosen channel's id in `release.approval_channel`.
-The approval request itself is posted as you, never as the bot.
-An earlier `#name` remains **#name (not checked)** and stays unchanged until you pick again.
-While you are not signed in to Slack as yourself, the control is disabled and points back to Connections.
-
-**Notifications → Post notifications to** stores its destination in `slack.notification_channel`.
-Invite Collie into each channel it posts notifications in with `/invite @Collie`, then choose **Refresh Slack**.
-Only channels it belongs to appear, including private channels it joined.
-While Slack is disconnected, this control is disabled and points back to Connections.
-Choose a channel, **Nowhere: toasts only**, or **A direct message to you**.
-The direct-message choice asks **Which of these is you?**; search the workspace's people and pick yourself once.
-Collie stores your user id and then shows **A direct message to** followed by your name.
-The Slack table's **Notifications** row comes from the host's own declaration beside the workflows.
-
-Each Machine's host posts the notification kinds you keep on about its own Runs.
-Desktop can be closed; Desktop never posts these messages.
-A user id opens a direct message before the host posts in its channel.
-An empty destination or a Slack Connection that is not working sends nothing.
-Each event is attempted once, including across host restarts; failed attempts are logged and do not fail the Run.
-Toasts continue independently of Slack.
-
-#### Slack as you
-
-**Slack as you** is you, signed in to Slack as yourself, apart from the **Collie** bot above.
-A release's **Post for approval** posts with it, under your own name and avatar; notifications stay with the bot.
-Neither Connection ever reads the other's token, so a working bot never stands in for you.
-Slack adds its own attribution line under a message you post this way, reported as "Sent using Collie".
+**Slack** is you, signed in to Slack as yourself. Everything Collie posts in Slack, a
+release's **Post for approval** and the notifications you keep on, is posted under your own
+name and avatar. Collie has no bot, and nothing ever posts as one instead of you.
+Slack adds its own attribution line under each message, reported as "Sent using Collie".
 Collie cannot change or remove that line, and it never reads "Sent with Collie".
+
+To sign in, open **Connections → Slack** and choose **Sign in to Slack**. Desktop ships the
+shared **Collie** app's public client ID, so there is nothing to paste, and it never asks for
+or keeps a client secret. Your browser opens Slack, which asks you to allow Collie to post as
+you and to see the channels you are in (`chat:write`, `channels:read` and `groups:read`, and
+no bot scopes). Slack sends you back to `http://localhost:47328/slack/callback`, where
+Desktop listens for five minutes, for that one sign-in. A cancelled sign-in, an answer for
+another sign-in, a grant without `chat:write`, a bot token, or a token Slack says is someone
+else's keeps nothing. Desktop then keeps the grant with its other credentials and gives
+every Machine its `slack-user.env`; an unreachable Machine gets it when it connects. The
+card reads **Posts as** you **in** your workspace. A sign-in kept from before stays signed in,
+renewing against the app it was made with.
 
 Each Machine reads it from `$XDG_CONFIG_HOME/collie/slack-user.env` (`~/.config/collie/slack-user.env` by default), readable by its owner alone.
 The file has three lines: `SLACK_USER_TOKEN` (`xoxp-…`, or `xoxe.xoxp-…` when it rotates), `SLACK_USER_ID` and `SLACK_TEAM_ID`.
 Before it counts, the host asks Slack's `auth.test` who the token belongs to. Each Machine reads one of these:
 
 - **absent**: there is no file. A Machine without it is still healthy in `collie doctor`.
-- **ok**: Slack names the same user and team as the file, and the token is not a bot's. The card reads, for example, **Posts approval requests as sam in Example Co**.
+  Where an older Collie left a bot token (`slack.env`, or `SLACK_BOT_TOKEN` in the host's
+  environment), the reading says Collie no longer posts with it, and to sign in to Slack.
+- **ok**: Slack names the same user and team as the file, and the token is not a bot's. The card reads, for example, **Posts as sam in Example Co**.
 - **broken**: Slack refused the token (such as `token_expired` or `invalid_auth`), or the token belongs to another user or team, or it is a bot's. The reading says which, and the fix is to open Desktop to renew Slack, or sign in again.
 
 Desktop never offers to copy it from another Machine.
 
-To sign in, open **Connections → Slack** and choose **Sign in as yourself**. The first time,
-paste the Collie app's **Client ID**, from **Basic Information › App Credentials**; Desktop
-keeps it, and never asks for or keeps the client secret. Your browser opens Slack, which
-asks you to allow Collie to post as you and to see the channels you are in (`chat:write`,
-`channels:read` and `groups:read`, and no bot scopes). Slack sends you back to
-`http://localhost:47328/slack/callback`, where Desktop listens for five minutes, for that
-one sign-in. A cancelled sign-in, an answer for another sign-in, a grant without
-`chat:write`, a bot token, or a token Slack says is someone else's keeps nothing. Desktop
-then keeps the grant with its other credentials and gives every Machine its
-`slack-user.env`; an unreachable Machine gets it when it connects. The card reads
-**Posts approval requests as** you **in** your workspace.
-
 Desktop renews the access token when it starts and in its last hour, and gives the new one
 to every Machine. A renewal Slack refuses keeps the old grant, and the card reads **Slack
 sign-in expired: sign in again**. **Sign out** forgets the grant and removes
-`slack-user.env` from every Machine, including one that reconnects later; it leaves the bot
-alone, as the bot's **Disconnect** leaves your sign-in.
+`slack-user.env` from every Machine, including one that reconnects later.
+
+**Moving from the bot.** An older Collie posted notifications with a bot token you pasted
+or gave as `SLACK_BOT_TOKEN`. Nothing reads it any more: until you sign in, Slack reads
+**absent** and nothing is posted. Once you sign in, Desktop forgets the bot token it kept
+and removes `slack.env` from every Machine, including one that reconnects later. That
+removes local copies only: the token stays valid at Slack until a workspace admin removes the
+bot. `collie onboard --secrets-stdin` given a `SLACK_BOT_TOKEN` writes nothing and says to
+sign in. Your chosen channels are kept.
+
+What moving from the bot changes:
+
+- Slack does not notify you of your own message, so a notification posted as you does not ping
+  you. Desktop's toast does.
+- Notifications go to channels only. The sign-in has no scope to open a direct message, and a
+  direct message to yourself would not notify you either. A person chosen before shows as
+  **<id> (direct messages are no longer sent)**, and each notification is logged on its Run
+  as not posted until you pick a channel.
+- A channel only the bot was in no longer receives notifications; join it or pick another.
+- A Machine set up without Desktop has no sign-in, so it posts no notifications, and its
+  releases ask you to share the merge request by hand.
+
+**Runs → Slack channel for approval requests** and **Notifications → Post notifications to**
+offer the channels you are in, public and private. Those are the channels where a post as
+you can succeed, so Collie needs no invitation there. They store the chosen channel's id in
+`release.approval_channel` and `slack.notification_channel`. A value stored before that you
+are not in remains **<value> (not checked)** and stays unchanged until you pick again. While
+you are not signed in to Slack, both controls are disabled and point back to Connections.
+Choose **Refresh Slack** after joining a channel. The Slack table's **Notifications** row
+comes from the host's own declaration beside the workflows.
+
+Each Machine's host posts the notification kinds you keep on about its own Runs.
+Desktop can be closed; Desktop never posts these messages.
+An empty destination or a Slack Connection that is not working sends nothing.
+Each event is attempted once, including across host restarts; failed attempts are logged and do not fail the Run.
+Toasts continue independently of Slack.
 
 The limits: an access token lasts 12 hours and is renewed only while Desktop runs, so a
 Machine whose token expired while Desktop was closed reads **broken** until Desktop next
-opens. A refresh token lasts 30 days; after a longer absence, sign in again. A Machine set
-up without Desktop has no Slack as you, so its releases ask you to share the merge request by hand.
+opens. A refresh token lasts 30 days; after a longer absence, sign in again.
+The app has no event subscriptions, Socket Mode or hosted relay; its one sign-in callback
+is on this computer. Talking to Collie in Slack is not built.
 
-Whoever owns the shared Collie app updates it once from **Add Collie to your Slack**'s
-manifest (**Features › App Manifest**): it turns on PKCE (`oauth_config.pkce_enabled`), adds
-the redirect URL `http://localhost:47328/slack/callback`, and adds the three user scopes.
-Then they reinstall the app. Turning PKCE on is one-way: it marks the app a public client,
-and only Slack support can turn it off.
+Whoever owns the shared Collie app keeps PKCE on (`oauth_config.pkce_enabled`), the
+redirect URL `http://localhost:47328/slack/callback`, and the three user scopes. Turning PKCE
+on is one-way: it marks the app a public client, and only Slack support can turn it off.
 
 ### Settings
 
@@ -2758,14 +2747,14 @@ To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`
 under Settings ([Your defaults](#your-defaults)). While the merge request waits on a
 teammate's approval, the Run asks **Post for approval** or **Wait for changes**. Check the
-merge request first: **Post for approval** has its host post it as you, through [Slack as you](#slack-as-you),
+merge request first: **Post for approval** has its host post it as you, through [Slack](#slack),
 linked by its forge title and nothing else. It appears under your name, with Slack's own
 attribution line beneath, reported as "Sent using Collie"; Collie cannot change or remove it.
-The host checks with Slack that the token is yours before it posts, and never posts as the Collie bot instead.
+The host checks with Slack that the token is yours before it posts, and never posts as a bot instead.
 The Run's log keeps the message's permalink.
 If the permalink cannot be read, the log says why; the message still counts as shared.
 A post Slack refuses is logged with Slack's reason and not tried again, and the Run continues to its review wait.
-Without a working Slack as you, such as on a Machine without Desktop, it asks you to share the merge
+Without a working Slack sign-in, such as on a Machine without Desktop, it asks you to share the merge
 request yourself, says why on its log, and shows its address to copy.
 **Wait for changes** posts nothing and asks again once the head moves.
 
@@ -2877,7 +2866,7 @@ itself can tell it.
 
 `release.share_for_approval` ("Ask before sharing a merge request for approval", off until
 set) and `release.approval_channel` ("Slack channel for approval requests") are under Settings' Runs.
-Sign in to [Slack as you](#slack-as-you), then pick one of your channels by name; Collie stores its id.
+Sign in to [Slack](#slack), then pick one of your channels by name; Collie stores its id.
 They nest in config.json as `"release": {"share_for_approval": true, "approval_channel": "C0123456789"}`.
 Earlier `#name` values are retained and used as written until picked again. Turned on with a
 channel, a release Run waiting on a teammate's approval asks you whether to post its merge

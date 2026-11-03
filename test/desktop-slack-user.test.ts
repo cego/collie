@@ -1,26 +1,27 @@
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Deferred, Effect, Fiber, FileSystem, Order, Queue, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Order, Queue, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { TestClock } from "effect/testing";
 import {
   SIGN_IN_EXPIRED,
+  SlackUserGrant,
   pkceChallenge,
   slackAuthorizeUrl,
   slackUserSession,
 } from "../desktop/src/bun/slack-user";
 import {
   credentialsFile,
-  giveSlack,
+  giveSlackBot,
   giveSlackUser,
   type Keyring,
 } from "../desktop/src/bun/credentials";
 import { givenCredentials } from "../desktop/src/bun/given";
 import { localRoute } from "../desktop/src/bun/machine";
 import { ranWith } from "../desktop/src/bun/onboarding";
-import { disconnectSlackConnection } from "../desktop/src/bun/slack";
+import { retireSlackBot } from "../desktop/src/bun/slack";
 import { SLACK_CALLBACK_PORT } from "../desktop/src/shared/slack";
 import type { SlackUserState } from "../desktop/src/shared/flock";
 import { slackApi } from "../src/slack";
@@ -76,7 +77,7 @@ const desktop = Effect.gen(function* () {
     give: {
       gitlab: () => Effect.succeed(null),
       helle: () => Effect.succeed(null),
-      slack: (route, text) => giveSlack([route], text).pipe(Effect.map((all) => all[0]!.failed)),
+      slack: giveSlackBot,
       "slack-user": (route, text) =>
         giveSlackUser([route], text).pipe(Effect.map((all) => all[0]!.failed)),
     },
@@ -91,6 +92,7 @@ const desktop = Effect.gen(function* () {
   const session = yield* slackUserSession({
     keyring,
     give: (text) => given.giveEvery(routes, "slack-user", text),
+    retireBot: retireSlackBot(keyring, (text) => given.giveEvery(routes, "slack", text)),
     open: (url) => {
       const authorize = new URL(url);
       opened.push(authorize);
@@ -110,6 +112,7 @@ const desktop = Effect.gen(function* () {
   const oauthCalls = () => Arr.filter(fake.calls, (call) => call.method === "oauth.v2.access");
   return {
     dir,
+    keyring,
     fake,
     session,
     given,
@@ -145,12 +148,11 @@ test("a sign-in keeps nothing and gives nothing unless Slack's answer is the hum
       const it = yield* desktop;
       const refused = (reason: string) =>
         Effect.gen(function* () {
-          expect(yield* it.session.signIn("123.456").pipe(Effect.flip)).toBe(reason);
+          expect(yield* it.session.signIn.pipe(Effect.flip)).toBe(reason);
           expect((yield* it.session.state).signedIn).toBeNull();
           expect(yield* it.held).toEqual([null, null]);
         });
 
-      expect(yield* it.session.signIn("").pipe(Effect.flip)).toContain("Client ID");
       it.browser.answer = () => [
         ["code", "the-code"],
         ["state", "someone-else's"],
@@ -193,14 +195,13 @@ test("a sign-in keeps nothing and gives nothing unless Slack's answer is the hum
 
       it.fake.exchange({});
       it.fake.calls.length = 0;
-      const signed = yield* it.session.signIn("123.456");
+      const signed = yield* it.session.signIn;
       expect(signed.given).toEqual([
         { name: "vm", failed: null },
         { name: "mini", failed: null },
       ]);
       expect(yield* it.session.state).toEqual({
         signedIn: { user: "sam", team: "Example Co" },
-        clientId: "123.456",
         trouble: null,
       });
       const [exchange] = it.oauthCalls();
@@ -211,7 +212,7 @@ test("a sign-in keeps nothing and gives nothing unless Slack's answer is the hum
         "redirect_uri",
       ]);
       expect(exchange!.parameters).toMatchObject({
-        client_id: "123.456",
+        client_id: "2673706937.12461393591409",
         code: "the-code",
         redirect_uri: "http://localhost:47328/slack/callback",
       });
@@ -242,7 +243,7 @@ test("a sign-in refuses, naming the port, when its callback port is taken", () =
         port: SLACK_CALLBACK_PORT,
         fetch: () => new Response(""),
       });
-      const failed = yield* it.session.signIn("123.456").pipe(Effect.flip);
+      const failed = yield* it.session.signIn.pipe(Effect.flip);
       yield* Effect.promise(() => holder.stop(true));
       expect(failed).toContain(`Port ${SLACK_CALLBACK_PORT} is in use`);
       expect(it.opened).toEqual([]);
@@ -253,7 +254,7 @@ test("Desktop renews in the access token's last hour, once at a time, and keeps 
   runEffect(
     Effect.gen(function* () {
       const it = yield* desktop;
-      yield* it.session.signIn("123.456");
+      yield* it.session.signIn;
       it.fake.calls.length = 0;
 
       yield* TestClock.adjust("10 hours");
@@ -266,7 +267,11 @@ test("Desktop renews in the access token's last hour, once at a time, and keeps 
         { name: "mini", failed: null },
       ]);
       expect(Arr.map(it.oauthCalls(), (call) => call.parameters)).toEqual([
-        { client_id: "123.456", grant_type: "refresh_token", refresh_token: "xoxe-1-refresh-1" },
+        {
+          client_id: "2673706937.12461393591409",
+          grant_type: "refresh_token",
+          refresh_token: "xoxe-1-refresh-1",
+        },
       ]);
       expect(yield* it.held).toEqual([SIGNED_IN(2), SIGNED_IN(2)]);
 
@@ -295,13 +300,11 @@ test("Desktop renews in the access token's last hour, once at a time, and keeps 
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
-test("Sign out removes slack-user.env everywhere, even from a Machine that reconnects later, and leaves the bot; Disconnect leaves the sign-in", () =>
+test("Sign out removes slack-user.env everywhere, even from a Machine that reconnects later", () =>
   runEffect(
     Effect.gen(function* () {
       const it = yield* desktop;
-      const fs = yield* FileSystem.FileSystem;
-      yield* it.given.giveEvery(it.routes, "slack", "xoxb-bot-opaque");
-      yield* it.session.signIn("123.456");
+      yield* it.session.signIn;
       it.reachable.delete("mini");
       yield* it.session.signOut;
       expect(yield* it.held).toEqual([null, SIGNED_IN(1)]);
@@ -309,19 +312,62 @@ test("Sign out removes slack-user.env everywhere, even from a Machine that recon
       yield* it.given.giveLacking(it.routes[1]!);
       expect(yield* it.held).toEqual([null, null]);
       expect(yield* it.session.state).toMatchObject({ signedIn: null });
-      for (const name of ["vm", "mini"])
-        expect(yield* fs.readFileString(it.file(name, "slack.env"))).toBe(
-          "SLACK_BOT_TOKEN=xoxb-bot-opaque\n",
-        );
+    }),
+  ));
 
-      yield* it.session.signIn("123.456");
-      yield* disconnectSlackConnection(
-        credentialsFile(`${it.dir}/desktop`, `${it.dir}/no-keyring`),
-        (text) => it.given.giveEvery(it.routes, "slack", text),
-      );
+test("one click signs in to Collie's public Slack app, and a grant kept from another app keeps its own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const it = yield* desktop;
+      yield* it.session.signIn;
+      expect(it.opened.at(-1)!.searchParams.get("client_id")).toBe("2673706937.12461393591409");
+      for (const call of it.fake.calls) expect(call.parameters).not.toHaveProperty("client_secret");
+      for (const url of it.opened) expect(url.searchParams.has("client_secret")).toBe(false);
+
+      const kept = yield* Schema.encodeEffect(Schema.fromJsonString(SlackUserGrant))({
+        clientId: "123.456",
+        accessToken: "xoxe.xoxp-1-kept",
+        refreshToken: "xoxe-1-kept",
+        expiresAt: 0,
+        userId: "U456",
+        userName: "sam",
+        teamId: "T123",
+        teamName: "Example Co",
+        scopes: "chat:write,channels:read,groups:read",
+      });
+      yield* it.keyring.store("slack-user-grant", "Slack sign-in", kept);
+      yield* it.session.renew(true);
+      expect(it.oauthCalls().at(-1)!.parameters).toMatchObject({
+        client_id: "123.456",
+        refresh_token: "xoxe-1-kept",
+      });
+      yield* it.session.signIn;
+      expect(it.opened.at(-1)!.searchParams.get("client_id")).toBe("123.456");
+    }),
+  ));
+
+test("an older Collie's bot token stays until the human signs in, then leaves every Machine and Desktop", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const it = yield* desktop;
+      const fs = yield* FileSystem.FileSystem;
+      for (const name of ["vm", "mini"]) {
+        yield* fs.makeDirectory(`${it.dir}/${name}/.config/collie`, { recursive: true });
+        yield* fs.writeFileString(it.file(name, "slack.env"), "SLACK_BOT_TOKEN=xoxb-bot-opaque\n");
+      }
+      yield* it.keyring.store("slack-token", "Collie's Slack bot token", "xoxb-bot-opaque");
+      yield* it.given.giveLacking(it.routes[0]!);
+      expect(yield* fs.exists(it.file("vm", "slack.env"))).toBe(true);
+
+      it.reachable.delete("mini");
+      yield* it.session.signIn;
       expect(yield* fs.exists(it.file("vm", "slack.env"))).toBe(false);
-      expect(yield* it.held).toEqual([SIGNED_IN(2), SIGNED_IN(2)]);
-      expect((yield* it.session.state).signedIn).toEqual({ user: "sam", team: "Example Co" });
+      expect(yield* fs.exists(it.file("mini", "slack.env"))).toBe(true);
+      expect(yield* it.keyring.lookup("slack-token")).toBe("");
+      it.reachable.add("mini");
+      yield* it.given.giveLacking(it.routes[1]!);
+      expect(yield* fs.exists(it.file("mini", "slack.env"))).toBe(false);
+      expect(yield* it.held).toEqual([SIGNED_IN(1), SIGNED_IN(1)]);
     }),
   ));
 
@@ -330,10 +376,10 @@ test("a refused exchange or renewal never says the access or refresh token", () 
     Effect.gen(function* () {
       const it = yield* desktop;
       it.fake.refuse("invalid_auth xoxe.xoxp-1-access-1 xoxe-1-refresh-1", "auth.test");
-      const exchange = yield* it.session.signIn("123.456").pipe(Effect.flip);
+      const exchange = yield* it.session.signIn.pipe(Effect.flip);
       expect(exchange).toStartWith("Slack auth.test: invalid_auth");
       it.fake.refuse(null);
-      yield* it.session.signIn("123.456");
+      yield* it.session.signIn;
       it.fake.refuse(
         "invalid_refresh_token xoxe-1-refresh-2 xoxe.xoxp-1-access-2",
         "oauth.v2.access",
@@ -356,9 +402,9 @@ test("Desktop lists the channels the human is in with their own token, renewing 
     Effect.gen(function* () {
       const it = yield* desktop;
       expect(yield* it.session.channels.pipe(Effect.flip)).toBe(
-        "Sign in to Slack as yourself under Connections to pick a channel you're in",
+        "Sign in to Slack under Connections to pick a channel you're in",
       );
-      yield* it.session.signIn("123.456");
+      yield* it.session.signIn;
       it.fake.calls.length = 0;
       it.fake.authorized.length = 0;
       expect(yield* it.session.channels).toEqual([
@@ -387,7 +433,7 @@ test("a Machine connecting while the human signs out is not given the grant they
     Effect.gen(function* () {
       const it = yield* desktop;
       it.reachable.delete("mini");
-      yield* it.session.signIn("123.456");
+      yield* it.session.signIn;
       expect(yield* it.held).toEqual([SIGNED_IN(1), null]);
       it.reachable.add("mini");
       const paused = yield* it.pauseGrantLookup;
@@ -404,7 +450,7 @@ test("the sign-in's standing is told again as it changes, a renewal refused in t
   runEffect(
     Effect.gen(function* () {
       const it = yield* desktop;
-      yield* it.session.signIn("123.456");
+      yield* it.session.signIn;
       const told = yield* Queue.unbounded<typeof SlackUserState.Type>();
       yield* it.session.changes.pipe(
         Stream.runForEach((state) => Queue.offer(told, state)),
@@ -412,11 +458,11 @@ test("the sign-in's standing is told again as it changes, a renewal refused in t
       );
       const next = Queue.take(told).pipe(Effect.timeout("2 seconds"));
       const sam = { user: "sam", team: "Example Co" };
-      expect(yield* next).toEqual({ signedIn: sam, clientId: "123.456", trouble: null });
+      expect(yield* next).toEqual({ signedIn: sam, trouble: null });
       it.fake.refuse("invalid_refresh_token", "oauth.v2.access");
       yield* it.session.renew(true).pipe(Effect.flip);
-      expect(yield* next).toEqual({ signedIn: sam, clientId: "123.456", trouble: SIGN_IN_EXPIRED });
+      expect(yield* next).toEqual({ signedIn: sam, trouble: SIGN_IN_EXPIRED });
       yield* it.session.signOut;
-      expect(yield* next).toEqual({ signedIn: null, clientId: null, trouble: null });
+      expect(yield* next).toEqual({ signedIn: null, trouble: null });
     }),
   ));
