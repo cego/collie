@@ -56,6 +56,9 @@ Amended 2026-10-07: the finishing is bounded. A host gives running steps five se
 a stop signal and then exits, because upstream waits on each step and one that never yields
 kept an old host — and its lock — alive past every client that tried to replace it.
 
+Extended by [ADR-draft-one-runner-holds-one-shard](draft-one-runner-holds-one-shard.md): a
+third setting, `shardsPerGroup` 1 against upstream's 300.
+
 Extended by
 [ADR-draft-a-check-ends-with-the-host-that-runs-it](draft-a-check-ends-with-the-host-that-runs-it.md):
 a host whose lock goes, or whose watched process exits, is bounded by the same grace.
