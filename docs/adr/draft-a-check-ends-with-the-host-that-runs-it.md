@@ -42,8 +42,10 @@ never touches another state directory's checks. That matters because Collie's ow
 runs inside a check and starts hosts of its own.
 
 **D3. A stop ends a host's checks. It does not wait for them.** Whatever ends a host ends
-every check it is collecting first: a stop signal, its lock or directory gone, or the
-process it watches gone. Those are one end, bounded by one grace. Before this, only a stop
+every check it is collecting first: a stop signal, its lock or directory gone, the process
+it watches gone, or a restart onto the same build. Those are one end, bounded by one grace.
+The one end that does not is a replacement by a newer build of the same installation, which
+hands its checks over (D5). Before this, only a stop
 signal was: a host whose lock went waited on its running steps for as long as they took.
 Each check gets SIGTERM at once. Whatever is left of them gets SIGKILL in the grace's last
 fifth, before the host lets go of its lock. A stop is not made to wait for a check to
@@ -62,18 +64,39 @@ killed mid-run would otherwise stand for its tree
 ([ADR-0034](0034-a-check-red-before-the-run-is-reported-not-fixed.md), amended
 2026-10-19).
 
-**D5. A host that starts ends what the last one left. It never adopts it.** Before it
-hands any Run back to the engine, a host ends every check of its state directory that a
+**D5. A host that starts ends what the last one left, unless it was handed over.** Before
+it hands any Run back to the engine, a host ends every check of its state directory that a
 previous host recorded or marked and that is still running: SIGTERM, then SIGKILL. It
 removes the check's record, and the Run's `verifying` marker where that names the check.
-The Run's log names each check ended, with the host that left it. The host never adopts
-one, for three reasons:
+The Run's log names each check ended, with the host that left it.
 
-- the check's output went to a pipe of the host that is gone;
-- only a process's parent can read its exit status;
-- the tree it started on was in that host's memory.
+_Amended 2026-11-02 (#264):_ a replacement by a newer build of the same installation hands
+its checks over, because ending them made every release on a shared Machine throw away the
+hour-long checks other Runs had in flight. The client replacing the host names it, and its
+own build, in `host.handover` before it signals it. Only a host signalled while that names
+it, and a build newer than its own, hands over: it stops collecting its supervised checks,
+leaves them running, and names itself, the build and the checks in `host.handed-over` before
+it lets go of its lock. Only a host of that build adopts them, and only those whose record
+names the host that handed them over and whose supervisor is proved by pid and start token,
+as D2 proves a leftover. A stop signal without that request, a crash, a lost lock or
+directory and a same-build restart still end every check, as D3 says, and nothing they leave
+is ever adopted. Draining a host before the swap was rejected: newer clients would be
+refused as a version mismatch for up to an hour after each release.
 
-Running it again costs what a restart costs today, without the second copy.
+Three things once made adoption unsafe, and a check's supervisor answers each. A host runs
+a check's command under a supervisor, a `collie` process outside its process group that
+leads the check's group and carries its markers. It holds the command's pipes and writes the
+check's log and each stream's end to the check's files under the state directory, then its
+exit status:
+
+- the check's output no longer goes only to a pipe of the host that is gone;
+- the exit status is the supervisor's to read and write down, not the host's;
+- the tree it started on is in `check-output/<id>.json`, written before it was spawned.
+
+A gate's step replayed on the new host claims the check it handed over rather than running
+it again. An agent's check is finished by the new host, and the agent's `collie verify`
+follows it there by the check's id. Two hosts never both collect one: the old one stops as
+it hands over, and the lock admits one new one.
 
 **D6. One check of a Run at a time.** Before a check of a Run starts, any recorded check of
 that Run that this host is not collecting is ended, once, by the bounded SIGTERM, SIGKILL
@@ -96,7 +119,8 @@ and the check runs again, so nothing of it needs vouching for.
 ## Consequences
 
 - A host restart during a check costs one more run of that check, as it did before, and
-  never two copies running at once.
+  never two copies running at once. A replacement by a newer build costs none: the check
+  runs on, and its one Verification is the run it was already making.
 - A host whose lock or directory goes, or whose watched process exits, exits within the
   stop grace, as a signalled host does. Before, it waited on its running steps.
 - A stop while a check runs takes the whole stop grace, because the check's step does not

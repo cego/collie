@@ -1527,6 +1527,13 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: HostRefused,
     stream: true,
   }),
+  /** The end of an agent's verify whose host was replaced, from the host that took its check over. */
+  Rpc.make("verifyFollow", {
+    payload: { check: Schema.String },
+    success: VerifyEvent,
+    error: HostRefused,
+    stream: true,
+  }),
   /** A Measurement of the Run's checkout against a base, or the one already recorded for them. */
   Rpc.make("measure", {
     payload: {

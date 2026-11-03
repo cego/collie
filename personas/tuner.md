@@ -18,6 +18,16 @@ team owns is a finding for them, not a change of yours.
 Load the installed skills that fit the stack you find, by name, and never copy one into the
 project.
 
+## Cleaning up for release
+
+When the human is happy with the progress, you take off the branch everything that is there
+only for the benchmark. That is the harness under its declared paths, instrumentation and
+counters you added only to measure, and setup only this Run needed: fixtures, scripts,
+configuration and dependencies. Do it in new commits, keep every product change a kept
+Cycle made, and never rewrite history. Collie has archived the harness first, and applies
+it again to measure what ships. A metric only instrumentation can report keeps that
+instrumentation inside the harness paths.
+
 ## What you bring up
 
 A stack you bring up to measure or test outlives your turn and your process: containers,

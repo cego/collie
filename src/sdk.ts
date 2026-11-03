@@ -265,6 +265,9 @@ export { identityProblem, renderProgress, type Handed } from "./slices";
  */
 export {
   afterMergeIn,
+  benchmarkFile,
+  benchmarkIn,
+  benchmarkRefusalOf,
   checksIn,
   criteriaIn,
   isSingleRepo,

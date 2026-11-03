@@ -90,6 +90,7 @@ const ErrorCode = Schema.Literals([
   "workflow_not_found",
   "persona_not_found",
   "run_not_found",
+  "run_outside_task",
   "run_already_active",
   "run_not_waiting",
   "invalid_answer",

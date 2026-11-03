@@ -32,6 +32,10 @@ given `Digest` itself. D3 serves `effect/crypto` beside `effect/workflow`, and r
 `effect/Crypto` with what replaces it, so a module that still imports it is told why it
 will not load.
 
+**Amended 2026-11-02: a seventh upstream behaviour.** Three first-attempt Flakes on master
+(#240) found one more, below as 7: an answer the engine has not processed yet is read early,
+and still wakes the Run later.
+
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
 will run it. That means Collie either builds durability, replay, suspension and recovery,
 or it uses Effect's. This says it uses Effect's, records exactly which settings that takes,
@@ -104,7 +108,7 @@ yet is `toolchain_unavailable`, said out loud — never a module reported as fin
 
 ## What upstream actually does
 
-Six things the proof measured rather than assumed. Each is a test.
+Six things the proof measured rather than assumed, and a seventh a Flake found. Each is a test.
 
 1. **Registering a name twice keeps the first.** It does not fail and it does not replace:
    the second registration is silently ignored. So duplicate registration is not a reload
@@ -132,6 +136,14 @@ Six things the proof measured rather than assumed. Each is a test.
    keeps waiting. `Effect.raceFirst` lets it reach the enclosing Run. The same-host
    collection regression in `test/agents.test.ts` proves suspension, reconciliation,
    attempt two, and reuse of the original launch without restarting the engine.
+
+7. **An answer the engine has stored but not processed is read early, and wakes the Run
+   later.** A Run that awaits a `DurableDeferred` whose completion is still waiting in
+   storage takes it and goes on. Processing that completion afterwards still preempts the
+   Run, or resumes whatever park it reached next, and a park made inside an Activity runs
+   that Activity again. So `answerDecision` completes a question only once its Run has
+   stopped to wait on it. The baseline scenarios that answer before the Run awaits are the
+   test.
 
 ## What this does not decide
 

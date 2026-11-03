@@ -102,7 +102,11 @@ export const MeasurementSchema = Schema.Struct({
   /** Why the Run's plan changed to this one; null for its first. */
   plan_reason: Schema.NullOr(Schema.String),
   base: Schema.Struct({ commit: Schema.String, ...Tree.fields }),
-  candidate: Tree,
+  candidate: Schema.Struct({
+    ...Tree.fields,
+    /** The harness commits a scratch tree put on a candidate that had none; it was sampled there. */
+    harness_applied: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
   /** Each command's environment as a Verification records it; null where it could not be read. */
   environment: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
   waited: Schema.Struct({

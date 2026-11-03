@@ -6,11 +6,23 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
+import { decodeBenchmarkPlan } from "./measurement-model";
 
 export const REPO_LINE = /^\s*\*\*Repo:\*\*\s*(.*?)\s*$/m;
 const BLOCKED_LINE = /^\s*\*\*Blocked by:\*\*\s*(.*?)\s*$/m;
 const CHECKS_LINE = /^\s*\*\*Checks:\*\*\s*(.*?)\s*$/m;
+const BENCHMARK_LINE = /^\s*\*\*Benchmark:\*\*\s*(.*?)\s*$/m;
+
+/** The benchmark plan a ticket's `**Benchmark:**` line names, beside the ticket; null where it names none. */
+export function benchmarkIn(text: string): string | null {
+  const named = Str.trim(BENCHMARK_LINE.exec(text)?.[1] ?? "");
+  return named === "" ? null : named;
+}
+
+/** Where a ticket's benchmark plan is: in the plan's `issues/`, beside the ticket. */
+export const benchmarkFile = (planDir: string, benchmark: string) =>
+  `${planDir}/issues/${benchmark}`;
 
 /**
  * The verification names a ticket's `**Checks:**` line promises, `[]` where it has none
@@ -468,6 +480,8 @@ export interface Slice {
   checks: ReadonlyArray<string>;
   /** Its acceptance criteria, which the builder answers one by one. */
   criteria: ReadonlyArray<string>;
+  /** The benchmark plan its speed-up criterion is measured by, as `benchmarkIn` reads it. */
+  benchmark: string | null;
 }
 
 /** The first heading, else the file name without its number — what a hand-off calls it. */
@@ -519,6 +533,7 @@ export function orderedTickets(
       ) ?? [],
     checks: checksIn(ticket.text),
     criteria: criteriaIn(ticket.text),
+    benchmark: benchmarkIn(ticket.text),
   }));
 
   const here = new Set(Arr.map(slices, (slice) => slice.number));
@@ -562,4 +577,28 @@ export const orderedTicketsOf = Effect.fn("Plan.orderedTicketsOf")(function* (
     tickets.push({ file, text });
   }
   return orderedTickets(tickets, repo);
+});
+
+/**
+ * Why a ticket's benchmark plan is not one `collie measure` takes, naming the ticket and the
+ * file; null where every ticket's is, or none names one.
+ */
+export const benchmarkRefusalOf = Effect.fn("Plan.benchmarkRefusalOf")(function* (planDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  for (const ticket of yield* orderedTicketsOf(planDir)) {
+    if (ticket.benchmark === null) continue;
+    const refused = yield* fs.readFileString(benchmarkFile(planDir, ticket.benchmark)).pipe(
+      Effect.mapError((cause) => `it cannot be read: ${cause.message}`),
+      Effect.flatMap((text) =>
+        Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(text).pipe(
+          Effect.mapError((cause) => `it is not JSON: ${cause.message}`),
+        ),
+      ),
+      Effect.flatMap(decodeBenchmarkPlan),
+      Effect.flip,
+      Effect.option,
+    );
+    if (Option.isSome(refused)) return `${ticket.file}: ${ticket.benchmark}: ${refused.value}`;
+  }
+  return null;
 });

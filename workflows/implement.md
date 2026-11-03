@@ -50,7 +50,7 @@ of it is yours.
 
 The acceptance criteria this work is held to, one by one:
 
-{{criteria}}
+{{criteria}}{{measure}}
 
 In your Output, `criteria` has one entry for each of them: `criterion` copied from the list
 above, and `met` saying how it is met (the test or the file that shows it), or
@@ -115,6 +115,26 @@ Then write your Output, plus the outcome fields above where they name any. `clea
 the whole scope is built and the tests pass; anything else is `findings`, one entry per
 thing that is not, each with a `severity` of `blocker`, `major` or `minor` — a failure
 that pre-dates this branch is `minor`.
+
+## measure
+
+This ticket's speed-up criterion is proved by a Measurement, never by timing anything
+yourself. Its benchmark plan is `{{benchmark}}`, the JSON `collie measure --plan` takes:
+
+1. Commit the benchmark harness, touching only the plan's `harness.paths`, and add those
+   commits to the plan's `harness.commits`.
+2. Before the speed-up, measure the base against itself:
+   `collie measure --base <merge-base> --plan {{benchmark}} --pass calibration`, where
+   `<merge-base>` is the commit this branch leaves its default branch at.
+3. On the finished tree:
+   `collie measure --base <merge-base> --plan {{benchmark}} --pass final`.
+4. Read the verdict for each metric. The criterion is met where the primary metric is a
+   `gain` and every guardrail is held: answer it with the `final` Measurement's id and those
+   verdicts.
+
+Time no A/B comparison yourself, as a verification or otherwise, and take no lock of your
+own: the host's Measurement holds the Machine and samples both trees. Leave the plan as it
+is between the two passes, since a changed plan is a new comparison.
 
 ## fix
 
@@ -279,7 +299,8 @@ What was actually verified, and by whom — `by collie` is a command Collie ran 
 
 Say that in the description, in one line: which verifications passed on the branch as it
 stands, and the outcome this run was held to — the one at the top of this prompt, or
-unclassified where it is empty. An Output that says the tests pass is a claim; these are not. Then list each
+unclassified where it is empty. Where the evidence names a `final` Measurement, put its id and
+each metric's verdict in the description. An Output that says the tests pass is a claim; these are not. Then list each
 verification this run is held to with its command, exactly as written at the top of this
 prompt: a model may have chosen them, and the human reading the merge request is who
 checks that they prove the work.
