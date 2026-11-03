@@ -5455,6 +5455,64 @@ test("a Task's workspace is looked for in its own Herd, where a workspace of the
     }),
   ));
 
+test.each(["listing", "renaming"] as const)(
+  "a Task edited during workspace %s keeps the external edit",
+  (during) =>
+    runEffect(
+      Effect.gen(function* () {
+        const env = rig.pluginEnv();
+        const task = {
+          id: "task-edit",
+          workspace: "wEdit",
+          label: "Collie | Plan new work",
+          cwd: rig.projectDir,
+          created_at: "2026-10-26T00:00:00.000Z",
+        };
+        const edited = { ...task, label: "Collie | Renamed by hand", root_pane: "human-pane" };
+        yield* rig.addWorkspace(task.workspace, task.label, task.cwd);
+        yield* writeTask(env.stateDir, task);
+        class EditingHerdr extends FakeHerdr {
+          override sessionList() {
+            return Effect.succeed([]);
+          }
+          override workspaceList() {
+            return super
+              .workspaceList()
+              .pipe(
+                Effect.tap(() =>
+                  during === "listing"
+                    ? writeTask(env.stateDir, edited).pipe(Effect.orDie)
+                    : Effect.void,
+                ),
+              );
+          }
+          override workspaceRename(id: string, label: string) {
+            return super
+              .workspaceRename(id, label)
+              .pipe(
+                Effect.tap(() =>
+                  during === "renaming"
+                    ? writeTask(env.stateDir, edited).pipe(Effect.orDie)
+                    : Effect.void,
+                ),
+              );
+          }
+        }
+        yield* retitleGenericTasks(env, new EditingHerdr(env), [
+          runFacts({
+            id: "run-edit",
+            workflow: "plan",
+            task: task.id,
+            settled: { inputs: { goal: "Design the banner" } },
+          }),
+        ]);
+        expect(yield* readTask(env.stateDir, task.id)).toEqual(edited);
+        if (during === "listing")
+          expect((yield* new FakeHerdr(env).workspaceList())[0]?.label).toBe(task.label);
+      }),
+    ),
+);
+
 test(
   "a Task's label is renamed under its lock, never over a Run holding it",
   () =>
@@ -6499,6 +6557,56 @@ test("without Collie's controls, a Claude overlay is a settings file of its own"
       const path = args[args.indexOf("--settings") + 1] ?? "";
       expect(path).toBe(`${dir}/agents/r1/review.settings.json`);
       expect(yield* read(path)).toContain("/home/me/.claude/CLAUDE.md");
+    }),
+  ));
+
+const ClaudeMdExcludes = Schema.fromJsonString(
+  Schema.Struct({ claudeMdExcludes: Schema.Array(Schema.String) }),
+);
+
+test.each(["", "/"])(
+  "a Claude agent working inside the Collie directory, spelled with %p after it, never loads that directory's instructions",
+  (trailing) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* withProfile({
+          reviewer: { claude: { claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"] } },
+        });
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"), {
+          env: rig.pluginEnv({ COLLIE_DIR: `${rig.root}${trailing}` }),
+        });
+
+        const { claudeMdExcludes } = yield* Schema.decodeEffect(ClaudeMdExcludes)(
+          yield* settingsAt(yield* rig.calls()),
+        );
+        expect(claudeMdExcludes).toEqual([
+          `${rig.root}/CLAUDE.md`,
+          `${rig.root}/CLAUDE.local.md`,
+          `${rig.root}/.claude/CLAUDE.md`,
+          `${rig.root}/.claude/rules/**`,
+          "/home/me/.claude/CLAUDE.md",
+        ]);
+      }),
+    ),
+);
+
+test("a Claude agent working outside the Collie directory keeps only the operator's exclusions", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* withProfile({
+        reviewer: { claude: { claudeMdExcludes: ["/home/me/.claude/CLAUDE.md"] } },
+      });
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), {
+        // A prefix of the checkout's path, but not a directory it is in.
+        env: rig.pluginEnv({ COLLIE_DIR: `${rig.root}/proj` }),
+      });
+
+      const { claudeMdExcludes } = yield* Schema.decodeEffect(ClaudeMdExcludes)(
+        yield* settingsAt(yield* rig.calls()),
+      );
+      expect(claudeMdExcludes).toEqual(["/home/me/.claude/CLAUDE.md"]);
     }),
   ));
 
