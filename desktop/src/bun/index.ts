@@ -40,6 +40,7 @@ import Electrobun, {
 import {
   type Channel,
   type FrameSchema,
+  heldUntilListened,
   serverProtocol,
   type ToMain,
   type ToView,
@@ -191,14 +192,15 @@ type Frames = RPCSchema<FrameSchema>;
 
 /** A window on the view, and the channel its RPC rides. */
 const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => {
-  let receive: (frame: ToMain) => void = () => {};
+  // The view loads while Desktop starts, so it asks before anything serves it.
+  const inbox = heldUntilListened<ToMain>();
   const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
     maxRequestTime: 10_000,
     handlers: {
       requests: {},
       messages: {
         // SAFETY: only the view sends on this channel, and the view sends nothing but `ToMain`.
-        frame: (frame) => receive(frame as ToMain),
+        frame: (frame) => inbox.receive(frame as ToMain),
       },
     },
   });
@@ -209,9 +211,7 @@ const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => 
   window.webview.setNavigationRules(["^*", url, "about:srcdoc"]);
   const channel: Channel<ToView, ToMain> = {
     send: (frame) => window.webview.rpc?.send.frame(frame),
-    listen: (listener) => {
-      receive = listener;
-    },
+    listen: inbox.listen,
   };
   return { window, channel };
 };

@@ -4,7 +4,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, Layer, Schema, Stream, flow, Result } from "effect";
+import { Effect, Fiber, Layer, Schema, Stream, flow, Result } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { foldFinished, headerSentence, primaryAction, sectionsOf } from "../src/board-model";
@@ -17,6 +17,7 @@ import {
 import {
   type Channel,
   clientProtocol,
+  heldUntilListened,
   serverProtocol,
   type ToMain,
   type ToView,
@@ -58,12 +59,13 @@ const fromJson = flow(
   Result.getOrThrow,
 );
 
+// SAFETY: what went in is what comes out; the JSON round trip only proves it survives one.
+const copy = <A>(frame: A) => fromJson(asJson(frame)) as A;
+
 /** Both ends of a channel that copies every frame through JSON, as Electrobun's does. */
 const channels = () => {
   let toView: (frame: ToView) => void = () => {};
   let toMain: (frame: ToMain) => void = () => {};
-  // SAFETY: what went in is what comes out; the JSON round trip only proves it survives one.
-  const copy = <A>(frame: A) => fromJson(asJson(frame)) as A;
   const view: Channel<ToMain, ToView> = {
     send: (frame) => queueMicrotask(() => toMain(copy(frame))),
     listen: (receive) => {
@@ -196,6 +198,38 @@ test("the view decodes every board message its main process relays, a reload inc
         expect(Arr.map(sectionsOf(tasks, "").needs, (one) => one.name)).toEqual(["Busy"]);
         expect(headerSentence(tasks).text).toBe("One task is waiting on you. 0 working.");
       }
+    }).pipe(Effect.scoped),
+  ));
+
+test("a view that asks before its main process serves is answered once it does", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const inbox = heldUntilListened<ToMain>();
+      let toView: (frame: ToView) => void = () => {};
+      const view: Channel<ToMain, ToView> = {
+        send: (frame) => queueMicrotask(() => inbox.receive(copy(frame))),
+        listen: (receive) => {
+          toView = receive;
+        },
+      };
+      const main: Channel<ToView, ToMain> = {
+        send: (frame) => queueMicrotask(() => toView(copy(frame))),
+        listen: inbox.listen,
+      };
+      const heard = yield* Effect.forkChild(
+        Effect.gen(function* () {
+          const client = yield* RpcClient.make(DesktopRpcs);
+          return yield* client.flock().pipe(Stream.take(told.length), Stream.runCollect);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(Layer.effect(RpcClient.Protocol, clientProtocol(view))),
+        ),
+      );
+      // The view's Hello and its ask are sent while the main process is still starting.
+      yield* Effect.sleep("20 millis");
+      yield* Layer.build(served(main));
+      const answered = yield* Fiber.join(heard).pipe(Effect.timeout("2 seconds"));
+      expect(answered).toEqual([...told]);
     }).pipe(Effect.scoped),
   ));
 
