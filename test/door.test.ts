@@ -13,6 +13,7 @@ import { door, relatedOf, type FromDoor, type ToDoor } from "../src/door";
 import { readEnv } from "../src/env";
 import { frontDoor } from "../src/host";
 import type { RunFacts } from "../src/runs";
+import { encodeStepLine, STEPS_FILE, type StepLine } from "../src/steps";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 
@@ -122,6 +123,49 @@ test("the door answers a Run's record and the host's identity while the engine a
       );
       expect(passed).toEqual(["toasts"]);
       yield* Fiber.interrupt(toasts);
+    }).pipe(Effect.scoped),
+  ));
+
+test("the door reads a record before any client asks, and tells the engine nothing of it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-" });
+      const run = yield* madeRun(dir, {
+        id: "r1",
+        state: "succeeded",
+        created: "2026-10-30T09:00:00Z",
+        finished: "2026-10-30T09:30:00Z",
+      });
+      // A finished Step, which an open's record would tell the engine it showed.
+      const step = {
+        id: "build",
+        title: "Build",
+        description: "",
+        kind: "agent",
+        role: null,
+        produces: null,
+      } as const;
+      const lines: ReadonlyArray<StepLine> = [
+        { kind: "forecast", steps: [step], at: "2026-10-30T09:00:00Z" },
+        { kind: "enter", key: "build", step, place: null, at: "2026-10-30T09:01:00Z" },
+        { kind: "leave", key: "build", at: "2026-10-30T09:29:00Z" },
+      ];
+      yield* fs.writeFileString(
+        `${run.dir}/${STEPS_FILE}`,
+        Arr.join(
+          Arr.map(lines, (line) => `${encodeStepLine(line)}\n`),
+          "",
+        ),
+      );
+      const { heard } = yield* silentEngine(dir, `${dir}/host.sock`, [run]);
+      yield* until(() => Arr.some(heard, (one) => one._tag === "Warmed"));
+      expect(Arr.map(heard, (one) => one._tag).sort()).toEqual(["Listening", "Warmed"]);
+      expect(
+        Arr.findFirst(heard, (one) => one._tag === "Warmed").pipe(
+          Option.map((one) => "runs" in one && one.runs),
+        ),
+      ).toEqual(Option.some(1));
     }).pipe(Effect.scoped),
   ));
 

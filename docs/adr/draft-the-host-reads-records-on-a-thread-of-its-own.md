@@ -79,4 +79,8 @@ opens a record after a write sees the write.
 - A record's live updates follow the board's listing: a write is re-read once the board has
   listed it, or at once through an ask.
 - The release binary carries `src/door.ts` as a second entrypoint (`tools/build.ts`).
-- The door loads the record's modules a second time, on its own heap.
+- The door loads the record's modules a second time, on its own heap. That heap's JIT has
+  compiled none of them, so at its first listing the door reads the records of the first ten
+  Runs listed, telling the engine nothing of them. Under a start storm, the first 20 opens
+  after a start averaged 45 ms without that and 29 ms with it. It keeps no more than opening
+  those records would.

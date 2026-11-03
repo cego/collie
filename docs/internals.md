@@ -1868,6 +1868,8 @@ its time.
     offers of a Run the board has not read.
   - A store write moves the revision of the Runs it names.
   - A Step a record first showed finished is told to the engine, which judges acts.
+  - At its first listing it reads the first ten Runs' records, for its JIT, and the engine
+    logs how long that took ("the door has read 10 records to warm it").
 - **Interactive reads come first** (D6 of that ADR). The board keeps each Task's card with the
   key it was derived from (`KeptCards` in `src/board.ts`): its Runs' revisions, markers,
   agents, pending work and merge request states. A build derives a card again only when its

@@ -1432,6 +1432,12 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
       const record = yield* recordSources({ panels, plans: new Map() });
       if (model === undefined || record === undefined) return;
       door.attach(model);
+      yield* door.warmed.pipe(
+        Effect.flatMap(({ runs, ms }) =>
+          Effect.logInfo(`the door has read ${runs} records to warm it, in ${ms} ms`),
+        ),
+        Effect.forkScoped,
+      );
       const { boards, kept, factsOf, offered, bun } = yield* SharedBoard;
       const registry = yield* Registry;
       /** The revision its view was read at, while that view is kept; a going Run's is not. */

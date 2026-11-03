@@ -4,7 +4,7 @@
 
 import * as Arr from "effect/Array";
 import { isMainThread } from "node:worker_threads";
-import { Context, Deferred, Effect, Layer, PubSub, Queue, Scope, Stream } from "effect";
+import { Clock, Context, Deferred, Effect, Layer, PubSub, Queue, Scope, Stream } from "effect";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -92,12 +92,15 @@ export type FromDoor =
     }
   | { readonly _tag: "Finished"; readonly run: string; readonly step: string; readonly seq: number }
   | { readonly _tag: "Unfinished"; readonly run: string; readonly step: string }
-  | { readonly _tag: "Ask"; readonly ask: number; readonly asked: Asked };
+  | { readonly _tag: "Ask"; readonly ask: number; readonly asked: Asked }
+  | { readonly _tag: "Warmed"; readonly runs: number; readonly ms: number };
 
 /** What the door answers itself; every other request is the engine's. */
 const DoorRpcs = RpcGroup.make(IdentityRpc, RunDetailRpc);
 const MODELLED = new Set(["identity", "runDetail"]);
 const UNMODELLED = new Set(["identity"]);
+/** How many of the first Runs listed the door reads a record of at start, for its JIT. */
+const WARMING = 10;
 
 /** Where a Worker or a test's channel carries messages, one way and the other. */
 export interface Port<Out, In> {
@@ -125,6 +128,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
     const disconnects = yield* Queue.unbounded<number>();
     const asks = yield* Queue.unbounded<{ readonly ask: number; readonly asked: Asked }>();
     const listening = yield* Deferred.make<void>();
+    const warmed = yield* Deferred.make<{ readonly runs: number; readonly ms: number }>();
     const clients = new Set<number>();
     let model: EngineModel | undefined;
     port.listen((message) => {
@@ -146,6 +150,8 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
           return model?.unfinished(message.run, message.step);
         case "Ask":
           return Queue.offerUnsafe(asks, message);
+        case "Warmed":
+          return Deferred.doneUnsafe(warmed, Effect.succeed(message));
       }
     });
     const protocol = RpcServer.Protocol.make((writeRequest) =>
@@ -186,6 +192,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
         model = engine;
       },
       asks,
+      warmed: Deferred.await(warmed),
       post: port.post,
     };
   });
@@ -286,6 +293,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     let order: ReadonlyArray<string> = [];
     let alive: ReadonlyArray<AgentInfo> = [];
     const writes = yield* PubSub.unbounded<void>();
+    const firstListed = yield* Deferred.make<ReadonlyArray<string>>();
     let asked = 0;
     const answers = new Map<number, Deferred.Deferred<unknown>>();
     const ask = (asking: Asked) =>
@@ -344,6 +352,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             for (const [run, offered] of message.offers) offers.set(run, offered);
             model?.gone(message.gone);
             if (message.order !== null) order = message.order;
+            if (order.length > 0) Deferred.doneUnsafe(firstListed, Effect.succeed(order));
             alive = message.alive;
             return PubSub.publish(writes, undefined);
           });
@@ -435,6 +444,30 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               ),
             ).pipe(markFirst("host:emit", key.runId), Stream.provideContext(bun), Stream.orDie),
     });
+    // A new heap runs the record's code slowly until its JIT has compiled it.
+    if (sources !== undefined) {
+      const unheard: RecordSources = {
+        ...sources,
+        model: { ...sources.model, finishedAt: (_run, _step, seq) => seq, unfinished: () => false },
+        related: (runId, also) => Effect.succeed(relatedOf(facts, order, runId, also) ?? []),
+        offers: (runId) => Effect.succeed(offers.get(runId) ?? []),
+        mr: () => Effect.succeed(null),
+      };
+      yield* Effect.forkScoped(
+        Effect.gen(function* () {
+          const runs = Arr.take(yield* Deferred.await(firstListed), WARMING);
+          const began = yield* Clock.currentTimeMillis;
+          for (const runId of runs)
+            yield* recordFrames(
+              unheard,
+              { runId, tail: true, pages: 1, refreshMr: false, parts: true },
+              Stream.never,
+            ).pipe(Stream.runHead, Effect.provideContext(bun), Effect.ignore);
+          const ms = (yield* Clock.currentTimeMillis) - began;
+          port.post({ _tag: "Warmed", runs: runs.length, ms });
+        }),
+      );
+    }
     const localProtocol = RpcServer.Protocol.make((writeRequest) =>
       Effect.gen(function* () {
         yield* Queue.take(local).pipe(
