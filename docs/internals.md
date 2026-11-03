@@ -1861,10 +1861,11 @@ its time.
   back. The door keeps a second Run model:
   - Its revisions come from the same counter in shared memory as the engine's.
   - It forgets what the engine's model invalidates.
-  - It takes each Run the engine listed, with its offers and the revision its view was read
-    at.
+  - It takes each Run the engine listed, with the revision its view was read at, and the
+    offers the engine's board read since the last listing (a plan ready to implement's).
   - It asks the engine (`doorFeedLayer` in `src/host.ts`) when a record's Runs are older than
-    their revision, or still going, or when a record's Run has a merge request.
+    their revision, or still going, when a record's Run has a merge request, or for the
+    offers of a Run the board has not read.
   - A store write moves the revision of the Runs it names.
   - A Step a record first showed finished is told to the engine, which judges acts.
 - **Interactive reads come first** (D6 of that ADR). The board keeps each Task's card with the

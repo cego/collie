@@ -22,12 +22,11 @@ import { markFirst } from "./record-marks";
 import { RunModel, runModelLayer, type ModelLink } from "./run-model";
 import type { RunFacts } from "./runs";
 
-/** What the engine tells the door of a Run: its facts, the revision they were read at, its offers. */
+/** What the engine tells the door of a Run: its facts and the revision they were read at. */
 export interface Listed {
   readonly fact: RunFacts;
   /** What the Run's facts were read at (`factsAt`); null for a view the engine reads every time. */
   readonly seq: number | null;
-  readonly offers: ReadonlyArray<OfferView>;
 }
 
 export interface Opened {
@@ -46,7 +45,8 @@ export interface Opened {
 
 export type Asked =
   | { readonly _tag: "Related"; readonly runId: string; readonly also: ReadonlyArray<string> }
-  | { readonly _tag: "Mr"; readonly run: RunFacts; readonly fresh: boolean };
+  | { readonly _tag: "Mr"; readonly run: RunFacts; readonly fresh: boolean }
+  | { readonly _tag: "Offers"; readonly runId: string };
 
 export type ToDoor =
   | ({ readonly _tag: "Open" } & Opened)
@@ -70,6 +70,8 @@ export type ToDoor =
       /** Every Run's id in the engine's order, where that order moved. */
       readonly order: ReadonlyArray<string> | null;
       readonly alive: ReadonlyArray<AgentInfo>;
+      /** What the engine's board read of a Run's offers since the last listing. */
+      readonly offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]>;
     }
   | { readonly _tag: "Wrote" }
   | { readonly _tag: "Answer"; readonly ask: number; readonly value: unknown };
@@ -300,7 +302,6 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
       for (const one of runs) {
         facts.set(one.fact.id, one.fact);
         read.set(one.fact.id, one.seq);
-        offers.set(one.fact.id, one.offers);
       }
       model?.mirror(Arr.map(runs, (one) => one.fact));
     };
@@ -340,6 +341,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               read.delete(run);
               offers.delete(run);
             }
+            for (const [run, offered] of message.offers) offers.set(run, offered);
             model?.gone(message.gone);
             if (message.order !== null) order = message.order;
             alive = message.alive;
@@ -384,7 +386,15 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             },
             plans: new Map(),
             alive: Effect.sync(() => alive),
-            offers: (runId) => Effect.sync(() => offers.get(runId) ?? []),
+            offers: (runId) => {
+              const held = offers.get(runId);
+              return held !== undefined
+                ? Effect.succeed(held)
+                : ask({ _tag: "Offers", runId }).pipe(
+                    // SAFETY: the engine answers an `Offers` ask with the Run's offers.
+                    Effect.map((asked) => asked as ReadonlyArray<OfferView>),
+                  );
+            },
             related: (runId, also) =>
               Effect.gen(function* () {
                 const held = relatedOf(facts, order, runId, also);

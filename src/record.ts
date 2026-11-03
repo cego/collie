@@ -4,7 +4,7 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Clock, Effect, Fiber, FileSystem, Path, Result, Schema, Stream, flow } from "effect";
+import { Clock, Effect, FileSystem, Path, Result, Schema, Stream, flow } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type {
   MrPanel,
@@ -15,7 +15,7 @@ import type {
   RunDiff,
   RunRevision,
 } from "./board-model";
-import { mrOf, taskFlowOf } from "./board";
+import { taskFlowOf } from "./board";
 import type { PluginEnv } from "./env";
 import { timedFlow, timeless } from "./flow-timing";
 import type { AgentInfo } from "./herdr";
@@ -70,9 +70,6 @@ const sameRevision = (one: RunRevision, other: RunRevision) =>
 export const recordBase = (sources: RecordSources, runId: string, pages: number) =>
   Effect.gen(function* () {
     const { env, model } = sources;
-    // Its own offers are read while the Runs it reads are chosen.
-    const own = yield* Effect.forkChild(sources.offers(runId));
-    const offers = (id: string) => (id === runId ? Fiber.join(own) : sources.offers(id));
     const runs = yield* sources.related(runId, model.planned(runId));
     const run = Arr.findFirst(runs, (one) => one.id === runId);
     if (run._tag === "None") return null;
@@ -87,7 +84,7 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
         runs,
         tasks: Arr.filter(tasks, (task): task is TaskRecord => task !== null),
         alive: yield* sources.alive,
-        offers,
+        offers: sources.offers,
         head: model.head,
       },
       runId,

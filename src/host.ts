@@ -219,6 +219,7 @@ import {
   SteerOutcome,
   Attachments,
   type FrontDoor,
+  type OfferView,
   type TaskView,
   type Where,
 } from "./board-model";
@@ -1102,6 +1103,8 @@ const hostBoard = (dir: string) =>
       model === undefined
         ? undefined
         : { revision: model.highest, kept: new Map(), markers: new Map() };
+    /** The offers a build read, which the door is told of with its listing. */
+    const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
       Effect.gen(function* () {
         return yield* buildBoard({
@@ -1113,6 +1116,7 @@ const hostBoard = (dir: string) =>
             registry.offers(runId).pipe(
               Effect.provideContext(hosted),
               Effect.orElseSucceed(() => []),
+              Effect.tap((offers) => Effect.sync(() => offered.set(runId, offers))),
             ),
           head: model?.head,
           cards,
@@ -1268,6 +1272,7 @@ const hostBoard = (dir: string) =>
       listing,
       kept,
       factsOf,
+      offered,
       herdrMoved,
       /** herdr's agents as the board last read them. */
       alive: aliveOf(agentsLast),
@@ -1427,37 +1432,39 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
       const record = yield* recordSources({ panels, plans: new Map() });
       if (model === undefined || record === undefined) return;
       door.attach(model);
-      const { boards, kept, factsOf, bun } = yield* SharedBoard;
+      const { boards, kept, factsOf, offered, bun } = yield* SharedBoard;
       const registry = yield* Registry;
       /** The revision its view was read at, while that view is kept; a going Run's is not. */
       const readAt = (run: RunFacts) => {
         const held = kept?.views.get(run.id);
         return held !== undefined && factsOf(held.view) === run ? held.revision : null;
       };
-      const listed = (runs: ReadonlyArray<RunFacts>) => {
-        const seqs = Arr.map(runs, readAt);
-        return Effect.forEach(
-          runs,
-          (fact, at): Effect.Effect<Listed> =>
-            Effect.map(record.offers(fact.id), (offers) => ({ fact, seq: seqs[at]!, offers })),
-          { concurrency: 4 },
-        );
-      };
+      const listed = (runs: ReadonlyArray<RunFacts>) =>
+        Arr.map(runs, (fact): Listed => ({ fact, seq: readAt(fact) }));
       const posted = new Map<string, RunFacts>();
       let order: ReadonlyArray<string> = [];
       yield* Effect.forkScoped(
         Stream.runForEach(boards, ({ runs, alive }) =>
-          Effect.gen(function* () {
+          Effect.sync(() => {
             const ids = Arr.map(runs, (run) => run.id);
             const present = new Set(ids);
             const gone = Arr.filter([...posted.keys()], (id) => !present.has(id));
             const moved =
               ids.length !== order.length || Arr.some(ids, (id, at) => order[at] !== id);
-            const fresh = yield* listed(Arr.filter(runs, (run) => posted.get(run.id) !== run));
+            const fresh = listed(Arr.filter(runs, (run) => posted.get(run.id) !== run));
             for (const id of gone) posted.delete(id);
             for (const run of runs) posted.set(run.id, run);
             if (moved) order = ids;
-            door.post({ _tag: "Listed", runs: fresh, gone, order: moved ? ids : null, alive });
+            const offers = [...offered];
+            offered.clear();
+            door.post({
+              _tag: "Listed",
+              runs: fresh,
+              gone,
+              order: moved ? ids : null,
+              alive,
+              offers,
+            });
           }),
         ),
       );
@@ -1469,21 +1476,26 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
           Effect.forkScoped,
         );
       yield* Queue.take(door.asks).pipe(
-        Effect.flatMap(({ ask, asked }) =>
-          asked._tag === "Mr"
-            ? answer(ask, record.mr(asked.run, asked.fresh))
-            : answer(
+        Effect.flatMap(({ ask, asked }) => {
+          switch (asked._tag) {
+            case "Mr":
+              return answer(ask, record.mr(asked.run, asked.fresh));
+            case "Offers":
+              return answer(ask, record.offers(asked.runId));
+            case "Related":
+              return answer(
                 ask,
                 registry
                   .related(asked.runId, asked.also, model.reading, kept)
                   .pipe(
                     Effect.map(Arr.map(factsOf)),
                     Effect.tap(model.note),
-                    Effect.flatMap(listed),
+                    Effect.map(listed),
                     Effect.provideContext(bun),
                   ),
-              ),
-        ),
+              );
+          }
+        }),
         Effect.forever,
         Effect.forkScoped,
       );

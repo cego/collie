@@ -4,11 +4,11 @@
 import { expect, test } from "bun:test";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Arr from "effect/Array";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Stream } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
-import { IdentityRpc, type RunDetail } from "../src/board-model";
+import { IdentityRpc, type OfferView, type RunDetail } from "../src/board-model";
 import { door, relatedOf, type FromDoor, type ToDoor } from "../src/door";
 import { readEnv } from "../src/env";
 import { frontDoor } from "../src/host";
@@ -19,7 +19,12 @@ import { madeRun } from "./support/records";
 const identity = { build: "test", pid: 1, dir: "/state", protocol: 1, installation: "i" };
 
 /** A door over `dir` whose engine hears everything and answers nothing. */
-const silentEngine = (dir: string, socket: string, runs: ReadonlyArray<RunFacts>) =>
+const silentEngine = (
+  dir: string,
+  socket: string,
+  runs: ReadonlyArray<RunFacts>,
+  offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]> = [],
+) =>
   Effect.gen(function* () {
     const heard: Array<FromDoor> = [];
     const listening = yield* Deferred.make<void>();
@@ -45,14 +50,20 @@ const silentEngine = (dir: string, socket: string, runs: ReadonlyArray<RunFacts>
     });
     tell({
       _tag: "Listed",
-      runs: Arr.map(runs, (fact) => ({ fact, seq: 0, offers: [] })),
+      runs: Arr.map(runs, (fact) => ({ fact, seq: 0 })),
       gone: [],
       order: Arr.map(runs, (fact) => fact.id),
       alive: [],
+      offers,
     });
     yield* Deferred.await(listening);
-    return heard;
+    return { heard, tell };
   });
+
+const until = (done: () => boolean) =>
+  Effect.gen(function* () {
+    while (!done()) yield* Effect.sleep("10 millis");
+  }).pipe(Effect.timeout("4 seconds"));
 
 test("the door answers a Run's record and the host's identity while the engine answers nothing", () =>
   runEffect(
@@ -66,7 +77,7 @@ test("the door answers a Run's record and the host's identity while the engine a
         finished: "2026-10-30T09:30:00Z",
       });
       const socket = `${dir}/host.sock`;
-      const heard = yield* silentEngine(dir, socket, [run]);
+      const { heard } = yield* silentEngine(dir, socket, [run]);
 
       const client = yield* frontDoor(socket);
       const first = yield* client
@@ -87,6 +98,8 @@ test("the door answers a Run's record and the host's identity while the engine a
           Effect.timeout("5 seconds"),
         );
       expect(whole._tag).toBe("Some");
+      // Its Flow shows no offer, so it asked the engine for none.
+      expect(Arr.filter(heard, (one) => one._tag === "Ask")).toEqual([]);
 
       const who = yield* RpcClient.make(RpcGroup.make(IdentityRpc)).pipe(
         Effect.provideContext(
@@ -101,15 +114,89 @@ test("the door answers a Run's record and the host's identity while the engine a
       expect(yield* who.identity().pipe(Effect.timeout("5 seconds"))).toEqual(identity);
 
       const toasts = yield* Effect.forkScoped(Stream.runDrain(client.toasts()));
-      yield* Effect.gen(function* () {
-        while (!Arr.some(heard, (one) => one._tag === "Request" && one.frame._tag === "Request"))
-          yield* Effect.sleep("10 millis");
-      }).pipe(Effect.timeout("5 seconds"));
+      yield* until(() =>
+        Arr.some(heard, (one) => one._tag === "Request" && one.frame._tag === "Request"),
+      );
       const passed = Arr.flatMap(heard, (one) =>
         one._tag === "Request" && one.frame._tag === "Request" ? [one.frame.tag] : [],
       );
       expect(passed).toEqual(["toasts"]);
       yield* Fiber.interrupt(toasts);
+    }).pipe(Effect.scoped),
+  ));
+
+const implementNow: OfferView = {
+  id: "implement-now",
+  title: "Implement now",
+  workflow: "implement",
+  arguments: null,
+  kind: "follow-up",
+  primary: true,
+  unavailable: null,
+};
+
+/** A plan ready to implement, whose Flow shows its first offer. */
+const readyPlan = (dir: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const run = yield* madeRun(dir, {
+      id: "plan",
+      workflow: "plan",
+      state: "succeeded",
+      created: "2026-10-30T09:00:00Z",
+      finished: "2026-10-30T09:30:00Z",
+    });
+    yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
+    yield* fs.writeFileString(`${run.dir}/plan/issues/01-one.md`, "# One\n");
+    return run;
+  });
+
+const flowIds = (shown: Option.Option<unknown>) => {
+  // SAFETY: a record of a Run the door was told of is a record, not null or Unchanged.
+  const flow = (shown._tag === "Some" ? (shown.value as RunDetail) : null)?.flow;
+  return Arr.flatMap(flow?.lanes ?? [], (lane) => Arr.map(lane.nodes, (node) => node.id));
+};
+
+const planRecord = (socket: string) =>
+  Effect.flatMap(frontDoor(socket), (client) =>
+    client
+      .runDetail({ runId: "plan", tail: false, pages: 1, refreshMr: false, parts: true })
+      .pipe(Stream.runHead),
+  );
+
+test("the door asks the engine for the offers of a plan ready to implement it was not told of", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-" });
+      const socket = `${dir}/host.sock`;
+      const { heard, tell } = yield* silentEngine(dir, socket, [yield* readyPlan(dir)]);
+      const first = yield* Effect.forkScoped(planRecord(socket));
+      yield* until(() => Arr.some(heard, (one) => one._tag === "Ask"));
+      const asked = Arr.filter(heard, (one) => one._tag === "Ask");
+      expect(Arr.map(asked, (one) => one.asked)).toEqual([{ _tag: "Offers", runId: "plan" }]);
+      tell({ _tag: "Answer", ask: asked[0]!.ask, value: [implementNow] });
+      expect(flowIds(yield* Fiber.join(first).pipe(Effect.timeout("4 seconds")))).toContain(
+        "offer:implement-now",
+      );
+    }).pipe(Effect.scoped),
+  ));
+
+test("the door shows the offers the engine's board read with its listing, and asks for none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-" });
+      const socket = `${dir}/host.sock`;
+      const { heard } = yield* silentEngine(
+        dir,
+        socket,
+        [yield* readyPlan(dir)],
+        [["plan", [implementNow]]],
+      );
+      const shown = yield* planRecord(socket).pipe(Effect.timeout("4 seconds"));
+      expect(flowIds(shown)).toContain("offer:implement-now");
+      expect(Arr.filter(heard, (one) => one._tag === "Ask")).toEqual([]);
     }).pipe(Effect.scoped),
   ));
 

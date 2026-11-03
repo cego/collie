@@ -38,8 +38,11 @@ when its door stops.
 **D2. The engine tells the door what only the engine knows.**
 
 - After each board listing, the engine sends each Run whose view moved. The message holds the
-  Run's facts, its offers and the revision its view was read at. A going Run's view is read every
-  time, so it is sent with no revision.
+  Run's facts and the revision its view was read at. A going Run's view is read every time, so
+  it is sent with no revision.
+- With the listing go the offers its board read: a record's Flow shows only a ready plan's
+  first offer, which is the card's. Reading every Run's offers for the door held its first
+  listing back by 2.9 s on 520 Runs.
 - The engine sends the agents herdr last showed.
 - The engine sends every invalidation in its Run model.
 
@@ -47,7 +50,8 @@ The door asks the engine in two cases:
 
 - for the Runs of a record, when the facts it holds are older than their Run's revision, or
   carry no revision;
-- for a merge request panel, when the Run has a merge request.
+- for a merge request panel, when the Run has a merge request;
+- for a Run's offers, when its board has not read them.
 
 **D3. One numbering.** Both Run models take revisions from one counter in shared memory. Each
 tells the other every Run it moved. So a card's revision, a record's revision and an act's
