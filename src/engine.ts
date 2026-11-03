@@ -534,7 +534,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly plan_digest: string;
     readonly plan_reason: string | null;
     readonly base: MeasuredTree & { readonly commit: string };
-    readonly candidate: MeasuredTree;
+    /** \`harness_applied\`: the harness commits a scratch tree put on a candidate that had none; it was sampled there. */
+    readonly candidate: MeasuredTree & { readonly harness_applied?: ReadonlyArray<string> };
     readonly environment: Readonly<Record<string, string | null>>;
     readonly waited: { readonly memory: boolean; readonly machine: ReadonlyArray<string> };
     readonly prepare: ReadonlyArray<{ readonly tree: "base" | "candidate"; readonly exit: number; readonly seconds: number; readonly output: string }>;
@@ -2009,10 +2010,26 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly checks: ReadonlyArray<string>;
     /** Its acceptance criteria, which the builder answers one by one. */
     readonly criteria: ReadonlyArray<string>;
+    /** The benchmark plan its speed-up criterion is measured by, as benchmarkIn reads it. */
+    readonly benchmark: string | null;
   }
 
   /** The verification names a ticket's **Checks:** line promises. */
   export function checksIn(text: string): string[];
+
+  /** The benchmark plan a ticket's **Benchmark:** line names, beside the ticket; null where it names none. */
+  export function benchmarkIn(text: string): string | null;
+
+  /** Where a ticket's benchmark plan is: in the plan's issues/, beside the ticket. */
+  export function benchmarkFile(planDir: string, benchmark: string): string;
+
+  /**
+   * Why a ticket's benchmark plan is not one collie measure takes, naming the ticket and the
+   * file; null where every ticket's is, or none names one.
+   */
+  export function benchmarkRefusalOf(
+    planDir: string,
+  ): Effect.Effect<string | null, never, FileSystem.FileSystem | Path.Path>;
 
   /**
    * A ticket's acceptance criteria: each checkbox item with its wrapped lines, under its
@@ -5145,7 +5162,19 @@ export const nextRegistrationName = (
   id: string,
 ): string => `${id}@${Arr.filter(known, (entry) => entry.workflow === id).length + 1}`;
 
-/** The exit a decision is answered with, encoded by the decision's own schema. */
+/** Once the Run has stopped, however long it takes to. */
+const untilStopped = (registration: Registration, executionId: string) =>
+  WorkflowEngine.WorkflowEngine.pipe(
+    Effect.flatMap((engine) => engine.poll(registration.workflow, executionId)),
+    Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(WAKE_INTERVAL) }),
+    Effect.asVoid,
+  );
+
+/**
+ * The exit a decision is answered with, encoded by the decision's own schema, once the Run
+ * has stopped to wait on it: the engine still wakes a Run that read its answer early, and
+ * that wake resumes whatever park the Run reached next.
+ */
 export const answerDecision = (
   registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
@@ -5156,7 +5185,9 @@ export const answerDecision = (
     workflow: registration.workflow,
     executionId: options.executionId,
   });
-  return DurableDeferred.done(decision, { token, exit: Exit.succeed(options.value) });
+  return untilStopped(registration, options.executionId).pipe(
+    Effect.andThen(DurableDeferred.done(decision, { token, exit: Exit.succeed(options.value) })),
+  );
 };
 
 /**
@@ -8383,12 +8414,18 @@ const makeRegistry: (
       if (settled._tag === "accepted") yield* crash("answered");
       // Completed again on a repeat: the recording host may have died before the run was told.
       // An agent's question is answered to its agent; waking the workflow would replay it.
-      if (settled.row.asker === null && found._tag === "Success")
-        yield* answerDecision(found.success.generation.registration, {
-          name,
-          executionId: found.success.execution,
-          value,
-        });
+      // Handed over in the background: a Run may take any time to stop, and only the
+      // handing-over needs the wake permit. A host that ends first leaves it to the next one.
+      if (settled.row.asker === null && found._tag === "Success") {
+        const { registration } = found.success.generation;
+        const executionId = found.success.execution;
+        yield* untilStopped(registration, executionId).pipe(
+          Effect.andThen(
+            answerDecision(registration, { name, executionId, value }).pipe(waking.withPermits(1)),
+          ),
+          Effect.forkIn(hostScope),
+        );
+      }
 
       return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
     }, waking.withPermits(1)),

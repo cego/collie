@@ -43,7 +43,17 @@ a check's marked processes can take seconds on a loaded machine, so the host wai
 grace for that SIGKILL and the last look after it, at most three seconds (`KILL_CEILING`),
 before the lock goes. Three seconds holds one slow look and keeps the exit, with its log
 flush, inside the five seconds a client gives a stopping host before it kills it. Its step does not complete
-and nothing is recorded for it, so the next host runs it once more. A newer client that
+and nothing is recorded for it, so the next host runs it once more.
+
+The one exception is a replacement by a newer build of the same installation: a newer client,
+or `collie host restart` from one. Before it signals the host, the client writes
+`host.handover` naming the host's pid and its own build. A host signalled while that names
+it, and a build newer than its own, hands its supervised checks over rather than ending
+them: it stops collecting them, leaves their processes and records alone, and writes
+`host.handed-over` naming itself, by pid and start token, the build and the checks before it
+lets go of its lock. It still ends any check it cannot hand over, such as a measurement's.
+Every other end ends them as above: a plain stop signal, a lost lock or directory, a watched
+process gone, a crash, and a restart onto the same build. A newer client that
 asked a host to stop kills it five seconds after its grace. A host that does not say who it
 is within five seconds is replaced too when `host.build`, which it writes as it starts,
 names an older build of the same installation; otherwise the client reports it as
@@ -98,20 +108,39 @@ parent resumed in the swap reads a child of any generation.
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one recorded under `running-checks/`, or a process marked with this
 installation's id. A host that has just made that id looks for none, since no process can
-carry it. Each gets SIGTERM, then SIGKILL two seconds later, and is never adopted. The
-Run's log and `host.log` name the check and the host that left it, and the step that ran it
-runs it once more. No check of a Run starts while one a previous host left of that Run is
+carry it. Each gets SIGTERM, then SIGKILL two seconds later, and is never adopted unless it
+was handed over. The Run's log and `host.log` name the check and the host that left it, and
+the step that ran it runs it once more.
+
+Before that, a host of the build `host.handed-over` names takes over each check listed there
+whose record names the host that wrote it, and whose supervisor is still that record's, by
+pid and start token, or has written its exit status. It takes the record as its own and says
+`took over check` in `host.log`. The replayed step that ran a gate's check asks for the same
+check, by its Run, name, pass and command, and gets the one taken over instead of starting
+another. An agent's check is finished by the host itself once it exits, and the agent's
+`collie verify`, whose stream broke with the old host, asks the new one for that
+Verification by the check's id (`verifyFollow`), whatever its build. Nothing else is taken
+over: a host of any other build, or one that finds no `host.handed-over`, ends them all. No check of a Run starts while one a previous host left of that Run is
 still running: one that survives SIGKILL is ended again a second later, and named again,
 until it is gone.
 
 What a check's Verification is finished from is written to `check-output/<id>.json`
 before it is spawned: which check of which Run, the command as resolved, the tree it
-started on, when, what it expects and where its evidence goes. The host reads its stdout
-and stderr through pipes, as they arrive, for its log and a watching client, and keeps the
-last 16 KiB of each, which it writes to `check-output/<id>.stdout` and `.stderr` once that
-stream ends. The host that ran it finishes it from what it kept; another host on the state
-directory could finish it from those files, and one that could not be written leaves none.
-They go with its record, `running-checks/<id>.json`.
+started on, when, what it expects and where its evidence goes. A host runs the command under
+a supervisor, `collie supervise-check` (`src/check-supervisor.ts`), which is the host's
+child, leads the check's process group outside the host's, and carries the check's markers,
+as the command does. Its record names the supervisor as the leader, so a stop, `stillRuns`
+and the sweep end both. Once it has spawned the command, the supervisor writes the
+command's own pid to `check-output/<id>.pid`, the one `collie verify` says it started as. The supervisor holds the command's pipes and reads both to their end,
+including a child that left the group and still holds one; it writes the check's log in the
+order the two streams arrived, relays both to the host for a watching client, and keeps the
+last 16 KiB of each. Once both close and the command has exited, it writes them to
+`check-output/<id>.stdout` and `.stderr`, then the exit status to `<id>.exit`. A host that
+goes leaves it writing: those three files answer each reason a host could not take over a
+check it did not start, which are that its output went to the old host's pipe, that only a
+parent reads an exit status, and that its starting tree was in the old host's memory, where
+`<id>.json` now keeps it. The host that ran it finishes it from what it kept; another host
+finishes it from those files. They go with its record, `running-checks/<id>.json`.
 
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no

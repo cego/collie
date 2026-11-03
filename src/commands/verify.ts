@@ -110,7 +110,9 @@ export const verify = Command.make(
             (last, event) =>
               event._tag === "Output"
                 ? echo[event.stream](event.text).pipe(Effect.as(last))
-                : Effect.succeed({ verification: event.verification, ran: event.ran ?? true }),
+                : event._tag === "Started"
+                  ? Effect.succeed(last)
+                  : Effect.succeed({ verification: event.verification, ran: event.ran ?? true }),
           ).pipe(
             Effect.catch((cause) =>
               Effect.succeed(

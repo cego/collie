@@ -11,16 +11,6 @@ import { Config, Console, Effect } from "effect";
  */
 const args = Bun.argv.slice(2);
 
-// Whoever spawned this process and has since gone is the only one who could have read
-// its output, so nothing is lost by stopping. Without this, the first write after the
-// peer closed fails and every later one waits for a `drain` that never comes — the
-// error reporter's own attempt to say so included — and the process stays behind idle.
-for (const stream of [process.stdout, process.stderr]) {
-  stream.on("error", (error: NodeJS.ErrnoException) => {
-    if (error.code === "EPIPE") process.exit(1);
-  });
-}
-
 /**
  * The helper a harness's own status line or hook is pointed at: the payload arrives on
  * stdin and one agent's telemetry comes out. Outside the CLI because it runs inside a
@@ -56,11 +46,30 @@ const cliProgram = Effect.promise(() => import("./collie")).pipe(
 
 const chosen = args[0] === "herdr" && args[1] === "compaction" ? compactionProgram : cliProgram;
 
-BunRuntime.runMain(
-  Effect.promise(() => import("./platform")).pipe(
-    Effect.flatMap(({ platformLayer }) =>
-      started.pipe(Effect.andThen(chosen), Effect.provide(platformLayer)),
+// `SUPERVISE` in ./check-supervisor, written out so this file loads none of Collie's modules.
+if (args[0] === "supervise-check") {
+  // A check's supervisor outlives the host reading its output, so a closed pipe does not end it.
+  const [{ supervise }, { platformLayer }] = await Promise.all([
+    import("./check-supervisor"),
+    import("./platform"),
+  ]);
+  await Effect.runPromise(supervise(args.slice(1)).pipe(Effect.provide(platformLayer)));
+} else {
+  // Whoever spawned this process and has since gone is the only one who could have read
+  // its output, so nothing is lost by stopping. Without this, the first write after the
+  // peer closed fails and every later one waits for a `drain` that never comes — the
+  // error reporter's own attempt to say so included — and the process stays behind idle.
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EPIPE") process.exit(1);
+    });
+  }
+  BunRuntime.runMain(
+    Effect.promise(() => import("./platform")).pipe(
+      Effect.flatMap(({ platformLayer }) =>
+        started.pipe(Effect.andThen(chosen), Effect.provide(platformLayer)),
+      ),
     ),
-  ),
-  { disableErrorReporting: true },
-);
+    { disableErrorReporting: true },
+  );
+}

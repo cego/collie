@@ -524,8 +524,14 @@ renaming a task workspace by hand changes nothing about what belongs to it, and 
 does not rename it back. See [Using Collie](using.md#what-a-task-workspace-is-called).
 
 Runs are scoped by Task, not by workspace. `collie run list` inside a task workspace lists
-that Task's local Runs and live peers' Runs; elsewhere it lists every reachable Run. A Run is reachable by id from the
-workspace it was started in. `--workspace <id>` picks which workspace that is.
+that Task's local Runs and live peers' Runs; elsewhere it lists every reachable Run. A
+command that names a Run, typed in a task workspace, reaches that Task's Runs, every Run on
+another Machine, and, from an agent's pane, any Run its own Run started (as `parent` or
+`requestedBy`) or was asked about (its goal, its inputs, or a steer it received, name the
+Run's id).
+Outside a task workspace every Run is reachable. Any other Run is `run_outside_task`, whose
+`details` name the Run's `task` and the `workspace` that reaches it; `--workspace <id>`
+picks that workspace.
 
 Checkouts are unchanged: a mutating run still gets a worktree of its own, keyed by its
 branch. A task workspace groups the work; it does not isolate files or branches.
@@ -893,6 +899,10 @@ open, that is refused. The answer is one of the question's options, in any case 
 `yes` and `YES` are the same answer — and one it does not take is refused with the ones it
 does. A refusal is `invalid_input` where your answer was the reason, and otherwise
 `operation_failed` with the host's own sentence.
+
+A run shows its question a moment before it stops to wait on it. An answer given in that
+moment is recorded at once and handed to the run once it has stopped, so it cannot wake the
+run out of a later park instead.
 
 ## Stop and resume
 
@@ -1769,7 +1779,13 @@ Machine on many samples
 The host makes the **base tree** as a detached worktree at `--base` with the plan's harness
 commits applied, under `measurements/trees/<run>/` in its state directory, and keeps it for
 the Run's later Measurements of the same base. The **candidate** is the Run's checkout, or
-`--cwd` inside it. `--run` defaults as for `collie verify`. A workflow asks for the same
+`--cwd` inside it. A candidate that holds every harness path is sampled where it is. One
+that holds none, such as a branch cleaned up for release, is sampled in a scratch worktree
+the host makes at its head with the harness commits applied, kept and removed as a base tree
+is. The checkout is left as it was, and the record names the commits applied as
+`candidate.harness_applied`. A candidate holding only some harness paths is refused with
+`invalid_input`, naming the missing ones. So is one with none of them and uncommitted work,
+which a scratch tree cannot carry. `--run` defaults as for `collie verify`. A workflow asks for the same
 Measurement with [`host.measure`](sdk.md#proving-it-rather-than-saying-so); both go through
 one host operation, on the Run's own Machine.
 
@@ -2016,7 +2032,8 @@ human line and a failure prints `error.message`.
 | `workspace_not_found` | The `--workspace` id is not a workspace herdr has.                                                                                                                             |
 | `workflow_not_found`  | No layer defines that workflow.                                                                                                                                                |
 | `persona_not_found`   | No layer defines that persona.                                                                                                                                                 |
-| `run_not_found`       | No run with that id, or none by that id in the Task this command is scoped to.                                                                                                 |
+| `run_not_found`       | No Machine has a Run by that id.                                                                                                                                               |
+| `run_outside_task`    | The Run is in another Task than the one this command is scoped to; `details` name its `task` and the `workspace` that reaches it.                                              |
 | `task_not_found`      | `--task` named a Task that does not exist.                                                                                                                                     |
 | `target_exists`       | A fork would overwrite a file that is already there.                                                                                                                           |
 | `needs_input`         | Inputs are missing; `details.inputs` says which, with their questions.                                                                                                         |

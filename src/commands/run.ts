@@ -503,7 +503,7 @@ const runShow = Command.make(
             memory = null,
             flow = null,
           } = shown;
-          const refused = outOfReach(view, machine, yield* runScope(global));
+          const refused = yield* outOfReach(resolved.env, view, machine, yield* runScope(global));
           if (refused !== null) return refused;
           const progress = yield* runProgress(resolved.env, runId);
           const ready = progress.ok && progress.value !== null ? progress.value.ready : null;
@@ -1024,7 +1024,12 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
 
   const shown = yield* runShown(resolved.env, runId);
   if (!shown.ok) return yield* printResult(shown, global.json);
-  const refused = outOfReach(shown.view, shown.machine, yield* runScope(global));
+  const refused = yield* outOfReach(
+    resolved.env,
+    shown.view,
+    shown.machine,
+    yield* runScope(global),
+  );
   if (refused !== null) return yield* printResult(refused, global.json);
   return yield* waitForRun(global, resolved.env, runId, {
     follow,

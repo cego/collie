@@ -34,6 +34,7 @@ import {
   agentWork,
   answerFor,
   ask,
+  benchmarkFile,
   classifyWorkSource,
   contentOf,
   criteriaIn,
@@ -100,6 +101,7 @@ const prompts = {
     session: Schema.Struct({ ask: text }),
     obstacle: text,
     criteria: text,
+    measure: text,
     source: text,
     proof: text,
   }),
@@ -183,8 +185,9 @@ const SliceRecord = Schema.Struct({
   title: Schema.String,
   blockedBy: Schema.Array(Schema.String),
   checks: Schema.Array(Schema.String),
-  // A reading journaled before tickets carried their criteria has none.
+  // A reading journaled before tickets carried their criteria, or their benchmark, has none.
   criteria: Schema.optionalKey(Schema.Array(Schema.String)),
+  benchmark: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
 /** A ticket's criteria and after-merge outcomes as one reading of its file found them. */
@@ -493,7 +496,11 @@ export default defineWorkflow({
           success: Schema.Array(SliceRecord),
           execute: orderedTicketsOf(source.value, place.options.repo ?? ""),
         });
-        return Arr.map(read, (one) => ({ ...one, criteria: one.criteria ?? [] }));
+        return Arr.map(read, (one) => ({
+          ...one,
+          criteria: one.criteria ?? [],
+          benchmark: one.benchmark ?? null,
+        }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
       // Read only after the build, which is what writes SPEC.md for any source but a plan.
@@ -564,6 +571,10 @@ export default defineWorkflow({
                   ticket === null && source.kind === "linear"
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
                     : renderCriteria(given),
+                measure:
+                  ticket?.benchmark != null && source.kind === "plan-dir"
+                    ? measuredBy(benchmarkFile(source.value, ticket.benchmark))
+                    : "",
                 source: sectionOf(`source.${source.kind}`, input),
                 proof: sectionOf(
                   content.sections.has(`outcome.${input.inputs.outcome}`)
@@ -1027,6 +1038,10 @@ const asCheckpoint = flow(
   ),
   Result.getOrThrow,
 );
+
+/** How a speed-up ticket's criterion is proved, after its criteria; nothing for any other. */
+const measuredBy = (benchmark: string) =>
+  `\n\n${pipe_(content.sections.get("measure") ?? "", Str.trim, Str.replaceAll("{{benchmark}}", benchmark))}`;
 
 /** A ticket's criteria as its builder is given them. */
 const renderCriteria = (criteria: ReadonlyArray<string>) =>

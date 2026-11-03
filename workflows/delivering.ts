@@ -572,7 +572,12 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           `${check}: ${name} (${file}) also fails at ${pipe_(at, Str.slice(0, 12))}, where this branch leaves the default branch, so it failed before this Run's changes.`,
       ),
     ];
-    if (unsettled.length > 0) yield* host.record(runId, `unsettled: ${Arr.join(unsettled, "; ")}`);
+    // Its own Activity, so a replay writes no second line.
+    if (unsettled.length > 0)
+      yield* Activity.make({
+        name: "unsettled",
+        execute: host.record(runId, `unsettled: ${Arr.join(unsettled, "; ")}`),
+      });
     const nothing = yield* Activity.make({
       name: "nothing-to-land",
       success: Schema.NullOr(Schema.String),
