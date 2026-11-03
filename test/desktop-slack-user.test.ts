@@ -367,6 +367,31 @@ test("an older Collie's bot token stays until the human signs in, then leaves ev
     }),
   ));
 
+/** The given record `it` saved, read by a Desktop opened again. */
+const reopen = (it: Effect.Success<typeof desktop>) =>
+  givenCredentials({
+    dir: `${it.dir}/given`,
+    keyring: it.keyring,
+    skipped: () => Effect.succeed([]),
+    tell: () => Effect.void,
+    give: {
+      gitlab: () => Effect.succeed(null),
+      helle: () => Effect.succeed(null),
+      slack: (route, text) =>
+        giveSlackUser([route], text).pipe(Effect.map((all) => all[0]!.failed)),
+    },
+  });
+
+test("a Machine given the sign-in is not given it again once Desktop reopens", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const it = yield* desktop;
+      yield* it.session.signIn;
+      const desktop2 = yield* reopen(it);
+      expect(yield* desktop2.giveLacking(it.routes[1]!)).toEqual([]);
+    }),
+  ));
+
 test("a Machine an older Desktop gave the sign-in is not given it again, and a later sign-out still reaches it", () =>
   runEffect(
     Effect.gen(function* () {
@@ -377,18 +402,7 @@ test("a Machine an older Desktop gave the sign-in is not given it again, and a l
       // An older Desktop recorded the bot's removal as `slack` and the sign-in as `slack-user`.
       const older = `{"slack":"${fingerprint("")}","slack-user":"${signIn}"}`;
       yield* fs.writeFileString(`${it.dir}/given/given.json`, `{"vm":${older},"mini":${older}}`);
-      const desktop2 = yield* givenCredentials({
-        dir: `${it.dir}/given`,
-        keyring: it.keyring,
-        skipped: () => Effect.succeed([]),
-        tell: () => Effect.void,
-        give: {
-          gitlab: () => Effect.succeed(null),
-          helle: () => Effect.succeed(null),
-          slack: (route, text) =>
-            giveSlackUser([route], text).pipe(Effect.map((all) => all[0]!.failed)),
-        },
-      });
+      const desktop2 = yield* reopen(it);
       expect(yield* desktop2.giveLacking(it.routes[1]!)).toEqual([]);
       yield* it.keyring.store("slack-user-grant", "Slack signed out", "");
       expect(yield* desktop2.giveLacking(it.routes[1]!)).toEqual([
