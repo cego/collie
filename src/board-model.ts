@@ -20,7 +20,6 @@ import { UsageReading } from "./usage-model";
 import { HarnessCatalogue } from "./catalogue-model";
 import { Connection, ConnectionLogin } from "./connection-model";
 import { HostDefinitions, SharedDefinition } from "./definitions-model";
-import { SlackChoices } from "./slack";
 import { VerifySpecSchema } from "./verify-spec";
 
 const STATE_ORDER = [
@@ -1643,7 +1642,6 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** Every Workflow and Persona in this host's shipped and user Layers, read in full. */
   Rpc.make("definitions", { success: HostDefinitions, error: HostRefused }),
-  Rpc.make("slackChoices", { success: SlackChoices, error: HostRefused }),
   /** A conversation's pending News, settled as `as` for that conversation alone. */
   Rpc.make("news", {
     payload: {

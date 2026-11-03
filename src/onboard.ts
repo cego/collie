@@ -17,7 +17,6 @@ import { onPath } from "./doctor-check";
 import { glabHosts, pushCheck } from "./forge/gitlab-checks";
 import { gitlabHostOf } from "./config";
 import { tokenPage } from "./gitlab-token";
-import { writeSlackToken } from "./slack-credentials";
 import type { PluginEnv } from "./env";
 import { err, prepareSteps, upgrade, type OpResult } from "./operations";
 import { whatItSaid } from "./mr";
@@ -552,9 +551,11 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     yield* step(
       "slack",
       "Slack's credentials",
-      writeSlackToken(here, secrets.SLACK_BOT_TOKEN || null).pipe(
-        Effect.as(done("Slack credential saved")),
-      ),
+      Effect.succeed<Outcome>({
+        status: "skipped",
+        detail:
+          "Collie no longer uses a Slack bot token: sign in to Slack in Desktop Settings › Connections",
+      }),
     );
 
   /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */

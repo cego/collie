@@ -3,14 +3,7 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Schema } from "effect";
 
-export const ConnectionId = Schema.Literals([
-  "gitlab",
-  "github",
-  "linear",
-  "helle",
-  "slack",
-  "slack-user",
-]);
+export const ConnectionId = Schema.Literals(["gitlab", "github", "linear", "helle", "slack"]);
 export type ConnectionId = typeof ConnectionId.Type;
 
 export const ConnectionReading = Schema.Union([
@@ -43,7 +36,7 @@ export const HOST_CONNECTION_USES: ReadonlyArray<typeof ConnectionUse.Type> = [
   {
     id: "Notifications",
     connections: {
-      uses: { slack: { with: "Posts the toasts you keep on", without: "Toasts only" } },
+      uses: { slack: { with: "Posts the toasts you keep on, as you", without: "Toasts only" } },
     },
   },
 ];

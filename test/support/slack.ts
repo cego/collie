@@ -23,6 +23,16 @@ export const signedInToSlack = (env: Pick<PluginEnv, "home" | "raw">, user: stri
     );
   }).pipe(Effect.orDie);
 
+/** The `slack.env` an older Collie wrote for its bot, or none for false. */
+export const botLeftOver = (env: Pick<PluginEnv, "home" | "raw">, left: boolean) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const file = `${(yield* Path.Path).dirname(slackUserEnvPath(env))}/slack.env`;
+    if (!left) return yield* fs.remove(file, { force: true });
+    yield* fs.makeDirectory((yield* Path.Path).dirname(file), { recursive: true });
+    yield* fs.writeFileString(file, "SLACK_BOT_TOKEN=xoxb-fixture\n", { mode: 0o600 });
+  }).pipe(Effect.orDie);
+
 export const fakeSlack = () => {
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];
   const authorized: Array<{ method: string; by: "bot" | "user" | null }> = [];

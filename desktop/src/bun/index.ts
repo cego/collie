@@ -1198,12 +1198,6 @@ const main = Effect.gen(function* () {
             people: yield* api.people(),
           };
         }
-        for (const source of doors.values()) {
-          const reading = Option.getOrUndefined(
-            Arr.findFirst(yield* source.desktop.connections(), (one) => one.id === "slack"),
-          );
-          if (reading?.reading.state === "ok") return yield* source.desktop.slackChoices();
-        }
         return yield* Effect.fail(
           "Connect Slack, under Connections below, to pick from the channels your Collie is in.",
         );

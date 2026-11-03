@@ -510,7 +510,7 @@ test("a Machine that can already push gets no key", () =>
     }),
   ));
 
-test("Slack handed on stdin is written owner-only without appearing in onboarding events", () =>
+test("a Slack bot token handed on stdin is no longer written, and says to sign in to Slack", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -518,17 +518,17 @@ test("Slack handed on stdin is written owner-only without appearing in onboardin
         {},
         { secrets: { SLACK_BOT_TOKEN: "xoxb-fixture-secret" } },
       );
-      expect(statusOf(events, "slack")).toBe("done");
-      expect(yield* read(`${home}/.config/collie/slack.env`)).toBe(
-        "SLACK_BOT_TOKEN=xoxb-fixture-secret\n",
-      );
-      expect((yield* fs.stat(`${home}/.config/collie/slack.env`)).mode & 0o777).toBe(0o600);
+      expect(statusOf(events, "slack")).toBe("skipped");
       expect(
         Arr.some(
           events,
-          (event) => "detail" in event && pipe_(event.detail, Str.includes("xoxb-fixture-secret")),
+          (event) =>
+            "detail" in event &&
+            event.detail ===
+              "Collie no longer uses a Slack bot token: sign in to Slack in Desktop Settings › Connections",
         ),
-      ).toBe(false);
+      ).toBe(true);
+      expect(yield* fs.exists(`${home}/.config/collie/slack.env`)).toBe(false);
     }),
   ));
 

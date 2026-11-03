@@ -398,7 +398,7 @@ export default defineWorkflow({
       gitlab: { with: "Merges, tags and watches the pipeline" },
     },
     uses: {
-      "slack-user": {
+      slack: {
         with: "Posts it for approval as you",
         without: "Asks you to share it yourself",
       },
@@ -830,7 +830,7 @@ export default defineWorkflow({
             `${SHARE_SETTINGS.on} is on but ${SHARE_SETTINGS.channel} names no channel, so nothing is shared for approval`,
           );
         let shared = !sharing.on || channel === "";
-        const slack = sharing.on && channel !== "" ? yield* connection("slack-user") : null;
+        const slack = sharing.on && channel !== "" ? yield* connection("slack") : null;
         if (slack !== null && slack.state !== "ok")
           yield* host.record(runId, `not posting for approval as you: ${slack.detail}`);
         let shares = 0;

@@ -136,10 +136,6 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
   return {
     auth: () => call("auth.test", SlackIdentity),
     tokenOwner: () => call("auth.test", SlackTokenOwner),
-    open: (user: string) =>
-      call("conversations.open", Schema.Struct({ channel: Schema.Struct({ id: Schema.String }) }), {
-        users: user,
-      }).pipe(Effect.map((answer) => answer.channel.id)),
     post: (channel: string, text: string) =>
       call("chat.postMessage", Schema.Struct({ channel: Schema.String, ts: Schema.String }), {
         channel,

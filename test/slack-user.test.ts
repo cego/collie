@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { redact } from "../src/redact";
 import { slackApi } from "../src/slack";
-import { probeSlackUser, slackUserToken } from "../src/slack-credentials";
+import { slackUserToken } from "../src/slack-credentials";
+import { connectionOnMachine } from "../src/connections";
 import { fakeSlack } from "./support/slack";
 import { runEffect } from "./support/effect";
+import { Rig } from "./support/recorder";
 
 const USER_TOKEN = "xoxe.xoxp-1-user-opaque-secret";
 
@@ -25,25 +27,40 @@ const signedIn = (token: string, user: string, team: string) =>
   `SLACK_USER_TOKEN=${token}\nSLACK_USER_ID=${user}\nSLACK_TEAM_ID=${team}\n`;
 
 const FIX = "Open Desktop to renew Slack, or sign in again";
+const SIGN_IN = "Sign in to Slack in Desktop Settings › Connections";
 
-test("a Machine reads its slack-user Connection from Slack's answer about the token", () =>
+test("a Machine's slack Connection is the human's sign-in, read from Slack's answer about the token", () =>
   runEffect(
     Effect.gen(function* () {
+      const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => rig.close().pipe(Effect.orDie));
       const fake = fakeSlack();
       const api = (token: string) => slackApi(token, fake.client);
-      const read = (lines: string | null) =>
-        Effect.flatMap(machine(lines), (env) => probeSlackUser(env, api));
+      const read = (lines: string | null, bot?: string) =>
+        Effect.flatMap(machine(lines, bot), (env) =>
+          connectionOnMachine({ ...rig.pluginEnv(), ...env }, "slack", api),
+        );
 
       expect(yield* read(null)).toEqual({
         state: "absent",
-        detail: "Not signed in to Slack as yourself on this Machine",
-        fix: "Sign in to Slack as yourself in Desktop Settings › Connections",
+        detail: "Not signed in to Slack on this Machine",
+        fix: SIGN_IN,
+      });
+      expect(yield* read(null, "xoxb-bot-opaque-secret")).toEqual({
+        state: "absent",
+        detail: "Collie no longer posts with a Slack bot token: sign in to Slack",
+        fix: SIGN_IN,
       });
       expect(yield* read(signedIn(USER_TOKEN, "U456", "T123"))).toEqual({
         state: "ok",
         account: "Example Co",
-        detail: "Posts approval requests as sam in Example Co",
+        detail: "Posts as sam in Example Co",
       });
+      expect(yield* read(signedIn(USER_TOKEN, "U456", "T123"), "xoxb-bot-opaque-secret")).toEqual({
+        state: "ok",
+        account: "Example Co",
+        detail: "Posts as sam in Example Co",
+      });
+      expect(fake.authorized).not.toContainEqual(expect.objectContaining({ by: "bot" }));
       expect(yield* read(signedIn(USER_TOKEN, "U999", "T123"))).toEqual({
         state: "broken",
         detail: "token belongs to U456, not U999",
@@ -94,7 +111,7 @@ test("the user token is handed back only once Slack says it is the expected huma
       expect(yield* token(null, "xoxb-bot-opaque-secret")).toEqual(
         expect.objectContaining({
           _tag: "Failure",
-          failure: "Not signed in to Slack as yourself on this Machine",
+          failure: "Collie no longer posts with a Slack bot token: sign in to Slack",
         }),
       );
       fake.refuse("invalid_auth");

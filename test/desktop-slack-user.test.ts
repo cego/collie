@@ -24,7 +24,7 @@ import { disconnectSlackConnection } from "../desktop/src/bun/slack";
 import { SLACK_CALLBACK_PORT } from "../desktop/src/shared/slack";
 import type { SlackUserState } from "../desktop/src/shared/flock";
 import { slackApi } from "../src/slack";
-import { probeSlackUser } from "../src/slack-credentials";
+import { probeSlack } from "../src/slack-credentials";
 import { fakeSlack } from "./support/slack";
 import { runEffect } from "./support/effect";
 
@@ -222,13 +222,13 @@ test("a sign-in keeps nothing and gives nothing unless Slack's answer is the hum
       const fs = yield* FileSystem.FileSystem;
       expect((yield* fs.stat(it.file("mini", "slack-user.env"))).mode & 0o777).toBe(0o600);
       expect(
-        yield* probeSlackUser({ home: `${it.dir}/vm`, raw: {} }, (token) =>
+        yield* probeSlack({ home: `${it.dir}/vm`, raw: {} }, (token) =>
           slackApi(token, it.fake.client),
         ),
       ).toEqual({
         state: "ok",
         account: "Example Co",
-        detail: "Posts approval requests as sam in Example Co",
+        detail: "Posts as sam in Example Co",
       });
     }),
   ));

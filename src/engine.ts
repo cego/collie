@@ -236,7 +236,7 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
 import { slackApi, slackText } from "./slack";
-import { slackToken, slackUserToken } from "./slack-credentials";
+import { slackUserToken } from "./slack-credentials";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
@@ -3512,12 +3512,14 @@ export const hostLayer = (options: {
                   );
                 return;
               }
+              if (/^U[A-Z0-9]+$/.test(channel))
+                return yield* Effect.fail("direct messages are no longer sent; pick a channel");
               const { env } = yield* placing;
-              const token = yield* slackToken(env);
-              if (token === null) return;
-              const api = (options.slack ?? slackApi)(token);
-              const destination = /^U[A-Z0-9]+$/.test(channel) ? yield* api.open(channel) : channel;
-              yield* api.post(destination, slackText(`${title}\n${body}`));
+              const slack = options.slack ?? slackApi;
+              yield* slack(yield* slackUserToken(env, slack)).post(
+                channel,
+                slackText(`${title}\n${body}`),
+              );
             }).pipe(
               Effect.catch((reason) =>
                 appendLog(
