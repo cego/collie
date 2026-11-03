@@ -49,7 +49,6 @@ import {
   applyItem,
   chatBoards,
   CREDENTIALS,
-  NOT_SIGNED_IN,
   type Credentials,
   DesktopRpcs,
   type DesktopSettingsChange,
@@ -789,7 +788,7 @@ const main = Effect.gen(function* () {
       "; ",
     );
   };
-  const slackUser = slackUserSession({
+  const slackUser = yield* slackUserSession({
     keyring,
     give: (text) => given.giveEvery(everyRoute(), "slack-user", text),
     open: openUrl,
@@ -1172,7 +1171,7 @@ const main = Effect.gen(function* () {
         Effect.map((all) => gave("Slack disconnect", all)),
         Effect.mapError((reason) => new ActionFailed({ reason })),
       ),
-    slackUser: () => slackUser.state.pipe(Effect.orElseSucceed(() => NOT_SIGNED_IN)),
+    slackUser: () => slackUser.changes,
     signInSlackUser: ({ clientId }) =>
       slackUser.signIn(clientId).pipe(
         Effect.map(

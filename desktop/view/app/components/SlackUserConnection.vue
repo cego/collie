@@ -2,26 +2,19 @@
 import * as Str from "effect/String";
 import { useAtomSet } from "@effect/atom-vue";
 import { Exit } from "effect";
-import type { SlackUserState } from "../../../src/shared/flock";
 import { failureOf, type Failed } from "../../../src/shared/actions";
-import { FlockClient } from "../flock";
+import { FlockClient, slackUserAtom } from "../flock";
 
-const read = useAtomSet(() => FlockClient.mutation("slackUser"), { mode: "promiseExit" });
 const signIn = useAtomSet(() => FlockClient.mutation("signInSlackUser"), { mode: "promiseExit" });
 const signOut = useAtomSet(() => FlockClient.mutation("signOutSlackUser"), {
   mode: "promiseExit",
 });
 const emit = defineEmits<{ changed: [] }>();
-const state = shallowRef<typeof SlackUserState.Type | null>(null);
+const { value: state } = useHeld(() => slackUserAtom);
 const clientId = ref("");
 const busy = ref(false);
 const refused = ref<string | null>(null);
 const done = ref<string | null>(null);
-const refresh = () =>
-  read({ payload: undefined }).then((exit) => {
-    if (Exit.isSuccess(exit)) state.value = exit.value;
-  });
-onMounted(refresh);
 const act = (run: () => Promise<Exit.Exit<string, Failed>>) => {
   busy.value = true;
   refused.value = null;
@@ -34,7 +27,6 @@ const act = (run: () => Promise<Exit.Exit<string, Failed>>) => {
       clientId.value = "";
       emit("changed");
     }
-    return refresh();
   });
 };
 const start = () => act(() => Promise.resolve(signIn({ payload: { clientId: clientId.value } })));

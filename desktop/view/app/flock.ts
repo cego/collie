@@ -127,6 +127,14 @@ export const credentialsAtom = FlockClient.runtime
     ),
   )
   .pipe(Atom.keepAlive);
+/** Whether the human is signed in to Slack as themselves, kept alive so a failed renewal is heard. */
+export const slackUserAtom = FlockClient.runtime
+  .atom(
+    held(
+      Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("slackUser", undefined)))),
+    ),
+  )
+  .pipe(Atom.keepAlive);
 /** The Flock's settings; asking syncs every connected Machine first. */
 export const flockSettingsAtom = FlockClient.runtime.atom(
   held(

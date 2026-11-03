@@ -122,7 +122,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         credentials: () => Stream.die("not asked"),
         saveSlack: () => Effect.die("not asked"),
         disconnectSlack: () => Effect.die("not asked"),
-        slackUser: () => Effect.die("not asked"),
+        slackUser: () => Stream.die("not asked"),
         signInSlackUser: () => Effect.die("not asked"),
         signOutSlackUser: () => Effect.die("not asked"),
         slackChoices: () => Effect.die("not asked"),

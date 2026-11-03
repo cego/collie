@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Effect, FileSystem, Order } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Order, Queue, Stream } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { TestClock } from "effect/testing";
@@ -11,12 +11,18 @@ import {
   slackAuthorizeUrl,
   slackUserSession,
 } from "../desktop/src/bun/slack-user";
-import { credentialsFile, giveSlack, giveSlackUser } from "../desktop/src/bun/credentials";
+import {
+  credentialsFile,
+  giveSlack,
+  giveSlackUser,
+  type Keyring,
+} from "../desktop/src/bun/credentials";
 import { givenCredentials } from "../desktop/src/bun/given";
 import { localRoute } from "../desktop/src/bun/machine";
 import { ranWith } from "../desktop/src/bun/onboarding";
 import { disconnectSlackConnection } from "../desktop/src/bun/slack";
 import { SLACK_CALLBACK_PORT } from "../desktop/src/shared/slack";
+import type { SlackUserState } from "../desktop/src/shared/flock";
 import { slackApi } from "../src/slack";
 import { probeSlackUser } from "../src/slack-credentials";
 import { fakeSlack } from "./support/slack";
@@ -30,7 +36,29 @@ const desktop = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-slack-user-" });
   const fake = fakeSlack();
-  const keyring = credentialsFile(`${dir}/desktop`, `${dir}/no-keyring`);
+  const stored = credentialsFile(`${dir}/desktop`, `${dir}/no-keyring`);
+  let pause: {
+    readonly reached: Deferred.Deferred<void>;
+    readonly release: Deferred.Deferred<void>;
+  } | null = null;
+  /** Holds the next read of the grant, once read, until released. */
+  const pauseGrantLookup = Effect.gen(function* () {
+    const held = { reached: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
+    pause = held;
+    return held;
+  });
+  const keyring: Keyring = {
+    ...stored,
+    lookup: (key) =>
+      Effect.tap(stored.lookup(key), () => {
+        const now = pause;
+        if (key !== "slack-user-grant" || now === null) return Effect.void;
+        pause = null;
+        return Deferred.succeed(now.reached, undefined).pipe(
+          Effect.andThen(Deferred.await(now.release)),
+        );
+      }),
+  };
   const reachable = new Set(["vm", "mini"]);
   const routes = Arr.map(["vm", "mini"], (name) => ({
     ...localRoute([], name),
@@ -60,7 +88,7 @@ const desktop = Effect.gen(function* () {
       ["state", authorize.searchParams.get("state")!],
     ],
   };
-  const session = slackUserSession({
+  const session = yield* slackUserSession({
     keyring,
     give: (text) => given.giveEvery(routes, "slack-user", text),
     open: (url) => {
@@ -92,6 +120,7 @@ const desktop = Effect.gen(function* () {
     held,
     file,
     oauthCalls,
+    pauseGrantLookup,
   };
 });
 
@@ -351,4 +380,43 @@ test("Desktop lists the channels the human is in with their own token, renewing 
       ]);
       expect(yield* it.held).toEqual([SIGNED_IN(2), SIGNED_IN(2)]);
     }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a Machine connecting while the human signs out is not given the grant they signed out of", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const it = yield* desktop;
+      it.reachable.delete("mini");
+      yield* it.session.signIn("123.456");
+      expect(yield* it.held).toEqual([SIGNED_IN(1), null]);
+      it.reachable.add("mini");
+      const paused = yield* it.pauseGrantLookup;
+      const reconnect = yield* Effect.forkScoped(it.given.giveLacking(it.routes[1]!));
+      yield* Deferred.await(paused.reached);
+      yield* it.session.signOut;
+      yield* Deferred.succeed(paused.release, undefined);
+      yield* Fiber.join(reconnect);
+      expect(yield* it.held).toEqual([null, null]);
+    }),
+  ));
+
+test("the sign-in's standing is told again as it changes, a renewal refused in the background included", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const it = yield* desktop;
+      yield* it.session.signIn("123.456");
+      const told = yield* Queue.unbounded<typeof SlackUserState.Type>();
+      yield* it.session.changes.pipe(
+        Stream.runForEach((state) => Queue.offer(told, state)),
+        Effect.forkScoped,
+      );
+      const next = Queue.take(told).pipe(Effect.timeout("2 seconds"));
+      const sam = { user: "sam", team: "Example Co" };
+      expect(yield* next).toEqual({ signedIn: sam, clientId: "123.456", trouble: null });
+      it.fake.refuse("invalid_refresh_token", "oauth.v2.access");
+      yield* it.session.renew(true).pipe(Effect.flip);
+      expect(yield* next).toEqual({ signedIn: sam, clientId: "123.456", trouble: SIGN_IN_EXPIRED });
+      yield* it.session.signOut;
+      expect(yield* next).toEqual({ signedIn: null, clientId: null, trouble: null });
+    }),
   ));

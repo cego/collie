@@ -3,7 +3,17 @@
 
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import { Clock, Deferred, Duration, Effect, Option, Schema, Semaphore } from "effect";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Option,
+  Schema,
+  Semaphore,
+  Stream,
+  SubscriptionRef,
+} from "effect";
 import type * as HttpClient from "effect/http/HttpClient";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Base64Url from "effect/encoding/Base64Url";
@@ -17,6 +27,7 @@ import {
   SIGN_IN_TO_PICK,
 } from "../shared/slack";
 import type { Keyring } from "./credentials";
+import { NOT_SIGNED_IN } from "../shared/flock";
 
 export const SlackUserGrant = Schema.Struct({
   clientId: Schema.String,
@@ -117,16 +128,18 @@ const listen = (state: string, open: (url: string) => Effect.Effect<void>, url: 
     return code;
   }).pipe(Effect.scoped);
 
-export const slackUserSession = (options: {
+export const slackUserSession = Effect.fnUntraced(function* (options: {
   readonly keyring: Keyring;
   /** Gives every Machine the grant, or "" to remove it, and says how each went. */
   readonly give: (text: string) => Effect.Effect<Given>;
   readonly open: (url: string) => Effect.Effect<void>;
   readonly client?: HttpClient.HttpClient;
-}) => {
+}) {
   // A refresh token works once, so renewals never overlap.
   const lock = Semaphore.makeUnsafe(1);
   let trouble: string | null = null;
+  const changed = yield* SubscriptionRef.make(0);
+  const tell = SubscriptionRef.update(changed, (n) => n + 1);
   const kept = options.keyring
     .lookup("slack-user-grant")
     .pipe(Effect.map((text) => (text ? decodeGrant(text) : null)));
@@ -137,6 +150,7 @@ export const slackUserSession = (options: {
       );
       yield* options.keyring.store("slack-user-grant", "Slack sign-in as you", text);
       trouble = null;
+      yield* tell;
       return yield* options.give(text);
     });
   const hidden = (grant: SlackUserGrant | null) => (reason: string) =>
@@ -221,7 +235,7 @@ export const slackUserSession = (options: {
             Effect.tapError(() =>
               Effect.sync(() => {
                 trouble = SIGN_IN_EXPIRED;
-              }),
+              }).pipe(Effect.andThen(tell)),
             ),
           );
           return yield* keep({
@@ -245,13 +259,18 @@ export const slackUserSession = (options: {
       .pipe(Effect.mapError(hidden(grant)));
   });
 
+  /** What the card says; no token. */
+  const state = Effect.map(kept, (grant) => ({
+    signedIn: grant === null ? null : { user: grant.userName, team: grant.teamName },
+    clientId: grant?.clientId ?? null,
+    trouble,
+  }));
+
   return {
-    /** What the card says; no token. */
-    state: Effect.map(kept, (grant) => ({
-      signedIn: grant === null ? null : { user: grant.userName, team: grant.teamName },
-      clientId: grant?.clientId ?? null,
-      trouble,
-    })),
+    state,
+    changes: SubscriptionRef.changes(changed).pipe(
+      Stream.mapEffect(() => state.pipe(Effect.orElseSucceed(() => NOT_SIGNED_IN))),
+    ),
     signIn,
     renew,
     channels,
@@ -260,6 +279,7 @@ export const slackUserSession = (options: {
       Effect.gen(function* () {
         yield* options.keyring.store("slack-user-grant", "Slack signed out", "");
         trouble = null;
+        yield* tell;
         return yield* options.give("");
       }),
     ),
@@ -274,4 +294,4 @@ export const slackUserSession = (options: {
       ),
     ),
   };
-};
+});

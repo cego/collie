@@ -562,8 +562,8 @@ export const DesktopRpcs = RpcGroup.make(
   }),
   Rpc.make("slackChoices", { success: SlackChoices, error: ActionFailed }),
   Rpc.make("disconnectSlack", { success: Schema.String, error: ActionFailed }),
-  /** Whether the human is signed in to Slack as themselves; no token. */
-  Rpc.make("slackUser", { success: SlackUserState }),
+  /** Whether the human is signed in to Slack as themselves, told again as it changes; no token. */
+  Rpc.make("slackUser", { success: SlackUserState, stream: true }),
   /** Signs the human in to Slack in their browser; "" uses the Client ID kept before. */
   Rpc.make("signInSlackUser", {
     payload: { clientId: Schema.String },
