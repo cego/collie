@@ -21,22 +21,23 @@ export const Connection = Schema.Struct({ id: ConnectionId, reading: ConnectionR
 export type Connection = typeof Connection.Type;
 
 /**
- * A host's Connections as sent. A protocol-4 host's `slack` is its bot and `slack-user` the
- * human, who is `slack` now; an id this build does not know is dropped.
+ * A host's Connections as sent. Until the next protocol bump the human's sign-in goes as
+ * protocol 4's `slack-user`, and a `slack` sent is a protocol-4 host's bot; an id this build
+ * does not know is dropped.
  */
 export const HostConnections = Schema.Array(
   Schema.Struct({ id: Schema.String, reading: ConnectionReading }),
 ).pipe(
   Schema.decodeTo(Schema.Array(Connection), {
-    decode: SchemaGetter.transform((sent) => {
-      const protocol4 = Arr.some(sent, ({ id }) => id === "slack-user");
-      return Arr.flatMap(sent, ({ id, reading }) => {
-        const now =
-          protocol4 && id === "slack-user" ? "slack" : protocol4 && id === "slack" ? "" : id;
+    decode: SchemaGetter.transform(
+      Arr.flatMap(({ id, reading }) => {
+        const now = id === "slack-user" ? "slack" : id === "slack" ? "" : id;
         return Schema.is(ConnectionId)(now) ? [{ id: now, reading }] : [];
-      });
-    }),
-    encode: SchemaGetter.passthroughSupertype(),
+      }),
+    ),
+    encode: SchemaGetter.transform(
+      Arr.map(({ id, reading }) => ({ id: id === "slack" ? "slack-user" : id, reading })),
+    ),
   }),
 );
 
