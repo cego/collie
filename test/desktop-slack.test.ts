@@ -61,13 +61,16 @@ test("the notification row offers the channels the human is in, and no direct me
     }),
   ));
 
-test("a person chosen before is kept and said to be no longer sent to, and a channel the human left stays unchecked", () =>
+test("a person or direct message chosen before is kept and said to be no longer sent to, and a channel the human left stays unchecked", () =>
   runEffect(
     Effect.gen(function* () {
       const yours = yield* yoursIn;
       expect(
         slackDestinationRow("slack.notification_channel", "U789", yours).options,
       ).toContainEqual({ value: "U789", label: "U789 (direct messages are no longer sent)" });
+      expect(
+        slackDestinationRow("slack.notification_channel", "D123", yours).options,
+      ).toContainEqual({ value: "D123", label: "D123 (direct messages are no longer sent)" });
       expect(
         slackDestinationRow("slack.notification_channel", "C123", yours).options,
       ).toContainEqual({ value: "C123", label: "C123 (not checked)" });

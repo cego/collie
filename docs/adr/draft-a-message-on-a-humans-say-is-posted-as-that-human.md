@@ -17,6 +17,10 @@ token: an older Collie's `slack.env` or `SLACK_BOT_TOKEN` is never read, and a M
 holding only that reads `absent` until the human signs in. This amends this record's first
 decision, which kept notifications with the bot: one sign-in is all a human sets up, and
 nothing can fall back to a bot that posts under another name.
+Dropping `slack-user`, the `slackChoices` operation and the bot's meaning of `slack` changes
+the board protocol, so `PROTOCOL` is 5. A protocol-5 host still answers a protocol-4 Desktop's
+`slackChoices`, with the refusal to sign in. A protocol-5 Desktop reads a protocol-4 host's
+`slack-user` as `slack` and drops its bot reading.
 
 **D2. Each human signs in to the shared app from Desktop with PKCE.** The shared Collie
 app turns on PKCE and registers a `http://localhost` redirect. Desktop ships the app's

@@ -14,7 +14,7 @@ export const slackUserEnvPath = (env: Pick<PluginEnv, "home" | "raw">) =>
 
 export const SLACK_FIX = "Open Desktop to renew Slack, or sign in again";
 const SIGN_IN = "Sign in to Slack in Desktop Settings › Connections";
-const SLACK_BOT_RETIRED = "Collie no longer posts with a Slack bot token: sign in to Slack";
+export const SLACK_BOT_RETIRED = "Collie no longer posts with a Slack bot token: sign in to Slack";
 
 const signedInAs = (env: Pick<PluginEnv, "home" | "raw">, api: typeof slackApi) =>
   Effect.gen(function* () {

@@ -338,32 +338,28 @@ test("a notification is posted as the signed-in human, never with a bot token", 
     }),
   ));
 
-test("a notification for a person posts nothing and says why on the Run's log", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* signedInToSlack(rig.pluginEnv(), "U456");
-      yield* writeConfigValue(rig.userDir, "slack.notification_channel", "U789");
-      const slack = fakeSlack();
-      yield* session(
-        Effect.gen(function* () {
-          yield* ownRun;
-          yield* (yield* Notifier).notify("r-own", "needs-you", "Choose the approach");
-        }),
-        { slack: (token) => slackApi(token, slack.client), toast: undefined },
-      );
-      expect(slack.calls).not.toContainEqual(
-        expect.objectContaining({ method: "conversations.open" }),
-      );
-      expect(slack.calls).not.toContainEqual(
-        expect.objectContaining({ method: "chat.postMessage" }),
-      );
-      expect(
-        yield* (yield* FileSystem.FileSystem).readFileString(`${dir}/runs/r-own/log.txt`),
-      ).toContain(
-        "Slack notification (needs-you) was not posted: direct messages are no longer sent; pick a channel",
-      );
-    }),
-  ));
+for (const destination of ["U789", "W789", "D123"])
+  test(`a notification for the person or direct message ${destination} posts nothing and says why on the Run's log`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* signedInToSlack(rig.pluginEnv(), "U456");
+        yield* writeConfigValue(rig.userDir, "slack.notification_channel", destination);
+        const slack = fakeSlack();
+        yield* session(
+          Effect.gen(function* () {
+            yield* ownRun;
+            yield* (yield* Notifier).notify("r-own", "needs-you", "Choose the approach");
+          }),
+          { slack: (token) => slackApi(token, slack.client), toast: undefined },
+        );
+        expect(Arr.filter(slack.calls, (call) => call.method !== "auth.test")).toEqual([]);
+        expect(
+          yield* (yield* FileSystem.FileSystem).readFileString(`${dir}/runs/r-own/log.txt`),
+        ).toContain(
+          "Slack notification (needs-you) was not posted: direct messages are no longer sent; pick a channel",
+        );
+      }),
+    ));
 
 test("a notification whose sign-in Slack refuses as expired posts nothing and says so on the Run's log", () =>
   runEffect(

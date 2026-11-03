@@ -31,6 +31,9 @@ const Channels = Schema.Struct({
   ),
   ...Cursor,
 });
+/** A person (`U`, `W`) or a direct message (`D`): the human's sign-in cannot open or reach one. */
+export const isDirectMessage = (destination: string) => /^[DUW][A-Z0-9]+$/.test(destination);
+
 export const slackText = (text: string) =>
   pipe_(
     text,

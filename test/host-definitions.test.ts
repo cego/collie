@@ -179,7 +179,7 @@ test(
               expect(yield* fs.exists(`${dir}/${made}`)).toBe(false);
 
           // An added read: the protocol is the one Desktops already speak.
-          expect(PROTOCOL).toBe(4);
+          expect(PROTOCOL).toBe(5);
         }).pipe(Effect.orDie),
       [],
     ),

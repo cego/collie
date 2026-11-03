@@ -155,7 +155,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `connection-model.ts`  | Connection reading Schemas and the text the CLI and chat print (pure)                                                       |
 | `connection-probes.ts` | Linear MCP and Helle probes; reexports the forge adapters' probes                                                           |
 | `connection-login.ts`  | Reads a reusable login through its forge adapter for host-to-Desktop hand-over, without recording the token                 |
-| `slack.ts`             | Slack Web API adapter: identity, member channels, people, posts, permalinks and user sign-in tokens                         |
+| `slack.ts`             | Slack Web API adapter: identity, member channels, posts, permalinks and user sign-in tokens                                 |
 | `slack-credentials.ts` | Checks each Machine's Slack user token, says when only an older bot token is left, and supplies the reading                 |
 | `connections.ts`       | The Connection registry: each probe isolated and bounded, shared by the host, doctor and workflow reads                     |
 | `schedule-model.ts`    | A Schedule as every door reads it, and when an occurrence starts and which comes next (pure)                                |

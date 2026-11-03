@@ -1,7 +1,7 @@
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Schema } from "effect";
+import { Schema, SchemaGetter } from "effect";
 
 export const ConnectionId = Schema.Literals(["gitlab", "github", "linear", "helle", "slack"]);
 export type ConnectionId = typeof ConnectionId.Type;
@@ -19,6 +19,25 @@ export type ConnectionReading = typeof ConnectionReading.Type;
 
 export const Connection = Schema.Struct({ id: ConnectionId, reading: ConnectionReading });
 export type Connection = typeof Connection.Type;
+
+/**
+ * A host's Connections as sent. A protocol-4 host's `slack` is its bot and `slack-user` the
+ * human, who is `slack` now; an id this build does not know is dropped.
+ */
+export const HostConnections = Schema.Array(
+  Schema.Struct({ id: Schema.String, reading: ConnectionReading }),
+).pipe(
+  Schema.decodeTo(Schema.Array(Connection), {
+    decode: SchemaGetter.transform((sent) => {
+      const protocol4 = Arr.some(sent, ({ id }) => id === "slack-user");
+      return Arr.flatMap(sent, ({ id, reading }) => {
+        const now = protocol4 && id === "slack-user" ? "slack" : protocol4 && id === "slack" ? "" : id;
+        return Schema.is(ConnectionId)(now) ? [{ id: now, reading }] : [];
+      });
+    }),
+    encode: SchemaGetter.passthroughSupertype(),
+  }),
+);
 
 export const ConnectionLogin = Schema.Struct({ host: Schema.String, token: Schema.String });
 export type ConnectionLogin = typeof ConnectionLogin.Type;

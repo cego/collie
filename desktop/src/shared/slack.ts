@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import type { SlackChannel } from "../../../src/slack";
+import { isDirectMessage, type SlackChannel } from "../../../src/slack";
 
 /** The shared Collie app's public client ID; a PKCE sign-in needs no secret. */
 export const SLACK_CLIENT_ID = "2673706937.12461393591409";
@@ -26,7 +26,7 @@ export const slackDestinationRow = (key: string, value: string, yours: Channels 
   if (value && !Arr.some(options, (option) => option.value === value))
     options.push({
       value,
-      label: /^U[A-Z0-9]+$/.test(value)
+      label: isDirectMessage(value)
         ? `${value} (direct messages are no longer sent)`
         : `${value} (not checked)`,
     });

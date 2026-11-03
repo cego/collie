@@ -235,7 +235,7 @@ import { Herdr, herdrFailureReason } from "./herdr";
 
 import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
-import { slackApi, slackText } from "./slack";
+import { isDirectMessage, slackApi, slackText } from "./slack";
 import { slackUserToken } from "./slack-credentials";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
@@ -378,7 +378,7 @@ export const TOOLCHAIN = {
  * surface, so a declaration that has drifted fails a test rather than an author's build.
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
-  export type ConnectionId = "gitlab" | "github" | "linear" | "helle" | "slack" | "slack-user";
+  export type ConnectionId = ${Arr.join(Arr.map(ConnectionId.literals, (id) => JSON.stringify(id)), " | ")};
   export const ConnectionId: Schema.Codec<ConnectionId, unknown, never, never>;
   export type ConnectionReading =
     | { readonly state: "ok"; readonly account: string; readonly detail: string }
@@ -3512,7 +3512,7 @@ export const hostLayer = (options: {
                   );
                 return;
               }
-              if (/^U[A-Z0-9]+$/.test(channel))
+              if (isDirectMessage(channel))
                 return yield* Effect.fail("direct messages are no longer sent; pick a channel");
               const { env } = yield* placing;
               const slack = options.slack ?? slackApi;

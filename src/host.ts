@@ -135,6 +135,7 @@ import { sideJobs } from "./side-jobs";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
 import { connectionsOnMachine } from "./connections";
+import { SLACK_BOT_RETIRED } from "./slack-credentials";
 import { readConnectionLogin } from "./connection-login";
 import { Schedules, schedulesLayer } from "./schedules";
 import { dataHomeOf, desktopRootOf } from "./desktop";
@@ -2128,6 +2129,7 @@ const frontDoorHandlers = (
           ),
         models: () => harnesses.catalogues,
         connections: () => connectionsOnMachine(env),
+        slackChoices: () => Effect.fail(new HostRefused({ reason: SLACK_BOT_RETIRED })),
         connectionLogin: ({ id }) =>
           readConnectionLogin(env, id).pipe(
             Effect.mapError(
