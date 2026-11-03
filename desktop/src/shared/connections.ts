@@ -44,6 +44,7 @@ export const CONNECTION_NAMES = {
   linear: "Linear",
   helle: "Helle",
   slack: "Slack",
+  "slack-user": "Slack as you",
 } satisfies Record<ConnectionId, string>;
 
 export type ConnectionPrimary =
@@ -111,7 +112,7 @@ export const connectionCards = (machines: ReadonlyArray<MachineConnections>) =>
               : "Not set up",
       account:
         source?.reading?.state === "ok"
-          ? id === "slack"
+          ? id === "slack" || id === "slack-user"
             ? source.reading.detail
             : source.reading.account
           : null,

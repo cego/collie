@@ -23,6 +23,8 @@ import { withGitlabHost } from "../src/commands/shared";
 import manifest from "../herdr-plugin.toml";
 import hcPin from "../hc-pin.json";
 import { registerAgent, registryPath, type AgentEntry } from "../src/registry";
+import { slackApi } from "../src/slack";
+import { fakeSlack } from "./support/slack";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -48,13 +50,13 @@ function env(overrides: Record<string, string> = {}) {
  * doctor against this rig: the fake herdr in-process, everything else on PATH, and the rig's
  * fake core.
  */
-function report(overrides: Record<string, string> = {}) {
+function report(overrides: Record<string, string> = {}, slack?: typeof slackApi) {
   const pluginEnv = env({
     FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]`,
     FAKE_HERDR_SESSIONS: asSessions([{ name: "default", socket_path: rig.socketPath }]),
     ...overrides,
   });
-  return doctor(pluginEnv, undefined, new FakeHerdr(pluginEnv));
+  return doctor(pluginEnv, undefined, new FakeHerdr(pluginEnv), slack);
 }
 
 const healthy = Effect.fn("doctorTest.healthy")(function* () {
@@ -253,8 +255,35 @@ test("a healthy machine passes every check and says so", () =>
         "helle",
         "linear mcp",
         "slack connection",
+        "slack-user connection",
       ]);
       expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
+    }),
+  ));
+
+test("a Machine whose bot posts but that is not signed in to Slack as its human stays healthy", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      const fake = fakeSlack();
+
+      const result = yield* report({ SLACK_BOT_TOKEN: "xoxb-doctor-fixture" }, (token) =>
+        slackApi(token, fake.client),
+      );
+
+      expect(result.ok).toBe(true);
+      expect(check(result, "slack connection")).toEqual({
+        name: "slack connection",
+        ok: true,
+        detail: "Posts as collie in Example Co",
+        fix: "",
+      });
+      expect(check(result, "slack-user connection")).toEqual({
+        name: "slack-user connection",
+        ok: true,
+        detail: "Not signed in to Slack as yourself on this Machine",
+        fix: "Sign in to Slack as yourself in Desktop Settings › Connections",
+      });
     }),
   ));
 

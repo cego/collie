@@ -245,11 +245,11 @@ production carries the merge, whatever your Output says.
 ## share
 
 The human checked {{inputs.mr}} and asked for it to be shared for approval in {{channel}}.
-The host reads its title from GitLab and posts through the host's Slack adapter:
+The host reads its title from GitLab and posts through the host's Slack adapter, as the human, with their own Slack sign-in:
 {{inputs.mr}} linked by that title, written `<URL|TITLE>`, with
 no other words, no emoji, no mention and no thread reply.
 The host records the message's permalink, or why the post failed or its permalink is missing.
 The release continues to its review wait even when Slack refuses.
 
-Without a working Slack Connection, the Run asks you to share it yourself and shows the address to copy.
+Without a working Slack sign-in as you, the Run asks you to share it yourself and shows the address to copy.
 No agent posts in Slack.

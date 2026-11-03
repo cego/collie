@@ -213,6 +213,13 @@ watch(
         @refresh="emit('refreshSlack')"
         ><slot name="slack-destination"
       /></SlackConnection>
+      <SlackUserConnection
+        v-if="current.id === 'slack-user'"
+        @changed="
+          emit('refresh');
+          emit('refreshSlack');
+        "
+      />
       <div class="overflow-x-auto rounded-md border border-default">
         <table class="w-full text-left text-sm">
           <caption class="sr-only">

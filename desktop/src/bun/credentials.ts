@@ -29,11 +29,12 @@ import { type ShellRoute, spawned } from "./machine";
 import { CHILD_CWD, childEnv, which } from "./login-env";
 import { ranWith, shOn, tracked } from "./onboarding";
 import { redact } from "../../../src/redact";
+import { decodeGrant, slackUserLines } from "./slack-user";
 
 export const GITLAB = `https://${GITLAB_HOST}`;
 
 /** What Desktop keeps, by name. */
-export type KeyringEntry = "gitlab-token" | "helle-token" | "slack-token";
+export type KeyringEntry = "gitlab-token" | "helle-token" | "slack-token" | "slack-user-grant";
 
 export interface Keyring {
   readonly lookup: (key: KeyringEntry) => Effect.Effect<string | null, string>;
@@ -257,18 +258,26 @@ export const giveHelle = (routes: ReadonlyArray<ShellRoute>, url: string, token:
     token,
   );
 
+const COLLIE_CONFIG = '"${XDG_CONFIG_HOME:-$HOME/.config}/collie"';
+/** Replaces the Machine's `collie/<file>` with stdin, owner-only and whole. */
+const writeCollieFile = (file: string) =>
+  `umask 077 && mkdir -p ${COLLIE_CONFIG} && rm -f ${COLLIE_CONFIG}/${file}.new && cat > ${COLLIE_CONFIG}/${file}.new && mv ${COLLIE_CONFIG}/${file}.new ${COLLIE_CONFIG}/${file}`;
+
 export const giveSlack = (routes: ReadonlyArray<ShellRoute>, token: string) =>
   token === ""
     ? clearSlack(routes)
-    : onEvery(
-        routes,
-        'umask 077 && mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/collie" && rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env.new" && cat > "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env.new" && mv "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env.new" "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env"',
-        `SLACK_BOT_TOKEN=${token}\n`,
-        token,
-      );
+    : onEvery(routes, writeCollieFile("slack.env"), `SLACK_BOT_TOKEN=${token}\n`, token);
 
 export const clearSlack = (routes: ReadonlyArray<ShellRoute>) =>
-  onEvery(routes, 'rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/collie/slack.env"', "", "<no-token>");
+  onEvery(routes, `rm -f ${COLLIE_CONFIG}/slack.env`, "", "<no-token>");
+
+/** Each Machine's `slack-user.env` from the grant Desktop keeps, or removed for "". */
+export const giveSlackUser = (routes: ReadonlyArray<ShellRoute>, text: string) => {
+  const grant = text === "" ? null : decodeGrant(text);
+  return grant === null
+    ? onEvery(routes, `rm -f ${COLLIE_CONFIG}/slack-user.env`, "", "<no-token>")
+    : onEvery(routes, writeCollieFile("slack-user.env"), slackUserLines(grant), grant.accessToken);
+};
 
 /** Whether a credential can go on a `KEY=value` line, as every Machine is given it. */
 export const oneLine = (value: string) => value !== "" && !/[\r\n]/.test(value);

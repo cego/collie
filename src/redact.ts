@@ -24,7 +24,7 @@ const SECRETS: ReadonlyArray<readonly [RegExp, string, string]> = [
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, "<github token>", "<github token>"],
   [/\bsk-[A-Za-z0-9_-]{16,}/g, "<api key>", "<api key>"],
   [/\bAKIA[0-9A-Z]{16}\b/g, "<aws key id>", "<aws key id>"],
-  [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, "<slack token>", "<slack token>"],
+  [/\b(?:xoxe\.)?xox[abposre]-[A-Za-z0-9-]{10,}/g, "<slack token>", "<slack token>"],
   [/\bey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "<jwt>", "<jwt>"],
   [/\b[Bb]earer\s+[A-Za-z0-9._~+/-]{20,}=*/g, "Bearer <token>", "<bearer token>"],
   // A named assignment whose value looks like a secret rather than like prose.

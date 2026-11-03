@@ -236,7 +236,7 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
 import { slackApi, slackText } from "./slack";
-import { slackToken } from "./slack-credentials";
+import { slackToken, slackUserToken } from "./slack-credentials";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
@@ -378,7 +378,7 @@ export const TOOLCHAIN = {
  * surface, so a declaration that has drifted fails a test rather than an author's build.
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
-  export type ConnectionId = "gitlab" | "github" | "linear" | "helle" | "slack";
+  export type ConnectionId = "gitlab" | "github" | "linear" | "helle" | "slack" | "slack-user";
   export const ConnectionId: Schema.Codec<ConnectionId, unknown, never, never>;
   export type ConnectionReading =
     | { readonly state: "ok"; readonly account: string; readonly detail: string }
@@ -4351,13 +4351,9 @@ export const hostLayer = (options: {
               const ref = mr === null ? null : mrRefOf(mr);
               if (mr === null || ref === null)
                 return { posted: false, why: "this Run recorded no merge request to share" };
-              const reading = yield* host.connection("slack");
-              if (reading.state !== "ok") return { posted: false, why: reading.detail };
               const { env } = yield* placing;
-              const token = yield* slackToken(env);
-              if (token === null)
-                return { posted: false, why: "No Slack bot token on this Machine" };
-              const api = (options.slack ?? slackApi)(token);
+              const slack = options.slack ?? slackApi;
+              const api = slack(yield* slackUserToken(env, slack));
               const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
               if (details._tag !== "Details") return { posted: false, why: details.reason };
               const posted = yield* api.post(asked.channel, `<${mr}|${slackText(details.title)}>`);

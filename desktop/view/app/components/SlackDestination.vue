@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SlackChoices } from "../../../../src/slack";
+import type { SlackChannel, SlackChoices } from "../../../../src/slack";
 import { slackDestinationRow, pickSlackDestination } from "../../../src/shared/slack";
 
 const props = defineProps<{
@@ -7,13 +7,16 @@ const props = defineProps<{
   setting: string;
   value: string;
   choices: SlackChoices | null;
+  yours: ReadonlyArray<typeof SlackChannel.Type> | null;
 }>();
 const emit = defineEmits<{ choose: [value: string] }>();
-const row = computed(() => slackDestinationRow(props.setting, props.value, props.choices));
+const row = computed(() =>
+  slackDestinationRow(props.setting, props.value, props.choices, props.yours),
+);
 const people = ref<ReadonlyArray<{ value: string; label: string }> | null>(null);
 const refused = ref<string | null>(null);
 const choose = (value: string) => {
-  const picked = pickSlackDestination(props.setting, value, props.choices);
+  const picked = pickSlackDestination(props.setting, value, props.choices, props.yours);
   if ("refused" in picked) {
     refused.value = picked.refused;
     return;

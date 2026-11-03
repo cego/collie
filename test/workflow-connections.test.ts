@@ -255,7 +255,7 @@ test(
           const declared = {
             implement: { needs: [], uses: ["linear", "gitlab", "github"] },
             plan: { needs: [], uses: ["linear"] },
-            release: { needs: ["helle", "gitlab"], uses: ["slack"] },
+            release: { needs: ["helle", "gitlab"], uses: ["slack-user"] },
             renovate: { needs: ["linear", "gitlab"], uses: [] },
             stage: { needs: ["helle", "gitlab"], uses: [] },
             "tune-up": { needs: [], uses: ["linear", "gitlab", "github"] },
