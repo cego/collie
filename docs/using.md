@@ -1622,14 +1622,17 @@ It does not uninstall the shared app or revoke a teammate's token.
 For a Machine configured without Desktop, give `SLACK_BOT_TOKEN=…` through `collie onboard --secrets-stdin`.
 An explicit `SLACK_BOT_TOKEN` in the host's environment takes precedence over the file.
 
-Invite Collie into each channel with `/invite @Collie`, then choose **Refresh Slack**.
-Only channels it belongs to appear, including private channels it joined.
-**Runs → Slack channel for approval requests** stores the chosen channel's id in `release.approval_channel`.
-The approval request itself is posted as you, through [Slack as you](#slack-as-you), never as the bot.
+**Runs → Slack channel for approval requests** offers the channels you are in, public and private, read with [Slack as you](#slack-as-you).
+Those are the channels where a post as you can succeed, so Collie needs no invitation there.
+It stores the chosen channel's id in `release.approval_channel`.
+The approval request itself is posted as you, never as the bot.
 An earlier `#name` remains **#name (not checked)** and stays unchanged until you pick again.
-While Slack is disconnected, the channel controls are disabled and point back to Connections.
+While you are not signed in to Slack as yourself, the control is disabled and points back to Connections.
 
 **Notifications → Post notifications to** stores its destination in `slack.notification_channel`.
+Invite Collie into each channel it posts notifications in with `/invite @Collie`, then choose **Refresh Slack**.
+Only channels it belongs to appear, including private channels it joined.
+While Slack is disconnected, this control is disabled and points back to Connections.
 Choose a channel, **Nowhere: toasts only**, or **A direct message to you**.
 The direct-message choice asks **Which of these is you?**; search the workspace's people and pick yourself once.
 Collie stores your user id and then shows **A direct message to** followed by your name.
@@ -2874,7 +2877,7 @@ itself can tell it.
 
 `release.share_for_approval` ("Ask before sharing a merge request for approval", off until
 set) and `release.approval_channel` ("Slack channel for approval requests") are under Settings' Runs.
-Connect [Slack](#slack), then pick the channel by name; Collie stores its id.
+Sign in to [Slack as you](#slack-as-you), then pick one of your channels by name; Collie stores its id.
 They nest in config.json as `"release": {"share_for_approval": true, "approval_channel": "C0123456789"}`.
 Earlier `#name` values are retained and used as written until picked again. Turned on with a
 channel, a release Run waiting on a teammate's approval asks you whether to post its merge

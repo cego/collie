@@ -1186,6 +1186,8 @@ const main = Effect.gen(function* () {
         Effect.map((all) => gave("Slack sign-out", all)),
         Effect.mapError((reason) => new ActionFailed({ reason })),
       ),
+    slackUserChannels: () =>
+      slackUser.channels.pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     slackChoices: () =>
       Effect.gen(function* () {
         const token = yield* keyring.lookup("slack-token");

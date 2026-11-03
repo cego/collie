@@ -321,3 +321,34 @@ test("a refused exchange or renewal never says the access or refresh token", () 
           expect(said).not.toContain(token);
     }),
   ));
+
+test("Desktop lists the channels the human is in with their own token, renewing it first once it has expired", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const it = yield* desktop;
+      expect(yield* it.session.channels.pipe(Effect.flip)).toBe(
+        "Sign in to Slack as yourself under Connections to pick a channel you're in",
+      );
+      yield* it.session.signIn("123.456");
+      it.fake.calls.length = 0;
+      it.fake.authorized.length = 0;
+      expect(yield* it.session.channels).toEqual([
+        { id: "C456", name: "design", is_private: false },
+        { id: "G234", name: "releases", is_private: true },
+      ]);
+      expect(it.fake.authorized).toEqual([
+        { method: "conversations.list", by: "user" },
+        { method: "conversations.list", by: "user" },
+      ]);
+
+      yield* TestClock.adjust("13 hours");
+      it.fake.calls.length = 0;
+      expect(yield* it.session.channels).toHaveLength(2);
+      expect(Arr.map(it.fake.calls, (call) => call.method)).toEqual([
+        "oauth.v2.access",
+        "conversations.list",
+        "conversations.list",
+      ]);
+      expect(yield* it.held).toEqual([SIGNED_IN(2), SIGNED_IN(2)]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));

@@ -38,6 +38,7 @@ const connectionsNeedYou = computed(
 );
 const {
   choices: slackChoices,
+  yours: slackYours,
   trouble: slackTrouble,
   loading: slackLoading,
   refresh: refreshSlack,
@@ -704,6 +705,7 @@ const drawnLine = computed(() =>
                         :setting="row.key"
                         :value="row.value"
                         :choices="slackDestinations"
+                        :yours="slackYours"
                         @choose="(value) => set(row, value)"
                       />
                       <fieldset
@@ -887,6 +889,7 @@ const drawnLine = computed(() =>
                       :setting="row.key"
                       :value="row.value"
                       :choices="slackDestinations"
+                      :yours="slackYours"
                       @choose="(value) => set(row, value)"
                     />
                     <p v-if="refusals[idOf(row)]" class="text-sm text-error" role="alert">

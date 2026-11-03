@@ -126,6 +126,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         signInSlackUser: () => Effect.die("not asked"),
         signOutSlackUser: () => Effect.die("not asked"),
         slackChoices: () => Effect.die("not asked"),
+        slackUserChannels: () => Effect.die("not asked"),
         flockSettings: () => Stream.die("not asked"),
         setFlockSetting: () => Effect.die("not asked"),
         setFlockSettings: () => Effect.die("not asked"),

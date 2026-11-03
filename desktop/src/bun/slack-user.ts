@@ -14,6 +14,7 @@ import {
   SLACK_CALLBACK_PORT,
   SLACK_REDIRECT_URL,
   SLACK_USER_SCOPES,
+  SIGN_IN_TO_PICK,
 } from "../shared/slack";
 import type { Keyring } from "./credentials";
 
@@ -234,6 +235,16 @@ export const slackUserSession = (options: {
       );
     });
 
+  const channels = Effect.gen(function* () {
+    const before = yield* kept;
+    if (before === null) return yield* Effect.fail(SIGN_IN_TO_PICK);
+    if (before.expiresAt <= (yield* Clock.currentTimeMillis)) yield* renew(true);
+    const grant = (yield* kept) ?? before;
+    return yield* slackApi(grant.accessToken, options.client)
+      .channels()
+      .pipe(Effect.mapError(hidden(grant)));
+  });
+
   return {
     /** What the card says; no token. */
     state: Effect.map(kept, (grant) => ({
@@ -243,6 +254,7 @@ export const slackUserSession = (options: {
     })),
     signIn,
     renew,
+    channels,
     /** Forgets the grant and removes it from every Machine, those that connect later too. */
     signOut: lock.withPermits(1)(
       Effect.gen(function* () {

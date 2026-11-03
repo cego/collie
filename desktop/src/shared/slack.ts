@@ -1,6 +1,6 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
-import type { SlackChoices } from "../../../src/slack";
+import type { SlackChannel, SlackChoices } from "../../../src/slack";
 
 /** Where Slack sends a human back after they sign in as themselves; the manifest names it. */
 export const SLACK_CALLBACK_PORT = 47328;
@@ -26,18 +26,26 @@ export const SLACK_MANIFEST_URL = `https://api.slack.com/apps?new_app=1&manifest
   }),
 )}`;
 
-export const slackDestinationRow = (key: string, value: string, choices: SlackChoices | null) => {
+type Channels = ReadonlyArray<typeof SlackChannel.Type>;
+
+export const SIGN_IN_TO_PICK =
+  "Sign in to Slack as yourself under Connections to pick a channel you're in";
+
+const asOptions = (channels: Channels) =>
+  Arr.map(channels, (channel) => ({ value: channel.id, label: `#${channel.name}` }));
+
+/** The notification row offers the bot's `choices`; the approval row the human's own `yours`. */
+export const slackDestinationRow = (
+  key: string,
+  value: string,
+  choices: SlackChoices | null,
+  yours: Channels | null,
+) => {
   const notification = key === "slack.notification_channel";
+  const offered = notification ? (choices?.channels ?? null) : yours;
   const options = [
     { value: "", label: notification ? "Nowhere: toasts only" : "Nowhere: shares nothing" },
-    ...(Option.getOrUndefined(
-      Option.map(Option.fromNullishOr(choices), (present) =>
-        Arr.map(present.channels, (channel) => ({
-          value: channel.id,
-          label: `#${channel.name}`,
-        })),
-      ),
-    ) ?? []),
+    ...asOptions(offered ?? []),
   ];
   if (notification) options.push({ value: "dm", label: "A direct message to you" });
   if (value && !Arr.some(options, (option) => option.value === value)) {
@@ -54,11 +62,13 @@ export const slackDestinationRow = (key: string, value: string, choices: SlackCh
     });
   }
   return {
-    disabled: choices === null,
+    disabled: offered === null,
     hint:
-      choices === null
-        ? "Connect Slack, under Connections below, to pick from the channels your Collie is in."
-        : null,
+      offered !== null
+        ? null
+        : notification
+          ? "Connect Slack, under Connections below, to pick from the channels your Collie is in."
+          : SIGN_IN_TO_PICK,
     options,
   };
 };
@@ -71,15 +81,20 @@ export const pickSlackDestination = (
   key: string,
   value: string,
   choices: SlackChoices | null,
+  yours: Channels | null,
 ): PickedDestination => {
-  if (choices === null) return { refused: "Connect Slack before picking a destination" };
-  if (key === "slack.notification_channel") {
-    if (value === "dm")
-      return {
-        people: Arr.map(choices.people, (person) => ({ value: person.id, label: person.name })),
-      };
-    if (Arr.some(choices.people, (person) => person.id === value)) return { value };
+  if (key !== "slack.notification_channel") {
+    if (yours === null) return { refused: SIGN_IN_TO_PICK };
+    return value === "" || Arr.some(yours, (channel) => channel.id === value)
+      ? { value }
+      : { refused: "Pick a channel you're in, or refresh Slack" };
   }
+  if (choices === null) return { refused: "Connect Slack before picking a destination" };
+  if (value === "dm")
+    return {
+      people: Arr.map(choices.people, (person) => ({ value: person.id, label: person.name })),
+    };
+  if (Arr.some(choices.people, (person) => person.id === value)) return { value };
   return value === "" || Arr.some(choices.channels, (channel) => channel.id === value)
     ? { value }
     : { refused: "Pick a channel Collie is in, or refresh Slack" };

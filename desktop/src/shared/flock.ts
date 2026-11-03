@@ -27,7 +27,7 @@ import { MachineSchedules } from "./schedules";
 import { MachineUsage } from "./usage";
 import { MachineCatalogue } from "./settings-agents";
 import { MachineConnections } from "./connections";
-import { SlackChoices } from "../../../src/slack";
+import { SlackChannel, SlackChoices } from "../../../src/slack";
 import { keepOwn, OwnReading } from "./machine-own";
 import {
   BoardMessage,
@@ -571,6 +571,8 @@ export const DesktopRpcs = RpcGroup.make(
     error: ActionFailed,
   }),
   Rpc.make("signOutSlackUser", { success: Schema.String, error: ActionFailed }),
+  /** The channels the human signed in to Slack is in, for the approval channel. */
+  Rpc.make("slackUserChannels", { success: Schema.Array(SlackChannel), error: ActionFailed }),
   /** Logs Claude Code in on the Machine a route reaches, then onboards it again. */
   Rpc.make("claudeLogin", {
     payload: { profile: Schema.String },

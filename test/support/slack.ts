@@ -82,6 +82,18 @@ export const fakeSlack = () => {
         user_id: "U234",
         bot_id: "B345",
       });
+    if (method === "conversations.list" && by === "user")
+      return Response.json({
+        ok: true,
+        channels:
+          parameters.cursor === "channels-next"
+            ? [{ id: "G234", name: "releases", is_member: true, is_private: true }]
+            : [
+                { id: "C123", name: "engineering", is_member: false, is_private: false },
+                { id: "C456", name: "design", is_member: true, is_private: false },
+              ],
+        response_metadata: { next_cursor: parameters.cursor ? "" : "channels-next" },
+      });
     if (method === "conversations.list")
       return Response.json({
         ok: true,
