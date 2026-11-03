@@ -214,6 +214,43 @@ test("an edited helper is a new revision of the entry beside it", () =>
     }).pipe(Effect.scoped),
   ));
 
+test("one revision reads each source once and the next revision reads an edited helper afresh", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "revision-reads-" });
+      const dir = `${root}/mod`;
+      const file = `${dir}/entry.ts`;
+      const helper = `${root}/helper.ts`;
+      yield* fs.makeDirectory(dir);
+      yield* fs.writeFileString(file, 'export { n } from "../helper";');
+      yield* fs.writeFileString(helper, "export const n = 1;");
+      const linked = `${root}/linked-notes`;
+      yield* fs.makeDirectory(linked);
+      yield* fs.writeFileString(`${linked}/note.md`, "Before");
+      yield* fs.symlink(linked, `${dir}/linked-notes`);
+      const reads: string[] = [];
+      const counted: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (file, encoding) =>
+          Effect.sync(() => reads.push(file)).pipe(
+            Effect.andThen(fs.readFileString(file, encoding)),
+          ),
+      };
+      const revision = revisionOf(dir).pipe(Effect.provideService(FileSystem.FileSystem, counted));
+      const before = yield* revision;
+      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
+      expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
+      yield* fs.writeFileString(`${linked}/note.md`, "After");
+      expect(yield* revision).toBe(before);
+      reads.length = 0;
+      yield* fs.writeFileString(helper, "export const n = 2;");
+      expect(yield* revision).not.toBe(before);
+      expect(Arr.filter(reads, (one) => one === file)).toHaveLength(1);
+      expect(Arr.filter(reads, (one) => one === helper)).toHaveLength(1);
+    }),
+  ));
+
 test("what an edited helper exports is what the entry beside it says next", () =>
   runEffect(
     Effect.gen(function* () {

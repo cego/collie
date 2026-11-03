@@ -74,6 +74,20 @@ test("a fingerprint reads HEAD from its status, in five git starts", () =>
     }),
   ));
 
+test("untracked content still changes a fingerprint when status hides untracked files", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* git(["config", "status.showUntrackedFiles", "no"]);
+      const clean = yield* fingerprint(repo);
+      yield* fs.writeFileString(`${repo}/scratch.txt`, "one\n");
+      const untracked = yield* fingerprint(repo);
+      expect(untracked.fingerprint).not.toBe(clean.fingerprint);
+      yield* fs.writeFileString(`${repo}/scratch.txt`, "two\n");
+      expect((yield* fingerprint(repo)).fingerprint).not.toBe(untracked.fingerprint);
+    }),
+  ));
+
 test("the fingerprint moves for anything that changes what a command would see", () =>
   inRepository(
     Effect.gen(function* () {

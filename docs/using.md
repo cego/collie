@@ -3011,6 +3011,14 @@ runbook find tools printing tokens — a second guard against the commands that 
   would switch Collie's hooks off, and any other key are refused with the reason. Codex, Pi
   and OpenCode take `env` only.
 
+A Claude agent working inside the Collie directory (`~/.collie`, or `COLLIE_DIR`), as in the
+default `worktrees_directory`, never loads that directory's `CLAUDE.md`, `CLAUDE.local.md`,
+`.claude/CLAUDE.md` or `.claude/rules/`. Collie adds them to `claudeMdExcludes`, ahead of any
+exclusions in your profile. Those files are not any project's instructions. On a Machine still
+installed as a clone of Collie, `~/.collie/CLAUDE.md` imports `AGENTS.md`, and Claude would ask
+in each new worktree whether to allow that external import. Claude still asks about every other
+import from outside a project.
+
 For Claude Code 2.1.129 or later, a Run's agent lists unnamed user and project skills by
 name only, saving their descriptions from each context. Skills named by a
 `{{skill:name}}` reference in the persona or first prompt, or by a Step's `skill`, keep
