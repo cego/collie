@@ -268,6 +268,8 @@ const body = (
     /** The board painted with every card, the folded ones unfolded. */
     const boardSettled = Effect.gen(function* () {
       yield* until("window.__bench?.board() === true");
+      // A Machine's saved board, drawn while Desktop reconnects, disables its cards.
+      yield* until(`document.querySelector("[data-as-of]") === null`);
       let before = -1;
       for (;;) {
         const count = yield* ev<number>(
