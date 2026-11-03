@@ -2,6 +2,12 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import type { SlackChoices } from "../../../src/slack";
 
+/** Where Slack sends a human back after they sign in as themselves; the manifest names it. */
+export const SLACK_CALLBACK_PORT = 47328;
+export const SLACK_CALLBACK_PATH = "/slack/callback";
+export const SLACK_REDIRECT_URL = `http://localhost:${SLACK_CALLBACK_PORT}${SLACK_CALLBACK_PATH}`;
+export const SLACK_USER_SCOPES = ["chat:write", "channels:read", "groups:read"];
+
 export const SLACK_MANIFEST_URL = `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(
   JSON.stringify({
     display_information: {
@@ -10,7 +16,12 @@ export const SLACK_MANIFEST_URL = `https://api.slack.com/apps?new_app=1&manifest
     },
     features: { bot_user: { display_name: "Collie", always_online: false } },
     oauth_config: {
-      scopes: { bot: ["chat:write", "im:write", "channels:read", "groups:read", "users:read"] },
+      pkce_enabled: true,
+      redirect_urls: [SLACK_REDIRECT_URL],
+      scopes: {
+        bot: ["chat:write", "im:write", "channels:read", "groups:read", "users:read"],
+        user: SLACK_USER_SCOPES,
+      },
     },
   }),
 )}`;

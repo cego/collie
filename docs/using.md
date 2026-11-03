@@ -1611,7 +1611,7 @@ Collie checks the token with Slack before keeping it. A refusal appears beside t
 The card reads, for example, **Posts as collie in Example Co**, from Slack's answer.
 Slack does not identify the installer, so Collie does not name one.
 The app has only five bot scopes: `chat:write`, `im:write`, `channels:read`, `groups:read`, and `users:read`.
-It has no event subscriptions, Socket Mode, hosted relay, or sign-in callback.
+It has no event subscriptions, Socket Mode or hosted relay. Its one sign-in callback is [Slack as you](#slack-as-you)'s, on this computer.
 Talking to Collie in Slack is not built.
 
 Desktop keeps the token with its other credentials and gives it to every Machine on stdin.
@@ -1656,6 +1656,35 @@ Before it counts, the host asks Slack's `auth.test` who the token belongs to. Ea
 - **broken**: Slack refused the token (such as `token_expired` or `invalid_auth`), or the token belongs to another user or team, or it is a bot's. The reading says which, and the fix is to open Desktop to renew Slack, or sign in again.
 
 Desktop never offers to copy it from another Machine.
+
+To sign in, open **Connections → Slack** and choose **Sign in as yourself**. The first time,
+paste the Collie app's **Client ID**, from **Basic Information › App Credentials**; Desktop
+keeps it, and never asks for or keeps the client secret. Your browser opens Slack, which
+asks you to allow Collie to post as you and to see the channels you are in (`chat:write`,
+`channels:read` and `groups:read`, and no bot scopes). Slack sends you back to
+`http://localhost:47328/slack/callback`, where Desktop listens for five minutes, for that
+one sign-in. A cancelled sign-in, an answer for another sign-in, a grant without
+`chat:write`, a bot token, or a token Slack says is someone else's keeps nothing. Desktop
+then keeps the grant with its other credentials and gives every Machine its
+`slack-user.env`; an unreachable Machine gets it when it connects. The card reads
+**Posts approval requests as** you **in** your workspace.
+
+Desktop renews the access token when it starts and in its last hour, and gives the new one
+to every Machine. A renewal Slack refuses keeps the old grant, and the card reads **Slack
+sign-in expired: sign in again**. **Sign out** forgets the grant and removes
+`slack-user.env` from every Machine, including one that reconnects later; it leaves the bot
+alone, as the bot's **Disconnect** leaves your sign-in.
+
+The limits: an access token lasts 12 hours and is renewed only while Desktop runs, so a
+Machine whose token expired while Desktop was closed reads **broken** until Desktop next
+opens. A refresh token lasts 30 days; after a longer absence, sign in again. A Machine set
+up without Desktop has no Slack as you.
+
+Whoever owns the shared Collie app updates it once from **Add Collie to your Slack**'s
+manifest (**Features › App Manifest**): it turns on PKCE (`oauth_config.pkce_enabled`), adds
+the redirect URL `http://localhost:47328/slack/callback`, and adds the three user scopes.
+Then they reinstall the app. Turning PKCE on is one-way: it marks the app a public client,
+and only Slack support can turn it off.
 
 ### Settings
 

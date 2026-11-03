@@ -203,8 +203,20 @@ export const MachineLinked = Schema.TaggedStruct("Linked", {
 });
 export type MachineLinked = typeof MachineLinked.Type;
 
+export const SlackUserState = Schema.Struct({
+  signedIn: Schema.NullOr(Schema.Struct({ user: Schema.String, team: Schema.String })),
+  clientId: Schema.NullOr(Schema.String),
+  /** Why the last renewal failed, until one works. */
+  trouble: Schema.NullOr(Schema.String),
+});
+export const NOT_SIGNED_IN: typeof SlackUserState.Type = {
+  signedIn: null,
+  clientId: null,
+  trouble: null,
+};
+
 /** A credential Desktop gives every Machine. */
-export const Credential = Schema.Literals(["gitlab", "helle", "slack"]);
+export const Credential = Schema.Literals(["gitlab", "helle", "slack", "slack-user"]);
 export type Credential = typeof Credential.Type;
 export const CREDENTIALS = Credential.literals;
 
@@ -550,6 +562,15 @@ export const DesktopRpcs = RpcGroup.make(
   }),
   Rpc.make("slackChoices", { success: SlackChoices, error: ActionFailed }),
   Rpc.make("disconnectSlack", { success: Schema.String, error: ActionFailed }),
+  /** Whether the human is signed in to Slack as themselves; no token. */
+  Rpc.make("slackUser", { success: SlackUserState }),
+  /** Signs the human in to Slack in their browser; "" uses the Client ID kept before. */
+  Rpc.make("signInSlackUser", {
+    payload: { clientId: Schema.String },
+    success: Schema.String,
+    error: ActionFailed,
+  }),
+  Rpc.make("signOutSlackUser", { success: Schema.String, error: ActionFailed }),
   /** Logs Claude Code in on the Machine a route reaches, then onboards it again. */
   Rpc.make("claudeLogin", {
     payload: { profile: Schema.String },

@@ -16,7 +16,7 @@ import {
   NO_FLOCK_SETTINGS,
 } from "../desktop/src/shared/flock-settings";
 
-test("Add Collie carries only the five post-only bot scopes, without events or Socket Mode", () => {
+test("Add Collie keeps the five post-only bot scopes and lets a human sign in as themselves with PKCE, without events or Socket Mode", () => {
   const url = new URL(SLACK_MANIFEST_URL);
   expect(url.origin + url.pathname).toBe("https://api.slack.com/apps");
   expect(url.searchParams.get("new_app")).toBe("1");
@@ -27,7 +27,12 @@ test("Add Collie carries only the five post-only bot scopes, without events or S
     },
     features: { bot_user: { display_name: "Collie", always_online: false } },
     oauth_config: {
-      scopes: { bot: ["chat:write", "im:write", "channels:read", "groups:read", "users:read"] },
+      pkce_enabled: true,
+      redirect_urls: ["http://localhost:47328/slack/callback"],
+      scopes: {
+        bot: ["chat:write", "im:write", "channels:read", "groups:read", "users:read"],
+        user: ["chat:write", "channels:read", "groups:read"],
+      },
     },
   });
 });

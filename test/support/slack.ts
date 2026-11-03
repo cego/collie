@@ -5,16 +5,42 @@ import * as Rec from "effect/Record";
 import { Effect, Redacted } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import type { SlackOAuthAnswer } from "../../src/slack";
 export const fakeSlack = () => {
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];
   let refused: string | null = null;
   let refusedMethod: string | undefined;
+  let issued = 0;
+  let exchanged: Partial<typeof SlackOAuthAnswer.Encoded> = {};
   const answer = (
     method: string,
     parameters: Record<string, string>,
     authorized: "bot" | "user" | null,
   ) => {
     calls.push({ method, parameters });
+    if (method === "oauth.v2.access") {
+      if (refused !== null && (refusedMethod === undefined || refusedMethod === method))
+        return Response.json({ ok: false, error: refused });
+      issued += 1;
+      const tokens = {
+        access_token: `xoxe.xoxp-1-access-${issued}`,
+        refresh_token: `xoxe-1-refresh-${issued}`,
+        expires_in: 43200,
+        token_type: "user",
+        scope: "chat:write,channels:read,groups:read",
+      };
+      return Response.json(
+        parameters.grant_type === "refresh_token"
+          ? { ok: true, app_id: "A123", ...tokens }
+          : {
+              ok: true,
+              app_id: "A123",
+              team: { id: "T123", name: "Example Co" },
+              authed_user: { id: "U456", ...tokens },
+              ...exchanged,
+            },
+      );
+    }
     if (authorized === null) return Response.json({ ok: false, error: "invalid_auth" });
     if (refused !== null && (refusedMethod === undefined || refusedMethod === method))
       return Response.json({ ok: false, error: refused });
@@ -140,6 +166,10 @@ export const fakeSlack = () => {
   return {
     client,
     calls,
+    /** Fields laid over each code exchange's answer, until replaced. */
+    exchange: (fields: Partial<typeof SlackOAuthAnswer.Encoded>) => {
+      exchanged = fields;
+    },
     refuse: (reason: string | null, method?: string) => {
       refused = reason;
       refusedMethod = method;

@@ -67,8 +67,22 @@ export const slackText = (text: string) =>
     Str.replaceAll(">", "&gt;"),
   );
 
-export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
-  const safe = (message: string) => redact(Arr.join(Str.split(message, token), "<redacted>"));
+const OAuthTokens = {
+  access_token: Schema.optionalKey(Schema.String),
+  refresh_token: Schema.optionalKey(Schema.String),
+  expires_in: Schema.optionalKey(Schema.Finite),
+  scope: Schema.optionalKey(Schema.String),
+  token_type: Schema.optionalKey(Schema.String),
+};
+/** `oauth.v2.access`: a user's tokens under `authed_user`, or at the top for a renewal. */
+export const SlackOAuthAnswer = Schema.Struct({
+  ...OAuthTokens,
+  authed_user: Schema.optionalKey(Schema.Struct({ id: Schema.String, ...OAuthTokens })),
+});
+
+const slackCall = (token: string | null, client?: HttpClient.HttpClient) => {
+  const safe = (message: string) =>
+    redact(token === null ? message : Arr.join(Str.split(message, token), "<redacted>"));
   const call = <S extends Schema.Decoder<unknown>>(
     method: string,
     schema: S,
@@ -80,7 +94,9 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
         ["conversations.list", "users.list", "chat.getPermalink"].includes(method)
           ? HttpClientRequest.get(url).pipe(HttpClientRequest.setUrlParams(parameters))
           : HttpClientRequest.post(url).pipe(HttpClientRequest.bodyUrlParams(parameters))
-      ).pipe(HttpClientRequest.bearerToken(token));
+      ).pipe((request) =>
+        token === null ? request : HttpClientRequest.bearerToken(request, token),
+      );
       const response = yield* (
         client === undefined
           ? HttpClient.execute(request).pipe(Effect.provide(FetchHttpClient.layer))
@@ -108,6 +124,15 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
         orElse: () => Effect.fail(`Slack ${method} did not answer; try again`),
       }),
     );
+  return call;
+};
+
+/** Slack's token exchange and renewal, which no token authorizes. */
+export const slackOAuth = (parameters: Record<string, string>, client?: HttpClient.HttpClient) =>
+  slackCall(null, client)("oauth.v2.access", SlackOAuthAnswer, parameters);
+
+export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
+  const call = slackCall(token, client);
   return {
     auth: () => call("auth.test", SlackIdentity),
     tokenOwner: () => call("auth.test", SlackTokenOwner),

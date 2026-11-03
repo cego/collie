@@ -142,6 +142,7 @@ const forget = () => {
         Collie has not joined any channels yet.
       </p>
     </div>
+    <SlackUserConnection />
     <slot />
     <div class="flex gap-2">
       <UButton

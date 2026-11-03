@@ -52,6 +52,7 @@ test("a pasted bot token is checked before storage, handed on stdin, retried aft
           helle: () => Effect.succeed(null),
           slack: (route, text) =>
             giveSlack([route], text).pipe(Effect.map((all) => all[0]!.failed)),
+          "slack-user": () => Effect.succeed(null),
         },
       });
       const save = saveSlackConnection(
@@ -140,6 +141,7 @@ test("a disconnected Machine removes its old token when it reconnects", () =>
           helle: () => Effect.succeed(null),
           slack: (route, text) =>
             giveSlack([route], text).pipe(Effect.map((all) => all[0]!.failed)),
+          "slack-user": () => Effect.succeed(null),
         },
       });
       yield* saveSlackConnection(

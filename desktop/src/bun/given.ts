@@ -20,6 +20,7 @@ const ENTRY = {
   gitlab: "gitlab-token",
   helle: "helle-token",
   slack: "slack-token",
+  "slack-user": "slack-user-grant",
 } satisfies Record<Credential, KeyringEntry>;
 
 /** Each Machine's fingerprints, by herdr profile and then credential. */
