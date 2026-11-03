@@ -35,6 +35,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `board-stream.ts`      | The board a host serves one client: a snapshot, then each Task that changed                                                 |
 | `run-model.ts`         | The host's Run model: each Run's disk inputs and facts in memory, dirtied per Run, with Run revisions                       |
 | `record.ts`            | A Run's record read from the model: its Task's Runs only, the Flow first, each part after, a frame only when it moved       |
+| `door.ts`              | The host's door: a Worker that owns `host.sock`, reads records itself, passes the rest to the engine                        |
 | `herds.ts`             | Every running herdr session the host reads, its agents, and the events it pushes                                            |
 | `attention.ts`         | Why a run wants a human, and which actions are safe now                                                                     |
 | `registry.ts`          | Which long-lived agents this Session still has, per workspace + repo                                                        |

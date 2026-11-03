@@ -104,14 +104,17 @@ interface Seen {
   readonly origin: number;
 }
 
-/** A trivial RPC every 50 ms, as a proxy for the host's event-loop lag. */
-const lagProbe = (into: number[]) =>
+/**
+ * A trivial RPC every 50 ms, as a proxy for a host thread's event-loop lag: `identity` is the
+ * door's, which reads records, and `registrations` the engine's.
+ */
+const lagProbe = (into: number[], on: "door" | "engine") =>
   Effect.scoped(
     Effect.gen(function* () {
       const client = yield* connect(world.state);
       for (;;) {
         const began = performance.now();
-        yield* client.identity();
+        yield* on === "door" ? client.identity() : client.registrations();
         into.push(performance.now() - began);
         yield* Effect.sleep("50 millis");
       }
@@ -135,14 +138,20 @@ const lagOver = <R>(
 ) =>
   Effect.gen(function* () {
     const lag: number[] = [];
-    const probe = yield* Effect.forkChild(lagProbe(lag));
+    const engine: number[] = [];
+    const probe = yield* Effect.forkChild(lagProbe(lag, "door"));
+    const engineProbe = yield* Effect.forkChild(lagProbe(engine, "engine"));
     yield* timed;
     for (let at = 0; lag.length < LAG_PROBES; at++) yield* more(at);
     yield* Fiber.interrupt(probe);
+    yield* Fiber.interrupt(engineProbe);
     return {
       lag_p99_ms: nearest(lag, 0.99),
       lag_max_ms: nearest(lag, 1),
       lag_probes: lag.length,
+      engine_lag_p99_ms: nearest(engine, 0.99),
+      engine_lag_max_ms: nearest(engine, 1),
+      engine_lag_probes: engine.length,
     };
   });
 
@@ -498,6 +507,9 @@ type Summaries = Record<
     readonly lag_p99_ms: number | null;
     readonly lag_max_ms: number | null;
     readonly lag_probes: number;
+    readonly engine_lag_p99_ms: number | null;
+    readonly engine_lag_max_ms: number | null;
+    readonly engine_lag_probes: number;
   }
 >;
 

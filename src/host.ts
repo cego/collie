@@ -23,7 +23,6 @@ import { createConnection, type Socket as NetSocket } from "node:net";
 import { withdrawStepNote } from "./step-steering";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { PlatformServices } from "./platform";
-import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import {
   Clock,
   Config,
@@ -62,8 +61,16 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
-import { FINISHED_STEPS, recordFlow, recordFrames, type RecordSources } from "./record";
+import {
+  FINISHED_STEPS,
+  drawerWrites,
+  recordFlow,
+  recordFrames,
+  watched,
+  type RecordSources,
+} from "./record";
 import { markFirst } from "./record-marks";
+import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from "./door";
 import { TurnScheduler } from "./turns";
 import { Foreground, foregroundLayer, servedNow } from "./foreground";
 import * as References from "effect/References";
@@ -193,6 +200,7 @@ import {
   RunReply,
   Seen,
   FrontDoorRpcs,
+  IdentityRpc,
   HostRefused,
   StaleAct,
   type RunRevision,
@@ -364,20 +372,6 @@ export class HostVersionMismatch extends Data.TaggedError("HostVersionMismatch")
   readonly development?: string;
 }> {}
 
-const Identity = Schema.Struct({
-  build: Schema.String,
-  pid: Schema.Int,
-  dir: Schema.String,
-  /** The installation it serves; absent from a host older than the field. */
-  root: Schema.optionalKey(Schema.String),
-  /** `<version>+<sha>` for a development checkout; absent for a release. */
-  development: Schema.optionalKey(Schema.String),
-  /** The board protocol it speaks; absent from a host older than the field. */
-  protocol: Schema.optionalKey(Schema.Int),
-  /** The state directory's own id; absent from a host older than the field. */
-  installation: Schema.optionalKey(Schema.String),
-});
-
 const RunShown = Schema.Struct({
   view: RunView,
   agents: Schema.Array(RunAgent),
@@ -421,7 +415,7 @@ const outcomeSaying = (removed: ReadonlyArray<string>, outcome: SteerOutcome): S
  * value with a schema at each hop rather than a shape one side remembers.
  */
 export const HostRpcs = RpcGroup.make(
-  Rpc.make("identity", { success: Identity }),
+  IdentityRpc,
   Rpc.make("linkNotice", {
     payload: { notice: RunLinkNotice, request: Schema.String },
     success: Schema.Boolean,
@@ -1324,16 +1318,6 @@ const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
   );
 };
 
-const watched = (dir: string, failed: Effect.Effect<void> = Effect.void) =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return fs
-        .watch(dir, { recursive: true })
-        .pipe(Stream.catch(() => Stream.fromEffect(failed).pipe(Stream.drain)));
-    }),
-  );
-
 /** Each write under the state directory that may move the board, by its path inside it. */
 export const boardWrites = (dir: string, model?: RunModelApi) =>
   watched(dir, model?.disable).pipe(
@@ -1341,15 +1325,6 @@ export const boardWrites = (dir: string, model?: RunModelApi) =>
     Stream.filter((event) => !isBookkeeping(event)),
     Stream.map((event) => event.path),
   );
-
-/** What a Run's open drawer lists and the board ignores: its handoffs' and evidence's sizes. */
-export const drawerWrites = (dir: string, runId: string) =>
-  Stream.merge(
-    watched(runDir(dir, runId)).pipe(
-      Stream.filter((event) => pipe(event.path, Str.startsWith("handoffs/"))),
-    ),
-    watched(evidenceDir(dir, runId)),
-  ).pipe(Stream.debounce("200 millis"));
 
 /**
  * A write under the state directory, by this host or anyone else, to a file the board reads,
@@ -1442,6 +1417,80 @@ const recordSources = (opts: { readonly panels: MrPanels | null; readonly plans:
       },
     } satisfies RecordSources;
   });
+
+/**
+ * What the door reads a record from that only the engine knows: each Run's facts and offers
+ * as each board was listed, herdr's agents, and the Runs and merge requests it asks for.
+ */
+const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
+      const record = yield* recordSources({ panels, plans: new Map() });
+      if (model === undefined || record === undefined) return;
+      door.attach(model);
+      const { boards, kept, factsOf, bun } = yield* SharedBoard;
+      const registry = yield* Registry;
+      /** The revision its view was read at, while that view is kept; a going Run's is not. */
+      const readAt = (run: RunFacts) => {
+        const held = kept?.views.get(run.id);
+        return held !== undefined && factsOf(held.view) === run ? held.revision : null;
+      };
+      const listed = (runs: ReadonlyArray<RunFacts>) => {
+        const seqs = Arr.map(runs, readAt);
+        return Effect.forEach(
+          runs,
+          (fact, at): Effect.Effect<Listed> =>
+            Effect.map(record.offers(fact.id), (offers) => ({ fact, seq: seqs[at]!, offers })),
+          { concurrency: 4 },
+        );
+      };
+      const posted = new Map<string, RunFacts>();
+      let order: ReadonlyArray<string> = [];
+      yield* Effect.forkScoped(
+        Stream.runForEach(boards, ({ runs, alive }) =>
+          Effect.gen(function* () {
+            const ids = Arr.map(runs, (run) => run.id);
+            const present = new Set(ids);
+            const gone = Arr.filter([...posted.keys()], (id) => !present.has(id));
+            const moved =
+              ids.length !== order.length || Arr.some(ids, (id, at) => order[at] !== id);
+            const fresh = yield* listed(Arr.filter(runs, (run) => posted.get(run.id) !== run));
+            for (const id of gone) posted.delete(id);
+            for (const run of runs) posted.set(run.id, run);
+            if (moved) order = ids;
+            door.post({ _tag: "Listed", runs: fresh, gone, order: moved ? ids : null, alive });
+          }),
+        ),
+      );
+      const answer = (ask: number, value: Effect.Effect<unknown>) =>
+        value.pipe(
+          Effect.flatMap((found) =>
+            Effect.sync(() => door.post({ _tag: "Answer", ask, value: found })),
+          ),
+          Effect.forkScoped,
+        );
+      yield* Queue.take(door.asks).pipe(
+        Effect.flatMap(({ ask, asked }) =>
+          asked._tag === "Mr"
+            ? answer(ask, record.mr(asked.run, asked.fresh))
+            : answer(
+                ask,
+                registry
+                  .related(asked.runId, asked.also, model.reading, kept)
+                  .pipe(
+                    Effect.map(Arr.map(factsOf)),
+                    Effect.tap(model.note),
+                    Effect.flatMap(listed),
+                    Effect.provideContext(bun),
+                  ),
+              ),
+        ),
+        Effect.forever,
+        Effect.forkScoped,
+      );
+    }),
+  );
 
 /** The merge watch, News, the cleanup sweep, and the board and chat terminals, for as long as this host runs. */
 const sideJobsLayer = (panels: MrPanels) =>
@@ -3516,12 +3565,19 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
           yield* Effect.logInfo(
             "the Run model is off: the board is read from disk on every change",
           );
-        yield* Effect.race(
+        const { port, gone } = yield* doorThread;
+        const door = yield* engineEnd(port);
+        const counter = new SharedArrayBuffer(4);
+        const epoch = `${installation}.${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`;
+        yield* Effect.raceAll([
           modelled
-            ? own(dir, checks, sweep).pipe(Effect.provide(runModelLayer(dir, installation)))
-            : own(dir, checks, sweep),
+            ? own(dir, checks, sweep, door, { counter, epoch, installation }).pipe(
+                Effect.provide(runModelLayer(dir, installation, door.link(counter, epoch))),
+              )
+            : own(dir, checks, sweep, door, undefined),
           orphaned(dir).pipe(Effect.flatMap(stop)),
-        );
+          gone.pipe(Effect.flatMap(() => stop(StopReason.DoorGone()))),
+        ]);
       }).pipe(Effect.provide(Logger.layer([hostLogger(logOf(dir))], { mergeWithExisting: true }))),
       0,
     );
@@ -3543,12 +3599,18 @@ const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
 const LOG_FLUSH = "200 millis";
 
 /** Why a host stops; every one of them ends its Checks within the grace. */
-type StopReason = Data.TaggedEnum<{ Asked: {}; LockGone: {}; WatchedGone: {} }>;
+type StopReason = Data.TaggedEnum<{
+  Asked: {};
+  LockGone: {};
+  WatchedGone: {};
+  DoorGone: {};
+}>;
 const StopReason = Data.taggedEnum<StopReason>();
 const stopSaid = StopReason.$match({
   Asked: () => "asked to stop",
   LockGone: () => "its lock is gone; stopping",
   WatchedGone: () => "the process it watches has exited; stopping",
+  DoorGone: () => "its door has stopped; stopping",
 });
 
 /** Any end of a host gives the shutdown the grace, then exits however far it got (ADR-0014). */
@@ -3673,7 +3735,13 @@ const scheduleSeconds = Config.option(Config.String("COLLIE_HOST_SCHEDULE_SECOND
   Effect.orDie,
 );
 
-const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effect<void>) =>
+const own = (
+  dir: string,
+  checks: CheckProcessesApi,
+  onceAnswering: Effect.Effect<void>,
+  door: EngineEnd,
+  model: Opened["model"],
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const env = yield* currentEnv.pipe(Effect.orDie);
@@ -3704,6 +3772,20 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
     const installation = yield* installationOf(dir).pipe(Effect.orDie);
     const installed = yield* installedRelease(env.pluginRoot, env.collieDir, BUILD);
     const development: Development = installed.release ? {} : { development: installed.build };
+    door.open({
+      socket: socketOf(dir),
+      env: { ...env, stateDir: dir },
+      identity: {
+        build: BUILD,
+        pid,
+        dir,
+        root: env.pluginRoot,
+        ...development,
+        protocol: PROTOCOL,
+        installation,
+      },
+      model,
+    });
     // One reader of this Machine's usage, so every door and every choice of agent paces as one.
     const usage = yield* Usage;
     const harnesses = yield* HarnessCatalogues;
@@ -3760,6 +3842,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
             handlers(dir, installation, development, declared, peers),
             frontDoorHandlers(dir, installation, development, panels, declared, stamp, toasted),
             sideJobsLayer(panels),
+            doorFeedLayer(door, panels),
             questionsLayer,
             slowRpcsLayer,
             Layer.effectDiscard(
@@ -3790,9 +3873,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
             ),
           ),
         ),
-        Layer.provide(RpcServer.layerProtocolSocketServer),
-        Layer.provide(serialization),
-        Layer.provide(BunSocketServer.layer({ path: socketOf(dir) })),
+        Layer.provide(door.protocol),
         Layer.provide(
           foundationLayer({
             dir,

@@ -3,6 +3,7 @@
 // cost to read, its Flow first, and a frame only when what it carries moved.
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { Clock, Effect, Fiber, FileSystem, Path, Result, Schema, Stream, flow } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type {
@@ -114,6 +115,25 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
       detail,
     };
   }).pipe(Effect.provideService(FileSystem.FileSystem, sources.model.reading));
+
+export const watched = (dir: string, failed: Effect.Effect<void> = Effect.void) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return fs
+        .watch(dir, { recursive: true })
+        .pipe(Stream.catch(() => Stream.fromEffect(failed).pipe(Stream.drain)));
+    }),
+  );
+
+/** What a Run's open drawer lists and the board ignores: its handoffs' and evidence's sizes. */
+export const drawerWrites = (dir: string, runId: string) =>
+  Stream.merge(
+    watched(`${dir}/runs/${runId}`).pipe(
+      Stream.filter((event) => Str.startsWith("handoffs/")(event.path)),
+    ),
+    watched(`${dir}/evidence/${runId}`),
+  ).pipe(Stream.debounce("200 millis"));
 
 /** A Step in these states has finished: an act shown on it before is refused. */
 export const FINISHED_STEPS = new Set(["done", "failed", "stopped", "not-run"]);

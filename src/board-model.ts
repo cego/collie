@@ -1387,6 +1387,42 @@ export const ShellRequest = Schema.Struct({
 });
 export type ShellRequest = typeof ShellRequest.Type;
 
+/** Which host answers, and what it serves. */
+export const IdentityRpc = Rpc.make("identity", {
+  success: Schema.Struct({
+    build: Schema.String,
+    pid: Schema.Int,
+    dir: Schema.String,
+    /** The installation it serves; absent from a host older than the field. */
+    root: Schema.optionalKey(Schema.String),
+    /** `<version>+<sha>` for a development checkout; absent for a release. */
+    development: Schema.optionalKey(Schema.String),
+    /** The board protocol it speaks; absent from a host older than the field. */
+    protocol: Schema.optionalKey(Schema.Int),
+    /** The state directory's own id; absent from a host older than the field. */
+    installation: Schema.optionalKey(Schema.String),
+  }),
+});
+
+/**
+ * One Run's details while a drawer is open: current first, then again whenever they
+ * change. `refreshMr` asks the merge watch again rather than taking what it last read.
+ */
+export const RunDetailRpc = Rpc.make("runDetail", {
+  payload: {
+    runId: Schema.String,
+    tail: Schema.Boolean,
+    pages: Schema.Int,
+    refreshMr: Schema.Boolean,
+    /** The Flow first, then each part as it comes; absent, every value is the whole record. */
+    parts: Schema.optionalKey(Schema.Boolean),
+    /** The revision of a record already held, answered `Unchanged` while it is current. */
+    held: Schema.optionalKey(RunRevision),
+  },
+  success: Schema.Union([RunDetail, RecordUnchanged, Schema.Null]),
+  stream: true,
+});
+
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
  * a request id: the same one twice is one operation, and with other arguments is refused.
@@ -1485,24 +1521,7 @@ export const FrontDoorRpcs = RpcGroup.make(
     payload: { runId: Schema.String },
     success: Schema.NullOr(RunProgress),
   }),
-  /**
-   * One Run's details while a drawer is open: current first, then again whenever they
-   * change. `refreshMr` asks the merge watch again rather than taking what it last read.
-   */
-  Rpc.make("runDetail", {
-    payload: {
-      runId: Schema.String,
-      tail: Schema.Boolean,
-      pages: Schema.Int,
-      refreshMr: Schema.Boolean,
-      /** The Flow first, then each part as it comes; absent, every value is the whole record. */
-      parts: Schema.optionalKey(Schema.Boolean),
-      /** The revision of a record already held, answered `Unchanged` while it is current. */
-      held: Schema.optionalKey(RunRevision),
-    },
-    success: Schema.Union([RunDetail, RecordUnchanged, Schema.Null]),
-    stream: true,
-  }),
+  RunDetailRpc,
   /**
    * A large item of a Run's, by reference: `log`, `review`, `diff:<path>`, `evidence:<name>`,
    * `verification:<id>`, `plan:<file>`, read-only from its checkout `file:<path>`, and

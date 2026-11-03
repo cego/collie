@@ -11,6 +11,7 @@ import type { RunRevision, TaskView } from "./board-model";
 import { readBranchHead } from "./board";
 import { shell } from "./mr";
 import type { RunFacts } from "./runs";
+import { StoreWrites } from "./store";
 import { workSourceOf } from "./strategies";
 
 /** A path under a Run's own directories, by its Run. */
@@ -87,15 +88,30 @@ const kept = <A>(
     });
 };
 
+/**
+ * Another model of the same state directory, on another thread: both draw revisions from
+ * `counter`, in shared memory, and each is told what the other moved.
+ */
+export interface ModelLink {
+  readonly counter: Int32Array;
+  readonly epoch: string;
+  readonly touched: (run: string, seq: number) => void;
+  readonly invalidated: (path: string) => void;
+  readonly disabled: () => void;
+}
+
 export const makeRunModel = Effect.fn("RunModel.make")(function* (
   dir: string,
   installation: string,
+  link?: ModelLink,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const scope = yield* Effect.scope;
   const spawning = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
-  const epoch = `${installation}.${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`;
+  const epoch =
+    link?.epoch ?? `${installation}.${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`;
   let seq = 0;
+  const next = () => (link === undefined ? ++seq : Atomics.add(link.counter, 0, 1) + 1);
   let enabled = true;
   /** Bumped by every invalidation, so a read it overtook is read again. */
   let generation = 0;
@@ -112,7 +128,19 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     byPlan: new Map(),
   };
   const keys = new Map<string, ReturnType<typeof keysOf>>();
-  const touch = (run: string) => revisions.set(run, ++seq);
+  const touch = (run: string) => {
+    const at = next();
+    revisions.set(run, at);
+    link?.touched(run, at);
+  };
+  /** The Runs whose rows were written. */
+  const wrote = (runs: ReadonlyArray<string>) => {
+    for (const run of runs) touch(run);
+  };
+  /** The other model moved the Run. */
+  const heard = (run: string, at: number) => {
+    if (at > (revisions.get(run) ?? 0)) revisions.set(run, at);
+  };
 
   /**
    * `run/<id>` for a path under a Run's own directories or one of its control files,
@@ -153,31 +181,38 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     groups.set(group, made);
     return made;
   };
+  /** Drops what is read of `path`, and moves what it moved where `moving`. */
+  const drop = (path: string, moving: (run: string) => void) => {
+    const group = path === dir ? "shared" : groupOf(path);
+    if (group === null) return;
+    generation++;
+    const inside = below(path);
+    if (path === dir || inside === "runs" || inside === "agents" || inside === "evidence") {
+      groups.clear();
+      for (const run of revisions.keys()) moving(run);
+      return;
+    }
+    groups.delete(group);
+    if (group === "shared") {
+      // A Task's record is its Runs' as much as their own files are.
+      const [top, name] = Str.split(inside, "/");
+      const task = top === "tasks" ? Str.replace(/\.json$/, "")(name ?? "") : "";
+      for (const run of indexes.byTask.get(task) ?? []) moving(run);
+      return;
+    }
+    moving(Str.slice(4)(group));
+    // A Run's directory or control file coming or going changes the listing above it.
+    if (Str.split(inside, "/").length <= 2) groups.delete("shared");
+  };
   const invalidate = (path: string) =>
     Effect.sync(() => {
-      const group = path === dir ? "shared" : groupOf(path);
-      if (group === null) return;
-      generation++;
-      const inside = below(path);
-      if (path === dir || inside === "runs" || inside === "agents" || inside === "evidence") {
-        groups.clear();
-        for (const run of revisions.keys()) touch(run);
-        return;
-      }
-      groups.delete(group);
-      if (group === "shared") {
-        // A Task's record is its Runs' as much as their own files are.
-        const [top, name] = Str.split(inside, "/");
-        const task = top === "tasks" ? Str.replace(/\.json$/, "")(name ?? "") : "";
-        for (const run of indexes.byTask.get(task) ?? []) touch(run);
-        return;
-      }
-      const run = Str.slice(4)(group);
-      touch(run);
-      // A Run's directory or control file coming or going changes the listing above it.
-      if (Str.split(inside, "/").length <= 2) groups.delete("shared");
+      link?.invalidated(path);
+      drop(path, touch);
     });
+  /** The other model invalidated `path`: what it moved, it numbered and told. */
+  const forget = (path: string) => Effect.sync(() => drop(path, () => {}));
   const disable = Effect.sync(() => {
+    link?.disabled();
     enabled = false;
     generation++;
     groups.clear();
@@ -265,6 +300,17 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     }
     index(run.id, keysOf(run));
   };
+  /** Runs another model observed, indexed here without numbering them again. */
+  const mirror = (runs: ReadonlyArray<RunFacts>) => {
+    for (const run of runs) index(run.id, keysOf(run));
+  };
+  /** Runs another model observed gone. */
+  const gone = (runs: ReadonlyArray<string>) => {
+    for (const run of runs) {
+      revisions.delete(run);
+      index(run, undefined);
+    }
+  };
   /** These Runs as a read found them, the rest left as they were. */
   const note = (runs: ReadonlyArray<RunFacts>) => Effect.sync(() => Arr.forEach(runs, seen));
 
@@ -292,10 +338,10 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   // Unwatched, nothing says what moved: every read is a revision no reader has seen.
   const revision = (run: string): RunRevision => ({
     epoch,
-    seq: enabled ? (revisions.get(run) ?? 0) : ++seq,
+    seq: enabled ? (revisions.get(run) ?? 0) : next(),
   });
   const highest = (runs: ReadonlyArray<string>) =>
-    enabled ? Math.max(0, ...Arr.map(runs, (run) => revisions.get(run) ?? 0)) : ++seq;
+    enabled ? Math.max(0, ...Arr.map(runs, (run) => revisions.get(run) ?? 0)) : next();
 
   const records = new Map<string, { readonly text: string; readonly seq: number }>();
   /**
@@ -400,9 +446,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     reading,
     writing,
     invalidate,
+    forget,
+    heard,
+    wrote,
     disable,
     observe,
     note,
+    mirror,
+    gone,
     revision,
     highest,
     stamp,
@@ -423,13 +474,14 @@ export type RunModelApi = Effect.Success<ReturnType<typeof makeRunModel>>;
 export class RunModel extends Context.Service<RunModel, RunModelApi>()("collie/RunModel") {}
 
 /** The model, and every write under the state directory made through it. */
-export const runModelLayer = (dir: string, installation: string) =>
+export const runModelLayer = (dir: string, installation: string, link?: ModelLink) =>
   Layer.unwrap(
-    makeRunModel(dir, installation).pipe(
+    makeRunModel(dir, installation, link).pipe(
       Effect.map((model) =>
-        Layer.merge(
+        Layer.mergeAll(
           Layer.succeed(RunModel, model),
           Layer.succeed(FileSystem.FileSystem, model.writing),
+          Layer.succeed(StoreWrites, model.wrote),
         ),
       ),
     ),

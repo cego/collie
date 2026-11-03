@@ -285,3 +285,47 @@ test("a board item with its revision decodes with the item schema as it was befo
       expect(yield* Schema.decodeEffect(TaskView)(revised)).toEqual(revised);
     }),
   ));
+
+test("two models of one state directory number their Runs as one, each told what the other moved", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const run = yield* madeRun(dir, { id: "r1", created: "2026-10-30T09:00:00Z" });
+      const log = `${run.dir}/log.txt`;
+      yield* fs.writeFileString(log, "one\n");
+      const counter = new Int32Array(new SharedArrayBuffer(4));
+      const told: Array<Effect.Effect<void>> = [];
+      let reader: Effect.Success<ReturnType<typeof makeRunModel>> | undefined;
+      const writer = yield* makeRunModel(dir, "installation", {
+        counter,
+        epoch: "shared",
+        touched: (id, seq) => void told.push(Effect.sync(() => reader!.heard(id, seq))),
+        invalidated: (path) => void told.push(Effect.suspend(() => reader!.forget(path))),
+        disabled: () => {},
+      });
+      reader = yield* makeRunModel(dir, "installation", {
+        counter,
+        epoch: "shared",
+        touched: (id, seq) => void told.push(Effect.sync(() => writer.heard(id, seq))),
+        invalidated: () => {},
+        disabled: () => {},
+      });
+      const deliver = Effect.suspend(() => Effect.all(told.splice(0), { discard: true }));
+      yield* writer.observe([run]);
+      expect(yield* reader.reading.readFileString(log)).toBe("one\n");
+
+      yield* writer.writing.writeFileString(log, "two\n");
+      yield* deliver;
+      expect(reader.revision("r1")).toEqual(writer.revision("r1"));
+      expect(reader.revision("r1").seq).toBeGreaterThan(0);
+      expect(yield* reader.reading.readFileString(log)).toBe("two\n");
+
+      // A record that moved while none of its Runs did moves its Run for both.
+      reader.stampRecord("key", "r1", ["r1"], "first");
+      const moved = reader.stampRecord("key", "r1", ["r1"], "second");
+      yield* deliver;
+      expect(writer.revision("r1")).toEqual(moved);
+      expect(moved.epoch).toBe("shared");
+    }).pipe(Effect.scoped),
+  ));

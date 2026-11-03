@@ -1853,6 +1853,20 @@ its time.
   A host's `collie_run` answer uses one local Run listing for its facts and Flow, with
   local offers and the same write-covered readiness as `progress`. Flow relationship
   indexes, installation identity and usual Step times are shared across a board build.
+- **Records are read on the host's door thread**
+  ([ADR-draft-the-host-reads-records-on-a-thread-of-its-own](adr/draft-the-host-reads-records-on-a-thread-of-its-own.md)).
+  `src/door.ts` is a Bun Worker. It owns `host.sock` and answers `identity` and `runDetail`
+  itself, on a heap and a loop of its own. It passes every other frame to the engine on the
+  main thread, by its connection, so the engine's collections and Steps never hold a record
+  back. The door keeps a second Run model:
+  - Its revisions come from the same counter in shared memory as the engine's.
+  - It forgets what the engine's model invalidates.
+  - It takes each Run the engine listed, with its offers and the revision its view was read
+    at.
+  - It asks the engine (`doorFeedLayer` in `src/host.ts`) when a record's Runs are older than
+    their revision, or still going, or when a record's Run has a merge request.
+  - A store write moves the revision of the Runs it names.
+  - A Step a record first showed finished is told to the engine, which judges acts.
 - **Interactive reads come first** (D6 of that ADR). The board keeps each Task's card with the
   key it was derived from (`KeptCards` in `src/board.ts`): its Runs' revisions, markers,
   agents, pending work and merge request states. A build derives a card again only when its
@@ -2014,7 +2028,10 @@ The run writes `samples.jsonl`, every sample with its marks and differences, and
 - `lag_p99_ms`, `lag_max_ms` and `lag_probes`: a trivial RPC every 50 ms, from after the
   warm-up (and, for the host-only cells, after the host's Run model has filled) until the window
   holds at least 2000 probes. The cell's opens go on, untimed, until it does. GC pauses are
-  not excluded;
+  not excluded. The RPC is `identity`, which the host's door thread answers, the thread that
+  reads records;
+- `engine_lag_p99_ms`, `engine_lag_max_ms` and `engine_lag_probes`: the same, over the same
+  window, with `registrations`, which the engine's thread answers;
 - for `host-cold`, `started_to_painted`: p50, p95 and max from the host's start to its
   record painted;
 - `stages`: where Desktop's `record:*` marks exist, `mount` (click to mounted),

@@ -12,6 +12,7 @@ import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import { Deferred, Effect, Fiber, FileSystem, Layer, Order, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
+import { RunModel, runModelLayer } from "../src/run-model";
 import { Store, storeLayer } from "../src/store";
 import { runEffect } from "./support/effect";
 
@@ -374,4 +375,34 @@ test("a question asked of one Run moves that Run's decisions alone, and an annou
       expect(decided("run-a")).not.toBe(a);
       expect(decided("run-b")).toBe(b);
     }),
+  ));
+
+test("a write to a Run's row moves that Run's revision in the host's Run model, and no other", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-store-model-" });
+      yield* Effect.gen(function* () {
+        const store = yield* Store;
+        const model = yield* RunModel;
+        yield* store.admit(admission("req-a", "run-a", {}));
+        yield* store.admit(admission("req-b", "run-b", {}));
+        const a = model.revision("run-a").seq;
+        const b = model.revision("run-b").seq;
+        yield* store.recordPlacing("run-a", "{}");
+        expect(model.revision("run-a").seq).toBeGreaterThan(a);
+        expect(model.revision("run-b").seq).toBe(b);
+      }).pipe(
+        Effect.provide(
+          storeLayer.pipe(
+            Layer.provideMerge(runModelLayer(dir, "installation")),
+            Layer.provide(
+              SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
+                Layer.provideMerge(Reactivity.layer),
+              ),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
   ));

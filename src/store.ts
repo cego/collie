@@ -240,6 +240,12 @@ export interface StoreApi {
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
 
+/** Told the Runs each write of this store's names. */
+export class StoreWrites extends Context.Service<
+  StoreWrites,
+  (runs: ReadonlyArray<string>) => void
+>()("collie/StoreWrites") {}
+
 export const storeLayer: Layer.Layer<Store, never, SqlClient.SqlClient | Reactivity.Reactivity> =
   Layer.effect(Store)(makeStore());
 
@@ -343,9 +349,12 @@ function makeStore(): Effect.Effect<
     let written = 0;
     /** The Runs written since the last read, or every Run where that is not known. */
     let dirty: Set<string> | "all" = "all";
+    const told = Option.getOrUndefined(yield* Effect.serviceOption(StoreWrites));
     const wrote = (runs?: ReadonlyArray<string>) =>
       Effect.sync(() => {
         written++;
+        // Another connection's commit names no Run, and only the host writes a Run's row (ADR-0040).
+        if (runs !== undefined) told?.(runs);
         if (runs === undefined) dirty = "all";
         else if (dirty !== "all") for (const run of runs) dirty.add(run);
       });
@@ -355,7 +364,10 @@ function makeStore(): Effect.Effect<
     let elsewhere = 0;
     const decisions = new Map<string, number>();
     const decide = (run: string) =>
-      Effect.sync(() => void decisions.set(run, (decisions.get(run) ?? 0) + 1));
+      Effect.sync(() => {
+        decisions.set(run, (decisions.get(run) ?? 0) + 1);
+        told?.([run]);
+      });
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         const now = yield* dataVersion;
