@@ -2167,7 +2167,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           adapter.id === "claude"
             ? yield* claudeSettings(
                 controls,
-                profile.claude ?? {},
+                withoutCollieInstructions(profile.claude ?? {}, ask.cwd, host.env.collieDir),
                 autoModeBlock(
                   yield* autoModeFacts(
                     {
@@ -3987,6 +3987,31 @@ const encodeSettings = flow(
 );
 
 const NO_AUTHORITY: RunAuthority = { created: null, roaming: false, started: null };
+
+/**
+ * The overlay with the Collie directory's instruction files excluded, for an agent working
+ * inside it: Claude reads every ancestor's, and a clone install's `@AGENTS.md` is an external
+ * import it asks about in each new worktree.
+ */
+const withoutCollieInstructions = (
+  overlay: ClaudeOverlay,
+  cwd: string,
+  given: string,
+): ClaudeOverlay => {
+  const collieDir = pipe(given, Str.replace(/\/+$/, ""));
+  return pipe(cwd, Str.startsWith(`${collieDir}/`))
+    ? {
+        ...overlay,
+        claudeMdExcludes: [
+          `${collieDir}/CLAUDE.md`,
+          `${collieDir}/CLAUDE.local.md`,
+          `${collieDir}/.claude/CLAUDE.md`,
+          `${collieDir}/.claude/rules/**`,
+          ...(overlay.claudeMdExcludes ?? []),
+        ],
+      }
+    : overlay;
+};
 
 /**
  * Claude's `--settings` with the operator's overlay and the Run's `autoMode` merged in: into
