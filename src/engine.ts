@@ -378,7 +378,7 @@ export const TOOLCHAIN = {
  * surface, so a declaration that has drifted fails a test rather than an author's build.
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
-  export type ConnectionId = "gitlab" | "github" | "linear" | "helle" | "slack";
+  export type ConnectionId = "gitlab" | "github" | "linear" | "helle" | "slack" | "slack-user";
   export const ConnectionId: Schema.Codec<ConnectionId, unknown, never, never>;
   export type ConnectionReading =
     | { readonly state: "ok"; readonly account: string; readonly detail: string }

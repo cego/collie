@@ -15,6 +15,10 @@ export const SlackIdentity = Schema.Struct({
   bot_id: Schema.String,
   url: Schema.String,
 });
+const SlackTokenOwner = Schema.Struct({
+  ...SlackIdentity.fields,
+  bot_id: Schema.optionalKey(Schema.String),
+});
 export const SlackChannel = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -106,6 +110,7 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
     );
   return {
     auth: () => call("auth.test", SlackIdentity),
+    tokenOwner: () => call("auth.test", SlackTokenOwner),
     open: (user: string) =>
       call("conversations.open", Schema.Struct({ channel: Schema.Struct({ id: Schema.String }) }), {
         users: user,

@@ -1543,7 +1543,7 @@ that Machine skips it too.
 
 ### Connections
 
-**Settings → Every Machine → Connections** shows GitLab, GitHub, Linear, Helle, and Slack.
+**Settings → Every Machine → Connections** shows GitLab, GitHub, Linear, Helle, Slack, and Slack as you.
 Each card names its account and the Machines that can reach it. The index counts cards that need you.
 **Details** lists each Machine's reading and fix, plus the workflows that declare the Connection.
 The **With it** and **Without it** text comes from those declarations; a **needs** row says **Does not start**.
@@ -1640,6 +1640,22 @@ A user id opens a direct message before the host posts in its channel.
 An empty destination or a Slack Connection that is not working sends nothing.
 Each event is attempted once, including across host restarts; failed attempts are logged and do not fail the Run.
 Toasts continue independently of Slack.
+
+#### Slack as you
+
+**Slack as you** is you, signed in to Slack as yourself, apart from the **Collie** bot above.
+It is meant for approval requests, so they appear under your own name. Notifications stay with the bot.
+Neither Connection ever reads the other's token, so a working bot never stands in for you.
+
+Each Machine reads it from `$XDG_CONFIG_HOME/collie/slack-user.env` (`~/.config/collie/slack-user.env` by default), readable by its owner alone.
+The file has three lines: `SLACK_USER_TOKEN` (`xoxp-…`, or `xoxe.xoxp-…` when it rotates), `SLACK_USER_ID` and `SLACK_TEAM_ID`.
+Before it counts, the host asks Slack's `auth.test` who the token belongs to. Each Machine reads one of these:
+
+- **absent**: there is no file. A Machine without it is still healthy in `collie doctor`.
+- **ok**: Slack names the same user and team as the file, and the token is not a bot's. The card reads, for example, **Posts approval requests as sam in Example Co**.
+- **broken**: Slack refused the token (such as `token_expired` or `invalid_auth`), or the token belongs to another user or team, or it is a bot's. The reading says which, and the fix is to open Desktop to renew Slack, or sign in again.
+
+Desktop never offers to copy it from another Machine.
 
 ### Settings
 

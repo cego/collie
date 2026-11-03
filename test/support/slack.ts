@@ -1,6 +1,5 @@
 // Slack's documented Web API envelopes; requests are recorded without their authorization header.
 import { pipe } from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { Effect, Redacted } from "effect";
@@ -10,11 +9,24 @@ export const fakeSlack = () => {
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];
   let refused: string | null = null;
   let refusedMethod: string | undefined;
-  const answer = (method: string, parameters: Record<string, string>, authorized: boolean) => {
+  const answer = (
+    method: string,
+    parameters: Record<string, string>,
+    authorized: "bot" | "user" | null,
+  ) => {
     calls.push({ method, parameters });
-    if (!authorized) return Response.json({ ok: false, error: "invalid_auth" });
+    if (authorized === null) return Response.json({ ok: false, error: "invalid_auth" });
     if (refused !== null && (refusedMethod === undefined || refusedMethod === method))
       return Response.json({ ok: false, error: refused });
+    if (method === "auth.test" && authorized === "user")
+      return Response.json({
+        ok: true,
+        url: "https://example.slack.com/",
+        team: "Example Co",
+        user: "sam",
+        team_id: "T123",
+        user_id: "U456",
+      });
     if (method === "auth.test")
       return Response.json({
         ok: true,
@@ -116,11 +128,11 @@ export const fakeSlack = () => {
         answer(
           method,
           parameters,
-          Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(request.headers.authorization), (present) =>
-              pipe(present, Str.startsWith("Bearer xoxb-")),
-            ),
-          ) ?? false,
+          pipe(request.headers.authorization ?? "", Str.startsWith("Bearer xoxb-"))
+            ? "bot"
+            : /^Bearer (xoxe\.)?xoxp-/.test(request.headers.authorization ?? "")
+              ? "user"
+              : null,
         ),
       ),
     );
