@@ -12,16 +12,10 @@ import {
   slackAuthorizeUrl,
   slackUserSession,
 } from "../desktop/src/bun/slack-user";
-import {
-  credentialsFile,
-  giveSlackBot,
-  giveSlackUser,
-  type Keyring,
-} from "../desktop/src/bun/credentials";
-import { givenCredentials } from "../desktop/src/bun/given";
+import { credentialsFile, giveSlackUser, type Keyring } from "../desktop/src/bun/credentials";
+import { fingerprint, givenCredentials } from "../desktop/src/bun/given";
 import { localRoute } from "../desktop/src/bun/machine";
 import { ranWith } from "../desktop/src/bun/onboarding";
-import { retireSlackBot } from "../desktop/src/bun/slack";
 import { SLACK_CALLBACK_PORT } from "../desktop/src/shared/slack";
 import type { SlackUserState } from "../desktop/src/shared/flock";
 import { slackApi } from "../src/slack";
@@ -77,8 +71,7 @@ const desktop = Effect.gen(function* () {
     give: {
       gitlab: () => Effect.succeed(null),
       helle: () => Effect.succeed(null),
-      slack: giveSlackBot,
-      "slack-user": (route, text) =>
+      slack: (route, text) =>
         giveSlackUser([route], text).pipe(Effect.map((all) => all[0]!.failed)),
     },
   });
@@ -91,8 +84,8 @@ const desktop = Effect.gen(function* () {
   };
   const session = yield* slackUserSession({
     keyring,
-    give: (text) => given.giveEvery(routes, "slack-user", text),
-    retireBot: retireSlackBot(keyring, (text) => given.giveEvery(routes, "slack", text)),
+    give: (text) => given.giveEvery(routes, "slack", text),
+    retireBot: stored.forgetSlackBot,
     open: (url) => {
       const authorize = new URL(url);
       opened.push(authorize);
@@ -355,7 +348,9 @@ test("an older Collie's bot token stays until the human signs in, then leaves ev
         yield* fs.makeDirectory(`${it.dir}/${name}/.config/collie`, { recursive: true });
         yield* fs.writeFileString(it.file(name, "slack.env"), "SLACK_BOT_TOKEN=xoxb-bot-opaque\n");
       }
-      yield* it.keyring.store("slack-token", "Collie's Slack bot token", "xoxb-bot-opaque");
+      const kept = `${it.dir}/desktop/credentials`;
+      yield* fs.makeDirectory(`${it.dir}/desktop`, { recursive: true });
+      yield* fs.writeFileString(kept, "gitlab-token=glpat-kept\nslack-token=xoxb-bot-opaque\n");
       yield* it.given.giveLacking(it.routes[0]!);
       expect(yield* fs.exists(it.file("vm", "slack.env"))).toBe(true);
 
@@ -363,11 +358,43 @@ test("an older Collie's bot token stays until the human signs in, then leaves ev
       yield* it.session.signIn;
       expect(yield* fs.exists(it.file("vm", "slack.env"))).toBe(false);
       expect(yield* fs.exists(it.file("mini", "slack.env"))).toBe(true);
-      expect(yield* it.keyring.lookup("slack-token")).toBe("");
+      expect(yield* fs.readFileString(kept)).not.toContain("xoxb-bot-opaque");
+      expect(yield* it.keyring.lookup("gitlab-token")).toBe("glpat-kept");
       it.reachable.add("mini");
       yield* it.given.giveLacking(it.routes[1]!);
       expect(yield* fs.exists(it.file("mini", "slack.env"))).toBe(false);
       expect(yield* it.held).toEqual([SIGNED_IN(1), SIGNED_IN(1)]);
+    }),
+  ));
+
+test("a Machine an older Desktop gave the sign-in is not given it again, and a later sign-out still reaches it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const it = yield* desktop;
+      yield* it.session.signIn;
+      const fs = yield* FileSystem.FileSystem;
+      const signIn = fingerprint((yield* it.keyring.lookup("slack-user-grant"))!);
+      // An older Desktop recorded the bot's removal as `slack` and the sign-in as `slack-user`.
+      const older = `{"slack":"${fingerprint("")}","slack-user":"${signIn}"}`;
+      yield* fs.writeFileString(`${it.dir}/given/given.json`, `{"vm":${older},"mini":${older}}`);
+      const desktop2 = yield* givenCredentials({
+        dir: `${it.dir}/given`,
+        keyring: it.keyring,
+        skipped: () => Effect.succeed([]),
+        tell: () => Effect.void,
+        give: {
+          gitlab: () => Effect.succeed(null),
+          helle: () => Effect.succeed(null),
+          slack: (route, text) =>
+            giveSlackUser([route], text).pipe(Effect.map((all) => all[0]!.failed)),
+        },
+      });
+      expect(yield* desktop2.giveLacking(it.routes[1]!)).toEqual([]);
+      yield* it.keyring.store("slack-user-grant", "Slack signed out", "");
+      expect(yield* desktop2.giveLacking(it.routes[1]!)).toEqual([
+        { credential: "slack", failed: null },
+      ]);
+      expect(yield* it.held).toEqual([SIGNED_IN(1), null]);
     }),
   ));
 

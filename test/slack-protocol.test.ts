@@ -11,7 +11,7 @@ const human = { state: "ok", account: "sam", detail: "Posts as sam in Example Co
 test("a protocol-4 host's Connections read with its human sign-in as slack, and its bot dropped", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const read = yield* Schema.decodeUnknownEffect(
+      const read = yield* Schema.decodeEffect(
         FrontDoorRpcs.requests.get("connections")!.successSchema,
       )([
         { id: "gitlab", reading: { state: "ok", account: "mk", detail: "gitlab.example as mk" } },

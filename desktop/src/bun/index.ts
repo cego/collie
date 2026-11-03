@@ -138,7 +138,6 @@ import {
   syncNow,
 } from "./machine";
 import { givenCredentials } from "./given";
-import { retireSlackBot } from "./slack";
 import { slackUserSession } from "./slack-user";
 import { connectionsOn, githubLogin, readBack, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
@@ -159,7 +158,6 @@ import {
   giveHelle,
   giveToken,
   giveGithub,
-  giveSlackBot,
   giveSlackUser,
   gitlabToken,
   helleOwner,
@@ -579,8 +577,7 @@ const main = Effect.gen(function* () {
     give: {
       gitlab: (route, text) => Effect.map(giveToken([route], gitlabHost(), text), firstFailure),
       helle: (route, text) => Effect.map(giveHelle([route], helle, text), firstFailure),
-      slack: giveSlackBot,
-      "slack-user": (route, text) => Effect.map(giveSlackUser([route], text), firstFailure),
+      slack: (route, text) => Effect.map(giveSlackUser([route], text), firstFailure),
     },
     tell: (item) => PubSub.publish(news, item).pipe(Effect.asVoid),
     skipped: (profile) =>
@@ -789,8 +786,8 @@ const main = Effect.gen(function* () {
   };
   const slackUser = yield* slackUserSession({
     keyring,
-    give: (text) => given.giveEvery(everyRoute(), "slack-user", text),
-    retireBot: retireSlackBot(keyring, (text) => given.giveEvery(everyRoute(), "slack", text)),
+    give: (text) => given.giveEvery(everyRoute(), "slack", text),
+    retireBot: keyring.forgetSlackBot,
     open: openUrl,
   });
   yield* slackUser.keepSignedIn.pipe(Effect.forkIn(scope));

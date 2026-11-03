@@ -134,7 +134,7 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
   /** Gives every Machine the grant, or "" to remove it, and says how each went. */
   readonly give: (text: string) => Effect.Effect<Given>;
   readonly open: (url: string) => Effect.Effect<void>;
-  /** Run once a sign-in is kept, since nothing reads a bot token any more. */
+  /** Run each time a sign-in is kept, since nothing reads a bot token any more. */
   readonly retireBot: Effect.Effect<unknown, string>;
   readonly client?: HttpClient.HttpClient;
 }) {
@@ -154,7 +154,11 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
       yield* options.keyring.store("slack-user-grant", "Slack sign-in", text);
       trouble = null;
       yield* tell;
-      return yield* options.give(text);
+      const given = yield* options.give(text);
+      yield* options.retireBot.pipe(
+        Effect.catch((reason) => Effect.logWarning(`Slack bot token removal: ${reason}`)),
+      );
+      return given;
     });
   const hidden = (grant: SlackUserGrant | null) => (reason: string) =>
     redact(
@@ -205,9 +209,6 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
       scopes: tokens.scope,
     };
     const given = yield* lock.withPermits(1)(keep(grant));
-    yield* options.retireBot.pipe(
-      Effect.catch((reason) => Effect.logWarning(`Slack bot token removal: ${reason}`)),
-    );
     return { grant, given };
   }).pipe(Effect.mapError(hidden(null)));
 

@@ -31,7 +31,8 @@ export const HostConnections = Schema.Array(
     decode: SchemaGetter.transform((sent) => {
       const protocol4 = Arr.some(sent, ({ id }) => id === "slack-user");
       return Arr.flatMap(sent, ({ id, reading }) => {
-        const now = protocol4 && id === "slack-user" ? "slack" : protocol4 && id === "slack" ? "" : id;
+        const now =
+          protocol4 && id === "slack-user" ? "slack" : protocol4 && id === "slack" ? "" : id;
         return Schema.is(ConnectionId)(now) ? [{ id: now, reading }] : [];
       });
     }),

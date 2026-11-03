@@ -4,6 +4,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Effect, FileSystem, Path, Schema, Semaphore, flow, Result } from "effect";
 import {
   CREDENTIALS,
@@ -19,8 +20,7 @@ import type { ShellRoute } from "./machine";
 const ENTRY = {
   gitlab: "gitlab-token",
   helle: "helle-token",
-  slack: "slack-token",
-  "slack-user": "slack-user-grant",
+  slack: "slack-user-grant",
 } satisfies Record<Credential, KeyringEntry>;
 
 /** Each Machine's fingerprints, by herdr profile and then credential. */
@@ -28,6 +28,14 @@ const GivenFile = Schema.fromJsonString(
   Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.String)),
 );
 const FILE = "given.json";
+
+/** An older Desktop's `slack` was its bot and `slack-user` the sign-in, which is `slack` now. */
+const fromSlackBot = ({
+  slack: _bot,
+  "slack-user": signIn,
+  ...rest
+}: Record<string, string>): Record<string, string> =>
+  signIn === undefined ? rest : { ...rest, slack: signIn };
 
 export const fingerprint = (text: string) => pipe_(sha256Hex(text), Str.slice(0, 16));
 
@@ -46,6 +54,7 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
   const file = (yield* Path.Path).join(options.dir, FILE);
   let record = yield* fs.readFileString(file).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(GivenFile)),
+    Effect.map(Rec.map(fromSlackBot)),
     Effect.orElseSucceed((): typeof GivenFile.Type => ({})),
   );
   /** Why the last give of a fingerprint failed, by profile and credential; this run's only. */

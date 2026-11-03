@@ -378,7 +378,10 @@ export const TOOLCHAIN = {
  * surface, so a declaration that has drifted fails a test rather than an author's build.
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
-  export type ConnectionId = ${Arr.join(Arr.map(ConnectionId.literals, (id) => JSON.stringify(id)), " | ")};
+  export type ConnectionId = ${Arr.join(
+    Arr.map(ConnectionId.literals, (id) => JSON.stringify(id)),
+    " | ",
+  )};
   export const ConnectionId: Schema.Codec<ConnectionId, unknown, never, never>;
   export type ConnectionReading =
     | { readonly state: "ok"; readonly account: string; readonly detail: string }

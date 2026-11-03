@@ -187,9 +187,12 @@ test("the secrets Desktop holds are handed to collie onboard as stdin lines", ()
       const dir = yield* scratch;
       const keyring = credentialsFile(dir, `${dir}/no-such-tool`);
       expect(yield* secretsFor(keyring)).toBe("");
+      yield* (yield* FileSystem.FileSystem).writeFileString(
+        `${dir}/credentials`,
+        "slack-token=xoxb-old\n",
+      );
       yield* keyring.store("gitlab-token", "token", "glpat-good");
       yield* keyring.store("helle-token", "token", "h-1");
-      yield* keyring.store("slack-token", "an older Collie's bot token", "xoxb-old");
       expect(yield* secretsFor(keyring)).toBe("GITLAB_TOKEN=glpat-good\nHELLE_API_TOKEN=h-1\n");
     }),
   ));
@@ -435,7 +438,6 @@ const givenIn = (
         gitlab: giver("gitlab"),
         helle: giver("helle"),
         slack: giver("slack"),
-        "slack-user": giver("slack-user"),
       },
       tell: (item) => Effect.sync(() => void told.push(item)),
       skipped: () => Effect.succeed(skipped),

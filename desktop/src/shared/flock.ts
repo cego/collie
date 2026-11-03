@@ -214,7 +214,7 @@ export const NOT_SIGNED_IN: typeof SlackUserState.Type = {
 };
 
 /** A credential Desktop gives every Machine. */
-export const Credential = Schema.Literals(["gitlab", "helle", "slack", "slack-user"]);
+export const Credential = Schema.Literals(["gitlab", "helle", "slack"]);
 export type Credential = typeof Credential.Type;
 export const CREDENTIALS = Credential.literals;
 
