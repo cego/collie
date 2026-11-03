@@ -95,7 +95,8 @@ const kept = <A>(
 export interface ModelLink {
   readonly counter: Int32Array;
   readonly epoch: string;
-  readonly touched: (run: string, seq: number) => void;
+  /** `facts` where what moved it was the Run's files or its row. */
+  readonly touched: (run: string, seq: number, facts: boolean) => void;
   readonly invalidated: (path: string) => void;
   readonly disabled: () => void;
 }
@@ -128,18 +129,23 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     byPlan: new Map(),
   };
   const keys = new Map<string, ReturnType<typeof keysOf>>();
-  const touch = (run: string) => {
+  /** The revision each Run's files or row last moved at: what its facts are read at. */
+  const factual = new Map<string, number>();
+  const touch = (run: string, facts = false) => {
     const at = next();
     revisions.set(run, at);
-    link?.touched(run, at);
+    if (facts) factual.set(run, at);
+    link?.touched(run, at, facts);
   };
+  const touchFacts = (run: string) => touch(run, true);
   /** The Runs whose rows were written. */
   const wrote = (runs: ReadonlyArray<string>) => {
-    for (const run of runs) touch(run);
+    for (const run of runs) touchFacts(run);
   };
   /** The other model moved the Run. */
-  const heard = (run: string, at: number) => {
+  const heard = (run: string, at: number, facts: boolean) => {
     if (at > (revisions.get(run) ?? 0)) revisions.set(run, at);
+    if (facts && at > (factual.get(run) ?? 0)) factual.set(run, at);
   };
 
   /**
@@ -207,7 +213,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const invalidate = (path: string) =>
     Effect.sync(() => {
       link?.invalidated(path);
-      drop(path, touch);
+      drop(path, touchFacts);
     });
   /** The other model invalidated `path`: what it moved, it numbered and told. */
   const forget = (path: string) => Effect.sync(() => drop(path, () => {}));
@@ -308,6 +314,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const gone = (runs: ReadonlyArray<string>) => {
     for (const run of runs) {
       revisions.delete(run);
+      factual.delete(run);
       index(run, undefined);
     }
   };
@@ -324,6 +331,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
           facts.delete(run);
           last.delete(run);
           revisions.delete(run);
+          factual.delete(run);
           index(run, undefined);
         }
     });
@@ -340,6 +348,8 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     epoch,
     seq: enabled ? (revisions.get(run) ?? 0) : next(),
   });
+  /** The revision the Run's facts read now are at; a card or a record moving it leaves this. */
+  const factsAt = (run: string) => (enabled ? (factual.get(run) ?? 0) : next());
   const highest = (runs: ReadonlyArray<string>) =>
     enabled ? Math.max(0, ...Arr.map(runs, (run) => revisions.get(run) ?? 0)) : next();
 
@@ -455,6 +465,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     mirror,
     gone,
     revision,
+    factsAt,
     highest,
     stamp,
     stampRecord,

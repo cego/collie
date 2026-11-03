@@ -1085,9 +1085,7 @@ const hostBoard = (dir: string) =>
       agentsRead === undefined ? agentsNow : Effect.succeed(agentsRead),
     );
     const kept: KeptViews | undefined =
-      model === undefined
-        ? undefined
-        : { revision: (run) => model.revision(run).seq, views: new Map() };
+      model === undefined ? undefined : { revision: model.factsAt, views: new Map() };
     const facts = new WeakMap<RunView, RunFacts>();
     /** The view's facts, the same object for as long as the view is. */
     const factsOf = (view: RunView) => {
@@ -3752,6 +3750,8 @@ const own = (
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
+    // The door's thread is ended, not closed, so its socket is let go of here.
+    yield* Effect.addFinalizer(() => fs.remove(socketOf(dir), { force: true }).pipe(Effect.ignore));
     const pid = yield* currentPid;
     const record = (herd: string | null) =>
       fs.writeFileString(

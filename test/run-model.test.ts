@@ -300,14 +300,16 @@ test("two models of one state directory number their Runs as one, each told what
       const writer = yield* makeRunModel(dir, "installation", {
         counter,
         epoch: "shared",
-        touched: (id, seq) => void told.push(Effect.sync(() => reader!.heard(id, seq))),
+        touched: (id, seq, facts) =>
+          void told.push(Effect.sync(() => reader!.heard(id, seq, facts))),
         invalidated: (path) => void told.push(Effect.suspend(() => reader!.forget(path))),
         disabled: () => {},
       });
       reader = yield* makeRunModel(dir, "installation", {
         counter,
         epoch: "shared",
-        touched: (id, seq) => void told.push(Effect.sync(() => writer.heard(id, seq))),
+        touched: (id, seq, facts) =>
+          void told.push(Effect.sync(() => writer.heard(id, seq, facts))),
         invalidated: () => {},
         disabled: () => {},
       });
@@ -319,6 +321,7 @@ test("two models of one state directory number their Runs as one, each told what
       yield* deliver;
       expect(reader.revision("r1")).toEqual(writer.revision("r1"));
       expect(reader.revision("r1").seq).toBeGreaterThan(0);
+      expect(reader.factsAt("r1")).toBe(writer.factsAt("r1"));
       expect(yield* reader.reading.readFileString(log)).toBe("two\n");
 
       // A record that moved while none of its Runs did moves its Run for both.
@@ -327,5 +330,30 @@ test("two models of one state directory number their Runs as one, each told what
       yield* deliver;
       expect(writer.revision("r1")).toEqual(moved);
       expect(moved.epoch).toBe("shared");
+    }).pipe(Effect.scoped),
+  ));
+
+test("only a Run's files or its row move what its facts were read at; a card or a record moving it does not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const run = yield* madeRun(dir, { id: "b", created: "2026-10-30T09:00:00Z" });
+      const model = yield* makeRunModel(dir, "installation");
+      yield* model.observe([run]);
+      const read = model.factsAt("b");
+
+      model.stamp([card({ sentence: "Working." })]);
+      model.stamp([card({ sentence: "Still working." })]);
+      model.stampRecord("key", "b", ["b"], "first");
+      model.stampRecord("key", "b", ["b"], "second");
+      expect(model.revision("b").seq).toBeGreaterThan(read);
+      expect(model.factsAt("b")).toBe(read);
+
+      yield* model.writing.writeFileString(`${run.dir}/log.txt`, "moved\n");
+      expect(model.factsAt("b")).toBeGreaterThan(read);
+      const written = model.factsAt("b");
+      model.wrote(["b"]);
+      expect(model.factsAt("b")).toBeGreaterThan(written);
     }).pipe(Effect.scoped),
   ));

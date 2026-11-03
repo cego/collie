@@ -25,7 +25,7 @@ import type { RunFacts } from "./runs";
 /** What the engine tells the door of a Run: its facts, the revision they were read at, its offers. */
 export interface Listed {
   readonly fact: RunFacts;
-  /** The Run's revision when its view was read; null for a view the engine reads every time. */
+  /** What the Run's facts were read at (`factsAt`); null for a view the engine reads every time. */
   readonly seq: number | null;
   readonly offers: ReadonlyArray<OfferView>;
 }
@@ -55,7 +55,12 @@ export type ToDoor =
       readonly conn: number;
       readonly frame: RpcMessage.FromServerEncoded;
     }
-  | { readonly _tag: "Touched"; readonly run: string; readonly seq: number }
+  | {
+      readonly _tag: "Touched";
+      readonly run: string;
+      readonly seq: number;
+      readonly facts: boolean;
+    }
   | { readonly _tag: "Invalidated"; readonly path: string }
   | { readonly _tag: "Disabled" }
   | {
@@ -77,7 +82,12 @@ export type FromDoor =
       readonly frame: RpcMessage.FromClientEncoded;
     }
   | { readonly _tag: "Gone"; readonly conn: number }
-  | { readonly _tag: "Touched"; readonly run: string; readonly seq: number }
+  | {
+      readonly _tag: "Touched";
+      readonly run: string;
+      readonly seq: number;
+      readonly facts: boolean;
+    }
   | { readonly _tag: "Finished"; readonly run: string; readonly step: string; readonly seq: number }
   | { readonly _tag: "Unfinished"; readonly run: string; readonly step: string }
   | { readonly _tag: "Ask"; readonly ask: number; readonly asked: Asked };
@@ -98,7 +108,7 @@ export interface Port<Out, In> {
 
 /** What the engine does with what the door tells it of the Run model. */
 export interface EngineModel {
-  readonly heard: (run: string, seq: number) => void;
+  readonly heard: (run: string, seq: number, facts: boolean) => void;
   readonly finishedAt: (run: string, step: string, seq: number) => number;
   readonly unfinished: (run: string, step: string) => void;
 }
@@ -127,7 +137,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
           return Queue.offerUnsafe(disconnects, message.conn);
         // Applied as it arrives: an act the door passes on after it is checked against it.
         case "Touched":
-          return model?.heard(message.run, message.seq);
+          return model?.heard(message.run, message.seq, message.facts);
         case "Finished":
           return void model?.finishedAt(message.run, message.step, message.seq);
         case "Unfinished":
@@ -162,7 +172,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
     const link = (counter: SharedArrayBuffer, epoch: string): ModelLink => ({
       counter: new Int32Array(counter),
       epoch,
-      touched: (run, seq) => port.post({ _tag: "Touched", run, seq }),
+      touched: (run, seq, facts) => port.post({ _tag: "Touched", run, seq, facts }),
       invalidated: (path) => port.post({ _tag: "Invalidated", path }),
       disabled: () => port.post({ _tag: "Disabled" }),
     });
@@ -261,7 +271,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               runModelLayer(env.stateDir, first.model.installation, {
                 counter: new Int32Array(first.model.counter),
                 epoch: first.model.epoch,
-                touched: (run, seq) => port.post({ _tag: "Touched", run, seq }),
+                touched: (run, seq, facts) => port.post({ _tag: "Touched", run, seq, facts }),
                 invalidated: () => {},
                 disabled: () => {},
               }),
@@ -317,7 +327,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
         case "Response":
           return Queue.offer(engineFrames, message);
         case "Touched":
-          return Effect.sync(() => model?.heard(message.run, message.seq));
+          return Effect.sync(() => model?.heard(message.run, message.seq, message.facts));
         case "Invalidated":
           return model?.forget(message.path) ?? Effect.void;
         case "Disabled":
@@ -380,7 +390,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                 const held = relatedOf(facts, order, runId, also);
                 const current =
                   held !== null &&
-                  Arr.every(held, (one) => read.get(one.id) === model.revision(one.id).seq);
+                  Arr.every(held, (one) => read.get(one.id) === model.factsAt(one.id));
                 if (current) return held;
                 // SAFETY: the engine answers a `Related` ask with the Runs it read, as `Listed`.
                 const runs = (yield* ask({
