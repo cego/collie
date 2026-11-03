@@ -84,7 +84,7 @@ import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { slackApi } from "../../src/slack";
 import { writeSlackToken } from "../../src/slack-credentials";
-import { fakeSlack } from "./slack";
+import { fakeSlack, signedInToSlack } from "./slack";
 import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import {
@@ -10148,7 +10148,10 @@ const agentPush = (
     };
   });
 
-/** Sharing for approval turned on as `collie settings set` writes it, in `channel` unless null. */
+/**
+ * Sharing for approval turned on as `collie settings set` writes it, in `channel` unless null,
+ * with the bot connected and the human signed in to Slack as themselves.
+ */
 const sharingIn = (channel: string | null) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -10163,6 +10166,7 @@ const sharingIn = (channel: string | null) =>
       ),
     ),
     Effect.andThen(writeSlackToken(hostOf().env, "xoxb-fixture")),
+    Effect.andThen(signedInToSlack(hostOf().env, "U456")),
     Effect.orDie,
   );
 
@@ -11987,6 +11991,13 @@ for (const name of ["gitlab", "github"] as const) {
             },
           ]);
           expect(
+            Arr.filter(slack.authorized, (call) => pipe(call.method, Str.startsWith("chat."))),
+          ).toEqual([
+            { method: "chat.postMessage", by: "user" },
+            { method: "chat.getPermalink", by: "user" },
+          ]);
+          expect(Arr.filter(slack.authorized, (call) => call.by !== "user")).toEqual([]);
+          expect(
             Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes(`/${runId}/share`))),
           ).toEqual([]);
           expect(repliesOf(model)).toEqual([]);
@@ -12010,13 +12021,14 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = "r-share-manually";
           yield* sharingIn("#frontend");
           yield* writeSlackToken(hostOf().env, null);
+          yield* signedInToSlack(hostOf().env, null);
           yield* rig.queueOutputs([PACKAGED]);
           const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
             Effect.gen(function* () {
               const share = yield* goAsked(run.asked, "share-for-approval");
               expect(share.prompt).toContain("Share it in #frontend yourself");
               expect(share.prompt).toContain(mr);
-              expect(share.prompt).toContain("No Slack bot token");
+              expect(share.prompt).toContain("Not signed in to Slack as yourself");
               expect(optionsOf([share], "share-for-approval")).toEqual([
                 "I shared it",
                 "Wait for changes",
@@ -12158,6 +12170,96 @@ for (const name of ["gitlab", "github"] as const) {
             Arr.filter(slack.calls, (call) => call.method === "chat.postMessage"),
           ).toHaveLength(1);
           expect(Arr.some(slack.calls, (call) => call.method === "chat.getPermalink")).toBe(false);
+        }),
+      ),
+    120_000,
+  );
+
+  /** Signed in as `user`, the manual share is asked with `said` in it, then go 1 finishes. */
+  const sharedByHand = (runId: string, user: string | null, said: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
+      yield* sharingIn("#frontend");
+      yield* signedInToSlack(hostOf().env, user);
+      yield* rig.queueOutputs([PACKAGED]);
+      const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
+        Effect.gen(function* () {
+          const share = yield* goAsked(run.asked, "share-for-approval");
+          expect(share.prompt).toContain("Share it in #frontend yourself");
+          for (const one of said) expect(share.prompt).toContain(one);
+          expect(optionsOf([share], "share-for-approval")).toEqual([
+            "I shared it",
+            "Wait for changes",
+          ]);
+          yield* run.answer("share-for-approval", "I shared it");
+          yield* changed(approvedBy("gitlab", "dave"));
+          yield* goAsked(run.asked, "go-1");
+          yield* run.answer("go-1", "Finish");
+          return yield* ended(run.status);
+        }),
+      );
+      yield* bin.restore();
+      expect(outcomeText(status)).toBe(`${mr} was left open`);
+      expect(Arr.filter(slack.calls, (call) => call.method === "chat.postMessage")).toEqual([]);
+    });
+
+  once(
+    "release on gitlab: a working Slack bot without the human's Slack sign-in asks them to share it and posts nothing",
+    () =>
+      runEffect(
+        sharedByHand("r-share-bot-only", null, [
+          "Not signed in to Slack as yourself",
+          "Sign in to Slack as yourself in Desktop Settings › Connections",
+        ]),
+      ),
+    120_000,
+  );
+
+  once(
+    "release on gitlab: a Slack user token that is someone else's asks the human to share it, logs why and posts nothing",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const runId = "r-share-not-yours";
+          yield* sharedByHand(runId, "U999", ["token belongs to U456, not U999", "sign in again"]);
+          expect(yield* runLog(runId)).toContain("token belongs to U456, not U999");
+        }),
+      ),
+    120_000,
+  );
+
+  once(
+    "release on gitlab: Slack refusing the human's share with not_in_channel posts nothing more, and never as the bot",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
+          const runId = "r-share-not-in-channel";
+          yield* sharingIn("#frontend");
+          slack.refuse("not_in_channel", "chat.postMessage");
+          yield* rig.queueOutputs([PACKAGED]);
+          yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "share-for-approval");
+              yield* run.answer("share-for-approval", "Post for approval");
+              yield* until(
+                () => awaitingOn(runId),
+                (on) => pipe(on, Str.includes("approval")),
+              );
+              yield* changed(approvedBy("gitlab", "dave"));
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(yield* runLog(runId)).toContain(
+            `did not share ${mr} in #frontend: Slack chat.postMessage: not_in_channel`,
+          );
+          expect(
+            Arr.filter(slack.authorized, (call) => call.method === "chat.postMessage"),
+          ).toEqual([{ method: "chat.postMessage", by: "user" }]);
+          expect(Arr.filter(slack.authorized, (call) => call.by === "bot")).toEqual([]);
         }),
       ),
     120_000,

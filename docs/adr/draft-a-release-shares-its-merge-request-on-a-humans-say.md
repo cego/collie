@@ -26,6 +26,9 @@ answered after it posts nothing: the review is read again before the message goe
 
 **D3. One message, through the host's Slack Connection.** This supersedes D3's original
 choice of the Run's agent and the operator's own Slack tool. D1 and D2 stand.
+[ADR-draft-a-message-on-a-humans-say-is-posted-as-that-human](draft-a-message-on-a-humans-say-is-posted-as-that-human.md)
+amends it: the message is posted as the human who asked, with their own Slack sign-in, and
+never by the bot.
 The host reads the merge request's title from its forge and posts its address linked by
 that title, with nothing else, in the configured channel. The `share` Activity journals
 the result, so a completed share is reused on replay.

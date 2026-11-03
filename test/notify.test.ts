@@ -18,7 +18,7 @@ import {
 import { slackApi } from "../src/slack";
 import { writeSlackToken } from "../src/slack-credentials";
 import { writeConfigValue } from "../src/config";
-import { fakeSlack } from "./support/slack";
+import { fakeSlack, signedInToSlack } from "./support/slack";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { Agents, agentsLayer } from "../src/agents";
 import { runEffect } from "./support/effect";
@@ -315,6 +315,7 @@ test("a notification for a person opens the DM and posts only in the returned ch
     Effect.gen(function* () {
       yield* writeSlackToken(rig.pluginEnv(), "xoxb-fixture");
       yield* writeConfigValue(rig.userDir, "slack.notification_channel", "U789");
+      yield* signedInToSlack(rig.pluginEnv(), "U456");
       const slack = fakeSlack();
       yield* session(
         Effect.gen(function* () {
@@ -329,6 +330,9 @@ test("a notification for a person opens the DM and posts only in the returned ch
           method: "chat.postMessage",
           parameters: { channel: "D123", text: "collie · r-own needs you\nChoose the approach" },
         },
+      ]);
+      expect(Arr.filter(slack.authorized, (call) => call.method === "chat.postMessage")).toEqual([
+        { method: "chat.postMessage", by: "bot" },
       ]);
     }),
   ));

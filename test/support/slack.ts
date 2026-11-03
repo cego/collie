@@ -2,12 +2,30 @@
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
-import { Effect, Redacted } from "effect";
+import { Effect, FileSystem, Path, Redacted } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import type { SlackOAuthAnswer } from "../../src/slack";
+import { slackUserEnvPath } from "../../src/slack-credentials";
+import type { PluginEnv } from "../../src/env";
+
+/** The Machine's sign-in as the fake's user U456 in T123, expecting `user`; null removes it. */
+export const signedInToSlack = (env: Pick<PluginEnv, "home" | "raw">, user: string | null) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const file = slackUserEnvPath(env);
+    if (user === null) return yield* fs.remove(file, { force: true });
+    yield* fs.makeDirectory((yield* Path.Path).dirname(file), { recursive: true });
+    yield* fs.writeFileString(
+      file,
+      `SLACK_USER_TOKEN=xoxe.xoxp-1-user-fixture\nSLACK_USER_ID=${user}\nSLACK_TEAM_ID=T123\n`,
+      { mode: 0o600 },
+    );
+  }).pipe(Effect.orDie);
+
 export const fakeSlack = () => {
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];
+  const authorized: Array<{ method: string; by: "bot" | "user" | null }> = [];
   let refused: string | null = null;
   let refusedMethod: string | undefined;
   let issued = 0;
@@ -15,9 +33,10 @@ export const fakeSlack = () => {
   const answer = (
     method: string,
     parameters: Record<string, string>,
-    authorized: "bot" | "user" | null,
+    by: "bot" | "user" | null,
   ) => {
     calls.push({ method, parameters });
+    authorized.push({ method, by });
     if (method === "oauth.v2.access") {
       if (refused !== null && (refusedMethod === undefined || refusedMethod === method))
         return Response.json({ ok: false, error: refused });
@@ -41,10 +60,10 @@ export const fakeSlack = () => {
             },
       );
     }
-    if (authorized === null) return Response.json({ ok: false, error: "invalid_auth" });
+    if (by === null) return Response.json({ ok: false, error: "invalid_auth" });
     if (refused !== null && (refusedMethod === undefined || refusedMethod === method))
       return Response.json({ ok: false, error: refused });
-    if (method === "auth.test" && authorized === "user")
+    if (method === "auth.test" && by === "user")
       return Response.json({
         ok: true,
         url: "https://example.slack.com/",
@@ -166,6 +185,8 @@ export const fakeSlack = () => {
   return {
     client,
     calls,
+    /** Which kind of token authorized each call, in step with `calls`. */
+    authorized,
     /** Fields laid over each code exchange's answer, until replaced. */
     exchange: (fields: Partial<typeof SlackOAuthAnswer.Encoded>) => {
       exchanged = fields;

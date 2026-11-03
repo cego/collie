@@ -1625,6 +1625,7 @@ An explicit `SLACK_BOT_TOKEN` in the host's environment takes precedence over th
 Invite Collie into each channel with `/invite @Collie`, then choose **Refresh Slack**.
 Only channels it belongs to appear, including private channels it joined.
 **Runs → Slack channel for approval requests** stores the chosen channel's id in `release.approval_channel`.
+The approval request itself is posted as you, through [Slack as you](#slack-as-you), never as the bot.
 An earlier `#name` remains **#name (not checked)** and stays unchanged until you pick again.
 While Slack is disconnected, the channel controls are disabled and point back to Connections.
 
@@ -1644,8 +1645,10 @@ Toasts continue independently of Slack.
 #### Slack as you
 
 **Slack as you** is you, signed in to Slack as yourself, apart from the **Collie** bot above.
-It is meant for approval requests, so they appear under your own name. Notifications stay with the bot.
+A release's **Post for approval** posts with it, under your own name and avatar; notifications stay with the bot.
 Neither Connection ever reads the other's token, so a working bot never stands in for you.
+Slack adds its own attribution line under a message you post this way, reported as "Sent using Collie".
+Collie cannot change or remove that line, and it never reads "Sent with Collie".
 
 Each Machine reads it from `$XDG_CONFIG_HOME/collie/slack-user.env` (`~/.config/collie/slack-user.env` by default), readable by its owner alone.
 The file has three lines: `SLACK_USER_TOKEN` (`xoxp-…`, or `xoxe.xoxp-…` when it rotates), `SLACK_USER_ID` and `SLACK_TEAM_ID`.
@@ -1678,7 +1681,7 @@ alone, as the bot's **Disconnect** leaves your sign-in.
 The limits: an access token lasts 12 hours and is renewed only while Desktop runs, so a
 Machine whose token expired while Desktop was closed reads **broken** until Desktop next
 opens. A refresh token lasts 30 days; after a longer absence, sign in again. A Machine set
-up without Desktop has no Slack as you.
+up without Desktop has no Slack as you, so its releases ask you to share the merge request by hand.
 
 Whoever owns the shared Collie app updates it once from **Add Collie to your Slack**'s
 manifest (**Features › App Manifest**): it turns on PKCE (`oauth_config.pkce_enabled`), adds
@@ -2752,11 +2755,15 @@ To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`
 under Settings ([Your defaults](#your-defaults)). While the merge request waits on a
 teammate's approval, the Run asks **Post for approval** or **Wait for changes**. Check the
-merge request first: **Post for approval** has its host post through the [Slack Connection](#slack),
-linked by its forge title and nothing else. The Run's log keeps the message's permalink.
+merge request first: **Post for approval** has its host post it as you, through [Slack as you](#slack-as-you),
+linked by its forge title and nothing else. It appears under your name, with Slack's own
+attribution line beneath, reported as "Sent using Collie"; Collie cannot change or remove it.
+The host checks with Slack that the token is yours before it posts, and never posts as the Collie bot instead.
+The Run's log keeps the message's permalink.
 If the permalink cannot be read, the log says why; the message still counts as shared.
-A failed post is logged, and the Run continues to its review wait.
-Without a working Slack Connection, it asks you to share the merge request yourself and shows its address to copy.
+A post Slack refuses is logged with Slack's reason and not tried again, and the Run continues to its review wait.
+Without a working Slack as you, such as on a Machine without Desktop, it asks you to share the merge
+request yourself, says why on its log, and shows its address to copy.
 **Wait for changes** posts nothing and asks again once the head moves.
 
 Then it asks **Release** or **Finish**, naming the head and who approved it. **Release**
