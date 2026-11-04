@@ -57,18 +57,30 @@
     for (;;) {
       await frame();
       if (watching !== expected) return null;
-      if (expected.start === null) continue;
+      if (expected.start === null) {
+        expected.waiting = "for the click on its card";
+        continue;
+      }
       const map = flowMap();
       const flow = flowOf(map);
-      if (flow === null) continue;
+      if (flow === null) {
+        expected.waiting = "for a Flow";
+        continue;
+      }
       if (!flow.lanes.some((lane) => lane.run === expected.run)) {
         stale = true;
+        expected.waiting = `on the Flow of ${flow.lanes.map((lane) => lane.run).join(", ")}`;
         continue;
       }
       const nodes = rowsOf(flow).reduce((sum, row) => sum + row.length, 0);
-      if (nodes === 0 || map.querySelectorAll("li button[aria-pressed]").length !== nodes) continue;
+      const drawn = map.querySelectorAll("li button[aria-pressed]").length;
+      if (nodes === 0 || drawn !== nodes) {
+        expected.waiting = `on ${drawn} of ${nodes} Steps drawn`;
+        continue;
+      }
       await frame();
       await frame();
+      expected.waiting = "on a disabled control";
       while ([...flowMap().querySelectorAll("li button")].some((button) => button.disabled))
         await frame();
       const end = performance.now();
@@ -89,9 +101,11 @@
   window.__bench = {
     /** Times the next click on `card`, whose record should show `run`'s Flow. */
     expect: (card, run) => {
-      watching = { card, run, start: null };
+      watching = { card, run, start: null, waiting: "to start" };
       window.__benchSample = follow(watching);
     },
+    /** What the sample last waited on, said when it never paints. */
+    waiting: () => watching?.waiting ?? null,
     /** What the open record paints now. */
     painted: () => paintedOf(flowMap(), flowOf(flowMap())),
     /** Whether the board is showing, with no record over it. */

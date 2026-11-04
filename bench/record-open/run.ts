@@ -369,7 +369,9 @@ const body = (
                 warmup,
                 run,
                 ms: NEVER_MS,
-                differences: ["never painted"],
+                differences: [
+                  `never painted: waited ${yield* ev<string>("window.__bench.waiting()")}`,
+                ],
                 stale: false,
                 marks: {},
                 start: 0,
