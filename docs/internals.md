@@ -2376,6 +2376,45 @@ stage is no tree" test, which is master's (#284) and passed in the other four su
 The branch later took master's herdr-core migration (#289), which rewrote the fakes most
 of the suite runs on. Neither window above measured that tree.
 
+### Test-suite measurements, 4 November 2026
+
+Run `run-8afaffc4.implement` took #215 to the host's Measurement on vm-mk (24 cores, Bun
+1.4.4). Its plan is ticket 05's benchmark plan: `tools/suite-bench.ts` (harness commit
+`7b4af6da`) runs one whole `bun run test`, 3 samples a side, `suite.own_ms` primary and
+`suite.cpu_ms` and `suite.passed` as guardrails. The base is master `4be825d2` plus the
+harness. Its attribution, on `b314b578`, is `handoffs/215-attribution.md` in that Run.
+
+Neither Measurement got past the base's first sample, because master's own suite went red
+there. A failed sample is not recorded, so neither has a median or a verdict. The load
+figures are the suite's own report, at admission and at its end. The second was started
+only once the lock was free and the 1-minute load was below 8, the lowest vm-mk's
+background (dockerd, kubelet, Falcon, the Collie host) allowed in two hours of waiting.
+
+| Measurement                                        | Pass        | Candidate  | Load       | Base suite                                 |
+| -------------------------------------------------- | ----------- | ---------- | ---------- | ------------------------------------------ |
+| `run-8afaffc4.implement-measurement-1793784587902` | calibration | `b314b578` | 10.3, 24.2 | `Failed`: ran 753.25 s, 5,496 pass, 1 fail |
+| `run-8afaffc4.implement-measurement-1793793402735` | calibration | `14a02889` | 7.5, 29.5  | `Failed`: ran 832.21 s, 5,493 pass, 4 fail |
+
+The tests that failed on the base:
+
+- In both: "a plan chained into implement writes a speed-up ticket's criterion as a
+  Measurement…", at 31.9 s and then 32.5 s, and in the second, 31.8 s under an unrelated
+  id. Its timeout is 120 s, so what ran out is most likely its `until()` wait for the
+  implement Run's first build prompt (1,000 tries 20 ms apart). The Measurement keeps
+  only the last 4 KiB of output, so the error itself was lost.
+- In the second only: "a tune-up whose last rally fix lands after the last review proves
+  its outcome on the fresh review delivery took", under an unrelated id, at 45.4 s; and
+  `test/verify.test.ts`'s "a tree git cannot stage is no tree", at 0.25 s. That test
+  also failed once on 2 November.
+
+Per-file time summed to 8,501 s and 9,318 s in these two suites, against 6,894 s on
+2 November, on a busier vm-mk.
+
+Cuts: one was made, and no Measurement judged it. A fingerprint now takes three git starts
+once its checkout is known, not five (`14a02889`); it is kept. No `final` Measurement was
+taken: with the base red under a quiet start, the Run stopped measuring. **#215 remains
+unmet.**
+
 ### Test-suite measurements, 12 October 2026
 
 Measured with `/usr/bin/time bun run test`, Bun 1.4.3, Linux and 20 available logical CPUs.
