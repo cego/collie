@@ -1688,6 +1688,12 @@ seconds, how long it has waited (`tools/suite-lock.ts`). Which forms take the lo
   sources directly, and join the budget as a small run (see [Keeping the suite and a start
   fast](#keeping-the-suite-and-a-start-fast)).
 
+`bun tools/suite-bench.ts` is the benchmark harness a [Measurement](cli.md#measure) of the
+suite runs: one whole `bun run test`, its output on stderr and its exit code kept, then a
+last stdout line of `own_ms` (built plus ran), `queued_ms` (the wait behind another suite or
+the budget), `passed` and `failed`. Output without the runner's `test: queued` line or
+Bun's summary is an error, never a zero.
+
 ### Tests against an installed harness
 
 A handful of tests ask the installed Claude, Codex, OpenCode and Pi whether they still take what
