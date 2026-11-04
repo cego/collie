@@ -49,6 +49,15 @@ const opened = computed(() =>
 const pageShown = computed(
   () => page.value !== null && (page.value.kind !== "record" || opened.value !== undefined),
 );
+const board = useHeldWhile(
+  () => ({
+    tasks: tasks.value,
+    sections: sections.value,
+    waiting: waiting.value,
+    finished: finished.value,
+  }),
+  () => pageShown.value,
+);
 // A page opened takes focus to its back button, but Go to pane leaves it in the pane; back
 // returns it to where it was.
 let focusedBefore: Element | null = null;
@@ -337,20 +346,23 @@ watch(update, (now) => {
                   : []
               "
             />
-            <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
+            <p v-if="board.tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
             <template v-for="[section, label] in SECTIONS" :key="section">
               <section
-                v-if="sections[section].length > 0"
+                v-if="board.sections[section].length > 0"
                 :data-testid="section"
                 class="flex flex-col gap-2"
               >
                 <template v-if="section === 'finished'">
-                  <BoardGrid v-if="finished.unseen.length > 0" :tasks="finished.unseen" />
+                  <BoardGrid
+                    v-if="board.finished.unseen.length > 0"
+                    :tasks="board.finished.unseen"
+                  />
                   <details>
                     <summary class="cursor-pointer text-sm font-semibold text-muted">
-                      {{ label }} · {{ sections.finished.length }}
+                      {{ label }} · {{ board.sections.finished.length }}
                     </summary>
-                    <BoardGrid :tasks="finished.seen" class="mt-2" />
+                    <BoardGrid :tasks="board.finished.seen" class="mt-2" />
                   </details>
                 </template>
                 <template v-else>
@@ -360,12 +372,14 @@ watch(update, (now) => {
                   >
                     {{ label }}
                   </h2>
-                  <BoardGrid :tasks="section === 'waiting' ? waiting.recent : sections[section]" />
-                  <details v-if="section === 'waiting' && waiting.older.length > 0">
+                  <BoardGrid
+                    :tasks="section === 'waiting' ? board.waiting.recent : board.sections[section]"
+                  />
+                  <details v-if="section === 'waiting' && board.waiting.older.length > 0">
                     <summary class="cursor-pointer text-sm text-muted">
-                      {{ waiting.older.length }} older than a week
+                      {{ board.waiting.older.length }} older than a week
                     </summary>
-                    <BoardGrid :tasks="waiting.older" class="mt-2" />
+                    <BoardGrid :tasks="board.waiting.older" class="mt-2" />
                   </details>
                 </template>
               </section>

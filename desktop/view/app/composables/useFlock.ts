@@ -16,6 +16,7 @@ import {
 import {
   EMPTY_FLOCK,
   flockCards,
+  type FlockCards,
   machineRows,
   notLiveOf,
   type PlacedTask,
@@ -39,7 +40,8 @@ export const useFlock = () => {
   const clock = useAtomValue(() => clockAtom);
   const now = computed(() => AsyncResult.getOrElse(clock.value, () => 0));
   const told = computed(() => flock.value.value ?? EMPTY_FLOCK);
-  const board = computed(() => flockCards(told.value));
+  let before: FlockCards | undefined;
+  const board = computed(() => (before = flockCards(told.value, before)));
   const tasks = computed(() => board.value.tasks);
   const placed = (some: ReadonlyArray<TaskView>) => Arr.map(some, board.value.placedOf);
   const sections = computed(() => sectionsOf(tasks.value, ""));
@@ -59,15 +61,16 @@ export const useFlock = () => {
     onboarding: computed(() => told.value.onboarding),
     tasks,
     everyTask: computed(() => placed(tasks.value)),
-    placedBy: (key: string) =>
-      Option.getOrUndefined(Arr.findFirst(placed(tasks.value), (one) => one.key === key)),
+    placedBy: (key: string) => board.value.byKey.get(key),
     placedAt: (machine: string, task: string) =>
       Option.getOrUndefined(
         Arr.findFirst(
-          placed(tasks.value),
+          [...board.value.byKey.values()],
           (one) => one.machine === machine && one.task.id === task,
         ),
       ),
+    /** The names of the Machines whose cards are saved ones, not live. */
+    away: computed(() => board.value.away),
     sections: computed(
       () =>
         ({

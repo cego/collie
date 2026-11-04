@@ -1,26 +1,15 @@
 <script setup lang="ts">
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
-import { pipe } from "effect/Function";
-import * as Str from "effect/String";
 import type { ComponentPublicInstance } from "vue";
-import type { Flow, FlowRun } from "../../../../src/board-model";
-import { stepSteering } from "../../../src/shared/step-steering";
+import type { Flow } from "../../../../src/board-model";
+import type { FlowActionView } from "../../../src/shared/flow-actions";
 import {
-  desktopFlowAction,
-  desktopLaneAction,
-  type FlowActionView,
-} from "../../../src/shared/flow-actions";
-import {
-  cardForLink,
   flowRows,
-  inspectorOf,
   isFlowMenuKey,
-  nodeName,
   type FlowCard,
   type FlowSelection,
   type FlowSpot,
 } from "../../../src/shared/flow";
+import { nodeKey, useFlowNodes } from "../composables/useFlowNodes";
 const props = defineProps<{
   flow: Flow;
   focused: FlowSpot | null;
@@ -46,89 +35,12 @@ const remember = (spot: FlowSpot, element: Element | ComponentPublicInstance | n
   if (element instanceof HTMLElement) buttons.set(keyOf(spot), element);
   else buttons.delete(keyOf(spot));
 };
-const rowFor = (run: string) =>
-  Option.getOrUndefined(Arr.findFirst(props.flow.lanes, (row) => row.run === run)) ??
-  props.flow.lanes.at(-1);
-const primary = (run: string, node: FlowRun) => {
-  const row = rowFor(run);
-  return row === undefined || node.primary == null
-    ? null
-    : desktopFlowAction(node.primary, node, row, props.installation, props.live);
-};
-const menu = (run: string, node: FlowRun) => {
-  const row = rowFor(run);
-  if (row === undefined) return [];
-  return Arr.flatMap([node.primary, ...(node.actions ?? [])], (kind) => {
-    if (kind == null) return [];
-    const one = desktopFlowAction(kind, node, row, props.installation, props.live);
-    return one === null
-      ? []
-      : [
-          {
-            label: one.label,
-            icon: one.icon,
-            onSelect: () =>
-              emit("act", one, {
-                run,
-                node: node.id,
-              }),
-          },
-        ];
-  });
-};
-const laneMenu = (run: string) => {
-  const row = Option.getOrUndefined(Arr.findFirst(props.flow.lanes, (one) => one.run === run));
-  return Arr.flatMap(
-    Option.getOrUndefined(Option.map(Option.fromNullishOr(row), (present) => present.actions)) ??
-      [],
-    (kind) => {
-      const one =
-        row === undefined ? null : desktopLaneAction(kind, row, props.installation, props.live);
-      return one === null
-        ? []
-        : [
-            {
-              label: one.label,
-              icon: one.icon,
-              onSelect: () => emit("act", one),
-            },
-          ];
-    },
-  );
-};
-const name = (run: string, node: FlowRun) =>
-  Arr.join(
-    Arr.filter(
-      [
-        nodeName(node, {
-          missing: node.link !== undefined && cardForLink(node, props.cards) === undefined,
-          notLive: Option.exists(
-            Option.fromNullishOr(node.link),
-            ({ machine }) => machine != null && props.away.has(machine),
-          ),
-          action: Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(primary(run, node)), (present__) => present__.label),
-          ),
-        }),
-        stepSteering(node).pause,
-        stepSteering(node).badge,
-      ],
-      (part): part is string => Boolean(part),
-    ),
-    ". ",
-  );
-const hover = (run: string, node: string) => {
-  const info = inspectorOf(props.flow, { run, node, item: null }, props.now);
-  return info === null
-    ? ""
-    : Arr.join(
-        Arr.filter(
-          [info.title, pipe(info.state, Str.replaceAll("-", " ")), info.said, ...info.lines],
-          (part): part is string => Boolean(part),
-        ),
-        "\n",
-      );
-};
+const drawn = useFlowNodes(props, (action, spot) =>
+  spot === undefined ? emit("act", action) : emit("act", action, spot),
+);
+/** What is drawn of a node, which every node of `rows` has. */
+const view = (run: string, node: string) => drawn.value.nodes.get(nodeKey(run, node))!;
+const laneMenu = (run: string) => drawn.value.laneMenus.get(run) ?? [];
 const matches = (spot: FlowSpot | null, run: string, node: string) =>
   spot?.run === run && spot.node === node;
 const showMenu = (element: HTMLElement | undefined) => {
@@ -245,15 +157,17 @@ defineExpose({
               :class="{ 'border-dashed': node.state === 'expected' }"
             />
             <UIcon
-              v-if="stepSteering(node).pause !== null"
+              v-if="view(row.run, node.id).steering.pause !== null"
               name="i-lucide-pause"
               class="absolute bg-default text-highlighted"
             />
           </span>
           <div class="relative min-w-0 flex-1">
-            <UContextMenu :items="menu(row.run, node)" :disabled="menu(row.run, node).length === 0"
+            <UContextMenu
+              :items="view(row.run, node.id).menu"
+              :disabled="view(row.run, node.id).menu.length === 0"
               ><UTooltip
-                :text="hover(row.run, node.id)"
+                :text="view(row.run, node.id).hover"
                 :delay-duration="300"
                 :ui="{ content: 'whitespace-pre-line' }"
               >
@@ -275,12 +189,12 @@ defineExpose({
                       'bg-muted': node.link !== undefined,
                       'border-success': node.kind === 'offer',
                       'ring-2 ring-primary/30': matches(selected, row.run, node.id),
-                      'pr-11': primary(row.run, node) !== null,
+                      'pr-11': view(row.run, node.id).primary !== null,
                       'opacity-50': node.link?.machine != null && away.has(node.link.machine),
                     },
                   ]"
                   :tabindex="matches(focused, row.run, node.id) ? 0 : -1"
-                  :aria-label="name(row.run, node)"
+                  :aria-label="view(row.run, node.id).name"
                   :aria-current="matches(flow.current, row.run, node.id) ? 'step' : undefined"
                   :aria-pressed="matches(selected, row.run, node.id)"
                   @focus="emit('focus', { run: row.run, node: node.id })"
@@ -293,10 +207,10 @@ defineExpose({
                       :class="{ 'max-w-40 shrink-0': rail }"
                       >{{ node.title }}</span
                     ><span
-                      v-if="stepSteering(node).badge !== null"
+                      v-if="view(row.run, node.id).steering.badge !== null"
                       class="inline-block shrink-0 rounded-full bg-elevated px-2 text-xs"
                       :class="{ 'mt-1': !rail }"
-                      >{{ stepSteering(node).badge }}</span
+                      >{{ view(row.run, node.id).steering.badge }}</span
                     ><span
                       v-if="node.said && (node.state !== 'expected' || node.pause != null)"
                       class="block truncate text-xs text-muted"
@@ -319,15 +233,15 @@ defineExpose({
                 </button> </UTooltip
             ></UContextMenu>
             <UButton
-              v-if="primary(row.run, node) !== null"
-              :icon="primary(row.run, node)!.icon"
-              :color="primary(row.run, node)!.color"
-              :aria-label="primary(row.run, node)!.label"
+              v-if="view(row.run, node.id).primary !== null"
+              :icon="view(row.run, node.id).primary!.icon"
+              :color="view(row.run, node.id).primary!.color"
+              :aria-label="view(row.run, node.id).primary!.label"
               variant="outline"
               size="xs"
               tabindex="-1"
               class="absolute right-2 top-1/2 -translate-y-1/2 rounded-full"
-              @click="emit('act', primary(row.run, node)!, { run: row.run, node: node.id })"
+              @click="emit('act', view(row.run, node.id).primary!, { run: row.run, node: node.id })"
             />
           </div>
         </li>

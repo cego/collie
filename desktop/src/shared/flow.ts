@@ -334,6 +334,38 @@ export const owningRun = (flow: Flow, spot: FlowSpot) =>
   spot.run === "release" ? (flow.lanes.at(-1)?.run ?? spot.run) : spot.run;
 const sameSpot = (one: FlowSpot | null, other: FlowSpot | null) =>
   one?.run === other?.run && one?.node === other?.node;
+const sameRuns = Arr.makeEquivalence<string>((one, other) => one === other);
+const sameCard = (one: FlowCard, other: FlowCard) =>
+  one.key === other.key && one.machine === other.machine && sameRuns(one.runs, other.runs);
+
+/**
+ * The cards a Flow's links can open, in the board's order. While they show what `before`
+ * shows they are `before`, so a change to a Task the Flow does not link to draws nothing.
+ */
+export const linkedCards = (
+  flow: Flow,
+  placed: ReadonlyArray<{
+    readonly key: string;
+    readonly machine: string;
+    readonly task: { readonly runs: ReadonlyArray<string> };
+  }>,
+  before?: ReadonlyArray<FlowCard>,
+): ReadonlyArray<FlowCard> => {
+  const linked = new Set(
+    Arr.flatMap(flowRows(flow), (row) =>
+      Arr.flatMap(row.nodes, (node) => (node.link?.run == null ? [] : [node.link.run])),
+    ),
+  );
+  const cards = Arr.flatMap(placed, ({ key, machine, task }) =>
+    Arr.some(task.runs, (run) => linked.has(run)) ? [{ key, machine, runs: task.runs }] : [],
+  );
+  return before !== undefined &&
+    before.length === cards.length &&
+    Arr.every(cards, (card, at) => sameCard(card, before[at]!))
+    ? before
+    : cards;
+};
+
 export const cardForLink = (node: FlowRun, cards: ReadonlyArray<FlowCard>) =>
   Option.getOrUndefined(
     Arr.findFirst(

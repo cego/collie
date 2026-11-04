@@ -13,10 +13,12 @@ import {
   flowKey,
   flowRows,
   inspectorOf,
+  linkedCards,
   nodeAt,
   rowOrigin,
   selectEntry,
   selectNode,
+  type FlowCard,
   type FlowPick,
   type FlowSelection,
   type FlowSpot,
@@ -33,23 +35,9 @@ const emit = defineEmits<{
   open: [run: string, tab: string, agent?: string];
   focusing: [focusing: boolean];
 }>();
-const { everyTask, now } = useFlock();
-const cards = computed(() =>
-  Arr.map(everyTask.value, (one) => ({
-    key: one.key,
-    machine: one.machine,
-    runs: one.task.runs,
-  })),
-);
-const away = computed(
-  () =>
-    new Set(
-      Arr.map(
-        Arr.filter(everyTask.value, (one) => one.asOf !== null),
-        (one) => one.machine,
-      ),
-    ),
-);
+const { everyTask, now, away } = useFlock();
+let shownCards: ReadonlyArray<FlowCard> | undefined;
+const cards = computed(() => (shownCards = linkedCards(props.flow, everyTask.value, shownCards)));
 const selected = ref<FlowSelection | null>(null);
 const first = () => {
   const row = Option.getOrUndefined(

@@ -1017,14 +1017,41 @@ export interface PlacedTask {
   readonly asOf: number | null;
 }
 
+export interface FlockCards {
+  readonly tasks: ReadonlyArray<TaskView>;
+  readonly placedOf: (task: TaskView) => PlacedTask;
+  readonly byKey: ReadonlyMap<string, PlacedTask>;
+  /** Each live Machine by its display name, and whether it is this computer's. */
+  readonly machines: ReadonlyArray<{
+    readonly installation: string;
+    readonly name: string;
+    readonly local: boolean;
+  }>;
+  /** The names of the Machines whose cards are saved ones, not live. */
+  readonly away: ReadonlySet<string>;
+}
+
+const samePlace = (one: PlacedTask, other: Omit<PlacedTask, "task">) =>
+  one.key === other.key &&
+  one.installation === other.installation &&
+  one.machine === other.machine &&
+  one.where === other.where &&
+  one.asOf === other.asOf;
+
 /**
  * Every Task of the Flock in the board's own order, and where it is: its Machine once there
- * is more than one, and its Herd only when its Machine runs several.
+ * is more than one, and its Herd only when its Machine runs several. A Task placed as it was
+ * in `before` is the same object, so what draws it is not drawn again.
  */
-export const flockCards = (flock: Flock) => {
+export const flockCards = (flock: Flock, before?: FlockCards): FlockCards => {
   const names = shownNames(flock);
   const placed = new Map<TaskView, PlacedTask>();
+  const byKey = new Map<string, PlacedTask>();
+  const away = new Set<string>();
   for (const [installation, { herds, tasks, asOf }] of flock.machines) {
+    // SAFETY: `names` holds every Machine of this Flock.
+    const machine = names.get(installation)!;
+    if (asOf !== null) away.add(machine);
     for (const task of tasks.values()) {
       const herd =
         herds.length > 1
@@ -1034,33 +1061,43 @@ export const flockCards = (flock: Flock) => {
         flock.machines.size > 1 ? names.get(installation) : undefined,
         herd === undefined ? undefined : (herd.name ?? herd.id),
       ];
-      placed.set(task, {
+      const place = {
         key: `${installation}:${task.id}`,
         installation,
-        // SAFETY: `names` holds every Machine of this Flock.
-        machine: names.get(installation)!,
-        task,
+        machine,
         where: Arr.join(
           Arr.filter(where, (part) => part !== undefined),
           " · ",
         ),
         asOf,
-      });
+      };
+      const was = before?.byKey.get(place.key);
+      const one =
+        was !== undefined && was.task === task && samePlace(was, place) ? was : { ...place, task };
+      placed.set(task, one);
+      byKey.set(one.key, one);
     }
   }
+  const machines = Arr.map(
+    Arr.filter([...flock.machines], ([, { asOf }]) => asOf === null),
+    ([installation, { machine }]) => ({
+      installation,
+      name: names.get(installation)!,
+      local: machine.profile === "local",
+    }),
+  );
   return {
     tasks: sortBoard([...placed.keys()]),
     // SAFETY: the board's helpers filter and sort these Tasks; they never make new ones.
     placedOf: (task: TaskView) => placed.get(task)!,
-    /** Each live Machine by its display name, and whether it is this computer's. */
-    machines: Arr.map(
-      Arr.filter([...flock.machines], ([, { asOf }]) => asOf === null),
-      ([installation, { machine }]) => ({
-        installation,
-        name: names.get(installation)!,
-        local: machine.profile === "local",
-      }),
-    ),
+    byKey,
+    machines,
+    away:
+      before !== undefined &&
+      before.away.size === away.size &&
+      Arr.every([...away], (name) => before.away.has(name))
+        ? before.away
+        : away,
   };
 };
 
