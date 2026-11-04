@@ -202,7 +202,7 @@ const unstagedPaths = (entries: string) => {
   return found;
 };
 
-/** Each checkout's index and root, which only a new checkout at the same path moves. */
+/** Each checkout root's index; a subdirectory is asked each time, since it can become a repository of its own. */
 const places = new Map<string, { readonly index: string; readonly root: string }>();
 
 const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
@@ -218,7 +218,7 @@ const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
   if (said.code !== 0) return null;
   const [index, cdup = ""] = Str.split(said.stdout, "\n");
   const place = { index: path.resolve(cwd, index), root: path.resolve(cwd, cdup) };
-  places.set(cwd, place);
+  if (cdup === "") places.set(cwd, place);
   return place;
 });
 

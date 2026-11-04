@@ -544,6 +544,27 @@ test("from a subdirectory, an edit too large anywhere in the checkout is no tree
     }),
   ));
 
+test("a subdirectory that becomes a repository of its own is fingerprinted by its own index", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const nested = path.join(repo, "nested");
+      yield* fs.makeDirectory(nested);
+      yield* fingerprint(nested);
+      yield* git(["init", "-q"], nested);
+      yield* git(["config", "user.email", "t@example.com"], nested);
+      yield* git(["config", "user.name", "t"], nested);
+      yield* fs.writeFileString(path.join(nested, ".gitignore"), "forced.txt\n");
+      yield* fs.writeFileString(path.join(nested, "forced.txt"), "one\n");
+      yield* git(["add", "-f", ".gitignore", "forced.txt"], nested);
+      yield* git(["commit", "-qm", "nested"], nested);
+      const before = yield* fingerprint(nested);
+      yield* fs.writeFileString(path.join(nested, "forced.txt"), "two\n");
+      expect(sameTree(before, yield* fingerprint(nested))).toBe(false);
+    }),
+  ));
+
 test("a tree git cannot stage is no tree, so an edit it hides moves nothing into a pass", () =>
   inRepository(
     Effect.gen(function* () {
