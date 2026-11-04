@@ -360,7 +360,6 @@ test("the Standing direction goes with every message, in the human's words and d
       expect(first).toContain("Everything is on the vm");
       expect(first).toContain("vm-mk:r-2: Run r-2 ended.");
 
-      // Edited between two messages, the second carries the new words and date.
       direction = { text: "Ask before any merge.", at: "2026-11-04T10:00:00.000Z" };
       const second = yield* contextNow();
       expect(second).toContain("Ask before any merge.");
