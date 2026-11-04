@@ -147,20 +147,27 @@ export type FlowEntry = {
   readonly folded: boolean;
   readonly wave?: number;
 };
+const formats = new Map<string | undefined, Intl.DateTimeFormat>();
+/** One formatter per zone: building one costs more than a record's whole Flow of instants. */
+const formatIn = (timeZone: string | undefined) => {
+  let format = formats.get(timeZone);
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    formats.set(timeZone, format);
+  }
+  return format;
+};
 const dateParts = (ms: number, timeZone: string | undefined) =>
   Rec.fromEntries(
-    Arr.map(
-      new Intl.DateTimeFormat("en-GB", {
-        timeZone,
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        hourCycle: "h23",
-      }).formatToParts(ms),
-      (part) => [part.type, part.value] as const,
-    ),
+    Arr.map(formatIn(timeZone).formatToParts(ms), (part) => [part.type, part.value] as const),
   );
 
 /** An instant on this Machine's clock: `11:22` today, `24 Oct, 11:22` on another day. */

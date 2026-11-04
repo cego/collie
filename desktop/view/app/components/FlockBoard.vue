@@ -297,9 +297,11 @@ watch(update, (now) => {
         />
       </header>
       <div class="relative min-h-0 flex-1">
+        <!-- Out of layout while a page covers it, or every card is laid out again for the page. -->
         <main
           class="flex h-full flex-col gap-6 overflow-y-auto p-4"
           :inert="pageShown"
+          :style="pageShown ? { contentVisibility: 'hidden' } : undefined"
           @click="click"
           @dblclick="doubleClick"
         >
