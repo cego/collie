@@ -108,7 +108,7 @@ export const treeOf: (
 > = Effect.fn("Verify.treeOf")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const [status, changed] = yield* Effect.all(
+  const [status, place] = yield* Effect.all(
     [
       git(
         [
@@ -117,11 +117,12 @@ export const treeOf: (
           "--branch",
           "--no-ahead-behind",
           "--ignore-submodules=none",
+          "--untracked-files=all",
           "-z",
         ],
         cwd,
       ),
-      git(["ls-files", "--modified", "--others", "--exclude-standard", "-z"], cwd),
+      placeOf(cwd),
     ],
     { concurrency: "unbounded" },
   );
@@ -133,23 +134,21 @@ export const treeOf: (
   const branch = !born || named === undefined ? null : named === "(detached)" ? "HEAD" : named;
   const dirty = entries !== "";
 
+  // Status names paths from the repository root, not from cwd.
+  const root = place?.root ?? cwd;
   let bytes = 0;
-  for (const relative of Str.split(changed.stdout, "\0")) {
-    if (relative === "") continue;
-    bytes += yield* fs.stat(path.join(cwd, relative)).pipe(
+  for (const relative of unstagedPaths(entries)) {
+    bytes += yield* fs.stat(path.join(root, relative)).pipe(
       Effect.map((info) => Number(info.size)),
       Effect.orElseSucceed(() => 0),
     );
     if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
   }
-  const tree = yield* workingTree(cwd);
+  // Outside a repository there is no tree to move, as there never was.
+  const tree = place === null ? "" : yield* workingTree(cwd, place.index);
   if (tree === UNMEASURED) return { head_sha, fingerprint: UNMEASURED, branch, dirty };
   const parts = [tree];
-  const subs = changedSubmodules(entries);
-  // Status names a submodule from the repository root, not from cwd.
-  const root =
-    subs.length === 0 ? "" : Str.trim((yield* git(["rev-parse", "--show-toplevel"], cwd)).stdout);
-  for (const sub of subs) {
+  for (const sub of changedSubmodules(entries)) {
     const inner = (yield* treeOf(path.join(root, sub))).fingerprint;
     if (inner === TOO_LARGE || inner === UNMEASURED || inner === "")
       return { head_sha, fingerprint: inner === TOO_LARGE ? TOO_LARGE : UNMEASURED, branch, dirty };
@@ -184,20 +183,55 @@ const changedSubmodules = (entries: string) => {
   return found;
 };
 
+/** Paths whose working-tree file differs from the index, and untracked ones, from the repository root. */
+const unstagedPaths = (entries: string) => {
+  const found: string[] = [];
+  let original = false;
+  for (const record of Str.split(entries, "\0")) {
+    if (original) {
+      original = false;
+      continue;
+    }
+    const [kind, xy = "", ...rest] = Str.split(record, " ");
+    original = kind === "2";
+    if (kind === "?") found.push(Arr.join([xy, ...rest], " "));
+    else if (kind === "u") found.push(Arr.join(Arr.drop(rest, 8), " "));
+    else if ((kind === "1" || kind === "2") && xy[1] !== ".")
+      found.push(Arr.join(Arr.drop(rest, kind === "1" ? 6 : 7), " "));
+  }
+  return found;
+};
+
+/** Each checkout's index and root, which only a new checkout at the same path moves. */
+const places = new Map<string, { readonly index: string; readonly root: string }>();
+
+const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const known = places.get(cwd);
+  if (
+    known !== undefined &&
+    (yield* fs.exists(known.index).pipe(Effect.orElseSucceed(() => false)))
+  )
+    return known;
+  const said = yield* git(["rev-parse", "--git-path", "index", "--show-cdup"], cwd);
+  if (said.code !== 0) return null;
+  const [index, cdup = ""] = Str.split(said.stdout, "\n");
+  const place = { index: path.resolve(cwd, index), root: path.resolve(cwd, cdup) };
+  places.set(cwd, place);
+  return place;
+});
+
 /** The tree `git add -A` would stage, written through a scratch copy so the checkout's own index is left as it was. */
 const workingTree = Effect.fn("Verify.workingTree")(
-  function* (cwd: string) {
+  function* (cwd: string, index: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const own = yield* git(["rev-parse", "--git-path", "index"], cwd);
-    // Outside a repository there is no tree to move, as there never was.
-    if (own.code !== 0) return "";
     return yield* Effect.acquireUseRelease(
       fs.makeTempDirectory({ prefix: "collie-index-" }),
       (scratch) =>
         Effect.gen(function* () {
           const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
-          const index = path.resolve(cwd, Str.trim(own.stdout));
           // A repository nothing was ever staged in has no index yet.
           if (yield* fs.exists(index)) yield* fs.copyFile(index, env.GIT_INDEX_FILE);
           if ((yield* shell("git", ["add", "-A"], cwd, env)).code !== 0) return UNMEASURED;
