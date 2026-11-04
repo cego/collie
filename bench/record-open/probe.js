@@ -6,7 +6,11 @@
   const flowMap = () =>
     document.querySelector('[data-testid="flow"] [role="group"][aria-label="Flow"]');
   // Vue's production devtools hooks, on in the benchmark's build only.
-  const flowOf = (map) => map?.__vueParentComponent?.props?.flow ?? null;
+  const flowOf = (map) => {
+    let component = map?.__vueParentComponent;
+    while (component != null && component.props?.flow === undefined) component = component.parent;
+    return component?.props.flow ?? null;
+  };
   const rowsOf = (flow) => [
     ...flow.lanes.map((lane) => lane.nodes),
     ...(flow.release === null ? [] : [flow.release]),
