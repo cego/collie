@@ -9,6 +9,7 @@ import {
   definitionsIn,
   DoorMap,
   type Door,
+  type Doors,
   offersOn,
   runDetailOn,
 } from "../desktop/src/bun/machine";
@@ -68,27 +69,30 @@ const detailDoor = (name: string, open: Set<string>) =>
     Queue.unbounded<string, { readonly _tag: "Closed" | "Broken" | "Died" }>(),
     (queue) => ({
       queue,
-      door: reached({
-        // SAFETY: a stream, as the client gives one when not asked for a queue.
-        runDetail: (() =>
-          Stream.fromQueue(queue).pipe(
-            // SAFETY: the tests read only a detail's title.
-            Stream.map((title) => ({ title }) as RunDetail),
-            Stream.catch(({ _tag }) =>
-              _tag === "Died"
-                ? Stream.die(new Error("the Run could not be read"))
-                : _tag === "Broken"
-                  ? Stream.fail(
-                      new RpcClientError({
-                        reason: new RpcClientDefect({ message: "socket closed", cause: null }),
-                      }),
-                    )
-                  : Stream.fromEffect(Effect.interrupt),
-            ),
-            Stream.onStart(Effect.sync(() => open.add(name))),
-            Stream.ensuring(Effect.sync(() => open.delete(name))),
-          )) as Door["runDetail"],
-      }),
+      door: {
+        // SAFETY: the tests read only a record's details.
+        record: {
+          // SAFETY: a stream, as the client gives one when not asked for a queue.
+          runDetail: (() =>
+            Stream.fromQueue(queue).pipe(
+              // SAFETY: the tests read only a detail's title.
+              Stream.map((title) => ({ title }) as RunDetail),
+              Stream.catch(({ _tag }) =>
+                _tag === "Died"
+                  ? Stream.die(new Error("the Run could not be read"))
+                  : _tag === "Broken"
+                    ? Stream.fail(
+                        new RpcClientError({
+                          reason: new RpcClientDefect({ message: "socket closed", cause: null }),
+                        }),
+                      )
+                    : Stream.fromEffect(Effect.interrupt),
+              ),
+              Stream.onStart(Effect.sync(() => open.add(name))),
+              Stream.ensuring(Effect.sync(() => open.delete(name))),
+            )) as Door["runDetail"],
+        } as Door,
+      },
     }),
   );
 
@@ -96,7 +100,7 @@ test("a Run's details follow its Machine from door to door, closed or broken, wi
   Effect.runPromise(
     Effect.gen(function* () {
       const open = new Set<string>();
-      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const doors = new DoorMap<Pick<Doors, "record">>();
       const a = yield* detailDoor("a", open);
       const b = yield* detailDoor("b", open);
       const c = yield* detailDoor("c", open);
@@ -120,7 +124,7 @@ test("a Run's details wait for a Machine with no door yet, and end with nothing 
   Effect.runPromise(
     Effect.gen(function* () {
       const open = new Set<string>();
-      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const doors = new DoorMap<Pick<Doors, "record">>();
       const a = yield* detailDoor("a", open);
       const reading = yield* runDetailOn(doors, "i-1", "r-1").pipe(
         Stream.take(1),
@@ -147,7 +151,7 @@ test("a Run's details wait for a Machine with no door yet, and end with nothing 
 test("a door that breaks and stays fails a Run's details", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const doors = new DoorMap<Pick<Doors, "record">>();
       const a = yield* detailDoor("a", new Set());
       doors.set("i-1", a.door);
       yield* Queue.fail(a.queue, { _tag: "Broken" });
@@ -162,7 +166,7 @@ test("a door that breaks and stays fails a Run's details", () =>
 test("a host that cannot read a Run still fails its details", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const doors = new DoorMap<Pick<Doors, "record">>();
       const a = yield* detailDoor("a", new Set());
       doors.set("i-1", a.door);
       yield* Queue.fail(a.queue, { _tag: "Died" });

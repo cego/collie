@@ -260,16 +260,19 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
 export type Door = Effect.Success<ReturnType<typeof openBridge>>;
 
 /**
- * A Machine's two channels: the board's and its actions on one, the Flock chat's tools on
- * the other. They know their Machine, so the chat's tools can name it.
+ * A Machine's three channels: the board's and its actions on one, its records on another, the
+ * Flock chat's tools on the third. A record has its own because a client reads its channel's
+ * messages in order, so one waits behind any board change not yet taken. They know their
+ * Machine, so the chat's tools can name it.
  */
 export interface Doors extends BoardSource {
   readonly machine: KnownMachine;
   readonly desktop: Door;
+  readonly record: Door;
   readonly chat: Door;
 }
 
-/** Opens both of a Machine's channels, each a bridge started as its front door. */
+/** Opens a Machine's channels, each a bridge started as its front door. */
 export const openDoors = (
   machine: KnownMachine,
   command: (as: Bridged) => ReadonlyArray<string>,
@@ -279,13 +282,15 @@ export const openDoors = (
   Effect.all(
     [
       openBridge(command("desktop"), env, waitingOnSso),
+      openBridge(command("desktop"), env, waitingOnSso),
       openBridge(command("chat"), env, waitingOnSso),
     ],
     { concurrency: "unbounded" },
   ).pipe(
-    Effect.map(([desktop, chat]): Doors => ({
+    Effect.map(([desktop, record, chat]): Doors => ({
       machine,
       desktop,
+      record,
       chat,
       board: desktop.board(),
       toasts: desktop.toasts(),
@@ -1567,11 +1572,12 @@ const nextDoor = <D>(doors: DoorMap<D>, installation: string, last?: D): Effect.
  * again over the next. It ends only when let go, the host fails it, or its door breaks and
  * stays.
  */
-export const runDetailOn = (doors: DoorMap<Reached>, installation: string, runId: string) => {
-  const after = (last?: Reached): Stream.Stream<RunDetail | null, ActionFailed> =>
+type RecordDoor = Pick<Doors, "record">;
+export const runDetailOn = (doors: DoorMap<RecordDoor>, installation: string, runId: string) => {
+  const after = (last?: RecordDoor): Stream.Stream<RunDetail | null, ActionFailed> =>
     Stream.unwrap(
       Effect.map(nextDoor(doors, installation, last), (door) =>
-        door.desktop
+        door.record
           .runDetail({
             runId,
             tail: true,
