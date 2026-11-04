@@ -45,12 +45,13 @@
     "click",
     (event) => {
       const card = event.target instanceof Element ? event.target.closest("[data-card]") : null;
-      if (
-        watching !== null &&
-        watching.start === null &&
-        card?.getAttribute("data-card") === watching.card
-      )
-        watching.start = event.timeStamp;
+      if (watching === null || watching.start !== null) return;
+      if (card?.getAttribute("data-card") === watching.card) watching.start = event.timeStamp;
+      else
+        watching.waiting = `for the click on its card; one landed on ${
+          card?.getAttribute("data-card") ??
+          (event.target instanceof Element ? event.target.tagName.toLowerCase() : "nothing")
+        }`;
     },
     true,
   );
@@ -61,10 +62,7 @@
     for (;;) {
       await frame();
       if (watching !== expected) return null;
-      if (expected.start === null) {
-        expected.waiting = "for the click on its card";
-        continue;
-      }
+      if (expected.start === null) continue;
       const map = flowMap();
       const flow = flowOf(map);
       if (flow === null) {
@@ -105,7 +103,7 @@
   window.__bench = {
     /** Times the next click on `card`, whose record should show `run`'s Flow. */
     expect: (card, run) => {
-      watching = { card, run, start: null, waiting: "to start" };
+      watching = { card, run, start: null, waiting: "for the click on its card" };
       window.__benchSample = follow(watching);
     },
     /** What the sample last waited on, said when it never paints. */
