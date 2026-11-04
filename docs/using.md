@@ -1696,6 +1696,9 @@ scope's rule once:
   the Flock chat's **Machine rule** (`machine_rule`) and **Flock chat speaks first**
   (`flock_chat.proactive`) beside each Machine's **Native chat speaks first**
   (`proactive`), so every Desktop routes work the same way, and the TUI shows them too.
+  Beside the Machine rule is your **Standing direction** (`standing_direction`): how you
+  like to work, in your own words, up to 4,000 characters, which every chat is given with
+  each message. It is shared like the rest, and a Run's agent cannot set it.
 - **This computer** is **Zoom** alone, under Board, marked **This computer** and saved on
   this computer, since monitors differ between computers. The Flock chat's harness, model,
   effort and width stay this computer's too, but have no rows here: they are chosen beside
@@ -1746,8 +1749,8 @@ Each setting has a plain name with its config key in small print, a sentence or 
 it changes (what 0 or unset means where that matters, and that `scope`, `density` and
 `questions` change the TUI's board, not Desktop's), a control that fits it, its default, and
 the same refusals as the TUI. A choice of six options or fewer is a row of radio buttons, so
-every option shows; a boolean is a switch; a number carries its unit in its field; JSON and
-the Machine rule are typed over several lines. Durations — `quiet_ms`, `idle_close_ms`,
+every option shows; a boolean is a switch; a number carries its unit in its field; JSON, the
+Machine rule and the Standing direction are typed over several lines. Durations — `quiet_ms`, `idle_close_ms`,
 `handoff_timeout_ms` and `board_quiet_ms` — are shown and typed in minutes, decimals where a
 value is not a whole number of them, and still stored in milliseconds, so `config.json` and
 `collie settings` are unchanged. A choice or a switch is saved when it changes; text is saved
@@ -2221,7 +2224,7 @@ and harness are kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation. Claude Code
 keeps and compacts its transcript; Pi keeps its session files under Desktop's `pi-sessions/`.
 Desktop reads Pi's current branch and earlier conversations from those files.
-The Machine rule, News and card note reach Pi after your words as a bracketed note of
+The Machine rule, Standing direction, News and card note reach Pi after your words as a bracketed note of
 Desktop's own. Reading the transcript back leaves the context out of your bubble and keeps
 the card as its pill.
 
@@ -2345,6 +2348,16 @@ edit from Desktop given to every Machine, and Settings shows the new text. The r
 nothing more: a start that names no Machine while several are reachable is still refused,
 and a Run the rule placed on another Machine still opens with Go to pane over that
 Machine's own connection.
+
+Your **Standing direction**, under **Chat** beside the Machine rule, is what you want every
+conversation to keep: "Stage only; production waits for my go." The chat gets it with every
+message, with the date you last edited it, as something you said earlier. It is never your go
+for a release, a merge or anything else that needs one, and grants Collie no Authority. Tell
+the chat "keep that", "add to my standing direction" or "drop that rule", and it replaces the
+text, with `collie_direction`, by exactly what you approved and says what is kept now; it
+may offer to keep something lasting you said, and writes only on your yes. Empty clears it,
+and text over 4,000 characters is refused. Words from a tool, a Run's notes or an agent never
+go into it, and a rule about one repository belongs in that workspace's defaults instead.
 
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, every harness's, newest first, and reopens one. Either way the

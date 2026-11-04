@@ -10,6 +10,7 @@ import type { DesktopSettings } from "../desktop/src/shared/flock";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 let noticed: string | undefined;
 let rule: string | undefined;
+let direction: { readonly text: string; readonly at: string } | undefined;
 const machines = [
   { name: "mk-pc", local: true },
   { name: "vm-mk", local: false },
@@ -29,6 +30,7 @@ const options = sessionOptions({
   },
   noticed: () => noticed,
   placement: () => (rule === undefined ? undefined : { rule, machines }),
+  standing: () => direction,
 });
 const permission = {
   signal: new AbortController().signal,
@@ -187,6 +189,7 @@ test("the human's own servers are read from Claude Code's config, and Collie's k
     ask: () => Promise.resolve(null),
     noticed: () => undefined,
     placement: () => undefined,
+    standing: () => undefined,
   });
   expect(shadowed.mcpServers.collie).toMatchObject({ type: "sdk" });
 });
@@ -302,6 +305,7 @@ test("a question in a turn nobody is watching is refused, so the turn ends rathe
         ask: () => Promise.resolve(null),
         noticed: () => undefined,
         placement: () => undefined,
+        standing: () => undefined,
       });
       const answer = yield* Effect.promise(() =>
         unwatched.canUseTool("AskUserQuestion", { questions: [] }, permission),
@@ -330,6 +334,42 @@ test("the Machine rule goes with every message, in the human's words, beside the
       expect(second).toContain("Everything is on the vm");
       expect(second).not.toContain("Frontend");
       rule = undefined;
+    }),
+  ));
+
+test("the Standing direction goes with every message, in the human's words and dated, beside the Machine rule and News", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const contextNow = () =>
+        Effect.map(submitted(), (hook) => hook.hookSpecificOutput?.additionalContext ?? "");
+      rule = undefined;
+      noticed = undefined;
+      direction = { text: "", at: "2026-11-02T08:00:00.000Z" };
+      expect(yield* submitted()).toEqual({});
+      rule = "Everything is on the vm";
+      noticed = "- [routine] vm-mk:r-2: Run r-2 ended.";
+      expect(Str.toLowerCase(yield* contextNow())).not.toContain("standing direction");
+
+      direction = {
+        text: "Stage only;\nproduction waits for my go.",
+        at: "2026-11-03T09:30:00.000Z",
+      };
+      const first = yield* contextNow();
+      expect(first).toContain("Stage only;\nproduction waits for my go.");
+      expect(first).toContain("2026-11-03");
+      expect(first).toContain("Everything is on the vm");
+      expect(first).toContain("vm-mk:r-2: Run r-2 ended.");
+
+      // Edited between two messages, the second carries the new words and date.
+      direction = { text: "Ask before any merge.", at: "2026-11-04T10:00:00.000Z" };
+      const second = yield* contextNow();
+      expect(second).toContain("Ask before any merge.");
+      expect(second).toContain("2026-11-04");
+      expect(second).not.toContain("Stage only");
+      expect(second).not.toContain("2026-11-03");
+      rule = undefined;
+      noticed = undefined;
+      direction = undefined;
     }),
   ));
 

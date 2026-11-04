@@ -150,6 +150,15 @@ is still refused. Only the Flock chat chooses between Machines, so the rule is D
 and no Machine is given it. Where the Run lands on the chosen Machine is still decided by
 placement ([ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md)).
 
+**Standing direction** — The human's own words on how they like to work, kept for every
+chat in the shared `standing_direction` setting beside the **Machine rule**: "stage only;
+production waits for my go". A chat is given it with every message, dated by its last edit,
+with the standing of something the human said earlier and no more: it is never
+**Authority**, a **Go** or a **Confirmation**. Only the human writes it, in Settings or by
+asking a chat to keep or change it; an edit from a Run's agent is refused. At most 4,000
+characters. A rule about one repository belongs in that workspace's defaults
+([ADR-draft-a-humans-standing-direction-outlives-the-chat](docs/adr/draft-a-humans-standing-direction-outlives-the-chat.md)).
+
 **Home** — Where a human works with the Herd from a terminal: two core terminals the
 Machine's host keeps, whatever its `terminal_backend`. `collie-board` draws the board and
 `collie-chat` holds **Native chat**, both in the Herd's own directory, which has no
@@ -347,7 +356,8 @@ harness accepted it) are not Quiet. Only Quiet counts as stopped.
 **Flock chat**, in Desktop). For a Herd, also the durable journal of human and Collie turns, plus the turns
 the board starts (`event`) when something meaningful changes — recorded as the board's, never
 as the human's. Redacted for credential-shaped values, bounded to 500 turns and 30 days, and
-never a worker transcript.
+never a worker transcript. What is said in one ends with it; the **Standing direction** is the
+human's text that outlives it.
 
 **Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
 its worktree under guards. It is how new steps start: a Workflow of its own, with its own

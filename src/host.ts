@@ -2022,6 +2022,15 @@ const frontDoorHandlers = (
           plainly(
             Effect.gen(function* () {
               const who = whoOf(client);
+              // AGENTS.md's first invariant allows this one exception: a harm only an agent could cause.
+              if (
+                who.origin === "agent" &&
+                Arr.some(settings, ({ key }) => key === "standing_direction")
+              )
+                return yield* new HostRefused({
+                  reason:
+                    "a Run's agent cannot set standing_direction: it reads repositories and trackers, and what it wrote there would reach every chat as the human's words",
+                });
               const trail = (yield* Path.Path).join(env.stateDir, "settings");
               const taken = yield* once(
                 trail,

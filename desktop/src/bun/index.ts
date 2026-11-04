@@ -98,6 +98,7 @@ import {
   editSetting,
   NO_FLOCK_SETTINGS,
   type FlockSettings,
+  standingDirectionOf,
 } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { changedLine } from "../../../src/schedule-model";
@@ -884,6 +885,14 @@ const main = Effect.gen(function* () {
     setMachineRule: (machineRule) =>
       editFlock("machine_rule", machineRule).pipe(
         Effect.asVoid,
+        Effect.orDie,
+        Effect.provide(BunServices.layer),
+      ),
+    standingDirection: () => standingDirectionOf(SubscriptionRef.getUnsafe(flockSettings)),
+    setStandingDirection: (text) =>
+      editFlock("standing_direction", text).pipe(
+        Effect.as(null),
+        Effect.catchTag("ActionFailed", ({ reason }) => Effect.succeed(reason)),
         Effect.orDie,
         Effect.provide(BunServices.layer),
       ),

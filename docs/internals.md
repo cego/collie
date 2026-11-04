@@ -699,6 +699,18 @@ refused as before. `collie_machine_rule` (`desktop/src/bun/flock-tools.ts`) read
 back or replaces it, through the one write Settings uses; it is in the Flock chat's toolkit
 only, not among the Collie tools both chats share.
 
+### The Standing direction
+
+`standing_direction` is one of the Flock's settings, so its text and last edit come from
+Desktop's Flock settings on every turn. `standingDirectionContext`
+(`src/standing-direction.ts`) words the block for every chat, and an empty direction adds
+none; the Flock chat puts it in the `UserPromptSubmit` hook on Claude and in the bracketed
+note on Pi, beside the Machine rule. `collie_direction` reads it or replaces it through
+Settings' edit path. A host refuses an edit of it from the `agent` front door
+(`setSettings` in `src/host.ts`), and nothing that decides Authority, a Go, a Confirmation or
+admission reads it
+([ADR-draft-a-humans-standing-direction-outlives-the-chat](adr/draft-a-humans-standing-direction-outlives-the-chat.md)).
+
 ### Settings shared across a Flock
 
 Collie's settings are one list, `src/settings.ts`: each key with its kind, its choices, its

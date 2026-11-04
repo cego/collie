@@ -95,6 +95,7 @@ export const claudeDriver = <Server>(
           ask: opts.ask,
           noticed: opts.noticed,
           placement: opts.placement,
+          standing: () => opts.flock.standingDirection(),
         }),
       });
       let lastTurn: TurnCost | undefined;

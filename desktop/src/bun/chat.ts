@@ -245,6 +245,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   readonly proactive: () => boolean;
   readonly machineRule: FlockChat["machineRule"];
   readonly setMachineRule: FlockChat["setMachineRule"];
+  readonly standingDirection: FlockChat["standingDirection"];
+  readonly setStandingDirection: FlockChat["setStandingDirection"];
   readonly inSync: FlockChat["inSync"];
   readonly helle?: FlockChat["helle"];
   /** What the chat's session opens on, as Settings have it now, or why it cannot run. */
@@ -302,6 +304,8 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     uploaded: new Map(),
     machineRule: opts.machineRule,
     setMachineRule: opts.setMachineRule,
+    standingDirection: opts.standingDirection,
+    setStandingDirection: opts.setStandingDirection,
     inSync: opts.inSync,
     helle: opts.helle,
     chatHarness: opts.chatHarness,

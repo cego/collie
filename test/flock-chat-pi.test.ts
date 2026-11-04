@@ -26,6 +26,8 @@ import { changeSettings } from "../desktop/src/bun/settings";
 import { chatSelects, choiceNotices } from "../desktop/src/shared/chat-choices";
 import { callFlockTool } from "../desktop/src/bun/flock-tools";
 
+let direction: { readonly text: string; readonly at: string } | undefined;
+
 const withPi = <A, E>(
   body: (
     driver: ReturnType<typeof piDriver>,
@@ -63,6 +65,8 @@ const withPi = <A, E>(
           uploaded: new Map(),
           machineRule: () => "",
           setMachineRule: () => Effect.void,
+          standingDirection: () => direction,
+          setStandingDirection: () => Effect.succeed(null),
           inSync: () => Effect.succeed(""),
           chatHarness: () => ({ harness: "pi", model: undefined, effort: undefined }),
           chatChoices: Effect.die("not asked"),
@@ -196,6 +200,42 @@ test("Pi's start isolates resources, keeps the token in its environment and send
       expect(details.prompt.message).toContain("Here");
       expect(details.prompt.message).toContain("A Run ended");
       expect(details.prompt.message).not.toContain("cGRm");
+    }),
+  ));
+
+test("Pi's note carries the Standing direction's words and date beside the Machine rule, and leaves it out while empty", () =>
+  withPi((driver) =>
+    Effect.gen(function* () {
+      const noteOf = (id: string) =>
+        Effect.gen(function* () {
+          const session = yield* driver.open(id, "openai-codex/gpt-6.1-sol", "medium");
+          yield* session.offer("inspect");
+          const events = yield* Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)));
+          yield* session.close;
+          const text = Option.getOrUndefined(
+            Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
+          );
+          if (text?.type !== "TEXT_MESSAGE_CONTENT")
+            return yield* Effect.die(new Error("No reply"));
+          return (yield* Schema.decodeEffect(
+            Schema.fromJsonString(
+              Schema.Struct({ prompt: Schema.Struct({ message: Schema.String }) }),
+            ),
+          )(text.delta).pipe(Effect.orDie)).prompt.message;
+        });
+      direction = {
+        text: "Stage only; production waits for my go.",
+        at: "2026-11-03T09:30:00.000Z",
+      };
+      const kept = yield* noteOf("pi-standing");
+      expect(kept).toContain("Stage only; production waits for my go.");
+      expect(kept).toContain("2026-11-03");
+      expect(kept).toContain("Here");
+      direction = { text: "", at: "2026-11-04T10:00:00.000Z" };
+      const cleared = yield* noteOf("pi-standing-cleared");
+      expect(cleared).toContain("Here");
+      expect(Str.toLowerCase(cleared)).not.toContain("standing direction");
+      direction = undefined;
     }),
   ));
 
@@ -473,6 +513,8 @@ test("Pi's configuration is read as a session opens, so a level changed since De
         proactive: () => false,
         machineRule: () => "",
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         inSync: () => Effect.succeed(""),
         choice: () => opensOn(settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir)),
         offered: (harness) =>
@@ -643,6 +685,8 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
         proactive: () => false,
         machineRule: () => "",
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         inSync: () => Effect.succeed(""),
         choice: () =>
           Effect.succeed({ ok: true, choice: { harness: "pi", model: "default", effort: null } }),

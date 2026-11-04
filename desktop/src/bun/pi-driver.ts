@@ -24,6 +24,7 @@ import { childEnv, which } from "./login-env";
 import { decodePiRecord, piEvents, piToolName } from "./pi-agui";
 import { piPrompt, piSessions } from "./pi-transcript";
 import { noticedContext, placementContext, systemPrompt } from "./session";
+import { standingDirectionContext } from "../../../src/standing-direction";
 
 const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
 const TOOL_TIMEOUT = 24 * 60 * 60;
@@ -125,6 +126,7 @@ export const piDriver = (
             Arr.filter(
               [
                 placement === undefined ? "" : placementContext(placement),
+                standingDirectionContext(context.flock.standingDirection()) ?? "",
                 noticed === undefined ? "" : noticedContext(noticed),
               ],
               (text) => text !== "",
