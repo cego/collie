@@ -36,7 +36,6 @@ export const suiteReadings = (
   };
 };
 
-/** All of `stream`'s text, each chunk written to stderr as it comes. */
 const passedThrough = (stream: ReadableStream<Uint8Array>) => {
   const decoder = new TextDecoder();
   let text = "";

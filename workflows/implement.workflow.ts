@@ -1041,7 +1041,6 @@ const asCheckpoint = flow(
   Result.getOrThrow,
 );
 
-/** How a speed-up criterion is proved with `benchmark`, led by section `lead`. */
 const measuredBy = (lead: string, benchmark: string) =>
   `\n\n${pipe_(
     `${Str.trim(content.sections.get(lead) ?? "")}\n${Str.trim(content.sections.get("measure.steps") ?? "")}`,

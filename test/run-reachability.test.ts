@@ -97,10 +97,6 @@ const view = (runId: string, task: string, more: Partial<RunView> = {}): RunView
   landing: null,
 });
 
-/**
- * A host listening on `socket` for state directory `dir`, holding `views` and the Runs of
- * `agents` by agent name; its `run` calls are counted.
- */
 const hostOf = (
   socket: string,
   dir: string,
