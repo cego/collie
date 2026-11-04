@@ -38,6 +38,7 @@ import { savedModules, type Fault, type Found } from "./discovery";
 import {
   connect,
   connectPeer,
+  followVerify,
   frontDoor,
   restartHost,
   restartSaid,
@@ -399,7 +400,7 @@ type Answered<A> = { readonly ok: true; readonly value: A; readonly machine: str
  * names — asked on its own connection. An operation names the front door asking, which the
  * channel declares before anything else.
  */
-const asks = <A>(
+export const asks = <A>(
   env: PluginEnv,
   question: (client: HostClient) => Effect.Effect<A, HostFailure>,
   door?: Door,
@@ -2015,7 +2016,16 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
   const found = yield* asksRun(env, request.runId, () => Effect.void, door);
   if (!found.ok) return found;
   const client = yield* reach(env, found.machine, door);
-  return { ok: true as const, events: client.verify(request) };
+  const events = client.verify(request);
+  if (found.machine !== null) return { ok: true as const, events };
+  return {
+    ok: true as const,
+    events: followVerify(env.stateDir, events, (again) =>
+      door === undefined
+        ? Effect.void
+        : again.declare(declaring(door, env.socketPath, env.hostStamp)),
+    ),
+  };
 });
 
 /** A Measurement of the Run's checkout, asked of the host on the Run's own Machine. */

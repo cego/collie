@@ -37,6 +37,7 @@ import {
   flow,
 } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
+import * as SqlClient from "effect/sql/SqlClient";
 import { Rig, FakeHerdr } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";
@@ -83,7 +84,7 @@ import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { slackApi } from "../../src/slack";
 import { writeSlackToken } from "../../src/slack-credentials";
-import { fakeSlack } from "./slack";
+import { fakeSlack, signedInToSlack } from "./slack";
 import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import {
@@ -112,7 +113,7 @@ import {
 } from "../../src/engine";
 import { declaredBy } from "../../src/discovery";
 import { readMeasurements } from "../../src/measurement";
-import type { Measurement } from "../../src/measurement-model";
+import type { BenchmarkPlan, Measurement } from "../../src/measurement-model";
 import { nothingToLandFile } from "../../src/standing";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
@@ -269,6 +270,7 @@ const session = <A, E>(
     | Children
     | Host
     | Store
+    | SqlClient.SqlClient
     | FileSystem.FileSystem
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner
@@ -1620,6 +1622,207 @@ scenario(
         );
         expect(yield* questions("r-plan-alone-bad")).toEqual([]);
         expect(started).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+/** A ticket the planner wrote, and the benchmark plan beside it where it names one. */
+const ticketed = (
+  runId: string,
+  file: string,
+  title: string,
+  benchmark?: typeof BenchmarkPlan.Encoded,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const issues = `${runDir(dir, runId)}/plan/issues`;
+    yield* fs.makeDirectory(issues, { recursive: true });
+    yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
+    const named = pipe(file, Str.replace(/\.md$/, ".benchmark.json"));
+    if (benchmark !== undefined) yield* fs.writeFileString(`${issues}/${named}`, asJson(benchmark));
+    yield* fs.writeFileString(
+      `${issues}/${file}`,
+      Arr.join(
+        [
+          `# ${title}`,
+          "",
+          "**Blocked by:** None",
+          ...(benchmark === undefined ? [] : ["", `**Benchmark:** ${named}`]),
+          "",
+          "**Checks:** unit",
+          "",
+          `- [ ] ${title}`,
+          "",
+        ],
+        "\n",
+      ),
+    );
+    return `${issues}/${named}`;
+  }).pipe(Effect.orDie);
+
+/** A benchmark plan as a planner writes one: the harness's paths, and no commits yet. */
+const speedUp = (metrics: typeof BenchmarkPlan.Encoded.metrics): typeof BenchmarkPlan.Encoded => ({
+  harness: { commits: [], paths: ["bench"] },
+  commands: [
+    { name: "bench", executable: "sh", argv: ["bench/bench.sh", `${rig.root}/bench-runs`] },
+  ],
+  metrics,
+  samples: 4,
+});
+
+/** A step's own text, from its work source on, with this rig's directories named the same in every rig. */
+const unrooted = (prompt: string) =>
+  pipe(
+    prompt,
+    Str.slice(Option.getOrElse(pipe(prompt, Str.indexOf("Work source")), () => 0)),
+    Str.replaceAll(dir, "<state>"),
+    Str.replaceAll(rig.root, "<root>"),
+  );
+
+scenario(
+  "a plan chained into implement writes a speed-up ticket's criterion as a Measurement, which its builder takes with collie measure, and a plain ticket as before",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        const harness = yield* harnessCommit({ "bench/bench.sh": CYCLE_BENCH });
+        const benchmark = yield* ticketed(
+          "r-plan-speed",
+          "01-faster.md",
+          "search answers in less time",
+          speedUp([STEADY_PRIMARY, SIZE_GUARDRAIL]),
+        );
+        yield* ticketed("r-plan-speed", "02-plain.md", "search reads its own index");
+        const builtFor = (criterion: string) => ({
+          ...BUILT,
+          criteria: [{ criterion, met: "the scenario shows it" }],
+        });
+        // The faster ticket's Output is written by hand, once its builder has measured.
+        yield* rig.queueOutputs([
+          GRILLED,
+          SPEC,
+          TICKETS,
+          null,
+          builtFor("search reads its own index"),
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        yield* ran({
+          entry: shipped("plan"),
+          runId: "r-plan-speed",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
+          input: { ...GOAL, then: "implement" },
+        });
+        const input = { plan: `${runDir(dir, "r-plan-speed")}/plan`, ...FINISH };
+        expect(Arr.map(started, (one) => [one.workflow, one.input])).toEqual([
+          ["implement", input],
+        ]);
+
+        const build = "r-plan-speed-implement";
+        yield* approve(build, ["unit"]);
+        const running = yield* Effect.forkChild(
+          ran({
+            entry: shipped("implement"),
+            runId: build,
+            input,
+            options: started[0]!.options,
+          }),
+        );
+        const agents = `${dir}/agents/${build}`;
+        yield* until(
+          () =>
+            fs.exists(`${agents}/01-faster.md.prompt.md`).pipe(Effect.orElseSucceed(() => false)),
+          (there) => there,
+        );
+        const faster = pipe(yield* asked(build, "01-faster.md"), Str.replace(/\s+/g, " "));
+        for (const pass of ["calibration", "final"])
+          expect(faster).toMatch(
+            new RegExp(`collie measure --base \\S+ --plan ${benchmark} --pass ${pass}`),
+          );
+
+        // The builder: the harness's commit added to the plan, then both passes measured.
+        const plan = { ...speedUp([STEADY_PRIMARY, SIZE_GUARDRAIL]) };
+        yield* fs.writeFileString(
+          benchmark,
+          asJson({ ...plan, harness: { ...plan.harness, commits: [harness] } }),
+        );
+        const base = yield* originHead();
+        const measured = (pass: string) =>
+          session(
+            Host.pipe(
+              Effect.flatMap((host) =>
+                host.measure({
+                  runId: build,
+                  base,
+                  cwd: rig.projectDir,
+                  plan: { ...plan, harness: { ...plan.harness, commits: [harness] } },
+                  pass,
+                }),
+              ),
+            ),
+          );
+        yield* measured("calibration");
+        yield* exec(["sh", "-c", "echo 3 > count && git add count && git commit -qm faster"], {
+          cwd: rig.projectDir,
+        });
+        const { measurement: final } = yield* measured("final");
+        yield* fs.writeFileString(
+          `${agents}/01-faster.md.json`,
+          asJson(builtFor("search answers in less time")),
+        );
+        yield* Fiber.join(running);
+        yield* bin.restore();
+
+        const plain = yield* asked(build, "02-plain.md");
+        expect(plain).not.toContain("collie measure");
+        // Rendered by 7d15bed3, before tickets named a benchmark plan.
+        expect(unrooted(plain)).toBe(
+          yield* readText(`${ROOT}test/fixtures/plain-ticket-build.prompt.txt`),
+        );
+
+        const mr = pipe(yield* asked(build, "mr"), Str.replace(/\s+/g, " "));
+        expect(verdictsOf(final)).toEqual(["bench.count gain", "bench.size no-change"]);
+        expect(mr).toContain(`final Measurement ${final.id}: bench.count gain`);
+        expect(mr).toContain("bench.size no-change");
+        expect(mr).toContain(
+          "Where the evidence names a `final` Measurement, put its id and each metric's verdict in the description.",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a ticket's benchmark plan the decoder refuses fails the plan's tickets step with its reason, before any implement Run starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* ticketed(
+          "r-plan-two-primaries",
+          "01-faster.md",
+          "search answers in less time",
+          speedUp([STEADY_PRIMARY, { ...SIZE_GUARDRAIL, role: "primary" }]),
+        );
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+
+        const result = yield* ran({
+          entry: shipped("plan"),
+          runId: "r-plan-two-primaries",
+          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
+          input: { ...GOAL, then: "implement" },
+        });
+
+        expect(reasonOf(result)).toContain(
+          "01-faster.benchmark.json: a plan declares exactly one primary metric, not 2",
+        );
+        expect(started).toEqual([]);
+        expect(statesOf(yield* laneNow("r-plan-two-primaries", "failed"))).toContainEqual([
+          "tickets",
+          "failed",
+        ]);
       }),
     ),
   120_000,
@@ -3580,6 +3783,118 @@ scenario(
           "- 01-first.md: after merge: The nightly deploy counts each registry once.",
         );
         expect(opening).toContain("- 01-first.md: after merge: The dashboard shows it.");
+      }),
+    ),
+  120_000,
+);
+
+/** implement delivering a ticket with an after-merge outcome, to park on its merge request: `gh` is missing. */
+const afterMergeParking = (runId: string) =>
+  Effect.gen(function* () {
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* noGitlabMrs(bin);
+    yield* bin.add(
+      "gh",
+      `case "$1 $2" in
+  "auth token") echo gho-fake; exit 0;;
+  "auth status") echo 'Logged in to github.com account tester'; exit 0;;
+esac
+exit 127`,
+    );
+    yield* repository();
+    yield* exec(["git", "remote", "set-url", "upstream", "git@github.com:team/project.git"], {
+      cwd: rig.projectDir,
+    });
+    const plan = yield* planOf([
+      {
+        file: "01-first.md",
+        title: "the first one",
+        checks: "unit",
+        body: "\n## After merge\n\n- The nightly deploy counts each registry once.\n",
+      },
+    ]);
+    yield* approve(runId, ["unit"]);
+    yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+    const repaired = exec(
+      ["git", "remote", "set-url", "origin", "git@gitlab.example.com:team/project.git"],
+      { cwd: rig.projectDir },
+    );
+    return { bin, repaired, options: { entry: shipped("implement"), runId, input: { plan } } };
+  });
+
+const unsettledLines = (runId: string) =>
+  Effect.map(
+    runLog(runId),
+    (log) => Arr.filter(Str.split(log, "\n"), Str.startsWith("unsettled: ")).length,
+  );
+
+scenario(
+  "a delivery parked, resumed and answered at What next records its unsettled outcomes once",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-unsettled-once";
+        const { bin, repaired, options } = yield* afterMergeParking(runId);
+        const status = yield* driven(options, (run) =>
+          Effect.gen(function* () {
+            yield* until(
+              () => parkedWhy(runId),
+              (why) => why !== "",
+            );
+            yield* repaired;
+            yield* run.resume;
+            yield* goAsked(run.asked, "next");
+            yield* run.answer("next", "Finish");
+            return yield* ended(run.status);
+          }),
+        );
+        yield* bin.restore();
+
+        expect(status.status).toBe("complete");
+        expect(yield* unsettledLines(runId)).toBe(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a Run parked after its unsettled outcomes were recorded with no Activity resumes, and records them at most once more",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-unsettled-recovered";
+        const { bin, repaired, options } = yield* afterMergeParking(runId);
+        yield* parkedOn(options);
+        // The journal origin/master's build leaves: the line in log.txt, no Activity for it.
+        const forgotten = yield* session(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const recorded = `SELECT id FROM cluster_messages WHERE tag = 'activity' AND payload LIKE '%"name":"unsettled"%'`;
+            const found = (yield* sql.unsafe(recorded)).length;
+            yield* sql.unsafe(`DELETE FROM cluster_replies WHERE request_id IN (${recorded})`);
+            yield* sql.unsafe(`DELETE FROM cluster_messages WHERE id IN (${recorded})`);
+            return found;
+          }),
+        );
+        expect(forgotten).toBe(1);
+        expect(yield* unsettledLines(runId)).toBe(1);
+        yield* repaired;
+
+        const status = yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.gen(function* () {
+            yield* run.resume;
+            yield* goAsked(run.asked, "next");
+            const resumed = yield* unsettledLines(runId);
+            yield* run.answer("next", "Finish");
+            const finished = yield* ended(run.status);
+            return { finished, resumed };
+          }),
+        );
+        yield* bin.restore();
+
+        expect(status.finished.status).toBe("complete");
+        expect(status.resumed).toBeLessThanOrEqual(2);
+        expect(yield* unsettledLines(runId)).toBe(status.resumed);
       }),
     ),
   120_000,
@@ -9642,16 +9957,22 @@ const releaseHost = <E = never>(
 /**
  * A Run of a shipped module, driven from outside while it runs: its status, what it asks,
  * and an answer given as a door gives one. Answers with what `drive` does. A `restarted` Run
- * was admitted by an earlier host, which this one takes over from.
+ * was admitted by an earlier host, which this one takes over from. `reached` is completed
+ * once an answer has reached the engine.
  */
 const driven = <A, E>(
-  options: ShippedRun & { readonly restarted?: boolean },
+  options: ShippedRun & {
+    readonly restarted?: boolean;
+    readonly reached?: Deferred.Deferred<void>;
+  },
   drive: (run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
     readonly asked: Effect.Effect<
       ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
     >;
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
+    /** Whether the engine has done with the answer to `decision`, waking the Run included. */
+    readonly taken: (decision: string) => Effect.Effect<boolean>;
     readonly resume: Effect.Effect<void>;
   }) => Effect.Effect<A, E, FileSystem.FileSystem>,
 ) =>
@@ -9660,6 +9981,20 @@ const driven = <A, E>(
       const made = yield* loaded(options.entry, options.runId);
       const engine = yield* WorkflowEngine.WorkflowEngine;
       const store = yield* Store;
+      const sql = yield* SqlClient.SqlClient;
+      const reached = options.reached;
+      const answering =
+        reached === undefined
+          ? engine
+          : WorkflowEngine.WorkflowEngine.of({
+              ...engine,
+              poll: (workflow, id) =>
+                Effect.tap(engine.poll(workflow, id), () => Deferred.succeed(reached, undefined)),
+              deferredDone: (deferred, done) =>
+                Effect.tap(engine.deferredDone(deferred, done), () =>
+                  Deferred.succeed(reached, undefined),
+                ),
+            });
       if (options.restarted !== true)
         yield* admit({ runId: options.runId, workflow: made.workflow.name, input: options.input });
       const payload = { runId: options.runId, input: options.input };
@@ -9673,21 +10008,51 @@ const driven = <A, E>(
           status,
           asked: store.asked(options.runId),
           resume: engine.resume(made.workflow, id),
-          // An answer landing before the Run awaits it queues a wake that would resume its next park.
           answer: (decision, value) =>
-            until(
-              () => status,
-              (got) => got.status === "suspended",
-            ).pipe(
-              Effect.andThen(answerDecision(made, { name: decision, executionId: id, value })),
+            answerDecision(made, { name: decision, executionId: id, value }).pipe(
               Effect.orDie,
-              Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
+              Effect.provideService(WorkflowEngine.WorkflowEngine, answering),
             ),
+          taken: (decision) =>
+            sql
+              .unsafe<{ processed: number }>(
+                `SELECT processed FROM cluster_messages WHERE tag = 'deferred' AND payload LIKE '%"name":"${decision}"%'`,
+              )
+              .pipe(Effect.map(Arr.some((row) => row.processed === 1)), Effect.orDie),
         });
       }).pipe(Effect.provide(made.layer));
     }),
     options.host,
   );
+
+/**
+ * `over`, with the Run held between asking `question` and awaiting it until `reached`: an
+ * answer given the moment the question shows, before the Run waits on it. `held` is
+ * completed once the Run is held.
+ */
+const answeredEarly = (question: string, over: HostOverride) => {
+  const held = Deferred.makeUnsafe<void>();
+  const reached = Deferred.makeUnsafe<void>();
+  const host: HostOverride = Layer.effect(Host)(
+    Effect.gen(function* () {
+      const host = yield* Host;
+      return Host.of({
+        ...host,
+        asking: (runId, asked, asker) =>
+          host
+            .asking(runId, asked, asker)
+            .pipe(
+              Effect.andThen(
+                asked.name === question && !Deferred.isDoneUnsafe(held)
+                  ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(reached)))
+                  : Effect.void,
+              ),
+            ),
+      });
+    }),
+  ).pipe(Layer.provide(over));
+  return { host, held, reached };
+};
 
 /** The go asked under `name`, once it is open. */
 const goAsked = (
@@ -9783,7 +10148,10 @@ const agentPush = (
     };
   });
 
-/** Sharing for approval turned on as `collie settings set` writes it, in `channel` unless null. */
+/**
+ * Sharing for approval turned on as `collie settings set` writes it, in `channel` unless null,
+ * with the bot connected and the human signed in to Slack as themselves.
+ */
 const sharingIn = (channel: string | null) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -9798,6 +10166,7 @@ const sharingIn = (channel: string | null) =>
       ),
     ),
     Effect.andThen(writeSlackToken(hostOf().env, "xoxb-fixture")),
+    Effect.andThen(signedInToSlack(hostOf().env, "U456")),
     Effect.orDie,
   );
 
@@ -11622,6 +11991,13 @@ for (const name of ["gitlab", "github"] as const) {
             },
           ]);
           expect(
+            Arr.filter(slack.authorized, (call) => pipe(call.method, Str.startsWith("chat."))),
+          ).toEqual([
+            { method: "chat.postMessage", by: "user" },
+            { method: "chat.getPermalink", by: "user" },
+          ]);
+          expect(Arr.filter(slack.authorized, (call) => call.by !== "user")).toEqual([]);
+          expect(
             Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes(`/${runId}/share`))),
           ).toEqual([]);
           expect(repliesOf(model)).toEqual([]);
@@ -11645,13 +12021,14 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = "r-share-manually";
           yield* sharingIn("#frontend");
           yield* writeSlackToken(hostOf().env, null);
+          yield* signedInToSlack(hostOf().env, null);
           yield* rig.queueOutputs([PACKAGED]);
           const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
             Effect.gen(function* () {
               const share = yield* goAsked(run.asked, "share-for-approval");
               expect(share.prompt).toContain("Share it in #frontend yourself");
               expect(share.prompt).toContain(mr);
-              expect(share.prompt).toContain("No Slack bot token");
+              expect(share.prompt).toContain("Not signed in to Slack as yourself");
               expect(optionsOf([share], "share-for-approval")).toEqual([
                 "I shared it",
                 "Wait for changes",
@@ -11793,6 +12170,96 @@ for (const name of ["gitlab", "github"] as const) {
             Arr.filter(slack.calls, (call) => call.method === "chat.postMessage"),
           ).toHaveLength(1);
           expect(Arr.some(slack.calls, (call) => call.method === "chat.getPermalink")).toBe(false);
+        }),
+      ),
+    120_000,
+  );
+
+  /** Signed in as `user`, the manual share is asked with `said` in it, then go 1 finishes. */
+  const sharedByHand = (runId: string, user: string | null, said: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
+      yield* sharingIn("#frontend");
+      yield* signedInToSlack(hostOf().env, user);
+      yield* rig.queueOutputs([PACKAGED]);
+      const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
+        Effect.gen(function* () {
+          const share = yield* goAsked(run.asked, "share-for-approval");
+          expect(share.prompt).toContain("Share it in #frontend yourself");
+          for (const one of said) expect(share.prompt).toContain(one);
+          expect(optionsOf([share], "share-for-approval")).toEqual([
+            "I shared it",
+            "Wait for changes",
+          ]);
+          yield* run.answer("share-for-approval", "I shared it");
+          yield* changed(approvedBy("gitlab", "dave"));
+          yield* goAsked(run.asked, "go-1");
+          yield* run.answer("go-1", "Finish");
+          return yield* ended(run.status);
+        }),
+      );
+      yield* bin.restore();
+      expect(outcomeText(status)).toBe(`${mr} was left open`);
+      expect(Arr.filter(slack.calls, (call) => call.method === "chat.postMessage")).toEqual([]);
+    });
+
+  once(
+    "release on gitlab: a working Slack bot without the human's Slack sign-in asks them to share it and posts nothing",
+    () =>
+      runEffect(
+        sharedByHand("r-share-bot-only", null, [
+          "Not signed in to Slack as yourself",
+          "Sign in to Slack as yourself in Desktop Settings › Connections",
+        ]),
+      ),
+    120_000,
+  );
+
+  once(
+    "release on gitlab: a Slack user token that is someone else's asks the human to share it, logs why and posts nothing",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const runId = "r-share-not-yours";
+          yield* sharedByHand(runId, "U999", ["token belongs to U456, not U999", "sign in again"]);
+          expect(yield* runLog(runId)).toContain("token belongs to U456, not U999");
+        }),
+      ),
+    120_000,
+  );
+
+  once(
+    "release on gitlab: Slack refusing the human's share with not_in_channel posts nothing more, and never as the bot",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
+          const runId = "r-share-not-in-channel";
+          yield* sharingIn("#frontend");
+          slack.refuse("not_in_channel", "chat.postMessage");
+          yield* rig.queueOutputs([PACKAGED]);
+          yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "share-for-approval");
+              yield* run.answer("share-for-approval", "Post for approval");
+              yield* until(
+                () => awaitingOn(runId),
+                (on) => pipe(on, Str.includes("approval")),
+              );
+              yield* changed(approvedBy("gitlab", "dave"));
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+          );
+          yield* bin.restore();
+          expect(yield* runLog(runId)).toContain(
+            `did not share ${mr} in #frontend: Slack chat.postMessage: not_in_channel`,
+          );
+          expect(
+            Arr.filter(slack.authorized, (call) => call.method === "chat.postMessage"),
+          ).toEqual([{ method: "chat.postMessage", by: "user" }]);
+          expect(Arr.filter(slack.authorized, (call) => call.by === "bot")).toEqual([]);
         }),
       ),
     120_000,
@@ -12270,6 +12737,59 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
         ),
       120_000,
     );
+
+  scenario(
+    "release: a claim Helle will not take back parks the release, unmerged, on an answer that reached the engine before the Run awaited it",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* stageable("gitlab");
+          claimed.length = 0;
+          refusedBack.length = 0;
+          refusedBack.push(["happytiger"]);
+          const runId = "r-helle-kept-early";
+          yield* rig.queueOutputs([MONOREPO_ASSESSED]);
+          const why = "helle POST /projects/spilnu/claim answered 500: down";
+          const early = answeredEarly(
+            "go-1.claim.unclaimed",
+            helleRun(runId, () => ({ held: { unresolved: why } })).host,
+          );
+          const [status, model] = yield* driven(
+            {
+              ...helleRun(runId, () => ({ held: { unresolved: why } })),
+              host: early.host,
+              reached: early.reached,
+            },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Merge, tag and stage");
+                yield* Deferred.await(early.held);
+                yield* run.answer("go-1.claim.unclaimed", "Release without a Helle claim");
+                const merged = forge
+                  .model()
+                  .pipe(Effect.map((model) => (model.merges ?? []).length > 0));
+                // A Run that went past its park merges before the engine is done with the answer.
+                yield* until(
+                  () => Effect.all([run.taken("go-1.claim.unclaimed"), merged]),
+                  ([taken, merged]) => taken || merged,
+                );
+                return yield* until(
+                  () => Effect.all([run.status, forge.model()]),
+                  ([status, model]) =>
+                    status.status !== "pending" || (model.merges ?? []).length > 0,
+                );
+              }),
+          );
+          yield* bin.restore();
+          expect(model.merges ?? []).toEqual([]);
+          expect(status.status).toBe("suspended");
+          expect(yield* parkedWhy(runId)).toContain("happytiger");
+          expect(yield* runLog(runId)).not.toContain("released without a Helle claim");
+        }),
+      ),
+    120_000,
+  );
 
   scenario(
     "release: a release goes on without a Helle claim only on the human's recorded say",
@@ -14067,6 +14587,40 @@ for (const name of ["gitlab", "github"] as const) {
       120_000,
     );
 
+  scenario(
+    `stage on ${name}: a refused claim give-back parks on a Done that reached the engine before the Run awaited it`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, staging, unstaging } = yield* stageOn();
+          claimed.length = 0;
+          refusedBack.length = 0;
+          refusedBack.push(["project"]);
+          const runId = `r-stage-retained-early-${name}`;
+          yield* rig.queueOutputs([MR_STAGED, staging(undefined, "passed"), unstaging()]);
+          const early = answeredEarly("staged-1", releaseHost());
+          const status = yield* driven(
+            { ...options(runId, early.host), reached: early.reached },
+            (run) =>
+              Effect.gen(function* () {
+                yield* Deferred.await(early.held);
+                yield* run.answer("staged-1", "Done");
+                yield* until(() => run.taken("staged-1"), Boolean);
+                return yield* until(
+                  () => run.status,
+                  (status) => status.status !== "pending",
+                );
+              }),
+          );
+          yield* bin.restore();
+          expect(status.status).toBe("suspended");
+          expect(yield* parkedWhy(runId)).toContain("project");
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
   const APPS = ["bingo", "casino", "happytiger", "lobby", "playground", "poker", "spilnu"] as const;
   const appJob = (app: string) => `stage:${app}`;
   const BUSY_ASSESSED = {
@@ -15514,8 +16068,51 @@ const tunePlan = (
 const NOISY_PRIMARY = { name: "bench.value", direction: "lower", role: "primary" } as const;
 const STEADY_PRIMARY = { name: "bench.count", direction: "lower", role: "primary" } as const;
 
-const tunedUp = (runId: string, input: Readonly<Record<string, Schema.Json>> = {}) =>
-  ran({ entry: shipped("tune-up"), runId, input });
+type Driving = Parameters<Parameters<typeof driven>[1]>[0];
+
+/** Each progress question answered as it opens, with the next of `answers` and then Yes, until the Run ends. */
+const answeringProgress = (run: Driving, answers: ReadonlyArray<string> = []) =>
+  Effect.gen(function* () {
+    const given: string[] = [];
+    for (;;) {
+      const [status, open] = yield* Effect.all([
+        run.status,
+        Effect.map(run.asked, (rows) =>
+          Arr.findFirst(
+            rows,
+            (row) =>
+              row.answer === null &&
+              pipe(row.decision, Str.startsWith("progress-")) &&
+              !given.includes(row.decision),
+          ),
+        ),
+      ]).pipe(
+        Effect.filterOrFail(
+          ([status, open]) =>
+            status.status === "complete" || status.status === "failed" || Option.isSome(open),
+        ),
+        Effect.retry({ schedule: Schedule.spaced("20 millis") }),
+      );
+      if (Option.isSome(open)) {
+        yield* run.answer(open.value.decision, answers[given.length] ?? "Yes");
+        given.push(open.value.decision);
+        continue;
+      }
+      return status.status === "complete"
+        ? { _tag: "Success" as const, success: status.value }
+        : {
+            _tag: "Failure" as const,
+            failure: { reason: status.status === "failed" ? status.reason : "" },
+          };
+    }
+  });
+
+/** A tune-up run to its end, each progress question answered with the next of `answers`, then Yes. */
+const tunedUp = (
+  runId: string,
+  input: Readonly<Record<string, Schema.Json>> = {},
+  answers: ReadonlyArray<string> = [],
+) => driven({ entry: shipped("tune-up"), runId, input }, (run) => answeringProgress(run, answers));
 
 const calibrations = (runId: string) =>
   Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
@@ -16057,11 +16654,12 @@ scenario(
         const runId = "r-tune-dirty-drop";
         yield* cycling(runId, [
           fasterWhileUpstreamPushes(3, "fixed"),
-          asTold("echo '# mine' >> bench/bench.sh", "dropped"),
+          cleanedUp(),
+          asTold("echo '# mine' > mine", "dropped"),
         ]);
         yield* tunedUp(runId, { samples: 4, cycles: 1 });
         expect(yield* wasAsked(runId, "drop")).toBe(true);
-        expect(yield* readText(`${rig.projectDir}/bench/bench.sh`)).toEndWith("# mine\n");
+        expect(yield* readText(`${rig.projectDir}/mine`)).toBe("# mine\n");
         const [final] = yield* finals(runId);
         expect(yield* checkoutTree()).toBe(final!.base.content);
       }),
@@ -16077,6 +16675,7 @@ scenario(
         const runId = "r-tune-foreign-drop";
         yield* cycling(runId, [
           fasterWhileUpstreamPushes(3, "fixed"),
+          cleanedUp(),
           asTold("echo theirs > theirs && git add theirs && git commit -qm theirs", "dropped"),
         ]);
         const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
@@ -16122,6 +16721,7 @@ scenario(
           FASTER(),
           NO_CHANGE(),
           RESET(),
+          cleanedUp(),
           TUNE_REVIEWED,
           OPENED,
         ]);
@@ -16133,7 +16733,9 @@ scenario(
           ),
         );
         expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert", "cycle-2"]);
-        const result = yield* resumed(options);
+        const result = yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.andThen(run.resume, answeringProgress(run)),
+        );
         expect(yield* cyclePrompts(runId)).toEqual([
           "cycle-1",
           "cycle-1-revert",
@@ -16145,6 +16747,57 @@ scenario(
           "cycle 1",
           "cycle 2",
           "cycle 3",
+        ]);
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose Cycle starts the build before recorded resumes in Cycle 2 on this one and runs no more than its cycles",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-upgraded";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [
+          NO_CHANGE(),
+          RESET(),
+          FASTER(),
+          NO_CHANGE(),
+          RESET(),
+          cleanedUp(),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 3 } };
+        yield* running(options, () =>
+          until(
+            () => wasAsked(runId, "cycle-2"),
+            (asked) => asked,
+          ),
+        );
+        // As 7d15bed3 recorded a Cycle's start: the tree, beside whether the wall time was spent.
+        yield* session(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`UPDATE cluster_replies
+              SET payload = json_set(payload, '$.value.exit.value', json_object('spent', NULL, 'tree', json(json_extract(payload, '$.value.exit.value'))))
+              WHERE json_extract(payload, '$.value.exit.value.head') IS NOT NULL
+              AND request_id IN (SELECT id FROM cluster_messages WHERE tag = 'activity' AND json_extract(payload, '$.name') LIKE 'cycle-%.start')`;
+          }).pipe(Effect.orDie),
+        );
+        const result = yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.andThen(run.resume, answeringProgress(run)),
+        );
+        expect(yield* cyclePrompts(runId)).toEqual([
+          "cycle-1",
+          "cycle-1-revert",
+          "cycle-2",
+          "cycle-3",
+          "cycle-3-revert",
         ]);
         yield* bin.restore();
         expect(said(result)).toBe(OPENED.mr_url);
@@ -16297,7 +16950,7 @@ scenario(
         const { bin, forge } = yield* tuneForge;
         const commit = yield* cycling(
           runId,
-          [fasterTo(5), fasterTo(3), TUNE_REVIEWED, OPENED],
+          [fasterTo(5), fasterTo(3), cleanedUp(), TUNE_REVIEWED, OPENED],
           [`API_TOKEN=${SECRET}`],
         );
         const result = yield* tunedUp(runId, { samples: 4, cycles: 2 });
@@ -16369,6 +17022,7 @@ scenario(
         yield* cycling(runId, [
           fasterTo(5),
           fasterWhileUpstreamPushes(3, "upstream.txt"),
+          cleanedUp(),
           TUNE_REVIEWED,
           OPENED,
         ]);
@@ -16392,6 +17046,14 @@ scenario(
   120_000,
 );
 
+/** The archive holds `final`, raw and with its intervals, though the change was dropped. */
+const archivedFinal = (runId: string, final: Measurement) =>
+  Effect.gen(function* () {
+    const archive = `${runDir(dir, runId)}/archive`;
+    expect(yield* readText(`${archive}/measurements.jsonl`)).toContain(final.id);
+    expect(yield* readText(`${archive}/README.md`)).toContain(`${final.id} (final)`);
+  });
+
 scenario(
   "a tune-up whose final Measurement is no-change once integrated drops back to its base tree, and completes with its findings and no merge request",
   () =>
@@ -16400,11 +17062,8 @@ scenario(
         const runId = "r-tune-lost";
         yield* cycling(runId, [
           fasterWhileUpstreamPushes(3, "fixed"),
-          {
-            writes: [],
-            sh: inCheckout("git rm -q count && git commit -qm drop"),
-            output: "dropped",
-          },
+          cleanedUp(),
+          asTold("true", "dropped"),
         ]);
         const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
         expect(result._tag).toBe("Success");
@@ -16417,6 +17076,7 @@ scenario(
         expect(yield* checkoutTree()).toBe(final!.base.content);
         expect(said(result)).toContain("bench.count no-change, not a gain");
         expect(yield* readText(Str.split(said(result), ": ")[0]!)).toContain(final!.id);
+        yield* archivedFinal(runId, final!);
       }),
     ),
   120_000,
@@ -16456,6 +17116,7 @@ scenario(
         const { bin, forge } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           TUNE_REVIEWED,
           openedFailing(forge),
           ciFixedTo(forge, 2),
@@ -16492,6 +17153,7 @@ scenario(
         const { bin, forge } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           TUNE_REVIEWED,
           openedFailing(forge),
           ciFixedTo(forge, 7),
@@ -16525,6 +17187,7 @@ scenario(
         const { bin } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           {
             ...TUNE_REVIEWED,
             verdict: "findings",
@@ -16581,6 +17244,7 @@ scenario(
         );
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           ...Arr.flatMap([1, 2, 3, 4], blockedThenFixed),
           TUNE_REVIEWED,
           {
@@ -16610,6 +17274,7 @@ scenario(
         const { bin, forge } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
+          cleanedUp(),
           TUNE_REVIEWED,
           {
             verdict: "findings",
@@ -16626,6 +17291,283 @@ scenario(
       }),
     ),
   120_000,
+);
+
+/** The tuner's cleanup: the harness taken off the branch, then `more`, in one commit. */
+const cleanedUp = (more = "true") => ({
+  writes: [],
+  sh: inCheckout(`git rm -rq bench && ${more} && git commit -qm cleanup`),
+  output: { removed: ["bench"], commits: ["HEAD"] },
+});
+
+const progressAsked = (runId: string) =>
+  Effect.map(
+    session(Effect.flatMap(Store, (store) => store.asked(runId))),
+    Arr.filter((row) => pipe(row.decision, Str.startsWith("progress-"))),
+  );
+
+const occurrences = (text: string, part: string) => Str.split(text, part).length - 1;
+
+scenario(
+  "a tune-up asks whether the progress is enough once its cycles are spent; each No runs one more Cycle past the budget, and Yes archives the benchmark, takes the harness off the branch and proves the cleaned tree",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-asked";
+        const { bin } = yield* tuneForge;
+        const commit = yield* cycling(runId, [
+          fasterTo(5),
+          NO_CHANGE(),
+          RESET(),
+          fasterTo(3),
+          cleanedUp(),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } };
+        const status = yield* driven(options, (run) =>
+          Effect.gen(function* () {
+            const first = yield* nextAsked(run.asked, []);
+            expect(first.decision).toBe("progress-1");
+            expect(yield* cyclePrompts(runId)).toEqual(["cycle-1"]);
+            expect(first.prompt).toContain("Are you happy with the progress?");
+            expect(first.prompt).toContain("Automatic cycling stopped: cycles spent: 1 of 1");
+            expect(first.prompt).toMatch(
+              /Cycle 1, .*: kept; \S+: bench\.count gain \(ratio 0\.714, 95% interval/,
+            );
+            expect(first.prompt).toContain("bench.size no-change");
+            yield* run.answer(first.decision, "No");
+            const second = yield* nextAsked(run.asked, [first.decision]);
+            expect(second.decision).toBe("progress-2");
+            expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-2", "cycle-2-revert"]);
+            expect(second.prompt).toContain("Cycle 2, ");
+            expect(second.prompt).toContain("reverted: bench.count no-change, not a gain");
+            yield* run.answer(second.decision, "no, keep improving");
+            const third = yield* nextAsked(run.asked, [first.decision, second.decision]);
+            expect(third.decision).toBe("progress-3");
+            yield* run.answer(third.decision, "Yes");
+            return yield* ended(run.status);
+          }),
+        );
+        yield* bin.restore();
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "cycle-3")).toContain("past it because the human answered No");
+        const log = yield* runLog(runId);
+        expect(occurrences(log, "cycle 2 started")).toBe(1);
+        expect(occurrences(log, "cycle 3 started")).toBe(1);
+        expect(Arr.map(yield* progressAsked(runId), (row) => row.decision)).toEqual([
+          "progress-1",
+          "progress-2",
+          "progress-3",
+        ]);
+        for (const decided of [
+          "decision progress-1: No",
+          "decision progress-2: no, keep improving",
+          "decision progress-3: Yes",
+        ])
+          expect(occurrences(log, decided)).toBe(1);
+
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${rig.projectDir}/bench`)).toBe(false);
+        expect(yield* wasAsked(runId, "cleanup")).toBe(true);
+        const [final, ...more] = yield* finals(runId);
+        expect(more).toEqual([]);
+        expect(final!.candidate.head_sha).toBe(yield* headOf());
+        expect(final!.candidate.harness_applied).toEqual([commit]);
+        expect(verdictsOf(final!)).toEqual(["bench.count gain", "bench.size no-change"]);
+
+        const archive = `${runDir(dir, runId)}/archive`;
+        const patches = yield* fs.readDirectory(`${archive}/harness`);
+        expect(patches).toHaveLength(1);
+        expect(yield* readText(`${archive}/harness/${patches[0]}`)).toContain("bench/bench.sh");
+        expect(yield* readText(`${archive}/plan.json`)).toContain('"paths":["bench"]');
+        const raw = yield* readText(`${archive}/measurements.jsonl`);
+        const taken = yield* readMeasurements(evidenceDir(dir, runId));
+        for (const one of taken) expect(raw).toContain(one.id);
+        const readme = yield* readText(`${archive}/README.md`);
+        expect(readme).toContain(`${final!.id} (final)`);
+        expect(readme).toContain(`candidate ${final!.candidate.head_sha} with ${commit} applied`);
+        expect(readme).toContain("95% interval");
+        expect(readme).toContain(`collie measure --run ${runId} --base ${final!.base.commit}`);
+
+        const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
+        expect(Str.split(body, "<details>")[0]).toContain(final!.id);
+        expect(body).toContain(archive);
+        expect(body).toContain("measured with it applied in a scratch tree");
+        expect(body).not.toContain("Accepted tradeoffs");
+      }),
+    ),
+  180_000,
+);
+
+scenario(
+  "a tune-up whose wall time is spent before Cycle 1 runs one more Cycle on a No, and a Yes with no Cycle kept ends with its findings and no merge request, archive or cleanup",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-no-time-no";
+        yield* cycling(runId, [NO_CHANGE(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4, wall_time: "1 millis" }, ["No"]);
+        expect(result._tag).toBe("Success");
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+        expect(Arr.map(yield* progressAsked(runId), (row) => row.decision)).toEqual([
+          "progress-1",
+          "progress-2",
+        ]);
+        expect(yield* runLog(runId)).toContain("decision progress-1: No");
+        const [, again] = yield* progressAsked(runId);
+        expect(again!.prompt).toContain("the human answered No, so Cycle 1 ran");
+        expect(said(result)).toContain("no Cycle was kept");
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(yield* wasAsked(runId, "cleanup")).toBe(false);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${runDir(dir, runId)}/archive`)).toBe(false);
+        expect(yield* fs.exists(`${rig.projectDir}/bench`)).toBe(true);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up answered with neither Yes nor No is asked again, and nothing else happens",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-unclear";
+        yield* cycling(runId, [NO_CHANGE(), RESET()]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 }, ["maybe later", "Yes."]);
+        expect(result._tag).toBe("Success");
+        expect(Arr.map(yield* progressAsked(runId), (row) => row.decision)).toEqual([
+          "progress-1",
+          "progress-1-again",
+        ]);
+        expect(yield* cyclePrompts(runId)).toEqual(["cycle-1", "cycle-1-revert"]);
+        const log = yield* runLog(runId);
+        expect(log).not.toContain("decision progress-1:");
+        expect(log).toContain("decision progress-1-again: Yes.");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up Yes with a tradeoff in words keeps a final Measurement whose guardrail regressed, writes the tradeoff apart from the verdicts, and the gate still fails it with no merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-tradeoff";
+        const tradeoff = "a larger index is fine for this speed";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          cleanedUp("echo 200 > size && git add size"),
+          TUNE_REVIEWED,
+          OPENED,
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 }, [`Yes, ${tradeoff}`]);
+        yield* bin.restore();
+        expect(result._tag).toBe("Failure");
+        const [final] = yield* finals(runId);
+        expect(verdictsOf(final!)).toEqual(["bench.count gain", "bench.size regression, not held"]);
+        expect(reasonOf(result)).toContain("guardrail bench.size is not held");
+        expect(reasonOf(result)).toContain(`accepted tradeoff: ${tradeoff}`);
+        expect(yield* wasAsked(runId, "drop")).toBe(false);
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect((yield* forge.model()).mrs ?? []).toEqual([]);
+        const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
+        const [table, rest] = Str.split(body, "### Accepted tradeoffs");
+        expect(table).toContain("| bench.size | guardrail |");
+        expect(table).toContain("regression, not held");
+        expect(Str.split(rest!, "###")[0]).toContain(tradeoff);
+        expect(yield* runLog(runId)).toContain(`accepted tradeoff: ${tradeoff}`);
+      }),
+    ),
+  180_000,
+);
+
+scenario(
+  "a tune-up Yes with no tradeoff drops a final Measurement whose guardrail regressed, as before",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-no-tradeoff";
+        yield* cycling(runId, [
+          fasterTo(3),
+          cleanedUp("echo 200 > size && git add size"),
+          asTold("true", "dropped"),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 }, [
+          "yes, prepare for release",
+        ]);
+        expect(result._tag).toBe("Success");
+        expect(yield* wasAsked(runId, "drop")).toBe(true);
+        expect(yield* wasAsked(runId, "mr")).toBe(false);
+        expect(said(result)).toContain("guardrail bench.size regression, not held");
+        expect(yield* runLog(runId)).not.toContain("accepted tradeoff");
+        const [final] = yield* finals(runId);
+        yield* archivedFinal(runId, final!);
+      }),
+    ),
+  180_000,
+);
+
+scenario(
+  "a tune-up host restarted while the question waits, after a No in the middle of the next Cycle, and after a Yes in the middle of cleanup records each decision once and repeats no Cycle, cleanup or final Measurement",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-asked-restart";
+        const { bin } = yield* tuneForge;
+        yield* cycling(runId, [fasterTo(5), fasterTo(3), cleanedUp(), TUNE_REVIEWED, OPENED]);
+        const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } };
+        yield* stalled(options);
+        expect(Arr.map(yield* progressAsked(runId), (row) => row.decision)).toEqual(["progress-1"]);
+        yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.gen(function* () {
+            yield* run.resume;
+            yield* run.answer("progress-1", "No");
+            yield* until(
+              () => wasAsked(runId, "cycle-2"),
+              (got) => got,
+            );
+          }),
+        );
+        yield* driven({ ...options, restarted: true }, (run) =>
+          Effect.gen(function* () {
+            yield* run.resume;
+            const next = yield* nextAsked(run.asked, ["progress-1"]);
+            expect(next.decision).toBe("progress-2");
+            yield* run.answer(next.decision, "Yes");
+            yield* until(
+              () => wasAsked(runId, "cleanup"),
+              (got) => got,
+            );
+          }),
+        );
+        const result = yield* resumed(options);
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        const log = yield* runLog(runId);
+        expect(occurrences(log, "decision progress-1: No")).toBe(1);
+        expect(occurrences(log, "decision progress-2: Yes")).toBe(1);
+        expect(occurrences(log, "cycle 2 started")).toBe(1);
+        expect(occurrences(log, "cleaned up to")).toBe(1);
+        const sent = Arr.map(yield* prompts(), (one) =>
+          Option.getOrUndefined(
+            Option.map(
+              Option.fromNullishOr(new RegExp(`/${runId}/([a-z0-9-]+)\\.prompt\\.md`).exec(one)),
+              (named) => named[1],
+            ),
+          ),
+        );
+        expect(Arr.filter(sent, (one) => one === "cycle-2")).toHaveLength(1);
+        expect(Arr.filter(sent, (one) => one === "cleanup")).toHaveLength(1);
+        expect(
+          Arr.map(yield* readMeasurements(evidenceDir(dir, runId)), (one) => one.pass),
+        ).toEqual(["calibration", "cycle 1", "cycle 2", "final"]);
+      }),
+    ),
+  240_000,
 );
 
 const POOLING = {
@@ -16751,25 +17693,42 @@ scenario(
           yield* emptyTracker();
           yield* cycling(
             runId,
-            [withExternal(fasterTo(3), [KNOWN]), TUNE_REVIEWED, OPENED, SEARCHED(), FILED()],
+            [
+              withExternal(fasterTo(3), [KNOWN]),
+              cleanedUp(),
+              TUNE_REVIEWED,
+              OPENED,
+              SEARCHED(),
+              FILED(),
+            ],
             [],
             { ...TUNE_DISCOVERED, external: [POOLING, FTS] },
           );
           const options = { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } };
           const driving = yield* driven(options, (run) =>
             Effect.gen(function* () {
-              const pooling = yield* nextAsked(run.asked, []);
-              expect(Arr.map(openOf(yield* run.asked), (row) => row.decision)).toEqual([
-                pooling.decision,
-              ]);
+              const happy = yield* nextAsked(run.asked, []);
+              expect(happy.decision).toBe("progress-1");
+              yield* run.answer(happy.decision, "Yes");
+              const pooling = yield* nextAsked(run.asked, [happy.decision]);
+              expect(
+                Arr.map(
+                  Arr.filter(openOf(yield* run.asked), (row) => row.decision !== happy.decision),
+                  (row) => row.decision,
+                ),
+              ).toEqual([pooling.decision]);
               expect(pooling.prompt).toContain(POOLING.title);
               expect(optionsOf([pooling], pooling.decision)).toEqual(["Ignore", "Post"]);
               yield* run.answer(pooling.decision, "Post");
-              const team = yield* nextAsked(run.asked, [pooling.decision]);
+              const team = yield* nextAsked(run.asked, [happy.decision, pooling.decision]);
               expect(team.prompt).toContain(FTS.title);
               expect(optionsOf([team], team.decision)).toEqual([]);
               yield* run.answer(team.decision, "Platform");
-              const fts = yield* nextAsked(run.asked, [pooling.decision, team.decision]);
+              const fts = yield* nextAsked(run.asked, [
+                happy.decision,
+                pooling.decision,
+                team.decision,
+              ]);
               expect(fts.prompt).toContain(FTS.title);
               expect(optionsOf([fts], fts.decision)).toEqual(["Ignore", "Post"]);
               yield* run.answer(fts.decision, "Ignore");
@@ -16994,6 +17953,8 @@ once("tune-up declares every input with its default, and its path", () =>
         "Harness",
         "Calibrate",
         "Cycles",
+        "Progress",
+        "Cleanup",
         "Integrate",
         "Review",
         "Checks",

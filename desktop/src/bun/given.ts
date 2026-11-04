@@ -20,6 +20,7 @@ const ENTRY = {
   gitlab: "gitlab-token",
   helle: "helle-token",
   slack: "slack-token",
+  "slack-user": "slack-user-grant",
 } satisfies Record<Credential, KeyringEntry>;
 
 /** Each Machine's fingerprints, by herdr profile and then credential. */
@@ -64,12 +65,12 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
   );
 
   /** What Desktop holds now, by credential. */
+  const current = (credential: Credential) =>
+    options.keyring.lookup(ENTRY[credential]).pipe(Effect.orElseSucceed(() => null));
   const held = Effect.gen(function* () {
     const texts: Partial<Record<Credential, string>> = {};
     for (const credential of CREDENTIALS) {
-      const text = yield* options.keyring
-        .lookup(ENTRY[credential])
-        .pipe(Effect.orElseSucceed(() => null));
+      const text = yield* current(credential);
       if (text !== null) texts[credential] = text;
     }
     return texts;
@@ -118,14 +119,19 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
     );
   /** One give at a time per Machine and credential, so the last given is the last recorded. */
   const giving = new Map<string, Semaphore.Semaphore>();
-  const giveOne = (route: ShellRoute, credential: Credential, text: string) =>
+  /** `text` is read once the give's turn comes, and null gives nothing. */
+  const giveOne = (route: ShellRoute, credential: Credential, text: Effect.Effect<string | null>) =>
     Effect.suspend(() => {
       const key = `${route.machine.profile} ${credential}`;
       const one = giving.get(key) ?? Semaphore.makeUnsafe(1);
       giving.set(key, one);
       return one.withPermits(1)(
-        options.give[credential](route, text).pipe(
-          Effect.tap((failed) => recorded(route.machine, credential, text, failed)),
+        Effect.flatMap(text, (now) =>
+          now === null
+            ? Effect.succeed(null)
+            : options.give[credential](route, now).pipe(
+                Effect.tap((failed) => recorded(route.machine, credential, now, failed)),
+              ),
         ),
       );
     });
@@ -137,12 +143,15 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
       Effect.forEach(
         routes,
         (route) =>
-          giveOne(route, credential, text).pipe(
+          giveOne(route, credential, Effect.succeed(text)).pipe(
             Effect.map((failed) => ({ name: route.machine.name, failed })),
           ),
         { concurrency: "unbounded" },
       ),
-    /** Gives the route each credential Desktop holds whose current one it was not given. */
+    /**
+     * Gives the route each credential Desktop holds whose current one it was not given, read
+     * again at its turn so a give queued behind a newer one never undoes it.
+     */
     giveLacking: (route: ShellRoute) =>
       Effect.flatMap(heldFor(route.machine), (texts) =>
         Effect.forEach(
@@ -150,8 +159,14 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
             texts,
             ([credential, text]) => !stateOf(route.machine, credential, text).given,
           ),
-          ([credential, text]) =>
-            giveOne(route, credential, text).pipe(Effect.map((failed) => ({ credential, failed }))),
+          ([credential]) =>
+            giveOne(
+              route,
+              credential,
+              Effect.map(current(credential), (now) =>
+                now === null || stateOf(route.machine, credential, now).given ? null : now,
+              ),
+            ).pipe(Effect.map((failed) => ({ credential, failed }))),
         ),
       ),
     /** Counts as given what an onboarding that ended ready was handed and set up. */

@@ -43,7 +43,17 @@ a check's marked processes can take seconds on a loaded machine, so the host wai
 grace for that SIGKILL and the last look after it, at most three seconds (`KILL_CEILING`),
 before the lock goes. Three seconds holds one slow look and keeps the exit, with its log
 flush, inside the five seconds a client gives a stopping host before it kills it. Its step does not complete
-and nothing is recorded for it, so the next host runs it once more. A newer client that
+and nothing is recorded for it, so the next host runs it once more.
+
+The one exception is a replacement by a newer build of the same installation: a newer client,
+or `collie host restart` from one. Before it signals the host, the client writes
+`host.handover` naming the host's pid and its own build. A host signalled while that names
+it, and a build newer than its own, hands its supervised checks over rather than ending
+them: it stops collecting them, leaves their processes and records alone, and writes
+`host.handed-over` naming itself, by pid and start token, the build and the checks before it
+lets go of its lock. It still ends any check it cannot hand over, such as a measurement's.
+Every other end ends them as above: a plain stop signal, a lost lock or directory, a watched
+process gone, a crash, and a restart onto the same build. A newer client that
 asked a host to stop kills it five seconds after its grace. A host that does not say who it
 is within five seconds is replaced too when `host.build`, which it writes as it starts,
 names an older build of the same installation; otherwise the client reports it as
@@ -99,20 +109,39 @@ parent resumed in the swap reads a child of any generation.
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one recorded under `running-checks/`, or a process marked with this
 installation's id. A host that has just made that id looks for none, since no process can
-carry it. Each gets SIGTERM, then SIGKILL two seconds later, and is never adopted. The
-Run's log and `host.log` name the check and the host that left it, and the step that ran it
-runs it once more. No check of a Run starts while one a previous host left of that Run is
+carry it. Each gets SIGTERM, then SIGKILL two seconds later, and is never adopted unless it
+was handed over. The Run's log and `host.log` name the check and the host that left it, and
+the step that ran it runs it once more.
+
+Before that, a host of the build `host.handed-over` names takes over each check listed there
+whose record names the host that wrote it, and whose supervisor is still that record's, by
+pid and start token, or has written its exit status. It takes the record as its own and says
+`took over check` in `host.log`. The replayed step that ran a gate's check asks for the same
+check, by its Run, name, pass and command, and gets the one taken over instead of starting
+another. An agent's check is finished by the host itself once it exits, and the agent's
+`collie verify`, whose stream broke with the old host, asks the new one for that
+Verification by the check's id (`verifyFollow`), whatever its build. Nothing else is taken
+over: a host of any other build, or one that finds no `host.handed-over`, ends them all. No check of a Run starts while one a previous host left of that Run is
 still running: one that survives SIGKILL is ended again a second later, and named again,
 until it is gone.
 
 What a check's Verification is finished from is written to `check-output/<id>.json`
 before it is spawned: which check of which Run, the command as resolved, the tree it
-started on, when, what it expects and where its evidence goes. The host reads its stdout
-and stderr through pipes, as they arrive, for its log and a watching client, and keeps the
-last 16 KiB of each, which it writes to `check-output/<id>.stdout` and `.stderr` once that
-stream ends. The host that ran it finishes it from what it kept; another host on the state
-directory could finish it from those files, and one that could not be written leaves none.
-They go with its record, `running-checks/<id>.json`.
+started on, when, what it expects and where its evidence goes. A host runs the command under
+a supervisor, `collie supervise-check` (`src/check-supervisor.ts`), which is the host's
+child, leads the check's process group outside the host's, and carries the check's markers,
+as the command does. Its record names the supervisor as the leader, so a stop, `stillRuns`
+and the sweep end both. Once it has spawned the command, the supervisor writes the
+command's own pid to `check-output/<id>.pid`, the one `collie verify` says it started as. The supervisor holds the command's pipes and reads both to their end,
+including a child that left the group and still holds one; it writes the check's log in the
+order the two streams arrived, relays both to the host for a watching client, and keeps the
+last 16 KiB of each. Once both close and the command has exited, it writes them to
+`check-output/<id>.stdout` and `.stderr`, then the exit status to `<id>.exit`. A host that
+goes leaves it writing: those three files answer each reason a host could not take over a
+check it did not start, which are that its output went to the old host's pipe, that only a
+parent reads an exit status, and that its starting tree was in the old host's memory, where
+`<id>.json` now keeps it. The host that ran it finishes it from what it kept; another host
+finishes it from those files. They go with its record, `running-checks/<id>.json`.
 
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no
@@ -2131,6 +2160,396 @@ the base). Four queued suites finish within 4.4 times one; targeted runs are adm
 once; the budget was never exceeded; and the suite fits its 12 cores. The probe's p95 under
 four queued suites is over twice its idle p95. Ten suites had two Flakes, over the one
 aimed for.
+
+### Test-suite measurements, 29 October 2026
+
+Run `run-af99447d` revalidated #246 (`4cc438f7`) and #253 (`68d583e1`) on master before
+measuring `c56e9486455b33a6d3a74f131019e4a18020f980`, on vm-mk with Bun 1.4.4.
+The targets remain 360 s including builds and a probe p95 at most twice its idle value.
+
+The windows below were later invalidated as performance baselines. During the first
+fix round, the shared Bun cache was found to contain filesystem and SQL counters left
+by another Run. The filesystem counter normalized and counted every read, directory
+listing and stat, and periodically sorted and wrote its results. Hard-linked installs
+carried that instrumentation into both measured checkouts and their compiled binaries.
+The owner confirmed the contamination and restored the shared files. The old numbers
+remain here as historical observations, not evidence about pristine Collie performance.
+This Run reinstalled dependencies in both its checkouts using a private cache and
+`--backend=copyfile`. Its FS and SQL files match the published 4.0.1 tarballs, verified
+against the lockfile's SHA-512 values, and have private inodes. Raw integrity records
+and the invalidated profiles are kept in `handoffs/profile/dependency-integrity/`.
+
+The driver and raw samples are in that Run's `handoffs/measure/`. `drive.ts` runs
+`git rev-parse HEAD` once a second, recording wall time, child CPU time, involuntary
+context switches, CPU/I/O/memory pressure, load, and the budget's held and waiting suites.
+It also runs `sar -u -q -w -d 1`. A measured suite has its own systemd scope, whose
+`cpu.stat` separates its CPU use from the rest of the Machine. Both the idle window and
+the suite hold the host's Measurement lock, to take turns with run-2a1e10fe's measurements.
+No competing load is started for the measurement; other Runs continue.
+
+| Window (UTC)                  | Samples | Probe p50 | Probe p95 | Median load | Mean CPU pressure |
+| ----------------------------- | ------: | --------: | --------: | ----------: | ----------------: |
+| Idle, 10:44:46–10:49:46       |     300 |   5.07 ms |   7.79 ms |       15.74 |           10.35 % |
+| Base suite, 10:49:47–10:59:38 |     591 |   5.90 ms |   9.95 ms |       32.55 |           36.00 % |
+
+The base took 590.58 s including builds (10.45 s build, 580.13 s run): 5,069 passed,
+11 skipped, and one timed out, across 324 files. The timeout was
+`run-paths.test.ts`'s changed-claim test, which passed in a targeted verification afterward.
+The suite used 6,252.81 CPU-s in its cgroup, averaging 10.60 cores; the Machine averaged
+17.53 busy cores. I/O pressure averaged 0.55 %, and memory pressure was zero.
+The probe's own CPU time stayed near 4.4 ms; its mean wall time rose from 5.46 to 6.36 ms,
+with more involuntary context switches. This supports CPU scheduling delay as the
+observed slowdown, with both suite and other Machine work contributing.
+
+The probe p95 was 1.28 times idle, but only one suite waited behind the running suite.
+This does not prove #216's four-suite target. The suite also misses #215's 360 s target.
+Neither issue is resolved by these baseline numbers, and no budget or scheduling change
+is justified by a window that does not reproduce the responsiveness failure.
+
+Two per-test costs are removed without sharing mutable test state. The test preload
+loads the Solid compiler only when a file imports JSX or Solid's server modules; other
+files avoid loading Babel. The handlers still come from the installed Solid plugin.
+A clean committed tree's fingerprint needs only `git status`, rather than three Git
+starts. Dirty trees and failed status reads retain the diff and untracked-content reads.
+Status explicitly includes untracked files even when the user's Git config hides them,
+and the fingerprint of an ordinary unchanged tree retains its previous value.
+
+The candidate, `621e7c3a1e753e3da511127b994138c44e00ec37`, ran at
+11:09:20–11:23:33 UTC with the same budget, dependencies, and measurement driver.
+It passed all 5,074 enabled tests, with the same 11 skips, across 325 files: four tests
+were added. It took 850.52 s including builds (10.46 s build, 840.06 s run).
+The probe's 851 samples gave p50 8.71 ms and p95 19.73 ms, 2.53 times the earlier idle p95.
+No suite waited behind this one. The additional ten-minute passive observation also
+caught no four-suite window; at most one suite waited in any recorded window.
+
+Background CPU load was substantially different. The candidate's scope averaged
+7.84 cores while the Machine averaged 21.93 busy cores, against 10.60 and 17.53 for the
+base. Mean CPU pressure was 53.81 %, I/O pressure 0.10 %, and memory pressure zero.
+The sampled cgroup ancestors had no CPU quota throttling. The final cgroup disappeared
+before its closing `cpu.stat` read; its interval samples and `/usr/bin/time -v` remain
+in `candidate-1/`. No other Run or workload was stopped to obtain these numbers.
+
+These measurements show no elapsed-time gain and meet neither original target.
+The differing background load also prevents attributing the elapsed-time difference to
+the patch. The compiler-load and Git-start reductions have targeted regression proofs;
+their whole-suite performance benefit remains unproved. #215 and #216 stay open, and
+the full correctness gate remains CI's `test` job.
+
+The first fix round adds a candidate scheduling mechanism for ticket 02. The old windows
+showed scheduling delay, but the contaminated dependencies prevent treating them as an
+attribution of pristine Collie's cost. The policy still needs fresh measurements.
+A whole-suite child now
+starts at nice level 10, or keeps an already lower priority, before the runner opens
+its execution gate. Workers and the hosts and commands they start inherit that priority;
+small runs retain their caller's priority. Admission, worker counts, and the reserve do
+not change. `suite-priority-red` observed the whole-suite descendant still at nice 0;
+`suite-priority-green` covers both kinds with real children, alongside the existing
+hold and cleanup tests. The effect on probe latency remains to be measured.
+
+The JSX regression was also run with JSX registration temporarily removed from the
+lazy preload. `jsx-transform-disabled-red` failed because Bun's default JSX output
+lacked Solid's `_$createElement`; restoring registration made both preload cases pass
+in `jsx-transform-restored-green`. The temporary mutation is not part of the patch.
+
+A fresh, uninstrumented profile of three placement scenarios still identified module
+scanning and filesystem work as costs: `scanImports` accounted for 4.4% of self samples.
+Registration was copying its generation again through the general entry loader.
+It now imports the already unique generation through the same contract validation,
+preserving separate module state and fresh imports when a host recovers work. The
+directory is unique on every registration, including recovery in the same process;
+`registration-recovery-red` and `registration-recovery-green` cover an edited external
+helper across two Registries using the same state directory. The
+`registration-copy-red` proof observed three directory copies for the first registration;
+`registration-copy-green` observes two, then one for another generation: the shared
+catalogue copy is reused and each registration keeps its own single copy. No persistent
+source-content cache or weaker edit detection is introduced. Full-suite timings must
+be repeated with pristine dependencies before claiming a gain or closing either issue.
+
+Pristine qualification ran at 13:08–13:34 UTC, after run-bd4539a0's final completion
+notice, using private FS and SQL dependencies checked against their published tarballs.
+The original performance targets remain unmet or unproved:
+
+| Window    | Revision                                   | Whole-suite time with builds | Tests                       | Probe p95 |
+| --------- | ------------------------------------------ | ---------------------------: | --------------------------- | --------: |
+| Idle      | —                                          |                            — | 300 probes                  |  9.219 ms |
+| Control   | `c54a40b88eb57e1bd22faaaab6b6d5b8f10de387` |                     622.40 s | 5,076 pass, 11 skip         | 11.731 ms |
+| Candidate | `0716a73754b1339e2de6138c1c9c879dad0771e0` |                     663.71 s | 5,078 pass, 11 skip, 1 fail | 12.974 ms |
+
+Neither suite had another whole suite waiting. The candidate's probe p95 is 1.41 times
+idle for the observed window, but that does not establish the required four-suite
+condition or a benefit from the priority change. The control and candidate used
+6,128.28 and 6,323.28 CPU-s respectively in their complete cgroups. Mean Machine use
+was 18.60 and 19.08 cores, versus suite use of 9.86 and 9.53 cores. Mean CPU pressure
+was 40.49% and 43.63%, with I/O pressure below 0.10% and negligible memory pressure.
+There is no demonstrated whole-suite gain. The candidate's board-stream test failed
+when a removed fake agent was still listed; it passed in the isolated diagnostic run.
+That failure is retained, not counted as a green measurement. Raw evidence and the
+qualification result are in `handoffs/measure/fix1-qualification.json` and the three
+`fix1-*-pristine/` directories. The lock was released at 13:34:49.902 UTC.
+
+Further module-load work removes the initial import that only learned an entry's id
+before staging and importing it for registration. Registration now stages once and
+uses that validated definition directly. `registration-single-import-red` and
+`registration-single-import-count-red` exposed the extra copy and top-level import;
+the green proof still checks separate registrations and external-helper recovery.
+Revision calculation also reuses source bytes between import scanning and hashing
+within one calculation. `revision-read-once-red` observed duplicate reads; its green
+proof checks one read per source and an edited helper on the next calculation. This
+cache ends with each calculation; dependency resolution and edit detection remain
+fresh. These cuts need a new measured qualification, coordinated after the other
+Run's next announced final-tree study; no further window was taken ahead of it.
+
+On 30 October, the other Run's actual final-tree completion notice opened the next
+qualification on `aedcd26dd6821134d1887e7c06780a8f0532dd71`. Both new attempts failed
+to obtain an idle baseline while ordinary work continued on the shared Machine:
+
+| Attempt | UTC window        | Probes | Probe p95 | Samples with a whole suite held | Samples with one waiting |
+| ------- | ----------------- | -----: | --------: | ------------------------------: | -----------------------: |
+| `fix1b` | 07:12:27–07:17:27 |    300 |  10.80 ms |                             199 |                      191 |
+| `fix1c` | 07:32:13–07:37:13 |    300 |   9.14 ms |                              78 |                        0 |
+
+These are contention observations, not qualifying idle measurements. `fix1b` was
+interrupted after its control entered its initial phase; it completed no suite and
+never started the candidate. The collector's new guard rejected `fix1c` before either
+suite started. All 600 probes, the partial control log, and the rejection record are
+retained in the Run's handoffs. No completed observation was repeated or discarded,
+and no other Run was stopped or reprioritized. No measurement job remains running
+from this fix step.
+
+The collector now waits for live whole-suite requests to clear and rejects an idle
+window if a whole suite runs or queues during it. Four-suite evidence additionally
+requires the candidate's held budget entry to name a PID in its measured cgroup;
+a candidate waiting behind another branch cannot prove its own scheduling policy.
+Both guards have failing-first self-checks. The raw sampler retains this ownership
+as an additive field; older observations are unchanged.
+
+A separate whole-suite timing on the latest runtime, committed as
+`d5710ea2e9d0de4704682a1e30ed6495479cfbfa`, started at 08:06:23 UTC. The host upgrade
+to Collie 0.107.1 stopped its check at 08:14:41, before a suite summary or the driver's
+final result. Its log ends with exit 130. Raw samples and the host interruption record
+are retained under `handoffs/measure/fix1-final-head-suite/` and
+`fix1-final-head-suite-interrupted.json`. It ran beyond 360 seconds, but it is an
+interrupted observation, not a completed timing or correctness result. No replacement
+measurement was started.
+
+At the end of fix round 1, the source had targeted cost and preservation proofs, but
+no qualifying whole-suite measurement. Its last completed pristine candidate took
+663.71 seconds on `0716a737`. No required four-suite responsiveness window has been
+observed. Both remain blocking findings, with no claimed performance gain or issue
+closure. Further per-test cost reduction and a qualifying natural queue observation
+are still required. The supplied plan forbids starting load solely to create
+contention; a controlled-load exception or different infrastructure requires the
+human's decision. The CI correctness gate remains the `test` job.
+
+Fix round 2 shares one source-tree read between a Registry registration's revision
+and staging. The failing-first `fix2-registration-source-red` observed four root
+directory listings for one registration; its green check observes one listing and
+one read of each source, while retaining separate imports and copies per generation
+and fresh external-helper recovery. The source snapshot lasts for that registration
+only. The six focused loader suites pass, including entry, helper and prompt edits
+while older work keeps its generation. These operation counts establish the removed
+duplication; they do not establish either whole-suite performance target.
+
+Three fixed AB/BA pairs profiled the same three placement cases on `e51af012`
+and `cdd63d94`, using the isolated checkout, Measurement lock and private dependencies
+checked before and after every process. All six processes passed. Median wall time
+was 7.215 versus 6.963 seconds; median CPU time was 11.25 versus 10.77 seconds. One
+candidate process took 10.640 seconds, so these observations do not establish a gain
+beyond noise. Every observation and profile is retained under
+`handoffs/measure/fix2-placement-pairs/`.
+
+The filesystem-boundary check also found attempts to read ordinary source files
+as directories. The source walker now checks file type before a
+directory read. `fix2-file-directory-red` observed one such attempt; its green check
+observes zero. Directory links remain named without traversal, and the revision
+proof retains that behavior while checking fresh reads after an external-helper edit.
+
+Qualification `fix2a` completed on `b193bbe9840fb29e4da277a9cc7cecb2e0ff4827` without
+a host interruption. Its 300 idle probes had no whole suite held or waiting and a
+p95 of 8.957 ms. The whole suite took 592.60 seconds including builds, used 5,676.67
+CPU-s in its cgroup, and reported 5,213 pass, 11 skip and one failure. Its 592 owned
+samples had no second whole suite held and no waiter; overall probe p95 was 9.86 ms.
+There were zero qualifying four-suite samples. Both targets remain unmet or unproved;
+these different revisions and workloads do not establish a causal suite gain. Raw
+logs, samples, integrity checks and the result remain under `handoffs/measure/fix2a-*`.
+
+The board-stream failure was reproduced with diagnostics: generic-title naming
+overwrote the test's external `Renamed` task label with `Hi`, so its first subscriber
+correctly received the wrong title. Naming had checked the task before a herdr call
+and later written that stale record. Two deterministic tests change the task during
+workspace listing and renaming; both failed before the fix. Naming now checks the
+current task after those calls and preserves newer edits and metadata. The original
+board-stream assertions and timeouts are unchanged; no delay, skip or retry repairs
+the failed measurement, which remains recorded as a failure.
+
+A fresh trace of three placement cases recorded 18,140 file opens, including at
+least 5,912 `ENOENT` results. Absent Run metadata files were repeatedly opened. An
+experiment used fresh directory listings to skip eight missing-file reads per view;
+its preservation checks and 166 affected tests passed. In three fixed AB/BA pairs,
+however, median wall time worsened from 6.956 to 7.174 seconds and CPU time was
+effectively unchanged, 11.00 versus 10.96 seconds. The experiment was reverted.
+Every observation is retained under `handoffs/measure/fix2-view-pairs/`; fewer
+file reads alone did not justify the added complexity.
+
+The placement tests now poll the existing status API while waiting for completion,
+then read the full Run once for their assertions. Three fixed AB/BA pairs on
+`943649c5` and `973a35c2` passed all three selected cases in each process. Median
+CPU time fell from 11.11 to 10.45 seconds; the candidate range, 10.27–10.54 seconds,
+was below the control range, 10.81–11.33 seconds. Median wall time fell from 7.416
+to 7.309 seconds. The complete placement and finished-poll files retained all 75
+tests and 305 assertions. Wait schedules, limits and final assertions are unchanged.
+Raw observations remain under `handoffs/measure/fix2-status-pairs/`; this focused
+CPU reduction does not establish either whole-suite acceptance target.
+
+Qualification `fix2b` ran on `196d68609294168d215fd2c1cc8c48b325f39237`.
+Its 300 idle probes had no whole suite held or waiting and a p95 of 9.012 ms.
+The whole suite took 719.34 seconds including builds: 5,215 passed, 11 skipped
+and one failed, across all 5,227 tests. Its cgroup used 6,309.39 CPU-s. The 718
+owned samples had no whole-suite waiter and no qualifying four-suite sample.
+Mean Machine and suite use were 20.66 and 8.78 cores. CPU stalls averaged 51.60%;
+I/O and memory stalls averaged 0.214% and 0.079%. The scope's ancestors had no
+CPU quota, restricted CPU set or recorded throttling. These shared-Machine
+observations establish no causal suite speedup.
+
+The failure was Helle's resume test: it granted the fake claim after 30 ms before
+the client had necessarily read the pending state. The fixture now waits for the
+client's first status output before that same 30 ms wait and grant. Every assertion
+is retained. The case passed 20 repetitions; its full file passed all 54 tests and
+138 assertions. This repair does not turn the failed whole-suite observation green.
+
+The installed CLI changed from 0.108.0 to 0.108.2 five seconds before `fix2b` ended;
+the measured suite used its own executables built from the frozen candidate.
+The host stopped afterward, at 10:18:54 UTC, and restarted at 10:19:00 UTC.
+That stop interrupted the separate passive observer after 1,324 of its planned
+1,800 samples. None showed a whole-suite waiter. Every sample and the exit-130
+record remain in `handoffs/measure/fix2-natural-queue-interrupted.json` and its raw
+directory. The completed whole-suite result, context and integrity checks remain
+in `handoffs/measure/fix2b-*`; no completed observation was retried or discarded.
+Both original acceptance targets remain unmet or unproved. The CI correctness
+gate remains the `test` job; no local `check` gate was run.
+
+Fix round 3 revalidated prerequisites #246 and #253 against freshly fetched
+`d410ba3ec60f6f39c35f237317d85da17705dab9`. Qualification used merged revision
+`efeb6a54ff6e4df7d1188993c4130abfdd98be26`, the existing isolated checkout,
+and the Machine Measurement lock. Private copyfile installations of the new
+Effect 4.1 filesystem and SQLite dependencies matched integrity-verified published
+tarballs before and after each process. Earlier dependency manifests remain unchanged.
+
+The 300 idle probes had no whole suite held or waiting; their p95 was 8.433 ms.
+The complete suite took 888.56 seconds including builds, with 5,280 passes,
+11 skips, and one failure across 5,292 tests. The failed stage claim give-back
+scenario expected suspension but observed completion. A focused diagnostic also
+failed one of its two variants; its cause remains unresolved. Neither observation
+is counted as a green suite result or repaired by a retry.
+
+The suite's 887 owned samples contained no whole-suite waiter. Overall probe p95
+was 16.005 ms, which cannot prove the required four-suite condition. Mean Machine
+and suite use were 21.49 and 8.79 cores; median load was 50.35. CPU, I/O, and memory
+stalls averaged 56.92%, 0.423%, and 0.064%. These observations do not isolate an
+exclusive external cause or prove a benefit from the worker priority change.
+The final cgroup CPU total was unavailable after the scope disappeared;
+`/usr/bin/time` retained 4,744.26 user CPU-s and 1,767.01 system CPU-s.
+Raw data, context, protocol, and dependency checks remain under `handoffs/measure/fix3-*`.
+
+A separate shutdown experiment removed process-table scans when a host had no
+checks to signal. Its failing-first regression observed three scans, then zero;
+all 32 shutdown safety tests passed. Three fixed AB/BA pairs compared `efeb6a54`
+with `20a6a0e9`, using separate compiled binaries and the same three engine cases.
+All six processes passed. Median CPU time fell from 12.24 to 11.97 seconds,
+but the ranges overlapped: 12.02–13.51 versus 11.82–12.18 seconds. Median wall
+time fell from 7.884 to 7.544 seconds. The recorded retention rule required
+a CPU gain beyond observed variation, so the experiment and its regression were
+reverted in `207c823d`. Every observation remains under
+`handoffs/measure/fix3-shutdown-pairs/`; no replacement pair or candidate suite was run.
+Both original performance blockers remain accepted and unresolved.
+
+Fix round 4 revalidated #246 and #253 on fetched master `e8d02a5d` and used the
+merged runtime `90ca541f`. A direct-entry loading experiment reused the source
+traversal already needed for its revision. Its failing-first regression observed
+two reads instead of one; the changed loader read once and imported an edited
+outside helper freshly. The complete discovery file passed all 14 tests.
+
+Three fixed AB/BA pairs compared `90ca541f` with `0af9f7a9` on the full
+`baseline-unrelated-03` scenario file. Each of the six processes passed 35 tests
+and 379 assertions. Control CPU times were 86.36, 89.88, and 86.72 seconds;
+candidate times were 91.25, 89.34, and 86.76 seconds. Median wall time was
+73.160 versus 78.037 seconds. The recorded retention rule failed, so the
+experiment and its added regression were reverted in `f720b8a4`. No replacement
+pair was run. `dc7acd15` replaces four native array calls in an existing revision
+regression to satisfy Effect 4.1 lint. Its runtime matches `90ca541f`.
+
+The final qualification attempt used frozen revision
+`dc7acd1553660a3e395a28fa7d0ab977b7a5b5f7`.
+All 300 idle probes remain recorded, but the entire baseline is unqualified:
+another Run reported targeted checks from 12:42:34 to 12:43:00 UTC within that
+window. Its descriptive p95 of 10.578 ms is not used for acceptance. No sample
+was selected out, and no replacement idle window was collected.
+
+The whole-suite attempt began at 12:47:17 UTC. Its last retained sample was at
+12:59:46 UTC, and the host log records version 0.109.1 starting at 12:59:52 UTC.
+The command ended with exit 130 and four files still running. Its 749 samples
+span 749.119 seconds; this exceeds the target but is not a completed suite time.
+There is no final test summary. Before interruption, two stage claim give-back
+cases expected suspension but observed completion; their cause remains unresolved.
+The attempt was not retried or labeled green.
+
+The 748 owned samples contained no whole-suite waiter or qualifying four-suite
+sample. Their descriptive probe p95 was 14.172 ms. Mean Machine and suite use
+were 20.80 and 9.72 cores; CPU, I/O, and memory stalls averaged 50.588%, 0.327%,
+and 0.002%. These observations establish no exclusive external cause or timing
+acceptance. A later report of prototype work from 13:15 onward does not overlap
+the retained samples and does not invalidate them.
+
+The passive phase could not start before the host interruption. Collected
+separately from 13:41:58 to 14:11:58 UTC, it retained 1,799 observations with no
+whole suite running or waiting. The gap is explicit; this was neither a whole-suite
+retry nor a replacement idle window. No four-suite condition was manufactured.
+
+All protocols, raw observations, dependency-integrity guards, the idle
+invalidation, and the interruption assessment remain under
+`handoffs/measure/fix4*` in Run `run-af99447d`. No completed observation was
+retried or discarded. Both original performance requirements remain unmet or
+unproved; the full correctness gate remains CI job `test`.
+
+### Test-suite measurements, 2 November 2026
+
+Run `run-40796ebf` followed up `run-af99447d` on vm-mk (24 cores, Bun 1.4) at
+`956e73dbee4658d356418664c7ba2e6982937034`, against the same targets: a whole
+`bun run test` alone in at most 360 s, green (#215), and the probe's p95 with four whole
+suites queued at most twice its idle p95 (#216). The driver (`drive.ts`, the 29 October
+method) and raw samples are in that Run's `handoffs/measure/`. Each window held the
+Measurement lock; other Runs' work outside the lock continued. Suites ran from four
+separate checkouts of the same commit.
+
+Attribution on e95d5fd8 showed the suite's CPU going to child processes and SQLite
+rather than test code: 6,473 CPU-s and 13,520 process starts in one suite, and 44,616 SQL
+statements in `test/baseline-01.test.ts` alone, 13,500 of them per-shard lock deletes.
+The branch therefore runs the engine on one shard
+([ADR-draft-one-runner-holds-one-shard](adr/draft-one-runner-holds-one-shard.md)).
+
+| Window (UTC)                          | Samples | Probe p50 | Probe p95 | Result                        |
+| ------------------------------------- | ------: | --------: | --------: | ----------------------------- |
+| q1 idle, 09:48:09–09:53:08            |     300 |   5.32 ms |   9.03 ms |                               |
+| q1 alone, 09:53–10:03:43              |     633 |   5.39 ms |   8.89 ms | 633.56 s, 5,342 pass, 0 fail  |
+| q1 four, ≥ 4 suites 10:03:44–10:15:53 |     729 |   6.28 ms |  12.31 ms | interrupted 10:17:31          |
+| q2 idle, 10:19:43–10:24:43            |     300 |   5.11 ms |   9.33 ms |                               |
+| q2 four, ≥ 4 suites 10:24:45–10:35:59 |     674 |   5.59 ms |  10.27 ms | completed 11:09:10, see below |
+
+The alone suite used 6,594.9 CPU-s, 13,561 process starts, and per-file time summing to
+6,894 s at 12 workers; `test/agents.test.ts` was the longest file at 200 s. At 12 workers
+that sum alone is about 575 s, so #215 needs roughly a third less work in the suite, not
+better scheduling. **#215 remains unmet.**
+
+The q1 four-suite window ended when the host restarted for Collie 0.110.1, with suite 1
+green and suites 2–4 cut off; over its 729 samples the ratio was 1.36. The q2 rerun
+completed: its 674 samples with four whole suites held or waiting give a p95 of 10.27 ms,
+1.10 times its idle 9.33 ms (mean 18.4 busy cores, 38 % CPU stall), so **#216 is met at
+956e73db**. Its suites took 675, 1,372, 2,039 and 2,666 s, queued one behind another.
+Three passed 5,342; one failed 1 of 5,342: `test/verify.test.ts`'s "a tree git cannot
+stage is no tree" test, which is master's (#284) and passed in the other four suites.
+
+The branch later took master's herdr-core migration (#289), which rewrote the fakes most
+of the suite runs on. Neither window above measured that tree.
 
 ### Test-suite measurements, 12 October 2026
 

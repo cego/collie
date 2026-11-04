@@ -762,8 +762,10 @@ export class Rig {
       const exists = yield* fs.exists(logPath);
       if (!exists) return [];
       const text = yield* fs.readFileString(logPath);
+      // The fake's CLI appends from another process: a line with no newline yet is still being written.
+      const whole = Str.split(text, "\n").slice(0, -1);
       return yield* Effect.forEach(
-        Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== ""),
+        Arr.filter(whole, (line) => Str.trim(line) !== ""),
         (line) => Schema.decodeEffect(CallString)(line),
       );
     });

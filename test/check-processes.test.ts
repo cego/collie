@@ -20,6 +20,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as PlatformError from "effect/PlatformError";
 import { TestClock } from "effect/testing";
+import { SUPERVISE } from "../src/check-supervisor";
 import {
   CHECK_ID,
   CHECK_INSTALLATION,
@@ -30,6 +31,7 @@ import {
   hostCheckProcesses,
   KILL_CEILING,
   runningChecksDir,
+  type RunningCheck,
 } from "../src/check-processes";
 import {
   bindingsOf,
@@ -1393,6 +1395,78 @@ test("a check's two streams reach its log in the order they were written", () =>
       expect(yield* fs.readFileString(log)).toBe("0\n1\n2\n3\n4\n5\n6\n7\n");
     }),
   ));
+
+test("a check claimed from the host it was handed over by keeps what its log already holds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { root, notes, checks } = yield* world;
+      const log = `${root}/check.log`;
+      yield* fs.writeFileString(log, "before the handover\n");
+      const claimed = {
+        ...checks,
+        run: () =>
+          Effect.succeed({
+            id: "handed",
+            pid: Effect.succeed(null),
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            exit: Effect.succeed(0),
+            logged: true,
+            collected: (collecting) => collecting,
+          } satisfies RunningCheck),
+      };
+
+      yield* Effect.scoped(
+        startCheck(`${root}/evidence`, {
+          ...check,
+          executable: "sh",
+          argv: [],
+          cwd: notes,
+          log,
+        }).pipe(Effect.provideService(CheckProcesses, claimed)),
+      );
+      expect(yield* fs.readFileString(log)).toBe("before the handover\n");
+    }),
+  ));
+
+const supervisedWorld = worldWith({
+  supervisor: [process.execPath, new URL("../src/main.ts", import.meta.url).pathname],
+});
+
+test.skipIf(process.platform !== "linux")(
+  "a check under its supervisor keeps the log and ends a host's own pipes keep, to the last write of a child that left its group",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const script = `tr '\\0' ' ' </proc/$PPID/cmdline >"$0/parent"
+i=0; while [ $i -lt 8 ]; do if [ $((i % 2)) -eq 0 ]; then echo $i; else echo $i >&2; fi; i=$((i + 1)); sleep 0.01; done
+setsid sh -c 'sleep 0.5; echo late' &`;
+        const through = (one: Effect.Success<typeof world>) =>
+          Effect.gen(function* () {
+            const log = `${one.root}/check.log`;
+            const kept = yield* collected(one, script, {
+              cwd: one.notes,
+              log,
+              argv: [one.notes],
+            });
+            return { log: yield* fs.readFileString(log), tail: kept.tail };
+          });
+        const own = yield* through(yield* world);
+        const supervised = yield* supervisedWorld;
+        const underSupervisor = yield* through(supervised);
+
+        expect(yield* fs.readFileString(`${supervised.notes}/parent`)).toContain(SUPERVISE);
+        expect(underSupervisor).toEqual({
+          log: "0\n1\n2\n3\n4\n5\n6\n7\nlate\n",
+          tail: { stdout: "0\n2\n4\n6\nlate\n", stderr: "1\n3\n5\n7\n" },
+        });
+        expect(underSupervisor).toEqual(own);
+      }),
+    ),
+  30_000,
+);
 
 test("a background child that sent both its streams elsewhere holds back no check", () =>
   runEffect(

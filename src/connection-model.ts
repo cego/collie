@@ -3,7 +3,14 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Schema } from "effect";
 
-export const ConnectionId = Schema.Literals(["gitlab", "github", "linear", "helle", "slack"]);
+export const ConnectionId = Schema.Literals([
+  "gitlab",
+  "github",
+  "linear",
+  "helle",
+  "slack",
+  "slack-user",
+]);
 export type ConnectionId = typeof ConnectionId.Type;
 
 export const ConnectionReading = Schema.Union([
@@ -46,7 +53,7 @@ export const connectionsLines = (connections: ReadonlyArray<Connection>): string
     Arr.map(
       connections,
       ({ id, reading }) =>
-        `${pipe(id, Str.padEnd(10))}${reading.state}${reading.state === "ok" ? ` · ${reading.account}` : ""}: ${reading.detail}${reading.state === "ok" ? "" : `\n          Fix: ${reading.fix}`}`,
+        `${pipe(`${id} `, Str.padEnd(10))}${reading.state}${reading.state === "ok" ? ` · ${reading.account}` : ""}: ${reading.detail}${reading.state === "ok" ? "" : `\n          Fix: ${reading.fix}`}`,
     ),
     "\n",
   );

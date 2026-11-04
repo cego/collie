@@ -25,6 +25,7 @@ import {
   WorkflowError,
   agentWork,
   ask,
+  benchmarkRefusalOf,
   contentOf,
   defineWorkflow,
   formatFindings,
@@ -307,13 +308,25 @@ export default defineWorkflow({
         }),
       );
       const written = yield* tickets(
-        agentWork({
-          ...planner,
-          operation: "tickets",
-          skill: "to-tickets",
-          instructions: prompts.tickets,
-          input: { ...input, checks: checksOf(yield* host.approved(run.id)) },
-          output: PlanOutputSchema,
+        Effect.gen(function* () {
+          const done = yield* agentWork({
+            ...planner,
+            operation: "tickets",
+            skill: "to-tickets",
+            instructions: prompts.tickets,
+            input: { ...input, checks: checksOf(yield* host.approved(run.id)) },
+            output: PlanOutputSchema,
+          });
+          const refused = yield* Activity.make({
+            name: "benchmarks.tickets",
+            success: Schema.NullOr(Schema.String),
+            execute: benchmarkRefusalOf(planDir),
+          });
+          if (refused !== null)
+            return yield* new WorkflowError({
+              reason: `a ticket's benchmark plan is not one collie measure takes: ${refused}`,
+            });
+          return done;
         }),
       );
       // A plan whose tickets nobody can build is not a finished plan: its planner is told once.

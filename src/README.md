@@ -148,7 +148,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `collecting.ts`        | Which agents Collie is collecting an Output from now, by Run and agent                                                      |
 | `controls.ts`          | The Hold and Stop an operator sets over a Run, one file each, and whether one is set                                        |
 | `processes.ts`         | Where a process's command, start time and session are read, and proven before anything signals it                           |
-| `check-processes.ts`   | A check's processes from spawn to gone: marked, recorded, and ended with the host that runs them                            |
+| `check-processes.ts`   | A check's processes from spawn to gone: marked, recorded, ended with the host, or handed to the newer build replacing it    |
+| `check-supervisor.ts`  | The process a check runs under: holds its pipes, writes its log, its streams' ends and its exit status to its files         |
 | `usage-model.ts`       | A Subscription's Usage reading: Schemas, parsing, Exhausted; pure, so Desktop and a module share it                         |
 | `usage.ts`             | This Machine's Usage readings: Claude's endpoint, Codex's app server, status lines                                          |
 | `catalogue-model.ts`   | A Harness catalogue: its Schemas, one decoder per harness's output, Collie's table (pure)                                   |
@@ -156,8 +157,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `connection-model.ts`  | Connection reading Schemas and the text the CLI and chat print (pure)                                                       |
 | `connection-probes.ts` | Linear MCP and Helle probes; reexports the forge adapters' probes                                                           |
 | `connection-login.ts`  | Reads a reusable login through its forge adapter for host-to-Desktop hand-over, without recording the token                 |
-| `slack.ts`             | Slack Web API adapter: identity, member channels, people, direct messages, posts and permalinks                             |
-| `slack-credentials.ts` | Reads and writes each Machine's Slack token and supplies its registry reading and channel choices                           |
+| `slack.ts`             | Slack Web API adapter: identity, member channels, people, direct messages, posts, permalinks and user sign-in tokens        |
+| `slack-credentials.ts` | Reads and writes each Machine's Slack bot token, checks its user token, and supplies both readings and channel choices      |
 | `connections.ts`       | The Connection registry: each probe isolated and bounded, shared by the host, doctor and workflow reads                     |
 | `schedule-model.ts`    | A Schedule as every door reads it, and when an occurrence starts and which comes next (pure)                                |
 | `schedules.ts`         | This Machine's Schedules: their records, the one write, and the `Schedule` workflow that fires them                         |

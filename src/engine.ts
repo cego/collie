@@ -236,7 +236,7 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
 import { slackApi, slackText } from "./slack";
-import { slackToken } from "./slack-credentials";
+import { slackToken, slackUserToken } from "./slack-credentials";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
@@ -378,7 +378,7 @@ export const TOOLCHAIN = {
  * surface, so a declaration that has drifted fails a test rather than an author's build.
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
-  export type ConnectionId = "gitlab" | "github" | "linear" | "helle" | "slack";
+  export type ConnectionId = "gitlab" | "github" | "linear" | "helle" | "slack" | "slack-user";
   export const ConnectionId: Schema.Codec<ConnectionId, unknown, never, never>;
   export type ConnectionReading =
     | { readonly state: "ok"; readonly account: string; readonly detail: string }
@@ -534,7 +534,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly plan_digest: string;
     readonly plan_reason: string | null;
     readonly base: MeasuredTree & { readonly commit: string };
-    readonly candidate: MeasuredTree;
+    /** \`harness_applied\`: the harness commits a scratch tree put on a candidate that had none; it was sampled there. */
+    readonly candidate: MeasuredTree & { readonly harness_applied?: ReadonlyArray<string> };
     readonly environment: Readonly<Record<string, string | null>>;
     readonly waited: { readonly memory: boolean; readonly machine: ReadonlyArray<string> };
     readonly prepare: ReadonlyArray<{ readonly tree: "base" | "candidate"; readonly exit: number; readonly seconds: number; readonly output: string }>;
@@ -2009,10 +2010,26 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly checks: ReadonlyArray<string>;
     /** Its acceptance criteria, which the builder answers one by one. */
     readonly criteria: ReadonlyArray<string>;
+    /** The benchmark plan its speed-up criterion is measured by, as benchmarkIn reads it. */
+    readonly benchmark: string | null;
   }
 
   /** The verification names a ticket's **Checks:** line promises. */
   export function checksIn(text: string): string[];
+
+  /** The benchmark plan a ticket's **Benchmark:** line names, beside the ticket; null where it names none. */
+  export function benchmarkIn(text: string): string | null;
+
+  /** Where a ticket's benchmark plan is: in the plan's issues/, beside the ticket. */
+  export function benchmarkFile(planDir: string, benchmark: string): string;
+
+  /**
+   * Why a ticket's benchmark plan is not one collie measure takes, naming the ticket and the
+   * file; null where every ticket's is, or none names one.
+   */
+  export function benchmarkRefusalOf(
+    planDir: string,
+  ): Effect.Effect<string | null, never, FileSystem.FileSystem | Path.Path>;
 
   /**
    * A ticket's acceptance criteria: each checkbox item with its wrapped lines, under its
@@ -2306,10 +2323,17 @@ export const loadEntry: (
 ) => Effect.Effect<WorkflowEntry, EntryError, FileSystem.FileSystem> = Effect.fn(
   "Engine.loadEntry",
 )(function* (file: string, revision?: string) {
-  installSdk();
   // Bun's module registry has no invalidation, so an entry or a helper read twice at one
   // path is the first read both times. Each read is of a copy of what is there now.
   const staged = yield* stagedEntry(file, revision);
+  return yield* readStagedEntry(file, staged);
+});
+
+const readStagedEntry = Effect.fn("Engine.readStagedEntry")(function* (
+  file: string,
+  staged: { readonly file: string; readonly root: string },
+) {
+  installSdk();
   const loaded = yield* Effect.tryPromise({
     try: () => import(staged.file),
     catch: (cause) =>
@@ -2612,6 +2636,8 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
   for (const name of top) {
     if (unstaged(name)) continue;
     names.push(name);
+    const info = yield* fs.stat(`${dir}/${name}`).pipe(Effect.option);
+    if (Option.isNone(info) || info.value.type !== "Directory") continue;
     // A link is named and not followed, as a recursive listing treats it.
     const link = yield* fs.readLink(`${dir}/${name}`).pipe(
       Effect.as(true),
@@ -2634,39 +2660,60 @@ const sourcesIn = Effect.fn("Engine.sourcesIn")(function* (dir: string) {
  */
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
   Effect.fn("Engine.revisionOf")(function* (dir: string) {
-    const fs = yield* FileSystem.FileSystem;
-    // An installed dependency counts by its names alone: the toolchain a module is
-    // typechecked against lives here too, and reading all of it would cost more than
-    // every start it is on the way of.
-    const installed = yield* fs
-      .readDirectory(`${dir}/node_modules`, { recursive: true })
-      .pipe(Effect.orElseSucceed((): Array<string> => []));
-    let read = Arr.join(
-      Arr.map(installed.sort(), (name) => `node_modules/${name}\n`),
-      "",
-    );
-    for (const name of (yield* sourcesIn(dir)).sort()) {
-      // A directory reads as nothing, and what is inside it is in the list under a name
-      // of its own.
-      const content = yield* fs
-        .readFileString(`${dir}/${name}`)
-        .pipe(Effect.orElseSucceed(() => ""));
-      read += `${name}:${Bun.hash(content).toString(16)}\n`;
-    }
-    for (const file of yield* outsideOf(dir)) {
-      const content = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-      read += `${file}:${Bun.hash(content).toString(16)}\n`;
-    }
-    return Bun.hash(read).toString(16);
+    return (yield* sourceTree(dir)).revision;
   });
+
+const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const contents = new Map<string, string>();
+  const contentOf = (file: string) => {
+    const cached = contents.get(file);
+    return cached !== undefined
+      ? Effect.succeed(cached)
+      : fs.readFileString(file).pipe(
+          Effect.orElseSucceed(() => ""),
+          Effect.map((content) => {
+            contents.set(file, content);
+            return content;
+          }),
+        );
+  };
+  // An installed dependency counts by its names alone: the toolchain a module is
+  // typechecked against lives here too, and reading all of it would cost more than
+  // every start it is on the way of.
+  const installed = yield* fs
+    .readDirectory(`${dir}/node_modules`, { recursive: true })
+    .pipe(Effect.orElseSucceed((): Array<string> => []));
+  let read = Arr.join(
+    Arr.map(installed.sort(), (name) => `node_modules/${name}\n`),
+    "",
+  );
+  const names = (yield* sourcesIn(dir)).sort();
+  for (const name of names) {
+    // A directory reads as nothing, and what is inside it is in the list under a name
+    // of its own.
+    const content = yield* contentOf(`${dir}/${name}`);
+    read += `${name}:${Bun.hash(content).toString(16)}\n`;
+  }
+  const outside = yield* outsideOf(dir, contentOf, names);
+  for (const file of outside) {
+    const content = yield* contentOf(file);
+    read += `${file}:${Bun.hash(content).toString(16)}\n`;
+  }
+  return { names, outside, revision: Bun.hash(read).toString(16) };
+});
 
 /**
  * The files outside `dir` its code imports by a relative path or a package import, what
  * those import in turn, and the `package.json` files above them that such imports resolve by.
  */
-const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
+const outsideOf = Effect.fn("Engine.outsideOf")(function* (
+  dir: string,
+  contentOf?: (file: string) => Effect.Effect<string>,
+  names?: ReadonlyArray<string>,
+) {
   const fs = yield* FileSystem.FileSystem;
-  const pending = Arr.map(yield* sourcesIn(dir), (name) => `${dir}/${name}`);
+  const pending = Arr.map(names ?? (yield* sourcesIn(dir)), (name) => `${dir}/${name}`);
   const outside = new Set<string>();
   const looked = new Set<string>();
   for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
@@ -2680,7 +2727,9 @@ const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
     }
     const loader = loaderOf(file);
     if (loader === null) continue;
-    const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+    const text = yield* (
+      contentOf?.(file) ?? fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))
+    );
     for (const target of importedBy(file, text, loader)) {
       if (pipe(target, Str.startsWith(`${dir}/`)) || outside.has(target)) continue;
       outside.add(target);
@@ -2735,16 +2784,26 @@ export const stageGeneration: (options: {
   readonly entry: string;
 }) => Effect.Effect<string, EntryError, FileSystem.FileSystem | Path.Path> = Effect.fn(
   "Engine.stageGeneration",
-)(function* (options: { readonly dir: string; readonly name: string; readonly entry: string }) {
+)((options) => stageFiles(options));
+
+const stageFiles = Effect.fn("Engine.stageFiles")(function* (
+  options: { readonly dir: string; readonly name: string; readonly entry: string },
+  sources?: { readonly names: ReadonlyArray<string>; readonly outside: ReadonlyArray<string> },
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const from = directoryOf(options.entry);
-  const outside = yield* outsideOf(from);
+  const outside = sources?.outside ?? (yield* outsideOf(from));
   const staged = (file: string) => path.join(options.dir, "generations", options.name, file);
   const failed = (cause: unknown) =>
     new EntryError({ file: options.entry, message: String(cause) });
   yield* fs.makeDirectory(staged(from), { recursive: true }).pipe(Effect.mapError(failed));
-  for (const name of yield* fs.readDirectory(from).pipe(Effect.mapError(failed))) {
+  const names =
+    (sources === undefined
+      ? undefined
+      : Arr.filter(sources.names, (name) => !pipe(name, Str.includes("/")))) ??
+    (yield* fs.readDirectory(from).pipe(Effect.mapError(failed)));
+  for (const name of names) {
     if (unstaged(name)) continue;
     yield* fs
       .copy(path.join(from, name), staged(path.join(from, name)), { overwrite: true })
@@ -2797,10 +2856,6 @@ const parentOf = (at: string) =>
     ),
   );
 
-/** A file and what was in its directory when it was read, as one value. */
-const sourceOf = (entry: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
-  revisionOf(directoryOf(entry)).pipe(Effect.map((revision) => `${entry}@${revision}`));
-
 /** Every generation a host staged, gone: a new host stages from the sources again. */
 export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
   FileSystem.FileSystem.pipe(
@@ -2810,8 +2865,8 @@ export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSy
 
 /**
  * The host's own stack: Bun's SQLite under Effect's single-node cluster under its
- * workflow engine. Two settings are not the defaults, and both would otherwise turn
- * recoverable work terminal — the reason each is here is in ADR-0014.
+ * workflow engine. Three settings are not the defaults; why each is here is in ADR-0014
+ * and ADR-draft-one-runner-holds-one-shard.
  */
 export function engineLayer(options: {
   readonly dir: string;
@@ -2839,6 +2894,8 @@ export function engineLayer(options: {
     // default marks them failed after a minute, which turns "the file is not there
     // yet" into a terminal result; waiting is what lets a repair recover the work.
     entityRegistrationTimeout: Duration.infinity,
+    // Each shard is a lock row taken, refreshed and released by the one runner there is.
+    shardsPerGroup: 1,
   };
   const polled =
     options.messagePoll === undefined
@@ -2855,7 +2912,7 @@ export function engineLayer(options: {
     ).pipe(
       Effect.map(([SingleRunner, ClusterWorkflowEngine]) => {
         const cluster = SingleRunner.layer({ shardingConfig: polled }).pipe(
-          Layer.provide([sql, Digest.layerWebCrypto]),
+          Layer.provide([oneShard.pipe(Layer.provideMerge(sql)), Digest.layerWebCrypto]),
         );
         // The message storage too: forgetting a Run clears what the engine kept of it.
         return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
@@ -2864,6 +2921,23 @@ export function engineLayer(options: {
   );
   return engine.pipe(Layer.provideMerge(sql));
 }
+
+/**
+ * Moves what an engine on upstream's 300 shards left onto the one shard this engine holds,
+ * before the cluster reads its storage: a message on any other shard is never read again.
+ */
+const oneShard = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const tables = yield* sql<{
+      readonly name: string;
+    }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('cluster_messages', 'cluster_locks')`;
+    for (const { name } of tables)
+      yield* name === "cluster_messages"
+        ? sql`UPDATE cluster_messages SET shard_id = 'default:1' WHERE shard_id <> 'default:1'`
+        : sql`DELETE FROM cluster_locks WHERE shard_id <> 'default:1'`;
+  }).pipe(Effect.orDie),
+);
 
 /** What the engine kept of one execution of a workflow registered under `name`, gone. */
 export const forgetExecution = (name: string, execution: string) =>
@@ -4277,13 +4351,9 @@ export const hostLayer = (options: {
               const ref = mr === null ? null : mrRefOf(mr);
               if (mr === null || ref === null)
                 return { posted: false, why: "this Run recorded no merge request to share" };
-              const reading = yield* host.connection("slack");
-              if (reading.state !== "ok") return { posted: false, why: reading.detail };
               const { env } = yield* placing;
-              const token = yield* slackToken(env);
-              if (token === null)
-                return { posted: false, why: "No Slack bot token on this Machine" };
-              const api = (options.slack ?? slackApi)(token);
+              const slack = options.slack ?? slackApi;
+              const api = slack(yield* slackUserToken(env, slack));
               const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
               if (details._tag !== "Details") return { posted: false, why: details.reason };
               const posted = yield* api.post(asked.channel, `<${mr}|${slackText(details.title)}>`);
@@ -5088,7 +5158,19 @@ export const nextRegistrationName = (
   id: string,
 ): string => `${id}@${Arr.filter(known, (entry) => entry.workflow === id).length + 1}`;
 
-/** The exit a decision is answered with, encoded by the decision's own schema. */
+/** Once the Run has stopped, however long it takes to. */
+const untilStopped = (registration: Registration, executionId: string) =>
+  WorkflowEngine.WorkflowEngine.pipe(
+    Effect.flatMap((engine) => engine.poll(registration.workflow, executionId)),
+    Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(WAKE_INTERVAL) }),
+    Effect.asVoid,
+  );
+
+/**
+ * The exit a decision is answered with, encoded by the decision's own schema, once the Run
+ * has stopped to wait on it: the engine still wakes a Run that read its answer early, and
+ * that wake resumes whatever park the Run reached next.
+ */
 export const answerDecision = (
   registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
@@ -5099,7 +5181,9 @@ export const answerDecision = (
     workflow: registration.workflow,
     executionId: options.executionId,
   });
-  return DurableDeferred.done(decision, { token, exit: Exit.succeed(options.value) });
+  return untilStopped(registration, options.executionId).pipe(
+    Effect.andThen(DurableDeferred.done(decision, { token, exit: Exit.succeed(options.value) })),
+  );
 };
 
 /**
@@ -6258,6 +6342,17 @@ const makeRegistry: (
       }
     });
 
+  const stageEntry = Effect.fn("Engine.stageEntry")(function* (file: string) {
+    const name = yield* random.uuidV4();
+    const sources = yield* sourceTree(directoryOf(file));
+    const staged = yield* stageFiles({ dir, name, entry: file }, sources);
+    const entry = yield* readStagedEntry(file, {
+      file: staged,
+      root: `${dir}/generations/${name}`,
+    });
+    return { entry, source: `${file}@${sources.revision}` };
+  });
+
   const register = Effect.fn("Engine.register")(function* (
     route: {
       readonly workflow: string;
@@ -6265,11 +6360,10 @@ const makeRegistry: (
       readonly entry: string;
     },
     recovered?: Set<string>,
+    prepared?: { readonly entry: WorkflowEntry; readonly source: string },
     reached: (run: string) => boolean = () => true,
   ) {
-    const entry = yield* stageGeneration({ dir, name: route.name, entry: route.entry }).pipe(
-      Effect.flatMap(loadEntry),
-    );
+    const { entry, source } = prepared ?? (yield* stageEntry(route.entry));
     const registration = entry.make(route.name);
     const pending: Array<{ row: RunRow; parked: Option.Option<string> }> = [];
     const held: string[] = [];
@@ -6337,7 +6431,7 @@ const makeRegistry: (
       fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
       closes: entry.metadata?.closes,
       checkout: entry.metadata?.checkout ?? "none",
-      source: yield* sourceOf(route.entry),
+      source,
       metadata: describeMetadata(entry.metadata),
       connections: entry.metadata?.connections,
       offers: declaredByModule(entry.metadata),
@@ -7704,13 +7798,13 @@ const makeRegistry: (
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
     // Read as it is now to learn the id this file claims, then register the next
     // generation of that id.
-    const described = yield* loadEntry(file);
+    const described = yield* stageEntry(file);
     const route = {
-      workflow: described.id,
-      name: nextRegistrationName(known, described.id),
+      workflow: described.entry.id,
+      name: nextRegistrationName(known, described.entry.id),
       entry: file,
     };
-    const generation = yield* register(route);
+    const generation = yield* register(route, undefined, described);
     known = [...known, route];
     yield* store.remember(route);
     return generation;
@@ -8097,7 +8191,7 @@ const makeRegistry: (
           yield* Effect.forEach(known, (route) =>
             live.has(route.name) || used?.has(route.name) === false
               ? Effect.void
-              : register(route, recovered, reached).pipe(
+              : register(route, recovered, undefined, reached).pipe(
                   Effect.catchTag("EntryError", (failure) =>
                     Effect.sync(() =>
                       unavailable.set(route.name, `${failure.file}: ${failure.message}`),
@@ -8463,12 +8557,18 @@ const makeRegistry: (
       if (settled._tag === "accepted") yield* crash("answered");
       // Completed again on a repeat: the recording host may have died before the run was told.
       // An agent's question is answered to its agent; waking the workflow would replay it.
-      if (settled.row.asker === null && found._tag === "Success")
-        yield* answerDecision(found.success.generation.registration, {
-          name,
-          executionId: found.success.execution,
-          value,
-        });
+      // Handed over in the background: a Run may take any time to stop, and only the
+      // handing-over needs the wake permit. A host that ends first leaves it to the next one.
+      if (settled.row.asker === null && found._tag === "Success") {
+        const { registration } = found.success.generation;
+        const executionId = found.success.execution;
+        yield* untilStopped(registration, executionId).pipe(
+          Effect.andThen(
+            answerDecision(registration, { name, executionId, value }).pipe(waking.withPermits(1)),
+          ),
+          Effect.forkIn(hostScope),
+        );
+      }
 
       return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
     }, waking.withPermits(1)),

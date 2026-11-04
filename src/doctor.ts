@@ -30,6 +30,7 @@ import manifest from "../herdr-plugin.toml";
 import { err } from "./operations";
 import type { ConnectionReading } from "./connection-model";
 import { connectionProbes, readConnections } from "./connections";
+import { slackApi } from "./slack";
 import { projectsRoot } from "./projects";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 import { humanBytes } from "./bytes";
@@ -372,6 +373,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   env: PluginEnv,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
   herdr: Herdr = new Herdr(env),
+  slack = slackApi,
 ) {
   const path = yield* Path.Path;
   const root = env.pluginRoot;
@@ -630,7 +632,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
 
   for (const { id, reading } of yield* readConnections(
     Arr.filter(
-      connectionProbes(env, run),
+      connectionProbes(env, run, slack),
       ({ id }) => id !== "linear" || needs.harnesses.includes("claude"),
     ),
   )) {

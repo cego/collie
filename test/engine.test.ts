@@ -9,11 +9,19 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
+import { Deferred, Duration, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
+import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
+import * as ClusterWorkflowEngine from "effect/cluster/ClusterWorkflowEngine";
+import * as SingleRunner from "effect/cluster/SingleRunner";
+import * as Digest from "effect/crypto/Digest";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
-import { engineLayer, loadEntry, TOOLCHAIN } from "../src/engine";
+import * as DurableDeferred from "effect/workflow/DurableDeferred";
+import { answerDecision, engineLayer, loadEntry, TOOLCHAIN } from "../src/engine";
+import type { HostCodec, HostPayload, HostWorkflow } from "../src/sdk";
 import { runEffect } from "./support/effect";
 import { HostReply, events, fixtures, openHost, root, until, workspace } from "./support/host";
 
@@ -447,6 +455,69 @@ test("a Run's execution id is the one Effect 4.0.1 derived, so a recorded Run is
     }),
   ));
 
+test("an answer given before its Run waits on the question is handed over only once it waits, however long that takes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-answer-" });
+      const asking: HostWorkflow = Workflow.make("asking", {
+        // SAFETY: a struct of schemas with no services, as the host's own envelope is.
+        payload: Schema.Struct({ runId: Schema.String }) as HostPayload,
+        idempotencyKey: (payload) => String(payload["runId"]),
+        // SAFETY: a string codec needs no services.
+        success: Schema.String as HostCodec,
+      });
+      const payload = { runId: "r1" };
+      const executionId = yield* asking.executionId(payload);
+      const decision = DurableDeferred.make("carry-on", { success: Schema.String });
+      const asked = yield* Deferred.make<void>();
+      const waits = yield* Deferred.make<void>();
+      const ticks = (seconds: number) =>
+        Effect.gen(function* () {
+          for (let step = 0; step < seconds; step++) {
+            yield* TestClock.adjust("1 second");
+            yield* TestClock.withLive(Effect.sleep("2 millis"));
+          }
+        });
+
+      const { early, result } = yield* Effect.gen(function* () {
+        yield* asking.execute(payload, { discard: true });
+        yield* Deferred.await(asked);
+        const answering = yield* answerDecision(
+          { workflow: asking, layer: Layer.empty },
+          { name: "carry-on", executionId, value: "yes" },
+        ).pipe(Effect.forkScoped);
+        yield* ticks(10);
+        const early = answering.pollUnsafe() !== undefined;
+        yield* Deferred.succeed(waits, undefined);
+        for (let step = 0; step < 30; step++) {
+          const polled = yield* asking.poll(executionId);
+          if (Option.isSome(polled) && polled.value._tag === "Complete") break;
+          yield* ticks(1);
+        }
+        return { early, result: yield* asking.poll(executionId) };
+      }).pipe(
+        Effect.provide(
+          asking
+            .toLayer(() =>
+              Deferred.succeed(asked, undefined).pipe(
+                Effect.andThen(Deferred.await(waits)),
+                Effect.andThen(DurableDeferred.await(decision)),
+              ),
+            )
+            .pipe(Layer.provideMerge(engineLayer({ dir })), Layer.provideMerge(TestClock.layer())),
+        ),
+        Effect.scoped,
+        Effect.orDie,
+      );
+
+      expect(early).toBe(false);
+      expect(
+        Option.isSome(result) && result.value._tag === "Complete" && result.value.exit,
+      ).toEqual(Exit.succeed("yes"));
+    }).pipe(Effect.scoped),
+  ));
+
 test("work for a workflow nobody has registered waits past upstream's deadline for it", () =>
   runEffect(
     Effect.gen(function* () {
@@ -506,6 +577,60 @@ test("work for a workflow nobody has registered waits past upstream's deadline f
             (result) => Option.isSome(result) && result.value._tag === "Complete",
           ),
         ),
+      );
+      expect(Option.isSome(done) && done.value._tag === "Complete" && done.value.exit).toEqual(
+        Exit.succeed("recovered"),
+      );
+    }).pipe(Effect.scoped),
+  ));
+
+test("work an engine on upstream's 300 shards left waiting is finished by the one-shard engine", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-shards-" });
+      const patient = Workflow.make("patient", {
+        payload: { runId: Schema.String },
+        idempotencyKey: (payload) => payload.runId,
+        success: Schema.String,
+      });
+      const payload = { runId: "r1" };
+      const executionId = yield* patient.executionId(payload);
+      const sql = SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
+        Layer.provideMerge(Reactivity.layer),
+      );
+      // The engine a host ran before this one: upstream's sharding, nothing registered.
+      yield* patient.execute(payload, { discard: true }).pipe(
+        Effect.provide(
+          ClusterWorkflowEngine.layer.pipe(
+            Layer.provideMerge(
+              SingleRunner.layer({
+                shardingConfig: { entityRegistrationTimeout: Duration.infinity },
+              }),
+            ),
+            Layer.provide([sql, Digest.layerWebCrypto]),
+          ),
+        ),
+        Effect.scoped,
+        Effect.orDie,
+      );
+      const shards = yield* Effect.flatMap(
+        SqlClient.SqlClient,
+        (client) => client<{ shard_id: string }>`SELECT shard_id FROM cluster_messages`,
+      ).pipe(Effect.provide(sql), Effect.scoped, Effect.orDie);
+      expect(Arr.map(shards, (row) => row.shard_id)).not.toContain("default:1");
+
+      const done = yield* until(
+        () => patient.poll(executionId),
+        (result) => Option.isSome(result) && result.value._tag === "Complete",
+      ).pipe(
+        Effect.provide(
+          patient
+            .toLayer(() => Effect.succeed("recovered"))
+            .pipe(Layer.provideMerge(engineLayer({ dir }))),
+        ),
+        Effect.scoped,
+        Effect.orDie,
       );
       expect(Option.isSome(done) && done.value._tag === "Complete" && done.value.exit).toEqual(
         Exit.succeed("recovered"),

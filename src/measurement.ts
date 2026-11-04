@@ -39,7 +39,14 @@ import { waitForMemory } from "./memory-wait";
 import { shell } from "./mr";
 import { machineName } from "./peers";
 import { nowIso } from "./time";
-import { contentOf, environmentOf, fingerprint, resolveExecutable, sameTree } from "./verify";
+import {
+  contentOf,
+  environmentOf,
+  fingerprint,
+  resolveExecutable,
+  sameTree,
+  treeOf,
+} from "./verify";
 
 const MeasurementLine = Schema.fromJsonString(MeasurementJson);
 
@@ -162,8 +169,8 @@ const outsideHarness = (
   });
 
 /**
- * The base tree: a detached worktree at `commit` with the harness commits applied, kept for
- * the Run's later Measurements of the same base and removed by Cleanup.
+ * A detached worktree at `commit` with the harness commits applied: the base tree, or a
+ * candidate's scratch tree. Kept for the Run's later Measurements and removed by Cleanup.
  */
 const baseTree = (
   stateDir: string,
@@ -414,6 +421,23 @@ export const measure = Effect.fn("Measurement.measure")(function* (
       why: `a harness commit touches ${Arr.join(outside, ", ")}, outside the plan's harness paths (${Arr.join(plan.harness.paths, ", ")})`,
     });
 
+  const present: Array<string> = [];
+  for (const one of plan.harness.paths)
+    if (yield* fs.exists(path.join(repository, one)).pipe(Effect.orElseSucceed(() => false)))
+      present.push(one);
+  if (present.length > 0 && present.length < plan.harness.paths.length)
+    return yield* new MeasureRefused({
+      why: `the candidate holds only some of the harness paths: ${Arr.join(
+        Arr.filter(plan.harness.paths, (one) => !present.includes(one)),
+        ", ",
+      )} missing`,
+    });
+  const applied = present.length === 0 ? harness : null;
+  if (applied !== null && (yield* treeOf(ask.cwd)).dirty)
+    return yield* new MeasureRefused({
+      why: `the candidate has none of the harness and has uncommitted work, which a scratch tree with the harness applied cannot carry; commit it first`,
+    });
+
   const recorded = Effect.gen(function* () {
     const now = yield* fingerprint(ask.cwd);
     const records = yield* readMeasurements(opts.evidence).pipe(Effect.orElseSucceed(() => []));
@@ -483,6 +507,7 @@ export const measure = Effect.fn("Measurement.measure")(function* (
       id,
       commit,
       harness,
+      applied,
       repository,
       waited,
       path,
@@ -532,6 +557,8 @@ const taking = Effect.fn("Measurement.taking")(function* (
     readonly id: string;
     readonly commit: string;
     readonly harness: ReadonlyArray<string>;
+    /** Harness commits to sample the candidate with, in a scratch tree, where it carries none. */
+    readonly applied: ReadonlyArray<string> | null;
     readonly repository: string;
     readonly waited: Waited;
     readonly path: Path.Path;
@@ -539,7 +566,15 @@ const taking = Effect.fn("Measurement.taking")(function* (
 ) {
   const { ask, plan, path } = opts;
   const started = yield* nowIso;
-  const candidate = yield* treeAt(ask.cwd);
+  const own = yield* treeAt(ask.cwd);
+  const candidate = opts.applied === null ? own : { ...own, harness_applied: [...opts.applied] };
+  const sampledIn =
+    opts.applied === null
+      ? ask.cwd
+      : path.join(
+          yield* baseTree(opts.stateDir, ask.runId, opts.repository, own.head_sha, opts.applied),
+          path.relative(opts.repository, ask.cwd),
+        );
   const baseRoot = yield* baseTree(
     opts.stateDir,
     ask.runId,
@@ -551,13 +586,13 @@ const taking = Effect.fn("Measurement.taking")(function* (
     commit: opts.commit,
     ...(yield* treeAt(path.join(baseRoot, path.relative(opts.repository, ask.cwd)))),
   };
-  const roots = { base: base.cwd, candidate: candidate.cwd };
+  const roots = { base: base.cwd, candidate: sampledIn };
   const checkOf = { run: ask.runId, pass: { pass: ask.pass }, by: "collie" } as const;
   const environment: Record<string, string | null> = {};
   for (const command of plan.commands) {
-    const absolute = yield* resolveExecutable(command.executable, candidate.cwd);
+    const absolute = yield* resolveExecutable(command.executable, sampledIn);
     environment[command.name] =
-      absolute === null ? null : yield* environmentOf(absolute, candidate.cwd);
+      absolute === null ? null : yield* environmentOf(absolute, sampledIn);
   }
   const prepared: Array<Measurement["prepare"][number]> = [];
   const samples: Array<Sample> = [];

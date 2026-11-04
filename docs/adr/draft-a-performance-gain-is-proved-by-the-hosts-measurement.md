@@ -53,6 +53,31 @@ Measurements on different Machines are never compared. Only one Measurement runs
 Machine at a time. Others wait, and say so, while no other work does. A Measurement waits
 while its Machine is **Short of memory**, like a Check.
 
+## Amended 2026-11-02: the candidate gets the harness where it carries none
+
+A Tune-up asks the human whether its progress is enough before it prepares a merge request.
+On Yes the tuner takes the harness off the branch, so the revision that ships carries none
+of it. The `final` Measurement after a Yes is of that cleaned revision, with the harness
+applied. The performance gate then judges the revision that ships, not one with benchmark
+scaffolding left in it.
+
+The host decides from the candidate's checkout:
+
+- **Every harness path exists:** the candidate carries the harness and is sampled in its
+  own checkout, as before.
+- **None exists:** the host samples it in a scratch worktree at the candidate's head with
+  the harness commits cherry-picked onto it, exactly as it makes the base tree. The checkout
+  is left as it was.
+- **Some but not all exist:** the candidate is refused, naming the missing paths.
+- **The candidate has uncommitted work and no harness:** it is refused, because a scratch
+  tree cannot carry that work.
+
+The comparison keeps its identity (D2): the candidate's own commit and fingerprint, plus
+the plan. The record names the harness commits applied. A repeated ask returns the recorded
+Measurement and does not sample again. Instrumentation that a metric needs stays inside the
+harness paths, so applying the harness brings it back. A metric still missing a reading is
+an unjudged Measurement, never a pass.
+
 ## Considered
 
 - **Benchmarks as Checks.** A Check is a pass or fail on one tree, and the host does not

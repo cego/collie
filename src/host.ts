@@ -19,11 +19,14 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
+// oxlint-disable-next-line effecttsgo/node-builtin-import -- A signal handler decides a hand-over before the interrupt it races can end a check, so it reads synchronously.
+import { readFileSync, rmSync } from "node:fs";
 import { createConnection, type Socket as NetSocket } from "node:net";
 import { withdrawStepNote } from "./step-steering";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { PlatformServices } from "./platform";
 import {
+  Cause,
   Clock,
   Config,
   Context,
@@ -179,6 +182,7 @@ import {
   type SweptBy,
 } from "./cleanup";
 import { startedOf } from "./automode";
+import { startedOf as processStarted } from "./processes";
 import { once, readAudit, recordAudit, startedBy, trimAudit, whoActed, actorOf } from "./audit";
 import { usagePhrase } from "./usage-model";
 import { currentEnv, leaveLauncher, withoutLauncher } from "./env";
@@ -328,8 +332,11 @@ import {
   type LockHolder,
 } from "./lock";
 
-/** What a host says it is. A client that is not this stops rather than guessing. */
-export const BUILD: string = manifest.version;
+/**
+ * What a host says it is. A client that is not this stops rather than guessing.
+ * `COLLIE_TEST_BUILD` is a test's older build, and unset everywhere else.
+ */
+export const BUILD: string = Bun.env.COLLIE_TEST_BUILD ?? manifest.version;
 
 export const socketOf = (dir: string) => `${dir}/host.sock`;
 const lockOf = hostLockOf;
@@ -348,6 +355,32 @@ const HostRecord = Schema.fromJsonString(
   }),
 );
 const encodeRecord = Schemaflow(Schema.encodeResult(HostRecord), Result.getOrThrow);
+
+/** A client replacing the host at `pid` with the newer `build`, written before it signals it. */
+const handOverAskedOf = (dir: string) => `${dir}/host.handover`;
+const HandOverAsked = Schema.fromJsonString(
+  Schema.Struct({ pid: Schema.Int, build: Schema.String }),
+);
+/** What a replaced host handed over, and to which build, written before it lets go of its lock. */
+const handedOverOf = (dir: string) => `${dir}/host.handed-over`;
+const HandedOverJson = Schema.fromJsonString(
+  Schema.Struct({
+    build: Schema.String,
+    host: Schema.Struct({ pid: Schema.Finite, started: Schema.String }),
+    checks: Schema.Array(Schema.String),
+  }),
+);
+
+/** Tells the host at `pid` it is being replaced by `build`, so it hands its checks over. */
+const askHandOver = (dir: string, pid: number, build: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      Schema.encodeEffect(HandOverAsked)({ pid, build }).pipe(
+        Effect.flatMap((text) => fs.writeFileString(handOverAskedOf(dir), text)),
+      ),
+    ),
+    Effect.ignore({ log: "Warn" }),
+  );
 
 /** Whether `build` is a newer release than `than`. */
 const newer = (build: string, than: string) =>
@@ -1575,6 +1608,43 @@ const Edited = Schema.Struct({ path: Schema.String, replaced: Schema.Int });
 const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
 
 /** The board, built here for every front door. */
+/**
+ * Finishes each agent's check this host took over, as its verify would have: no step runs it
+ * again. Gives back each one's Verification to come, by check id, for the verify following it.
+ */
+const finishTakenOver = (stateDir: string) =>
+  Effect.gen(function* () {
+    const checks = yield* CheckProcesses;
+    const { finishCheck } = yield* Effect.promise(() => import("./verify"));
+    const { noteVerification } = yield* Effect.promise(() => import("./metrics"));
+    const followed = new Map<
+      string,
+      Deferred.Deferred<import("./verify-model").Verification, HostRefused>
+    >();
+    for (const record of yield* checks.takenOver) {
+      if (record.by !== "agent") continue;
+      const done = yield* Deferred.make<import("./verify-model").Verification, HostRefused>();
+      followed.set(record.id, done);
+      yield* Effect.scoped(
+        checks.claim(record.id).pipe(
+          Effect.flatMap((running) =>
+            running === null ? Effect.never : running.collected(running.exit),
+          ),
+          Effect.flatMap((exit) => finishCheck(record.id, exit)),
+        ),
+      ).pipe(
+        Effect.tap((verification) =>
+          noteVerification(evidenceDir(stateDir, record.run), verification),
+        ),
+        Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+        Effect.exit,
+        Effect.flatMap((exit) => Deferred.done(done, exit)),
+        Effect.forkScoped,
+      );
+    }
+    return followed;
+  });
+
 const frontDoorHandlers = (
   dir: string,
   installation: string,
@@ -1630,6 +1700,7 @@ const frontDoorHandlers = (
               reason: `${node.title} has finished since the record you acted on was shown`,
             });
         });
+      const followed = yield* finishTakenOver(env.stateDir).pipe(Effect.provideContext(hosted));
       const stampOf = (client: { readonly id: number }) => stampIn(declared, client);
       const doorOf = (client: { readonly id: number }) => stampOf(client).origin;
       /** Who asks on a channel: its front door, and a chat's voice. */
@@ -2748,6 +2819,8 @@ const frontDoorHandlers = (
                         {
                           stdout: echo("stdout"),
                           stderr: echo("stderr"),
+                          started: (check) =>
+                            Queue.offer(queue, { _tag: "Started", check }).pipe(Effect.asVoid),
                           said: (line) =>
                             echo("stderr")(`${line}\n`).pipe(
                               Effect.andThen(appendLog(runDir(env.stateDir, runId), line)),
@@ -2804,6 +2877,22 @@ const frontDoorHandlers = (
               );
             }),
           ),
+        verifyFollow: ({ check }) => {
+          const done = followed.get(check);
+          return done === undefined
+            ? Stream.fail(
+                new HostRefused({
+                  reason: `invalid_state: check ${check} is not one this host took over.`,
+                }),
+              )
+            : Stream.fromEffect(
+                Effect.map(Deferred.await(done), (verification) => ({
+                  _tag: "Result" as const,
+                  verification,
+                  ran: true,
+                })),
+              );
+        },
         measure: ({ runId, base, cwd, plan, pass, reason }, { client }) =>
           Stream.unwrap(
             Effect.gen(function* () {
@@ -3550,11 +3639,19 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
         const fresh = !(yield* fs.exists(`${dir}/installation`));
         const installation = yield* installationOf(dir);
         yield* markSeenSince(dir, yield* nowIso);
+        const handedOver = yield* fs
+          .readFileString(handedOverOf(dir))
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HandedOverJson)), Effect.option);
+        yield* fs.remove(handedOverOf(dir), { force: true }).pipe(Effect.ignore);
         const checks = yield* hostCheckProcesses({
           dir,
           installation,
           onRun: onLeftoversRun(dir),
           sweep: false,
+          supervisor: yield* hostCommand,
+          // Only a host of the build it was handed to takes the checks over.
+          ...(Option.isSome(handedOver) &&
+            handedOver.value.build === BUILD && { handedOver: handedOver.value }),
         });
         const sweep = fresh
           ? Effect.void
@@ -3566,7 +3663,7 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
                 }),
               ),
             );
-        const stop = yield* boundedStop(lock, checks);
+        const stop = yield* boundedStop(dir, lock, checks);
         yield* Effect.logInfo(`collie ${BUILD} host started, pid ${process.pid}`);
         yield* Effect.forkScoped(
           rotateInPlace(outputOf(dir)).pipe(Effect.repeat(Schedule.spaced("1 minute"))),
@@ -3630,13 +3727,36 @@ const stopSaid = StopReason.$match({
 });
 
 /** Any end of a host gives the shutdown the grace, then exits however far it got (ADR-0014). */
-const boundedStop = (lock: string, checks: CheckProcessesApi) =>
+const boundedStop = (dir: string, lock: string, checks: CheckProcessesApi) =>
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
     const grace = yield* stopGrace;
     const stopping = yield* Deferred.make<StopReason>();
+    const host = { pid: process.pid, started: (yield* processStarted(process.pid)) ?? "" };
+    const context = yield* Effect.context<never>();
+    let handed: { readonly build: string; readonly checks: ReadonlyArray<string> } | null = null;
     // In the outer scope, which closes only once the shutdown it bounds has finished.
     yield* Deferred.await(stopping).pipe(
       Effect.flatMap((why) => Effect.logInfo(stopSaid(why))),
+      Effect.andThen(
+        Effect.suspend(() =>
+          handed === null
+            ? Effect.void
+            : Schema.encodeEffect(HandedOverJson)({ ...handed, host }).pipe(
+                Effect.flatMap((text) =>
+                  fs
+                    .writeFileString(`${handedOverOf(dir)}.new`, text)
+                    .pipe(Effect.andThen(fs.rename(`${handedOverOf(dir)}.new`, handedOverOf(dir)))),
+                ),
+                Effect.andThen(
+                  Effect.logInfo(
+                    `handed ${handed.checks.length} check(s) over to collie ${handed.build}`,
+                  ),
+                ),
+                Effect.ignore({ log: "Warn" }),
+              ),
+        ),
+      ),
       Effect.andThen(
         endAllWithin(checks, grace, (ended) =>
           Effect.forEach(
@@ -3659,10 +3779,16 @@ const boundedStop = (lock: string, checks: CheckProcessesApi) =>
       Effect.andThen(Effect.sync(() => process.exit(1))),
       Effect.forkScoped,
     );
-    const signalled = () => Deferred.doneUnsafe(stopping, Effect.succeed(StopReason.Asked()));
+    const signalled = () => {
+      // Decided as the signal lands, before an interrupted check's Scope can end it.
+      const asked = handOverAsked(dir);
+      if (asked !== null && asked.pid === process.pid && newer(asked.build, BUILD))
+        handed = { build: asked.build, checks: Effect.runSyncWith(context)(checks.handOver) };
+      Deferred.doneUnsafe(stopping, Effect.succeed(StopReason.Asked()));
+    };
     yield* Effect.acquireRelease(
       Effect.sync(() => {
-        for (const signal of STOP_SIGNALS) process.once(signal, signalled);
+        for (const signal of STOP_SIGNALS) process.prependOnceListener(signal, signalled);
       }),
       () =>
         Effect.sync(() => {
@@ -3671,6 +3797,17 @@ const boundedStop = (lock: string, checks: CheckProcessesApi) =>
     );
     return (why: StopReason) => Deferred.succeed(stopping, why).pipe(Effect.asVoid);
   });
+
+/** The hand-over a replacing client asked for, read and removed at once, as a signal handler must. */
+const handOverAsked = (dir: string) => {
+  try {
+    const text = readFileSync(handOverAskedOf(dir), "utf8");
+    rmSync(handOverAskedOf(dir), { force: true });
+    return Option.getOrNull(Schema.decodeOption(HandOverAsked)(text));
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Resolves, with why, once nothing is left for this host to serve: its lock is gone with the
@@ -3940,7 +4077,7 @@ export const connect = (
     const ours = who.root === undefined || sameInstallation(who.root, install);
     const replaced = ours && newer(build, who.build);
     if (replaced) {
-      yield* stopOwner(dir, who.pid);
+      yield* replaceOwner(dir, who.pid, build);
       who = yield* ensureRunning(dir, hostEnv, build);
     }
     if (who.build !== build) {
@@ -3980,7 +4117,10 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       pid: owner.pid,
       build: Option.match(answered, { onNone: () => null, onSome: (who) => who.build }),
     };
-    yield* stopOwner(dir, owner.pid);
+    const build = options?.build ?? BUILD;
+    if (before.build !== null && newer(build, before.build))
+      yield* replaceOwner(dir, owner.pid, build);
+    else yield* stopOwner(dir, owner.pid);
   }
   const who = yield* ensureRunning(dir, options?.hostEnv ?? {}, options?.build ?? BUILD);
   return { before, after: { pid: who.pid, build: who.build } };
@@ -4022,6 +4162,59 @@ const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: numbe
   if (yield* goneWithin(STOP_SLACK)) return;
   return yield* unavailable(dir, `pid ${pid} owns the directory and did not stop`);
 });
+
+/** Stops the host at `pid` as a newer `build` replaces it, so it hands its checks over (ADR-draft-a-check-ends-with-the-host-that-runs-it, D5). */
+const replaceOwner = (dir: string, pid: number, build: string) =>
+  askHandOver(dir, pid, build).pipe(
+    Effect.andThen(stopOwner(dir, pid)),
+    Effect.ensuring(
+      FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.remove(handOverAskedOf(dir), { force: true })),
+        Effect.ignore,
+      ),
+    ),
+  );
+
+/** How long a verify waits for the host that took its check over to answer it. */
+const FOLLOW_FOR = "2 minutes";
+
+type VerifyEventOf = typeof import("./verify-model").VerifyEvent.Type;
+type Followed<E, D> = E | D | HostRefused | HostUnavailable | RpcClientError.RpcClientError;
+
+/**
+ * A verify's events, followed to its result on whichever host took its check over where the
+ * one running it was replaced. That host may be a newer build: it is only asked for a result.
+ */
+export const followVerify = <E, R, D>(
+  dir: string,
+  events: Stream.Stream<VerifyEventOf, E, R>,
+  declare: (client: HostClient) => Effect.Effect<unknown, D>,
+): Stream.Stream<VerifyEventOf, Followed<E, D>, R> =>
+  Stream.suspend(() => {
+    let check: string | null = null;
+    return events.pipe(
+      Stream.tap((event) =>
+        Effect.sync(() => {
+          if (event._tag === "Started") check = event.check;
+        }),
+      ),
+      Stream.catchCause((cause): Stream.Stream<VerifyEventOf, Followed<E, D>> => {
+        const taken = check;
+        return taken === null || Option.exists(Cause.findErrorOption(cause), Schema.is(HostRefused))
+          ? Stream.failCause(cause)
+          : Stream.unwrap(
+              open(dir).pipe(
+                Effect.tap(declare),
+                Effect.map((client) => client.verifyFollow({ check: taken })),
+              ),
+            ).pipe(
+              Stream.retry(
+                Schedule.spaced("500 millis").pipe(Schedule.upTo({ duration: FOLLOW_FOR })),
+              ),
+            );
+      }),
+    );
+  });
 
 /** One connection, in the caller's scope: theirs to keep, and theirs to close. */
 const openGroup = <Rpcs extends Rpc.Any>(

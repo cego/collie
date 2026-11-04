@@ -140,6 +140,7 @@ import {
 } from "./machine";
 import { givenCredentials } from "./given";
 import { saveSlackConnection, disconnectSlackConnection } from "./slack";
+import { slackUserSession } from "./slack-user";
 import { slackApi } from "../../../src/slack";
 import { connectionsOn, githubLogin, readBack, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
@@ -161,6 +162,7 @@ import {
   giveToken,
   giveGithub,
   giveSlack,
+  giveSlackUser,
   gitlabToken,
   helleOwner,
   oneLine,
@@ -579,6 +581,7 @@ const main = Effect.gen(function* () {
       gitlab: (route, text) => Effect.map(giveToken([route], gitlabHost(), text), firstFailure),
       helle: (route, text) => Effect.map(giveHelle([route], helle, text), firstFailure),
       slack: (route, text) => Effect.map(giveSlack([route], text), firstFailure),
+      "slack-user": (route, text) => Effect.map(giveSlackUser([route], text), firstFailure),
     },
     tell: (item) => PubSub.publish(news, item).pipe(Effect.asVoid),
     skipped: (profile) =>
@@ -785,6 +788,12 @@ const main = Effect.gen(function* () {
       "; ",
     );
   };
+  const slackUser = yield* slackUserSession({
+    keyring,
+    give: (text) => given.giveEvery(everyRoute(), "slack-user", text),
+    open: openUrl,
+  });
+  yield* slackUser.keepSignedIn.pipe(Effect.forkIn(scope));
   const codes = new Map<string, Queue.Queue<string>>();
   /** Logs Claude Code in through `route`, then onboards it again under the same job. */
   const loginAs = (job: string, route: ShellRoute) =>
@@ -1162,6 +1171,22 @@ const main = Effect.gen(function* () {
         Effect.map((all) => gave("Slack disconnect", all)),
         Effect.mapError((reason) => new ActionFailed({ reason })),
       ),
+    slackUser: () => slackUser.changes,
+    signInSlackUser: ({ clientId }) =>
+      slackUser.signIn(clientId).pipe(
+        Effect.map(
+          ({ grant, given }) =>
+            `Posts approval requests as ${grant.userName} in ${grant.teamName}. ${gave("Your Slack sign-in", given)}`,
+        ),
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+      ),
+    signOutSlackUser: () =>
+      slackUser.signOut.pipe(
+        Effect.map((all) => gave("Slack sign-out", all)),
+        Effect.mapError((reason) => new ActionFailed({ reason })),
+      ),
+    slackUserChannels: () =>
+      slackUser.channels.pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
     slackChoices: () =>
       Effect.gen(function* () {
         const token = yield* keyring.lookup("slack-token");
