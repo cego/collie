@@ -22,6 +22,7 @@ import {
 import { runDetailAtom, runDetailKey } from "../flock";
 import type { Flow } from "../../../../src/board-model";
 import { timedFlow } from "../../../../src/flow-timing";
+import { keepFlow } from "../../../src/shared/flow";
 import type { DiffTarget } from "./DiffTab.vue";
 
 const props = defineProps<{ placed: PlacedTask }>();
@@ -70,8 +71,14 @@ watch(
   { immediate: true },
 );
 const { notLive, protocolOf, now } = useFlock();
+let timedBefore: Flow | null = null;
 const timed = computed(() =>
-  flow.value === null ? null : timedFlow(flow.value, Math.max(now.value, arrived.value)),
+  flow.value === null
+    ? null
+    : (timedBefore = keepFlow(
+        timedFlow(flow.value, Math.max(now.value, arrived.value)),
+        timedBefore,
+      )),
 );
 const away = computed(() => notLive(props.placed.installation));
 const loading = computed(

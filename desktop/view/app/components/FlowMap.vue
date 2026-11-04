@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type { ComponentPublicInstance } from "vue";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import type { Flow } from "../../../../src/board-model";
 import type { FlowActionView } from "../../../src/shared/flow-actions";
 import {
@@ -35,12 +37,22 @@ const remember = (spot: FlowSpot, element: Element | ComponentPublicInstance | n
   if (element instanceof HTMLElement) buttons.set(keyOf(spot), element);
   else buttons.delete(keyOf(spot));
 };
-const drawn = useFlowNodes(props, (action, spot) =>
-  spot === undefined ? emit("act", action) : emit("act", action, spot),
-);
+const drawn = useFlowNodes(props);
 /** What is drawn of a node, which every node of `rows` has. */
-const view = (run: string, node: string) => drawn.value.nodes.get(nodeKey(run, node))!;
-const laneMenu = (run: string) => drawn.value.laneMenus.get(run) ?? [];
+const view = (run: string, node: string) => drawn.value.nodes[nodeKey(run, node)]!;
+const laneMenus = computed(() =>
+  Rec.map(drawn.value.laneMenus, (actions) =>
+    Arr.map(actions, (one) => ({
+      label: one.label,
+      icon: one.icon,
+      onSelect: () => emit("act", one),
+    })),
+  ),
+);
+const laneMenu = (run: string) => laneMenus.value[run] ?? [];
+const onFocus = (spot: FlowSpot) => emit("focus", spot);
+const onChoose = (spot: FlowSpot) => emit("choose", spot);
+const onAct = (action: FlowActionView, spot: FlowSpot) => emit("act", action, spot);
 const matches = (spot: FlowSpot | null, run: string, node: string) =>
   spot?.run === run && spot.node === node;
 const showMenu = (element: HTMLElement | undefined) => {
@@ -141,110 +153,23 @@ defineExpose({
             : 'grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-y-2'
         "
       >
-        <li
+        <FlowStep
           v-for="(node, at) in row.nodes"
           :key="node.id"
-          class="relative flex"
-          :class="{ 'max-w-64 shrink-0': rail }"
-        >
-          <span
-            aria-hidden="true"
-            class="absolute top-1/2 right-full flex w-6 items-center justify-center"
-          >
-            <span
-              v-if="at > 0"
-              class="w-full border-t-2 border-default"
-              :class="{ 'border-dashed': node.state === 'expected' }"
-            />
-            <UIcon
-              v-if="view(row.run, node.id).steering.pause !== null"
-              name="i-lucide-pause"
-              class="absolute bg-default text-highlighted"
-            />
-          </span>
-          <div class="relative min-w-0 flex-1">
-            <UContextMenu
-              :items="view(row.run, node.id).menu"
-              :disabled="view(row.run, node.id).menu.length === 0"
-              ><UTooltip
-                :text="view(row.run, node.id).hover"
-                :delay-duration="300"
-                :ui="{ content: 'whitespace-pre-line' }"
-              >
-                <button
-                  :ref="(el) => remember({ run: row.run, node: node.id }, el)"
-                  type="button"
-                  class="flex w-full items-center gap-2 rounded border bg-default px-2.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-primary"
-                  :class="[
-                    rail ? 'min-h-9' : 'min-h-12',
-                    node.state === 'failed'
-                      ? 'border-2 border-error'
-                      : node.state === 'needs-you'
-                        ? 'border-2 border-warning'
-                        : matches(flow.current, row.run, node.id)
-                          ? 'border-2 border-info'
-                          : 'border-default',
-                    {
-                      'border-dashed': node.state === 'expected' || node.kind === 'offer',
-                      'bg-muted': node.link !== undefined,
-                      'border-success': node.kind === 'offer',
-                      'ring-2 ring-primary/30': matches(selected, row.run, node.id),
-                      'pr-11': view(row.run, node.id).primary !== null,
-                      'opacity-50': node.link?.machine != null && away.has(node.link.machine),
-                    },
-                  ]"
-                  :tabindex="matches(focused, row.run, node.id) ? 0 : -1"
-                  :aria-label="view(row.run, node.id).name"
-                  :aria-current="matches(flow.current, row.run, node.id) ? 'step' : undefined"
-                  :aria-pressed="matches(selected, row.run, node.id)"
-                  @focus="emit('focus', { run: row.run, node: node.id })"
-                  @click="emit('choose', { run: row.run, node: node.id })"
-                >
-                  <FlowGlyph :state="node.state" />
-                  <span class="min-w-0 flex-1" :class="{ 'flex items-baseline gap-2': rail }"
-                    ><span
-                      class="block truncate text-sm font-semibold"
-                      :class="{ 'max-w-40 shrink-0': rail }"
-                      >{{ node.title }}</span
-                    ><span
-                      v-if="view(row.run, node.id).steering.badge !== null"
-                      class="inline-block shrink-0 rounded-full bg-elevated px-2 text-xs"
-                      :class="{ 'mt-1': !rail }"
-                      >{{ view(row.run, node.id).steering.badge }}</span
-                    ><span
-                      v-if="node.said && (node.state !== 'expected' || node.pause != null)"
-                      class="block truncate text-xs text-muted"
-                      >{{ node.said }}</span
-                    ><span
-                      v-if="
-                        node.link?.machine != null &&
-                        away.has(node.link.machine) &&
-                        node.link.asOf != null
-                      "
-                      class="block truncate text-xs text-muted"
-                      >as of {{ node.link.asOf }}</span
-                    ></span
-                  >
-                  <UIcon
-                    v-if="node.link !== undefined"
-                    name="i-lucide-arrow-up-right"
-                    class="ml-auto shrink-0 text-muted"
-                  />
-                </button> </UTooltip
-            ></UContextMenu>
-            <UButton
-              v-if="view(row.run, node.id).primary !== null"
-              :icon="view(row.run, node.id).primary!.icon"
-              :color="view(row.run, node.id).primary!.color"
-              :aria-label="view(row.run, node.id).primary!.label"
-              variant="outline"
-              size="xs"
-              tabindex="-1"
-              class="absolute right-2 top-1/2 -translate-y-1/2 rounded-full"
-              @click="emit('act', view(row.run, node.id).primary!, { run: row.run, node: node.id })"
-            />
-          </div>
-        </li>
+          :run="row.run"
+          :node="node"
+          :view="view(row.run, node.id)"
+          :rail="rail"
+          :joined="at > 0"
+          :current="matches(flow.current, row.run, node.id)"
+          :selected="matches(selected, row.run, node.id)"
+          :focused="matches(focused, row.run, node.id)"
+          :dimmed="node.link?.machine != null && away.has(node.link.machine)"
+          :remember="remember"
+          @focus="onFocus"
+          @choose="onChoose"
+          @act="onAct"
+        />
       </ol>
     </section>
   </div>

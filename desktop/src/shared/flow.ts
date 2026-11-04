@@ -6,6 +6,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import type { Flow, FlowNode, FlowRun } from "../../../src/board-model";
 import { epochMs } from "../../../src/time";
+import { keepEqual, keepList } from "./keep-equal";
 import { stepTiming } from "./step-timing";
 export interface FlowSpot {
   readonly run: string;
@@ -427,4 +428,22 @@ export const selectNode = (
   return sameSpot(spot, selected)
     ? { kind: "close" }
     : { kind: "inspect", run: owningRun(flow, spot), selection: { ...spot, item: null } };
+};
+
+/**
+ * `next`, with each lane and Step equal to the one already drawn being that one, so a Flow sent
+ * or timed again draws only what changed.
+ */
+export const keepFlow = (next: Flow, before: Flow | null): Flow => {
+  if (before === null) return next;
+  const lanes = keepList(next.lanes, before.lanes, (lane, was) => {
+    const nodes = keepList(lane.nodes, was?.nodes);
+    return keepEqual(nodes === lane.nodes ? lane : { ...lane, nodes }, was);
+  });
+  const release =
+    next.release === null ? null : keepList(next.release, before.release ?? undefined);
+  return keepEqual(
+    lanes === next.lanes && release === next.release ? next : { ...next, lanes, release },
+    before,
+  );
 };
