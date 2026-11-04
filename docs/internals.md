@@ -2410,10 +2410,11 @@ The tests that failed on the base:
 Per-file time summed to 8,501 s and 9,318 s in these two suites, against 6,894 s on
 2 November, on a busier vm-mk.
 
-Cuts: one was made, and no Measurement judged it. A fingerprint now takes three git starts
+Cuts: one was made, and it is not yet measured. A fingerprint now takes three git starts
 once its checkout is known, not five (`14a02889`); it is kept. No `final` Measurement was
-taken: with the base red under a quiet start, the Run stopped measuring. **#215 remains
-unmet.**
+taken: with the base red under a quiet start, the Run stopped measuring, and the human then
+gave the measurement and the 360 s proof to another Run already doing that work. **#215
+remains open until that Run's `final` Measurement.**
 
 ### Test-suite measurements, 12 October 2026
 
