@@ -572,9 +572,11 @@ export default defineWorkflow({
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
                     : renderCriteria(given),
                 measure:
-                  ticket?.benchmark != null && source.kind === "plan-dir"
-                    ? measuredBy(benchmarkFile(source.value, ticket.benchmark))
-                    : "",
+                  source.kind !== "plan-dir"
+                    ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
+                    : ticket?.benchmark != null
+                      ? measuredBy("measure", benchmarkFile(source.value, ticket.benchmark))
+                      : "",
                 source: sectionOf(`source.${source.kind}`, input),
                 proof: sectionOf(
                   content.sections.has(`outcome.${input.inputs.outcome}`)
@@ -1039,9 +1041,12 @@ const asCheckpoint = flow(
   Result.getOrThrow,
 );
 
-/** How a speed-up ticket's criterion is proved, after its criteria; nothing for any other. */
-const measuredBy = (benchmark: string) =>
-  `\n\n${pipe_(content.sections.get("measure") ?? "", Str.trim, Str.replaceAll("{{benchmark}}", benchmark))}`;
+/** How a speed-up criterion is proved with `benchmark`, led by section `lead`. */
+const measuredBy = (lead: string, benchmark: string) =>
+  `\n\n${pipe_(
+    `${Str.trim(content.sections.get(lead) ?? "")}\n${Str.trim(content.sections.get("measure.steps") ?? "")}`,
+    Str.replaceAll("{{benchmark}}", benchmark),
+  )}`;
 
 /** A ticket's criteria as its builder is given them. */
 const renderCriteria = (criteria: ReadonlyArray<string>) =>

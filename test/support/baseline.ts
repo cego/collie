@@ -4364,6 +4364,44 @@ for (const [kind, plan] of [
     120_000,
   );
 
+for (const kind of ["typed text", "Linear issue", "follow-up", "review"] as const)
+  scenario(
+    `a ${kind} builder writes a speed-up criterion's benchmark plan beside its ticket and takes it with collie measure`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* noMergeRequests;
+          yield* repository();
+          const fs = yield* FileSystem.FileSystem;
+          const runId = `r-measure-${pipe(kind, Str.replace(/\W/g, "-"))}`;
+          const reviewed = `${rig.root}/${runId}-reviewed`;
+          yield* fs.makeDirectory(reviewed, { recursive: true });
+          yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nIt is slow.\n");
+          yield* fs.writeFileString(`${reviewed}/findings.json`, "[]");
+          const plan = {
+            "typed text": "Make search answer in less time",
+            "Linear issue": "ABC-126",
+            "follow-up": "followup:r-measure-parent",
+            review: reviewed,
+          }[kind];
+          yield* approve(runId, ["unit"]);
+          yield* fs.makeDirectory(`${runDir(dir, runId)}/plan`, { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
+          yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+          yield* ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } });
+
+          const building = pipe(yield* asked(runId, "build"), Str.replace(/\s+/g, " "));
+          const benchmark = `${runDir(dir, runId)}/plan/issues/NN-<slug>.benchmark.json`;
+          expect(building).toContain(`beside its ticket, \`${benchmark}\``);
+          for (const pass of ["calibration", "final"])
+            expect(building).toContain(
+              `collie measure --base <merge-base> --plan ${benchmark} --pass ${pass}`,
+            );
+        }).pipe((work) => (kind === "Linear issue" ? withLinear(work) : work), Effect.orDie),
+      ),
+    120_000,
+  );
+
 scenario(
   "the planner route is read again for each ticket, so a planner that has gone is not called live",
   () =>
