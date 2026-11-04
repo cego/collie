@@ -69,7 +69,8 @@ watch(page, (now, before) => {
       yield* Effect.promise(() => Promise.resolve(nextTick()));
       const target =
         now === null ? focusedBefore : document.querySelector('[data-testid="page-back"]');
-      if (target instanceof HTMLElement && target.isConnected) target.focus();
+      if (target instanceof HTMLElement && target.isConnected)
+        target.focus({ preventScroll: true });
     }),
   );
 });
