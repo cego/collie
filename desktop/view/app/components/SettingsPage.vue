@@ -36,18 +36,7 @@ const {
 const connectionsNeedYou = computed(
   () => Arr.filter(connectionCards.value, (card) => card.needsYou).length,
 );
-const {
-  choices: slackChoices,
-  yours: slackYours,
-  trouble: slackTrouble,
-  loading: slackLoading,
-  refresh: refreshSlack,
-} = useSlack();
-const slackDestinations = computed(() =>
-  Arr.some(connectionCards.value, (card) => card.id === "slack" && card.account !== null)
-    ? slackChoices.value
-    : null,
-);
+const { yours: slackYours, loading: slackLoading, refresh: refreshSlack } = useSlack();
 watch(connectionCards, () => Effect.runPromise(Effect.promise(() => refreshSlack())));
 const refreshSlackConnection = () =>
   Effect.runPromise(
@@ -704,7 +693,6 @@ const drawnLine = computed(() =>
                         :id="idOf(row)"
                         :setting="row.key"
                         :value="row.value"
-                        :choices="slackDestinations"
                         :yours="slackYours"
                         @choose="(value) => set(row, value)"
                       />
@@ -858,8 +846,6 @@ const drawnLine = computed(() =>
                 </div>
               </section>
               <SettingsConnections
-                :slack="slackChoices"
-                :slack-trouble="slackTrouble"
                 :slack-loading="slackLoading"
                 @refresh-slack="refreshSlackConnection"
                 v-if="showConnections"
@@ -888,7 +874,6 @@ const drawnLine = computed(() =>
                       id="slack-notify-in-card"
                       :setting="row.key"
                       :value="row.value"
-                      :choices="slackDestinations"
                       :yours="slackYours"
                       @choose="(value) => set(row, value)"
                     />

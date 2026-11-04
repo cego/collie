@@ -16,7 +16,6 @@ import {
   wanted,
 } from "../src/notify";
 import { slackApi } from "../src/slack";
-import { writeSlackToken } from "../src/slack-credentials";
 import { writeConfigValue } from "../src/config";
 import { fakeSlack, signedInToSlack } from "./support/slack";
 import { Rig, FakeHerdr } from "./support/recorder";
@@ -269,7 +268,7 @@ test("two hosts send a needs-you event once from its owning host without Desktop
       const fs = yield* FileSystem.FileSystem;
       const other = `${rig.root}/other-host`;
       yield* fs.makeDirectory(other);
-      yield* writeSlackToken(rig.pluginEnv(), "xoxb-fixture");
+      yield* signedInToSlack(rig.pluginEnv(), "U456");
       yield* writeConfigValue(rig.userDir, "slack.notification_channel", "C123");
       yield* writeConfigValue(rig.userDir, "notifications.run-done", false);
       const owner = fakeSlack();
@@ -310,11 +309,16 @@ test("two hosts send a needs-you event once from its owning host without Desktop
     }),
   ));
 
-test("a notification for a person opens the DM and posts only in the returned channel", () =>
+test("a notification is posted as the signed-in human, never with a bot token", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* writeSlackToken(rig.pluginEnv(), "xoxb-fixture");
-      yield* writeConfigValue(rig.userDir, "slack.notification_channel", "U789");
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${rig.pluginEnv().home}/.config/collie`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.pluginEnv().home}/.config/collie/slack.env`,
+        "SLACK_BOT_TOKEN=xoxb-fixture\n",
+      );
+      yield* writeConfigValue(rig.userDir, "slack.notification_channel", "C123");
       yield* signedInToSlack(rig.pluginEnv(), "U456");
       const slack = fakeSlack();
       yield* session(
@@ -324,23 +328,66 @@ test("a notification for a person opens the DM and posts only in the returned ch
         }),
         { slack: (token) => slackApi(token, slack.client), toast: undefined },
       );
-      expect(Arr.filter(slack.calls, (call) => call.method !== "auth.test")).toEqual([
-        { method: "conversations.open", parameters: { users: "U789" } },
+      expect(Arr.filter(slack.calls, (call) => call.method === "chat.postMessage")).toEqual([
         {
           method: "chat.postMessage",
-          parameters: { channel: "D123", text: "collie · r-own needs you\nChoose the approach" },
+          parameters: { channel: "C123", text: "collie · r-own needs you\nChoose the approach" },
         },
       ]);
-      expect(Arr.filter(slack.authorized, (call) => call.method === "chat.postMessage")).toEqual([
-        { method: "chat.postMessage", by: "bot" },
-      ]);
+      expect(slack.authorized).not.toContainEqual(expect.objectContaining({ by: "bot" }));
+    }),
+  ));
+
+for (const destination of ["U789", "W789", "D123"])
+  test(`a notification for the person or direct message ${destination} posts nothing and says why on the Run's log`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* signedInToSlack(rig.pluginEnv(), "U456");
+        yield* writeConfigValue(rig.userDir, "slack.notification_channel", destination);
+        const slack = fakeSlack();
+        yield* session(
+          Effect.gen(function* () {
+            yield* ownRun;
+            yield* (yield* Notifier).notify("r-own", "needs-you", "Choose the approach");
+          }),
+          { slack: (token) => slackApi(token, slack.client), toast: undefined },
+        );
+        expect(Arr.filter(slack.calls, (call) => call.method !== "auth.test")).toEqual([]);
+        expect(
+          yield* (yield* FileSystem.FileSystem).readFileString(`${dir}/runs/r-own/log.txt`),
+        ).toContain(
+          "Slack notification (needs-you) was not posted: direct messages are no longer sent; pick a channel",
+        );
+      }),
+    ));
+
+test("a notification whose sign-in Slack refuses as expired posts nothing and says so on the Run's log", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* signedInToSlack(rig.pluginEnv(), "U456");
+      yield* writeConfigValue(rig.userDir, "slack.notification_channel", "C123");
+      const slack = fakeSlack();
+      slack.refuse("token_expired");
+      yield* session(
+        Effect.gen(function* () {
+          yield* ownRun;
+          yield* (yield* Notifier).notify("r-own", "needs-you", "Choose the approach");
+        }),
+        { slack: (token) => slackApi(token, slack.client), toast: undefined },
+      );
+      expect(slack.calls).not.toContainEqual(
+        expect.objectContaining({ method: "chat.postMessage" }),
+      );
+      expect(
+        yield* (yield* FileSystem.FileSystem).readFileString(`${dir}/runs/r-own/log.txt`),
+      ).toContain("Slack notification (needs-you) was not posted: Slack auth.test: token_expired");
     }),
   ));
 
 test("notification text cannot turn a Run's words into Slack mentions", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* writeSlackToken(rig.pluginEnv(), "xoxb-fixture");
+      yield* signedInToSlack(rig.pluginEnv(), "U456");
       yield* writeConfigValue(rig.userDir, "slack.notification_channel", "C123");
       const slack = fakeSlack();
       yield* session(

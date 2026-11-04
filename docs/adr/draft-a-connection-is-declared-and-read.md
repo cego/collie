@@ -38,7 +38,7 @@ GitHub reads gh's active login on github.com.
 Helle keeps its existing credentials, health check, detail and fix, adding the user id as account.
 Linear reads Claude, Codex and OpenCode MCP configurations; it ignores disabled servers.
 Its account is the MCP registration name. Configuration discovery cannot establish the authenticated Linear user or OAuth health.
-Slack checks the Machine's bot token with `auth.test` and names its workspace and bot.
+Slack checks the human's own user token with `auth.test` and names its workspace and user.
 
 The formats follow [glab's configuration](https://docs.gitlab.com/cli/config/),
 [gh auth status](https://cli.github.com/manual/gh_auth_status),
@@ -53,7 +53,7 @@ A Machine lacking a working login gets `reusable.from` naming a Machine whose lo
 Reading Connections never moves credentials. An explicit reuse action reads a working
 Machine's GitLab or GitHub login through its host and gives it to missing Machines on
 stdin. Source credentials remain in place. Desktop keeps the reused GitLab token;
-Helle and Slack use their shared token flows. Linear sets up each Machine's MCP and
+Helle uses its shared token flow, and Slack uses Desktop's sign-in. Linear sets up each Machine's MCP and
 browser login without copying OAuth credentials.
 
 **D5. Workflows declare required and optional Connections with their consequences.**

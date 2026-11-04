@@ -23,6 +23,16 @@ export const signedInToSlack = (env: Pick<PluginEnv, "home" | "raw">, user: stri
     );
   }).pipe(Effect.orDie);
 
+/** The `slack.env` an older Collie wrote for its bot, or none for false. */
+export const botLeftOver = (env: Pick<PluginEnv, "home" | "raw">, left: boolean) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const file = `${(yield* Path.Path).dirname(slackUserEnvPath(env))}/slack.env`;
+    if (!left) return yield* fs.remove(file, { force: true });
+    yield* fs.makeDirectory((yield* Path.Path).dirname(file), { recursive: true });
+    yield* fs.writeFileString(file, "SLACK_BOT_TOKEN=xoxb-fixture\n", { mode: 0o600 });
+  }).pipe(Effect.orDie);
+
 export const fakeSlack = () => {
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];
   const authorized: Array<{ method: string; by: "bot" | "user" | null }> = [];
@@ -94,59 +104,6 @@ export const fakeSlack = () => {
               ],
         response_metadata: { next_cursor: parameters.cursor ? "" : "channels-next" },
       });
-    if (method === "conversations.list")
-      return Response.json({
-        ok: true,
-        channels:
-          parameters.cursor === "channels-next"
-            ? [{ id: "G234", name: "releases", is_member: true, is_private: true }]
-            : [
-                { id: "C123", name: "engineering", is_member: true, is_private: false },
-                { id: "C999", name: "not-joined", is_member: false, is_private: false },
-              ],
-        response_metadata: { next_cursor: parameters.cursor ? "" : "channels-next" },
-      });
-    if (method === "users.list")
-      return Response.json({
-        ok: true,
-        members:
-          parameters.cursor === "people-next"
-            ? [
-                {
-                  id: "U789",
-                  name: "alex",
-                  deleted: false,
-                  is_bot: false,
-                  profile: { display_name: "Alex Example", real_name: "Alex Example" },
-                },
-                {
-                  id: "U999",
-                  name: "gone",
-                  deleted: true,
-                  is_bot: false,
-                  profile: { display_name: "Gone" },
-                },
-              ]
-            : [
-                {
-                  id: "U456",
-                  name: "sam",
-                  deleted: false,
-                  is_bot: false,
-                  profile: { display_name: "Sam" },
-                },
-                {
-                  id: "U234",
-                  name: "collie",
-                  deleted: false,
-                  is_bot: true,
-                  profile: { display_name: "Collie" },
-                },
-              ],
-        response_metadata: { next_cursor: parameters.cursor ? "" : "people-next" },
-      });
-    if (method === "conversations.open")
-      return Response.json({ ok: true, channel: { id: "D123" } });
     if (method === "chat.postMessage")
       return Response.json({
         ok: true,
@@ -164,9 +121,7 @@ export const fakeSlack = () => {
   };
   const client = HttpClient.make((request) => {
     const method = Str.split(new URL(request.url).pathname, "/").at(-1)!;
-    const verb = ["conversations.list", "users.list", "chat.getPermalink"].includes(method)
-      ? "GET"
-      : "POST";
+    const verb = ["conversations.list", "chat.getPermalink"].includes(method) ? "GET" : "POST";
     if (request.method !== verb)
       return Effect.succeed(
         HttpClientResponse.fromWeb(request, Response.json({ ok: false, error: "unknown_method" })),

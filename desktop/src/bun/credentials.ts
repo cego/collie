@@ -34,7 +34,7 @@ import { decodeGrant, slackUserLines } from "./slack-user";
 export const GITLAB = `https://${GITLAB_HOST}`;
 
 /** What Desktop keeps, by name. */
-export type KeyringEntry = "gitlab-token" | "helle-token" | "slack-token" | "slack-user-grant";
+export type KeyringEntry = "gitlab-token" | "helle-token" | "slack-user-grant";
 
 export interface Keyring {
   readonly lookup: (key: KeyringEntry) => Effect.Effect<string | null, string>;
@@ -42,7 +42,7 @@ export interface Keyring {
   readonly clear: (key: KeyringEntry) => Effect.Effect<void, string>;
 }
 
-const ENTRIES: ReadonlyArray<KeyringEntry> = ["gitlab-token", "helle-token", "slack-token"];
+const ENTRIES: ReadonlyArray<KeyringEntry> = ["gitlab-token", "helle-token"];
 
 const parsed = (text: string) =>
   new Map(
@@ -75,7 +75,10 @@ const fromSecretTool = (tool: string) =>
  * whole, as glab, gh and Helle keep the same tokens on every Machine. Until it exists, what
  * an earlier Desktop left in the Secret Service is read and copied into it.
  */
-export const credentialsFile = (dir: string, secretTool = "secret-tool"): Keyring => {
+export const credentialsFile = (
+  dir: string,
+  secretTool = "secret-tool",
+): Keyring & { readonly forgetSlackBot: Effect.Effect<void, string> } => {
   const file = `${dir}/credentials`;
   const lock = Semaphore.makeUnsafe(1);
   const write = (values: ReadonlyMap<string, string>) =>
@@ -108,21 +111,24 @@ export const credentialsFile = (dir: string, secretTool = "secret-tool"): Keyrin
         Effect.mapError((error) => `${file}: ${error.message}`),
         Effect.provide(BunFileSystem.layer),
       );
+  // Written even when nothing is left, so an earlier Desktop's keyring is not copied back.
+  const forget = (key: string) =>
+    locked(
+      load.pipe(
+        Effect.flatMap((values) => {
+          const left = new Map(values);
+          left.delete(key);
+          return write(left);
+        }),
+      ),
+    );
   return {
     lookup: (key) => locked(load.pipe(Effect.map((values) => values.get(key) ?? null))),
     store: (key, _label, value) =>
       locked(load.pipe(Effect.flatMap((values) => write(new Map(values).set(key, value))))),
-    // Written even when nothing is left, so an earlier Desktop's keyring is not copied back.
-    clear: (key) =>
-      locked(
-        load.pipe(
-          Effect.flatMap((values) => {
-            const left = new Map(values);
-            left.delete(key);
-            return write(left);
-          }),
-        ),
-      ),
+    clear: forget,
+    /** An older Collie's bot token, which nothing reads any more. */
+    forgetSlackBot: forget("slack-token"),
   };
 };
 
@@ -132,7 +138,6 @@ export const secretsFor = (keyring: Keyring) =>
     const lines: Array<readonly [string, KeyringEntry]> = [
       ["GITLAB_TOKEN", "gitlab-token"],
       ["HELLE_API_TOKEN", "helle-token"],
-      ["SLACK_BOT_TOKEN", "slack-token"],
     ];
     let text = "";
     for (const [name, key] of lines) {
@@ -263,20 +268,21 @@ const COLLIE_CONFIG = '"${XDG_CONFIG_HOME:-$HOME/.config}/collie"';
 const writeCollieFile = (file: string) =>
   `umask 077 && mkdir -p ${COLLIE_CONFIG} && rm -f ${COLLIE_CONFIG}/${file}.new && cat > ${COLLIE_CONFIG}/${file}.new && mv ${COLLIE_CONFIG}/${file}.new ${COLLIE_CONFIG}/${file}`;
 
-export const giveSlack = (routes: ReadonlyArray<ShellRoute>, token: string) =>
-  token === ""
-    ? clearSlack(routes)
-    : onEvery(routes, writeCollieFile("slack.env"), `SLACK_BOT_TOKEN=${token}\n`, token);
-
-export const clearSlack = (routes: ReadonlyArray<ShellRoute>) =>
-  onEvery(routes, `rm -f ${COLLIE_CONFIG}/slack.env`, "", "<no-token>");
-
-/** Each Machine's `slack-user.env` from the grant Desktop keeps, or removed for "". */
+/**
+ * Each Machine's `slack-user.env` from the grant Desktop keeps, or removed for "". An older
+ * Collie's bot token in `slack.env` goes either way.
+ */
 export const giveSlackUser = (routes: ReadonlyArray<ShellRoute>, text: string) => {
   const grant = text === "" ? null : decodeGrant(text);
+  const bot = `rm -f ${COLLIE_CONFIG}/slack.env`;
   return grant === null
-    ? onEvery(routes, `rm -f ${COLLIE_CONFIG}/slack-user.env`, "", "<no-token>")
-    : onEvery(routes, writeCollieFile("slack-user.env"), slackUserLines(grant), grant.accessToken);
+    ? onEvery(routes, `rm -f ${COLLIE_CONFIG}/slack-user.env && ${bot}`, "", "<no-token>")
+    : onEvery(
+        routes,
+        `${writeCollieFile("slack-user.env")} && ${bot}`,
+        slackUserLines(grant),
+        grant.accessToken,
+      );
 };
 
 /** Whether a credential can go on a `KEY=value` line, as every Machine is given it. */

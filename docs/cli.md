@@ -2284,6 +2284,9 @@ An absent or broken Connection does not fail this command. Failure to reach its 
   Claude uses `.claude.json` and `.mcp.json`, Codex uses `config.toml`, and OpenCode uses
   `opencode.json` or `opencode.jsonc`. Their config-directory environment overrides apply.
 - **Helle:** the existing credentials and `/me` check, with the token owner's user id.
+- **Slack:** the human's own sign-in, which Desktop gives each Machine as `slack-user.env`;
+  Slack's `auth.test` has to name the same user and team, and not a bot. A Machine with only an
+  older Collie's bot token reads `absent`, and its fix is to sign in to Slack.
 
 Under `--json`, the envelope is:
 
@@ -2543,7 +2546,8 @@ its checkout is not moved.
 Secrets are never arguments. `--secrets-stdin` reads `KEY=value` lines from stdin —
 `GITLAB_TOKEN` and `HELLE_API_TOKEN` — and the token reaches glab on its
 stdin too. Helle and Linear count toward onboarded unless `--skip` names them; a skipped
-step reports `skipped`. Doctor's own checks for them stay optional.
+step reports `skipped`. Doctor's own checks for them stay optional. A `SLACK_BOT_TOKEN` given
+there is not written: its `slack` step reports `skipped` and says to sign in to Slack from Desktop.
 
 Each step prints a line when it starts and one when it ends. Under `--json` each is a JSON
 line, then the envelope:

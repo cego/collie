@@ -42,7 +42,9 @@ test(
           {
             id: "Notifications",
             connections: {
-              uses: { slack: { with: "Posts the toasts you keep on", without: "Toasts only" } },
+              uses: {
+                slack: { with: "Posts the toasts you keep on, as you", without: "Toasts only" },
+              },
             },
           },
         ]);

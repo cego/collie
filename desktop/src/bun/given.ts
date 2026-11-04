@@ -4,7 +4,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path, Schema, Semaphore, flow, Result } from "effect";
+import { Effect, FileSystem, Path, Schema, SchemaGetter, Semaphore, flow, Result } from "effect";
 import {
   CREDENTIALS,
   type Credential,
@@ -19,13 +19,29 @@ import type { ShellRoute } from "./machine";
 const ENTRY = {
   gitlab: "gitlab-token",
   helle: "helle-token",
-  slack: "slack-token",
-  "slack-user": "slack-user-grant",
+  slack: "slack-user-grant",
 } satisfies Record<Credential, KeyringEntry>;
 
-/** Each Machine's fingerprints, by herdr profile and then credential. */
+const Fingerprints = Schema.Record(Schema.String, Schema.String);
+
+/**
+ * Each Machine's fingerprints, by herdr profile and then credential. The sign-in's are kept
+ * under an older Desktop's `slack-user`, whose `slack` was its bot.
+ */
 const GivenFile = Schema.fromJsonString(
-  Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.String)),
+  Schema.Record(
+    Schema.String,
+    Fingerprints.pipe(
+      Schema.decodeTo(Fingerprints, {
+        decode: SchemaGetter.transform(({ slack: _bot, "slack-user": signIn, ...rest }) =>
+          signIn === undefined ? rest : { ...rest, slack: signIn },
+        ),
+        encode: SchemaGetter.transform(({ slack: signIn, ...rest }) =>
+          signIn === undefined ? rest : { ...rest, "slack-user": signIn },
+        ),
+      }),
+    ),
+  ),
 );
 const FILE = "given.json";
 

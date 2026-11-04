@@ -13,7 +13,7 @@ import {
 import { shell, type Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/process";
 import { redact } from "./redact";
-import { probeSlack, probeSlackUser, SLACK_FIX, SLACK_USER_FIX } from "./slack-credentials";
+import { probeSlack, SLACK_FIX } from "./slack-credentials";
 import { slackApi } from "./slack";
 import { GLAB_RELOGIN } from "./forge/gitlab";
 import { ghLogin } from "./forge/github";
@@ -60,7 +60,6 @@ export const connectionProbes = (
     { id: "helle", read: probeHelle(env), fix: `check HELLE_API_TOKEN in ${helleEnvPath(env)}` },
     { id: "linear", read: probeLinearMcp(env), fix: LINEAR_MCP_FIX },
     { id: "slack", read: probeSlack(env, slack), fix: SLACK_FIX },
-    { id: "slack-user", read: probeSlackUser(env, slack), fix: SLACK_USER_FIX },
   ] satisfies ReadonlyArray<
     ConnectionProbe<
       FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner,

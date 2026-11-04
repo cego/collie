@@ -83,8 +83,7 @@ import { readStepLines } from "../../src/steps";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { slackApi } from "../../src/slack";
-import { writeSlackToken } from "../../src/slack-credentials";
-import { fakeSlack, signedInToSlack } from "./slack";
+import { botLeftOver, fakeSlack, signedInToSlack } from "./slack";
 import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import {
@@ -10150,7 +10149,7 @@ const agentPush = (
 
 /**
  * Sharing for approval turned on as `collie settings set` writes it, in `channel` unless null,
- * with the bot connected and the human signed in to Slack as themselves.
+ * with an older Collie's bot token left over and the human signed in to Slack.
  */
 const sharingIn = (channel: string | null) =>
   FileSystem.FileSystem.pipe(
@@ -10165,7 +10164,7 @@ const sharingIn = (channel: string | null) =>
         }),
       ),
     ),
-    Effect.andThen(writeSlackToken(hostOf().env, "xoxb-fixture")),
+    Effect.andThen(botLeftOver(hostOf().env, true)),
     Effect.andThen(signedInToSlack(hostOf().env, "U456")),
     Effect.orDie,
   );
@@ -12020,7 +12019,7 @@ for (const name of ["gitlab", "github"] as const) {
           const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
           const runId = "r-share-manually";
           yield* sharingIn("#frontend");
-          yield* writeSlackToken(hostOf().env, null);
+          yield* botLeftOver(hostOf().env, false);
           yield* signedInToSlack(hostOf().env, null);
           yield* rig.queueOutputs([PACKAGED]);
           const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
@@ -12028,7 +12027,7 @@ for (const name of ["gitlab", "github"] as const) {
               const share = yield* goAsked(run.asked, "share-for-approval");
               expect(share.prompt).toContain("Share it in #frontend yourself");
               expect(share.prompt).toContain(mr);
-              expect(share.prompt).toContain("Not signed in to Slack as yourself");
+              expect(share.prompt).toContain("Not signed in to Slack on this Machine");
               expect(optionsOf([share], "share-for-approval")).toEqual([
                 "I shared it",
                 "Wait for changes",
@@ -12204,12 +12203,12 @@ for (const name of ["gitlab", "github"] as const) {
     });
 
   once(
-    "release on gitlab: a working Slack bot without the human's Slack sign-in asks them to share it and posts nothing",
+    "release on gitlab: a Machine with only an older Collie's Slack bot token asks the human to sign in, share it by hand, and posts nothing",
     () =>
       runEffect(
         sharedByHand("r-share-bot-only", null, [
-          "Not signed in to Slack as yourself",
-          "Sign in to Slack as yourself in Desktop Settings › Connections",
+          "Collie no longer posts with a Slack bot token: sign in to Slack",
+          "Sign in to Slack in Desktop Settings › Connections",
         ]),
       ),
     120_000,

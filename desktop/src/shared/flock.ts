@@ -27,7 +27,7 @@ import { MachineSchedules } from "./schedules";
 import { MachineUsage } from "./usage";
 import { MachineCatalogue } from "./settings-agents";
 import { MachineConnections } from "./connections";
-import { SlackChannel, SlackChoices } from "../../../src/slack";
+import { SlackChannel } from "../../../src/slack";
 import { keepOwn, OwnReading } from "./machine-own";
 import {
   BoardMessage,
@@ -205,18 +205,16 @@ export type MachineLinked = typeof MachineLinked.Type;
 
 export const SlackUserState = Schema.Struct({
   signedIn: Schema.NullOr(Schema.Struct({ user: Schema.String, team: Schema.String })),
-  clientId: Schema.NullOr(Schema.String),
   /** Why the last renewal failed, until one works. */
   trouble: Schema.NullOr(Schema.String),
 });
 export const NOT_SIGNED_IN: typeof SlackUserState.Type = {
   signedIn: null,
-  clientId: null,
   trouble: null,
 };
 
 /** A credential Desktop gives every Machine. */
-export const Credential = Schema.Literals(["gitlab", "helle", "slack", "slack-user"]);
+export const Credential = Schema.Literals(["gitlab", "helle", "slack"]);
 export type Credential = typeof Credential.Type;
 export const CREDENTIALS = Credential.literals;
 
@@ -555,23 +553,12 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
-  Rpc.make("saveSlack", {
-    payload: { token: Schema.String },
-    success: Schema.String,
-    error: ActionFailed,
-  }),
-  Rpc.make("slackChoices", { success: SlackChoices, error: ActionFailed }),
-  Rpc.make("disconnectSlack", { success: Schema.String, error: ActionFailed }),
-  /** Whether the human is signed in to Slack as themselves, told again as it changes; no token. */
+  /** Whether the human is signed in to Slack, told again as it changes; no token. */
   Rpc.make("slackUser", { success: SlackUserState, stream: true }),
-  /** Signs the human in to Slack in their browser; "" uses the Client ID kept before. */
-  Rpc.make("signInSlackUser", {
-    payload: { clientId: Schema.String },
-    success: Schema.String,
-    error: ActionFailed,
-  }),
+  /** Signs the human in to Slack in their browser. */
+  Rpc.make("signInSlackUser", { success: Schema.String, error: ActionFailed }),
   Rpc.make("signOutSlackUser", { success: Schema.String, error: ActionFailed }),
-  /** The channels the human signed in to Slack is in, for the approval channel. */
+  /** The channels the human signed in to Slack is in, for both Slack destinations. */
   Rpc.make("slackUserChannels", { success: Schema.Array(SlackChannel), error: ActionFailed }),
   /** Logs Claude Code in on the Machine a route reaches, then onboards it again. */
   Rpc.make("claudeLogin", {

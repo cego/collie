@@ -138,9 +138,7 @@ import {
   syncNow,
 } from "./machine";
 import { givenCredentials } from "./given";
-import { saveSlackConnection, disconnectSlackConnection } from "./slack";
 import { slackUserSession } from "./slack-user";
-import { slackApi } from "../../../src/slack";
 import { connectionsOn, githubLogin, readBack, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, openTerminal } from "./terminal";
@@ -160,7 +158,6 @@ import {
   giveHelle,
   giveToken,
   giveGithub,
-  giveSlack,
   giveSlackUser,
   gitlabToken,
   helleOwner,
@@ -580,8 +577,7 @@ const main = Effect.gen(function* () {
     give: {
       gitlab: (route, text) => Effect.map(giveToken([route], gitlabHost(), text), firstFailure),
       helle: (route, text) => Effect.map(giveHelle([route], helle, text), firstFailure),
-      slack: (route, text) => Effect.map(giveSlack([route], text), firstFailure),
-      "slack-user": (route, text) => Effect.map(giveSlackUser([route], text), firstFailure),
+      slack: (route, text) => Effect.map(giveSlackUser([route], text), firstFailure),
     },
     tell: (item) => PubSub.publish(news, item).pipe(Effect.asVoid),
     skipped: (profile) =>
@@ -790,7 +786,8 @@ const main = Effect.gen(function* () {
   };
   const slackUser = yield* slackUserSession({
     keyring,
-    give: (text) => given.giveEvery(everyRoute(), "slack-user", text),
+    give: (text) => given.giveEvery(everyRoute(), "slack", text),
+    retireBot: keyring.forgetSlackBot,
     open: openUrl,
   });
   yield* slackUser.keepSignedIn.pipe(Effect.forkIn(scope));
@@ -1154,29 +1151,12 @@ const main = Effect.gen(function* () {
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
         return gave("Helle's token", yield* given.giveEvery(everyRoute(), "helle", said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
-    saveSlack: ({ token }) =>
-      saveSlackConnection(token, keyring, (text) =>
-        given.giveEvery(everyRoute(), "slack", text),
-      ).pipe(
-        Effect.map(
-          ({ identity, given }) =>
-            `Posts as ${identity.user} in ${identity.team}. ${gave("Slack's token", given)}`,
-        ),
-        Effect.mapError((reason) => new ActionFailed({ reason })),
-      ),
-    disconnectSlack: () =>
-      disconnectSlackConnection(keyring, (text) =>
-        given.giveEvery(everyRoute(), "slack", text),
-      ).pipe(
-        Effect.map((all) => gave("Slack disconnect", all)),
-        Effect.mapError((reason) => new ActionFailed({ reason })),
-      ),
     slackUser: () => slackUser.changes,
-    signInSlackUser: ({ clientId }) =>
-      slackUser.signIn(clientId).pipe(
+    signInSlackUser: () =>
+      slackUser.signIn.pipe(
         Effect.map(
           ({ grant, given }) =>
-            `Posts approval requests as ${grant.userName} in ${grant.teamName}. ${gave("Your Slack sign-in", given)}`,
+            `Posts as ${grant.userName} in ${grant.teamName}. ${gave("Your Slack sign-in", given)}`,
         ),
         Effect.mapError((reason) => new ActionFailed({ reason })),
       ),
@@ -1187,38 +1167,6 @@ const main = Effect.gen(function* () {
       ),
     slackUserChannels: () =>
       slackUser.channels.pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
-    slackChoices: () =>
-      Effect.gen(function* () {
-        const token = yield* keyring.lookup("slack-token");
-        if (token) {
-          const api = slackApi(token);
-          return {
-            identity: yield* api.auth(),
-            channels: yield* api.channels(),
-            people: yield* api.people(),
-          };
-        }
-        for (const source of doors.values()) {
-          const reading = Option.getOrUndefined(
-            Arr.findFirst(yield* source.desktop.connections(), (one) => one.id === "slack"),
-          );
-          if (reading?.reading.state === "ok") return yield* source.desktop.slackChoices();
-        }
-        return yield* Effect.fail(
-          "Connect Slack, under Connections below, to pick from the channels your Collie is in.",
-        );
-      }).pipe(
-        Effect.mapError(
-          (error) =>
-            new ActionFailed({
-              reason: isString(error)
-                ? error
-                : "reason" in error && isString(error.reason)
-                  ? error.reason
-                  : "The Machine's Slack choices could not be read",
-            }),
-        ),
-      ),
     claudeLogin: ({ profile }) =>
       Effect.gen(function* () {
         const route = routes.get(profile)?.route;
