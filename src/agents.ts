@@ -149,6 +149,7 @@ import {
   HerdrError,
 } from "./herdr";
 import { promptAsync } from "./opencode";
+import { isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
@@ -2682,23 +2683,21 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               names: Arr.map(call.questions, () => agentQuestionName(stem, ++n)),
             }),
           );
-          const asked = yield* questions.asked;
-          const answers = new Map(Arr.map(asked, (one) => [one.name, one.answer]));
-          const answerers = new Map(Arr.map(asked, (one) => [one.name, one.by]));
+          const asked = new Map(Arr.map(yield* questions.asked, (one) => [one.name, one] as const));
           let open = false;
           const opened = openQuestions.get(launched.agent) ?? new Set<string>();
           openQuestions.set(launched.agent, opened);
           for (const { call, names } of calls) {
             for (const [at, question] of call.questions.entries()) {
               const name = names[at] ?? "";
-              if (answers.has(name)) continue;
+              if (asked.has(name)) continue;
               yield* questions.ask(
                 { name, prompt: questionPrompt(question), options: [] },
                 launched.operation,
               );
-              answers.set(name, null);
+              asked.set(name, { name, answer: null });
             }
-            const given = Arr.map(names, (name) => answers.get(name) ?? null);
+            const given = Arr.map(names, (name) => asked.get(name) ?? { name, answer: null });
             const key = `${launched.agent}\n${call.id}`;
             // Until its answers are sent, so Collie's next prompt cannot reach it first.
             const holds = (holding: boolean) => {
@@ -2707,18 +2706,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 else opened.delete(`${name} on ${launched.runId}`);
             };
             if (closing !== null) {
-              for (const [at, name] of names.entries())
-                if (given[at] === null) yield* questions.close(name, closing);
+              for (const one of given)
+                if (isUnanswered(one)) yield* questions.close(one.name, closing);
               holds(false);
               continue;
             }
-            if (Arr.some(given, (answer) => answer === null)) {
+            if (Arr.some(given, isUnanswered)) {
               open = true;
               holds(true);
               continue;
             }
             if (
-              Arr.some(given, (answer) => closings.includes(answer ?? "")) ||
+              Arr.some(given, (one) => closings.includes(one.answer ?? "")) ||
               answeredCalls.has(key)
             ) {
               holds(false);
@@ -2728,13 +2727,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
               call.questions[at]?.header || call.questions[at]?.question || names[at];
-            for (const group of bySender(Arr.map(names, (name) => answerers.get(name)))) {
+            for (const group of bySender(Arr.map(given, (one) => one.by))) {
               const sent = yield* deliver(
                 launched,
                 group.at.length === 1
-                  ? `Your question ${label(group.at[0]!)} is answered: ${given[group.at[0]!]}`
+                  ? `Your question ${label(group.at[0]!)} is answered: ${given[group.at[0]!]?.answer}`
                   : `Your questions are answered: ${Arr.join(
-                      Arr.map(group.at, (at) => `${label(at)}: ${given[at]}`),
+                      Arr.map(group.at, (at) => `${label(at)}: ${given[at]?.answer}`),
                       "; ",
                     )}`,
                 {

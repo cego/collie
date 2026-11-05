@@ -75,6 +75,8 @@ const Decision = Schema.Struct({
 });
 export type DecisionRow = typeof Decision.Type;
 
+export const isUnanswered = (one: Pick<DecisionRow, "answer">): boolean => one.answer === null;
+
 /** What became of an answer. Only `accepted` completes anything. */
 export type Answered =
   | { readonly _tag: "accepted"; readonly row: DecisionRow }

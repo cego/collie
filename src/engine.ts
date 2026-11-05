@@ -210,7 +210,14 @@ import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
-import { Store, storeLayer, type Admission, type RunRow, type StoreApi } from "./store";
+import {
+  Store,
+  isUnanswered,
+  storeLayer,
+  type Admission,
+  type RunRow,
+  type StoreApi,
+} from "./store";
 import {
   Answered,
   Controlled,
@@ -4962,7 +4969,7 @@ export const hostLayer = (options: {
             cwd,
             worktree,
             mr: yield* mergeRequestOf(fs, dir, runId),
-            asking: Arr.some(yield* store.asked(runId), (one) => one.answer === null),
+            asking: Arr.some(yield* store.asked(runId), isUnanswered),
             held: yield* set(HOLD, runId),
             family:
               row === null
@@ -8369,7 +8376,7 @@ const makeRegistry: (
       if (found._tag === "Failure" && (yield* store.run(options.runId)) === null)
         return yield* found.failure;
       const asks = yield* asked(options.runId);
-      const open = Arr.filter(asks, (one) => one.answer === null);
+      const open = Arr.filter(asks, isUnanswered);
       const sole = options.decision === null ? soleOpen(options.runId, open) : null;
       if (sole !== null) return yield* sole;
       const name = options.decision ?? open[0]?.name ?? "";

@@ -88,6 +88,7 @@ import { scopeFor, scopeKey } from "./registry";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { reason } from "./naming";
 import { attachmentRefusal } from "./attachments";
+import { isUnanswered } from "./store";
 import type { ScheduleChange } from "./schedule-model";
 import type { ScheduleDoor } from "./schedule-move";
 
@@ -1300,7 +1301,7 @@ export const describeRun = (view: RunView): ReadonlyArray<string> => [
 /** The questions a Run is still waiting on, with what each will take. */
 export const describeWaiting = (view: RunView): ReadonlyArray<string> =>
   Arr.map(
-    Arr.filter(view.waiting, (one) => one.answer === null),
+    Arr.filter(view.waiting, isUnanswered),
     (one) =>
       `waiting on "${one.name}": ${one.prompt}${one.options.length === 0 ? "" : ` (${Arr.join(one.options, " | ")})`}`,
   );

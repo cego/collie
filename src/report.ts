@@ -8,6 +8,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Schema, flow, Result } from "effect";
 import { STOP, type RunView } from "./engine";
+import { isUnanswered } from "./store";
 import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { measuresOf, type Measures, type OutcomeRecords } from "./outcomes";
@@ -133,9 +134,9 @@ export function reportOf(
       stopped.push({ runId, workflow });
     }
     if (view.mr !== null) tally.withMr++;
-    const answered = Arr.filter(view.waiting, (decision) => decision.answer !== null).length;
-    tally.answered += answered;
-    tally.open += view.waiting.length - answered;
+    const open = Arr.filter(view.waiting, isUnanswered).length;
+    tally.open += open;
+    tally.answered += view.waiting.length - open;
     const recorded = metrics.get(runId);
     if (recorded !== undefined) {
       tally.rework += recorded.rework;
