@@ -80,22 +80,93 @@ interface Session {
 }
 
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
-const objectsOf = (text: string) =>
-  Arr.flatMap(Str.split(text, "\n"), (line) =>
-    pipe(decodeLine(line), Option.filter(isJsonObject), Option.toArray),
-  );
-/** Each line's record, or why the file is not one the reader knows. */
-const recordsOf = (text: string): ReadonlyArray<JsonObject> | string => {
+/** Each line's record, or why the file is not one the reader knows; an unended last line is still being written. */
+const recordsOf = (
+  text: string,
+  types?: ReadonlySet<string>,
+): ReadonlyArray<JsonObject> | string => {
   const records: Array<JsonObject> = [];
-  for (const [index, line] of Arr.map(Str.split(text, "\n"), (line, i) => [i, line] as const)) {
+  const lines = Str.split(text, "\n");
+  for (const [index, line] of Arr.map(Arr.dropRight(lines, 1), (line, i) => [i, line] as const)) {
     if (Str.trim(line) === "") continue;
     const record = pipe(decodeLine(line), Option.filter(isJsonObject), Option.getOrUndefined);
-    if (record === undefined || !isString(record["type"]))
-      return `line ${index + 1} is not a record it knows`;
+    const type = record?.["type"];
+    if (record === undefined || (types !== undefined && !(isString(type) && types.has(type))))
+      return record === undefined
+        ? `line ${index + 1} is not a record`
+        : `line ${index + 1} is of type ${String(type)}, which it does not know`;
     records.push(record);
   }
   return records;
 };
+
+/** The record types each harness writes to a session, as of the versions read here. */
+const CLAUDE_TYPES = new Set([
+  "user",
+  "assistant",
+  "system",
+  "attachment",
+  "progress",
+  "summary",
+  "file-history-snapshot",
+  "file-history-delta",
+  "last-prompt",
+  "continued-in",
+  "content-replacement",
+  "api-request-shape",
+  "api-request-blob",
+  "api-request",
+  "fork-context-ref",
+  "frame-link",
+  "custom-title",
+  "ended-by-model",
+  "ai-title",
+  "tag",
+  "relocated",
+  "agent-name",
+  "agent-color",
+  "agent-setting",
+  "pr-link",
+  "artifact-comment-monitor",
+  "artifact-autoreact-ledger",
+  "bridge-session",
+  "history-suppression",
+  "attribution-snapshot",
+  "mode",
+  "permission-mode",
+  "isolation-latch",
+  "dev-mods",
+  "memory-mode",
+  "atis-latch",
+  "worktree-state",
+  "cost-state",
+  "queue-operation",
+  "observer-ref",
+  "marble-origami-commit",
+  "marble-origami-snapshot",
+  "speculation-accept",
+]);
+const CODEX_TYPES = new Set([
+  "session_meta",
+  "response_item",
+  "event_msg",
+  "turn_context",
+  "compacted",
+]);
+const PI_TYPES = new Set([
+  "session",
+  "message",
+  "model_change",
+  "thinking_level_change",
+  "usage",
+  "compaction",
+  "context_edit",
+  "branch_summary",
+  "custom",
+  "custom_message",
+  "label",
+  "session_info",
+]);
 const objectAt = (value: Json | undefined, key: string): JsonObject | undefined => {
   const found = isJsonObject(value) ? value[key] : undefined;
   return isJsonObject(found) ? found : undefined;
@@ -300,6 +371,7 @@ interface FileStore {
   readonly source: OwnSource;
   readonly root: string;
   readonly isSession: (relative: string) => boolean;
+  readonly types: ReadonlySet<string>;
   readonly read: (records: ReadonlyArray<JsonObject>, relative: string) => Session;
 }
 
@@ -309,6 +381,7 @@ const fileStores = (home: string): ReadonlyArray<FileStore> => [
     root: `${home}/.claude/projects`,
     // A session's own subagents are kept in a folder beside it, as sidechains.
     isSession: (relative) => /^[^/]+\/[^/]+\.jsonl$/.test(relative),
+    types: CLAUDE_TYPES,
     read: (records, relative) =>
       claudeSession(
         records,
@@ -319,12 +392,14 @@ const fileStores = (home: string): ReadonlyArray<FileStore> => [
     source: "codex",
     root: `${home}/.codex/sessions`,
     isSession: (relative) => /(^|\/)rollout-[^/]*\.jsonl$/.test(relative),
+    types: CODEX_TYPES,
     read: codexSession,
   },
   {
     source: "pi",
     root: `${home}/.pi/agent/sessions`,
     isSession: (relative) => /^[^/]+\/[^/]+\.jsonl$/.test(relative),
+    types: PI_TYPES,
     read: piSession,
   },
 ];
@@ -437,7 +512,12 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, re
       unread.add(run, read.failure);
       continue;
     }
-    const lines = Arr.filter(objectsOf(read.success), isHuman);
+    const records = recordsOf(read.success);
+    if (isString(records)) {
+      unread.add(run, records);
+      continue;
+    }
+    const lines = Arr.filter(records, isHuman);
     entries += lines.length;
     if (!reading) continue;
     const seen = new Set<string>();
@@ -509,7 +589,8 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
       );
       if (modified !== undefined && since !== null && modified.getTime() < since) continue;
       const text = yield* fs.readFileString(path).pipe(Effect.result);
-      const records = text._tag === "Failure" ? String(text.failure) : recordsOf(text.success);
+      const records =
+        text._tag === "Failure" ? String(text.failure) : recordsOf(text.success, store.types);
       if (isString(records)) {
         unread.add(relative, records);
         continue;

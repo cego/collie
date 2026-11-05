@@ -800,3 +800,38 @@ test("a session file it cannot read, or whose records it does not know, is count
       expect(texts(words)).toEqual(["Run the tests before you push.", "Keep pull requests small."]);
     }).pipe(Effect.scoped),
   ));
+
+test("a record type its harness does not write, or a broken audit line, makes the file unread", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const future = (more: JsonFields) =>
+        json([{ type: "future_user_message", timestamp: "2026-10-03T10:00:00.000Z", ...more }]);
+      const at = yield* places({
+        "home/.claude/projects/-home-u-shop/3a3a-future.jsonl": future({
+          message: { role: "user", content: "Said in a newer format." },
+        }),
+        "home/.codex/sessions/2026/10/03/rollout-2026-10-03T10-00-00-04c0.jsonl": future({
+          payload: { text: "Said in a newer format." },
+        }),
+        "home/.pi/agent/sessions/--home-u-web--/2026-10-03_pi.jsonl": future({
+          message: { role: "user", content: "Said in a newer format." },
+        }),
+        "state/runs/run-g/operations.jsonl": `${json([
+          audit("start", { origin: "cli-tty" }, null, "2026-10-06T09:00:00.000Z"),
+        ])}{"op":"deliver",\n`,
+      });
+      const words = yield* readOwnWords(at, NOW);
+      for (const source of ["claude-code", "codex", "pi"]) {
+        expect([source, storeOf(words, source)]).toMatchObject([
+          source,
+          { found: "read", sessions: 1, unread: 1 },
+        ]);
+        expect([source, storeOf(words, source)?.why]).toEqual([
+          source,
+          expect.stringContaining("future_user_message"),
+        ]);
+      }
+      expect(storeOf(words, "collie")).toMatchObject({ unread: 1 });
+      expect(storeOf(words, "collie")?.why).toContain("run-g");
+    }).pipe(Effect.scoped),
+  ));
