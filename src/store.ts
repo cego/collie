@@ -13,7 +13,7 @@
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Context, Effect, Layer, Schema, Stream, flow, Result } from "effect";
+import { Context, Effect, Layer, Option, Schema, Stream, flow, Result } from "effect";
 import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
 import * as Migrator from "effect/sql/Migrator";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -94,6 +94,23 @@ export const isSuperseded = (one: {
   readonly answer: string | null;
   readonly superseded?: string | null | undefined;
 }): boolean => one.answer === null && (one.superseded ?? null) !== null;
+
+/** A Workflow's question set aside and not yet asked again: no Decision while its work runs. */
+export const isSetAside = <
+  A extends {
+    readonly name: string;
+    readonly answer: string | null;
+    readonly superseded?: string | null | undefined;
+    readonly asker?: string | null | undefined;
+    readonly revises?: string | null | undefined;
+  },
+>(
+  all: ReadonlyArray<A>,
+  one: A,
+): boolean =>
+  isSuperseded(one) &&
+  (one.asker ?? null) === null &&
+  !Arr.some(all, (r) => r.revises === one.name);
 
 export const supersededReason = (one: {
   readonly name: string;
@@ -188,6 +205,18 @@ export interface StoreApi {
     readonly actor: AuditLine["actor"];
     readonly agent: string;
   }) => Effect.Effect<Superseded>;
+  /**
+   * Asks a superseded workflow question again as `name`, only while it is unanswered and
+   * unrevised, so the database orders it against the messaged agent's answer. True where
+   * this call opened it.
+   */
+  readonly revise: (revising: {
+    readonly run: string;
+    readonly decision: string;
+    readonly name: string;
+  }) => Effect.Effect<boolean>;
+  /** Every workflow question set aside by a human's message and not yet asked again. */
+  readonly setAside: Effect.Effect<ReadonlyArray<DecisionRow>>;
   readonly generations: Effect.Effect<ReadonlyArray<GenerationRow>>;
   /**
    * Claims a request id for a run, or hands back the run that already has it. `fresh` is
@@ -369,6 +398,34 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         sql`SELECT ${decisionColumns} FROM collie_decisions WHERE run = ${key.run} AND decision = ${key.decision}`,
     });
 
+    const setAsideRows = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: Decision,
+      execute: () =>
+        sql`SELECT ${decisionColumns} FROM collie_decisions
+          WHERE asker IS NULL AND answer IS NULL AND superseded IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM collie_decisions revision
+              WHERE revision.run = collie_decisions.run AND revision.revises = collie_decisions.decision
+            )
+          ORDER BY run, asked`,
+    });
+
+    /** Why `row` takes no answer now, naming the question asked in its place. */
+    const whyClosed = Effect.fn("Store.whyClosed")(function* (row: DecisionRow) {
+      if (row.answer !== null) return `"${row.decision}" was already answered "${row.answer}"`;
+      const rows = yield* decisionsOf(row.run).pipe(Effect.orDie);
+      let newest: DecisionRow | undefined;
+      let next = Arr.findFirst(rows, (one) => one.revises === row.decision);
+      while (Option.isSome(next)) {
+        const revision = next.value;
+        newest = revision;
+        next = Arr.findFirst(rows, (one) => one.revises === revision.decision);
+      }
+      const why = supersededReason({ ...row, name: row.decision });
+      return newest === undefined ? why : `${why}; answer "${newest.decision}" instead`;
+    });
+
     const everyGeneration = SqlSchema.findAll({
       Request: Schema.Void,
       Result: Generation,
@@ -448,7 +505,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         if (row.request === answer.request && row.answer === answer.value) {
           return { _tag: "repeat" as const, row };
         }
-        return { _tag: "refused" as const, reason: whyClosed(row) };
+        return { _tag: "refused" as const, reason: yield* whyClosed(row) };
       }),
 
       supersede: Effect.fn("Store.supersede")(function* (superseding) {
@@ -477,8 +534,33 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
           };
         return written.length > 0
           ? { _tag: "accepted" as const, row }
-          : { _tag: "refused" as const, reason: whyClosed(row) };
+          : { _tag: "refused" as const, reason: yield* whyClosed(row) };
       }),
+
+      revise: Effect.fn("Store.revise")(function* (revising) {
+        const at = yield* nowIso;
+        const opened = yield* reactivity
+          .mutation(
+            RUNS,
+            sql`
+              INSERT INTO collie_decisions (run, decision, prompt, options, asked, revises)
+              SELECT run, ${revising.name}, prompt, options, ${at}, decision
+              FROM collie_decisions
+              WHERE run = ${revising.run} AND decision = ${revising.decision}
+                AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM collie_decisions revision
+                  WHERE revision.run = ${revising.run} AND revision.revises = ${revising.decision}
+                )
+              ON CONFLICT(run, decision) DO NOTHING
+              RETURNING decision
+            `,
+          )
+          .pipe(Effect.orDie);
+        return opened.length > 0;
+      }),
+
+      setAside: setAsideRows().pipe(Effect.orDie),
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
         const input = canonical(admission.input);
@@ -610,10 +692,6 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
-const whyClosed = (row: DecisionRow): string =>
-  row.answer !== null
-    ? `"${row.decision}" was already answered "${row.answer}"`
-    : supersededReason({ ...row, name: row.decision });
 
 const answererText = flow(
   Schema.encodeResult(Schema.fromJsonString(AuditLine.fields.actor)),

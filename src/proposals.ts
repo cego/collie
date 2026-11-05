@@ -238,7 +238,7 @@ export function voiceOf({ conversation, said, attachments }: Voice): Voice {
   return voice;
 }
 
-export function isHuman(actor: Actor): boolean {
+export function isHuman(actor: Pick<Actor, "origin">): boolean {
   return actor.origin === "cli-tty" || actor.origin === "board" || actor.origin === "desktop";
 }
 

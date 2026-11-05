@@ -146,6 +146,7 @@ import {
   isSettled,
   RUN_LABEL,
   type AgentInfo,
+  type AgentStatus,
   HerdrError,
 } from "./herdr";
 import { promptAsync } from "./opencode";
@@ -497,7 +498,13 @@ export interface AgentsApi {
    * Puts on its Run every question an agent asked that no collection is reading — its Run
    * finished or parked, or the agent between steps — and sends it the answers.
    */
-  readonly tendQuestions: (questionsFor: (runId: string) => Questions) => Effect.Effect<void>;
+  readonly tendQuestions: (
+    questionsFor: (runId: string) => Questions,
+    /** Told of each queued message it submits now. */
+    submitted?: (queued: Queued, sent: Steered) => Effect.Effect<void>,
+  ) => Effect.Effect<void>;
+  /** What herdr says `agent` is doing now: `gone` where herdr no longer has it. */
+  readonly statusOf: (agent: string) => Effect.Effect<AgentStatus | "gone">;
   /**
    * Starts again, each in the session it had, every agent of this Run that core no longer
    * has. The one whose Output is still out is told to carry on with its step.
@@ -2768,7 +2775,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         }).pipe(Effect.orElseSucceed(() => false));
     });
 
-  const tendQuestions = (questionsFor: (runId: string) => Questions) =>
+  const tendQuestions = (
+    questionsFor: (runId: string) => Questions,
+    submitted: (queued: Queued, sent: Steered) => Effect.Effect<void> = () => Effect.void,
+  ) =>
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -2782,7 +2792,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             ),
           )) {
             if (queued.result !== null) continue;
-            yield* steer({ ...queued, mode: "now" });
+            yield* submitted(queued, yield* steer({ ...queued, mode: "now" }));
           }
         }
         const named = yield* fs
@@ -3692,6 +3702,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     repair,
     steer,
     tendQuestions,
+    statusOf: (agent) =>
+      under(host.herdr.agentStatus(agent)).pipe(
+        Effect.catch((cause) =>
+          Effect.succeed(
+            cause.code === "agent_not_found" ? ("gone" as const) : ("unknown" as const),
+          ),
+        ),
+      ),
     resumeLost,
     onLosses: (resumed) => under(Stream.runForEach(host.herdr.agentsEnded(), () => resumed)),
     atWork: (runId) =>

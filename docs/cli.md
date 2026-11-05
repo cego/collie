@@ -900,6 +900,14 @@ open, that is refused. The answer is one of the question's options, in any case 
 does. A refusal is `invalid_input` where your answer was the reason, and otherwise
 `operation_failed` with the host's own sentence.
 
+A message a human sends one of the run's agents while it waits — from the board, Desktop,
+a terminal, or chat with the human's own words — supersedes the question: it carries
+`superseded` and no answer, nothing lists it as waiting, and an answer to it is refused.
+Only the agent that was messaged may still answer it, as a planner told "go" does. Once
+that agent's work ends, and the run is neither stopped nor moved on, the question is asked
+again under a new name with `revises` naming the old one; answer that one. A message is
+never read as an answer, even one that is exactly an option.
+
 A run shows its question a moment before it stops to wait on it. An answer given in that
 moment is recorded at once and handed to the run once it has stopped, so it cannot wake the
 run out of a later park instead.

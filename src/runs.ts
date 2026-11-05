@@ -4,14 +4,14 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { RequestedBy, RunReport } from "./board-model";
 import type { PluginEnv } from "./env";
 import { resultText, runView, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
-import { isSuperseded, isUnanswered } from "./store";
+import { isSetAside, isSuperseded, isUnanswered } from "./store";
 import type { Settled } from "./strategies";
 import type { WorktreeRecord } from "./run";
 import type { Landing } from "./landing";
@@ -59,6 +59,8 @@ export interface RunFacts {
   /** Where its verifications are kept. */
   readonly evidence: string;
   readonly asking: ReadonlyArray<Asked>;
+  /** The agent a human messaged while that sets its question aside, until it is asked again. */
+  readonly superseding?: string | null;
   /** The questions it has been answered, oldest first. */
   readonly answered: ReadonlyArray<Asked & { readonly answer: string }>;
   readonly held: boolean;
@@ -140,6 +142,9 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
     Arr.filter(view.waiting, (one) => isAsking(view, one)),
     (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
   ),
+  superseding:
+    Option.getOrUndefined(Arr.findLast(view.waiting, (one) => isSetAside(view.waiting, one)))
+      ?.messaged ?? null,
   answered: Arr.flatMap(view.waiting, ({ name, prompt, options, answer }) =>
     answer === null ? [] : [{ name, prompt, options, answer }],
   ),

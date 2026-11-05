@@ -5,7 +5,7 @@ import * as Arr from "effect/Array";
 import type { ForgeChecks, ReadyToRelease, RunProgress } from "./board-model";
 import type { RunView } from "./engine";
 import { HOLD, STOP } from "./controls";
-import { isSuperseded, isUnanswered } from "./store";
+import { isSetAside, isUnanswered } from "./store";
 
 export const UNTILS = ["terminal", "attention", "ready", "needs-human"] as const;
 export type Until = (typeof UNTILS)[number];
@@ -17,7 +17,7 @@ export type Until = (typeof UNTILS)[number];
 export const atAttention = (view: RunView): boolean =>
   view.parked !== null ||
   (view.status.status === "suspended" &&
-    (!Arr.some(view.waiting, isSuperseded) ||
+    (!Arr.some(view.waiting, (one) => isSetAside(view.waiting, one)) ||
       Arr.some(view.waiting, isUnanswered) ||
       view.controls.includes(HOLD) ||
       view.controls.includes(STOP)));

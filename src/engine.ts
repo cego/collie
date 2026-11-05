@@ -14,7 +14,7 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import type { Asker } from "./proposals";
+import { isHuman, type Asker } from "./proposals";
 import { ReadModel } from "./read-model";
 import { actorOf, readAudit, recordAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
@@ -212,6 +212,7 @@ import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers
 import { isOutcome, REQUESTABLE } from "./outcome";
 import {
   Store,
+  isSetAside,
   isSuperseded,
   isUnanswered,
   storeLayer,
@@ -5803,6 +5804,10 @@ export const OpenDecision = Schema.Struct({
   /** When a human's message set it aside, and the Delivery or submit that carried it. */
   superseded: Schema.optionalKey(Schema.NullOr(Schema.String)),
   cause: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** The agent that message went to. */
+  messaged: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** The question this one asks again, or null for an original. */
+  revises: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type OpenDecision = typeof OpenDecision.Type;
 
@@ -6172,6 +6177,8 @@ export interface RegistryOptions {
   readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
   /** Whether a child's own Task is named by the namer's model, or by the stand-in. */
   readonly namesTasks?: boolean;
+  /** How long a messaged agent may take to start a turn before its work counts as ended. */
+  readonly supersedeGraceMs?: number | undefined;
 }
 
 export const registryLayer = (
@@ -7274,10 +7281,8 @@ const makeRegistry: (
         if (!reached(row.run)) continue;
         const generation = live.get(row.generation);
         if (generation === undefined) continue;
-        const answered = Arr.filter(
-          yield* store.asked(row.run),
-          (one) => one.answer !== null && one.asker === null,
-        );
+        const rows = yield* store.asked(row.run);
+        const answered = Arr.filter(rows, (one) => one.answer !== null && one.asker === null);
         if (answered.length === 0) continue;
         const state = pollStatus(
           yield* engine.poll(generation.registration.workflow, row.execution),
@@ -7289,7 +7294,7 @@ const makeRegistry: (
         yield* clearParked(row.run);
         for (const one of answered) {
           yield* answerDecision(generation.registration, {
-            name: one.decision,
+            name: rootOf(rows, one.decision),
             executionId: row.execution,
             value: one.answer ?? "",
           });
@@ -7538,6 +7543,8 @@ const makeRegistry: (
           asker: row.asker,
           superseded: row.superseded,
           cause: row.cause,
+          messaged: row.messaged,
+          revises: row.revises,
         })),
       ),
     );
@@ -7629,6 +7636,102 @@ const makeRegistry: (
       workflow.errorSchema,
     ).status;
     return status === "complete" || status === "failed";
+  });
+
+  const supersedeQuestion = Effect.fn("Engine.supersedeQuestion")(function* (
+    options: Parameters<RegistryApi["supersede"]>[0],
+  ) {
+    const superseded = yield* store.supersede({
+      run: options.runId,
+      decision: options.decision,
+      cause: options.cause,
+      actor: actorOf(options.by, options.cause),
+      agent: options.agent,
+    });
+    if (superseded._tag === "accepted")
+      yield* recordAudit(runDir(dir, options.runId), {
+        ...options.by,
+        operation: "supersede",
+        request: options.cause,
+        result: SupersedeRecord,
+        value: { decision: options.decision, agent: options.agent },
+      }).pipe(Effect.orDie);
+    return superseded;
+  });
+
+  /** A human's message submitted to one of a Run's agents sets its Workflow's open questions aside (D1). */
+  const superseding = Effect.fn("Engine.superseding")(function* (
+    runId: string,
+    cause: string,
+    actor: Asker | undefined,
+    sent: typeof Steered.Type,
+  ) {
+    if (!sent.delivered || actor === undefined || !speaksForHuman(actor)) return;
+    for (const one of yield* store.asked(runId))
+      if (one.asker === null && isUnanswered(one))
+        yield* supersedeQuestion({
+          runId,
+          decision: one.decision,
+          cause,
+          by: actor,
+          agent: sent.agent,
+        });
+  });
+
+  /** Questions set aside whose messaged agent herdr has reported working since, in memory only. */
+  const seenWorking = new Set<string>();
+  const graceMs = options?.supersedeGraceMs ?? SUPERSEDE_GRACE_MS;
+
+  /**
+   * Asks each set-aside question again once its messaged agent's work has ended, while
+   * the Run is not stopped and still suspended on it (D3, D7): from the rows and herdr alone.
+   */
+  const reviseQuestions = Effect.gen(function* () {
+    const agents = yield* Agents;
+    for (const row of yield* store.setAside) {
+      const key = `${row.run}/${row.decision}`;
+      if ((yield* controlsOf(row.run)).includes(STOP)) continue;
+      const found = yield* routed(row.run).pipe(Effect.option);
+      if (Option.isNone(found)) continue;
+      const { generation, execution } = found.value;
+      const state = pollStatus(
+        yield* engine.poll(generation.registration.workflow, execution),
+        generation.entry,
+      );
+      if (state.status !== "suspended") continue;
+      const agent = row.messaged ?? "";
+      const status = yield* agents.statusOf(agent);
+      if (status === "working" || status === "blocked") {
+        seenWorking.add(key);
+        continue;
+      }
+      const rows = yield* store.asked(row.run);
+      if (status !== "gone") {
+        const launches = yield* readLaunches(dir, row.run).pipe(Effect.orElseSucceed(() => []));
+        const asksItself = Arr.some(
+          rows,
+          (one) =>
+            one.asker !== null &&
+            isUnanswered(one) &&
+            Arr.some(
+              launches,
+              (launch) => launch.operation === one.asker && launch.agent === agent,
+            ),
+        );
+        if (asksItself) continue;
+        const since = epochMs(row.superseded ?? "");
+        if (!seenWorking.has(key) && (yield* Clock.currentTimeMillis) - since < graceMs) continue;
+      }
+      const lineage = lineageOf(rows, row.decision);
+      const name = `${lineage[0]}.r${lineage.length + 1}`;
+      seenWorking.delete(key);
+      if (!(yield* store.revise({ run: row.run, decision: row.decision, name }))) continue;
+      const notifier = yield* Effect.serviceOption(Notifier);
+      if (Option.isSome(notifier))
+        yield* notifier.value.notify(row.run, "needs-you", `${name}: ${row.prompt}`, {
+          key: `ask:${name}`,
+        });
+    }
   });
 
   /** Why a live agent in any session works inside `dir`, or null when none does. */
@@ -8398,9 +8501,13 @@ const makeRegistry: (
         return yield* found.failure;
       const asks = yield* asked(options.runId);
       const open = Arr.filter(asks, isUnanswered);
-      const sole = options.decision === null ? soleOpen(options.runId, open, asks) : null;
+      // Nothing open but one question set aside with no revision yet: only the agent the
+      // human messaged may answer it (D8), which the store decides.
+      const setAside = Arr.filter(asks, (one) => isSetAside(asks, one));
+      const candidates = open.length === 0 && setAside.length === 1 ? setAside : open;
+      const sole = options.decision === null ? soleOpen(options.runId, candidates, asks) : null;
       if (sole !== null) return yield* sole;
-      const name = options.decision ?? open[0]?.name ?? "";
+      const name = options.decision ?? candidates[0]?.name ?? "";
       // Every question, not only the open ones: one already answered and one never
       // asked are different refusals, and an operator is owed the difference.
       const question = Option.getOrUndefined(Arr.findFirst(asks, (one) => one.name === name));
@@ -8448,9 +8555,12 @@ const makeRegistry: (
       if (settled.row.asker === null && found._tag === "Success") {
         const { registration } = found.success.generation;
         const executionId = found.success.execution;
+        const deferred = rootOf(yield* store.asked(options.runId), name);
         yield* untilStopped(registration, executionId).pipe(
           Effect.andThen(
-            answerDecision(registration, { name, executionId, value }).pipe(waking.withPermits(1)),
+            answerDecision(registration, { name: deferred, executionId, value }).pipe(
+              waking.withPermits(1),
+            ),
           ),
           Effect.forkIn(hostScope),
         );
@@ -8459,24 +8569,7 @@ const makeRegistry: (
       return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
     }, waking.withPermits(1)),
 
-    supersede: Effect.fn("Engine.Registry.supersede")(function* (options) {
-      const superseded = yield* store.supersede({
-        run: options.runId,
-        decision: options.decision,
-        cause: options.cause,
-        actor: actorOf(options.by, options.cause),
-        agent: options.agent,
-      });
-      if (superseded._tag === "accepted")
-        yield* recordAudit(runDir(dir, options.runId), {
-          ...options.by,
-          operation: "supersede",
-          request: options.cause,
-          result: SupersedeRecord,
-          value: { decision: options.decision, agent: options.agent },
-        }).pipe(Effect.orDie);
-      return superseded;
-    }),
+    supersede: supersedeQuestion,
 
     control: Effect.fn("Engine.Registry.control")(function* (options: {
       readonly runId: string;
@@ -8644,16 +8737,25 @@ const makeRegistry: (
         };
       }
       const sent = yield* (yield* Agents).steer(options);
+      yield* superseding(options.runId, options.request, options.actor, sent);
       return sent.gone === true ? { ...sent, finished: yield* hasEnded(options.runId) } : sent;
     }),
 
     tendQuestions: Effect.gen(function* () {
       const host = yield* Host;
-      yield* (yield* Agents).tendQuestions((runId) => ({
-        ask: (question, asker) => host.asking(runId, question, asker),
-        asked: host.asked(runId),
-        close: (decision, value) => host.close(runId, decision, value),
-      }));
+      const services = yield* Effect.context<HostServices>();
+      yield* (yield* Agents).tendQuestions(
+        (runId) => ({
+          ask: (question, asker) => host.asking(runId, question, asker),
+          asked: host.asked(runId),
+          close: (decision, value) => host.close(runId, decision, value),
+        }),
+        (queued, sent) =>
+          superseding(queued.runId, queued.request, queued.actor, sent).pipe(
+            Effect.provideContext(services),
+          ),
+      );
+      yield* reviseQuestions;
     }),
   } satisfies RegistryApi;
 });
@@ -8670,6 +8772,34 @@ const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArra
   );
   return Arr.flatMap(children, (child) => [child, ...descendantsOf(rows, child)]);
 };
+
+const SUPERSEDE_GRACE_MS = 30_000;
+
+/** A door a human types into, or chat carrying the human's own words of that turn. */
+const speaksForHuman = (actor: Asker): boolean =>
+  isHuman(actor) || (actor.origin === "chat" && actor.said !== undefined);
+
+/** The questions `name` asks again, the original first and `name` last. */
+const lineageOf = (
+  rows: ReadonlyArray<{ readonly decision: string; readonly revises: string | null }>,
+  name: string,
+): ReadonlyArray<string> => {
+  const line: Array<string> = [];
+  let at: string | null = name;
+  while (at !== null && !Arr.contains(line, at)) {
+    const current: string = at;
+    line.push(current);
+    const row = Option.getOrUndefined(Arr.findFirst(rows, (one) => one.decision === current));
+    at = row?.revises ?? null;
+  }
+  return Arr.reverse(line);
+};
+
+/** The question a revision asks again, whose deferred its Workflow is waiting on. */
+const rootOf = (
+  rows: ReadonlyArray<{ readonly decision: string; readonly revises: string | null }>,
+  name: string,
+): string => lineageOf(rows, name)[0] ?? name;
 
 /**
  * Why a caller who named no question cannot be given one, or null where exactly one is

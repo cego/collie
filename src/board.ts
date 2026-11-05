@@ -174,6 +174,21 @@ const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   } satisfies Reopened;
 });
 
+/** The agent a human messaged while its Run's question is set aside, and what it was told. */
+const supersedingOf = Effect.fn("Board.supersedingOf")(function* (
+  stateDir: string,
+  run: RunFacts,
+  live: ReadonlyMap<string, AgentInfo>,
+) {
+  const agent = run.superseding ?? null;
+  if (agent === null) return null;
+  return {
+    agent,
+    told: yield* toldBy(stateDir, run.id, agent),
+    status: live.get(agent)?.status ?? "gone",
+  };
+});
+
 export type { ForgeChecks } from "./board-model";
 
 /** The forge's word on a merge request's checks, and the head revision it said it of. */
@@ -1119,12 +1134,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const reopened = ended(leader)
           ? yield* reopenedOf(stateDir, leader, deliveries, live)
           : null;
+        // Its question set aside: the agent a human messaged works on that instead.
+        const toldNow = reopened ?? (going ? yield* supersedingOf(stateDir, leader, live) : null);
         // A Reopened Run is the work its agent is doing now, while it does it; then its facts.
         const state = abandoned
           ? "abandoned"
-          : decision === null && reopened?.status === "working"
+          : decision === null && toldNow?.status === "working"
             ? "active"
-            : decision === null && reopened?.status === "blocked"
+            : decision === null && toldNow?.status === "blocked"
               ? "blocked"
               : stateOf(status, silent !== null, decision, stalled !== null, checking.length > 0);
 
@@ -1307,7 +1324,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             checking: check?.sentence ?? null,
             memory: memory === null ? null : waitLine(memory),
             awaiting: awaiting === null ? null : awaitingLine(awaiting),
-            reopened: state === "active" ? reopened : null,
+            reopened: state === "active" ? toldNow : null,
             silent,
             wave: fan !== null && fanned === leader ? fan.wave : null,
             failure,

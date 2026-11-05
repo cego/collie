@@ -3560,11 +3560,18 @@ const scheduleSeconds = Config.option(Config.String("COLLIE_HOST_SCHEDULE_SECOND
   Effect.orDie,
 );
 
+/** How long a test has a messaged agent take to start a turn before its work counts as ended. */
+const supersedeGraceMs = Config.option(Config.Int("COLLIE_HOST_SUPERSEDE_GRACE_MS")).pipe(
+  Effect.map(Option.getOrUndefined),
+  Effect.orDie,
+);
+
 const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effect<void>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const env = yield* currentEnv.pipe(Effect.orDie);
     const crashAt = yield* crashPoint;
+    const graceMs = yield* supersedeGraceMs;
     const seconds = yield* scheduleSeconds;
     const bun = yield* Effect.context<PlatformServices>();
     const herdr = new Herdr(env);
@@ -3666,6 +3673,7 @@ const own = (dir: string, checks: CheckProcessesApi, onceAnswering: Effect.Effec
                       locate: locateIn(env),
                       userDir: env.userDir,
                       crashAt,
+                      supersedeGraceMs: graceMs,
                       namesTasks: true,
                       placing: { herdr, env: { ...env, stateDir: dir } },
                     }),
