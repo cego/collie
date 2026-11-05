@@ -1,0 +1,90 @@
+// Desktop keeps the records it showed subscribed: one opened again paints from what it kept,
+// a frame goes only to its own record, and an older host's frames are taken whole.
+
+import { expect, test } from "bun:test";
+import { Array as Arr, Effect, Fiber, Stream } from "effect";
+import { DoorMap, type Doors } from "../desktop/src/bun/machine";
+import { recordKeeper } from "../desktop/src/bun/records";
+import type { KeptRecord } from "../desktop/src/shared/flock";
+import { frame, frameAt, recordDoor, type Asked } from "./support/record-doors";
+
+const said = (records: ReadonlyArray<KeptRecord>) =>
+  Arr.map(records, ({ detail, asOf }) => `${detail?.title}${asOf === null ? "" : " (as of)"}`);
+
+test("with A, B and C selected 100 ms apart and A's frame last, C's record shows only C's", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Array<Asked> = [];
+      const doors = new DoorMap<Pick<Doors, "record">>();
+      const door = yield* recordDoor(asked);
+      doors.set("i-1", door.door);
+      const keeper = yield* recordKeeper(doors);
+      const shown = {
+        A: new Array<KeptRecord>(),
+        B: new Array<KeptRecord>(),
+        C: new Array<KeptRecord>(),
+      };
+      const show = (run: keyof typeof shown) =>
+        keeper.open("i-1", run).pipe(
+          Stream.runForEach((record) => Effect.sync(() => shown[run].push(record))),
+          Effect.forkChild,
+        );
+      const a = yield* show("A");
+      yield* Effect.sleep("100 millis");
+      const b = yield* show("B");
+      yield* Fiber.interrupt(a);
+      yield* Effect.sleep("100 millis");
+      const c = yield* show("C");
+      yield* Fiber.interrupt(b);
+      yield* door.offer("C", frameAt("C", 1));
+      yield* door.offer("B", frameAt("B", 1));
+      yield* door.offer("A", frameAt("A", 1));
+      yield* Effect.sleep("50 millis");
+      expect(said(shown.C)).toEqual(["C"]);
+      expect(said(shown.A)).toEqual([]);
+      yield* Fiber.interrupt(c);
+
+      const again = yield* keeper.open("i-1", "A").pipe(Stream.runHead);
+      expect(said(Arr.fromOption(again))).toEqual(["A"]);
+      expect(Arr.map(asked, ({ runId }) => runId).sort()).toEqual(["A", "B", "C"]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("against a host that ignores what is held, a kept record is labelled until a whole frame comes", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const doors = new DoorMap<Pick<Doors, "record">>();
+      const older = yield* recordDoor([]);
+      doors.set("i-1", older.door);
+      const keeper = yield* recordKeeper(doors);
+      const pull = yield* keeper.open("i-1", "r-1").pipe(Stream.toPull);
+      yield* older.offer("r-1", frame("one"));
+      expect(said(yield* pull)).toEqual(["one"]);
+      doors.delete("i-1");
+      yield* older.close;
+      expect(said(yield* pull)).toEqual(["one (as of)"]);
+
+      const back = yield* recordDoor([]);
+      doors.set("i-1", back.door);
+      const early = yield* pull.pipe(Effect.timeoutOption("100 millis"));
+      expect(early._tag).toBe("None");
+      yield* back.offer("r-1", frame("two"));
+      expect(said(yield* pull)).toEqual(["two"]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a record its host ends while its door stays is kept current", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const doors = new DoorMap<Pick<Doors, "record">>();
+      const door = yield* recordDoor([]);
+      doors.set("i-1", door.door);
+      const keeper = yield* recordKeeper(doors);
+      const pull = yield* keeper.open("i-1", "r-1").pipe(Stream.toPull);
+      yield* door.offer("r-1", frameAt("done", 3));
+      expect(said(yield* pull)).toEqual(["done"]);
+      yield* door.close;
+      const after = yield* pull.pipe(Effect.timeoutOption("100 millis"));
+      expect(after._tag).toBe("None");
+    }).pipe(Effect.scoped),
+  ));

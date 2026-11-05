@@ -19,6 +19,8 @@ import type { DesktopAction } from "../../../src/shared/flock";
 import { type Gesture, seenBy } from "../../../src/shared/board-clicks";
 import { cardQuestion, openQuestions } from "../../../src/shared/pending-answer";
 import { cardFlow } from "../../../src/shared/flow-strip";
+import { useAtomSet } from "@effect/atom-vue";
+import { pointAtAtom } from "../flock";
 
 const props = defineProps<{
   task: TaskView;
@@ -29,6 +31,11 @@ const props = defineProps<{
   machine: string;
 }>();
 const { run, openLink } = useActions();
+const point = useAtomSet(() => pointAtAtom);
+const pointing = (at: boolean) =>
+  point({
+    payload: { card: at ? { installation: props.installation, runId: props.task.run } : null },
+  });
 const toast = useToast();
 // SAFETY: FlockBoard provides it to every card it draws.
 const gesture =
@@ -216,6 +223,10 @@ const menu = computed(() =>
       :data-testid="`card-${task.id}`"
       :data-card="cardKey"
       :data-as-of="asOf === null ? undefined : ''"
+      @mouseenter="pointing(true)"
+      @mouseleave="pointing(false)"
+      @focusin="pointing(true)"
+      @focusout="pointing(false)"
       :variant="task.state === 'blocked' ? 'soft' : 'outline'"
       :class="{ 'opacity-50': asOf !== null, 'ring-2 ring-primary': chosen }"
       :ui="{

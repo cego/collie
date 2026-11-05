@@ -3,7 +3,8 @@
 
 import { expect, test } from "bun:test";
 import { Array as Arr, Effect, Option, Stream } from "effect";
-import { DoorMap, openDoors, runDetailOn, type Doors } from "../desktop/src/bun/machine";
+import { DoorMap, openDoors, recordEvents, type Doors } from "../desktop/src/bun/machine";
+import { recordKeeper } from "../desktop/src/bun/records";
 import type { RunDetail } from "../src/board-model";
 import { flowNode, mainFlow } from "./support/flow";
 
@@ -21,11 +22,11 @@ test(
         );
         const doors = new DoorMap<typeof opened>();
         doors.set("i-1", opened);
-        const first = yield* runDetailOn(doors, "i-1", "r-1").pipe(
+        const first = yield* recordEvents(doors, "i-1", "r-1").pipe(
           Stream.runHead,
           Effect.timeoutOption("5 seconds"),
         );
-        expect(Option.flatten(first)).toEqual(Option.some(null));
+        expect(Option.flatten(first)).toEqual(Option.some({ _tag: "Frame", detail: null }));
       }).pipe(Effect.scoped),
     ),
   15_000,
@@ -55,7 +56,9 @@ test("a record's later frames reach the view without a Flow it already has", () 
           runDetail: (() => Stream.fromIterable(frames)) as Doors["record"]["runDetail"],
         } as Doors["record"],
       });
-      const seen = yield* runDetailOn(doors, "i-1", "r-1").pipe(
+      const keeper = yield* recordKeeper(doors);
+      const seen = yield* keeper.open("i-1", "r-1").pipe(
+        Stream.map(({ detail }) => detail),
         Stream.take(frames.length),
         Stream.runCollect,
       );
@@ -72,5 +75,5 @@ test("a record's later frames reach the view without a Flow it already has", () 
         null,
         "still working",
       ]);
-    }),
+    }).pipe(Effect.scoped),
   ));

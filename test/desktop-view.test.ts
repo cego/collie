@@ -143,6 +143,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         terminal: () => Stream.die("not asked"),
         terminalSend: () => Effect.die("not asked"),
         runDetail: () => Stream.die("not asked"),
+        pointAt: () => Effect.die("not asked"),
         runFile: () => Effect.die("not asked"),
         usage: () => Effect.die("not asked"),
         catalogues: () => Effect.die("not asked"),

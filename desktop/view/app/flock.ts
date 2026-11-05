@@ -153,6 +153,9 @@ export const flockSettingsAtom = FlockClient.runtime.atom(
     Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("flockSettings", undefined)))),
   ),
 );
+/** Tells Desktop which card the human points at, so its record is kept before it opens. */
+export const pointAtAtom = FlockClient.mutation("pointAt");
+
 /** A Run's details while some record shows them, keyed by `runDetailKey`. */
 export const runDetailAtom = Atom.family((key: string) =>
   FlockClient.runtime.atom(

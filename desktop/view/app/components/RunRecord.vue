@@ -23,6 +23,7 @@ import { runDetailAtom, runDetailKey } from "../flock";
 import type { Flow } from "../../../../src/board-model";
 import { timedFlow } from "../../../../src/flow-timing";
 import { keepFlow } from "../../../src/shared/flow";
+import { asOfSaid, recordStanding } from "../../../src/shared/kept-records";
 import type { DiffTarget } from "./DiffTab.vue";
 
 const props = defineProps<{ placed: PlacedTask }>();
@@ -39,18 +40,19 @@ watch(
   },
   { immediate: true },
 );
-const recordPlaced = computed(() => ({
-  ...props.placed,
-  task: { ...props.placed.task, run: shownRun.value },
-}));
-
 const timing = useRecordTiming();
 timing.mounted(props.placed.key);
 
 const { value: read, trouble } = useHeld(() =>
   runDetailAtom(runDetailKey({ installation: props.placed.installation, runId: shownRun.value })),
 );
-const detail = computed(() => read.value ?? null);
+const detail = computed(() => read.value?.detail ?? null);
+// A record its host has not confirmed since its door went takes no action, as a saved card.
+const recordPlaced = computed(() => ({
+  ...props.placed,
+  asOf: props.placed.asOf ?? read.value?.asOf ?? null,
+  task: { ...props.placed.task, run: shownRun.value },
+}));
 const flow = shallowRef<Flow | null>(null);
 /** When the Flow last came, so its minutes are never said as of an older tick of `now`. */
 const arrived = ref(0);
@@ -58,10 +60,18 @@ watch(
   detail,
   (shown) => {
     if (shown?.flow === undefined) return;
-    const first = flow.value === null;
     flow.value = shown.flow;
     arrived.value = DateTime.toEpochMillis(DateTime.nowUnsafe());
-    if (!first) return;
+  },
+  { immediate: true },
+);
+// A record shown as of an earlier time is not opened yet.
+let counted = false;
+watch(
+  read,
+  (kept) => {
+    if (counted || kept?.asOf !== null || flow.value === null) return;
+    counted = true;
     const card = props.placed.key;
     timing.frame(card);
     void nextTick(() =>
@@ -80,7 +90,9 @@ const timed = computed(() =>
         timedBefore,
       )),
 );
-const away = computed(() => notLive(props.placed.installation));
+const away = computed(() =>
+  recordStanding(read.value?.asOf ?? null, notLive(props.placed.installation)),
+);
 const loading = computed(
   () =>
     trouble.value === null &&
@@ -300,10 +312,10 @@ const locationOf = (file: string, line: number | null) =>
           color="warning"
           variant="subtle"
           :icon="away.icon"
-          :title="`${away.title}; showing what it last said`"
+          :title="`${away.title}; showing what it last said${away.asOf === null ? '' : `, ${asOfSaid(away.asOf)}`}`"
           :description="away.reason"
         />
-        <p v-else-if="read === null" class="text-muted text-sm">
+        <p v-else-if="read?.detail === null" class="text-muted text-sm">
           This Run's details are not on its Machine.
         </p>
         <div v-if="loading" data-testid="record-loading" class="flex flex-col gap-4">

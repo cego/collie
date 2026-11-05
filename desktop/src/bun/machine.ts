@@ -36,7 +36,6 @@ import {
   type BoardMessage,
   type CleanupReport,
   type BoardSnapshot,
-  Flow,
   PROTOCOL,
   FrontDoorRpcs,
   HostRefused,
@@ -44,6 +43,7 @@ import {
   type ProposalRefused,
   type RequestConflict,
   type RunDetail,
+  type RunRevision,
   type StaleAct,
   type Toasted,
 } from "../../../src/board-model";
@@ -1568,64 +1568,71 @@ const nextDoor = <D>(doors: DoorMap<D>, installation: string, last?: D): Effect.
       : Deferred.await(changed).pipe(Effect.andThen(nextDoor(doors, installation, last)));
   });
 
+/** A Run's record as its host tells it over the Machine's record door. */
+export type RecordDoor = Pick<Doors, "record">;
+export type RecordEvent =
+  | { readonly _tag: "Frame"; readonly detail: RunDetail | null }
+  /** The record held is still the host's. */
+  | { readonly _tag: "Unchanged" }
+  /** Its door closed or broke; the next door is asked again. */
+  | { readonly _tag: "Lost" };
+const LOST: RecordEvent = { _tag: "Lost" };
+const UNCHANGED: RecordEvent = { _tag: "Unchanged" };
+
 /**
- * A Run's details over whichever door its Machine has now: when that door closes or breaks,
- * again over the next. It ends only when let go, the host fails it, or its door breaks and
- * stays.
+ * A Run's record over whichever door its Machine has now: when that door closes or breaks,
+ * again over the next, resuming from the revision `held` names. It ends only when let go, the
+ * host fails it, or its door breaks and stays.
  */
-type RecordDoor = Pick<Doors, "record">;
-const sameFlow = Schema.toEquivalence(Flow);
-/**
- * Each frame without a Flow the view already has, which it keeps: each later part of a record
- * carries the whole Flow again, and decoding a large one again costs the view a frame.
- */
-const newFlowsOnly = (
-  shown: Flow | undefined,
-  detail: RunDetail | null,
-): readonly [Flow | undefined, ReadonlyArray<RunDetail | null>] => {
-  if (detail === null) return [undefined, [null]];
-  if (detail.flow === undefined) return [shown, [detail]];
-  if (shown === undefined || !sameFlow(detail.flow, shown)) return [detail.flow, [detail]];
-  const { flow: _, ...rest } = detail;
-  return [shown, [rest]];
-};
-export const runDetailOn = (doors: DoorMap<RecordDoor>, installation: string, runId: string) => {
-  const after = (last?: RecordDoor): Stream.Stream<RunDetail | null, ActionFailed> =>
+export const recordEvents = (
+  doors: DoorMap<RecordDoor>,
+  installation: string,
+  runId: string,
+  held: Effect.Effect<RunRevision | undefined> = Effect.undefined,
+) => {
+  const after = (last?: RecordDoor): Stream.Stream<RecordEvent, ActionFailed> =>
     Stream.unwrap(
-      Effect.map(nextDoor(doors, installation, last), (door) =>
-        door.record
-          .runDetail({
-            runId,
-            tail: true,
-            pages: 1,
-            refreshMr: false,
-            parts: true,
-          })
-          .pipe(
-            markFirst("desktop:read", runId),
-            Stream.filter(
-              (value): value is RunDetail | null => value === null || !("_tag" in value),
-            ),
-            // A broken connection's door is replaced soon after; one that stays was not.
-            Stream.catchTag("RpcClientError", (error) =>
-              Stream.fromEffectDrain(
-                nextDoor(doors, installation, door).pipe(
-                  Effect.timeoutOrElse({
-                    duration: "5 seconds",
-                    orElse: () => Effect.fail(error),
-                  }),
+      Effect.flatMap(nextDoor(doors, installation, last), (door) =>
+        Effect.map(held, (revision) => {
+          const asked = { runId, tail: true, pages: 1, refreshMr: false, parts: true };
+          return door.record
+            .runDetail(revision === undefined ? asked : { ...asked, held: revision })
+            .pipe(
+              markFirst("desktop:read", runId),
+              Stream.map((value): RecordEvent =>
+                value !== null && "_tag" in value ? UNCHANGED : { _tag: "Frame", detail: value },
+              ),
+              // A broken connection's door is replaced soon after; one that stays was not.
+              Stream.catchTag("RpcClientError", (error) =>
+                Stream.concat(
+                  Stream.make(LOST),
+                  Stream.fromEffectDrain(
+                    nextDoor(doors, installation, door).pipe(
+                      Effect.timeoutOrElse({
+                        duration: "5 seconds",
+                        orElse: () => Effect.fail(error),
+                      }),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            Stream.mapError(refusal()),
-            Stream.catchCause((cause) =>
-              Cause.hasInterruptsOnly(cause) ? Stream.empty : Stream.failCause(cause),
-            ),
-            Stream.concat(Stream.suspend(() => after(door))),
-          ),
+              Stream.mapError(refusal()),
+              Stream.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause) ? Stream.empty : Stream.failCause(cause),
+              ),
+              // A host may end a record its door still serves; only a door gone loses it.
+              Stream.concat(
+                Stream.suspend(() =>
+                  doors.get(installation) === door
+                    ? after(door)
+                    : Stream.concat(Stream.make(LOST), after(door)),
+                ),
+              ),
+            );
+        }),
       ),
     );
-  return after().pipe(Stream.mapAccum((): Flow | undefined => undefined, newFlowsOnly));
+  return after();
 };
 
 export const runFileOn = (door: Reached, runId: string, ref: string, offset?: number) =>

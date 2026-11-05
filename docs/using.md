@@ -968,6 +968,11 @@ when `NO_COLOR` disables CLI colour. OpenTUI draws those styles in the board's p
 Comark's security plugin drops scripts and embedded content first, because what an agent
 writes is untrusted. Tables and rules are drawn to the drawer's width. The log is shown as plain text.
 
+Desktop keeps the last records you opened, and one whose card you rest on, up to date in
+the background, so opening one again shows it at once. A record whose Machine's connection
+dropped says **Reconnecting** (or why its Machine is out of reach) with the time it was last
+current, and offers no action until its Machine confirms it again.
+
 The record scrolls with the wheel wherever the pointer is over it, and a new record — or a
 new tab — starts at the top, because how far the last one had been scrolled says nothing
 about this one.

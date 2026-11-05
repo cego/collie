@@ -1879,6 +1879,13 @@ its time.
   says as `invalid_state`; each act's result carries the Run's revision after it, which the
   caller's next frame is at least. A request without `parts` is sent whole records, their
   minutes said, on every change and tick, as an older Desktop expects.
+  Desktop keeps records subscribed after they close (`desktop/src/shared/kept-records.ts`
+  says which, `desktop/src/bun/records.ts` keeps them): the open one, the last 8 opened and
+  a card pointed at for 150 ms, at most 16 MB of frames, the least recently opened going
+  first and never the open one. A kept record opened again is painted from what Desktop
+  holds. Its door gone, it is sent with the time its host last confirmed it, and the record
+  says so and takes no action, until the next door answers its `held` revision with
+  `Unchanged` or a frame. A host that ends a record its door still serves leaves it current.
   A host's `collie_run` answer uses one local Run listing for its facts and Flow, with
   local offers and the same write-covered readiness as `progress`. Flow relationship
   indexes, installation identity and usual Step times are shared across a board build.

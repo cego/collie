@@ -447,6 +447,13 @@ export const machineToAdd = (typed: MachineToAdd): MachineToAdd | null => {
   return target && label && session ? { target, label, session } : null;
 };
 
+/** A record as Desktop keeps it: `asOf` is when its host last confirmed it, while it has not since. */
+export const KeptRecord = Schema.Struct({
+  detail: Schema.NullOr(RunDetail),
+  asOf: Schema.NullOr(Schema.Finite),
+});
+export type KeptRecord = typeof KeptRecord.Type;
+
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
   /**
@@ -666,9 +673,15 @@ export const DesktopRpcs = RpcGroup.make(
   /** One Run's details while its record is open, with its log's tail, again as they change. */
   Rpc.make("runDetail", {
     payload: { installation: Schema.String, runId: Schema.String },
-    success: Schema.NullOr(RunDetail),
+    success: KeptRecord,
     error: ActionFailed,
     stream: true,
+  }),
+  /** The card the human points at, whose record is kept once pointed at long enough. */
+  Rpc.make("pointAt", {
+    payload: {
+      card: Schema.NullOr(Schema.Struct({ installation: Schema.String, runId: Schema.String })),
+    },
   }),
   /** A large item of a Run's, by the reference its details hand out, from `offset` bytes on. */
   Rpc.make("runFile", {

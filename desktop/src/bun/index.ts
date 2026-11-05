@@ -112,7 +112,6 @@ import {
   doorTo,
   focusOn,
   offersOn,
-  runDetailOn,
   usageOn,
   cataloguesOn,
   machineOwnOn,
@@ -138,6 +137,7 @@ import {
   type RouteChange,
   syncNow,
 } from "./machine";
+import { recordKeeper } from "./records";
 import { givenCredentials } from "./given";
 import { saveSlackConnection, disconnectSlackConnection } from "./slack";
 import { slackUserSession } from "./slack-user";
@@ -295,6 +295,7 @@ const main = Effect.gen(function* () {
   }).pipe(Effect.ignore({ log: "Warn" }));
   const logged = yield* actionsLog(own);
   const doors = new DoorMap<Doors>();
+  const records = yield* recordKeeper(doors);
   /** A harness's list from this computer's Machine; its own reader's where it has none or an older one. */
   const fromMachine = (harness: string, own: Effect.Effect<ReadonlyArray<ListedModel>, string>) =>
     Effect.suspend(() => {
@@ -1345,7 +1346,8 @@ const main = Effect.gen(function* () {
         Effect.mapError((reason) => new ActionFailed({ reason })),
         Effect.provide(BunServices.layer),
       ),
-    runDetail: ({ installation, runId }) => runDetailOn(doors, installation, runId),
+    runDetail: ({ installation, runId }) => records.open(installation, runId),
+    pointAt: ({ card }) => records.point(card),
     usage: () =>
       Effect.forEach(doors.values(), (door) => usageOn(door.machine, door.desktop), {
         concurrency: "unbounded",
