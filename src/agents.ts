@@ -2717,7 +2717,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               continue;
             }
             if (
-              Arr.some(given, (one) => closings.includes(one.answer ?? "")) ||
+              Arr.some(given, (one) => Arr.some(closings, (closing) => closing === one.answer)) ||
               answeredCalls.has(key)
             ) {
               holds(false);
