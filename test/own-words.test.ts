@@ -607,3 +607,38 @@ test("a typed turn that carries an image keeps its text; a tool's result beside 
       expect(texts(words)).toEqual(["Use this logo.", "Match this screenshot's spacing."]);
     }).pipe(Effect.scoped),
   ));
+
+test("an OpenCode session whose delivery token is older than 90 days is still Collie's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* places({ "home/.local/share/opencode/.keep": "" });
+      const file = `${at.home}/.local/share/opencode/opencode.db`;
+      openCode(file);
+      const db = new Database(file);
+      const old = epochMs("2026-07-01T10:00:00.000Z");
+      const recent = epochMs("2026-10-20T10:00:00.000Z");
+      db.run(
+        "INSERT INTO session VALUES ('ses_old', 'p1', NULL, 'old', '/home/u/ops', 't', '1', 0, 0)",
+      );
+      db.run("INSERT INTO message VALUES ('m9', 'ses_old', ?, ?, ?)", [
+        old,
+        old,
+        encode({ role: "user" }),
+      ]);
+      db.run("INSERT INTO part VALUES ('p9', 'm9', 'ses_old', 0, 0, ?)", [
+        encode({ type: "text", text: "collie-delivery:run-5-build Build." }),
+      ]);
+      db.run("INSERT INTO message VALUES ('m10', 'ses_old', ?, ?, ?)", [
+        recent,
+        recent,
+        encode({ role: "user" }),
+      ]);
+      db.run("INSERT INTO part VALUES ('p10', 'm10', 'ses_old', 0, 0, ?)", [
+        encode({ type: "text", text: "Collie steered its agent." }),
+      ]);
+      db.close();
+      const words = yield* readOwnWords(at, NOW);
+      expect(texts(words)).toEqual(["Deploy on Tuesdays only."]);
+      expect(words.skipped).toBe(2);
+    }).pipe(Effect.scoped),
+  ));

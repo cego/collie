@@ -166,6 +166,10 @@ const OpenCodeRow = Schema.Struct({
   part: Schema.String,
 });
 const decodeRows = flow(Schema.decodeUnknownResult(Schema.Array(OpenCodeRow)), Result.getOrThrow);
+const decodeSessions = flow(
+  Schema.decodeUnknownResult(Schema.Array(Schema.Struct({ session: Schema.String }))),
+  Result.getOrThrow,
+);
 const decodeCount = flow(
   Schema.decodeUnknownResult(Schema.Struct({ n: Schema.Finite })),
   Result.getOrThrow,
@@ -179,6 +183,22 @@ const openCodeStore = (file: string, since: number | null) =>
       try {
         const count = decodeCount(db.query("SELECT count(*) AS n FROM session").get()).n;
         if (since === null) return { count, sessions: [] };
+        // A token marks the whole session, however old the message that carries it.
+        const collies = new Set(
+          Arr.map(
+            decodeSessions(
+              db
+                .query(
+                  `SELECT DISTINCT m.session_id AS session
+                   FROM part p JOIN message m ON m.id = p.message_id
+                   WHERE json_extract(m.data, '$.role') = 'user'
+                     AND instr(json_extract(p.data, '$.text'), ?) > 0`,
+                )
+                .all(DELIVERY),
+            ),
+            (row) => row.session,
+          ),
+        );
         const rows = decodeRows(
           db
             .query(
@@ -193,13 +213,11 @@ const openCodeStore = (file: string, since: number | null) =>
         const sessions = Arr.map(
           Rec.values(Arr.groupBy(rows, (row) => row.session)),
           (parts): Session => {
-            let delivered = false;
             const said: Array<Said> = [];
             for (const row of parts) {
               const part = pipe(decodeLine(row.part), Option.getOrUndefined);
               const raw = stringAt(part, "type") === "text" ? stringAt(part, "text") : undefined;
               if (raw === undefined) continue;
-              delivered ||= pipe(raw, Str.includes(DELIVERY));
               const typed = Str.trim(raw);
               if (isJsonObject(part) && part["synthetic"] === true) continue;
               if (typed !== "" && !injected(typed)) said.push({ at: isoAt(row.at), text: typed });
@@ -210,7 +228,7 @@ const openCodeStore = (file: string, since: number | null) =>
               ids: [first.session],
               cwd: first.directory,
               said: first.parent === null ? said : [],
-              delivered,
+              delivered: collies.has(first.session),
             };
           },
         );
