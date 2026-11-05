@@ -6,7 +6,7 @@ import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as Str from "effect/String";
 import { Clock, Config, Effect, FileSystem, Option, Stream } from "effect";
 
-export type RecordMarkAt = "host:emit" | "bridge:relay" | "desktop:read";
+export type RecordMarkAt = "host:emit" | "bridge:relay" | "desktop:read" | "desktop:serve";
 
 /** A line per mark appended to the file, or null when marking is off. */
 export const recordMarks = Effect.gen(function* () {

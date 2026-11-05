@@ -711,6 +711,11 @@ const stagesOf = (samples: ReadonlyArray<Sample>) => {
   const split = marked.filter(({ marks }) =>
     ["host:emit", "bridge:relay", "desktop:read"].every((at) => marks[at] !== undefined),
   );
+  const kept = marked.filter(
+    ({ marks }) =>
+      marks["desktop:serve"] !== undefined &&
+      (marks["host:emit"] ?? Infinity) >= marks["record:usable"]!,
+  );
   return {
     n: marked.length,
     // Samples whose host, bridge or Desktop mark never came, so the split leaves them out.
@@ -726,6 +731,18 @@ const stagesOf = (samples: ReadonlyArray<Sample>) => {
         to_view: stage("desktop:read", "record:frame", split),
       },
     }),
+    // Opens painted from a record Desktop kept: no host frame came before the paint.
+    ...(kept.length > 0 && {
+      kept: {
+        n: kept.length,
+        to_main: stage("record:mounted", "desktop:serve", kept),
+        to_view: stage("desktop:serve", "record:frame", kept),
+      },
+    }),
+    host_before_paint: marked.filter(
+      ({ marks }) =>
+        marks["host:emit"] !== undefined && marks["host:emit"] < marks["record:usable"]!,
+    ).length,
     render: stage("record:frame", "record:usable"),
   };
 };
