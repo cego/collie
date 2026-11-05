@@ -104,7 +104,8 @@ import {
   terminalBackend,
   worktreesDirectory,
 } from "./config";
-import { unlistedServers } from "./compaction";
+import { controlDir, unlistedServers } from "./compaction";
+import { externalSubmits } from "./compactors";
 import { foldPreferences, preferencesFromOptions, resolveChoice } from "./harness";
 import type { MachineCatalogue } from "./harness-choice";
 import { handoffsDir } from "./handoffs";
@@ -7663,42 +7664,60 @@ const makeRegistry: (
   const seenWorking = new Set<string>();
 
   /**
-   * A human's message submitted to one of a Run's agents sets its Workflow's open questions
-   * and that agent's own aside (D1, D4), and a Workflow's question already set aside then
-   * waits for that agent too.
+   * A human's message submitted to `agent` sets its Run's Workflow questions and that
+   * agent's own aside (D1, D4), and a Workflow's question already set aside then waits for
+   * that agent too. Only questions asked before `submitted`, and each submit once.
    */
-  const superseding = Effect.fn("Engine.superseding")(function* (
+  const supersedeFor = Effect.fn("Engine.supersedeFor")(function* (
+    runId: string,
+    cause: string,
+    actor: Asker,
+    agent: string,
+    submitted = Infinity,
+  ) {
+    const rows = yield* store.asked(runId);
+    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+    const supersede = (decision: string) =>
+      supersedeQuestion({ runId, decision, cause, by: actor, agent });
+    for (const one of rows) {
+      if (epochMs(one.asked) >= submitted) continue;
+      if (one.asker !== null) {
+        if (isUnanswered(one) && asksAs(launches, one.asker, agent)) yield* supersede(one.decision);
+        continue;
+      }
+      if (isUnanswered(one)) yield* supersede(one.decision);
+      else if (
+        isSuperseded(one) &&
+        !Arr.some(rows, (r) => r.revises === one.decision) &&
+        !Arr.some(one.messaged ?? [], (was) => was.agent === agent && epochMs(was.at) >= submitted)
+      ) {
+        seenWorking.delete(`${runId}/${one.decision}/${agent}`);
+        yield* store.alsoMessaged({ run: runId, decision: one.decision, agent });
+      }
+    }
+  });
+
+  const superseding = (
     runId: string,
     cause: string,
     actor: Asker | undefined,
     sent: typeof Steered.Type,
-  ) {
-    if (!sent.delivered || actor === undefined || !speaksForHuman(actor)) return;
-    const rows = yield* store.asked(runId);
-    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
-    for (const one of rows) {
-      if (one.asker !== null) {
-        if (isUnanswered(one) && asksAs(launches, one.asker, sent.agent))
-          yield* supersedeQuestion({
-            runId,
-            decision: one.decision,
-            cause,
-            by: actor,
-            agent: sent.agent,
-          });
-        continue;
-      }
-      if (isUnanswered(one))
-        yield* supersedeQuestion({
-          runId,
-          decision: one.decision,
-          cause,
-          by: actor,
-          agent: sent.agent,
-        });
-      else if (isSuperseded(one) && !Arr.some(rows, (r) => r.revises === one.decision)) {
-        seenWorking.delete(`${runId}/${one.decision}/${sent.agent}`);
-        yield* store.alsoMessaged({ run: runId, decision: one.decision, agent: sent.agent });
+  ) =>
+    sent.delivered && actor !== undefined && speaksForHuman(actor)
+      ? supersedeFor(runId, cause, actor, sent.agent)
+      : Effect.void;
+
+  /** Typing into a Claude agent's pane, which its hook records as `external` (D1). */
+  const paneSubmits = Effect.gen(function* () {
+    const runs = Arr.dedupe(Arr.map(yield* store.unanswered, (row) => row.run));
+    for (const runId of runs) {
+      const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+      for (const agent of Arr.dedupe(Arr.map(launches, (launch) => launch.agent))) {
+        const submits = yield* externalSubmits(yield* controlDir(placing.env.stateDir, agent)).pipe(
+          Effect.orElseSucceed(() => []),
+        );
+        for (const at of submits)
+          yield* supersedeFor(runId, `${agent}:submit:${at}`, { origin: "cli-tty" }, agent, at);
       }
     }
   });
@@ -8777,6 +8796,7 @@ const makeRegistry: (
             Effect.provideContext(services),
           ),
       );
+      yield* paneSubmits;
       yield* reviseQuestions;
     }),
   } satisfies RegistryApi;

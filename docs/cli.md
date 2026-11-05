@@ -906,7 +906,8 @@ does. A refusal is `invalid_input` where your answer was the reason, and otherwi
 `operation_failed` with the host's own sentence.
 
 A message a human sends one of the run's agents while it waits — from the board, Desktop,
-a terminal, or chat with the human's own words — supersedes the question: it carries
+a terminal, chat with the human's own words, or typed into a Claude agent's pane —
+supersedes the question: it carries
 `superseded` and no answer, nothing lists it as waiting, and an answer to it is refused.
 Only an agent that was messaged since may still answer it, as a planner told "go" does. Once
 every messaged agent's work ends, and the run is neither stopped nor moved on, the question

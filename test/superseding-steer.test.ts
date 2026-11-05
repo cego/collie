@@ -714,3 +714,94 @@ test(
     ),
   180_000,
 );
+
+/** A turn submitted in the agent's Claude pane, as its `UserPromptSubmit` hook records it. */
+const typedIn = (at: AtQuestion, prompt: string, agent = at.agent) =>
+  Effect.gen(function* () {
+    yield* recordClaudeEvent(
+      yield* controlDir(at.world.state, agent),
+      encode({ session_id: "s-1", hook_event_name: "UserPromptSubmit", prompt }),
+    ).pipe(Effect.orDie);
+  });
+
+const setAside = (at: AtQuestion, name: string) =>
+  until(
+    () => waitingOf(at),
+    (rows) => (rowOf(rows, name)?.superseded ?? null) !== null,
+  ).pipe(Effect.map((rows) => rowOf(rows, name)!));
+
+test(
+  "typing into the agent's Claude pane sets the question aside while it works, and the question is asked again after",
+  () =>
+    atQuestion("collie-supersede-typed-", (at) =>
+      Effect.gen(function* () {
+        yield* at.status("working");
+        yield* typedIn(at, "Call it the chooser");
+        const go = yield* setAside(at, "go");
+        expect(go).toMatchObject({ answer: null });
+        expect(go.cause).toMatch(new RegExp(`^${at.agent}:submit:\\d+$`));
+
+        const card = yield* cardOf(at);
+        expect(card?.state).toBe("active");
+        expect(card?.decision).toBeNull();
+        expect(card?.sentence).toContain(`Working on what you told ${at.agent}`);
+
+        yield* at.status("idle");
+        expect(yield* revised(at)).toMatchObject({ prompt: "Ship it?", answer: null });
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "a submit that carries Collie's delivery or the harness's own leaves the question open",
+  () =>
+    atQuestion("collie-supersede-not-typed-", (at) =>
+      Effect.gen(function* () {
+        yield* typedIn(at, "collie-delivery:r-1-build-step-2\nYour task for this step is next.");
+        yield* typedIn(at, "<task-notification>a background task finished</task-notification>");
+        yield* typedIn(at, '<agent-message from="planner">Carry on</agent-message>');
+        yield* Effect.sleep(SETTLED);
+        const go = rowOf(yield* waitingOf(at), "go");
+        expect(go).toMatchObject({ answer: null });
+        expect(go?.superseded ?? null).toBeNull();
+        expect((yield* cardOf(at))?.decision).not.toBeNull();
+
+        yield* typedIn(at, "Now something else");
+        yield* setAside(at, "go");
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "typing into the agent's Claude pane closes its own question, which is not asked again",
+  () =>
+    atQuestion("collie-supersede-typed-own-", (at) =>
+      Effect.gen(function* () {
+        yield* recordClaudeEvent(
+          yield* controlDir(at.world.state, at.agent),
+          encode({
+            session_id: "s-1",
+            hook_event_name: "PreToolUse",
+            tool_name: "AskUserQuestion",
+            tool_use_id: "toolu-own",
+            tool_input: {
+              questions: [{ question: "Which database?", header: "Database", options: [] }],
+            },
+          }),
+        ).pipe(Effect.orDie);
+        yield* until(
+          () => waitingOf(at),
+          (rows) => rows.length === 2,
+        );
+
+        yield* typedIn(at, "Use SQLite");
+        expect(yield* setAside(at, "ask-build-1")).toMatchObject({ answer: null });
+        yield* revised(at);
+        yield* Effect.sleep(SETTLED);
+        expect(revisionOf(yield* waitingOf(at), "ask-build-1")).toBeUndefined();
+      }),
+    ),
+  180_000,
+);

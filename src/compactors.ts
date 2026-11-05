@@ -1742,13 +1742,18 @@ export const COMPACTION_PORTS: CompactionPorts = {
  * Counted rather than timestamped: the caller compares this against what it saw last
  * time, so a submission it has already turned into an override is not one again.
  */
-export const externalSubmissions = Effect.fn("Compactors.externalSubmissions")(function* (
-  dir: string,
-) {
-  return Arr.filter(
-    yield* readEvents(dir),
-    (event) => event.kind === "submit" && event.reason === "external",
-  ).length;
+export const externalSubmissions = (dir: string) =>
+  Effect.map(externalSubmits(dir), (ats) => ats.length);
+
+/** When each of those submissions was made, in epoch ms. */
+export const externalSubmits = Effect.fn("Compactors.externalSubmits")(function* (dir: string) {
+  return Arr.map(
+    Arr.filter(
+      yield* readEvents(dir),
+      (event) => event.kind === "submit" && event.reason === "external",
+    ),
+    (event) => event.at,
+  );
 });
 
 /** Whether the submit hook recorded this delivery's token: the harness took that prompt. */

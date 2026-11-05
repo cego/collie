@@ -219,6 +219,8 @@ export interface StoreApi {
   }) => Effect.Effect<boolean>;
   /** Every workflow question set aside by a human's message and not yet asked again. */
   readonly setAside: Effect.Effect<ReadonlyArray<DecisionRow>>;
+  /** Every question with no answer yet, superseded or not. */
+  readonly unanswered: Effect.Effect<ReadonlyArray<DecisionRow>>;
   /**
    * Adds `agent` to the agents a set-aside workflow question waits for, or restarts its
    * wait where it is already one, while no revision has opened. True where it did.
@@ -422,6 +424,13 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
           ORDER BY run, asked`,
     });
 
+    const unansweredRows = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: Decision,
+      execute: () =>
+        sql`SELECT ${decisionColumns} FROM collie_decisions WHERE answer IS NULL ORDER BY run, asked`,
+    });
+
     /** Why `row` takes no answer now, naming the question asked in its place. */
     const whyClosed = Effect.fn("Store.whyClosed")(function* (row: DecisionRow) {
       if (row.answer !== null) return `"${row.decision}" was already answered "${row.answer}"`;
@@ -576,6 +585,8 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       }),
 
       setAside: setAsideRows().pipe(Effect.orDie),
+
+      unanswered: unansweredRows().pipe(Effect.orDie),
 
       alsoMessaged: Effect.fn("Store.alsoMessaged")(function* (messaging) {
         const at = yield* nowIso;
