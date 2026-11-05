@@ -36,6 +36,7 @@ import {
   type BoardMessage,
   type CleanupReport,
   type BoardSnapshot,
+  Flow,
   PROTOCOL,
   FrontDoorRpcs,
   HostRefused,
@@ -1573,6 +1574,21 @@ const nextDoor = <D>(doors: DoorMap<D>, installation: string, last?: D): Effect.
  * stays.
  */
 type RecordDoor = Pick<Doors, "record">;
+const sameFlow = Schema.toEquivalence(Flow);
+/**
+ * Each frame without a Flow the view already has, which it keeps: each later part of a record
+ * carries the whole Flow again, and decoding a large one again costs the view a frame.
+ */
+const newFlowsOnly = (
+  shown: Flow | undefined,
+  detail: RunDetail | null,
+): readonly [Flow | undefined, ReadonlyArray<RunDetail | null>] => {
+  if (detail === null) return [undefined, [null]];
+  if (detail.flow === undefined) return [shown, [detail]];
+  if (shown === undefined || !sameFlow(detail.flow, shown)) return [detail.flow, [detail]];
+  const { flow: _, ...rest } = detail;
+  return [shown, [rest]];
+};
 export const runDetailOn = (doors: DoorMap<RecordDoor>, installation: string, runId: string) => {
   const after = (last?: RecordDoor): Stream.Stream<RunDetail | null, ActionFailed> =>
     Stream.unwrap(
@@ -1609,7 +1625,7 @@ export const runDetailOn = (doors: DoorMap<RecordDoor>, installation: string, ru
           ),
       ),
     );
-  return after();
+  return after().pipe(Stream.mapAccum((): Flow | undefined => undefined, newFlowsOnly));
 };
 
 export const runFileOn = (door: Reached, runId: string, ref: string, offset?: number) =>
