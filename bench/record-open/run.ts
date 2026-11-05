@@ -376,7 +376,11 @@ const body = (
           shown = yield* seen;
           if (shown === null || !("missed" in shown)) break;
           missed.push(shown.missed);
-          if (shown.opened) yield* until("!window.__bench.board()", 5_000);
+          // A click on another card may open its record, a moment later, or not at all.
+          for (let waited = 0; shown.opened && waited < 5_000; waited += 50) {
+            if (!(yield* ev<boolean>("window.__bench.board()"))) break;
+            yield* Effect.sleep("50 millis");
+          }
           yield* close;
         }
         const sample: Sample =
