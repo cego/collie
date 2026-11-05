@@ -425,6 +425,19 @@ Collie's own prompts to that agent wait. Any of a
 Task's Runs can be waiting on one, a fan-out's Repo runs included, and each is answered on
 the Run that asked. Both are answered on the card, from the CLI or from chat, and survive
 the board closing. A Run's **Checks** are never one: nobody approves them (ADR-0055).
+A human's message to one of the Run's agents supersedes its open questions, which are then
+no Decision until asked again (**Superseded question**).
+
+**Superseded question** — A Run's question that a human's own message to one of its agents
+set aside while it was open: from the board, Desktop, a terminal's `collie run steer` or
+`deliver`, chat relaying the human's words, or typing in a Claude pane. Collie's own
+Deliveries and another agent's never supersede. It is a state of its own, never an answer:
+it picks no option and grants nothing. While the agent works on the message it is no
+Decision, and an answer to it is refused, except from an agent the human messaged. A
+Workflow's question is asked again under a new name, with the same prompt and options, once
+every messaged agent's work ends, if nobody answered it and the Workflow still waits on it. An agent's own
+question is closed instead, and the agent asks again if it still needs to
+(ADR-draft-a-humans-message-supersedes-a-runs-open-question).
 
 **Stalled** — The other way into **Needs you**, and the one with nothing on the card to
 answer: an agent is waiting for a human in its own pane — at a dialog of its harness's
@@ -438,7 +451,8 @@ is shown the same way. A Run can have several at once, and each front door says 
 ranks first.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
-settled, or a **Reopened** Run whose agent herdr reports working. The board's third
+settled, or a **Reopened** Run whose agent herdr reports working. A Run whose question a
+human's message superseded is Working while its agent works on that message. The board's third
 section, under Waiting on you.
 
 **Waiting on you** — A Task whose work has ended without **landing**, and which nobody has
@@ -729,7 +743,7 @@ whole `recheck` (ADR-0034, amended 2026-10-15).
 
 **Slice** — One item of a list of work — a ticket's build — known by its name, never by where it sits. It has its own prompt and its own Output, runs on the list's one agent, and is handed only its ticket and a few lines of fact about the items before it — their commits and what they verified, never their transcripts. A replayed or resumed Run reuses the items already done and does only what is left.
 
-**Choice** — A question a Run asks the human with `ask`, from a closed set of options: what the answer does next — start another Workflow, prompt an agent, post a review, stop — is the Workflow's own code. An answer outside the options, or a second answer to one already answered, is refused and starts nothing.
+**Choice** — A question a Run asks the human with `ask`, from a closed set of options: what the answer does next — start another Workflow, prompt an agent, post a review, stop — is the Workflow's own code. An answer outside the options, or a second answer to one already answered, is refused and starts nothing. A human's message to the Run's agent supersedes an open one, and it is asked again once that work ends (**Superseded question**).
 
 **Chain** — Starting another Workflow from a Run, with `child`: typed input decoded against the child's schema before it is admitted, a stable invocation name, and the child recorded as this Run's. Replaying the parent reuses the child it already has. A child started as work of its own is a Task of its own, and still this Run's. A fan-out chains several at once, one per repository a plan touches; see Repo run.
 

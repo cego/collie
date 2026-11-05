@@ -1002,12 +1002,17 @@ function handle(
         }
         // A comma-separated list is read one per call, the last value repeating, so a
         // test can script "working for a while, then idle".
-        // A file, where named and present, says it instead, so a test can change it under a host.
+        // A file, where named and present, says it instead, so a test can change it under a host;
+        // `<file>.<agent>` says it for that agent alone.
         const statusFile = yield* envString("FAKE_HERDR_AGENT_STATUS_FILE");
+        const filedAt = (path: string) =>
+          Effect.gen(function* () {
+            return statusFile !== "" && (yield* fs.exists(path))
+              ? Str.trim(yield* fs.readFileString(path))
+              : "";
+          });
         const filed =
-          statusFile !== "" && (yield* fs.exists(statusFile))
-            ? Str.trim(yield* fs.readFileString(statusFile))
-            : "";
+          (yield* filedAt(`${statusFile}.${argv[2] ?? ""}`)) || (yield* filedAt(statusFile));
         const scripted = Str.split(
           filed || (yield* envString("FAKE_HERDR_AGENT_STATUS", "idle")),
           ",",

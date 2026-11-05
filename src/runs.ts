@@ -4,13 +4,14 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { RequestedBy, RunReport } from "./board-model";
 import type { PluginEnv } from "./env";
 import { resultText, runView, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
+import { isSetAside, isUnanswered } from "./store";
 import type { Settled } from "./strategies";
 import type { WorktreeRecord } from "./run";
 import type { Landing } from "./landing";
@@ -58,6 +59,8 @@ export interface RunFacts {
   /** Where its verifications are kept. */
   readonly evidence: string;
   readonly asking: ReadonlyArray<Asked>;
+  /** The agents a human messaged while that sets its question aside, until it is asked again. */
+  readonly superseding?: ReadonlyArray<string>;
   /** The questions it has been answered, oldest first. */
   readonly answered: ReadonlyArray<Asked & { readonly answer: string }>;
   readonly held: boolean;
@@ -100,9 +103,7 @@ const stateOf = (view: RunView): RunState => {
     // A stop suspends the Run; otherwise only a question or a parked Run is waiting.
     case "suspended":
       if (stopped) return "stopped";
-      return view.parked !== null || Arr.some(view.waiting, (one) => one.answer === null)
-        ? "waiting"
-        : "running";
+      return view.parked !== null || Arr.some(view.waiting, isUnanswered) ? "waiting" : "running";
     // Concurrent work can keep the Run pending while one Activity is parked.
     case "pending":
       if (stopped) return "stopped";
@@ -141,6 +142,9 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
     Arr.filter(view.waiting, (one) => isAsking(view, one)),
     (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
   ),
+  superseding:
+    Option.getOrUndefined(Arr.findLast(view.waiting, (one) => isSetAside(view.waiting, one)))
+      ?.messaged ?? [],
   answered: Arr.flatMap(view.waiting, ({ name, prompt, options, answer }) =>
     answer === null ? [] : [{ name, prompt, options, answer }],
   ),
@@ -167,6 +171,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       answered: one.answered ?? null,
       by: one.by ?? null,
       open: isAsking(view, one),
+      superseded: isSetAside(view.waiting, one),
       text: one.prompt,
       options: Arr.map(one.options, (value) => ({ id: value, title: value, subtitle: null })),
     })),
@@ -181,7 +186,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
  */
 const isAsking = (view: RunView, one: RunView["waiting"][number]): boolean => {
   const state = stateOf(view);
-  return one.answer === null && (!settled({ state }) || (one.asker != null && state !== "stopped"));
+  return isUnanswered(one) && (!settled({ state }) || (one.asker != null && state !== "stopped"));
 };
 
 const executionOf = (view: RunView): Execution => {

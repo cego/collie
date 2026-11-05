@@ -195,6 +195,61 @@ test(
 );
 
 test(
+  "a Codex agent's superseded question no longer holds its next step, and is never answered to it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const standIn: StandIn = {
+          events: `${rig.root}/codex-server.events`,
+          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [question] }],
+        };
+        yield* fs.writeFileString(config(), asJson(standIn)).pipe(Effect.orDie);
+        yield* rig.queueOutputs([null, null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            const store = yield* Store;
+            yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length > 0));
+            yield* Effect.forkChild(
+              (yield* Agents).launch({
+                runId: "r1",
+                operation: "fix",
+                role: "reviewer",
+                workflow: "agent-work",
+                task: null,
+                agent: "review",
+                cwd: rig.projectDir,
+                prompt: "Fix it.",
+                output: `${dir}/agents/r1/fix.json`,
+                skill: null,
+                harness: "codex",
+                model: null,
+                effort: null,
+                permissions: null,
+              }),
+            );
+            yield* spend(30_000);
+            expect(yield* typedCount(STEP)).toBe(1);
+
+            const superseded = yield* store.supersede({
+              run: "r1",
+              decision: "ask-review-1",
+              cause: "delivery-1",
+              actor: { origin: "desktop", requestId: "steer-1" },
+              agent: agentName("r1", "review", null, 1),
+            });
+            expect(superseded._tag).toBe("accepted");
+            yield* waitFor(Effect.map(typedCount(STEP), (count) => count === 2));
+            expect(yield* typedCount("is answered")).toBe(0);
+          }),
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
   "with compaction off, a Codex agent's question is still a Decision on its Run",
   () =>
     runEffect(

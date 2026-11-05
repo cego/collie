@@ -405,7 +405,10 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   go to the agent together as its next message. While one is open, the step's Output
   budget is paused. One still open when the step's Output comes is closed with
   `closed: <operation> finished before it was answered`, and nothing is sent
-  ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md)). A question no step is
+  ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md)). A human's message to
+  that agent supersedes its open questions instead: an answer to one is refused and never
+  sent, none is asked again, and Collie's next prompt to it no longer waits on them. A
+  question no step is
   waiting on — the Run finished, parked, or the agent between steps — is put on its Run
   and its answer sent back all the same, numbered under the work it was given last. One still
   open once its agent is gone is closed with `closed: <agent> is gone`. With no host
@@ -901,6 +904,16 @@ open, that is refused. The answer is one of the question's options, in any case 
 `yes` and `YES` are the same answer — and one it does not take is refused with the ones it
 does. A refusal is `invalid_input` where your answer was the reason, and otherwise
 `operation_failed` with the host's own sentence.
+
+A message a human sends one of the run's agents while it waits — from the board, Desktop,
+a terminal, chat with the human's own words, or typed into a Claude agent's pane —
+supersedes the question: it carries
+`superseded` and no answer, nothing lists it as waiting, and an answer to it is refused.
+Only an agent that was messaged since may still answer it, as a planner told "go" does. Once
+every messaged agent's work ends, and the run is neither stopped nor moved on, the question
+is asked again under a new name with `revises` naming the old one; answer that one. A
+further message supersedes that one in turn. A message is never read as an answer, even one
+that is exactly an option.
 
 A run shows its question a moment before it stops to wait on it. An answer given in that
 moment is recorded at once and handed to the run once it has stopped, so it cannot wake the
