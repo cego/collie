@@ -7750,6 +7750,7 @@ const makeRegistry: (
           return false;
         }
         if (status === "gone") return true;
+        if (status === "unknown") return false;
         const asksItself = Arr.some(
           rows,
           (one) => one.asker !== null && isUnanswered(one) && asksAs(launches, one.asker, agent),

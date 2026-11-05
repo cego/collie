@@ -370,6 +370,26 @@ test(
 );
 
 test(
+  "an agent herdr cannot say the status of has not finished, so the question is not asked again yet",
+  () =>
+    atQuestion("collie-supersede-unknown-", (at) =>
+      Effect.gen(function* () {
+        yield* supersededBy(at, "Rework the plan", "desktop-unknown");
+        yield* at.status("unknown");
+        yield* Effect.sleep(SETTLED);
+        expect(revisionOf(yield* waitingOf(at))).toBeUndefined();
+
+        yield* at.status("idle");
+        yield* until(
+          () => waitingOf(at),
+          (rows) => revisionOf(rows) !== undefined,
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
   "a message that is not a human's supersedes nothing",
   () =>
     atQuestion("collie-supersede-not-human-", (at) =>
