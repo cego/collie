@@ -21,20 +21,19 @@ import {
   inspectorOf,
   nodeName,
   type FlowCard,
+  type FlowSpot,
 } from "../../../src/shared/flow";
 
 export interface FlowNodesFrom {
   readonly flow: Flow;
   readonly cards: ReadonlyArray<FlowCard>;
   readonly away: ReadonlySet<string>;
-  readonly now: number;
   readonly installation: string;
   readonly live: boolean;
 }
 
 export interface NodeView {
   readonly name: string;
-  readonly hover: string;
   readonly primary: FlowActionView | null;
   readonly menu: ReadonlyArray<FlowActionView>;
   readonly steering: ReturnType<typeof stepSteering>;
@@ -47,10 +46,24 @@ interface FlowNodes {
   readonly laneMenus: Readonly<Record<string, ReadonlyArray<FlowActionView>>>;
 }
 
+/** What a Step's tooltip says, read for the one Step it shows rather than for every Step. */
+export const stepHover = (flow: Flow, spot: FlowSpot, now: number): string => {
+  const info = inspectorOf(flow, { ...spot, item: null }, now);
+  return info === null
+    ? ""
+    : Arr.join(
+        Arr.filter(
+          [info.title, pipe(info.state, Str.replaceAll("-", " ")), info.said, ...info.lines],
+          (part): part is string => Boolean(part),
+        ),
+        "\n",
+      );
+};
+
 export const useFlowNodes = (from: FlowNodesFrom) => {
   let before: FlowNodes | undefined;
   return computed((): FlowNodes => {
-    const { flow, cards, away, now, installation, live } = from;
+    const { flow, cards, away, installation, live } = from;
     const lanes = new Map(Arr.map(flow.lanes, (lane) => [lane.run, lane] as const));
     const laneOf = (run: string) => lanes.get(run) ?? flow.lanes.at(-1);
     const nodes: Record<string, NodeView> = {};
@@ -66,12 +79,10 @@ export const useFlowNodes = (from: FlowNodesFrom) => {
             });
       const owner = laneOf(row.run);
       for (const node of row.nodes) {
-        const spot = { run: row.run, node: node.id };
         const actionOf = (kind: NonNullable<FlowRun["primary"]>) =>
           owner === undefined ? null : desktopFlowAction(kind, node, owner, installation, live);
         const primary = node.primary == null ? null : actionOf(node.primary);
         const steering = stepSteering(node);
-        const info = inspectorOf(flow, { ...spot, item: null }, now);
         nodes[nodeKey(row.run, node.id)] = {
           primary,
           steering,
@@ -97,21 +108,6 @@ export const useFlowNodes = (from: FlowNodesFrom) => {
             ),
             ". ",
           ),
-          hover:
-            info === null
-              ? ""
-              : Arr.join(
-                  Arr.filter(
-                    [
-                      info.title,
-                      pipe(info.state, Str.replaceAll("-", " ")),
-                      info.said,
-                      ...info.lines,
-                    ],
-                    (part): part is string => Boolean(part),
-                  ),
-                  "\n",
-                ),
         };
       }
     }

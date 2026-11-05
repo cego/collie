@@ -10,7 +10,7 @@ import {
   type FlowSelection,
   type FlowSpot,
 } from "../../../src/shared/flow";
-import { nodeKey, useFlowNodes } from "../composables/useFlowNodes";
+import { nodeKey, stepHover, useFlowNodes } from "../composables/useFlowNodes";
 import { CLOSED, tipAfter, type StepTip, type TipEvent } from "../../../src/shared/step-tip";
 const props = defineProps<{
   flow: Flow;
@@ -102,8 +102,7 @@ const tipButton = computed(() =>
 );
 const tipText = computed(() => {
   const spot = stepOf(tipButton.value);
-  // A Step the Flow no longer has may still be the one hovered.
-  return spot === null ? "" : (drawn.value.nodes[nodeKey(spot.run, spot.node)]?.hover ?? "");
+  return spot === null ? "" : stepHover(props.flow, spot, props.now);
 });
 const stepKey = (target: EventTarget | null) => {
   const spot = stepOf(target);

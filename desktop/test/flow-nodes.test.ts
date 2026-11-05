@@ -5,7 +5,12 @@ import type { Mutable } from "effect/Types";
 import { reactive } from "vue";
 import type { Flow } from "../../src/board-model";
 import type { FlowSelection, FlowSpot } from "../src/shared/flow";
-import { nodeKey, useFlowNodes, type FlowNodesFrom } from "../view/app/composables/useFlowNodes";
+import {
+  nodeKey,
+  stepHover,
+  useFlowNodes,
+  type FlowNodesFrom,
+} from "../view/app/composables/useFlowNodes";
 import { flowNode } from "../../test/support/flow";
 
 const flowOf = (said: string, changed?: string): Flow => ({
@@ -42,7 +47,6 @@ test("a 300-node Flow's node views are read once per revision, not again for a f
     rail: false,
     cards: [],
     away: new Set<string>(),
-    now: 0,
     installation: "inst-1",
     live: true,
   });
@@ -57,7 +61,7 @@ test("a 300-node Flow's node views are read once per revision, not again for a f
   }
   props.flow = flowOf("second");
   expect(drawn.value).not.toBe(first);
-  expect(drawn.value.nodes[nodeKey("r-0", "s-0")]?.hover).toContain("second");
+  expect(drawn.value.nodes[nodeKey("r-0", "s-0")]?.name).toContain("second");
 });
 
 test("a Flow sent again keeps each unchanged node's view, so only a changed Step is drawn again", () => {
@@ -65,7 +69,6 @@ test("a Flow sent again keeps each unchanged node's view, so only a changed Step
     flow: flowOf("first"),
     cards: [],
     away: new Set<string>(),
-    now: 0,
     installation: "inst-1",
     live: true,
   });
@@ -76,7 +79,14 @@ test("a Flow sent again keeps each unchanged node's view, so only a changed Step
   props.flow = flowOf("first", "changed");
   const next = drawn.value.nodes;
   expect(next[nodeKey("r-0", "s-5")]).not.toBe(first.nodes[nodeKey("r-0", "s-5")]);
-  expect(next[nodeKey("r-0", "s-5")]?.hover).toContain("changed");
+  expect(next[nodeKey("r-0", "s-5")]?.name).toContain("changed");
   for (const key of [nodeKey("r-0", "s-4"), nodeKey("r-1", "s-5"), nodeKey("r-2", "s-99")])
     expect(next[key]).toBe(first.nodes[key]!);
+});
+
+test("a Step's tooltip is read for that Step alone, and says nothing of one the Flow lost", () => {
+  const flow = flowOf("first", "changed");
+  expect(stepHover(flow, { run: "r-0", node: "s-5" }, 0)).toContain("changed");
+  expect(stepHover(flow, { run: "r-0", node: "s-4" }, 0)).toContain("first");
+  expect(stepHover(flow, { run: "r-0", node: "gone" }, 0)).toBe("");
 });
