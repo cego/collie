@@ -1,20 +1,10 @@
-// The records Desktop keeps subscribed (`shared/kept-records.ts` says which), each its host's
-// subscription and what it last told, so a record opened again paints without a host round
-// trip and says how current it is.
+// Each record the view holds, as its host's subscription and what it last told: resumed from
+// the revision it holds when its door returns, and said to be as of an earlier time until then.
 
 import { Clock, Effect, Fiber, Schema, Stream, SubscriptionRef } from "effect";
 import { Flow, type RunDetail, type RunRevision } from "../../../src/board-model";
 import type { ActionFailed, KeptRecord } from "../shared/flock";
-import {
-  closed,
-  EMPTY_KEPT,
-  keptKeys,
-  opened,
-  POINT_MS,
-  pointed,
-  settled,
-  sized,
-} from "../shared/kept-records";
+import { markFirst } from "../../../src/record-marks";
 import { recordEvents, type DoorMap, type RecordDoor, type RecordEvent } from "./machine";
 
 interface Told {
@@ -25,6 +15,8 @@ interface Told {
   readonly confirmed: number;
   readonly revision: RunRevision | undefined;
   readonly failure: ActionFailed | null;
+  /** The encoded size of its latest frame. */
+  readonly bytes: number;
 }
 
 interface Kept {
@@ -32,6 +24,7 @@ interface Kept {
   readonly runId: string;
   readonly told: SubscriptionRef.SubscriptionRef<Told>;
   fiber: Fiber.Fiber<void> | null;
+  readers: number;
 }
 
 const keyOf = (installation: string, runId: string) => `${installation}\u0000${runId}`;
@@ -63,6 +56,7 @@ const apply = (told: Told, event: RecordEvent, now: number): Told => {
   switch (event._tag) {
     case "Frame":
       return {
+        ...told,
         detail: event.detail,
         asOf: null,
         confirmed: now,
@@ -85,10 +79,9 @@ const apply = (told: Told, event: RecordEvent, now: number): Told => {
 export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
-    let set = EMPTY_KEPT;
     const kept = new Map<string, Kept>();
 
-    const follow = (one: Kept, key: string) =>
+    const follow = (one: Kept) =>
       recordEvents(
         doors,
         one.installation,
@@ -96,20 +89,14 @@ export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
         Effect.map(SubscriptionRef.get(one.told), ({ revision }) => revision),
       ).pipe(
         Stream.runForEach((event) =>
-          Effect.flatMap(Clock.currentTimeMillis, (now) =>
-            SubscriptionRef.update(one.told, (told) => apply(told, event, now)).pipe(
-              Effect.andThen(
-                event._tag === "Frame"
-                  ? weighed(event.detail).pipe(
-                      Effect.flatMap((bytes) => {
-                        set = sized(set, key, bytes);
-                        return reconcile;
-                      }),
-                    )
-                  : Effect.void,
-              ),
-            ),
-          ),
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            const bytes = event._tag === "Frame" ? yield* weighed(event.detail) : undefined;
+            yield* SubscriptionRef.update(one.told, (told) => ({
+              ...apply(told, event, now),
+              bytes: bytes ?? told.bytes,
+            }));
+          }),
         ),
         Effect.catch((failure: ActionFailed) =>
           SubscriptionRef.update(one.told, (told) => ({
@@ -122,22 +109,8 @@ export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
         Effect.forkIn(scope),
       );
 
-    const reconcile: Effect.Effect<void> = Effect.suspend(() => {
-      const keys = keptKeys(set);
-      return Effect.forEach(
-        [...kept],
-        ([key, one]) => {
-          if (keys.has(key)) return Effect.void;
-          kept.delete(key);
-          return one.fiber === null ? Effect.void : Fiber.interrupt(one.fiber);
-        },
-        { discard: true },
-      );
-    });
-
-    const keep = (installation: string, runId: string) =>
+    const keep = (key: string, installation: string, runId: string) =>
       Effect.gen(function* () {
-        const key = keyOf(installation, runId);
         const was = kept.get(key);
         const one = was ?? {
           installation,
@@ -148,64 +121,48 @@ export const recordKeeper = (doors: DoorMap<RecordDoor>) =>
             confirmed: 0,
             revision: undefined,
             failure: null,
+            bytes: 0,
           }),
           fiber: null,
+          readers: 0,
         };
         if (was === undefined) kept.set(key, one);
         if (one.fiber === null) {
           yield* SubscriptionRef.update(one.told, (told) => ({ ...told, failure: null }));
-          one.fiber = yield* follow(one, key);
+          one.fiber = yield* follow(one);
         }
         return one;
       });
 
     return {
-      /** A record while the view shows it, kept once the view lets it go. */
+      /** A record for as long as the view holds it, which the view keeps after closing it. */
       open: (installation: string, runId: string): Stream.Stream<KeptRecord, ActionFailed> =>
         Stream.unwrap(
           Effect.gen(function* () {
             const key = keyOf(installation, runId);
-            set = opened(set, key);
-            const one = yield* keep(installation, runId);
-            yield* reconcile;
+            const one = yield* keep(key, installation, runId);
+            one.readers++;
             return SubscriptionRef.changes(one.told).pipe(
               Stream.changesWith(
                 (a, b) => a.detail === b.detail && a.asOf === b.asOf && a.failure === b.failure,
               ),
-              Stream.flatMap(({ detail, asOf, failure }) => {
+              Stream.flatMap(({ detail, asOf, failure, bytes }) => {
                 const shown: Stream.Stream<KeptRecord> =
-                  detail === undefined ? Stream.empty : Stream.make({ detail, asOf });
+                  detail === undefined ? Stream.empty : Stream.make({ detail, asOf, bytes });
                 return failure === null ? shown : Stream.concat(shown, Stream.fail(failure));
               }),
               Stream.mapAccum((): Flow | undefined => undefined, newFlowsOnly),
+              markFirst("desktop:serve", runId),
               Stream.ensuring(
                 Effect.suspend(() => {
-                  if (set.open !== key) return Effect.void;
-                  set = closed(set);
-                  return reconcile;
+                  if (--one.readers > 0 || kept.get(key) !== one) return Effect.void;
+                  kept.delete(key);
+                  return one.fiber === null ? Effect.void : Fiber.interrupt(one.fiber);
                 }),
               ),
             );
           }),
         ),
-      /** The card the human points at, kept once pointed at for `POINT_MS`. */
-      point: (card: { readonly installation: string; readonly runId: string } | null) =>
-        Effect.gen(function* () {
-          const key = card === null ? null : keyOf(card.installation, card.runId);
-          set = pointed(set, key, yield* Clock.currentTimeMillis);
-          if (card === null) return;
-          yield* Effect.sleep(POINT_MS).pipe(
-            Effect.andThen(Clock.currentTimeMillis),
-            Effect.flatMap((now) => {
-              set = settled(set, now);
-              return keptKeys(set).has(key!)
-                ? Effect.asVoid(keep(card.installation, card.runId))
-                : Effect.void;
-            }),
-            Effect.andThen(reconcile),
-            Effect.forkIn(scope),
-          );
-        }),
     };
   });
 

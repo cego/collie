@@ -1,7 +1,8 @@
 // Which records Desktop keeps subscribed: the open one, the last few opened, and a card the
 // human has pointed at long enough to be about to open it.
 
-import { Array as Arr, DateTime, pipe, String as Str } from "effect";
+import { Array as Arr, DateTime, Option, pipe, String as Str } from "effect";
+import type { KeptRecord } from "./flock";
 
 export interface KeptSet {
   readonly open: string | null;
@@ -104,4 +105,60 @@ export const asOfSaid = (at: number) => {
   );
   const two = (n: number) => pipe(String(n), Str.padStart(2, "0"));
   return `as of ${two(hour)}:${two(minute)}`;
+};
+
+/** Holds the kept set's records: `hold` subscribes one, and what it returns lets it go. */
+export const keptHolder = (
+  hold: (key: string, sized: (bytes: number) => void) => () => void,
+  now: () => number,
+  later: (ms: number, then: () => void) => void,
+) => {
+  let set = EMPTY_KEPT;
+  const held = new Map<string, () => void>();
+  const sync = () => {
+    const keys = keptKeys(set);
+    for (const [key, release] of held)
+      if (!keys.has(key)) {
+        held.delete(key);
+        release();
+      }
+    for (const key of keys) {
+      if (held.has(key) || !keptKeys(set).has(key)) continue;
+      // Held before `hold` runs, which may tell a size, and so trim, at once.
+      held.set(key, () => {});
+      const release = hold(key, (bytes) => {
+        set = sized(set, key, bytes);
+        sync();
+      });
+      if (held.has(key)) held.set(key, release);
+      else release();
+    }
+  };
+  return {
+    opened: (key: string) => {
+      set = opened(set, key);
+      sync();
+    },
+    closed: (key: string) => {
+      if (set.open !== key) return;
+      set = closed(set);
+      sync();
+    },
+    pointed: (key: string | null) => {
+      set = pointed(set, key, now());
+      if (key === null) return;
+      later(POINT_MS, () => {
+        set = settled(set, now());
+        sync();
+      });
+    },
+  };
+};
+
+/** A frame Desktop sent without the Flow the view holds, which it left out as unchanged. */
+export const withFlowKept = (held: Option.Option<KeptRecord>, record: KeptRecord): KeptRecord => {
+  const flow = Option.getOrUndefined(held)?.detail?.flow;
+  return record.detail === null || record.detail.flow !== undefined || flow === undefined
+    ? record
+    : { ...record, detail: { ...record.detail, flow } };
 };

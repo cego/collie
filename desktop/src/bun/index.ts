@@ -1347,7 +1347,6 @@ const main = Effect.gen(function* () {
         Effect.provide(BunServices.layer),
       ),
     runDetail: ({ installation, runId }) => records.open(installation, runId),
-    pointAt: ({ card }) => records.point(card),
     usage: () =>
       Effect.forEach(doors.values(), (door) => usageOn(door.machine, door.desktop), {
         concurrency: "unbounded",

@@ -451,6 +451,8 @@ export const machineToAdd = (typed: MachineToAdd): MachineToAdd | null => {
 export const KeptRecord = Schema.Struct({
   detail: Schema.NullOr(RunDetail),
   asOf: Schema.NullOr(Schema.Finite),
+  /** Its latest frame's encoded size, which bounds how many records the view keeps. */
+  bytes: Schema.Finite,
 });
 export type KeptRecord = typeof KeptRecord.Type;
 
@@ -676,12 +678,6 @@ export const DesktopRpcs = RpcGroup.make(
     success: KeptRecord,
     error: ActionFailed,
     stream: true,
-  }),
-  /** The card the human points at, whose record is kept once pointed at long enough. */
-  Rpc.make("pointAt", {
-    payload: {
-      card: Schema.NullOr(Schema.Struct({ installation: Schema.String, runId: Schema.String })),
-    },
   }),
   /** A large item of a Run's, by the reference its details hand out, from `offset` bytes on. */
   Rpc.make("runFile", {

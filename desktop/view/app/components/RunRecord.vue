@@ -20,6 +20,7 @@ import {
   typedIn,
 } from "../../../src/shared/record";
 import { runDetailAtom, runDetailKey } from "../flock";
+import { kept as keptRecords } from "../kept";
 import type { Flow } from "../../../../src/board-model";
 import { timedFlow } from "../../../../src/flow-timing";
 import { keepFlow } from "../../../src/shared/flow";
@@ -43,9 +44,19 @@ watch(
 const timing = useRecordTiming();
 timing.mounted(props.placed.key);
 
-const { value: read, trouble } = useHeld(() =>
-  runDetailAtom(runDetailKey({ installation: props.placed.installation, runId: shownRun.value })),
+const recordKey = computed(() =>
+  runDetailKey({ installation: props.placed.installation, runId: shownRun.value }),
 );
+watch(
+  recordKey,
+  (key, was) => {
+    if (was !== undefined) keptRecords.closed(was);
+    keptRecords.opened(key);
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => keptRecords.closed(recordKey.value));
+const { value: read, trouble } = useHeld(() => runDetailAtom(recordKey.value));
 const detail = computed(() => read.value?.detail ?? null);
 // A record its host has not confirmed since its door went takes no action, as a saved card.
 const recordPlaced = computed(() => ({

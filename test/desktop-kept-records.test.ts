@@ -1,5 +1,5 @@
-// Desktop keeps the records it showed subscribed: one opened again paints from what it kept,
-// a frame goes only to its own record, and an older host's frames are taken whole.
+// Desktop holds a record's host subscription while the view holds it: one opened again is
+// served from it, a frame goes only to its own record, and an older host's frames are whole.
 
 import { expect, test } from "bun:test";
 import { Array as Arr, Effect, Fiber, Stream } from "effect";
@@ -29,6 +29,8 @@ test("with A, B and C selected 100 ms apart and A's frame last, C's record shows
           Stream.runForEach((record) => Effect.sync(() => shown[run].push(record))),
           Effect.forkChild,
         );
+      // The view's own hold on A, as it keeps a record it showed.
+      yield* keeper.open("i-1", "A").pipe(Stream.runDrain, Effect.forkChild);
       const a = yield* show("A");
       yield* Effect.sleep("100 millis");
       const b = yield* show("B");
@@ -57,19 +59,26 @@ test("against a host that ignores what is held, a kept record is labelled until 
       const older = yield* recordDoor([]);
       doors.set("i-1", older.door);
       const keeper = yield* recordKeeper(doors);
-      const pull = yield* keeper.open("i-1", "r-1").pipe(Stream.toPull);
+      const shown = new Array<KeptRecord>();
+      yield* keeper.open("i-1", "r-1").pipe(
+        Stream.runForEach((record) => Effect.sync(() => shown.push(record))),
+        Effect.forkChild,
+      );
+      const settle = Effect.sleep("50 millis");
       yield* older.offer("r-1", frame("one"));
-      expect(said(yield* pull)).toEqual(["one"]);
+      yield* settle;
       doors.delete("i-1");
       yield* older.close;
-      expect(said(yield* pull)).toEqual(["one (as of)"]);
+      yield* settle;
+      expect(said(shown)).toEqual(["one", "one (as of)"]);
 
       const back = yield* recordDoor([]);
       doors.set("i-1", back.door);
-      const early = yield* pull.pipe(Effect.timeoutOption("100 millis"));
-      expect(early._tag).toBe("None");
+      yield* Effect.sleep("100 millis");
+      expect(said(shown)).toEqual(["one", "one (as of)"]);
       yield* back.offer("r-1", frame("two"));
-      expect(said(yield* pull)).toEqual(["two"]);
+      yield* settle;
+      expect(said(shown)).toEqual(["one", "one (as of)", "two"]);
     }).pipe(Effect.scoped),
   ));
 
