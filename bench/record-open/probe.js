@@ -48,10 +48,12 @@
       if (watching === null || watching.start !== null) return;
       if (card?.getAttribute("data-card") === watching.card) watching.start = event.timeStamp;
       else
-        watching.waiting = `for the click on its card; one landed on ${
-          card?.getAttribute("data-card") ??
-          (event.target instanceof Element ? event.target.tagName.toLowerCase() : "nothing")
-        }`;
+        watching.miss({
+          missed:
+            card?.getAttribute("data-card") ??
+            (event.target instanceof Element ? event.target.tagName.toLowerCase() : "nothing"),
+          opened: card !== null,
+        });
     },
     true,
   );
@@ -103,8 +105,11 @@
   window.__bench = {
     /** Times the next click on `card`, whose record should show `run`'s Flow. */
     expect: (card, run) => {
-      watching = { card, run, start: null, waiting: "for the click on its card" };
-      window.__benchSample = follow(watching);
+      // A live Run can move the board between finding the card and clicking it.
+      let miss = () => {};
+      const missed = new Promise((done) => (miss = done));
+      watching = { card, run, start: null, waiting: "for the click on its card", miss };
+      window.__benchSample = Promise.race([follow(watching), missed]);
     },
     /** What the sample last waited on, said when it never paints. */
     waiting: () => watching?.waiting ?? null,

@@ -93,6 +93,13 @@ interface Sample {
   readonly stale: boolean;
   readonly marks: Readonly<Record<string, number>>;
   readonly start: number;
+  /** Clicks that landed on another card before this one landed on its own. */
+  readonly missed?: ReadonlyArray<string>;
+}
+interface Missed {
+  readonly missed: string;
+  /** Whether the click landed on a card, whose record then opens. */
+  readonly opened: boolean;
 }
 interface Seen {
   readonly ms: number;
@@ -237,6 +244,8 @@ const processMarks = (run: string, origin: number, after: number) => {
 
 /** The longest a sample waits for its Flow before it is counted as never painted. */
 const NEVER_MS = 60_000;
+/** The clicks a sample may land on another card before it is counted as never painted. */
+const MISSES = 3;
 
 const body = (
   fixture: Fixture,
@@ -328,7 +337,7 @@ const body = (
       Effect.flatMap(cardOf(run), (card) =>
         ev(`window.__bench.expect(${JSON.stringify(card)}, ${JSON.stringify(run)})`),
       );
-    const seen = ev<Seen | null>(
+    const seen = ev<Seen | Missed | null>(
       `Promise.race([window.__benchSample, new Promise((done) => setTimeout(() => done(null), ${NEVER_MS}))])`,
       true,
     );
@@ -359,22 +368,33 @@ const body = (
 
     const timedOpen = (cell: Cell, warmup: boolean, run: string) =>
       Effect.gen(function* () {
-        yield* expect(run);
-        yield* clickName(run);
-        const shown = yield* seen;
+        const missed: Array<string> = [];
+        let shown: Seen | Missed | null = null;
+        while (missed.length < MISSES) {
+          yield* expect(run);
+          yield* clickName(run);
+          shown = yield* seen;
+          if (shown === null || !("missed" in shown)) break;
+          missed.push(shown.missed);
+          if (shown.opened) yield* until("!window.__bench.board()", 5_000);
+          yield* close;
+        }
         const sample: Sample =
-          shown === null
+          shown === null || "missed" in shown
             ? {
                 cell,
                 warmup,
                 run,
                 ms: NEVER_MS,
                 differences: [
-                  `never painted: waited ${yield* ev<string>("window.__bench.waiting()")}`,
+                  shown === null
+                    ? `never painted: waited ${yield* ev<string>("window.__bench.waiting()")}`
+                    : `never painted: every click landed on another card (${missed.join(", ")})`,
                 ],
                 stale: false,
                 marks: {},
                 start: 0,
+                missed,
               }
             : {
                 cell,
@@ -391,6 +411,7 @@ const body = (
                   ...processMarks(run, shown.origin, shown.marks["record:mounted"] ?? shown.start),
                 },
                 start: shown.start,
+                missed,
               };
         yield* close;
         return sample;
@@ -488,6 +509,7 @@ const body = (
           samples.filter((sample) => sample.differences.length > 0).length,
         ),
         warmup: WARMUP,
+        missed_clicks: samples.reduce((sum, sample) => sum + (sample.missed?.length ?? 0), 0),
         stages: stagesOf(samples),
         ...lag,
         ...startedToPainted(samples),
@@ -507,6 +529,8 @@ type Summaries = Record<
   string,
   CellSummary & {
     readonly warmup: number;
+    /** Absent from a cell that clicks nothing. */
+    readonly missed_clicks?: number;
     readonly stages: ReturnType<typeof stagesOf>;
     readonly lag_p99_ms: number | null;
     readonly lag_max_ms: number | null;
