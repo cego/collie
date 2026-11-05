@@ -109,7 +109,7 @@ import { shell } from "./mr";
 import type { ForgeHttp } from "./forge/http";
 import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
-import type { Asker } from "./proposals";
+import { humanOf, type Asker } from "./proposals";
 import { STOP, controlSet } from "./controls";
 import * as dispatch from "./dispatcher";
 import type * as Types from "effect/Types";
@@ -1696,6 +1696,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       cause: { kind: delivery.kind, ref: delivery.ref },
       mode: delivery.mode ?? "boundary",
       idleOnly: delivery.idleOnly,
+      human: delivery.kind === "steer" ? humanOf(fitted.actor) : null,
       // Work, a repair and a steer share a causal key per thing they are about, which is
       // what makes the second copy refusable; a correction's is its constraint's.
       intentVersion: delivery.intentVersion ?? 0,

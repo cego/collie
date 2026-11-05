@@ -16,6 +16,7 @@ import { ensureLockDir, withLock } from "./lock";
 import { nowIso, epochMs } from "./time";
 import { terminalBackend } from "./config";
 import { coreSocket } from "./hc";
+import { FrontDoor } from "./board-model";
 
 /** What a delivery is about. The work, not the words. */
 const CauseSchema = Schema.Struct({
@@ -78,6 +79,12 @@ export function toldIn(log: string, agent: string): string | null {
 /** States nothing follows: a causal key with one of these is free for a new delivery. */
 const TERMINAL_STATES: ReadonlySet<string> = new Set(["failed", "superseded"]);
 
+const HumanDoorSchema = Schema.Struct({
+  origin: FrontDoor,
+  conversation: Schema.optionalKey(Schema.String),
+});
+export type HumanDoor = typeof HumanDoorSchema.Type;
+
 export const DeliverySchema = Schema.Struct({
   id: Schema.String,
   at: Schema.String,
@@ -96,6 +103,8 @@ export const DeliverySchema = Schema.Struct({
   /** herdr's own code for a refusal it answered with. */
   code: Schema.optionalKey(Schema.String),
   note: Schema.optionalKey(Schema.String),
+  /** Where its words are a human's, whose: a host that dies before acting on it still can. */
+  human: Schema.optionalKey(HumanDoorSchema),
 });
 export type Delivery = Schema.Schema.Type<typeof DeliverySchema>;
 
@@ -219,6 +228,21 @@ export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (
     for (const delivery of newestById(yield* readLedger(file)).values())
       if (delivery.run === run) found.push({ file, delivery });
   return found;
+});
+
+/** Every Delivery of a human's words herdr took, at its first line saying so. */
+export const humanSubmits = Effect.fn("Steering.humanSubmits")(function* (stateDir: string) {
+  const first = new Map<string, Delivery & { readonly human: HumanDoor }>();
+  for (const file of yield* ledgerFiles(stateDir))
+    for (const line of yield* readLedger(file).pipe(Effect.orElseSucceed(() => [])))
+      if (
+        isDelivery(line) &&
+        line.human !== undefined &&
+        SENT_STATES.has(line.state) &&
+        !first.has(line.id)
+      )
+        first.set(line.id, { ...line, human: line.human });
+  return [...first.values()];
 });
 
 /** Every delivery this state directory's ledgers hold, newest state each, read once for a board. */

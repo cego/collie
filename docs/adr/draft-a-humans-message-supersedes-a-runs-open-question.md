@@ -86,7 +86,9 @@ work, and the work the answer starts still waits for the Hold to lift.
 
 **D7. It survives a restart.** The rows are the state. A host that starts up finds
 superseded questions that have no revision, checks whether their work has ended, and opens
-revisions where it has. It never reads the answer from memory.
+revisions where it has. It never reads the answer from memory. A Delivery of a human's
+words records whose they are in its ledger, so a host that dies after herdr took the message
+but before it set the question aside still sets it aside.
 
 **D8. The agent the human messaged may still answer.** While a Workflow's question is
 superseded and no revision of it is open, an `answer` is accepted only from an agent the human messaged

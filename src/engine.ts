@@ -14,7 +14,7 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { isHuman, type Asker } from "./proposals";
+import { speaksForHuman, type Asker } from "./proposals";
 import { ReadModel } from "./read-model";
 import { actorOf, readAudit, recordAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
@@ -190,7 +190,7 @@ import {
   type Watched,
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
-import { budgetPath, herdOf, machineHerd } from "./steering";
+import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
@@ -7691,21 +7691,42 @@ const makeRegistry: (
       ? supersedeFor(runId, sent.delivery, actor, sent.agent)
       : Effect.void;
 
-  /** Typing into a Claude agent's pane, which its hook records as `external` (D1). */
-  const paneSubmits = Effect.gen(function* () {
+  /**
+   * Each human's message the host has not yet acted on (D1, D7): one typed into a Claude
+   * agent's pane, which its hook records as `external`, and a Delivery herdr took before
+   * the host that sent it could set the question aside.
+   */
+  const missedMessages = Effect.gen(function* () {
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
+    if (runs.length === 0) return;
+    const delivered = yield* humanSubmits(placing.env.stateDir);
     for (const runId of runs) {
       const rows = yield* store.asked(runId);
       const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
-      for (const agent of Arr.dedupe(Arr.map(launches, (launch) => launch.agent))) {
-        const submits = yield* externalSubmits(yield* controlDir(placing.env.stateDir, agent)).pipe(
-          Effect.orElseSucceed(() => []),
-        );
-        for (const at of submits) {
-          const touched = touchedBy(rows, launches, agent, at);
-          if (touched.aside.length + touched.extended.length > 0)
-            yield* supersedeFor(runId, `${agent}:submit:${at}`, { origin: "cli-tty" }, agent, at);
-        }
+      const typed = yield* Effect.forEach(
+        Arr.dedupe(Arr.map(launches, (launch) => launch.agent)),
+        (agent) =>
+          Effect.gen(function* () {
+            const ats = yield* externalSubmits(yield* controlDir(placing.env.stateDir, agent)).pipe(
+              Effect.orElseSucceed(() => []),
+            );
+            return Arr.map(ats, (at) => ({
+              cause: `${agent}:submit:${at}`,
+              actor: { origin: "cli-tty" } as const,
+              agent,
+              at,
+            }));
+          }),
+      );
+      const sent = Arr.flatMap(delivered, (one) =>
+        one.run === runId
+          ? [{ cause: one.id, actor: one.human, agent: one.agent, at: epochMs(one.at) }]
+          : [],
+      );
+      for (const one of [...sent, ...Arr.flatten(typed)]) {
+        const touched = touchedBy(rows, launches, one.agent, one.at);
+        if (touched.aside.length + touched.extended.length > 0)
+          yield* supersedeFor(runId, one.cause, one.actor, one.agent, one.at);
       }
     }
   });
@@ -8803,7 +8824,7 @@ const makeRegistry: (
         (queued, sent) =>
           superseding(queued.runId, queued.actor, sent).pipe(Effect.provideContext(services)),
       );
-      yield* paneSubmits;
+      yield* missedMessages;
       yield* reviseQuestions;
     }),
   } satisfies RegistryApi;
@@ -8857,10 +8878,6 @@ const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArra
 };
 
 const SUPERSEDE_GRACE_MS = 30_000;
-
-/** A door a human types into, or chat carrying the human's own words of that turn. */
-const speaksForHuman = (actor: Asker): boolean =>
-  isHuman(actor) || (actor.origin === "chat" && actor.said !== undefined);
 
 /** The questions `name` asks again, the original first and `name` last. */
 const lineageOf = (

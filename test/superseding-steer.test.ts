@@ -14,7 +14,7 @@ import { readEnv, type PluginEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
 import { carryOutAsked } from "../src/run-actions";
-import { SENT_STATES, deliveriesOf } from "../src/steering";
+import { SENT_STATES, appendLine, deliveriesOf } from "../src/steering";
 import { TaskView } from "../src/board-model";
 import {
   proposalsPath,
@@ -25,7 +25,7 @@ import {
 import { agentName } from "../src/naming";
 import { controlDir } from "../src/compaction";
 import { recordClaudeEvent } from "../src/compactors";
-import { epochMs } from "../src/time";
+import { epochMs, nowIso } from "../src/time";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
@@ -213,10 +213,39 @@ const supersededBy = (at: AtQuestion, text: string, request: string, agent = at.
       yield* deliveriesOf(at.world.state, at.runId),
       (one) => one.delivery.cause.kind === "steer" && SENT_STATES.has(one.delivery.state),
     );
-    expect(Arr.map(sent, (one) => one.delivery.id)).toContain(
-      rowOf(yield* waitingOf(at), "go")?.cause ?? "",
-    );
+    const cause = rowOf(yield* waitingOf(at), "go")?.cause;
+    expect(Arr.filter(sent, (one) => one.delivery.id === cause)).toMatchObject([
+      { delivery: { human: { origin: "desktop" } } },
+    ]);
   });
+
+test(
+  "a human's message herdr took before its host could set the question aside still sets it aside",
+  () =>
+    atQuestion("collie-supersede-missed-", (at) =>
+      Effect.gen(function* () {
+        const [step] = Arr.filter(
+          yield* deliveriesOf(at.world.state, at.runId),
+          (one) => one.delivery.agent === at.agent,
+        );
+        yield* appendLine(step!.file, {
+          ...step!.delivery,
+          id: "missed-steer-1",
+          at: yield* nowIso,
+          cause: { kind: "steer", ref: "missed" },
+          state: "submitted",
+          human: { origin: "desktop" },
+        });
+
+        const waiting = yield* until(
+          () => waitingOf(at),
+          (rows) => (rowOf(rows, "go")?.superseded ?? null) !== null,
+        );
+        expect(rowOf(waiting, "go")).toMatchObject({ answer: null, cause: "missed-steer-1" });
+      }),
+    ),
+  180_000,
+);
 
 test(
   "a human's Desktop message sets the question aside while its agent works, and the question is asked again after",
