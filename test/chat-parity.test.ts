@@ -48,6 +48,15 @@ import { connect, frontDoor, socketOf } from "../src/host";
 import { hosted, hostedRun } from "./support/hosted";
 import { until } from "./support/host";
 import { save } from "./support/world";
+import { Rig } from "./support/recorder";
+import { chatContextFor } from "../src/statusline";
+import { takeShared } from "../src/config";
+import { sessionOptions } from "../desktop/src/bun/session";
+import {
+  editSettings,
+  NO_FLOCK_SETTINGS,
+  standingDirectionOf,
+} from "../desktop/src/shared/flock-settings";
 
 const encodeJson = flow(
   Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
@@ -721,3 +730,48 @@ test(
   // A host, and a Run of it waiting on its decision.
   60_000,
 );
+
+test("a Machine's Native chat and Desktop's Flock chat are given the same Standing direction", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const rig = yield* Rig.scoped();
+      const env = rig.pluginEnv();
+      let flock = NO_FLOCK_SETTINGS;
+      const flockChat = sessionOptions({
+        cwd: "/state/collie-desktop",
+        session: { resume: "5c1e6c8e-0000-4000-8000-000000000000" },
+        model: "opus",
+        effort: "medium",
+        server: "the in-process server",
+        claude: "/usr/local/bin/claude",
+        userServers: {},
+        ask: () => Promise.resolve({}),
+        noticed: () => undefined,
+        placement: () => undefined,
+        standing: () => standingDirectionOf(flock),
+      });
+      const desktopContext = () =>
+        Effect.promise(() => flockChat.hooks.UserPromptSubmit[0]!.hooks[0]!()).pipe(
+          Effect.map((hook) => hook.hookSpecificOutput?.additionalContext ?? ""),
+        );
+      const edited = editSettings(
+        flock,
+        [{ key: "standing_direction", value: "Stage only; production waits for my go." }],
+        "2026-10-02T09:30:00.000Z",
+      );
+      if ("refused" in edited) throw new Error(edited.refused);
+      flock = edited;
+      // What a Desktop gives a Machine when it syncs the Flock's settings.
+      yield* takeShared(
+        env.userDir,
+        [{ key: "standing_direction", ...flock.settings["standing_direction"]! }],
+        "desktop-1",
+        "2026-10-02T09:31:00.000Z",
+      );
+
+      const native = yield* chatContextFor(env);
+      expect(native).toContain("Stage only; production waits for my go.");
+      expect(native).toContain("2026-10-02");
+      expect(yield* desktopContext()).toContain(native);
+    }).pipe(Effect.scoped),
+  ));

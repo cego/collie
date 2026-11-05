@@ -83,6 +83,8 @@ import { deliveriesOf, machineHerd } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { doctor } from "./doctor";
+import { standingDirectionOn } from "./config";
+import { standingDirectionContext } from "./standing-direction";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeKey } from "./registry";
 import { readSelection, selectionPath } from "./selection";
@@ -854,6 +856,9 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
   const served = yield* anyRuns(env);
   const sweepable = served ? yield* cleanupListing(env, "chat") : null;
   const scheduled = served ? yield* scheduleListing(env, "chat") : null;
+  const standing = standingDirectionContext(
+    yield* standingDirectionOn(env.userDir).pipe(Effect.orElseSucceed(() => undefined)),
+  );
   return Arr.join(
     [
       `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,
@@ -874,6 +879,7 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
       "",
       `chat: ${harness}${whyUnavailable(harness, Bun.which(harness)) ?? " installed"}, running ${chat?.harness ?? "nothing"}`,
       `delivery: ${pushable(harness).how}`,
+      ...(standing === undefined ? [] : ["", standing]),
     ],
     "\n",
   );

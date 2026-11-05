@@ -21,7 +21,8 @@ import { Effect, FileSystem, Path, Result, Schema, flow } from "effect";
 import { CommandLine } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { everyAgentText } from "./agents";
-import { autoCompactWindowAsWritten, readConfig } from "./config";
+import { autoCompactWindowAsWritten, readConfig, standingDirectionOn } from "./config";
+import { standingDirectionContext } from "./standing-direction";
 import { redact } from "./redact";
 import { NATIVE, newsPath } from "./news";
 import { selfCommand, type PluginEnv } from "./env";
@@ -533,6 +534,8 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
   /** This Herd's news journal, for the harness that can be pushed to. */
   readonly news: string;
   readonly mcpConfig: string;
+  /** Given once at launch, to a harness with no prompt hook to give it with each message. */
+  readonly atLaunch?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -549,7 +552,10 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
     systemPrompt,
     `${Arr.join(
       Arr.map(
-        Arr.filter([Str.trim(chat), every], (part) => part !== null && part !== ""),
+        Arr.filter(
+          [Str.trim(chat), every, opts.atLaunch],
+          (part) => part !== null && part !== undefined && part !== "",
+        ),
         (part) => (part === null || part === undefined ? "" : globalThis.String(part)),
       ),
       "\n\n",
@@ -659,6 +665,12 @@ export const startChat = Effect.fn("Chat.start")(function* (
     })),
     news: yield* newsPath(env.stateDir, key),
     mcpConfig: mcpConfig(self, serverEnv),
+    atLaunch:
+      harness === "pi"
+        ? standingDirectionContext(
+            yield* standingDirectionOn(env.userDir).pipe(Effect.orElseSucceed(() => undefined)),
+          )
+        : undefined,
   });
 
   const sessionId = yield* (yield* SecureRandom.SecureRandom).uuidV4();

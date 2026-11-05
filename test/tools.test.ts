@@ -26,6 +26,7 @@ import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { hostname } from "node:os";
 import { readEnv, type PluginEnv } from "../src/env";
+import { setSetting } from "../src/config";
 import { amend, readIntent, writeIntentHeld } from "../src/intent";
 import { ensureLockDir, withLock } from "../src/lock";
 import { nowIso } from "../src/time";
@@ -2106,5 +2107,31 @@ test("a read through the host takes only the three reads, and no selection stand
       });
       expect(write._tag).toBe("Failure");
       expect(Schema.decodeExit(payload)({ tool: "collie_run", input: {} })._tag).toBe("Success");
+    }),
+  ));
+
+test("collie_installation gives the Standing direction as it is now, with its edit date", () =>
+  inWorld(
+    Effect.gen(function* () {
+      expect(yield* call("collie_installation")).not.toContain("standing direction");
+      yield* setSetting(
+        env.userDir,
+        "standing_direction",
+        "Stage only; production waits for my go.",
+        "2026-10-02T09:30:00.000Z",
+      );
+      const first = yield* call("collie_installation");
+      expect(first).toContain("Stage only; production waits for my go.");
+      expect(first).toContain("2026-10-02");
+      yield* setSetting(
+        env.userDir,
+        "standing_direction",
+        "Ask before renovating.",
+        "2026-10-03T08:00:00.000Z",
+      );
+      const second = yield* call("collie_installation");
+      expect(second).toContain("Ask before renovating.");
+      expect(second).toContain("2026-10-03");
+      expect(second).not.toContain("Stage only");
     }),
   ));

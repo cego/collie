@@ -15,6 +15,8 @@ import { selfCommand, type PluginEnv } from "./env";
 import { isString } from "./schema";
 import { promptLine, readSelection, selectionLine, selectionPath } from "./selection";
 import { machineHerd } from "./steering";
+import { standingDirectionOn } from "./config";
+import { standingDirectionContext } from "./standing-direction";
 import { YamlMapSchema, isYamlMap } from "./yaml";
 
 /** What the configured command ends in, which is also how Collie recognises its own. */
@@ -72,6 +74,20 @@ export const promptLineFor = Effect.fn("StatusLine.prompt")(function* (env: Plug
   if (!(yield* fs.exists(told).pipe(Effect.orElseSucceed(() => false)))) return "";
   yield* fs.remove(told, { force: true }).pipe(Effect.ignore);
   return "Board: no card open now; questions are about the whole Herd unless one is named.";
+});
+
+/** What `collie chat context` gives Claude's prompt hook with each message. */
+export const chatContextFor = Effect.fn("StatusLine.chatContext")(function* (env: PluginEnv) {
+  const standing = yield* standingDirectionOn(env.userDir).pipe(
+    Effect.orElseSucceed(() => undefined),
+  );
+  return Arr.join(
+    Arr.filter(
+      [standingDirectionContext(standing) ?? "", yield* promptLineFor(env)],
+      (part) => part !== "",
+    ),
+    "\n\n",
+  );
 });
 
 export type StatusLine =

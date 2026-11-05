@@ -2428,6 +2428,16 @@ never a filter Collie applies for you — the Herd-wide reads stay Herd-wide wha
 prompt the same fact can be Claude Code's status line, `board selection: <task name>`,
 configured by `setup.sh` if you have no status line of your own; `collie doctor` says which.
 
+**Chat knows your Standing direction**, the text kept under **Chat** in Settings beside the
+Machine rule (see [the Flock chat](#the-flock-chat)). It is read from this Machine's own
+settings, which a Desktop keeps level with the Flock's. On Claude every message carries it,
+dated, before the open card's line, so an edit reaches the next message. Pi has no prompt
+hook: it is given the direction once, as it stands at launch, and `collie_installation`
+reads it as it is now, so an edit made mid-conversation reaches a Pi chat only at its next
+launch or when it reads that. Ask chat to keep, change or drop something, and it runs
+`collie settings set standing_direction` with exactly the text you approved; a Run's agent
+cannot.
+
 **Choosing a harness.** `claude` is the default, on an installation you have had for
 months as much as a new one, and independently of the harness your Runs are on.
 
