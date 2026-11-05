@@ -170,6 +170,12 @@ const decodeSessions = flow(
   Schema.decodeUnknownResult(Schema.Array(Schema.Struct({ session: Schema.String }))),
   Result.getOrThrow,
 );
+const decodePlacings = flow(
+  Schema.decodeUnknownResult(
+    Schema.Array(Schema.Struct({ run: Schema.String, placing: Schema.String })),
+  ),
+  Result.getOrThrow,
+);
 const decodeCount = flow(
   Schema.decodeUnknownResult(Schema.Struct({ n: Schema.Finite })),
   Result.getOrThrow,
@@ -299,35 +305,78 @@ const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(functi
 
 const HUMAN_DOORS = new Set(["desktop", "cli-tty", "board"]);
 
-/** The human's words in Collie's records, each under the Run it was said to. */
-const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string) {
+/** A human's entry: through a human door, or a chat's carrying the words they said. */
+const isHuman = (line: JsonObject) => {
+  const actor = objectAt(line, "actor");
+  const origin = stringAt(actor, "origin");
+  return origin === "chat" ? stringAt(actor, "said") !== undefined : HUMAN_DOORS.has(origin ?? "");
+};
+
+/** The words each Run was started with through a human door, as the host's store keeps them. */
+const startedWords = Effect.fn("OwnWords.startedWords")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const file = `${stateDir}/host.db`;
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))))
+    return new Map<string, string>();
+  return yield* Effect.try({
+    try: () => {
+      const db = new Database(file, { readonly: true });
+      try {
+        const started = new Map<string, string>();
+        for (const { run, placing } of decodePlacings(
+          db.query("SELECT run, placing FROM collie_runs WHERE placing IS NOT NULL").all(),
+        )) {
+          const by = objectAt(pipe(decodeLine(placing), Option.getOrUndefined), "started");
+          const words = stringAt(by, "words");
+          if (words !== undefined && stringAt(by, "door") !== "chat") started.set(run, words);
+        }
+        return started;
+      } finally {
+        db.close();
+      }
+    },
+    catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
+  });
+});
+
+/** What a human's entry says they typed, where it holds their words. */
+const typedIn = (line: JsonObject, started: ReadonlyMap<string, string>, run: string) => {
+  const asked = objectAt(line, "asked");
+  return (
+    stringAt(objectAt(line, "actor"), "said") ??
+    (line["operation"] === "start"
+      ? started.get(run)
+      : line["operation"] === "answer"
+        ? stringAt(objectAt(line, "result"), "value")
+        : (stringAt(asked, "text") ?? stringAt(asked, "reason") ?? stringAt(asked, "note")))
+  );
+};
+
+/**
+ * How many human entries Collie's records hold, and, when `reading`, the words they hold, each
+ * under the Run it was said to.
+ */
+const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, reading: boolean) {
   const fs = yield* FileSystem.FileSystem;
   const dir = `${stateDir}/runs`;
   const runs = yield* fs.readDirectory(dir);
+  const started = reading ? yield* startedWords(stateDir) : new Map<string, string>();
   const words: Array<OwnMessage> = [];
+  let entries = 0;
   for (const run of runs) {
-    const lines = objectsOf(
-      yield* fs
-        .readFileString(`${dir}/${run}/operations.jsonl`)
-        .pipe(Effect.orElseSucceed(() => "")),
+    const lines = Arr.filter(
+      objectsOf(
+        yield* fs
+          .readFileString(`${dir}/${run}/operations.jsonl`)
+          .pipe(Effect.orElseSucceed(() => "")),
+      ),
+      isHuman,
     );
-    const goal = () =>
-      fs.readFileString(`${dir}/${run}/intent.json`).pipe(
-        Effect.map((text) => stringAt(pipe(decodeLine(text), Option.getOrUndefined), "goal")),
-        Effect.orElseSucceed(() => undefined),
-      );
+    entries += lines.length;
+    if (!reading) continue;
     const seen = new Set<string>();
     for (const line of lines) {
-      const actor = objectAt(line, "actor");
-      const origin = stringAt(actor, "origin");
-      const said = origin === "chat" ? stringAt(actor, "said") : undefined;
-      if (said === undefined && !HUMAN_DOORS.has(origin ?? "")) continue;
-      const asked = objectAt(line, "asked");
-      const text =
-        said ??
-        (line["operation"] === "start"
-          ? yield* goal()
-          : (stringAt(asked, "text") ?? stringAt(asked, "reason") ?? stringAt(asked, "note")));
+      const text = typedIn(line, started, run);
       const at = stringAt(line, "at");
       const typed = text === undefined ? "" : Str.trim(text);
       if (typed === "" || at === undefined || seen.has(typed)) continue;
@@ -335,7 +384,7 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string) {
       words.push({ source: "collie", at, cwd: null, text: typed, run });
     }
   }
-  return words;
+  return { entries, words };
 });
 
 const byNewest = Order.mapInput(Order.flip(Order.String), (one: OwnMessage) => one.at);
@@ -421,11 +470,11 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
   }
 
   const runs = `${places.stateDir}/runs`;
-  const collie = yield* collieWords(places.stateDir).pipe(Effect.result);
+  const collie = yield* collieWords(places.stateDir, since !== null).pipe(Effect.result);
   if (collie._tag === "Failure") stores.push(notThere("collie", runs));
   else {
-    stores.push({ source: "collie", where: runs, found: "read", sessions: collie.success.length });
-    for (const one of collie.success)
+    stores.push({ source: "collie", where: runs, found: "read", sessions: collie.success.entries });
+    for (const one of collie.success.words)
       if (since === null || epochMs(one.at) >= since) messages.push(one);
   }
   return { stores, messages, skipped } satisfies Gathered;

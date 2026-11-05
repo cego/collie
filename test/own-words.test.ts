@@ -8,7 +8,7 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Database } from "bun:sqlite";
-import { Effect, FileSystem, Path, Result, Schema, flow } from "effect";
+import { Effect, FileSystem, Layer, Path, Result, Schema, flow } from "effect";
 import { expect, test } from "bun:test";
 import { ownInventory, readOwnWords } from "../src/own-words";
 import type { OwnWords } from "../src/own-words-model";
@@ -398,11 +398,20 @@ const audit = (
   asked,
   result: {},
 });
+/** The host's store as it keeps who started each Run, with only the columns read here. */
+const hostStore = (file: string, placings: Readonly<Record<string, Json>>) => {
+  const db = new Database(file, { create: true });
+  db.run("CREATE TABLE collie_runs (run TEXT PRIMARY KEY, request TEXT, placing TEXT)");
+  for (const [run, placing] of Rec.toEntries(placings))
+    db.run("INSERT INTO collie_runs VALUES (?, ?, ?)", [run, `r-${run}`, encode(placing)]);
+  db.close();
+};
+
 const COLLIE = {
   "state/runs/run-a/intent.json": encode({
     version: 1,
     run: "run-a",
-    goal: "Make checkout retry on 502.",
+    goal: "A goal a planner wrote.",
   }),
   "state/runs/run-a/operations.jsonl": json([
     audit("start", { origin: "cli-tty" }, null, "2026-10-06T09:00:00.000Z"),
@@ -442,7 +451,15 @@ const COLLIE = {
 test("from Collie's records, the human's own words with their Run, and nothing an agent, the host or a Schedule said", () =>
   runEffect(
     Effect.gen(function* () {
-      const words = yield* readOwnWords(yield* places(COLLIE), NOW);
+      const at = yield* places(COLLIE);
+      hostStore(`${at.stateDir}/host.db`, {
+        "run-a": {
+          started: { door: "cli-tty", words: "Make checkout retry on 502." },
+          from: "/x",
+          taskLabel: null,
+        },
+      });
+      const words = yield* readOwnWords(at, NOW);
       expect(words.messages).toEqual([
         {
           source: "collie",
@@ -640,5 +657,122 @@ test("an OpenCode session whose delivery token is older than 90 days is still Co
       const words = yield* readOwnWords(at, NOW);
       expect(texts(words)).toEqual(["Deploy on Tuesdays only."]);
       expect(words.skipped).toBe(2);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a human's answer comes back from where the host records it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const words = yield* readOwnWords(
+        yield* places({
+          "state/runs/run-c/operations.jsonl": json([
+            {
+              at: "2026-10-07T10:00:00.000Z",
+              operation: "answer",
+              request: "a1",
+              actor: { origin: "board", requestId: "a1" },
+              result: {
+                runId: "run-c",
+                decision: "scope",
+                value: "Only the API, not the UI.",
+                fresh: true,
+              },
+            },
+            {
+              at: "2026-10-07T10:01:00.000Z",
+              operation: "answer",
+              request: "a2",
+              actor: { origin: "agent", requestId: "a2" },
+              result: {
+                runId: "run-c",
+                decision: "scope",
+                value: "An agent's answer.",
+                fresh: true,
+              },
+            },
+          ]),
+        }),
+        NOW,
+      );
+      expect(texts(words)).toEqual(["Only the API, not the UI."]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a Run's start is the words its human started it with, never the Intent's goal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* places({
+        "state/runs/run-d/intent.json": encode({
+          version: 1,
+          run: "run-d",
+          goal: "A goal a planner wrote.",
+        }),
+        "state/runs/run-d/operations.jsonl": json([
+          audit("start", { origin: "desktop" }, null, "2026-10-08T09:00:00.000Z"),
+        ]),
+        "state/runs/run-e/intent.json": encode({
+          version: 1,
+          run: "run-e",
+          goal: "Another planner's goal.",
+        }),
+        "state/runs/run-e/operations.jsonl": json([
+          audit("start", { origin: "board" }, null, "2026-10-08T10:00:00.000Z"),
+        ]),
+      });
+      hostStore(`${at.stateDir}/host.db`, {
+        "run-d": {
+          started: { door: "desktop", words: "Fix the flaky login test." },
+          from: "/x",
+          taskLabel: null,
+        },
+        "run-e": { from: "/x", taskLabel: null },
+      });
+      const words = yield* readOwnWords(at, NOW);
+      expect(words.messages).toEqual([
+        {
+          source: "collie",
+          at: "2026-10-08T09:00:00.000Z",
+          cwd: null,
+          text: "Fix the flaky login test.",
+          run: "run-d",
+        },
+      ]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("the inventory counts Collie's human entries without opening what they said", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* places({
+        ...COLLIE,
+        "state/runs/run-a/operations.jsonl": json([
+          audit(
+            "deliver",
+            { origin: "desktop" },
+            { text: "Same words.", operation: null, agent: null, mode: null },
+          ),
+          audit(
+            "deliver",
+            { origin: "desktop" },
+            { text: "Same words.", operation: null, agent: null, mode: null },
+            "2026-10-06T10:05:00.000Z",
+          ),
+          audit("start", { origin: "cli-tty" }, null, "2026-10-06T09:00:00.000Z"),
+        ]),
+      });
+      const opened: Array<string> = [];
+      const recording = Layer.effect(
+        FileSystem.FileSystem,
+        Effect.map(FileSystem.FileSystem, (fs) => ({
+          ...fs,
+          readFileString: (path: string, encoding?: string) => {
+            opened.push(path);
+            return fs.readFileString(path, encoding);
+          },
+        })),
+      );
+      const inventory = yield* ownInventory(at).pipe(Effect.provide(recording));
+      expect(storeOf(inventory, "collie")).toMatchObject({ found: "read", sessions: 3 });
+      expect(Arr.filter(opened, Str.endsWith("intent.json"))).toEqual([]);
     }).pipe(Effect.scoped),
   ));
