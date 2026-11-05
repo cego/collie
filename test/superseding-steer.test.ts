@@ -56,7 +56,7 @@ interface AtQuestion {
 
 interface Setup {
   /** `pair` has two agents work before the question. */
-  readonly mode: "declared" | "pair";
+  readonly mode: "declared" | "pair" | "moves";
   readonly task?: string;
 }
 
@@ -444,6 +444,31 @@ test(
           (started) => started,
         );
       }),
+    ),
+  180_000,
+);
+
+test(
+  "a question its Workflow no longer waits on once it is taken up again is not asked again",
+  () =>
+    atQuestion(
+      "collie-supersede-moved-",
+      (at) =>
+        Effect.gen(function* () {
+          yield* supersededBy(at, "Rework the plan", "desktop-moved");
+          yield* (yield* FileSystem.FileSystem)
+            .writeFileString(`${at.world.home}/moved`, "")
+            .pipe(Effect.orDie);
+          yield* collie(at.world, ["run", "stop", at.runId]);
+          yield* collie(at.world, ["run", "resume", at.runId]);
+          yield* until(
+            () => waitingOf(at),
+            (rows) => rowOf(rows, "other")?.answer === null,
+          );
+          yield* Effect.sleep(SETTLED);
+          expect(revisionOf(yield* waitingOf(at))).toBeUndefined();
+        }),
+      { mode: "moves" },
     ),
   180_000,
 );

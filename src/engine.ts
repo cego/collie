@@ -220,6 +220,7 @@ import {
   supersededReason,
   type Superseded,
   type Admission,
+  type DecisionRow,
   type RunRow,
   type StoreApi,
 } from "./store";
@@ -7723,6 +7724,24 @@ const makeRegistry: (
   });
   const graceMs = options?.supersedeGraceMs ?? SUPERSEDE_GRACE_MS;
 
+  /** Whether the Workflow's latest entry reached `decision`'s root, so it waits on that deferred. */
+  const awaitsRoot = Effect.fn("Engine.awaitsRoot")(function* (
+    runId: string,
+    rows: ReadonlyArray<DecisionRow>,
+    decision: string,
+  ) {
+    const root = Arr.findFirst(rows, (one) => one.decision === rootOf(rows, decision));
+    if (Option.isNone(root)) return false;
+    const entry = Arr.findLast(
+      yield* readStepLines(runDir(dir, runId)),
+      (line) => line.kind === "entry",
+    );
+    return (
+      Option.isNone(entry) ||
+      epochMs(root.value.reached ?? root.value.asked) >= epochMs(entry.value.at)
+    );
+  });
+
   /**
    * Asks each set-aside question again once its messaged agent's work has ended, while
    * the Run is not stopped and still suspended on it (D3, D7): from the rows and herdr alone.
@@ -7740,6 +7759,7 @@ const makeRegistry: (
       );
       if (state.status !== "suspended") continue;
       const rows = yield* store.asked(row.run);
+      if (!(yield* awaitsRoot(row.run, rows, row.decision))) continue;
       const launches = yield* readLaunches(dir, row.run).pipe(Effect.orElseSucceed(() => []));
       const messaged = row.messaged ?? [];
       const keyOf = (agent: string) => `${row.run}/${row.decision}/${agent}`;
@@ -7767,7 +7787,8 @@ const makeRegistry: (
       const lineage = lineageOf(rows, row.decision);
       const name = `${lineage[0]}.r${lineage.length + 1}`;
       for (const one of messaged) seenWorking.delete(keyOf(one.agent));
-      if (!(yield* store.revise({ run: row.run, decision: row.decision, name, messaged }))) continue;
+      if (!(yield* store.revise({ run: row.run, decision: row.decision, name, messaged })))
+        continue;
       const notifier = yield* Effect.serviceOption(Notifier);
       if (Option.isSome(notifier))
         yield* notifier.value.notify(row.run, "needs-you", `${name}: ${row.prompt}`, {

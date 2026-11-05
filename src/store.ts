@@ -83,6 +83,8 @@ const Decision = Schema.Struct({
   ),
   /** The question this one asks again, or null for an original. */
   revises: Schema.NullOr(Schema.String),
+  /** When its Workflow last reached it, which every replay renews; null for an agent's. */
+  reached: Schema.NullOr(Schema.String),
 });
 export type DecisionRow = typeof Decision.Type;
 
@@ -341,6 +343,10 @@ const MIGRATIONS = {
     yield* sql`ALTER TABLE collie_decisions ADD COLUMN messaged TEXT`;
     yield* sql`ALTER TABLE collie_decisions ADD COLUMN revises TEXT`;
   }),
+  "11_reached": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE collie_decisions ADD COLUMN reached TEXT`;
+  }),
   "4_decisions": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
@@ -397,7 +403,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         sql`SELECT ${columns} FROM collie_runs WHERE accepted IS NULL ORDER BY admitted, run`,
     });
 
-    const decisionColumns = sql`run, decision, prompt, options, answer, request, asker, answerer, asked, answered, superseded, cause, superseder, messaged, revises`;
+    const decisionColumns = sql`run, decision, prompt, options, answer, request, asker, answerer, asked, answered, superseded, cause, superseder, messaged, revises, reached`;
 
     const decisionsOf = SqlSchema.findAll({
       Request: Schema.String,
@@ -473,13 +479,14 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         Effect.gen(function* () {
           const at = yield* nowIso;
           yield* sql`
-              INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker, revises)
+              INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker, revises, reached)
               VALUES (
                 ${question.run}, ${question.decision}, ${question.prompt},
                 ${asJsonText([...question.options])}, ${at}, ${question.asker ?? null},
-                ${question.revises ?? null}
+                ${question.revises ?? null}, ${question.asker === undefined ? at : null}
               )
-              ON CONFLICT(run, decision) DO NOTHING
+              ON CONFLICT(run, decision) DO UPDATE SET reached = excluded.reached
+                WHERE excluded.reached IS NOT NULL
             `;
           yield* reactivity.invalidate(RUNS);
         }).pipe(Effect.orDie),
