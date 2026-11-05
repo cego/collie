@@ -230,20 +230,54 @@ export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (
   return found;
 });
 
+type HumanSubmit = Delivery & { readonly human: HumanDoor };
+
+/** Each ledger's submits at the size it was read: a ledger only grows, so the same size holds the same. */
+export type LedgerScan = Map<
+  string,
+  { readonly size: bigint; readonly submits: ReadonlyArray<HumanSubmit> }
+>;
+
 /** Every Delivery of a human's words herdr took, at its first line saying so. */
-export const humanSubmits = Effect.fn("Steering.humanSubmits")(function* (stateDir: string) {
-  const first = new Map<string, Delivery & { readonly human: HumanDoor }>();
-  for (const file of yield* ledgerFiles(stateDir))
-    for (const line of yield* readLedger(file).pipe(Effect.orElseSucceed(() => [])))
-      if (
-        isDelivery(line) &&
-        line.human !== undefined &&
-        SENT_STATES.has(line.state) &&
-        !first.has(line.id)
-      )
-        first.set(line.id, { ...line, human: line.human });
+export const humanSubmits = Effect.fn("Steering.humanSubmits")(function* (
+  stateDir: string,
+  scanned: LedgerScan,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const files = yield* ledgerFiles(stateDir);
+  for (const file of scanned.keys()) if (!files.includes(file)) scanned.delete(file);
+  const first = new Map<string, HumanSubmit>();
+  for (const file of files) {
+    const size = yield* fs.stat(file).pipe(
+      Effect.map((info) => info.size),
+      Effect.option,
+    );
+    if (Option.isNone(size)) continue;
+    let known = scanned.get(file);
+    if (known?.size !== size.value) {
+      known = {
+        size: size.value,
+        submits: submitsIn(yield* readLedger(file).pipe(Effect.orElseSucceed(() => []))),
+      };
+      scanned.set(file, known);
+    }
+    for (const one of known.submits) if (!first.has(one.id)) first.set(one.id, one);
+  }
   return [...first.values()];
 });
+
+const submitsIn = (lines: ReadonlyArray<LedgerLine>): ReadonlyArray<HumanSubmit> => {
+  const first = new Map<string, HumanSubmit>();
+  for (const line of lines)
+    if (
+      isDelivery(line) &&
+      line.human !== undefined &&
+      SENT_STATES.has(line.state) &&
+      !first.has(line.id)
+    )
+      first.set(line.id, { ...line, human: line.human });
+  return [...first.values()];
+};
 
 /** Every delivery this state directory's ledgers hold, newest state each, read once for a board. */
 export const everyDelivery = Effect.fn("Steering.everyDelivery")(function* (stateDir: string) {

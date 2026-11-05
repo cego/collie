@@ -190,7 +190,7 @@ import {
   type Watched,
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
-import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
+import { budgetPath, herdOf, humanSubmits, machineHerd, type LedgerScan } from "./steering";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
@@ -7696,10 +7696,11 @@ const makeRegistry: (
    * agent's pane, which its hook records as `external`, and a Delivery herdr took before
    * the host that sent it could set the question aside.
    */
+  const scannedLedgers: LedgerScan = new Map();
   const missedMessages = Effect.gen(function* () {
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     if (runs.length === 0) return;
-    const delivered = yield* humanSubmits(placing.env.stateDir);
+    const delivered = yield* humanSubmits(placing.env.stateDir, scannedLedgers);
     for (const runId of runs) {
       const rows = yield* store.asked(runId);
       const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
