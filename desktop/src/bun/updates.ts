@@ -85,7 +85,10 @@ export const updatesOf = (
     const scope = yield* Effect.scope;
     if (!(yield* released(port))) {
       const never: UpdateNews = { _tag: "Never", reason: CHECKOUT };
-      return { news: Stream.make(never), check: Effect.succeed(never) } satisfies Updates;
+      return {
+        news: Stream.concat(Stream.make(never), Stream.never),
+        check: Effect.succeed(never),
+      } satisfies Updates;
     }
     const latest = yield* SubscriptionRef.make<UpdateNews>({ _tag: "Checking" });
     let running: Deferred.Deferred<UpdateNews> | undefined;
