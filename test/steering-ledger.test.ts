@@ -366,3 +366,24 @@ test("a ledger that has not grown since the last scan is not read again; one tha
       expect(yield* ids).toEqual(["d2", "d3"]);
     }),
   ));
+
+test("a ledger that could not be read is read again on the next scan", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = yield* ledgerPath(stateDir, "term-1");
+      yield* appendLine(
+        file,
+        delivery({ id: "d1", state: "submitted", human: { origin: "desktop" } }),
+      );
+      const scanned = new Map();
+      const ids = Effect.map(
+        humanSubmits(stateDir, scanned),
+        Arr.map((one) => one.id),
+      );
+      yield* fs.chmod(file, 0o000);
+      expect(yield* ids).toEqual([]);
+      yield* fs.chmod(file, 0o644);
+      expect(yield* ids).toEqual(["d1"]);
+    }),
+  ));

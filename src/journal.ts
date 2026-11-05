@@ -20,7 +20,13 @@ export const readJournalWhole = Effect.fn("Journal.readWhole")(function* <A>(
   json: Schema.Codec<A, string, never, never>,
 ): Effect.fn.Return<Journal<A>, never, FileSystem.FileSystem> {
   const fs = yield* FileSystem.FileSystem;
-  const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  return journalOf(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")), json);
+});
+
+export const journalOf = <A>(
+  raw: string,
+  json: Schema.Codec<A, string, never, never>,
+): Journal<A> => {
   const decode = Schema.decodeUnknownOption(json);
   const texts = Arr.filter(Str.split(raw, "\n"), (text) => Str.trim(text) !== "");
   const lines: A[] = [];
@@ -31,7 +37,7 @@ export const readJournalWhole = Effect.fn("Journal.readWhole")(function* <A>(
     else if (at < texts.length - 1) corrupt += 1;
   }
   return { lines, corrupt };
-});
+};
 
 export const readJournal = <A>(file: string, json: Schema.Codec<A, string, never, never>) =>
   readJournalWhole(file, json).pipe(Effect.map((journal) => journal.lines));

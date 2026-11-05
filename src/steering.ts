@@ -11,7 +11,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
-import { appendJournal, readJournal, readJournalWhole } from "./journal";
+import { appendJournal, journalOf, readJournal, readJournalWhole } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { nowIso, epochMs } from "./time";
 import { terminalBackend } from "./config";
@@ -255,13 +255,16 @@ export const humanSubmits = Effect.fn("Steering.humanSubmits")(function* (
     if (Option.isNone(size)) continue;
     let known = scanned.get(file);
     if (known?.size !== size.value) {
-      known = {
-        size: size.value,
-        submits: submitsIn(yield* readLedger(file).pipe(Effect.orElseSucceed(() => []))),
-      };
-      scanned.set(file, known);
+      const raw = yield* fs.readFileString(file).pipe(Effect.option);
+      if (Option.isSome(raw)) {
+        known = {
+          size: size.value,
+          submits: submitsIn(journalOf(raw.value, LedgerLineJson).lines),
+        };
+        scanned.set(file, known);
+      }
     }
-    for (const one of known.submits) if (!first.has(one.id)) first.set(one.id, one);
+    for (const one of known?.submits ?? []) if (!first.has(one.id)) first.set(one.id, one);
   }
   return [...first.values()];
 });
