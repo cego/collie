@@ -2382,8 +2382,11 @@ a Machine's host gives it to Desktop's door alone and refuses every other (a cha
 a Run's agent, the CLI) without a word of it. No chat has a tool that reads it, and the Flock
 chat's file tools are refused those stores and `~/.claude/history.jsonl` and
 `~/.codex/history.jsonl`: `collie_read`, `collie_glob` and `collie_grep` on every Machine,
-and its own Read, Glob, Grep, Bash and Pi's tools on this computer, where a call names one or
-a grep starts above one. A shell command that reaches one without naming it is not caught.
+and its own file tools and shell on this computer, where a file's path leads into one, through
+`~`, `.` or a link, a grep starts above one, or a shell command names one. Other tools, such
+as `collie_direction`, may mention a store freely. A shell command that reaches one without
+naming it, such as `grep -r` over your home, is not caught: only an OS sandbox around the
+shell could catch it.
 
 **Tell Collie how you work.** While your Standing direction is empty, Desktop offers to help
 write it, in the Flock chat: when a Machine's onboarding finishes, and when Desktop starts

@@ -7,14 +7,21 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { type Answers, DESKTOP_SAID } from "../shared/chat-view";
 import { homedir, hostname } from "node:os";
-// oxlint-disable-next-line effecttsgo/node-builtin-import -- A hook answers at once, with no Effect services.
+/* oxlint-disable effecttsgo/node-builtin-import -- A hook answers at once, with no Effect services. */
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+/* oxlint-enable effecttsgo/node-builtin-import */
 import { Option, Schema } from "effect";
 import { FILE_TOOLS } from "./file-tools";
 import { FLOCK_TOOLS } from "./flock-tools";
 import { childEnv } from "./login-env";
 import { type StandingDirection, standingDirectionContext } from "../../../src/standing-direction";
-import { SESSION_STORES, SESSIONS_CLOSED, sessionStoreReached } from "../../../src/own-words";
+import {
+  type SessionCall,
+  SESSION_STORES,
+  SESSIONS_CLOSED,
+  sessionStoreReached,
+} from "../../../src/own-words";
 
 export const systemPrompt = (
   computer: string,
@@ -190,11 +197,19 @@ const toolPrefix = (server: string) =>
 /** Every claude.ai connector's tools are named under this. */
 const CONNECTOR_PREFIX = "mcp__claude_ai_";
 
-/**
- * Of the user's Claude Code setup only their MCP servers load: the chat has those, Collie's
- * tools, this computer's files and shell, and each Machine's files. `ask` puts
- * AskUserQuestion to the human, or answers null when no human is in the turn.
- */
+/** What each of the chat's own file tools and its shell touch; any other tool reads no file. */
+const SESSION_CALLS = new Map<
+  string,
+  (given: (key: string) => string | undefined) => Omit<SessionCall, "cwd">
+>([
+  ["Read", (given) => ({ path: given("file_path") })],
+  ["Edit", (given) => ({ path: given("file_path") })],
+  ["Write", (given) => ({ path: given("file_path") })],
+  ["NotebookEdit", (given) => ({ path: given("notebook_path") })],
+  ["Glob", (given) => ({ path: given("path") ?? "." })],
+  ["Grep", (given) => ({ root: given("path") ?? "." })],
+  ["Bash", (given) => ({ command: given("command") })],
+]);
 
 /** Refuses the chat's own file tools and shell where the human's sessions are kept. */
 const refusedSessions = (input: {
@@ -205,16 +220,19 @@ const refusedSessions = (input: {
   const given = Schema.is(Schema.Record(Schema.String, Schema.Unknown))(input.tool_input)
     ? input.tool_input
     : {};
-  const root =
-    input.tool_name === "Grep"
-      ? resolve(input.cwd ?? "/", Schema.is(Schema.String)(given["path"]) ? given["path"] : ".")
-      : null;
-  const store = sessionStoreReached(
-    SESSION_STORES,
-    homedir(),
-    Arr.filter(Rec.values(given), Schema.is(Schema.String)),
-    root,
-  );
+  const touched = SESSION_CALLS.get(input.tool_name ?? "");
+  const store =
+    touched === undefined
+      ? undefined
+      : sessionStoreReached(
+          SESSION_STORES,
+          homedir(),
+          { realpath: realpathSync, resolve },
+          {
+            cwd: input.cwd ?? "/",
+            ...touched((key) => (Schema.is(Schema.String)(given[key]) ? given[key] : undefined)),
+          },
+        );
   return Promise.resolve(
     store === undefined
       ? {}
@@ -228,6 +246,11 @@ const refusedSessions = (input: {
   );
 };
 
+/**
+ * Of the user's Claude Code setup only their MCP servers load: the chat has those, Collie's
+ * tools, this computer's files and shell, and each Machine's files. `ask` puts
+ * AskUserQuestion to the human, or answers null when no human is in the turn.
+ */
 export const sessionOptions = <Server>(opts: {
   readonly cwd: string;
   readonly session: { readonly resume: string } | { readonly sessionId: string };

@@ -2,7 +2,13 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { homedir } from "node:os";
-import { Effect, type Scope, Stream } from "effect";
+/* oxlint-disable effecttsgo/node-builtin-import -- the guard is handed Node's own functions, as in production. */
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+/* oxlint-enable effecttsgo/node-builtin-import */
+import { Effect, FileSystem, type Scope, Stream } from "effect";
+import { platformLayer } from "../src/platform";
+import { SESSION_STORES, sessionStoreReached } from "../src/own-words";
 import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
 import type { DriverContext } from "../desktop/src/bun/driver";
 import { sessionOptions, userMcpServers } from "../desktop/src/bun/session";
@@ -444,5 +450,37 @@ test("the chat's own file tools and shell are refused where the human's sessions
       ).toMatchObject(refused);
       expect(yield* decide("Read", { file_path: `${home}/work/notes.md` })).toEqual({});
       expect(yield* decide("Grep", { pattern: "deploy", path: `${home}/work` })).toEqual({});
+      expect(
+        yield* decide("Read", { file_path: `${home}/.claude/./projects/-x/1.jsonl` }),
+      ).toMatchObject(refused);
+      expect(yield* decide("Read", { file_path: "~/.claude/projects/-x/1.jsonl" })).toMatchObject(
+        refused,
+      );
+      expect(
+        yield* decide("Bash", { command: "cat ~/.claude/./projects//-x/1.jsonl" }),
+      ).toMatchObject(refused);
+      expect(
+        yield* decide("mcp__collie__collie_direction", {
+          text: "Never read ~/.claude/projects without asking me.",
+        }),
+      ).toEqual({});
     }),
+  ));
+
+test("a link to a session store is followed to it", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "sessions-linked-" });
+      const home = `${root}/home`;
+      yield* fs.makeDirectory(`${home}/.claude/projects/-x`, { recursive: true });
+      yield* fs.writeFileString(`${home}/.claude/projects/-x/1.jsonl`, "{}\n");
+      yield* fs.symlink(`${home}/.claude`, `${root}/link`);
+      const reached = (call: Parameters<typeof sessionStoreReached>[3]) =>
+        sessionStoreReached(SESSION_STORES, home, { realpath: realpathSync, resolve }, call);
+      expect(reached({ cwd: root, path: "link/projects/-x/1.jsonl" })).toBe(".claude/projects");
+      expect(reached({ cwd: root, path: "link/projects/-y/new.jsonl" })).toBe(".claude/projects");
+      expect(reached({ cwd: root, root: "link" })).toBe(".claude/projects");
+      expect(reached({ cwd: root, path: "link/settings.json" })).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));

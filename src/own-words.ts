@@ -42,23 +42,54 @@ export const SESSION_STORES = [
 export const SESSIONS_CLOSED =
   "holds the human's sessions, which only their click on Desktop's \"Read my messages\" reads";
 
+/** What a chat's file tool or shell touches: a file or folder, a folder searched, or a command. */
+export interface SessionCall {
+  readonly cwd: string;
+  readonly path?: string | undefined;
+  readonly root?: string | undefined;
+  readonly command?: string | undefined;
+}
+
 /**
- * The session store a file tool's call reaches: one its arguments name, or one below where its
- * search starts. Pi's extension carries this function's source, so it uses nothing around it.
+ * The session store `call` reaches, past `~`, dot segments and links. Pi's extension carries
+ * this function's source, so it uses nothing around it.
  */
 /* oxlint-disable effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string -- Pi runs this source without Effect. */
 export function sessionStoreReached(
   stores: ReadonlyArray<string>,
   home: string,
-  said: ReadonlyArray<string>,
-  root: string | null,
+  io: {
+    readonly realpath: (path: string) => string;
+    readonly resolve: (...paths: ReadonlyArray<string>) => string;
+  },
+  call: SessionCall,
 ): string | undefined {
-  const top = root === null ? null : root.replace(/\/+$/, "");
-  return stores.find(
-    (store) =>
-      said.some((one) => one.includes(store)) ||
-      (top !== null && `${home}/${store}`.startsWith(`${top}/`)),
-  );
+  const full = (path: string) =>
+    io.resolve(call.cwd, path === "~" || path.startsWith("~/") ? home + path.slice(1) : path);
+  // A path not there yet is where the nearest one that is leads.
+  const real = (path: string) => {
+    const tail: Array<string> = [];
+    for (let at = path; at.length > 1; at = io.resolve(at, "..")) {
+      try {
+        return io.resolve(io.realpath(at), ...tail);
+      } catch {
+        tail.unshift(at.slice(at.lastIndexOf("/") + 1));
+      }
+    }
+    return path;
+  };
+  const under = (path: string, top: string) =>
+    path === top || path.startsWith(top.endsWith("/") ? top : `${top}/`);
+  const places = (path: string) => [full(path), real(full(path))];
+  const command = call.command?.replace(/\/(\.\/)+/g, "/").replace(/\/{2,}/g, "/");
+  return stores.find((store) => {
+    const tops = [`${home}/${store}`, real(`${home}/${store}`)];
+    const inside = (path: string | undefined) =>
+      path !== undefined && places(path).some((one) => tops.some((top) => under(one, top)));
+    const above = (path: string | undefined) =>
+      path !== undefined && places(path).some((one) => tops.some((top) => under(top, one)));
+    return inside(call.path) || inside(call.root) || above(call.root) || !!command?.includes(store);
+  });
 }
 /* oxlint-enable effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string */
 
@@ -94,7 +125,7 @@ const recordsOf = (
     if (record === undefined || (types !== undefined && !(isString(type) && types.has(type))))
       return record === undefined
         ? `line ${index + 1} is not a record`
-        : `line ${index + 1} is of type ${String(type)}, which it does not know`;
+        : `line ${index + 1} is of type ${isString(type) ? type : "none"}, which it does not know`;
     records.push(record);
   }
   return records;

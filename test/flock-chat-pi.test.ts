@@ -762,5 +762,13 @@ test("Pi's file tools and shell are refused where the human's sessions are kept"
       );
       expect(yield* call("grep", { pattern: "deploy", path: home })).toMatchObject(blocked);
       expect(yield* call("read", { path: `${home}/work/notes.md` })).toBeUndefined();
+      expect(yield* call("read", { path: `${home}/.claude/./projects/-x/1.jsonl` })).toMatchObject(
+        blocked,
+      );
+      expect(
+        yield* call("cf-0_collie_direction", {
+          text: "Never read ~/.claude/projects without asking me.",
+        }),
+      ).toBeUndefined();
     }),
   ));

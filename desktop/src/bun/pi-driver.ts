@@ -51,15 +51,25 @@ export const piDriver = (
       const extension = `${context.dir}/pi-collie.ts`;
       const json = (value: Schema.Json) =>
         Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(value).pipe(Effect.orDie);
-      const source = `import { homedir } from "node:os";
+      const source = `import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 const reached = ${String(sessionStoreReached)};
+const touched = {
+  read: (given) => ({ path: given("path") }),
+  edit: (given) => ({ path: given("path") }),
+  write: (given) => ({ path: given("path") }),
+  ls: (given) => ({ path: given("path") ?? "." }),
+  find: (given) => ({ path: given("path") ?? "." }),
+  grep: (given) => ({ root: given("path") ?? "." }),
+  bash: (given) => ({ command: given("command") }),
+};
 export default function(pi) {
   pi.registerMcpServer("${server}", { url: ${yield* json(url)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } });
   pi.on("tool_call", (event, ctx) => {
     const input = event.input ?? {};
-    const root = event.toolName === "grep" ? resolve(ctx.cwd, typeof input.path === "string" ? input.path : ".") : null;
-    const store = reached(${yield* json(SESSION_STORES)}, homedir(), Object.values(input).filter((one) => typeof one === "string"), root);
+    const call = Object.hasOwn(touched, event.toolName) ? touched[event.toolName]((key) => typeof input[key] === "string" ? input[key] : undefined) : undefined;
+    const store = call === undefined ? undefined : reached(${yield* json(SESSION_STORES)}, homedir(), { realpath: realpathSync, resolve }, { cwd: ctx.cwd, ...call });
     return store === undefined ? undefined : { block: true, reason: "~/" + store + " " + ${yield* json(SESSIONS_CLOSED)} + "." };
   });
 }
