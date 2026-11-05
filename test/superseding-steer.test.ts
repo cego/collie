@@ -23,6 +23,8 @@ import {
   type Actor,
 } from "../src/proposals";
 import { agentName } from "../src/naming";
+import { controlDir } from "../src/compaction";
+import { recordClaudeEvent } from "../src/compactors";
 import { epochMs } from "../src/time";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
@@ -667,6 +669,48 @@ test(
           expect(asking(yield* stillAsking, other.runId)).toBe(true);
         }),
       { mode: "declared", task: "task-shared" },
+    ),
+  180_000,
+);
+
+test(
+  "a human's message to one agent closes that agent's own question, and another agent's stays a Decision",
+  () =>
+    atQuestion(
+      "collie-supersede-own-question-",
+      (at) =>
+        Effect.gen(function* () {
+          for (const [agent, question] of [
+            [at.agents[0]!, "Which database?"],
+            [at.agents[1]!, "Which checks?"],
+          ] as const)
+            yield* recordClaudeEvent(
+              yield* controlDir(at.world.state, agent),
+              encode({
+                session_id: agent,
+                hook_event_name: "PreToolUse",
+                tool_name: "AskUserQuestion",
+                tool_use_id: `toolu-${agent}`,
+                tool_input: { questions: [{ question, header: question, options: [] }] },
+              }),
+            ).pipe(Effect.orDie);
+          yield* until(
+            () => waitingOf(at),
+            (rows) => rows.length === 3,
+          );
+
+          yield* supersededBy(at, "Use SQLite", "desktop-own", at.agents[0]);
+          const built = rowOf(yield* waitingOf(at), "ask-build-1");
+          expect(built).toMatchObject({ answer: null });
+          expect(built?.superseded ?? null).not.toBeNull();
+          const checked = rowOf(yield* waitingOf(at), "ask-check-1");
+          expect(checked).toMatchObject({ answer: null });
+          expect(checked?.superseded ?? null).toBeNull();
+          const ids = Arr.map((yield* cardOf(at))?.questions ?? [], (one) => one.id);
+          expect(ids).toContain("ask-check-1");
+          expect(ids).not.toContain("ask-build-1");
+        }),
+      { mode: "pair" },
     ),
   180_000,
 );

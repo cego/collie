@@ -7664,7 +7664,8 @@ const makeRegistry: (
 
   /**
    * A human's message submitted to one of a Run's agents sets its Workflow's open questions
-   * aside (D1), and one already set aside then waits for that agent too.
+   * and that agent's own aside (D1, D4), and a Workflow's question already set aside then
+   * waits for that agent too.
    */
   const superseding = Effect.fn("Engine.superseding")(function* (
     runId: string,
@@ -7674,8 +7675,19 @@ const makeRegistry: (
   ) {
     if (!sent.delivered || actor === undefined || !speaksForHuman(actor)) return;
     const rows = yield* store.asked(runId);
+    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
     for (const one of rows) {
-      if (one.asker !== null) continue;
+      if (one.asker !== null) {
+        if (isUnanswered(one) && asksAs(launches, one.asker, sent.agent))
+          yield* supersedeQuestion({
+            runId,
+            decision: one.decision,
+            cause,
+            by: actor,
+            agent: sent.agent,
+          });
+        continue;
+      }
       if (isUnanswered(one))
         yield* supersedeQuestion({
           runId,
@@ -7721,13 +7733,7 @@ const makeRegistry: (
         if (status === "gone") return true;
         const asksItself = Arr.some(
           rows,
-          (one) =>
-            one.asker !== null &&
-            isUnanswered(one) &&
-            Arr.some(
-              launches,
-              (launch) => launch.operation === one.asker && launch.agent === agent,
-            ),
+          (one) => one.asker !== null && isUnanswered(one) && asksAs(launches, one.asker, agent),
         );
         if (asksItself) return false;
         return (
@@ -8779,6 +8785,12 @@ const makeRegistry: (
 const decodeOptions = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
+
+const asksAs = (
+  launches: ReadonlyArray<{ readonly operation: string; readonly agent: string }>,
+  asker: string,
+  agent: string,
+): boolean => Arr.some(launches, (launch) => launch.operation === asker && launch.agent === agent);
 
 /** Every child this Run started, however deep; an offer's Run has a request of its own. */
 const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArray<string> => {

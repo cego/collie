@@ -405,7 +405,10 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   go to the agent together as its next message. While one is open, the step's Output
   budget is paused. One still open when the step's Output comes is closed with
   `closed: <operation> finished before it was answered`, and nothing is sent
-  ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md)). A question no step is
+  ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md)). A human's message to
+  that agent supersedes its open questions instead: an answer to one is refused and never
+  sent, none is asked again, and Collie's next prompt to it no longer waits on them. A
+  question no step is
   waiting on — the Run finished, parked, or the agent between steps — is put on its Run
   and its answer sent back all the same, numbered under the work it was given last. One still
   open once its agent is gone is closed with `closed: <agent> is gone`. With no host
