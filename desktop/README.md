@@ -10,7 +10,9 @@ root's `test/desktop-*.test.ts` and `test/flock-*.test.ts`; the view's logic in 
 and accessible name. `FlowGlyph.vue` draws the eight states with Nuxt UI tokens.
 `src/shared/flow.ts` owns `selectNode`, `selectEntry`, `inspectorOf`, `openIn`,
 `flowKey`, `nodeName` and `flowAnnouncements`. `FlowMap`, `FlowInspector` and
-`FlowTab` render those decisions. `recordTabs` puts Flow first where the host sends
+`FlowTab` render those decisions. `src/shared/flow-window.ts` says which Steps FlowMap
+has drawn yet: a large Flow draws those around where the work is first, and the rest a
+few a frame after. `recordTabs` puts Flow first where the host sends
 one; RunRecord can keep that map while subscribing to an earlier Run of its Task.
 `src/shared/flow-actions.ts` maps the host's node and lane capabilities to labels,
 icons and existing Desktop routes; `nextMove` and `retryCaption` supply their context.

@@ -1,6 +1,7 @@
 // Injected into the view before it loads; the app knows nothing of it. For the card the
-// harness expects, it times the click to the frame where the record's Flow shows every
-// node, two frames more, and its controls enabled, then reads what was painted.
+// harness expects, it times the click to the frame where the record's Flow has a place for
+// every node and draws each one in view, two frames more, and its controls enabled. It reads
+// what was painted once every node is drawn.
 (() => {
   const frame = () => new Promise((done) => requestAnimationFrame(done));
   const flowMap = () =>
@@ -31,6 +32,31 @@
         };
       }),
     }));
+  };
+  const drawnIn = (item) => item.querySelector("button[aria-pressed]") !== null;
+  /** What of `element` can be seen: the window, cut by each ancestor that clips. */
+  const viewOf = (element) => {
+    let view = { top: 0, left: 0, bottom: innerHeight, right: innerWidth };
+    for (let up = element.parentElement; up !== null; up = up.parentElement) {
+      if (getComputedStyle(up).overflow === "visible") continue;
+      const box = up.getBoundingClientRect();
+      view = {
+        top: Math.max(view.top, box.top),
+        left: Math.max(view.left, box.left),
+        bottom: Math.min(view.bottom, box.bottom),
+        right: Math.min(view.right, box.right),
+      };
+    }
+    return view;
+  };
+  const seen = (item, view) => {
+    const box = item.getBoundingClientRect();
+    return (
+      box.bottom > view.top &&
+      box.top < view.bottom &&
+      box.right > view.left &&
+      box.left < view.right
+    );
   };
   const marksOf = (card, start) =>
     Object.fromEntries(
@@ -77,9 +103,15 @@
         continue;
       }
       const nodes = rowsOf(flow).reduce((sum, row) => sum + row.length, 0);
-      const drawn = map.querySelectorAll("li button[aria-pressed]").length;
-      if (nodes === 0 || drawn !== nodes) {
-        expected.waiting = `on ${drawn} of ${nodes} Steps drawn`;
+      const items = [...map.querySelectorAll(":scope > section > ol > li")];
+      if (nodes === 0 || items.length !== nodes) {
+        expected.waiting = `on ${items.length} of ${nodes} Steps placed`;
+        continue;
+      }
+      const view = viewOf(map);
+      const unseen = items.filter((item) => !drawnIn(item) && seen(item, view)).length;
+      if (unseen > 0) {
+        expected.waiting = `on ${unseen} Steps in view drawn`;
         continue;
       }
       await frame();
@@ -88,6 +120,9 @@
       while ([...flowMap().querySelectorAll("li button")].some((button) => button.disabled))
         await frame();
       const end = performance.now();
+      expected.waiting = "on every Step drawn";
+      while (![...flowMap().querySelectorAll(":scope > section > ol > li")].every(drawnIn))
+        await frame();
       const shown = flowMap();
       return {
         card: expected.card,

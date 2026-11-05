@@ -12,6 +12,7 @@ import {
 } from "../../../src/shared/flow";
 import { nodeKey, stepHover, useFlowNodes } from "../composables/useFlowNodes";
 import { CLOSED, tipAfter, type StepTip, type TipEvent } from "../../../src/shared/step-tip";
+import { firstWindow, grownWindow, wholeWindow } from "../../../src/shared/flow-window";
 const props = defineProps<{
   flow: Flow;
   focused: FlowSpot | null;
@@ -41,6 +42,52 @@ const drawn = useFlowNodes(props);
 /** What is drawn of a node, which every node of `rows` has. */
 const view = (run: string, node: string) => drawn.value.nodes[nodeKey(run, node)]!;
 const laneMenu = (run: string) => drawn.value.laneMenus[run] ?? [];
+
+// A large Flow draws the Steps around where the work is first and the rest a few a frame after;
+// one not drawn yet holds its place. The current, focused and selected Steps are always drawn.
+const order = computed(() =>
+  Arr.flatMap(rows.value, (row) => Arr.map(row.nodes, (node) => nodeKey(row.run, node.id))),
+);
+const place = computed(() => new Map(Arr.map(order.value, (key, at) => [key, at] as const)));
+const anchor = props.selected ?? props.focused ?? props.flow.current;
+const span = shallowRef(
+  firstWindow(
+    order.value.length,
+    anchor === null ? 0 : (place.value.get(nodeKey(anchor.run, anchor.node)) ?? 0),
+  ),
+);
+let growing = 0;
+const grow = () => {
+  growing = 0;
+  if (wholeWindow(span.value, order.value.length)) return;
+  span.value = grownWindow(span.value, order.value.length);
+  growing = requestAnimationFrame(grow);
+};
+// From the frame after the first is painted, so the first frame has only its own Steps to draw.
+onMounted(() => (growing = requestAnimationFrame(() => (growing = requestAnimationFrame(grow)))));
+watch(
+  () => order.value.length,
+  () => growing === 0 && (growing = requestAnimationFrame(grow)),
+);
+onBeforeUnmount(() => cancelAnimationFrame(growing));
+const asked = shallowRef<ReadonlySet<string>>(new Set());
+const shows = (run: string, node: string) => {
+  const key = nodeKey(run, node);
+  const at = place.value.get(key) ?? 0;
+  return (
+    (at >= span.value.from && at < span.value.to) ||
+    asked.value.has(key) ||
+    matches(props.flow.current, run, node) ||
+    matches(props.focused, run, node) ||
+    matches(props.selected, run, node)
+  );
+};
+/** Draws `spot` if it is not yet, then does `then` with it drawn. */
+const whenDrawn = (spot: FlowSpot, then: (button: HTMLElement | undefined) => void) => {
+  if (!shows(spot.run, spot.node))
+    asked.value = new Set(asked.value).add(nodeKey(spot.run, spot.node));
+  void nextTick(() => then(buttons.get(keyOf(spot))));
+};
 
 /** The Step a DOM event is on, read from the attributes FlowStep sets on its button. */
 const stepOf = (target: EventTarget | null): FlowSpot | null => {
@@ -158,7 +205,7 @@ const rowKey = (event: KeyboardEvent) => {
   if (event.currentTarget instanceof HTMLElement) showMenu(event.currentTarget);
 };
 const reveal = (spot: FlowSpot) =>
-  buttons.get(keyOf(spot))?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  whenDrawn(spot, (button) => button?.scrollIntoView({ block: "nearest", inline: "nearest" }));
 // A map that changes size, with the window or the inspector, keeps the selected Step in view.
 const box = ref<HTMLElement | null>(null);
 let resized: ResizeObserver | undefined;
@@ -168,9 +215,9 @@ onMounted(() => {
 });
 onBeforeUnmount(() => resized?.disconnect());
 defineExpose({
-  focus: (spot: FlowSpot) => buttons.get(keyOf(spot))?.focus(),
+  focus: (spot: FlowSpot) => whenDrawn(spot, (button) => button?.focus()),
   reveal,
-  menu: (spot: FlowSpot) => showMenu(buttons.get(keyOf(spot))),
+  menu: (spot: FlowSpot) => whenDrawn(spot, showMenu),
 });
 </script>
 
@@ -249,23 +296,25 @@ defineExpose({
               : 'grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-y-2'
           "
         >
-          <FlowStep
-            v-for="(node, at) in row.nodes"
-            :key="node.id"
-            :run="row.run"
-            :node="node"
-            :view="view(row.run, node.id)"
-            :rail="rail"
-            :joined="at > 0"
-            :current="matches(flow.current, row.run, node.id)"
-            :selected="matches(selected, row.run, node.id)"
-            :focused="matches(focused, row.run, node.id)"
-            :dimmed="node.link?.machine != null && away.has(node.link.machine)"
-            :remember="remember"
-            @focus="onFocus"
-            @choose="onChoose"
-            @act="onAct"
-          />
+          <template v-for="(node, at) in row.nodes" :key="node.id">
+            <FlowStep
+              v-if="shows(row.run, node.id)"
+              :run="row.run"
+              :node="node"
+              :view="view(row.run, node.id)"
+              :rail="rail"
+              :joined="at > 0"
+              :current="matches(flow.current, row.run, node.id)"
+              :selected="matches(selected, row.run, node.id)"
+              :focused="matches(focused, row.run, node.id)"
+              :dimmed="node.link?.machine != null && away.has(node.link.machine)"
+              :remember="remember"
+              @focus="onFocus"
+              @choose="onChoose"
+              @act="onAct"
+            />
+            <li v-else aria-hidden="true" :class="rail ? 'min-h-9 w-40 shrink-0' : 'min-h-12'" />
+          </template>
         </ol>
       </section>
       <UTooltip

@@ -2012,10 +2012,11 @@ Each sample:
 
 1. Sends a real `Input.dispatchMouseEvent` click on the card's name.
 2. `probe.js`, injected before the page loads, takes the click's `timeStamp`. It waits for
-   the frame where the record's Flow shows every node of that Run, then two more frames,
-   until the Flow's buttons are enabled. The sample's time runs to that point.
-3. Reads the painted Flow in that same frame, after its time is taken: each row, node and
-   action by accessible name, and each node's attempts and wait from FlowMap's props.
+   the frame where the record's Flow has a place for every node of that Run and draws each
+   one in view, then two more frames, until the Flow's buttons are enabled. The sample's
+   time runs to that point. A large Flow draws its other Steps over the frames after.
+3. Once every node is drawn, reads the painted Flow: each row, node and action by
+   accessible name, and each node's attempts and wait from FlowMap's props.
 4. Compares it with the host's Flow, read over the front door after the paint. A mismatch
    fails the sample. A live Run is read once more, half a second later, before it fails.
 
