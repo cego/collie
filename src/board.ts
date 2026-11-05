@@ -174,14 +174,22 @@ const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   } satisfies Reopened;
 });
 
-/** The agent a human messaged while its Run's question is set aside, and what it was told. */
+/**
+ * The agent a human messaged while its Run's question is set aside, and what it was told:
+ * one still at work where any is, else the last messaged.
+ */
 const supersedingOf = Effect.fn("Board.supersedingOf")(function* (
   stateDir: string,
   run: RunFacts,
   live: ReadonlyMap<string, AgentInfo>,
 ) {
-  const agent = run.superseding ?? null;
-  if (agent === null) return null;
+  const messaged = run.superseding ?? [];
+  const agent =
+    Arr.findFirst(messaged, (one) => {
+      const status = live.get(one)?.status;
+      return status === "working" || status === "blocked";
+    }).pipe(Option.getOrUndefined) ?? messaged.at(-1);
+  if (agent === undefined) return null;
   return {
     agent,
     told: yield* toldBy(stateDir, run.id, agent),

@@ -421,9 +421,9 @@ set aside while it was open: from the board, Desktop, a terminal's `collie run s
 `deliver`, chat relaying the human's words, or typing in a Claude pane. Collie's own
 Deliveries and another agent's never supersede. It is a state of its own, never an answer:
 it picks no option and grants nothing. While the agent works on the message it is no
-Decision, and an answer to it is refused, except from the agent the human messaged. A
+Decision, and an answer to it is refused, except from an agent the human messaged. A
 Workflow's question is asked again under a new name, with the same prompt and options, once
-that work ends, if nobody answered it and the Workflow still waits on it. An agent's own
+every messaged agent's work ends, if nobody answered it and the Workflow still waits on it. An agent's own
 question is closed instead, and the agent asks again if it still needs to
 (ADR-draft-a-humans-message-supersedes-a-runs-open-question).
 

@@ -1,5 +1,5 @@
 // A module that declares its Steps and a path, taking one of several shapes so a test can
-// read its Flow at each: an agent, a question and an agent; a list; rounds; a Step off the
+// read its Flow at each: an agent, a question and an agent; two agents, then the same; a list; rounds; a Step off the
 // path; a new forecast; a stop, a crash or a park inside a Step; a durable timer.
 //
 // A Step that waits on a gate goes on once the file `<gates>/<name>` exists.
@@ -42,6 +42,7 @@ const agent = (operation: string) =>
 
 const PATHS = {
   declared: [build, decide, ship],
+  pair: [build, decide, ship],
   items: [slice],
   rounds: [review],
   offpath: [build, ship],
@@ -54,6 +55,7 @@ const PATHS = {
 
 const Mode = Schema.Literals([
   "declared",
+  "pair",
   "items",
   "rounds",
   "offpath",
@@ -83,6 +85,12 @@ export default defineWorkflow({
           yield* decide(ask({ name: "go", prompt: "Ship it?", options: ["yes", "no"] }));
           yield* ship(agent("ship"));
           yield* agent("tidy");
+          break;
+        case "pair":
+          yield* build(agent("build"));
+          yield* agent("check");
+          yield* decide(ask({ name: "go", prompt: "Ship it?", options: ["yes", "no"] }));
+          yield* ship(agent("ship"));
           break;
         case "items": {
           const items = ["a", "b", "c"];

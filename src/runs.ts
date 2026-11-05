@@ -59,8 +59,8 @@ export interface RunFacts {
   /** Where its verifications are kept. */
   readonly evidence: string;
   readonly asking: ReadonlyArray<Asked>;
-  /** The agent a human messaged while that sets its question aside, until it is asked again. */
-  readonly superseding?: string | null;
+  /** The agents a human messaged while that sets its question aside, until it is asked again. */
+  readonly superseding?: ReadonlyArray<string>;
   /** The questions it has been answered, oldest first. */
   readonly answered: ReadonlyArray<Asked & { readonly answer: string }>;
   readonly held: boolean;
@@ -144,7 +144,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   ),
   superseding:
     Option.getOrUndefined(Arr.findLast(view.waiting, (one) => isSetAside(view.waiting, one)))
-      ?.messaged ?? null,
+      ?.messaged ?? [],
   answered: Arr.flatMap(view.waiting, ({ name, prompt, options, answer }) =>
     answer === null ? [] : [{ name, prompt, options, answer }],
   ),

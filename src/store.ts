@@ -77,8 +77,10 @@ const Decision = Schema.Struct({
   /** The Delivery or submit that superseded it. */
   cause: Schema.NullOr(Schema.String),
   superseder: Schema.NullOr(Schema.fromJsonString(AuditLine.fields.actor)),
-  /** The agent that message went to, which alone may still answer it (D8). */
-  messaged: Schema.NullOr(Schema.String),
+  /** Every agent a human messaged since, and when; any of them may still answer it (D8). */
+  messaged: Schema.NullOr(
+    Schema.fromJsonString(Schema.Array(Schema.Struct({ agent: Schema.String, at: Schema.String }))),
+  ),
   /** The question this one asks again, or null for an original. */
   revises: Schema.NullOr(Schema.String),
 });
@@ -217,6 +219,15 @@ export interface StoreApi {
   }) => Effect.Effect<boolean>;
   /** Every workflow question set aside by a human's message and not yet asked again. */
   readonly setAside: Effect.Effect<ReadonlyArray<DecisionRow>>;
+  /**
+   * Adds `agent` to the agents a set-aside workflow question waits for, or restarts its
+   * wait where it is already one, while no revision has opened. True where it did.
+   */
+  readonly alsoMessaged: (messaging: {
+    readonly run: string;
+    readonly decision: string;
+    readonly agent: string;
+  }) => Effect.Effect<boolean>;
   readonly generations: Effect.Effect<ReadonlyArray<GenerationRow>>;
   /**
    * Claims a request id for a run, or hands back the run that already has it. `fresh` is
@@ -482,7 +493,10 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
                 answerer = ${answer.answerer === undefined ? null : answererText(answer.answerer)}
               WHERE run = ${answer.run} AND decision = ${answer.decision} AND answer IS NULL
                 AND (superseded IS NULL OR (
-                  asker IS NULL AND messaged = ${messaged} AND NOT EXISTS (
+                  asker IS NULL AND EXISTS (
+                    SELECT 1 FROM json_each(collie_decisions.messaged)
+                    WHERE json_extract(value, '$.agent') = ${messaged}
+                  ) AND NOT EXISTS (
                     SELECT 1 FROM collie_decisions revision
                     WHERE revision.run = collie_decisions.run
                       AND revision.revises = collie_decisions.decision
@@ -516,7 +530,8 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
             sql`
               UPDATE collie_decisions
               SET superseded = ${at}, cause = ${superseding.cause},
-                superseder = ${answererText(superseding.actor)}, messaged = ${superseding.agent}
+                superseder = ${answererText(superseding.actor)},
+                messaged = ${asJsonText([{ agent: superseding.agent, at }])}
               WHERE run = ${superseding.run} AND decision = ${superseding.decision}
                 AND answer IS NULL AND superseded IS NULL
               RETURNING decision
@@ -561,6 +576,31 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       }),
 
       setAside: setAsideRows().pipe(Effect.orDie),
+
+      alsoMessaged: Effect.fn("Store.alsoMessaged")(function* (messaging) {
+        const at = yield* nowIso;
+        const written = yield* reactivity
+          .mutation(
+            RUNS,
+            sql`
+              UPDATE collie_decisions
+              SET messaged = json_insert(
+                (SELECT json_group_array(json(value)) FROM json_each(collie_decisions.messaged)
+                  WHERE json_extract(value, '$.agent') <> ${messaging.agent}),
+                '$[#]', json_object('agent', ${messaging.agent}, 'at', ${at})
+              )
+              WHERE run = ${messaging.run} AND decision = ${messaging.decision}
+                AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM collie_decisions revision
+                  WHERE revision.run = ${messaging.run} AND revision.revises = ${messaging.decision}
+                )
+              RETURNING decision
+            `,
+          )
+          .pipe(Effect.orDie);
+        return written.length > 0;
+      }),
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
         const input = canonical(admission.input);

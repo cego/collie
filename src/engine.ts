@@ -5804,8 +5804,8 @@ export const OpenDecision = Schema.Struct({
   /** When a human's message set it aside, and the Delivery or submit that carried it. */
   superseded: Schema.optionalKey(Schema.NullOr(Schema.String)),
   cause: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** The agent that message went to. */
-  messaged: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** Every agent a human messaged since, oldest first. */
+  messaged: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The question this one asks again, or null for an original. */
   revises: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
@@ -7543,7 +7543,7 @@ const makeRegistry: (
           asker: row.asker,
           superseded: row.superseded,
           cause: row.cause,
-          messaged: row.messaged,
+          messaged: Arr.map(row.messaged ?? [], (one) => one.agent),
           revises: row.revises,
         })),
       ),
@@ -7659,7 +7659,13 @@ const makeRegistry: (
     return superseded;
   });
 
-  /** A human's message submitted to one of a Run's agents sets its Workflow's open questions aside (D1). */
+  /** Each set-aside question's messaged agent herdr has reported working since, in memory only. */
+  const seenWorking = new Set<string>();
+
+  /**
+   * A human's message submitted to one of a Run's agents sets its Workflow's open questions
+   * aside (D1), and one already set aside then waits for that agent too.
+   */
   const superseding = Effect.fn("Engine.superseding")(function* (
     runId: string,
     cause: string,
@@ -7667,8 +7673,10 @@ const makeRegistry: (
     sent: typeof Steered.Type,
   ) {
     if (!sent.delivered || actor === undefined || !speaksForHuman(actor)) return;
-    for (const one of yield* store.asked(runId))
-      if (one.asker === null && isUnanswered(one))
+    const rows = yield* store.asked(runId);
+    for (const one of rows) {
+      if (one.asker !== null) continue;
+      if (isUnanswered(one))
         yield* supersedeQuestion({
           runId,
           decision: one.decision,
@@ -7676,10 +7684,12 @@ const makeRegistry: (
           by: actor,
           agent: sent.agent,
         });
+      else if (isSuperseded(one) && !Arr.some(rows, (r) => r.revises === one.decision)) {
+        seenWorking.delete(`${runId}/${one.decision}/${sent.agent}`);
+        yield* store.alsoMessaged({ run: runId, decision: one.decision, agent: sent.agent });
+      }
+    }
   });
-
-  /** Questions set aside whose messaged agent herdr has reported working since, in memory only. */
-  const seenWorking = new Set<string>();
   const graceMs = options?.supersedeGraceMs ?? SUPERSEDE_GRACE_MS;
 
   /**
@@ -7689,7 +7699,6 @@ const makeRegistry: (
   const reviseQuestions = Effect.gen(function* () {
     const agents = yield* Agents;
     for (const row of yield* store.setAside) {
-      const key = `${row.run}/${row.decision}`;
       if ((yield* controlsOf(row.run)).includes(STOP)) continue;
       const found = yield* routed(row.run).pipe(Effect.option);
       if (Option.isNone(found)) continue;
@@ -7699,15 +7708,17 @@ const makeRegistry: (
         generation.entry,
       );
       if (state.status !== "suspended") continue;
-      const agent = row.messaged ?? "";
-      const status = yield* agents.statusOf(agent);
-      if (status === "working" || status === "blocked") {
-        seenWorking.add(key);
-        continue;
-      }
       const rows = yield* store.asked(row.run);
-      if (status !== "gone") {
-        const launches = yield* readLaunches(dir, row.run).pipe(Effect.orElseSucceed(() => []));
+      const launches = yield* readLaunches(dir, row.run).pipe(Effect.orElseSucceed(() => []));
+      const messaged = row.messaged ?? [];
+      const keyOf = (agent: string) => `${row.run}/${row.decision}/${agent}`;
+      const finished = Effect.fn("Engine.finished")(function* (agent: string, since: string) {
+        const status = yield* agents.statusOf(agent);
+        if (status === "working" || status === "blocked") {
+          seenWorking.add(keyOf(agent));
+          return false;
+        }
+        if (status === "gone") return true;
         const asksItself = Arr.some(
           rows,
           (one) =>
@@ -7718,13 +7729,18 @@ const makeRegistry: (
               (launch) => launch.operation === one.asker && launch.agent === agent,
             ),
         );
-        if (asksItself) continue;
-        const since = epochMs(row.superseded ?? "");
-        if (!seenWorking.has(key) && (yield* Clock.currentTimeMillis) - since < graceMs) continue;
-      }
+        if (asksItself) return false;
+        return (
+          seenWorking.has(keyOf(agent)) ||
+          (yield* Clock.currentTimeMillis) - epochMs(since) >= graceMs
+        );
+      });
+      // Every agent is asked, so each one herdr sees working now is remembered as seen.
+      const ended = yield* Effect.forEach(messaged, (one) => finished(one.agent, one.at));
+      if (!Arr.every(ended, (one) => one)) continue;
       const lineage = lineageOf(rows, row.decision);
       const name = `${lineage[0]}.r${lineage.length + 1}`;
-      seenWorking.delete(key);
+      for (const one of messaged) seenWorking.delete(keyOf(one.agent));
       if (!(yield* store.revise({ run: row.run, decision: row.decision, name }))) continue;
       const notifier = yield* Effect.serviceOption(Notifier);
       if (Option.isSome(notifier))

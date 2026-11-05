@@ -177,7 +177,11 @@ test("a supersede and an answer racing on one question: whichever lands first st
       expect(refused._tag === "refused" && refused.reason).toContain("superseded");
       expect(refused._tag === "refused" && refused.reason).toContain("delivery-1");
       const [q1] = yield* store.asked("run-a");
-      expect(q1).toMatchObject({ answer: null, cause: "delivery-1", messaged: "planner" });
+      expect(q1).toMatchObject({
+        answer: null,
+        cause: "delivery-1",
+        messaged: [{ agent: "planner" }],
+      });
       expect(q1?.superseded).not.toBeNull();
       expect(q1?.superseder).toEqual(human);
 
@@ -228,7 +232,7 @@ test("a superseded workflow question takes an answer only from the agent the hum
       expect((yield* store.asked("run-a"))[0]).toMatchObject({
         answer: "Implement now",
         cause: "delivery-1",
-        messaged: "planner",
+        messaged: [{ agent: "planner" }],
       });
 
       yield* asks("next-2");

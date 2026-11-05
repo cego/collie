@@ -22,6 +22,7 @@ import {
   record as recordProposal,
   type Actor,
 } from "../src/proposals";
+import { agentName } from "../src/naming";
 import { epochMs } from "../src/time";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
@@ -45,25 +46,35 @@ interface AtQuestion {
   readonly client: Client;
   readonly runId: string;
   readonly agent: string;
-  /** Sets what the fake herdr says of the agent: `working` or `idle`. */
-  readonly status: (status: string) => Effect.Effect<void>;
+  /** Every agent the Run started before its question, oldest first. */
+  readonly agents: ReadonlyArray<string>;
+  /** Sets what the fake herdr says of `agent`, or of every agent: `working` or `idle`. */
+  readonly status: (status: string, agent?: string) => Effect.Effect<void>;
+}
+
+interface Setup {
+  /** `pair` has two agents work before the question. */
+  readonly mode: "declared" | "pair";
+  readonly task?: string;
 }
 
 /** The Run's host, started from this process with this world's fake herdr and grace period. */
 const startHost = (world: World) => connect(world.state).pipe(Effect.orDie);
 
-/** A `stepped` Run started under `request`, once it waits on `go`, and its idle agent. */
+/** A `stepped` Run started under `request`, once it waits on `go`, and its idle agents. */
 const waitingRun = Effect.fn("test.waitingRun")(function* (
   world: World,
   client: Client,
   request: string,
+  setup: Setup = { mode: "declared" },
 ) {
   const { runId } = yield* client
     .start({
       project: world.project,
       id: "stepped",
       request,
-      input: { mode: "declared", gates: world.home },
+      input: { mode: setup.mode, gates: world.home },
+      task: setup.task,
     })
     .pipe(Effect.orDie);
   yield* until(
@@ -76,13 +87,18 @@ const waitingRun = Effect.fn("test.waitingRun")(function* (
   const herdr = yield* Schema.decodeEffect(FakeState)(
     yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
   ).pipe(Effect.orDie);
-  return { runId, agent: herdr.agents.at(-1)!.name };
+  const agents = Arr.map(setup.mode === "pair" ? ["build", "check"] : ["build"], (step) =>
+    agentName(runId, step, null, 1),
+  );
+  expect(Arr.map(herdr.agents, (one) => one.name)).toEqual(expect.arrayContaining(agents));
+  return { runId, agent: agents.at(-1)!, agents };
 });
 
 /** A `stepped` Run waiting on `go` after its first agent's step, and its idle agent. */
 const atQuestion = <A, E>(
   prefix: string,
   body: (at: AtQuestion) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
+  setup: Setup = { mode: "declared" },
 ) =>
   proves(
     prefix,
@@ -95,7 +111,10 @@ const atQuestion = <A, E>(
         yield* fs
           .writeFileString(outputs, encode(Arr.makeBy(6, () => ({ verdict: "done" }))))
           .pipe(Effect.orDie);
-        const status = (said: string) => fs.writeFileString(file, said).pipe(Effect.orDie);
+        const status = (said: string, agent?: string) =>
+          fs
+            .writeFileString(agent === undefined ? file : `${file}.${agent}`, said)
+            .pipe(Effect.orDie);
         yield* status("idle");
         const set = {
           FAKE_HERDR_OUTPUTS: outputs,
@@ -127,8 +146,8 @@ const atQuestion = <A, E>(
           COLLIE_CWD: world.project,
         });
         const client = yield* startHost(world);
-        const { runId, agent } = yield* waitingRun(world, client, "start");
-        return yield* body({ world, env, client, runId, agent, status }).pipe(
+        const { runId, agent, agents } = yield* waitingRun(world, client, "start", setup);
+        return yield* body({ world, env, client, runId, agent, agents, status }).pipe(
           Effect.ensuring(stopHost(world.state)),
         );
       }),
@@ -137,14 +156,10 @@ const atQuestion = <A, E>(
 
 const desktop = (requestId: string): Actor => ({ origin: "desktop", requestId });
 
-/** One message to the Run's agent, from whoever `by` is. */
-const tell = (at: AtQuestion, text: string, by: Actor) =>
+/** One message to one of the Run's agents, from whoever `by` is. */
+const tell = (at: AtQuestion, text: string, by: Actor, agent = at.agent) =>
   Effect.map(
-    carryOutAsked(
-      at.env,
-      [{ kind: "deliver", run: at.runId, agent: at.agent, text, mode: "boundary" }],
-      by,
-    ),
+    carryOutAsked(at.env, [{ kind: "deliver", run: at.runId, agent, text, mode: "boundary" }], by),
     ([done]) => done,
   );
 
@@ -157,9 +172,9 @@ const waitingOf = (at: AtQuestion, client: Client = at.client) =>
 const rowOf = (waiting: Effect.Success<ReturnType<typeof waitingOf>>, name: string) =>
   Option.getOrUndefined(Arr.findFirst(waiting, (one) => one.name === name));
 
-/** The question asked again in `go`'s place, once one is open. */
-const revisionOf = (waiting: Effect.Success<ReturnType<typeof waitingOf>>) =>
-  Option.getOrUndefined(Arr.findFirst(waiting, (one) => one.revises === "go"));
+/** The question asked again in `of`'s place, once one is open. */
+const revisionOf = (waiting: Effect.Success<ReturnType<typeof waitingOf>>, of = "go") =>
+  Option.getOrUndefined(Arr.findFirst(waiting, (one) => one.revises === of));
 
 const answer = (at: AtQuestion, value: string, decision: string, extra = {}) =>
   collie(at.world, ["run", "answer", at.runId, value, "--decision", decision], extra);
@@ -187,9 +202,9 @@ const cardOf = (at: AtQuestion) =>
     return Option.getOrUndefined(Arr.findFirst(tasks, (task) => task.run === at.runId));
   });
 
-const supersededBy = (at: AtQuestion, text: string, request: string) =>
+const supersededBy = (at: AtQuestion, text: string, request: string, agent = at.agent) =>
   Effect.gen(function* () {
-    expect(yield* tell(at, text, desktop(request))).toMatchObject({ state: "applied" });
+    expect(yield* tell(at, text, desktop(request), agent)).toMatchObject({ state: "applied" });
     expect(rowOf(yield* waitingOf(at), "go")).toMatchObject({ answer: null });
     expect(rowOf(yield* waitingOf(at), "go")?.superseded ?? null).not.toBeNull();
   });
@@ -482,6 +497,176 @@ test(
         yield* startHost(at.world);
         yield* settled;
       }),
+    ),
+  180_000,
+);
+
+/** The revision opened in `of`'s place, once the host has opened one. */
+const revised = (at: AtQuestion, of = "go") =>
+  Effect.map(
+    until(
+      () => waitingOf(at),
+      (rows) => revisionOf(rows, of) !== undefined,
+    ),
+    (rows) => revisionOf(rows, of)!,
+  );
+
+const asAgent = (at: AtQuestion, agent: string, decision: string) =>
+  collie(at.world, ["run", "answer", at.runId, "yes", "--decision", decision], {
+    COLLIE_RUN: at.runId,
+    COLLIE_AGENT: agent,
+  });
+
+test(
+  "a question set aside is asked again only once every agent the human messaged has finished",
+  () =>
+    atQuestion(
+      "collie-supersede-several-",
+      (at) =>
+        Effect.gen(function* () {
+          const [first, second] = [at.agents[0]!, at.agents[1]!];
+          yield* supersededBy(at, "Check the edge cases", "desktop-second", second);
+          yield* at.status("working", second);
+          expect(
+            yield* tell(at, "And tidy the names", desktop("desktop-first"), first),
+          ).toMatchObject({ state: "applied" });
+          yield* at.status("working", first);
+          yield* at.status("idle", second);
+
+          yield* Effect.sleep(SETTLED);
+          expect(revisionOf(yield* waitingOf(at))).toBeUndefined();
+
+          yield* at.status("idle", first);
+          const revision = yield* revised(at);
+          expect((yield* answer(at, "yes", revision.name)).envelope).toMatchObject({ ok: true });
+          yield* until(
+            () => shipStarted(at),
+            (started) => started,
+          );
+        }),
+      { mode: "pair" },
+    ),
+  180_000,
+);
+
+test(
+  "a message to an agent that did not ask supersedes the question, and any agent the human messaged may answer it",
+  () =>
+    atQuestion(
+      "collie-supersede-second-answers-",
+      (at) =>
+        Effect.gen(function* () {
+          const [first, second] = [at.agents[0]!, at.agents[1]!];
+          yield* supersededBy(at, "Rename the flag", "desktop-first", first);
+          yield* at.status("working", first);
+
+          const unmessaged = yield* asAgent(at, second, "go");
+          expect(unmessaged.envelope.error?.message).toContain('"go" was superseded');
+
+          expect(
+            yield* tell(at, "Looks good, go ahead", desktop("desktop-second"), second),
+          ).toMatchObject({ state: "applied" });
+          const before = yield* notified(at);
+          expect((yield* asAgent(at, second, "go")).envelope).toMatchObject({
+            ok: true,
+            data: { decision: "go", value: "yes" },
+          });
+          yield* until(
+            () => shipStarted(at),
+            (started) => started,
+          );
+
+          yield* at.status("idle", first);
+          yield* Effect.sleep(SETTLED);
+          expect(revisionOf(yield* waitingOf(at))).toBeUndefined();
+          expect(
+            Arr.filter(yield* notified(at), (line) => !before.includes(line)),
+          ).not.toContainEqual(expect.stringContaining("needs-you:ask:"));
+        }),
+      { mode: "pair" },
+    ),
+  180_000,
+);
+
+test(
+  "a human's message after the question is asked again supersedes the revision too, and the next one moves the Run on",
+  () =>
+    atQuestion("collie-supersede-twice-", (at) =>
+      Effect.gen(function* () {
+        yield* supersededBy(at, "Rework the plan", "desktop-once");
+        const second = yield* revised(at);
+
+        expect(yield* tell(at, "Once more, smaller", desktop("desktop-twice"))).toMatchObject({
+          state: "applied",
+        });
+        const set = rowOf(yield* waitingOf(at), second.name);
+        expect(set).toMatchObject({ answer: null });
+        expect(set?.superseded ?? null).not.toBeNull();
+
+        const third = yield* revised(at, second.name);
+        expect(third).toMatchObject({ prompt: "Ship it?", options: ["yes", "no"], answer: null });
+        for (const name of ["go", second.name]) {
+          const refused = yield* answer(at, "yes", name);
+          expect(refused.envelope.error?.message).toContain(`"${name}" was superseded`);
+          expect(refused.envelope.error?.message).toContain(`answer "${third.name}" instead`);
+        }
+        expect(yield* shipStarted(at)).toBe(false);
+
+        expect((yield* answer(at, "yes", third.name)).envelope).toMatchObject({ ok: true });
+        yield* until(
+          () => shipStarted(at),
+          (started) => started,
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "another Run of the same Task keeps its question open and Blocked throughout",
+  () =>
+    atQuestion(
+      "collie-supersede-other-run-",
+      (at) =>
+        Effect.gen(function* () {
+          const other = yield* waitingRun(at.world, at.client, "start-other", {
+            mode: "declared",
+            task: "task-shared",
+          });
+          const stillAsking = Effect.gen(function* () {
+            const go = rowOf(yield* waitingOf({ ...at, runId: other.runId }), "go");
+            expect(go).toMatchObject({ answer: null });
+            expect(go?.superseded ?? null).toBeNull();
+            const printed = yield* collie(at.world, ["board"]);
+            const { tasks } = yield* Schema.decodeUnknownEffect(Board)(printed.envelope.data).pipe(
+              Effect.orDie,
+            );
+            const card = Arr.findFirst(tasks, (task) => task.runs.includes(other.runId));
+            expect(Option.map(card, (task) => task.runs)).toEqual(
+              Option.some(expect.arrayContaining([at.runId, other.runId])),
+            );
+            expect(Option.map(card, (task) => task.state)).toEqual(Option.some("blocked"));
+            return Option.getOrThrow(card).questions ?? [];
+          });
+          const asking = (questions: ReadonlyArray<{ readonly run: string }>, run: string) =>
+            Arr.some(questions, (one) => one.run === run);
+
+          expect(asking(yield* stillAsking, other.runId)).toBe(true);
+          yield* supersededBy(at, "Rework the plan", "desktop-other-run");
+          const aside = yield* stillAsking;
+          expect(asking(aside, other.runId)).toBe(true);
+          expect(asking(aside, at.runId)).toBe(false);
+
+          const revision = yield* revised(at);
+          expect(asking(yield* stillAsking, other.runId)).toBe(true);
+          expect((yield* answer(at, "yes", revision.name)).envelope).toMatchObject({ ok: true });
+          yield* until(
+            () => shipStarted(at),
+            (started) => started,
+          );
+          expect(asking(yield* stillAsking, other.runId)).toBe(true);
+        }),
+      { mode: "declared", task: "task-shared" },
     ),
   180_000,
 );
