@@ -98,6 +98,14 @@ export const desktopSettingsAtom = FlockClient.runtime
   )
   .pipe(Atom.keepAlive);
 
+export const setupOfferAtom = FlockClient.runtime
+  .atom(
+    held(
+      Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("setupOffer", undefined)))),
+    ),
+  )
+  .pipe(Atom.keepAlive);
+
 /** What the Flock chat holds, runs on and is offered, told again after each change. */
 export const chatChoicesAtom = FlockClient.runtime
   .atom(

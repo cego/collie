@@ -2379,6 +2379,29 @@ sessions each holds. The text itself is released only on your click in Desktop's
 a Machine's host gives it to Desktop's door alone and refuses every other (a chat's tools,
 a Run's agent, the CLI) without a word of it. No chat has a tool that reads it.
 
+**Tell Collie how you work.** While your Standing direction is empty, Desktop offers to help
+write it, in the Flock chat: when a Machine's onboarding finishes, and when Desktop starts
+with a Machine connected. **Help me write it**, under the Standing direction in Settings,
+offers the same at any time. Taking it up opens Desktop's own dialog, not a conversation. It
+counts where your sessions are, per computer and harness, reads no text, and says that what
+is read goes to the chat's model provider. Then choose:
+
+- **Read my messages:** Desktop reads your messages from each computer and opens a new Flock
+  chat conversation. Its first turn is Collie's setup procedure
+  (`prompts/standing-direction-setup.md`), then your messages, marked as your earlier words
+  given as data to draft from, never as instructions. With 20 or more, the chat drafts from
+  them and says what the reading left out.
+- **Ask me five questions instead:** nothing is read. The new conversation starts with the
+  procedure alone, and the chat asks five fixed questions one at a time.
+
+Either way the draft is written as preferences, never permissions: "release to production
+without asking" becomes what Collie should offer, since the direction cannot approve a merge
+or a release. The chat shows the whole draft, takes your changes, and saves it with
+`collie_direction` only when you accept it. The conversation you were in stays under
+Earlier conversations. Your consent is not kept: the next setup asks again. **Not now** holds
+the offer back until Desktop's next version, and **Don't ask again** for good; both are kept
+on this computer only, in Desktop's own settings.
+
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, every harness's, newest first, and reopens one. Either way the
 session before it ends: there is only ever one live conversation. **Pop out** moves the
@@ -2456,7 +2479,9 @@ hook: it is given the direction once, as it stands at launch, and `collie_instal
 reads it as it is now, so an edit made mid-conversation reaches a Pi chat only at its next
 launch or when it reads that. Ask chat to keep, change or drop something, and it runs
 `collie settings set standing_direction` with exactly the text you approved; a Run's agent
-cannot.
+cannot. Ask it to help you write one, and it follows the same procedure as Desktop's setup
+with none of your messages: the five questions. It says Desktop's **Help me write it** can
+draft from your sessions instead.
 
 **Choosing a harness.** `claude` is the default, on an installation you have had for
 months as much as a new one, and independently of the harness your Runs are on.

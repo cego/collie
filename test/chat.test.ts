@@ -336,6 +336,32 @@ test("the system prompt chat writes takes a reported review as a report, asks be
     }).pipe(Effect.scoped),
   ));
 
+test("the system prompt points chat at the setup procedure Desktop's Flock chat follows, by a path that reads", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "hw-chat-setup-" });
+      const files = yield* writeLaunchFiles({
+        dir: `${root}/chat`,
+        pluginRoot: `${import.meta.dir}/..`,
+        userDir: `${root}/user`,
+        home: `${root}/home`,
+        self: ["/bin/collie"],
+        serverEnv: {},
+        news: `${root}/news.jsonl`,
+        tools: [],
+        mcpConfig: "{}",
+      });
+      const named = /`([^`\s]+standing-direction-setup\.md)`/.exec(
+        yield* fs.readFileString(files.systemPrompt),
+      )?.[1];
+      expect(named).toBeDefined();
+      expect(yield* fs.readFileString(named!)).toContain(
+        "When work is ready, which next steps should Collie offer you without being asked",
+      );
+    }).pipe(Effect.scoped),
+  ));
+
 test("the shipped prompt has chat choose by description, with ad-hoc work as general", () =>
   runEffect(
     Effect.gen(function* () {

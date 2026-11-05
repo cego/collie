@@ -281,6 +281,7 @@ watch(update, (now) => {
           @click="toggle('settings')"
         />
         <OnboardDialog />
+        <StandingSetupDialog />
         <UButton
           v-if="!chatShown && !popped"
           icon="i-lucide-messages-square"

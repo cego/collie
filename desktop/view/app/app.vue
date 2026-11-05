@@ -5,7 +5,10 @@ const alone = window.location.hash === "#chat";
 
 <template>
   <UApp>
-    <FlockChat v-if="alone" alone class="h-screen border-l-0" />
+    <template v-if="alone">
+      <FlockChat alone class="h-screen border-l-0" />
+      <StandingSetupDialog />
+    </template>
     <FlockBoard v-else />
   </UApp>
 </template>

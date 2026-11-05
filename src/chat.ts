@@ -546,7 +546,10 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
   const systemPrompt = path.join(opts.dir, "system-prompt.md");
   const chat = yield* fs
     .readFileString(path.join(opts.pluginRoot, "prompts", "collie-chat.md"))
-    .pipe(Effect.orElseSucceed(() => ""));
+    .pipe(
+      Effect.map(Str.replaceAll("{{prompts}}", path.join(opts.pluginRoot, "prompts"))),
+      Effect.orElseSucceed(() => ""),
+    );
   const every = yield* everyAgentText({ ...opts, cwd: opts.dir });
   yield* fs.writeFileString(
     systemPrompt,

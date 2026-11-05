@@ -39,7 +39,22 @@ const {
   turnsTrouble,
   proactive,
   setProactive,
+  setUp,
 } = useFlockChat();
+const setup = useStandingSetup();
+watch(
+  setup.chosen,
+  (choice) => {
+    if (choice === null) return;
+    setup.chosen.value = null;
+    void setUp(choice);
+  },
+  { immediate: true },
+);
+const declineSetup = (forGood: boolean) =>
+  setup.decline(forGood).then((refused) => {
+    if (refused !== null) toast.add({ title: refused, color: "error" });
+  });
 const { desktopSettings } = useDesktopSettings();
 const {
   selects,
@@ -458,6 +473,33 @@ const queuedText = ({ content }: QueuedMessage) => {
       </li>
       <li v-if="turnsTrouble">
         <RetryNotice title="Desktop is reconnecting to its chat" :trouble="turnsTrouble" />
+      </li>
+      <li
+        v-if="setup.offered.value"
+        data-testid="standing-setup-offer"
+        class="flex flex-col gap-2 rounded-md border border-default px-3 py-2"
+      >
+        <span class="font-medium">Tell Collie how you work</span>
+        <span class="text-sm text-muted">
+          A Standing direction goes with every message to the chat, in your words.
+        </span>
+        <div class="flex flex-wrap justify-end gap-2">
+          <UButton
+            label="Don't ask again"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            @click="declineSetup(true)"
+          />
+          <UButton
+            label="Not now"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            @click="declineSetup(false)"
+          />
+          <UButton label="Let's write it" size="sm" @click="setup.open.value = true" />
+        </div>
       </li>
       <li
         v-for="pending in queue"

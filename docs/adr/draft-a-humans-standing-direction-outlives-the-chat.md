@@ -80,6 +80,7 @@ While the setting is empty, Desktop offers to help:
   No model can ask for that text. The reader is in no chat's toolkit, and a host answers it
   only on the `desktop` front door, which the Flock chat's tools do not use. Desktop gives
   what it read to the new conversation as data to draft from, never as instructions.
+
 - **What it never reads:** tool output, model text, context a harness or a hook injected,
   and the sessions Collie started for a Run's agents. In those sessions the user turns are
   Collie's own prompts.

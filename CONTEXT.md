@@ -156,7 +156,9 @@ production waits for my go". A chat is given it with every message, dated by its
 with the standing of something the human said earlier and no more: it is never
 **Authority**, a **Go** or a **Confirmation**. Only the human writes it, in Settings or by
 asking a chat to keep or change it; an edit from a Run's agent is refused. At most 4,000
-characters. A rule about one repository belongs in that workspace's defaults
+characters. A rule about one repository belongs in that workspace's defaults. A chat can draft
+it with the human: from their own sessions, read only on their click in Desktop, or from five
+fixed questions. The draft is kept only as text the human accepted
 ([ADR-draft-a-humans-standing-direction-outlives-the-chat](docs/adr/draft-a-humans-standing-direction-outlives-the-chat.md)).
 
 **Home** — Where a human works with the Herd from a terminal: two core terminals the
