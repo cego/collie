@@ -4,8 +4,16 @@
 // what was painted once every node is drawn.
 (() => {
   const frame = () => new Promise((done) => requestAnimationFrame(done));
+  // Kept while it is on the page: a search of the whole document walks every card of the
+  // board before the record, a cost of the bench that Desktop never pays.
+  let found = null;
   const flowMap = () =>
-    document.querySelector('[data-testid="flow"] [role="group"][aria-label="Flow"]');
+    found?.isConnected
+      ? found
+      : (found =
+          document
+            .querySelector('[data-testid="record"]')
+            ?.querySelector('[data-testid="flow"] [role="group"][aria-label="Flow"]') ?? null);
   // Vue's production devtools hooks, on in the benchmark's build only.
   const flowOf = (map) => {
     let component = map?.__vueParentComponent;
