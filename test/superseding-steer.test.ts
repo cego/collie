@@ -158,7 +158,6 @@ const atQuestion = <A, E>(
 
 const desktop = (requestId: string): Actor => ({ origin: "desktop", requestId });
 
-/** One message to one of the Run's agents, from whoever `by` is. */
 const tell = (at: AtQuestion, text: string, by: Actor, agent = at.agent) =>
   Effect.map(
     carryOutAsked(at.env, [{ kind: "deliver", run: at.runId, agent, text, mode: "boundary" }], by),

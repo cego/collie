@@ -1142,7 +1142,6 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const reopened = ended(leader)
           ? yield* reopenedOf(stateDir, leader, deliveries, live)
           : null;
-        // Its question set aside: the agent a human messaged works on that instead.
         const toldNow = reopened ?? (going ? yield* supersedingOf(stateDir, leader, live) : null);
         // A Reopened Run is the work its agent is doing now, while it does it; then its facts.
         const state = abandoned
