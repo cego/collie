@@ -245,6 +245,35 @@ test("a superseded workflow question takes an answer only from the agent the hum
     }),
   ));
 
+test("a revision opens only for the agents its caller found finished, not one messaged since", () =>
+  onStore(
+    "collie-store-revise-stale-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-1", "run-a", { note: "asks" }));
+      yield* store.asking({ run: "run-a", decision: "go", prompt: "Go?", options: ["yes"] });
+      yield* store.supersede({
+        run: "run-a",
+        decision: "go",
+        cause: "delivery-1",
+        actor: human,
+        agent: "planner",
+      });
+      const checked = (yield* store.asked("run-a"))[0]!.messaged ?? [];
+      const revise = (name: string, messaged: typeof checked) =>
+        store.revise({ run: "run-a", decision: "go", name, messaged });
+
+      yield* store.alsoMessaged({ run: "run-a", decision: "go", agent: "reviewer" });
+      expect(yield* revise("go.r2", checked)).toBe(false);
+
+      const refreshed = (yield* store.asked("run-a"))[0]!.messaged ?? [];
+      yield* store.alsoMessaged({ run: "run-a", decision: "go", agent: "planner" });
+      expect(yield* revise("go.r2", refreshed)).toBe(false);
+
+      expect(yield* revise("go.r2", (yield* store.asked("run-a"))[0]!.messaged ?? [])).toBe(true);
+    }),
+  ));
+
 test("two requests with the same input are two runs", () =>
   onStore(
     "collie-store-separate-",

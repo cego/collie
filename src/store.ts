@@ -208,14 +208,16 @@ export interface StoreApi {
     readonly agent: string;
   }) => Effect.Effect<Superseded>;
   /**
-   * Asks a superseded workflow question again as `name`, only while it is unanswered and
-   * unrevised, so the database orders it against the messaged agent's answer. True where
+   * Asks a superseded workflow question again as `name`, only while it is unanswered,
+   * unrevised and still waits on exactly the `messaged` its caller found finished, so the
+   * database orders it against the messaged agent's answer and a newer message. True where
    * this call opened it.
    */
   readonly revise: (revising: {
     readonly run: string;
     readonly decision: string;
     readonly name: string;
+    readonly messaged: NonNullable<DecisionRow["messaged"]>;
   }) => Effect.Effect<boolean>;
   /** Every workflow question set aside by a human's message and not yet asked again. */
   readonly setAside: Effect.Effect<ReadonlyArray<DecisionRow>>;
@@ -572,6 +574,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
               FROM collie_decisions
               WHERE run = ${revising.run} AND decision = ${revising.decision}
                 AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL
+                AND json(messaged) = json(${asJsonText(revising.messaged)})
                 AND NOT EXISTS (
                   SELECT 1 FROM collie_decisions revision
                   WHERE revision.run = ${revising.run} AND revision.revises = ${revising.decision}

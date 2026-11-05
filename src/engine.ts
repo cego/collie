@@ -7767,7 +7767,7 @@ const makeRegistry: (
       const lineage = lineageOf(rows, row.decision);
       const name = `${lineage[0]}.r${lineage.length + 1}`;
       for (const one of messaged) seenWorking.delete(keyOf(one.agent));
-      if (!(yield* store.revise({ run: row.run, decision: row.decision, name }))) continue;
+      if (!(yield* store.revise({ run: row.run, decision: row.decision, name, messaged }))) continue;
       const notifier = yield* Effect.serviceOption(Notifier);
       if (Option.isSome(notifier))
         yield* notifier.value.notify(row.run, "needs-you", `${name}: ${row.prompt}`, {
