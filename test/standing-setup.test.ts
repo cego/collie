@@ -231,7 +231,6 @@ test('"Not now" keeps this version in Desktop\'s own settings and "Don\'t ask ag
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
 
-/** One computer's Read, each message `size` characters long, a minute apart from `from`. */
 const readOf = (computer: string, from: string, count: number, size: number) => ({
   computer,
   words: {
