@@ -1,7 +1,7 @@
 // The Flock as the view holds it: the main process's `flock` stream, decoded with the
 // board's own Schemas and folded into each Machine's Tasks.
 
-import { Atom, AtomRpc } from "@effect/atom-vue";
+import { AsyncResult, Atom, AtomRpc } from "@effect/atom-vue";
 import { Effect, Layer, Option, Schema, Stream, flow, Result } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import { Electroview, type RPCSchema } from "electrobun/view";
@@ -17,6 +17,8 @@ import {
   DesktopRpcs,
   EMPTY_FLOCK,
   type Flock,
+  flockCards,
+  type FlockCards,
   type FlockItem,
 } from "../../src/shared/flock";
 import { foldedOf, heldOf, retryWake } from "../../src/shared/retrying";
@@ -90,6 +92,16 @@ export const flockAtom = FlockClient.runtime
     ),
   )
   .pipe(Atom.keepAlive);
+
+let cardsBefore: FlockCards | undefined;
+/** The Flock's cards, folded once per change for every page that reads them. */
+export const flockCardsAtom = Atom.make((get) => {
+  const flock = Option.getOrElse(
+    Option.flatMap(AsyncResult.value(get(flockAtom)), ({ value }) => value),
+    () => EMPTY_FLOCK,
+  );
+  return (cardsBefore = flockCards(flock, cardsBefore));
+}).pipe(Atom.keepAlive);
 
 /** Desktop's own settings, told again after every saved change, wherever it was made. */
 export const desktopSettingsAtom = FlockClient.runtime

@@ -13,15 +13,8 @@ import {
   sectionsOf,
   type TaskView,
 } from "../../../../src/board-model";
-import {
-  EMPTY_FLOCK,
-  flockCards,
-  type FlockCards,
-  machineRows,
-  notLiveOf,
-  type PlacedTask,
-} from "../../../src/shared/flock";
-import { flockAtom } from "../flock";
+import { EMPTY_FLOCK, machineRows, notLiveOf, type PlacedTask } from "../../../src/shared/flock";
+import { flockAtom, flockCardsAtom } from "../flock";
 import { machineOwnRows } from "../../../src/shared/machine-own";
 
 /** Now, again every minute: a week's fold and the header's count of it age with it. */
@@ -40,8 +33,7 @@ export const useFlock = () => {
   const clock = useAtomValue(() => clockAtom);
   const now = computed(() => AsyncResult.getOrElse(clock.value, () => 0));
   const told = computed(() => flock.value.value ?? EMPTY_FLOCK);
-  let before: FlockCards | undefined;
-  const board = computed(() => (before = flockCards(told.value, before)));
+  const board = useAtomValue(() => flockCardsAtom);
   const tasks = computed(() => board.value.tasks);
   const placed = (some: ReadonlyArray<TaskView>) => Arr.map(some, board.value.placedOf);
   const sections = computed(() => sectionsOf(tasks.value, ""));
