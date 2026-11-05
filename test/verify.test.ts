@@ -565,6 +565,30 @@ test("a subdirectory that becomes a repository of its own is fingerprinted by it
     }),
   ));
 
+test("a worktree root replaced by a repository of its own is fingerprinted by the new index", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const aside = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-moved-" });
+      const live = path.join(aside, "live");
+      yield* git(["worktree", "add", "-q", live]);
+      yield* fingerprint(live);
+      yield* git(["worktree", "move", live, path.join(aside, "moved")]);
+      yield* fs.makeDirectory(live);
+      yield* git(["init", "-q"], live);
+      yield* git(["config", "user.email", "t@example.com"], live);
+      yield* git(["config", "user.name", "t"], live);
+      yield* fs.writeFileString(path.join(live, ".gitignore"), "forced.txt\n");
+      yield* fs.writeFileString(path.join(live, "forced.txt"), "one\n");
+      yield* git(["add", "-f", ".gitignore", "forced.txt"], live);
+      yield* git(["commit", "-qm", "replacement"], live);
+      const before = yield* fingerprint(live);
+      yield* fs.writeFileString(path.join(live, "forced.txt"), "two\n");
+      expect(sameTree(before, yield* fingerprint(live))).toBe(false);
+    }),
+  ));
+
 test("a tree git cannot stage is no tree, so an edit it hides moves nothing into a pass", () =>
   inRepository(
     Effect.gen(function* () {

@@ -202,23 +202,37 @@ const unstagedPaths = (entries: string) => {
   return found;
 };
 
-/** Each checkout root's index; a subdirectory is asked each time, since it can become a repository of its own. */
-const places = new Map<string, { readonly index: string; readonly root: string }>();
+/**
+ * Each checkout root's index, kept while the root's `.git` stays what it was; a subdirectory
+ * is asked each time, since it can become a repository of its own.
+ */
+const places = new Map<
+  string,
+  { readonly index: string; readonly root: string; readonly dotGit: string }
+>();
+
+/** A `.git` directory's index is always its own; a `.git` file's is the gitdir it names. */
+const dotGitOf = Effect.fn("Verify.dotGitOf")(
+  function* (root: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dotGit = path.join(root, ".git");
+    const info = yield* fs.stat(dotGit);
+    return info.type === "Directory" ? "directory" : yield* fs.readFileString(dotGit);
+  },
+  Effect.orElseSucceed(() => null),
+);
 
 const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
-  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const dotGit = yield* dotGitOf(cwd);
   const known = places.get(cwd);
-  if (
-    known !== undefined &&
-    (yield* fs.exists(known.index).pipe(Effect.orElseSucceed(() => false)))
-  )
-    return known;
+  if (known !== undefined && known.dotGit === dotGit) return known;
   const said = yield* git(["rev-parse", "--git-path", "index", "--show-cdup"], cwd);
   if (said.code !== 0) return null;
   const [index, cdup = ""] = Str.split(said.stdout, "\n");
   const place = { index: path.resolve(cwd, index), root: path.resolve(cwd, cdup) };
-  if (cdup === "") places.set(cwd, place);
+  if (cdup === "" && dotGit !== null) places.set(cwd, { ...place, dotGit });
   return place;
 });
 
