@@ -157,8 +157,29 @@ test(
             outputMode: "content",
           });
           expect(searched.text).not.toContain("pull requests");
-          for (const one of [refused, found, searched])
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(`${world.home}/.codex`);
+          for (const history of [".claude/history.jsonl", ".codex/history.jsonl"])
+            yield* fs.writeFileString(`${world.home}/${history}`, `{"display":"${TYPED}"}\n`);
+          yield* fs.symlink(`${world.home}/.claude`, `${world.home}/link`);
+          const asked = [
+            yield* chat.grep({ pattern: "pull requests", path: world.home, outputMode: "content" }),
+            yield* chat.grep({
+              pattern: "pull requests",
+              path: `${world.home}/.codex`,
+              outputMode: "files_with_matches",
+            }),
+            yield* chat.grep({
+              pattern: "pull requests",
+              path: `${world.home}/link`,
+              outputMode: "content",
+            }),
+            yield* chat.glob({ pattern: "**/*.jsonl", path: `${world.home}/link` }),
+          ];
+          for (const one of [refused, found, searched, ...asked]) {
             expect(encode(one)).not.toContain("pull requests");
+            expect(encode(one)).not.toContain("jsonl");
+          }
           yield* stopHost(world.state);
         }),
       [],

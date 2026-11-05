@@ -95,7 +95,7 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
   closed: ReadonlyArray<string> = [],
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const root = yield* outside(dir, closed);
+  const root = yield* searchRoot(dir, closed);
   const shut = yield* closedRoots(closed);
   const paths = yield* Path.Path;
   const matches = reaches(pattern);
@@ -246,9 +246,10 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
   bound = SEARCH_LIMIT,
   closed: ReadonlyArray<string> = [],
 ) {
-  const root = yield* outside(asked.path, closed);
+  const root = yield* searchRoot(asked.path, closed);
   const shut = yield* closedRoots(closed);
-  const keep = (line: string) => !Arr.some(shut, (one) => pipe_(line, Str.startsWith(`${one}/`)));
+  // A line names its file first, and after it a separator that varies with the mode.
+  const keep = (line: string) => !Arr.some(shut, (one) => pipe_(line, Str.startsWith(one)));
   const mode = asked.outputMode ?? "files_with_matches";
   const rg = Bun.which("rg");
   // A search of one file runs beside it: a file is no working directory.
@@ -338,6 +339,18 @@ const outside = Effect.fn("HostFiles.outside")(function* (
   if (within(path, shut) || within(yield* realOf(path), shut))
     return yield* refused(`${path} ${SESSIONS_CLOSED}`);
   return path;
+});
+
+/**
+ * Where a search of `asked` starts: past its links where any path is closed, so that every path
+ * it prints is real, as `closed`'s own roots are.
+ */
+const searchRoot = Effect.fn("HostFiles.searchRoot")(function* (
+  asked: string,
+  closed: ReadonlyArray<string>,
+) {
+  const path = yield* outside(asked, closed);
+  return closed.length === 0 ? path : yield* realOf(path);
 });
 
 export const writeWhole = Effect.fn("HostFiles.write")(function* (
