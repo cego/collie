@@ -559,3 +559,51 @@ test("the inventory counts where the human's words are, and holds none of them",
         expect(said).not.toContain(typed);
     }).pipe(Effect.scoped),
   ));
+
+test("a typed turn that carries an image keeps its text; a tool's result beside text is still dropped", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const image = {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "iVBO" },
+      };
+      const words = yield* readOwnWords(
+        yield* places({
+          "home/.claude/projects/-home-u-shop/6e6e-image.jsonl": json([
+            claudeUser("6e6e-image", "2026-10-12T00:00:00.000Z", [
+              { type: "text", text: "Match this screenshot's spacing." },
+              image,
+            ]),
+            claudeUser("6e6e-image", "2026-10-12T00:01:00.000Z", [
+              { type: "tool_result", tool_use_id: "toolu_2", content: "Tool output." },
+              { type: "text", text: "Text a tool's result carried." },
+            ]),
+          ]),
+          "home/.pi/agent/sessions/--home-u-web--/2026-10-12T00-00-00-000Z_cc33.jsonl": json([
+            {
+              type: "session",
+              version: 3,
+              id: "cc33",
+              timestamp: "2026-10-12T00:00:00.000Z",
+              cwd: "/home/u/web",
+            },
+            {
+              type: "message",
+              id: "u1",
+              parentId: null,
+              timestamp: "2026-10-12T00:02:00.000Z",
+              message: {
+                role: "user",
+                content: [
+                  { type: "text", text: "Use this logo." },
+                  { type: "image", data: "iVBO", mimeType: "image/png" },
+                ],
+              },
+            },
+          ]),
+        }),
+        NOW,
+      );
+      expect(texts(words)).toEqual(["Use this logo.", "Match this screenshot's spacing."]);
+    }).pipe(Effect.scoped),
+  ));

@@ -66,14 +66,17 @@ const injected = (text: string) =>
 const withoutReminders = (text: string) =>
   Str.trim(pipe(text, Str.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")));
 
-/** Text blocks only: a list with anything else in it is a tool's, not the human's. */
+/** The text of a turn of text and images: a list with anything else in it is a tool's. */
 const typedText = (content: Json | undefined, kind: string) => {
   if (isString(content)) return content;
-  if (!isJsonArray(content) || content.length === 0) return undefined;
-  const blocks = Arr.map(content, (block) =>
-    stringAt(block, "type") === kind ? stringAt(block, "text") : undefined,
+  if (!isJsonArray(content)) return undefined;
+  const types = Arr.map(content, (block) => stringAt(block, "type"));
+  if (!Arr.every(types, (type) => type === kind || type === "image")) return undefined;
+  const texts = Arr.filter(
+    Arr.map(content, (block) => stringAt(block, "text")),
+    isString,
   );
-  return Arr.every(blocks, isString) ? Arr.join(blocks, "\n") : undefined;
+  return texts.length === 0 ? undefined : Arr.join(texts, "\n");
 };
 
 const claudeSession = (text: string, stem: string): Session => {
