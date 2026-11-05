@@ -12,6 +12,7 @@ import { isString } from "../../../../src/schema";
 import { type Attached, attachedIn, attachmentPart } from "../../../src/shared/attachments";
 import { About, type Answers, type HeldConversation } from "../../../src/shared/chat-view";
 import { replyEvents } from "../../../src/shared/chat-stream";
+import { SetupChoice } from "../../../src/shared/standing-setup";
 import {
   conversationChangesAtom,
   desktopTurnsAtom,
@@ -28,6 +29,7 @@ const popOutAtom = FlockClient.mutation("popOut");
 const popInAtom = FlockClient.mutation("popIn");
 
 const decodeAbout = Schema.decodeUnknownOption(About);
+const decodeSetup = Schema.decodeUnknownOption(SetupChoice);
 
 /** The card a message was sent about, which rides on it as its metadata. */
 export const aboutOf = (message: UIMessage | ModelMessage) =>
@@ -60,13 +62,21 @@ const lastSaid = (messages: ReadonlyArray<UIMessage | ModelMessage>) => {
 
 export const useFlockChat = () => {
   const registry = injectRegistry();
-  const turn = ({ text, about, attachments }: ReturnType<typeof lastSaid>, now: boolean) =>
+  const turn = (
+    { text, about, attachments }: ReturnType<typeof lastSaid>,
+    now: boolean,
+    setup: SetupChoice | null,
+  ) =>
     Stream.unwrap(
       AtomRegistry.getResult(registry, FlockClient.runtime).pipe(
         Effect.map((context) =>
           Stream.unwrap(
             FlockClient.use((client) =>
-              Effect.succeed(client("say", { text, about, now, attachments })),
+              Effect.succeed(
+                setup === null
+                  ? client("say", { text, about, now, attachments })
+                  : client("setUp", { choice: setup }),
+              ),
             ),
           ).pipe(Stream.provideContext(context)),
         ),
@@ -77,7 +87,7 @@ export const useFlockChat = () => {
       // SAFETY: AG-UI's event types are string enums whose values are these events' `type`s.
       connect: (messages, body, signal) =>
         replyEvents(
-          turn(lastSaid(messages), body?.now === true),
+          turn(lastSaid(messages), body?.now === true, Option.getOrNull(decodeSetup(body?.setup))),
           signal,
         ) as AsyncIterable<StreamChunk>,
     },
@@ -142,6 +152,14 @@ export const useFlockChat = () => {
         body: { now },
         whenBusy: now ? "interrupt" : "queue",
       });
+    },
+    /** Opens a new conversation for the setup the human chose, and starts it. */
+    setUp: (choice: SetupChoice) => {
+      chat.clear();
+      return chat.sendMessage(
+        { content: "Help me write my Standing direction." },
+        { body: { setup: choice }, whenBusy: "interrupt" },
+      );
     },
     answer: (toolCallId: string, answers: Answers) => answer({ payload: { toolCallId, answers } }),
     reload,

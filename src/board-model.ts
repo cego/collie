@@ -21,6 +21,7 @@ import { HarnessCatalogue } from "./catalogue-model";
 import { ConnectionLogin, HostConnections } from "./connection-model";
 import { HostDefinitions, SharedDefinition } from "./definitions-model";
 import { VerifySpecSchema } from "./verify-spec";
+import { OwnInventory, OwnWords } from "./own-words-model";
 
 const STATE_ORDER = [
   "blocked",
@@ -1673,6 +1674,10 @@ export const FrontDoorRpcs = RpcGroup.make(
   /** This Machine's settings that a Flock shares: those ever set, each with when. */
   Rpc.make("settings", { success: SharedSettings, error: HostRefused }),
   Rpc.make("machineOwn", { success: MachineOwn, error: HostRefused }),
+  /** Where the human's own typed words are on this Machine, and how many: no text. */
+  Rpc.make("ownInventory", { success: OwnInventory, error: HostRefused }),
+  /** The human's own typed words on this Machine, answered on Desktop's door alone. */
+  Rpc.make("ownWords", { success: OwnWords, error: HostRefused }),
   /**
    * The Flock's settings, each written with its own edit's time, where it is newer than
    * this Machine's last edit of that key.

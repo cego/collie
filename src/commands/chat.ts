@@ -29,7 +29,12 @@ import {
   read as readNews,
   uncertain as uncertainNews,
 } from "../news";
-import { claudeSettingsPath, installStatusLine, promptLineFor, statusLineFor } from "../statusline";
+import {
+  chatContextFor,
+  claudeSettingsPath,
+  installStatusLine,
+  statusLineFor,
+} from "../statusline";
 import { err, newRequestId } from "../operations";
 import { settleNewsFor } from "../lifecycle";
 import { machineHerd } from "../steering";
@@ -212,9 +217,17 @@ const statusLine = Command.make(
  */
 const context = Command.make("context", {}, () =>
   answering((env) =>
-    Effect.map(promptLineFor(env), (line) => ({ ok: true as const, data: { line }, human: line })),
+    Effect.map(chatContextFor(env), (context) => ({
+      ok: true as const,
+      data: { context },
+      human: context,
+    })),
   ),
-).pipe(Command.withDescription("The board's selection, as a chat prompt's context"));
+).pipe(
+  Command.withDescription(
+    "The Standing direction and the board's selection, as a chat prompt's context",
+  ),
+);
 
 /** Claude Code's other prompt hook: hands the prompt on stdin to the tool host. */
 const heard = Command.make("heard", {}, () =>

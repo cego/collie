@@ -265,6 +265,7 @@ import { VERIFYING_FILE, verifyingIn } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
+import { ownInventory, readOwnWords, SESSION_STORES } from "./own-words";
 import {
   loadDefaults,
   SettingRefused,
@@ -1469,6 +1470,11 @@ const frontDoorHandlers = (
         ...askerOf(client),
         ...stampOf(client),
       });
+      /** Where a door's file tools may not go: the human's sessions, but on Desktop's own. */
+      const closedTo = (client: { readonly id: number }) =>
+        whoOf(client).origin === "desktop"
+          ? []
+          : Arr.map(SESSION_STORES, (store) => `${env.home}/${store}`);
       /** An agent settled while Collie waits on its Output is told its verify ended, or it would wait forever. */
       const toldVerifyEnded = (
         client: { readonly id: number },
@@ -2018,10 +2024,35 @@ const frontDoorHandlers = (
             Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
             Effect.provideContext(bun),
           ),
+        ownInventory: () =>
+          ownInventory({ home: env.home, stateDir: env.stateDir }).pipe(Effect.provideContext(bun)),
+        ownWords: (_, { client }) =>
+          whoOf(client).origin === "desktop"
+            ? Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) =>
+                  readOwnWords({ home: env.home, stateDir: env.stateDir }, now),
+                ),
+                Effect.provideContext(bun),
+              )
+            : Effect.fail(
+                new HostRefused({
+                  reason:
+                    "the human's own words are given only to Desktop, on their click there; no chat, agent or command reads them",
+                }),
+              ),
         setSettings: ({ settings, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
               const who = whoOf(client);
+              // AGENTS.md's first invariant allows this one exception: a harm only an agent could cause.
+              if (
+                who.origin === "agent" &&
+                Arr.some(settings, ({ key }) => key === "standing_direction")
+              )
+                return yield* new HostRefused({
+                  reason:
+                    "a Run's agent cannot set standing_direction: it reads repositories and trackers, and what it wrote there would reach every chat as the human's words",
+                });
               const trail = (yield* Path.Path).join(env.stateDir, "settings");
               const taken = yield* once(
                 trail,
@@ -2227,11 +2258,14 @@ const frontDoorHandlers = (
               return { path: got.path };
             }),
           ),
-        readFile: ({ path, offset, length }) =>
-          readPart(path, offset, length).pipe(Effect.provideContext(bun)),
-        glob: ({ pattern, path }) => refusedPlainly(globFiles(pattern, path ?? env.home)),
-        grep: ({ path, ...asked }) =>
-          refusedPlainly(grepFiles({ ...asked, path: path ?? env.home })),
+        readFile: ({ path, offset, length }, { client }) =>
+          readPart(path, offset, length, closedTo(client)).pipe(Effect.provideContext(bun)),
+        glob: ({ pattern, path }, { client }) =>
+          refusedPlainly(globFiles(pattern, path ?? env.home, undefined, closedTo(client))),
+        grep: ({ path, ...asked }, { client }) =>
+          refusedPlainly(
+            grepFiles({ ...asked, path: path ?? env.home }, undefined, closedTo(client)),
+          ),
         writeFile: ({ path, content, request }, { client }) =>
           refusedPlainly(
             filesOnce(

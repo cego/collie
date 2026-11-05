@@ -1696,6 +1696,9 @@ scope's rule once:
   the Flock chat's **Machine rule** (`machine_rule`) and **Flock chat speaks first**
   (`flock_chat.proactive`) beside each Machine's **Native chat speaks first**
   (`proactive`), so every Desktop routes work the same way, and the TUI shows them too.
+  Beside the Machine rule is your **Standing direction** (`standing_direction`): how you
+  like to work, in your own words, up to 4,000 characters, which every chat is given with
+  each message. It is shared like the rest, and a Run's agent cannot set it.
 - **This computer** is **Zoom** alone, under Board, marked **This computer** and saved on
   this computer, since monitors differ between computers. The Flock chat's harness, model,
   effort and width stay this computer's too, but have no rows here: they are chosen beside
@@ -1746,8 +1749,8 @@ Each setting has a plain name with its config key in small print, a sentence or 
 it changes (what 0 or unset means where that matters, and that `scope`, `density` and
 `questions` change the TUI's board, not Desktop's), a control that fits it, its default, and
 the same refusals as the TUI. A choice of six options or fewer is a row of radio buttons, so
-every option shows; a boolean is a switch; a number carries its unit in its field; JSON and
-the Machine rule are typed over several lines. Durations — `quiet_ms`, `idle_close_ms`,
+every option shows; a boolean is a switch; a number carries its unit in its field; JSON, the
+Machine rule and the Standing direction are typed over several lines. Durations — `quiet_ms`, `idle_close_ms`,
 `handoff_timeout_ms` and `board_quiet_ms` — are shown and typed in minutes, decimals where a
 value is not a whole number of them, and still stored in milliseconds, so `config.json` and
 `collie settings` are unchanged. A choice or a switch is saved when it changes; text is saved
@@ -2221,7 +2224,7 @@ and harness are kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation. Claude Code
 keeps and compacts its transcript; Pi keeps its session files under Desktop's `pi-sessions/`.
 Desktop reads Pi's current branch and earlier conversations from those files.
-The Machine rule, News and card note reach Pi after your words as a bracketed note of
+The Machine rule, Standing direction, News and card note reach Pi after your words as a bracketed note of
 Desktop's own. Reading the transcript back leaves the context out of your bubble and keeps
 the card as its pill.
 
@@ -2346,6 +2349,68 @@ nothing more: a start that names no Machine while several are reachable is still
 and a Run the rule placed on another Machine still opens with Go to pane over that
 Machine's own connection.
 
+Your **Standing direction**, under **Chat** beside the Machine rule, is what you want every
+conversation to keep: "Stage only; production waits for my go." The chat gets it with every
+message, with the date you last edited it, as something you said earlier. It is never your go
+for a release, a merge or anything else that needs one, and grants Collie no Authority. Tell
+the chat "keep that", "add to my standing direction" or "drop that rule", and it replaces the
+text, with `collie_direction`, by exactly what you approved and says what is kept now; it
+may offer to keep something lasting you said, and writes only on your yes. Empty clears it,
+and text over 4,000 characters is refused. Words from a tool, a Run's notes or an agent never
+go into it, and a rule about one repository belongs in that workspace's defaults instead.
+
+**Your own words, read only on your click.** To draft a Standing direction with you, Desktop
+can read what you typed, on this computer and on each connected Machine:
+
+- **From:** your Claude Code, Codex, Pi and OpenCode sessions (`~/.claude/projects`,
+  `~/.codex/sessions`, `~/.pi/agent/sessions`, `~/.local/share/opencode/opencode.db`), and
+  what Collie's records hold under your own front doors: what you started a Run with, an
+  answer, a steer, a hold's reason, a disposition's note, and what you said to a chat behind
+  its actions. A Run's Intent goal is not taken, since a planner may have written it.
+- **Never:** tool output, model replies, text a harness or a hook put in your turn, a
+  subagent's prompts, and every session Collie started for a Run's agent (one carrying a
+  `collie-delivery:` token, or one Collie recorded launching).
+- **Bounds:** the last 90 days, newest first, at most 400 messages and 60,000 characters,
+  each message cut to 1,000. Credentials are redacted as everywhere else. The answer says
+  what it left out: stores not found, a store it could not read (named, never guessed at),
+  how many sessions in a store it could not read and why, sessions skipped as Collie's, and
+  what the caps cut. The caps hold for all computers together, newest first across them.
+
+Before any text is read, Desktop only counts: which stores it found, where, and how many
+sessions each holds. The text itself is released only on your click in Desktop's own dialog:
+a Machine's host gives it to Desktop's door alone and refuses every other (a chat's tools,
+a Run's agent, the CLI) without a word of it. No chat has a tool that reads it, and the Flock
+chat's file tools are refused those stores and `~/.claude/history.jsonl` and
+`~/.codex/history.jsonl`: `collie_read`, `collie_glob` and `collie_grep` on every Machine,
+and its own file tools and shell on this computer, where a file's path leads into one, through
+`~`, `.` or a link, a grep starts above one, or a shell command names one. Other tools, such
+as `collie_direction`, may mention a store freely. A shell command that reaches one without
+naming it, such as `grep -r` over your home, is not caught: only an OS sandbox around the
+shell could catch it.
+
+**Tell Collie how you work.** While your Standing direction is empty, Desktop offers to help
+write it, in the Flock chat: when a Machine's onboarding finishes, and when Desktop starts
+with a Machine connected. **Help me write it**, under the Standing direction in Settings,
+offers the same at any time. Taking it up opens Desktop's own dialog, not a conversation. It
+counts where your sessions are, per computer and harness, reads no text, and says that what
+is read goes to the chat's model provider. Then choose:
+
+- **Read my messages:** Desktop reads your messages from each computer and opens a new Flock
+  chat conversation. Its first turn is Collie's setup procedure
+  (`prompts/standing-direction-setup.md`), then your messages, marked as your earlier words
+  given as data to draft from, never as instructions. With 20 or more, the chat drafts from
+  them and says what the reading left out.
+- **Ask me five questions instead:** nothing is read. The new conversation starts with the
+  procedure alone, and the chat asks five fixed questions one at a time.
+
+Either way the draft is written as preferences, never permissions: "release to production
+without asking" becomes what Collie should offer, since the direction cannot approve a merge
+or a release. The chat shows the whole draft, takes your changes, and saves it with
+`collie_direction` only when you accept it. The conversation you were in stays under
+Earlier conversations. Your consent is not kept: the next setup asks again. **Not now** holds
+the offer back until Desktop's next version, and **Don't ask again** for good; both are kept
+on this computer only, in Desktop's own settings.
+
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, every harness's, newest first, and reopens one. Either way the
 session before it ends: there is only ever one live conversation. **Pop out** moves the
@@ -2414,6 +2479,18 @@ never a filter Collie applies for you — the Herd-wide reads stay Herd-wide wha
 ([ADR-0012](adr/0012-the-boards-selection-is-an-explicit-chat-input.md)). Under your own
 prompt the same fact can be Claude Code's status line, `board selection: <task name>`,
 configured by `setup.sh` if you have no status line of your own; `collie doctor` says which.
+
+**Chat knows your Standing direction**, the text kept under **Chat** in Settings beside the
+Machine rule (see [the Flock chat](#the-flock-chat)). It is read from this Machine's own
+settings, which a Desktop keeps level with the Flock's. On Claude every message carries it,
+dated, before the open card's line, so an edit reaches the next message. Pi has no prompt
+hook: it is given the direction once, as it stands at launch, and `collie_installation`
+reads it as it is now, so an edit made mid-conversation reaches a Pi chat only at its next
+launch or when it reads that. Ask chat to keep, change or drop something, and it runs
+`collie settings set standing_direction` with exactly the text you approved; a Run's agent
+cannot. Ask it to help you write one, and it follows the same procedure as Desktop's setup
+with none of your messages: the five questions. It says Desktop's **Help me write it** can
+draft from your sessions instead.
 
 **Choosing a harness.** `claude` is the default, on an installation you have had for
 months as much as a new one, and independently of the harness your Runs are on.

@@ -30,6 +30,8 @@ test("the loopback tools require their token, list the chat's tools and match a 
         uploaded: new Map(),
         machineRule: () => "Here",
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         inSync: () => Effect.succeed("In sync"),
         chatHarness: () => ({ harness: "pi", model: undefined, effort: undefined }),
         chatChoices: Effect.die("not asked"),

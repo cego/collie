@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { describe, expect, test } from "bun:test";
 import { Result, Schema } from "effect";
 import { harnessNames } from "../src/harness";
@@ -108,6 +109,24 @@ describe("Collie's settings", () => {
     });
   });
 
+  test("keep the human's Standing direction as their words, trimmed, up to 4,000 characters", () => {
+    expect(settingOf("standing_direction")).toMatchObject({
+      kind: "text",
+      fallback: "",
+      group: "Chat",
+    });
+    expect(
+      parseSetting("standing_direction", "\n Stage only;\nproduction waits for my go. \n"),
+    ).toEqual({
+      value: "Stage only;\nproduction waits for my go.",
+    });
+    const most = Str.repeat(4000)("x");
+    expect(parseSetting("standing_direction", ` ${most} `)).toEqual({ value: most });
+    const refused = parseSetting("standing_direction", `${most}y`);
+    expect(refused).toHaveProperty("refused");
+    expect("refused" in refused ? refused.refused : "").toContain("4,000");
+  });
+
   test("refuse what no Run could use, saying what would do", () => {
     expect(parseSetting("max_iterations", "five")).toEqual({
       refused: 'max_iterations has to be a whole number, not "five"',
@@ -183,7 +202,7 @@ describe("Each setting explains itself", () => {
       "release.approval_channel",
     ],
     Board: ["scope", "density", "board_quiet_ms"],
-    Chat: ["flock_chat.proactive", "machine_rule", "proactive"],
+    Chat: ["flock_chat.proactive", "machine_rule", "standing_direction", "proactive"],
     Notifications: [
       "questions",
       "slack.notification_channel",

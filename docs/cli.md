@@ -1086,7 +1086,8 @@ opened somewhere else carries no line about a board it is nowhere near.
 
 `chat context` is the same fact for the conversation: the Home's Claude Code runs it as a
 `UserPromptSubmit` hook, so each message you send carries one line naming the open card,
-and nothing at all while none is open. You never type it, and it is wired per launch —
+and nothing at all while none is open. Before that line it gives your Standing direction
+(`standing_direction`), dated, while one is set. You never type it, and it is wired per launch —
 nothing in your own Claude Code settings changes. A second hook beside it, `chat heard`,
 hands each message you send to Collie's tool host, so what `collie_do` carries out that
 turn is recorded with your words; the same command on Claude's `Stop` hook forgets them

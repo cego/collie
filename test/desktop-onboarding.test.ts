@@ -8,7 +8,17 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { platformLayer, type PlatformServices } from "../src/platform";
-import { Clock, Deferred, Effect, FileSystem, Option, Schedule, type Scope, Stream } from "effect";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  FileSystem,
+  Option,
+  Schedule,
+  type Scope,
+  Stream,
+  SubscriptionRef,
+} from "effect";
 import type { BoardMessage, BoardSnapshot } from "../src/board-model";
 import { signRelease } from "../src/signing";
 import { flockStream, localRoute, type Route } from "../desktop/src/bun/machine";
@@ -19,6 +29,7 @@ import {
   platformOf,
   verifiedRunner,
 } from "../desktop/src/bun/onboarding";
+import { setupOffer } from "../desktop/src/bun/standing-setup";
 import {
   applyItem,
   EMPTY_FLOCK,
@@ -256,6 +267,49 @@ test("onboarding puts the verified runner on the Machine and streams its steps, 
         { step: "runner", title: "Collie 0.40.0's runner, signed", status: "running" },
       ]);
       expect(yield* fs.readFile(`${home}/.cache/collie/runners/collie-0.40.0`)).toEqual(bytes);
+    }),
+  ));
+
+/** A runner whose `collie --json onboard` finishes with the Machine ready. */
+const ONBOARDED = `#!/bin/sh
+echo '{"event":"start","step":"system","title":"Checking for git, curl and openssl"}'
+echo '{"event":"result","step":"system","status":"done"}'
+echo '{"ok":true,"data":{"ready":true,"steps":[]}}'
+`;
+
+test("a finished onboarding offers help writing the Standing direction while it is empty, and not once it is set", () =>
+  run(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* scratch;
+      const home = `${dir}/home`;
+      yield* fs.makeDirectory(home);
+      const key = pair();
+      const bytes = new TextEncoder().encode(ONBOARDED);
+      const platform = platformOf(Str.trim(yield* Effect.promise(() => Bun.$`uname -sm`.text())))!;
+      const served = yield* releases({
+        [`/0.40.0/collie-${platform}`]: bytes,
+        [`/0.40.0/collie-${platform}.sig`]: signRelease(bytes, key.privateKey),
+      });
+      const onboarded = yield* onboardThrough(
+        { ...localRoute([], "pc"), sh: localSh(home) },
+        { version: "0.40.0", releases: served.base, runners: `${dir}/runners`, key: key.publicKey },
+        () => Effect.void,
+      );
+      expect(onboarded.ready).toBe(true);
+      const offeredAfter = (direction?: { readonly text: string; readonly at: string }) =>
+        Effect.gen(function* () {
+          const offer = yield* setupOffer({
+            facts: () => ({ direction, version: "0.40.0", settings: {} }),
+            save: () => Effect.void,
+          });
+          yield* offer.onboarded(onboarded);
+          return yield* SubscriptionRef.get(offer.offered);
+        });
+      expect(yield* offeredAfter()).toBe(true);
+      expect(
+        yield* offeredAfter({ text: "Offer the merge request.", at: "2026-11-01T09:00:00.000Z" }),
+      ).toBe(false);
     }),
   ));
 

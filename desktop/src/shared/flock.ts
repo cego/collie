@@ -42,6 +42,7 @@ import {
 } from "../../../src/board-model";
 import { HostDefinitions } from "../../../src/definitions-model";
 import { PeerView } from "../../../src/peers-model";
+import { ComputerStores, SetupChoice } from "./standing-setup";
 
 /**
  * A Machine as Desktop knows it: its installation id, the herdr profile it is reached
@@ -405,6 +406,10 @@ export const DesktopSettings = Schema.Struct({
   chatEffort: Schema.optionalKey(Schema.String),
   /** The Flock chat's width beside the board in CSS pixels; unset is `chatWidth`'s start. */
   chatWidth: Schema.optionalKey(Schema.Finite),
+  /** The Desktop version the human said "Not now" to the Standing direction's setup at. */
+  setupNotNow: Schema.optionalKey(Schema.String),
+  /** The human said "Don't ask again" to it. */
+  setupNever: Schema.optionalKey(Schema.Boolean),
 });
 export type DesktopSettings = typeof DesktopSettings.Type;
 
@@ -419,6 +424,8 @@ export const DesktopSettingsChange = Schema.Struct({
   chatEffort: Schema.optionalKey(Schema.String),
   /** Null unsets it. */
   chatWidth: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  setupNotNow: Schema.optionalKey(Schema.String),
+  setupNever: Schema.optionalKey(Schema.Boolean),
 });
 export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 
@@ -739,6 +746,20 @@ export const DesktopRpcs = RpcGroup.make(
     success: DesktopSettings,
     error: ActionFailed,
   }),
+  /** Whether Desktop offers to help write the Standing direction, now and as that changes. */
+  Rpc.make("setupOffer", { success: Schema.Boolean, stream: true }),
+  /** "Not now", or "Don't ask again" `forGood`. */
+  Rpc.make("declineSetup", { payload: { forGood: Schema.Boolean }, error: ActionFailed }),
+  /** Where each computer keeps the human's sessions, and how many; no message is read. */
+  Rpc.make("setupInventory", { success: Schema.Array(ComputerStores) }),
+  /** The human's choice in the dialog, for the Flock chat in whichever window it is. */
+  Rpc.make("chooseSetup", { payload: { choice: SetupChoice } }),
+  /** The choice waiting for a Flock chat to take it, or null, now and as that changes. */
+  Rpc.make("setupChosen", { success: Schema.NullOr(SetupChoice), stream: true }),
+  /** The waiting choice, to the one chat that takes it, or null. */
+  Rpc.make("takeSetup", { success: Schema.NullOr(SetupChoice) }),
+  /** The setup conversation the human chose, opened fresh, and its first turn as it streams. */
+  Rpc.make("setUp", { payload: { choice: SetupChoice }, success: AguiEvent, stream: true }),
 );
 
 /**

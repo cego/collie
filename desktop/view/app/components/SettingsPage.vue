@@ -46,6 +46,7 @@ const refreshSlackConnection = () =>
     }),
   );
 const { desktopSettings, change } = useDesktopSettings();
+const standingSetup = useStandingSetup();
 const { rows: machines, own, now } = useFlock();
 const { machines: catalogues, problem: catalogueProblem } = useCatalogues();
 const { machines: usage } = useUsage();
@@ -785,6 +786,16 @@ const drawnLine = computed(() =>
                           </template>
                         </UInput>
                         <div class="flex justify-end gap-2">
+                          <UButton
+                            v-if="row.key === 'standing_direction'"
+                            class="me-auto"
+                            color="neutral"
+                            variant="outline"
+                            icon="i-lucide-sparkles"
+                            label="Help me write it"
+                            data-testid="standing-setup-help"
+                            @click="standingSetup.open.value = true"
+                          />
                           <UButton
                             v-if="row.multiline && dirty(row)"
                             color="neutral"

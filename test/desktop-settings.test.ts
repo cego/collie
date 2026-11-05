@@ -239,8 +239,14 @@ test("Zoom is the one row kept on this computer, and the Flock chat's rule and s
   ).toEqual([
     ["flock_chat.proactive", true],
     ["machine_rule", true],
+    ["standing_direction", true],
     ["proactive", true],
   ]);
+  expect(row("standing_direction")).toMatchObject({
+    multiline: true,
+    set: false,
+    defaultSaid: "Unset: nothing kept",
+  });
   expect(row("machine_rule")).toMatchObject({
     multiline: true,
     set: false,

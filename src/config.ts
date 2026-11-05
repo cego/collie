@@ -24,6 +24,7 @@ import {
   WORKTREES_DIRECTORY,
 } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
+import type { StandingDirection } from "./standing-direction";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
 
 export { type Defaults, FALLBACK_DEFAULTS } from "./settings";
@@ -183,6 +184,19 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
 
 /** This Machine's settings a Flock shares: each ever set, and when, the file's time where unrecorded. */
 export const sharedSettings = (userDir: string) => settingsLocked(userDir, readShared(userDir));
+
+/** This Machine's Standing direction and its last edit, or undefined while it is empty. */
+export const standingDirectionOn = (userDir: string) =>
+  sharedSettings(userDir).pipe(
+    Effect.map(({ settings }): StandingDirection | undefined => {
+      const held = Arr.findFirst(settings, ({ key }) => key === "standing_direction");
+      return Option.match(held, {
+        onNone: () => undefined,
+        onSome: ({ value, at }) =>
+          isString(value) && Str.trim(value) !== "" ? { text: value, at } : undefined,
+      });
+    }),
+  );
 
 /** A shared value refused as one its setting does not take. */
 export class SettingRefused extends Data.TaggedError("SettingRefused")<{

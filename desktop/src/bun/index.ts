@@ -71,7 +71,8 @@ import { appWindowFor } from "./browser";
 import { applicationMenu } from "./menu";
 import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
-import { actionsLog } from "./sent";
+import { actionsLog, reasonOf } from "./sent";
+import { type Place, setUp, setupInventory, setupOffer, thisComputer } from "./standing-setup";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
 import { claudeCode, claudeModels } from "./claude";
 import { claudeDriver } from "./claude-driver";
@@ -98,6 +99,7 @@ import {
   editSetting,
   NO_FLOCK_SETTINGS,
   type FlockSettings,
+  standingDirectionOf,
 } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { changedLine } from "../../../src/schedule-model";
@@ -692,6 +694,7 @@ const main = Effect.gen(function* () {
       );
       const run =
         adding === undefined ? onboarded : yield* addedToCore(job, machine, onboarded, adding);
+      yield* offer.onboarded(run);
       if (run.ready === true && secrets !== "") yield* given.handed(machine, handed, run.steps);
       // Kept as skipped where the run ended before it, so the next run skips it too.
       const unreached = Arr.map(
@@ -887,6 +890,14 @@ const main = Effect.gen(function* () {
         Effect.orDie,
         Effect.provide(BunServices.layer),
       ),
+    standingDirection: () => standingDirectionOf(SubscriptionRef.getUnsafe(flockSettings)),
+    setStandingDirection: (text) =>
+      editFlock("standing_direction", text).pipe(
+        Effect.as(null),
+        Effect.catchTag("ActionFailed", ({ reason }) => Effect.succeed(reason)),
+        Effect.orDie,
+        Effect.provide(BunServices.layer),
+      ),
     choice: () =>
       opensOn(settings(), SubscriptionRef.getUnsafe(flockSettings), readPiConfig(own), lists),
     offered: (harness) =>
@@ -947,6 +958,33 @@ const main = Effect.gen(function* () {
     chat.pipe(
       Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),
     );
+  const home = yield* Config.String("HOME");
+  const setupPlaces = (): ReadonlyArray<Place> => {
+    const machines = Arr.map([...doors.values()], ({ machine, desktop }): Place => ({
+      computer: machine.name,
+      inventory: desktop.ownInventory().pipe(Effect.mapError(reasonOf)),
+      read: desktop.ownWords().pipe(Effect.mapError(reasonOf)),
+    }));
+    return Arr.some([...doors.values()], ({ machine }) => machine.profile === "local")
+      ? machines
+      : [thisComputer(home), ...machines];
+  };
+  const offer = yield* setupOffer({
+    facts: () => ({
+      direction: standingDirectionOf(SubscriptionRef.getUnsafe(flockSettings)),
+      version: manifest.version,
+      settings: settings(),
+    }),
+    save: saveSettings,
+  });
+  const anyConnected: Effect.Effect<void> = Effect.suspend(() =>
+    doors.size > 0 ? Effect.void : Deferred.await(doors.changed).pipe(Effect.andThen(anyConnected)),
+  );
+  yield* anyConnected.pipe(Effect.andThen(offer.launched), Effect.forkIn(scope));
+  yield* SubscriptionRef.changes(flockSettings).pipe(
+    Stream.runForEach(() => offer.directionChanged),
+    Effect.forkIn(scope),
+  );
   /** The terminal open in the window, and what ends it. */
   let shownTerminal:
     | {
@@ -1530,6 +1568,22 @@ const main = Effect.gen(function* () {
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.choices), Stream.empty)),
     drawn: () => SubscriptionRef.changes(drawn).pipe(Stream.filter((now) => now !== null)),
     setSettings: saveSettings,
+    setupOffer: () => SubscriptionRef.changes(offer.offered),
+    declineSetup: ({ forGood }) => offer.decline(forGood),
+    setupInventory: () => offer.taken.pipe(Effect.andThen(setupInventory(setupPlaces()))),
+    chooseSetup: ({ choice }) => offer.choose(choice),
+    setupChosen: () => SubscriptionRef.changes(offer.chosen),
+    takeSetup: () => offer.take,
+    setUp: ({ choice }) =>
+      Stream.unwrap(
+        Effect.map(chat, (opened) =>
+          Result.match(opened, {
+            onSuccess: (conversation) => setUp(choice, setupPlaces(), conversation),
+            onFailure: (cause) =>
+              Stream.make(refusal(`The Flock chat could not start: ${String(cause)}`)),
+          }),
+        ),
+      ),
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(

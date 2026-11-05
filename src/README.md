@@ -173,7 +173,9 @@ opener a front door runs, the host's `-O`-only handle and the sweep that closes 
 no longer names, and `-G`. `ssh-argv.ts` holds the argv and bounds Desktop shares with it, core's `via` for a Machine, the rider
 a session through the connection uses among them, so Desktop never loads the host's lock. `peers-model.ts` holds the peer records and states
 Desktop shares. `flock-settings.ts` holds the latest-edit rule and merge both hosts and
-Desktop use. `shared-definitions.ts` reads and writes the user Layer's files a Flock
+Desktop use. `standing-direction.ts` words the Standing direction block every chat,
+Native and Flock, is given. `own-words.ts` reads what the human typed in their harnesses' sessions
+and Collie's records, for drafting it; `own-words-model.ts` is what it answers. `shared-definitions.ts` reads and writes the user Layer's files a Flock
 shares, keeping replaced text under `replaced/`. `channel.ts` declares and pipes the channel the bridge and peer link share.
 
 `reports.ts` sends a settled Run's result to its recorded requester once, through the

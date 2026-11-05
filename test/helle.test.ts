@@ -1435,6 +1435,8 @@ const claimedThroughDesktop = Effect.fn("test.claimedThroughDesktop")(function* 
       uploaded: new Map(),
       machineRule: () => undefined,
       setMachineRule: () => Effect.void,
+      standingDirection: () => undefined,
+      setStandingDirection: () => Effect.succeed(null),
       inSync: () => Effect.succeed(""),
       helle: Effect.succeed({ url: server.base, token: "token-abc" }),
       chatHarness: () => ({ harness: "claude", model: undefined, effort: undefined }),

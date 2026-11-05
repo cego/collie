@@ -22,7 +22,12 @@ import {
   type Reached,
 } from "../desktop/src/bun/flock-tools";
 import type { ChatBoard, DesktopSettings } from "../desktop/src/shared/flock";
-import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
+import {
+  editSettings,
+  type FlockSettings,
+  NO_FLOCK_SETTINGS,
+  standingDirectionOf,
+} from "../desktop/src/shared/flock-settings";
 import type { Attempted } from "../desktop/src/bun/sent";
 import { changeSettings } from "../desktop/src/bun/settings";
 import { tableOffer } from "../desktop/src/bun/chat-choices";
@@ -274,6 +279,7 @@ const ON_DISK = new Map([
 let saved: string | undefined;
 const savedRule = () => saved;
 let chat: DesktopSettings = { proactive: true };
+let flockSettings: FlockSettings = NO_FLOCK_SETTINGS;
 
 const flockOf = (asked: Asked[]) => ({
   machines: () => [
@@ -291,6 +297,18 @@ const flockOf = (asked: Asked[]) => ({
   said: () => "stop the board bugs one",
   machineRule: () => saved,
   setMachineRule: (rule: string) => Effect.sync(() => (saved = rule)),
+  standingDirection: () => standingDirectionOf(flockSettings),
+  setStandingDirection: (text: string) =>
+    Effect.sync(() => {
+      const edited = editSettings(
+        flockSettings,
+        [{ key: "standing_direction", value: text }],
+        "2026-11-04T10:00:00.000Z",
+      );
+      if ("refused" in edited) return edited.refused;
+      flockSettings = edited;
+      return null;
+    }),
   chatHarness: () => ({
     harness: chat.chatHarness ?? "claude",
     model: chat.chatModel,
@@ -667,6 +685,8 @@ test("a Machine whose host is older than the Flock chat is written to by nothing
         conversation: "flock@mk-pc",
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         chatHarness: () => ({
           harness: "claude",
           model: undefined,
@@ -702,6 +722,8 @@ test("a Machine that stops answering costs a look for News its time, and the oth
         conversation: "flock@mk-pc",
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         chatHarness: () => ({
           harness: "claude",
           model: undefined,
@@ -730,6 +752,8 @@ const withUnread = (asked: Asked[], board: ChatBoard) => ({
   conversation: "flock@mk-pc",
   machineRule: () => undefined,
   setMachineRule: () => Effect.void,
+  standingDirection: () => undefined,
+  setStandingDirection: () => Effect.succeed(null),
   chatHarness: () => ({ harness: "claude", model: undefined, effort: undefined }),
   chatChoices: Effect.die("not asked"),
   setChatHarness: () => Effect.succeed(null),
@@ -1032,6 +1056,8 @@ test("a Machine whose host cannot answer a read is told to upgrade, one that is 
         said: () => undefined,
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         chatHarness: () => ({
           harness: "claude",
           model: undefined,
@@ -1081,6 +1107,34 @@ test("the Machine rule is read back as saved, and replaced with what the human a
         "The Machine rule is cleared.",
       );
       expect(savedRule()).toBe("");
+    }),
+  ));
+
+test("the Standing direction is read back, replaced by exactly what is asked, refused over 4,000 characters and cleared", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      flockSettings = NO_FLOCK_SETTINGS;
+      const kept = () => flockSettings.settings.standing_direction?.value ?? null;
+      expect(yield* call([], "collie_direction", {})).toBe(
+        "There is no standing direction: the human has not asked any chat to keep one.",
+      );
+      const replaced = yield* call([], "collie_direction", {
+        text: "  Stage only;\nproduction waits for my go.\n",
+      });
+      expect(replaced).toContain('"Stage only;\nproduction waits for my go."');
+      expect(kept()).toBe("Stage only;\nproduction waits for my go.");
+      const read = yield* call([], "collie_direction", {});
+      expect(read).toContain('"Stage only;\nproduction waits for my go."');
+      expect(read).toContain("2026-11-04");
+
+      const tooLong = yield* call([], "collie_direction", { text: Str.repeat(4001)("x") });
+      expect(tooLong).toContain("4,000");
+      expect(kept()).toBe("Stage only;\nproduction waits for my go.");
+
+      expect(yield* call([], "collie_direction", { text: "" })).toBe(
+        "The standing direction is cleared.",
+      );
+      expect(kept()).toBeNull();
     }),
   ));
 
@@ -1493,6 +1547,8 @@ test("a Machine whose Collie has no such operation is told to upgrade, and the r
         said: () => undefined,
         machineRule: () => undefined,
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         chatHarness: () => ({
           harness: "claude",
           model: undefined,
