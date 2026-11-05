@@ -5,12 +5,17 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
-import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Database } from "bun:sqlite";
 import { Effect, FileSystem, Result, Schema, flow } from "effect";
-import type { OwnMessage, OwnSource, OwnStore, OwnWords } from "./own-words-model";
+import {
+  type OwnMessage,
+  type OwnSource,
+  type OwnStore,
+  type OwnWords,
+  withinCaps,
+} from "./own-words-model";
 import { redact } from "./redact";
 import { epochMs, isoAt } from "./time";
 import { isJsonObject, isString, type JsonObject } from "./schema";
@@ -24,8 +29,6 @@ export interface OwnPlaces {
 }
 
 const DAYS = 90;
-const MOST_MESSAGES = 400;
-const MOST_CHARACTERS = 60_000;
 const MOST_IN_ONE = 1000;
 const DELIVERY = "collie-delivery:";
 
@@ -416,8 +419,6 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, re
   return { entries, words, unread: unread.said() };
 });
 
-const byNewest = Order.mapInput(Order.flip(Order.String), (one: OwnMessage) => one.at);
-
 interface Gathered {
   readonly stores: ReadonlyArray<OwnStore>;
   readonly messages: ReadonlyArray<OwnMessage>;
@@ -545,23 +546,20 @@ export const readOwnWords = Effect.fn("OwnWords.read")(function* (
 ) {
   const since = now - DAYS * 24 * 60 * 60 * 1000;
   const gathered = yield* gather(places, since);
-  const newest = Arr.sort(gathered.messages, byNewest);
-  const kept: Array<OwnMessage> = [];
-  let characters = 0;
-  let cut = 0;
-  for (const message of newest) {
-    const clean = redact(message.text);
-    const text = pipe(clean, Str.slice(0, MOST_IN_ONE));
-    if (kept.length >= MOST_MESSAGES || characters + text.length > MOST_CHARACTERS) break;
-    if (text !== clean) cut += 1;
-    characters += text.length;
-    kept.push({ ...message, text });
-  }
+  const cutOnes = new Set<OwnMessage>();
+  const { kept, leftOut } = withinCaps(
+    Arr.map(gathered.messages, (message) => {
+      const clean = redact(message.text);
+      const one = { ...message, text: pipe(clean, Str.slice(0, MOST_IN_ONE)) };
+      if (one.text !== clean) cutOnes.add(one);
+      return one;
+    }),
+  );
   return {
     messages: kept,
     stores: gathered.stores,
     skipped: gathered.skipped,
-    leftOut: newest.length - kept.length,
-    cut,
+    leftOut,
+    cut: Arr.filter(kept, (one) => cutOnes.has(one)).length,
   } satisfies OwnWords;
 });

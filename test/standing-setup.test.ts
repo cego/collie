@@ -8,7 +8,7 @@ import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Queue, Schema, Stream, SubscriptionRef } from "effect";
 import { TestClock } from "effect/testing";
 import { platformLayer } from "../src/platform";
-import { nowIso } from "../src/time";
+import { epochMs, isoAt, nowIso } from "../src/time";
 import { ownInventory, readOwnWords } from "../src/own-words";
 import procedure from "../prompts/standing-direction-setup.md" with { type: "text" };
 import { openFlockChat } from "../desktop/src/bun/chat";
@@ -18,7 +18,7 @@ import { heldSettings } from "../desktop/src/bun/settings";
 import { type Place, setUp, setupInventory, setupOffer } from "../desktop/src/bun/standing-setup";
 import type { DesktopSettings } from "../desktop/src/shared/flock";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
-import { offersSetup } from "../desktop/src/shared/standing-setup";
+import { offersSetup, setupTurn } from "../desktop/src/shared/standing-setup";
 
 const DIRECTION = { text: "Offer the merge request; I merge it.", at: "2026-11-01T09:00:00.000Z" };
 
@@ -230,3 +230,47 @@ test('"Not now" keeps this version in Desktop\'s own settings and "Don\'t ask ag
           expect(yield* fs.readFileString(`${dir}/${name}`)).not.toContain("setup");
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
+
+/** One computer's Read, each message `size` characters long, a minute apart from `from`. */
+const readOf = (computer: string, from: string, count: number, size: number) => ({
+  computer,
+  words: {
+    messages: Arr.makeBy(count, (i) => ({
+      source: "claude-code" as const,
+      at: isoAt(epochMs(from) + i * 60_000),
+      cwd: null,
+      text: pipe_(`${computer}-${i}.`, Str.padEnd(size, ".")),
+    })),
+    stores: [
+      {
+        source: "codex" as const,
+        where: "/home/u/.codex/sessions",
+        found: "read" as const,
+        sessions: 2,
+        unread: 1,
+        why: "2026/rollout-x.jsonl: line 1 is not a record it knows",
+      },
+    ],
+    skipped: 0,
+    leftOut: 0,
+    cut: 0,
+  },
+});
+
+test("the setup turn holds at most 400 messages and 60,000 characters from all computers together, newest first across them", () => {
+  const turn = setupTurn(procedure, [
+    readOf("laptop", "2026-10-01T00:00:00.000Z", 400, 150),
+    readOf("vm", "2026-11-01T00:00:00.000Z", 400, 150),
+  ]);
+  const listed = Arr.filter(Str.split(turn, "\n"), Str.startsWith("  laptop-"));
+  const vm = Arr.filter(Str.split(turn, "\n"), Str.startsWith("  vm-"));
+  expect(listed.length + vm.length).toBe(400);
+  expect(Arr.reduce([...listed, ...vm], 0, (n, line) => n + line.length - 2)).toBeLessThanOrEqual(
+    60_000,
+  );
+  expect(vm[0]).toStartWith("  vm-399.");
+  expect(listed).toEqual([]);
+  expect(turn).toContain("Below are 400 of the human's earlier messages");
+  expect(turn).toContain("400 messages over the caps of all computers together");
+  expect(turn).toContain("vm: codex at /home/u/.codex/sessions: 1 sessions not read");
+});

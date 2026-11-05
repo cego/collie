@@ -1,6 +1,8 @@
 // What the reader of the human's own words answers, kept apart from the reader so the board
 // protocol and Desktop's views can name it without loading a session store.
 
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import { Schema } from "effect";
 
 export const OwnSource = Schema.Literals(["claude-code", "codex", "pi", "opencode", "collie"]);
@@ -44,3 +46,21 @@ export const OwnWords = Schema.Struct({
   cut: Schema.Finite,
 });
 export type OwnWords = typeof OwnWords.Type;
+
+const MOST_MESSAGES = 400;
+const MOST_CHARACTERS = 60_000;
+
+const byNewest = Order.mapInput(Order.flip(Order.String), (one: OwnMessage) => one.at);
+
+/** The newest messages within the caps on what one setup may read, and how many more there were. */
+export const withinCaps = <M extends OwnMessage>(messages: ReadonlyArray<M>) => {
+  const newest = Arr.sort(messages, byNewest);
+  let characters = 0;
+  let kept = 0;
+  for (const { text } of newest) {
+    if (kept >= MOST_MESSAGES || characters + text.length > MOST_CHARACTERS) break;
+    characters += text.length;
+    kept += 1;
+  }
+  return { kept: Arr.take(newest, kept), leftOut: newest.length - kept };
+};

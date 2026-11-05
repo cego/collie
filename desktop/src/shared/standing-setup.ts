@@ -5,7 +5,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Schema } from "effect";
-import { OwnStore, type OwnWords } from "../../../src/own-words-model";
+import { OwnStore, type OwnWords, withinCaps } from "../../../src/own-words-model";
 import type { StandingDirection } from "../../../src/standing-direction";
 import type { DesktopSettings, DesktopSettingsChange } from "./flock";
 
@@ -73,16 +73,22 @@ const leftOut = (read: ComputerWords) => {
 export const setupTurn = (procedure: string, read: ReadonlyArray<ComputerWords> | null) => {
   if (read === null)
     return `${Str.trim(procedure)}\n\nThe human chose the five questions, so no earlier messages are given.`;
-  const messages = Arr.flatMap(read, (one) =>
-    "words" in one
-      ? Arr.map(
-          one.words.messages,
-          ({ source, at, cwd, text }) =>
-            `- ${one.computer} · ${source} · ${at}${cwd === null ? "" : ` · ${cwd}`}\n${indented(text)}`,
-        )
-      : [],
+  const { kept, leftOut: overAll } = withinCaps(
+    Arr.flatMap(read, (one) =>
+      "words" in one
+        ? Arr.map(one.words.messages, (message) => ({ ...message, computer: one.computer }))
+        : [],
+    ),
   );
-  const missing = Arr.flatMap(read, leftOut);
+  const messages = Arr.map(
+    kept,
+    ({ computer, source, at, cwd, text }) =>
+      `- ${computer} · ${source} · ${at}${cwd === null ? "" : ` · ${cwd}`}\n${indented(text)}`,
+  );
+  const missing = [
+    ...Arr.flatMap(read, leftOut),
+    ...(overAll > 0 ? [`${overAll} messages over the caps of all computers together`] : []),
+  ];
   return pipe_(
     [
       Str.trim(procedure),
