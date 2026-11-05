@@ -7698,14 +7698,9 @@ const makeRegistry: (
     }
   });
 
-  const superseding = (
-    runId: string,
-    cause: string,
-    actor: Asker | undefined,
-    sent: typeof Steered.Type,
-  ) =>
-    sent.delivered && actor !== undefined && speaksForHuman(actor)
-      ? supersedeFor(runId, cause, actor, sent.agent)
+  const superseding = (runId: string, actor: Asker | undefined, sent: typeof Steered.Type) =>
+    sent.delivered && sent.delivery !== undefined && actor !== undefined && speaksForHuman(actor)
+      ? supersedeFor(runId, sent.delivery, actor, sent.agent)
       : Effect.void;
 
   /** Typing into a Claude agent's pane, which its hook records as `external` (D1). */
@@ -8800,7 +8795,7 @@ const makeRegistry: (
         };
       }
       const sent = yield* (yield* Agents).steer(options);
-      yield* superseding(options.runId, options.request, options.actor, sent);
+      yield* superseding(options.runId, options.actor, sent);
       return sent.gone === true ? { ...sent, finished: yield* hasEnded(options.runId) } : sent;
     }),
 
@@ -8814,9 +8809,7 @@ const makeRegistry: (
           close: (decision, value) => host.close(runId, decision, value),
         }),
         (queued, sent) =>
-          superseding(queued.runId, queued.request, queued.actor, sent).pipe(
-            Effect.provideContext(services),
-          ),
+          superseding(queued.runId, queued.actor, sent).pipe(Effect.provideContext(services)),
       );
       yield* paneSubmits;
       yield* reviseQuestions;

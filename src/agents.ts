@@ -532,6 +532,8 @@ export type DeliveryMode = "boundary" | "now" | "interrupt";
 export interface Steered {
   readonly agent: string;
   readonly delivered: boolean;
+  /** The Delivery that carried it, where one was submitted. */
+  readonly delivery?: string;
   readonly detail: string;
   readonly queued?: boolean;
   /** Not delivered because no incarnation of the agent is alive. */
@@ -1714,13 +1716,22 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           about.runId,
           `${about.agent}: its ${delivery.kind} ${outcome.id} did not start a turn on core, so Enter was pressed once`,
         );
+      const id = outcome.id;
       if (outcome.submission === "observed")
-        return { sent: true, why: "", observed: dispatch.TURN_STARTED, pane, kept: fitted.kept };
+        return {
+          sent: true,
+          why: "",
+          id,
+          observed: dispatch.TURN_STARTED,
+          pane,
+          kept: fitted.kept,
+        };
       if (delivery.kind !== "steer" && delivery.kind !== "correction")
-        return { sent: true, why: "" };
+        return { sent: true, why: "", id };
       return {
         sent: true,
         why: "",
+        id,
         observed: yield* observe(about, entry, draft, delivery.herdr),
         pane,
         kept: fitted.kept,
@@ -1732,6 +1743,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return {
         sent: true,
         why: outcome.detail,
+        id: outcome.id ?? undefined,
         observed: outcome.held === "acknowledged" ? "taken when it was first sent" : null,
         pane,
       };
@@ -3524,6 +3536,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           if (previous !== undefined) {
             const result = SENT_STATES.has(previous.state)
               ? receipt(previous.agent, {
+                  id: previous.id,
                   observed:
                     previous.state === "acknowledged" ? "taken when it was first sent" : null,
                 })
@@ -3745,6 +3758,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 const receipt = (
   agent: string,
   sent: {
+    readonly id?: string | undefined;
     readonly observed?: string | null;
     readonly pane?: string;
     readonly kept?: string | null;
@@ -3758,6 +3772,7 @@ const receipt = (
     observed: how !== null,
   };
   if (how !== null) steered.how = how;
+  if (sent.id !== undefined) steered.delivery = sent.id;
   if (sent.pane !== undefined) steered.pane = sent.pane;
   if (sent.kept !== undefined && sent.kept !== null) steered.kept = sent.kept;
   return steered;

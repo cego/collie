@@ -478,7 +478,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
       `not sent to ${entry.agent}: ${inFlight.state} delivery ${inFlight.id} is already about this work`,
     );
     return {
-      ...refuse(null, "blocked", `${inFlight.id} is ${inFlight.state}`),
+      ...refuse(inFlight.id, "blocked", `${inFlight.id} is ${inFlight.state}`),
       held: inFlight.state,
     };
   }

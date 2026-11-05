@@ -209,6 +209,13 @@ const supersededBy = (at: AtQuestion, text: string, request: string, agent = at.
     expect(yield* tell(at, text, desktop(request), agent)).toMatchObject({ state: "applied" });
     expect(rowOf(yield* waitingOf(at), "go")).toMatchObject({ answer: null });
     expect(rowOf(yield* waitingOf(at), "go")?.superseded ?? null).not.toBeNull();
+    const sent = Arr.filter(
+      yield* deliveriesOf(at.world.state, at.runId),
+      (one) => one.delivery.cause.kind === "steer" && SENT_STATES.has(one.delivery.state),
+    );
+    expect(Arr.map(sent, (one) => one.delivery.id)).toContain(
+      rowOf(yield* waitingOf(at), "go")?.cause ?? "",
+    );
   });
 
 test(
