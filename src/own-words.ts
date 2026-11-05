@@ -1,0 +1,446 @@
+// What the human typed, read from each harness's sessions and Collie's records on this
+// computer, for a chat to draft their Standing direction from. Never a tool: the host answers
+// a Read only on Desktop's own door, after the human's click there.
+
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import { Database } from "bun:sqlite";
+import { Effect, FileSystem, Result, Schema, flow } from "effect";
+import type { OwnMessage, OwnSource, OwnStore, OwnWords } from "./own-words-model";
+import { redact } from "./redact";
+import { epochMs, isoAt } from "./time";
+import { isJsonObject, isString, type JsonObject } from "./schema";
+
+type Json = Schema.Json;
+const isJsonArray = Schema.is(Schema.Array(Schema.Json));
+
+export interface OwnPlaces {
+  readonly home: string;
+  readonly stateDir: string;
+}
+
+const DAYS = 90;
+const MOST_MESSAGES = 400;
+const MOST_CHARACTERS = 60_000;
+const MOST_IN_ONE = 1000;
+const DELIVERY = "collie-delivery:";
+
+interface Said {
+  readonly at: string;
+  readonly text: string;
+}
+
+/** One session as its store has it: the human's candidate messages, and whether Collie sent any. */
+interface Session {
+  readonly ids: ReadonlyArray<string>;
+  readonly cwd: string | null;
+  readonly said: ReadonlyArray<Said>;
+  readonly delivered: boolean;
+}
+
+const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+const objectsOf = (text: string) =>
+  Arr.flatMap(Str.split(text, "\n"), (line) =>
+    pipe(decodeLine(line), Option.filter(isJsonObject), Option.toArray),
+  );
+const objectAt = (value: Json | undefined, key: string): JsonObject | undefined => {
+  const found = isJsonObject(value) ? value[key] : undefined;
+  return isJsonObject(found) ? found : undefined;
+};
+const stringAt = (value: Json | undefined, key: string) => {
+  const found = isJsonObject(value) ? value[key] : undefined;
+  return isString(found) ? found : undefined;
+};
+
+/** Text the harness or a hook put where the human types. */
+const injected = (text: string) =>
+  /^<[a-z][\w-]*>/.test(text) ||
+  pipe(text, Str.startsWith("Caveat: ")) ||
+  pipe(text, Str.startsWith("[Request interrupted")) ||
+  pipe(text, Str.startsWith("# AGENTS.md instructions"));
+
+const withoutReminders = (text: string) =>
+  Str.trim(pipe(text, Str.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")));
+
+/** Text blocks only: a list with anything else in it is a tool's, not the human's. */
+const typedText = (content: Json | undefined, kind: string) => {
+  if (isString(content)) return content;
+  if (!isJsonArray(content) || content.length === 0) return undefined;
+  const blocks = Arr.map(content, (block) =>
+    stringAt(block, "type") === kind ? stringAt(block, "text") : undefined,
+  );
+  return Arr.every(blocks, isString) ? Arr.join(blocks, "\n") : undefined;
+};
+
+const claudeSession = (text: string, stem: string): Session => {
+  let cwd: string | null = null;
+  let delivered = false;
+  const said: Array<Said> = [];
+  for (const line of objectsOf(text)) {
+    if (line["type"] !== "user") continue;
+    cwd = stringAt(line, "cwd") ?? cwd;
+    const raw = typedText(objectAt(line, "message")?.["content"], "text");
+    if (raw === undefined) continue;
+    delivered ||= pipe(raw, Str.includes(DELIVERY));
+    const kind = stringAt(objectAt(line, "origin"), "kind");
+    if (
+      line["isMeta"] === true ||
+      line["isCompactSummary"] === true ||
+      line["isVisibleInTranscriptOnly"] === true ||
+      line["isSidechain"] === true ||
+      (kind !== undefined && kind !== "human")
+    )
+      continue;
+    const typed = withoutReminders(raw);
+    const at = stringAt(line, "timestamp");
+    if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+  }
+  return { ids: [stem], cwd, said, delivered };
+};
+
+const codexSession = (text: string): Session => {
+  let ids: ReadonlyArray<string> = [];
+  let cwd: string | null = null;
+  let spawned = false;
+  let delivered = false;
+  const said: Array<Said> = [];
+  for (const line of objectsOf(text)) {
+    const payload = objectAt(line, "payload");
+    if (line["type"] === "session_meta") {
+      ids = Arr.filter([stringAt(payload, "id"), stringAt(payload, "session_id")], isString);
+      cwd = stringAt(payload, "cwd") ?? cwd;
+      // A subagent's user turns are its parent model's words.
+      spawned = objectAt(payload, "source")?.["subagent"] !== undefined;
+      continue;
+    }
+    if (line["type"] !== "response_item") continue;
+    if (stringAt(payload, "type") !== "message" || stringAt(payload, "role") !== "user") continue;
+    const at = stringAt(line, "timestamp");
+    const content = payload?.["content"];
+    for (const block of isJsonArray(content) ? content : []) {
+      const raw = stringAt(block, "type") === "input_text" ? stringAt(block, "text") : undefined;
+      if (raw === undefined) continue;
+      delivered ||= pipe(raw, Str.includes(DELIVERY));
+      const typed = Str.trim(raw);
+      if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+    }
+  }
+  return { ids, cwd, said: spawned ? [] : said, delivered };
+};
+
+const piSession = (text: string): Session => {
+  let ids: ReadonlyArray<string> = [];
+  let cwd: string | null = null;
+  let delivered = false;
+  const said: Array<Said> = [];
+  for (const line of objectsOf(text)) {
+    if (line["type"] === "session") {
+      ids = Arr.filter([stringAt(line, "id")], isString);
+      cwd = stringAt(line, "cwd") ?? cwd;
+      continue;
+    }
+    const message = objectAt(line, "message");
+    if (line["type"] !== "message" || stringAt(message, "role") !== "user") continue;
+    const raw = typedText(message?.["content"], "text");
+    if (raw === undefined) continue;
+    delivered ||= pipe(raw, Str.includes(DELIVERY));
+    const typed = Str.trim(raw);
+    const at = stringAt(line, "timestamp");
+    if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+  }
+  return { ids, cwd, said, delivered };
+};
+
+const OpenCodeRow = Schema.Struct({
+  session: Schema.String,
+  parent: Schema.NullOr(Schema.String),
+  directory: Schema.String,
+  at: Schema.Finite,
+  part: Schema.String,
+});
+const decodeRows = flow(Schema.decodeUnknownResult(Schema.Array(OpenCodeRow)), Result.getOrThrow);
+const decodeCount = flow(
+  Schema.decodeUnknownResult(Schema.Struct({ n: Schema.Finite })),
+  Result.getOrThrow,
+);
+
+/** OpenCode's SQLite store, read-only; any table or column it lacks makes it unreadable. */
+const openCodeStore = (file: string, since: number | null) =>
+  Effect.try({
+    try: () => {
+      const db = new Database(file, { readonly: true });
+      try {
+        const count = decodeCount(db.query("SELECT count(*) AS n FROM session").get()).n;
+        if (since === null) return { count, sessions: [] };
+        const rows = decodeRows(
+          db
+            .query(
+              `SELECT s.id AS session, s.parent_id AS parent, s.directory AS directory,
+                      m.time_created AS at, p.data AS part
+               FROM part p JOIN message m ON m.id = p.message_id JOIN session s ON s.id = m.session_id
+               WHERE json_extract(m.data, '$.role') = 'user' AND m.time_created >= ?
+               ORDER BY m.time_created, p.id`,
+            )
+            .all(since),
+        );
+        const sessions = Arr.map(
+          Rec.values(Arr.groupBy(rows, (row) => row.session)),
+          (parts): Session => {
+            let delivered = false;
+            const said: Array<Said> = [];
+            for (const row of parts) {
+              const part = pipe(decodeLine(row.part), Option.getOrUndefined);
+              const raw = stringAt(part, "type") === "text" ? stringAt(part, "text") : undefined;
+              if (raw === undefined) continue;
+              delivered ||= pipe(raw, Str.includes(DELIVERY));
+              const typed = Str.trim(raw);
+              if (isJsonObject(part) && part["synthetic"] === true) continue;
+              if (typed !== "" && !injected(typed)) said.push({ at: isoAt(row.at), text: typed });
+            }
+            const first = parts[0]!;
+            // A child session's user turns are the model's own.
+            return {
+              ids: [first.session],
+              cwd: first.directory,
+              said: first.parent === null ? said : [],
+              delivered,
+            };
+          },
+        );
+        return { count, sessions };
+      } finally {
+        db.close();
+      }
+    },
+    catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
+  });
+
+/** A harness's session files, and how each is read. */
+interface FileStore {
+  readonly source: OwnSource;
+  readonly root: string;
+  readonly isSession: (relative: string) => boolean;
+  readonly read: (text: string, relative: string) => Session;
+}
+
+const fileStores = (home: string): ReadonlyArray<FileStore> => [
+  {
+    source: "claude-code",
+    root: `${home}/.claude/projects`,
+    // A session's own subagents are kept in a folder beside it, as sidechains.
+    isSession: (relative) => /^[^/]+\/[^/]+\.jsonl$/.test(relative),
+    read: (text, relative) =>
+      claudeSession(
+        text,
+        pipe(relative, Str.split("/"), Arr.lastNonEmpty, Str.replace(/\.jsonl$/, "")),
+      ),
+  },
+  {
+    source: "codex",
+    root: `${home}/.codex/sessions`,
+    isSession: (relative) => /(^|\/)rollout-[^/]*\.jsonl$/.test(relative),
+    read: codexSession,
+  },
+  {
+    source: "pi",
+    root: `${home}/.pi/agent/sessions`,
+    isSession: (relative) => /^[^/]+\/[^/]+\.jsonl$/.test(relative),
+    read: piSession,
+  },
+];
+
+const openCodeFile = (home: string) => `${home}/.local/share/opencode/opencode.db`;
+
+/** Every session Collie recorded launching a Run's agent in, by id or path. */
+const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(function* (
+  stateDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = `${stateDir}/agents`;
+  const names = yield* fs
+    .readDirectory(dir, { recursive: true })
+    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+  const sessions = new Set<string>();
+  for (const name of Arr.filter(names, Str.endsWith(".launch.json"))) {
+    const text = yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
+    const value = stringAt(
+      objectAt(pipe(decodeLine(text), Option.getOrUndefined), "agentSession"),
+      "value",
+    );
+    if (value !== undefined) sessions.add(value);
+  }
+  return sessions;
+});
+
+const HUMAN_DOORS = new Set(["desktop", "cli-tty", "board"]);
+
+/** The human's words in Collie's records, each under the Run it was said to. */
+const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = `${stateDir}/runs`;
+  const runs = yield* fs.readDirectory(dir);
+  const words: Array<OwnMessage> = [];
+  for (const run of runs) {
+    const lines = objectsOf(
+      yield* fs
+        .readFileString(`${dir}/${run}/operations.jsonl`)
+        .pipe(Effect.orElseSucceed(() => "")),
+    );
+    const goal = () =>
+      fs.readFileString(`${dir}/${run}/intent.json`).pipe(
+        Effect.map((text) => stringAt(pipe(decodeLine(text), Option.getOrUndefined), "goal")),
+        Effect.orElseSucceed(() => undefined),
+      );
+    const seen = new Set<string>();
+    for (const line of lines) {
+      const actor = objectAt(line, "actor");
+      const origin = stringAt(actor, "origin");
+      const said = origin === "chat" ? stringAt(actor, "said") : undefined;
+      if (said === undefined && !HUMAN_DOORS.has(origin ?? "")) continue;
+      const asked = objectAt(line, "asked");
+      const text =
+        said ??
+        (line["operation"] === "start"
+          ? yield* goal()
+          : (stringAt(asked, "text") ?? stringAt(asked, "reason") ?? stringAt(asked, "note")));
+      const at = stringAt(line, "at");
+      const typed = text === undefined ? "" : Str.trim(text);
+      if (typed === "" || at === undefined || seen.has(typed)) continue;
+      seen.add(typed);
+      words.push({ source: "collie", at, cwd: null, text: typed, run });
+    }
+  }
+  return words;
+});
+
+const byNewest = Order.mapInput(Order.flip(Order.String), (one: OwnMessage) => one.at);
+
+interface Gathered {
+  readonly stores: ReadonlyArray<OwnStore>;
+  readonly messages: ReadonlyArray<OwnMessage>;
+  readonly skipped: number;
+}
+
+const notThere = (source: OwnSource, where: string): OwnStore => ({
+  source,
+  where,
+  found: "missing",
+  sessions: 0,
+});
+
+/** Each store, read for messages said `since` where it is given, or only counted where not. */
+const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since: number | null) {
+  const fs = yield* FileSystem.FileSystem;
+  const recorded =
+    since === null ? new Set<string>() : yield* recordedAgentSessions(places.stateDir);
+  const stores: Array<OwnStore> = [];
+  const messages: Array<OwnMessage> = [];
+  let skipped = 0;
+  const take = (source: OwnSource, session: Session, ids: ReadonlyArray<string>) => {
+    if (session.delivered || Arr.some(ids, (id) => recorded.has(id))) {
+      skipped += 1;
+      return;
+    }
+    for (const { at, text } of session.said)
+      if (since === null || epochMs(at) >= since)
+        messages.push({ source, at, cwd: session.cwd, text });
+  };
+
+  for (const store of fileStores(places.home)) {
+    if (!(yield* fs.exists(store.root).pipe(Effect.orElseSucceed(() => false)))) {
+      stores.push(notThere(store.source, store.root));
+      continue;
+    }
+    const listed = yield* fs.readDirectory(store.root, { recursive: true }).pipe(Effect.result);
+    if (listed._tag === "Failure") {
+      stores.push({
+        ...notThere(store.source, store.root),
+        found: "unreadable",
+        why: String(listed.failure),
+      });
+      continue;
+    }
+    const files = Arr.filter(listed.success, store.isSession);
+    stores.push({ source: store.source, where: store.root, found: "read", sessions: files.length });
+    if (since === null) continue;
+    for (const relative of files) {
+      const path = `${store.root}/${relative}`;
+      // ponytail: a whole file is read at once; stream it if sessions outgrow memory.
+      const modified = yield* fs.stat(path).pipe(
+        Effect.map((info) => Option.getOrUndefined(info.mtime)),
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (modified !== undefined && modified.getTime() < since) continue;
+      const text = yield* fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
+      const session = store.read(text, relative);
+      take(store.source, session, [...session.ids, path]);
+    }
+  }
+
+  const openCode = openCodeFile(places.home);
+  if (!(yield* fs.exists(openCode).pipe(Effect.orElseSucceed(() => false))))
+    stores.push(notThere("opencode", openCode));
+  else {
+    const read = yield* openCodeStore(openCode, since).pipe(Effect.result);
+    if (read._tag === "Failure")
+      stores.push({ ...notThere("opencode", openCode), found: "unreadable", why: read.failure });
+    else {
+      stores.push({
+        source: "opencode",
+        where: openCode,
+        found: "read",
+        sessions: read.success.count,
+      });
+      for (const session of read.success.sessions) take("opencode", session, session.ids);
+    }
+  }
+
+  const runs = `${places.stateDir}/runs`;
+  const collie = yield* collieWords(places.stateDir).pipe(Effect.result);
+  if (collie._tag === "Failure") stores.push(notThere("collie", runs));
+  else {
+    stores.push({ source: "collie", where: runs, found: "read", sessions: collie.success.length });
+    for (const one of collie.success)
+      if (since === null || epochMs(one.at) >= since) messages.push(one);
+  }
+  return { stores, messages, skipped } satisfies Gathered;
+});
+
+/** Where the human's words are and how many sessions hold them; no text. */
+export const ownInventory = Effect.fn("OwnWords.inventory")(function* (places: OwnPlaces) {
+  const { stores } = yield* gather(places, null);
+  return { stores };
+});
+
+/** The human's typed messages, newest first, within the caps, saying what was left out. */
+export const readOwnWords = Effect.fn("OwnWords.read")(function* (
+  places: OwnPlaces,
+  /** Epoch milliseconds. */
+  now: number,
+) {
+  const since = now - DAYS * 24 * 60 * 60 * 1000;
+  const gathered = yield* gather(places, since);
+  const newest = Arr.sort(gathered.messages, byNewest);
+  const kept: Array<OwnMessage> = [];
+  let characters = 0;
+  let cut = 0;
+  for (const message of newest) {
+    const clean = redact(message.text);
+    const text = pipe(clean, Str.slice(0, MOST_IN_ONE));
+    if (kept.length >= MOST_MESSAGES || characters + text.length > MOST_CHARACTERS) break;
+    if (text !== clean) cut += 1;
+    characters += text.length;
+    kept.push({ ...message, text });
+  }
+  return {
+    messages: kept,
+    stores: gathered.stores,
+    skipped: gathered.skipped,
+    leftOut: newest.length - kept.length,
+    cut,
+  } satisfies OwnWords;
+});

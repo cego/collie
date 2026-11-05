@@ -265,6 +265,7 @@ import { VERIFYING_FILE, verifyingIn } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
+import { ownInventory, readOwnWords } from "./own-words";
 import {
   loadDefaults,
   SettingRefused,
@@ -2018,6 +2019,22 @@ const frontDoorHandlers = (
             Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
             Effect.provideContext(bun),
           ),
+        ownInventory: () =>
+          ownInventory({ home: env.home, stateDir: env.stateDir }).pipe(Effect.provideContext(bun)),
+        ownWords: (_, { client }) =>
+          whoOf(client).origin === "desktop"
+            ? Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) =>
+                  readOwnWords({ home: env.home, stateDir: env.stateDir }, now),
+                ),
+                Effect.provideContext(bun),
+              )
+            : Effect.fail(
+                new HostRefused({
+                  reason:
+                    "the human's own words are given only to Desktop, on their click there; no chat, agent or command reads them",
+                }),
+              ),
         setSettings: ({ settings, request }, { client }) =>
           plainly(
             Effect.gen(function* () {

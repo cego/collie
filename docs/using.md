@@ -2359,6 +2359,26 @@ may offer to keep something lasting you said, and writes only on your yes. Empty
 and text over 4,000 characters is refused. Words from a tool, a Run's notes or an agent never
 go into it, and a rule about one repository belongs in that workspace's defaults instead.
 
+**Your own words, read only on your click.** To draft a Standing direction with you, Desktop
+can read what you typed, on this computer and on each connected Machine:
+
+- **From:** your Claude Code, Codex, Pi and OpenCode sessions (`~/.claude/projects`,
+  `~/.codex/sessions`, `~/.pi/agent/sessions`, `~/.local/share/opencode/opencode.db`), and
+  what Collie's records hold under your own front doors: a Run's goal, a steer, a hold's
+  reason, a disposition's note, and what you said to a chat behind its actions.
+- **Never:** tool output, model replies, text a harness or a hook put in your turn, a
+  subagent's prompts, and every session Collie started for a Run's agent (one carrying a
+  `collie-delivery:` token, or one Collie recorded launching).
+- **Bounds:** the last 90 days, newest first, at most 400 messages and 60,000 characters,
+  each message cut to 1,000. Credentials are redacted as everywhere else. The answer says
+  what it left out: stores not found, a store it could not read (named, never guessed at),
+  sessions skipped as Collie's, and what the caps cut.
+
+Before any text is read, Desktop only counts: which stores it found, where, and how many
+sessions each holds. The text itself is released only on your click in Desktop's own dialog:
+a Machine's host gives it to Desktop's door alone and refuses every other (a chat's tools,
+a Run's agent, the CLI) without a word of it. No chat has a tool that reads it.
+
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, every harness's, newest first, and reopens one. Either way the
 session before it ends: there is only ever one live conversation. **Pop out** moves the
