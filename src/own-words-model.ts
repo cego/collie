@@ -12,6 +12,8 @@ export const OwnStore = Schema.Struct({
   where: Schema.String,
   found: Schema.Literals(["read", "missing", "unreadable"]),
   sessions: Schema.Finite,
+  /** Sessions it could not read, the first of them named in `why`. */
+  unread: Schema.optionalKey(Schema.Finite),
   why: Schema.optionalKey(Schema.String),
 });
 export type OwnStore = typeof OwnStore.Type;

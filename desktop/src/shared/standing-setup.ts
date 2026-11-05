@@ -54,8 +54,12 @@ const leftOut = (read: ComputerWords) => {
   const { stores, skipped, leftOut, cut } = read.words;
   return Arr.map(
     [
-      ...Arr.flatMap(stores, ({ source, where, found, why }) =>
-        found === "read" ? [] : [`${source} at ${where} ${found}${why ? `: ${why}` : ""}`],
+      ...Arr.flatMap(stores, ({ source, where, found, unread, why }) =>
+        found !== "read"
+          ? [`${source} at ${where} ${found}${why ? `: ${why}` : ""}`]
+          : unread === undefined
+            ? []
+            : [`${source} at ${where}: ${unread} sessions not read, such as ${why}`],
       ),
       ...(skipped > 0 ? [`${skipped} sessions skipped as Collie's own`] : []),
       ...(leftOut > 0 ? [`${leftOut} messages over the caps`] : []),

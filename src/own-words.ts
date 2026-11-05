@@ -47,6 +47,18 @@ const objectsOf = (text: string) =>
   Arr.flatMap(Str.split(text, "\n"), (line) =>
     pipe(decodeLine(line), Option.filter(isJsonObject), Option.toArray),
   );
+/** Each line's record, or why the file is not one the reader knows. */
+const recordsOf = (text: string): ReadonlyArray<JsonObject> | string => {
+  const records: Array<JsonObject> = [];
+  for (const [index, line] of Arr.map(Str.split(text, "\n"), (line, i) => [i, line] as const)) {
+    if (Str.trim(line) === "") continue;
+    const record = pipe(decodeLine(line), Option.filter(isJsonObject), Option.getOrUndefined);
+    if (record === undefined || !isString(record["type"]))
+      return `line ${index + 1} is not a record it knows`;
+    records.push(record);
+  }
+  return records;
+};
 const objectAt = (value: Json | undefined, key: string): JsonObject | undefined => {
   const found = isJsonObject(value) ? value[key] : undefined;
   return isJsonObject(found) ? found : undefined;
@@ -79,11 +91,11 @@ const typedText = (content: Json | undefined, kind: string) => {
   return texts.length === 0 ? undefined : Arr.join(texts, "\n");
 };
 
-const claudeSession = (text: string, stem: string): Session => {
+const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string): Session => {
   let cwd: string | null = null;
   let delivered = false;
   const said: Array<Said> = [];
-  for (const line of objectsOf(text)) {
+  for (const line of records) {
     if (line["type"] !== "user") continue;
     cwd = stringAt(line, "cwd") ?? cwd;
     const raw = typedText(objectAt(line, "message")?.["content"], "text");
@@ -105,13 +117,13 @@ const claudeSession = (text: string, stem: string): Session => {
   return { ids: [stem], cwd, said, delivered };
 };
 
-const codexSession = (text: string): Session => {
+const codexSession = (records: ReadonlyArray<JsonObject>): Session => {
   let ids: ReadonlyArray<string> = [];
   let cwd: string | null = null;
   let spawned = false;
   let delivered = false;
   const said: Array<Said> = [];
-  for (const line of objectsOf(text)) {
+  for (const line of records) {
     const payload = objectAt(line, "payload");
     if (line["type"] === "session_meta") {
       ids = Arr.filter([stringAt(payload, "id"), stringAt(payload, "session_id")], isString);
@@ -135,12 +147,12 @@ const codexSession = (text: string): Session => {
   return { ids, cwd, said: spawned ? [] : said, delivered };
 };
 
-const piSession = (text: string): Session => {
+const piSession = (records: ReadonlyArray<JsonObject>): Session => {
   let ids: ReadonlyArray<string> = [];
   let cwd: string | null = null;
   let delivered = false;
   const said: Array<Said> = [];
-  for (const line of objectsOf(text)) {
+  for (const line of records) {
     if (line["type"] === "session") {
       ids = Arr.filter([stringAt(line, "id")], isString);
       cwd = stringAt(line, "cwd") ?? cwd;
@@ -251,7 +263,7 @@ interface FileStore {
   readonly source: OwnSource;
   readonly root: string;
   readonly isSession: (relative: string) => boolean;
-  readonly read: (text: string, relative: string) => Session;
+  readonly read: (records: ReadonlyArray<JsonObject>, relative: string) => Session;
 }
 
 const fileStores = (home: string): ReadonlyArray<FileStore> => [
@@ -260,9 +272,9 @@ const fileStores = (home: string): ReadonlyArray<FileStore> => [
     root: `${home}/.claude/projects`,
     // A session's own subagents are kept in a folder beside it, as sidechains.
     isSession: (relative) => /^[^/]+\/[^/]+\.jsonl$/.test(relative),
-    read: (text, relative) =>
+    read: (records, relative) =>
       claudeSession(
-        text,
+        records,
         pipe(relative, Str.split("/"), Arr.lastNonEmpty, Str.replace(/\.jsonl$/, "")),
       ),
   },
@@ -352,6 +364,19 @@ const typedIn = (line: JsonObject, started: ReadonlyMap<string, string>, run: st
   );
 };
 
+/** The sessions of a store it could not read, and why the first could not. */
+class Unread {
+  private count = 0;
+  private first: string | undefined;
+  add(which: string, why: string) {
+    this.count += 1;
+    this.first ??= `${which}: ${why}`;
+  }
+  said(): Pick<OwnStore, "unread" | "why"> {
+    return this.first === undefined ? {} : { unread: this.count, why: this.first };
+  }
+}
+
 /**
  * How many human entries Collie's records hold, and, when `reading`, the words they hold, each
  * under the Run it was said to.
@@ -362,16 +387,20 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, re
   const runs = yield* fs.readDirectory(dir);
   const started = reading ? yield* startedWords(stateDir) : new Map<string, string>();
   const words: Array<OwnMessage> = [];
+  const unread = new Unread();
   let entries = 0;
   for (const run of runs) {
-    const lines = Arr.filter(
-      objectsOf(
-        yield* fs
-          .readFileString(`${dir}/${run}/operations.jsonl`)
-          .pipe(Effect.orElseSucceed(() => "")),
+    const read = yield* fs.readFileString(`${dir}/${run}/operations.jsonl`).pipe(
+      Effect.catchTag("PlatformError", (error) =>
+        error.reason._tag === "NotFound" ? Effect.succeed("") : Effect.fail(String(error)),
       ),
-      isHuman,
+      Effect.result,
     );
+    if (read._tag === "Failure") {
+      unread.add(run, read.failure);
+      continue;
+    }
+    const lines = Arr.filter(objectsOf(read.success), isHuman);
     entries += lines.length;
     if (!reading) continue;
     const seen = new Set<string>();
@@ -384,7 +413,7 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, re
       words.push({ source: "collie", at, cwd: null, text: typed, run });
     }
   }
-  return { entries, words };
+  return { entries, words, unread: unread.said() };
 });
 
 const byNewest = Order.mapInput(Order.flip(Order.String), (one: OwnMessage) => one.at);
@@ -435,20 +464,31 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
       continue;
     }
     const files = Arr.filter(listed.success, store.isSession);
-    stores.push({ source: store.source, where: store.root, found: "read", sessions: files.length });
-    if (since === null) continue;
-    for (const relative of files) {
+    const unread = new Unread();
+    for (const relative of since === null ? [] : files) {
       const path = `${store.root}/${relative}`;
       // ponytail: a whole file is read at once; stream it if sessions outgrow memory.
       const modified = yield* fs.stat(path).pipe(
         Effect.map((info) => Option.getOrUndefined(info.mtime)),
         Effect.orElseSucceed(() => undefined),
       );
-      if (modified !== undefined && modified.getTime() < since) continue;
-      const text = yield* fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
-      const session = store.read(text, relative);
+      if (modified !== undefined && since !== null && modified.getTime() < since) continue;
+      const text = yield* fs.readFileString(path).pipe(Effect.result);
+      const records = text._tag === "Failure" ? String(text.failure) : recordsOf(text.success);
+      if (isString(records)) {
+        unread.add(relative, records);
+        continue;
+      }
+      const session = store.read(records, relative);
       take(store.source, session, [...session.ids, path]);
     }
+    stores.push({
+      source: store.source,
+      where: store.root,
+      found: "read",
+      sessions: files.length,
+      ...unread.said(),
+    });
   }
 
   const openCode = openCodeFile(places.home);
@@ -471,9 +511,20 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
 
   const runs = `${places.stateDir}/runs`;
   const collie = yield* collieWords(places.stateDir, since !== null).pipe(Effect.result);
-  if (collie._tag === "Failure") stores.push(notThere("collie", runs));
+  if (collie._tag === "Failure")
+    stores.push(
+      (yield* fs.exists(runs).pipe(Effect.orElseSucceed(() => false)))
+        ? { ...notThere("collie", runs), found: "unreadable", why: String(collie.failure) }
+        : notThere("collie", runs),
+    );
   else {
-    stores.push({ source: "collie", where: runs, found: "read", sessions: collie.success.entries });
+    stores.push({
+      source: "collie",
+      where: runs,
+      found: "read",
+      sessions: collie.success.entries,
+      ...collie.success.unread,
+    });
     for (const one of collie.success.words)
       if (since === null || epochMs(one.at) >= since) messages.push(one);
   }

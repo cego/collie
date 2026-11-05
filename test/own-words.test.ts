@@ -776,3 +776,27 @@ test("the inventory counts Collie's human entries without opening what they said
       expect(Arr.filter(opened, Str.endsWith("intent.json"))).toEqual([]);
     }).pipe(Effect.scoped),
   ));
+
+test("a session file it cannot read, or whose records it does not know, is counted and named, never read as empty", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = yield* places({
+        ...CLAUDE,
+        "home/.claude/projects/-home-u-shop/2f2f-changed.jsonl": "{not json\n",
+        "home/.codex/sessions/2026/10/03/rollout-2026-10-03T10-00-00-03c0.jsonl": json([
+          { kind: "turn", said: "A format Codex might change to." },
+        ]),
+        "state/runs/run-f/operations.jsonl/.keep": "",
+      });
+      const words = yield* readOwnWords(at, NOW);
+      expect(storeOf(words, "claude-code")).toMatchObject({
+        found: "read",
+        sessions: 3,
+        unread: 1,
+      });
+      expect(storeOf(words, "claude-code")?.why).toContain("2f2f-changed.jsonl");
+      expect(storeOf(words, "codex")).toMatchObject({ found: "read", sessions: 1, unread: 1 });
+      expect(storeOf(words, "collie")).toMatchObject({ unread: 1 });
+      expect(texts(words)).toEqual(["Run the tests before you push.", "Keep pull requests small."]);
+    }).pipe(Effect.scoped),
+  ));
