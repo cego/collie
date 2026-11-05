@@ -4,13 +4,23 @@
 import * as Arr from "effect/Array";
 import type { ForgeChecks, ReadyToRelease, RunProgress } from "./board-model";
 import type { RunView } from "./engine";
+import { HOLD, STOP } from "./controls";
+import { isSuperseded, isUnanswered } from "./store";
 
 export const UNTILS = ["terminal", "attention", "ready", "needs-human"] as const;
 export type Until = (typeof UNTILS)[number];
 
-/** Waiting on someone: a question, a hold or a stop, or a park its status may not show. */
+/**
+ * Waiting on someone: a question, a hold or a stop, or a park its status may not show. A
+ * superseded question keeps the workflow suspended while the agent works on the message.
+ */
 export const atAttention = (view: RunView): boolean =>
-  view.status.status === "suspended" || view.parked !== null;
+  view.parked !== null ||
+  (view.status.status === "suspended" &&
+    (!Arr.some(view.waiting, isSuperseded) ||
+      Arr.some(view.waiting, isUnanswered) ||
+      view.controls.includes(HOLD) ||
+      view.controls.includes(STOP)));
 
 /** Whether the wait is over, or can only be over once a human acts (`stuck`). */
 export type Reached = "waiting" | "reached" | "stuck";

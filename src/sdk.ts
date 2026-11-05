@@ -1280,6 +1280,7 @@ export class Host extends Context.Service<Host, HostApi>()("collie/Host") {}
 export interface AskedQuestion {
   readonly name: string;
   readonly answer: string | null;
+  readonly superseded?: string | null;
   /** Who answered it, where the Run's audit says. */
   readonly by?: Asker;
 }

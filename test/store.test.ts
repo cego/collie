@@ -145,6 +145,102 @@ test("an answer under a request already used for another answer is refused", () 
     }),
   ));
 
+const human = { origin: "desktop" as const, requestId: "steer-1" };
+const agentOn = (run: string, agent: string) => ({
+  origin: "agent" as const,
+  requestId: `ans-${agent}`,
+  from: { run, agent },
+});
+
+test("a supersede and an answer racing on one question: whichever lands first stands", () =>
+  onStore(
+    "collie-store-supersede-race-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-1", "run-a", { note: "asks" }));
+      const supersede = (decision: string) =>
+        store.supersede({
+          run: "run-a",
+          decision,
+          cause: "delivery-1",
+          actor: human,
+          agent: "planner",
+        });
+      const answer = (decision: string) =>
+        store.settle({ run: "run-a", decision, value: "yes", request: `ans-${decision}` });
+
+      yield* store.asking({ run: "run-a", decision: "q1", prompt: "Go?", options: ["yes"] });
+      const [superseded, refused] = yield* Effect.all([supersede("q1"), answer("q1")], {
+        concurrency: "unbounded",
+      });
+      expect(superseded._tag).toBe("accepted");
+      expect(refused._tag === "refused" && refused.reason).toContain("superseded");
+      expect(refused._tag === "refused" && refused.reason).toContain("delivery-1");
+      const [q1] = yield* store.asked("run-a");
+      expect(q1).toMatchObject({ answer: null, cause: "delivery-1", messaged: "planner" });
+      expect(q1?.superseded).not.toBeNull();
+      expect(q1?.superseder).toEqual(human);
+
+      yield* store.asking({ run: "run-a", decision: "q2", prompt: "Go?", options: ["yes"] });
+      const [answered, late] = yield* Effect.all([answer("q2"), supersede("q2")], {
+        concurrency: "unbounded",
+      });
+      expect(answered._tag).toBe("accepted");
+      expect(late._tag === "refused" && late.reason).toContain('already answered "yes"');
+      const q2 = (yield* store.asked("run-a"))[1];
+      expect(q2).toMatchObject({ answer: "yes", superseded: null, cause: null, superseder: null });
+    }),
+  ));
+
+test("a superseded workflow question takes an answer only from the agent the human messaged", () =>
+  onStore(
+    "collie-store-supersede-d8-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-1", "run-a", { note: "asks" }));
+      const question = { run: "run-a", prompt: "What next?", options: ["Implement now"] };
+      const asks = (decision: string) => store.asking({ ...question, decision });
+      const supersede = (decision: string) =>
+        store.supersede({
+          run: "run-a",
+          decision,
+          cause: "delivery-1",
+          actor: human,
+          agent: "planner",
+        });
+      const answer = (decision: string, by: ReturnType<typeof agentOn>) =>
+        store.settle({
+          run: "run-a",
+          decision,
+          value: "Implement now",
+          request: `${by.requestId}-${decision}`,
+          answerer: by,
+        });
+
+      yield* asks("next-1");
+      yield* supersede("next-1");
+      const reviewer = yield* answer("next-1", agentOn("run-a", "reviewer"));
+      expect(reviewer._tag === "refused" && reviewer.reason).toContain("superseded");
+      const elsewhere = yield* answer("next-1", agentOn("run-b", "planner"));
+      expect(elsewhere._tag).toBe("refused");
+      const planner = yield* answer("next-1", agentOn("run-a", "planner"));
+      expect(planner._tag).toBe("accepted");
+      expect((yield* store.asked("run-a"))[0]).toMatchObject({
+        answer: "Implement now",
+        cause: "delivery-1",
+        messaged: "planner",
+      });
+
+      yield* asks("next-2");
+      yield* supersede("next-2");
+      yield* store.asking({ ...question, decision: "next-2-revision", revises: "next-2" });
+      const revised = yield* answer("next-2", agentOn("run-a", "planner"));
+      expect(revised._tag === "refused" && revised.reason).toContain("superseded");
+      const row = Arr.findFirst(yield* store.asked("run-a"), (one) => one.decision === "next-2");
+      expect(row._tag === "Some" && row.value.answer).toBeNull();
+    }),
+  ));
+
 test("two requests with the same input are two runs", () =>
   onStore(
     "collie-store-separate-",

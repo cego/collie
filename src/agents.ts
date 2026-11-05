@@ -149,7 +149,7 @@ import {
   HerdrError,
 } from "./herdr";
 import { promptAsync } from "./opencode";
-import { isUnanswered } from "./store";
+import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
@@ -2716,7 +2716,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               holds(true);
               continue;
             }
+            // A superseded question's answer is never delivered: the agent asks again (D4).
             if (
+              Arr.some(given, isSuperseded) ||
               Arr.some(given, (one) => Arr.some(closings, (closing) => closing === one.answer)) ||
               answeredCalls.has(key)
             ) {

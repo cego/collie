@@ -1306,6 +1306,10 @@ export const describeWaiting = (view: RunView): ReadonlyArray<string> =>
       `waiting on "${one.name}": ${one.prompt}${one.options.length === 0 ? "" : ` (${Arr.join(one.options, " | ")})`}`,
   );
 
+/** The question an answer would settle next: the oldest still open. */
+export const nextAction = (view: RunView): string | null =>
+  Option.getOrNull(Arr.findFirst(view.waiting, isUnanswered))?.name ?? null;
+
 /** The one word a listing gives a Run, and the sentence behind it where there is one. */
 export const statusOf = (view: RunView): string => {
   switch (view.status.status) {

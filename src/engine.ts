@@ -16,7 +16,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import type { Asker } from "./proposals";
 import { ReadModel } from "./read-model";
-import { actorOf, readAudit, whoActed, type ScheduledBy } from "./audit";
+import { actorOf, readAudit, recordAudit, whoActed, type ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
@@ -212,8 +212,11 @@ import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers
 import { isOutcome, REQUESTABLE } from "./outcome";
 import {
   Store,
+  isSuperseded,
   isUnanswered,
   storeLayer,
+  supersededReason,
+  type Superseded,
   type Admission,
   type RunRow,
   type StoreApi,
@@ -4292,9 +4295,10 @@ export const hostLayer = (options: {
                     (line) => line.operation === "answer" && line.request === row.request,
                   ),
                 )?.actor;
-              if (actor === undefined) return { name: row.decision, answer: row.answer };
+              const asked = { name: row.decision, answer: row.answer, superseded: row.superseded };
+              if (actor === undefined) return asked;
               const { requestId: _, schedule: __, ...by } = actor;
-              return { name: row.decision, answer: row.answer, by };
+              return { ...asked, by };
             });
           }),
         close: (runId, decision, value) =>
@@ -5796,8 +5800,13 @@ export const OpenDecision = Schema.Struct({
   by: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** The operation whose agent asked it; null where the workflow did. */
   asker: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** When a human's message set it aside, and the Delivery or submit that carried it. */
+  superseded: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  cause: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type OpenDecision = typeof OpenDecision.Type;
+
+const SupersedeRecord = Schema.Struct({ decision: Schema.String, agent: Schema.String });
 
 /** What became of one delivery to a run's agent. */
 export { Steered };
@@ -5984,6 +5993,16 @@ export interface RegistryApi {
     readonly request: string;
     readonly by?: Asker & { readonly schedule?: ScheduledBy | undefined };
   }) => Effect.Effect<typeof Answered.Type, HostRefused, HostServices>;
+  /** Sets one open question aside for a human's message, and records it on the Run's trail. */
+  readonly supersede: (options: {
+    readonly runId: string;
+    readonly decision: string;
+    /** The Delivery or submit that carried the message. */
+    readonly cause: string;
+    readonly by: Asker;
+    /** The agent the message went to. */
+    readonly agent: string;
+  }) => Effect.Effect<Superseded, never, HostServices>;
   /** Sets or clears one durable control over one run, and says whether it reached it. */
   readonly control: (options: {
     readonly runId: string;
@@ -7517,6 +7536,8 @@ const makeRegistry: (
           answered: row.answered,
           by: row.answerer === null ? null : whoActed(row.answerer),
           asker: row.asker,
+          superseded: row.superseded,
+          cause: row.cause,
         })),
       ),
     );
@@ -8377,7 +8398,7 @@ const makeRegistry: (
         return yield* found.failure;
       const asks = yield* asked(options.runId);
       const open = Arr.filter(asks, isUnanswered);
-      const sole = options.decision === null ? soleOpen(options.runId, open) : null;
+      const sole = options.decision === null ? soleOpen(options.runId, open, asks) : null;
       if (sole !== null) return yield* sole;
       const name = options.decision ?? open[0]?.name ?? "";
       // Every question, not only the open ones: one already answered and one never
@@ -8437,6 +8458,25 @@ const makeRegistry: (
 
       return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
     }, waking.withPermits(1)),
+
+    supersede: Effect.fn("Engine.Registry.supersede")(function* (options) {
+      const superseded = yield* store.supersede({
+        run: options.runId,
+        decision: options.decision,
+        cause: options.cause,
+        actor: actorOf(options.by, options.cause),
+        agent: options.agent,
+      });
+      if (superseded._tag === "accepted")
+        yield* recordAudit(runDir(dir, options.runId), {
+          ...options.by,
+          operation: "supersede",
+          request: options.cause,
+          result: SupersedeRecord,
+          value: { decision: options.decision, agent: options.agent },
+        }).pipe(Effect.orDie);
+      return superseded;
+    }),
 
     control: Effect.fn("Engine.Registry.control")(function* (options: {
       readonly runId: string;
@@ -8636,12 +8676,19 @@ const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArra
  * open. Nothing is guessed at: an answer landing on the wrong question is the mistake
  * this exists to prevent.
  */
-const soleOpen = (runId: string, open: ReadonlyArray<OpenDecision>): HostRefused | null => {
+const soleOpen = (
+  runId: string,
+  open: ReadonlyArray<OpenDecision>,
+  asks: ReadonlyArray<OpenDecision>,
+): HostRefused | null => {
   if (open.length === 1) return null;
+  const setAside = Arr.filter(asks, isSuperseded);
   return new HostRefused({
     reason:
       open.length === 0
-        ? `run "${runId}" is not waiting on a decision`
+        ? setAside.length > 0
+          ? Arr.join(Arr.map(setAside, supersededReason), "; ")
+          : `run "${runId}" is not waiting on a decision`
         : `run "${runId}" is waiting on ${Arr.join(
             Arr.map(open, (one) => `"${one.name}"`),
             ", ",

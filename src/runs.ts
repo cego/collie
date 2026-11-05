@@ -11,7 +11,7 @@ import type { RequestedBy, RunReport } from "./board-model";
 import type { PluginEnv } from "./env";
 import { resultText, runView, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
-import { isUnanswered } from "./store";
+import { isSuperseded, isUnanswered } from "./store";
 import type { Settled } from "./strategies";
 import type { WorktreeRecord } from "./run";
 import type { Landing } from "./landing";
@@ -166,6 +166,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       answered: one.answered ?? null,
       by: one.by ?? null,
       open: isAsking(view, one),
+      superseded: isSuperseded(one),
       text: one.prompt,
       options: Arr.map(one.options, (value) => ({ id: value, title: value, subtitle: null })),
     })),
