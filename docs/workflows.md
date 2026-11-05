@@ -147,7 +147,11 @@ tells the builder to commit the harness and add its commits to the plan, run
 [`collie measure`](cli.md#measure) with `--pass calibration` and then `--pass final` on the
 finished tree, and read the verdict per metric. It forbids timing an A/B comparison by hand
 and taking a lock of its own. The merge request names the `final` Measurement's id and each
-metric's verdict. Every other ticket's step is unchanged.
+metric's verdict. Every other planned ticket's step is unchanged.
+A builder that writes its own tickets, from text, a Linear issue, a follow-up or a review,
+proves a speed-up criterion the same way: it is told to write the benchmark plan beside its
+ticket, `plan/issues/NN-<slug>.benchmark.json` in the Run's directory, and to take it with
+the same steps.
 The merge request is opened or updated last, and not at
 all only where there is no GitLab to open one on. Missing evidence does not keep it
 closed: an opened merge request is not a gate that passed, and what is unproved is
