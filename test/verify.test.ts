@@ -54,7 +54,7 @@ const inRepository: typeof runEffect = (effect) =>
     }),
   );
 
-test("a fingerprint reads HEAD from its status, in five git starts", () =>
+test("a fingerprint reads HEAD from its status, in four git starts and three once its checkout is known", () =>
   inRepository(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -62,15 +62,15 @@ test("a fingerprint reads HEAD from its status, in five git starts", () =>
       yield* fs.writeFileString(`${repo}/scratch.txt`, "a\n");
       const aside = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-git-" });
       const starts = yield* loggedGit(`${aside}/bin`, `${aside}/git.log`);
+      const verbs = (after: number) =>
+        Effect.map(starts, (lines) =>
+          Arr.map(Arr.drop(lines, after), (line) => Str.split(line, " ")[0]).sort(),
+        );
       const tree = yield* fingerprint(repo);
       expect(tree.head_sha).toHaveLength(40);
-      expect(Arr.map(yield* starts, (line) => Str.split(line, " ")[0]).sort()).toEqual([
-        "add",
-        "ls-files",
-        "rev-parse",
-        "status",
-        "write-tree",
-      ]);
+      expect(yield* verbs(0)).toEqual(["add", "rev-parse", "status", "write-tree"]);
+      expect(yield* fingerprint(repo)).toEqual(tree);
+      expect(yield* verbs(4)).toEqual(["add", "status", "write-tree"]);
     }),
   ));
 
@@ -522,6 +522,70 @@ test("a clean tree is its commit's tree, and a tree too large is no tree", () =>
       const huge = yield* fingerprint(repo);
       expect(huge.fingerprint).toBe(TOO_LARGE);
       expect(sameTree(huge, huge)).toBe(false);
+    }),
+  ));
+
+test("from a subdirectory, an edit too large anywhere in the checkout is no tree", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sub = path.join(repo, "sub");
+      yield* fs.makeDirectory(sub);
+      yield* fs.writeFileString(path.join(sub, "kept.txt"), "kept\n");
+      yield* git(["add", "-A"]);
+      yield* git(["commit", "-qm", "sub"]);
+      expect((yield* fingerprint(sub)).fingerprint).not.toBe(TOO_LARGE);
+      yield* fs.writeFileString(
+        path.join(repo, "tracked.txt"),
+        Str.repeat(FINGERPRINT_MAX_BYTES + 1)("a"),
+      );
+      expect((yield* fingerprint(sub)).fingerprint).toBe(TOO_LARGE);
+    }),
+  ));
+
+test("a subdirectory that becomes a repository of its own is fingerprinted by its own index", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const nested = path.join(repo, "nested");
+      yield* fs.makeDirectory(nested);
+      yield* fingerprint(nested);
+      yield* git(["init", "-q"], nested);
+      yield* git(["config", "user.email", "t@example.com"], nested);
+      yield* git(["config", "user.name", "t"], nested);
+      yield* fs.writeFileString(path.join(nested, ".gitignore"), "forced.txt\n");
+      yield* fs.writeFileString(path.join(nested, "forced.txt"), "one\n");
+      yield* git(["add", "-f", ".gitignore", "forced.txt"], nested);
+      yield* git(["commit", "-qm", "nested"], nested);
+      const before = yield* fingerprint(nested);
+      yield* fs.writeFileString(path.join(nested, "forced.txt"), "two\n");
+      expect(sameTree(before, yield* fingerprint(nested))).toBe(false);
+    }),
+  ));
+
+test("a worktree root replaced by a repository of its own is fingerprinted by the new index", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const aside = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-moved-" });
+      const live = path.join(aside, "live");
+      yield* git(["worktree", "add", "-q", live]);
+      yield* fingerprint(live);
+      yield* git(["worktree", "move", live, path.join(aside, "moved")]);
+      yield* fs.makeDirectory(live);
+      yield* git(["init", "-q"], live);
+      yield* git(["config", "user.email", "t@example.com"], live);
+      yield* git(["config", "user.name", "t"], live);
+      yield* fs.writeFileString(path.join(live, ".gitignore"), "forced.txt\n");
+      yield* fs.writeFileString(path.join(live, "forced.txt"), "one\n");
+      yield* git(["add", "-f", ".gitignore", "forced.txt"], live);
+      yield* git(["commit", "-qm", "replacement"], live);
+      const before = yield* fingerprint(live);
+      yield* fs.writeFileString(path.join(live, "forced.txt"), "two\n");
+      expect(sameTree(before, yield* fingerprint(live))).toBe(false);
     }),
   ));
 
