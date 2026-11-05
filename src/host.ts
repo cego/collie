@@ -265,7 +265,7 @@ import { VERIFYING_FILE, verifyingIn } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
-import { ownInventory, readOwnWords } from "./own-words";
+import { ownInventory, readOwnWords, SESSION_STORES } from "./own-words";
 import {
   loadDefaults,
   SettingRefused,
@@ -1470,6 +1470,11 @@ const frontDoorHandlers = (
         ...askerOf(client),
         ...stampOf(client),
       });
+      /** Where a door's file tools may not go: the human's sessions, but on Desktop's own. */
+      const closedTo = (client: { readonly id: number }) =>
+        whoOf(client).origin === "desktop"
+          ? []
+          : Arr.map(SESSION_STORES, (store) => `${env.home}/${store}`);
       /** An agent settled while Collie waits on its Output is told its verify ended, or it would wait forever. */
       const toldVerifyEnded = (
         client: { readonly id: number },
@@ -2253,11 +2258,14 @@ const frontDoorHandlers = (
               return { path: got.path };
             }),
           ),
-        readFile: ({ path, offset, length }) =>
-          readPart(path, offset, length).pipe(Effect.provideContext(bun)),
-        glob: ({ pattern, path }) => refusedPlainly(globFiles(pattern, path ?? env.home)),
-        grep: ({ path, ...asked }) =>
-          refusedPlainly(grepFiles({ ...asked, path: path ?? env.home })),
+        readFile: ({ path, offset, length }, { client }) =>
+          readPart(path, offset, length, closedTo(client)).pipe(Effect.provideContext(bun)),
+        glob: ({ pattern, path }, { client }) =>
+          refusedPlainly(globFiles(pattern, path ?? env.home, undefined, closedTo(client))),
+        grep: ({ path, ...asked }, { client }) =>
+          refusedPlainly(
+            grepFiles({ ...asked, path: path ?? env.home }, undefined, closedTo(client)),
+          ),
         writeFile: ({ path, content, request }, { client }) =>
           refusedPlainly(
             filesOnce(

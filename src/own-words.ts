@@ -28,6 +28,40 @@ export interface OwnPlaces {
   readonly stateDir: string;
 }
 
+/** Where harnesses keep the human's sessions, under their home: only Read opens them. */
+export const SESSION_STORES = [
+  ".claude/projects",
+  ".claude/history.jsonl",
+  ".codex/sessions",
+  ".codex/history.jsonl",
+  ".pi/agent/sessions",
+  ".local/share/opencode",
+];
+
+/** Why a chat's file tool may not go there. */
+export const SESSIONS_CLOSED =
+  "holds the human's sessions, which only their click on Desktop's \"Read my messages\" reads";
+
+/**
+ * The session store a file tool's call reaches: one its arguments name, or one below where its
+ * search starts. Pi's extension carries this function's source, so it uses nothing around it.
+ */
+/* oxlint-disable effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string -- Pi runs this source without Effect. */
+export function sessionStoreReached(
+  stores: ReadonlyArray<string>,
+  home: string,
+  said: ReadonlyArray<string>,
+  root: string | null,
+): string | undefined {
+  const top = root === null ? null : root.replace(/\/+$/, "");
+  return stores.find(
+    (store) =>
+      said.some((one) => one.includes(store)) ||
+      (top !== null && `${home}/${store}`.startsWith(`${top}/`)),
+  );
+}
+/* oxlint-enable effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string */
+
 const DAYS = 90;
 const MOST_IN_ONE = 1000;
 const DELIVERY = "collie-delivery:";

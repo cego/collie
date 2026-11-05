@@ -1,6 +1,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
+import { homedir } from "node:os";
 import { Effect, type Scope, Stream } from "effect";
 import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
 import type { DriverContext } from "../desktop/src/bun/driver";
@@ -411,3 +412,37 @@ test("the system prompt has the chat take a reported review as a report, ask bef
     `When you read a merge request's review, read the replies on it too, and tell the human what a Collie Run replied there in their name: its reply ends "Posted by Collie's Run <run> on <machine>."`,
   );
 });
+
+test("the chat's own file tools and shell are refused where the human's sessions are kept", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const home = homedir();
+      const decide = (tool_name: string, tool_input: Readonly<Record<string, string>>) =>
+        Effect.promise(() =>
+          options.hooks.PreToolUse[0]!.hooks[0]!({
+            tool_name,
+            tool_input,
+            cwd: "/state/collie-desktop",
+          }),
+        );
+      const refused = {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: expect.stringContaining("Read my messages"),
+        },
+      };
+      expect(
+        yield* decide("Read", { file_path: `${home}/.claude/projects/-x/1.jsonl` }),
+      ).toMatchObject(refused);
+      expect(
+        yield* decide("Bash", { command: "tail ~/.codex/sessions/2026/*/*.jsonl" }),
+      ).toMatchObject(refused);
+      expect(yield* decide("Grep", { pattern: "deploy", path: home })).toMatchObject(refused);
+      expect(
+        yield* decide("Glob", { pattern: "**/*.jsonl", path: `${home}/.pi/agent/sessions` }),
+      ).toMatchObject(refused);
+      expect(yield* decide("Read", { file_path: `${home}/work/notes.md` })).toEqual({});
+      expect(yield* decide("Grep", { pattern: "deploy", path: `${home}/work` })).toEqual({});
+    }),
+  ));

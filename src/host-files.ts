@@ -10,6 +10,7 @@ import * as Base64 from "effect/encoding/Base64";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { mediaTypeOf } from "./attachments";
 import { HostRefused, PART_BYTES, type HostFile } from "./board-model";
+import { SESSIONS_CLOSED } from "./own-words";
 
 /** The most paths a glob answers, and lines a grep does, unless asked for fewer. */
 export const FOUND_LIMIT = 100;
@@ -33,9 +34,10 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
   asked: string,
   offset = 0,
   length = PART_BYTES,
+  closed: ReadonlyArray<string> = [],
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* absolute(asked);
+  const path = yield* outside(asked, closed);
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const info = yield* fs.stat(path);
@@ -90,12 +92,14 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
   pattern: string,
   dir: string,
   bound = SEARCH_LIMIT,
+  closed: ReadonlyArray<string> = [],
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const root = yield* absolute(dir);
+  const root = yield* outside(dir, closed);
+  const shut = yield* closedRoots(closed);
   const paths = yield* Path.Path;
   const matches = reaches(pattern);
-  const keep = (line: string) => matches(paths.relative(root, line));
+  const keep = (line: string) => matches(paths.relative(root, line)) && !within(line, shut);
   const dotted = dotNames(pattern);
   // The root must list; an unreadable directory below it is passed by.
   yield* fs
@@ -240,8 +244,11 @@ const searched = (
 export const grepFiles = Effect.fn("HostFiles.grep")(function* (
   asked: GrepAsked,
   bound = SEARCH_LIMIT,
+  closed: ReadonlyArray<string> = [],
 ) {
-  const root = yield* absolute(asked.path);
+  const root = yield* outside(asked.path, closed);
+  const shut = yield* closedRoots(closed);
+  const keep = (line: string) => !Arr.some(shut, (one) => pipe_(line, Str.startsWith(`${one}/`)));
   const mode = asked.outputMode ?? "files_with_matches";
   const rg = Bun.which("rg");
   // A search of one file runs beside it: a file is no working directory.
@@ -254,8 +261,8 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
   const limit = Math.min(asked.headLimit ?? FOUND_LIMIT, FOUND_LIMIT);
   const found = yield* (
     rg === null
-      ? searched("grep", [...grepArgs(asked, mode), root], cwd, limit, bound)
-      : searched(rg, [...rgArgs(asked, mode), root], cwd, limit, bound)
+      ? searched("grep", [...grepArgs(asked, mode), root], cwd, limit, bound, keep)
+      : searched(rg, [...rgArgs(asked, mode), root], cwd, limit, bound, keep)
   ).pipe(Effect.mapError((cause) => refused(`the search of ${root} failed: ${String(cause)}`)));
   // Exit 1 is "nothing matched"; above it with matches, some files could not be read.
   if (found.code > 1 && found.lines.length === 0)
@@ -309,6 +316,27 @@ const writable = Effect.fn("HostFiles.writable")(function* (asked: string, state
     return yield* refused(
       `${path} is inside the host's state directory ${state}, which only its operations change`,
     );
+  return path;
+});
+
+const within = (path: string, roots: ReadonlyArray<string>) =>
+  Arr.some(roots, (root) => path === root || pipe_(path, Str.startsWith(`${root}/`)));
+
+/** `closed` as named and where their links lead. */
+const closedRoots = Effect.fn("HostFiles.closedRoots")(function* (closed: ReadonlyArray<string>) {
+  return [...closed, ...(yield* Effect.forEach(closed, realOf))];
+});
+
+/** `asked`, refused where it, or where its links lead, is inside one of `closed`. */
+const outside = Effect.fn("HostFiles.outside")(function* (
+  asked: string,
+  closed: ReadonlyArray<string>,
+) {
+  const path = yield* absolute(asked);
+  if (closed.length === 0) return path;
+  const shut = yield* closedRoots(closed);
+  if (within(path, shut) || within(yield* realOf(path), shut))
+    return yield* refused(`${path} ${SESSIONS_CLOSED}`);
   return path;
 });
 

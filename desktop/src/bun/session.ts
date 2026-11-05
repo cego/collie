@@ -6,12 +6,15 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { type Answers, DESKTOP_SAID } from "../shared/chat-view";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
+// oxlint-disable-next-line effecttsgo/node-builtin-import -- A hook answers at once, with no Effect services.
+import { resolve } from "node:path";
 import { Option, Schema } from "effect";
 import { FILE_TOOLS } from "./file-tools";
 import { FLOCK_TOOLS } from "./flock-tools";
 import { childEnv } from "./login-env";
 import { type StandingDirection, standingDirectionContext } from "../../../src/standing-direction";
+import { SESSION_STORES, SESSIONS_CLOSED, sessionStoreReached } from "../../../src/own-words";
 
 export const systemPrompt = (
   computer: string,
@@ -193,6 +196,38 @@ const CONNECTOR_PREFIX = "mcp__claude_ai_";
  * AskUserQuestion to the human, or answers null when no human is in the turn.
  */
 
+/** Refuses the chat's own file tools and shell where the human's sessions are kept. */
+const refusedSessions = (input: {
+  readonly tool_name?: string;
+  readonly tool_input?: unknown;
+  readonly cwd?: string;
+}) => {
+  const given = Schema.is(Schema.Record(Schema.String, Schema.Unknown))(input.tool_input)
+    ? input.tool_input
+    : {};
+  const root =
+    input.tool_name === "Grep"
+      ? resolve(input.cwd ?? "/", Schema.is(Schema.String)(given["path"]) ? given["path"] : ".")
+      : null;
+  const store = sessionStoreReached(
+    SESSION_STORES,
+    homedir(),
+    Arr.filter(Rec.values(given), Schema.is(Schema.String)),
+    root,
+  );
+  return Promise.resolve(
+    store === undefined
+      ? {}
+      : {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse" as const,
+            permissionDecision: "deny" as const,
+            permissionDecisionReason: `~/${store} ${SESSIONS_CLOSED}.`,
+          },
+        },
+  );
+};
+
 export const sessionOptions = <Server>(opts: {
   readonly cwd: string;
   readonly session: { readonly resume: string } | { readonly sessionId: string };
@@ -261,6 +296,7 @@ export const sessionOptions = <Server>(opts: {
               message: `${name} is not available in Desktop's chat.`,
             }),
     hooks: {
+      PreToolUse: [{ hooks: [refusedSessions] }],
       UserPromptSubmit: [
         {
           hooks: [

@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
+import { homedir } from "node:os";
 import { platformLayer } from "../src/platform";
 import { Effect, FileSystem, Path, Schema, Scope, Stream, flow, Result } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -721,4 +722,45 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
         content: expect.stringContaining("Here"),
       });
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+  ));
+
+/** Pi's `tool_call` event and its answer, as far as Collie's extension uses them. */
+type ToolCallHandler = (
+  event: { readonly toolName: string; readonly input: Readonly<Record<string, string>> },
+  ctx: { readonly cwd: string },
+) => { readonly block: true; readonly reason: string } | undefined;
+interface PiApi {
+  readonly registerMcpServer: () => void;
+  readonly on: (event: string, handler: ToolCallHandler) => void;
+}
+
+test("Pi's file tools and shell are refused where the human's sessions are kept", () =>
+  withPi((driver, context) =>
+    Effect.gen(function* () {
+      const session = yield* driver.open("pi-closed", "openai-codex/gpt-6.1-sol", "medium");
+      yield* Effect.addFinalizer(() => session.close);
+      const handlers = new Map<string, ToolCallHandler>();
+      const extension = yield* Effect.promise(
+        (): Promise<{ readonly default: (pi: PiApi) => void }> =>
+          import(`${context.dir}/pi-collie.ts`),
+      );
+      extension.default({
+        registerMcpServer: () => undefined,
+        on: (event, handler) => handlers.set(event, handler),
+      });
+      const home = homedir();
+      const call = (toolName: string, input: Readonly<Record<string, string>>) =>
+        Effect.promise(() =>
+          Promise.resolve(handlers.get("tool_call")!({ toolName, input }, { cwd: context.dir })),
+        );
+      const blocked = { block: true, reason: expect.stringContaining("Read my messages") };
+      expect(yield* call("read", { path: `${home}/.claude/projects/-x/1.jsonl` })).toMatchObject(
+        blocked,
+      );
+      expect(yield* call("bash", { command: "cat ~/.claude/history.jsonl" })).toMatchObject(
+        blocked,
+      );
+      expect(yield* call("grep", { pattern: "deploy", path: home })).toMatchObject(blocked);
+      expect(yield* call("read", { path: `${home}/work/notes.md` })).toBeUndefined();
+    }),
   ));

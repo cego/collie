@@ -2364,20 +2364,26 @@ can read what you typed, on this computer and on each connected Machine:
 
 - **From:** your Claude Code, Codex, Pi and OpenCode sessions (`~/.claude/projects`,
   `~/.codex/sessions`, `~/.pi/agent/sessions`, `~/.local/share/opencode/opencode.db`), and
-  what Collie's records hold under your own front doors: a Run's goal, a steer, a hold's
-  reason, a disposition's note, and what you said to a chat behind its actions.
+  what Collie's records hold under your own front doors: what you started a Run with, an
+  answer, a steer, a hold's reason, a disposition's note, and what you said to a chat behind
+  its actions. A Run's Intent goal is not taken, since a planner may have written it.
 - **Never:** tool output, model replies, text a harness or a hook put in your turn, a
   subagent's prompts, and every session Collie started for a Run's agent (one carrying a
   `collie-delivery:` token, or one Collie recorded launching).
 - **Bounds:** the last 90 days, newest first, at most 400 messages and 60,000 characters,
   each message cut to 1,000. Credentials are redacted as everywhere else. The answer says
   what it left out: stores not found, a store it could not read (named, never guessed at),
-  sessions skipped as Collie's, and what the caps cut.
+  how many sessions in a store it could not read and why, sessions skipped as Collie's, and
+  what the caps cut. The caps hold for all computers together, newest first across them.
 
 Before any text is read, Desktop only counts: which stores it found, where, and how many
 sessions each holds. The text itself is released only on your click in Desktop's own dialog:
 a Machine's host gives it to Desktop's door alone and refuses every other (a chat's tools,
-a Run's agent, the CLI) without a word of it. No chat has a tool that reads it.
+a Run's agent, the CLI) without a word of it. No chat has a tool that reads it, and the Flock
+chat's file tools are refused those stores and `~/.claude/history.jsonl` and
+`~/.codex/history.jsonl`: `collie_read`, `collie_glob` and `collie_grep` on every Machine,
+and its own Read, Glob, Grep, Bash and Pi's tools on this computer, where a call names one or
+a grep starts above one. A shell command that reaches one without naming it is not caught.
 
 **Tell Collie how you work.** While your Standing direction is empty, Desktop offers to help
 write it, in the Flock chat: when a Machine's onboarding finishes, and when Desktop starts

@@ -21,6 +21,7 @@ import type { ChatDriver, DriverContext, DriverSession, TurnCost } from "./drive
 import type { JsonObject } from "../../../src/schema";
 import type { ChatEndpoint } from "./chat-endpoint";
 import { childEnv, which } from "./login-env";
+import { SESSION_STORES, SESSIONS_CLOSED, sessionStoreReached } from "../../../src/own-words";
 import { decodePiRecord, piEvents, piToolName } from "./pi-agui";
 import { piPrompt, piSessions } from "./pi-transcript";
 import { noticedContext, placementContext, systemPrompt } from "./session";
@@ -48,7 +49,21 @@ export const piDriver = (
         Str.replaceAll("-", ""),
       )}`;
       const extension = `${context.dir}/pi-collie.ts`;
-      const source = `export default function(pi) { pi.registerMcpServer("${server}", { url: ${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(url).pipe(Effect.orDie)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } }); }\n`;
+      const json = (value: Schema.Json) =>
+        Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(value).pipe(Effect.orDie);
+      const source = `import { homedir } from "node:os";
+import { resolve } from "node:path";
+const reached = ${String(sessionStoreReached)};
+export default function(pi) {
+  pi.registerMcpServer("${server}", { url: ${yield* json(url)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } });
+  pi.on("tool_call", (event, ctx) => {
+    const input = event.input ?? {};
+    const root = event.toolName === "grep" ? resolve(ctx.cwd, typeof input.path === "string" ? input.path : ".") : null;
+    const store = reached(${yield* json(SESSION_STORES)}, homedir(), Object.values(input).filter((one) => typeof one === "string"), root);
+    return store === undefined ? undefined : { block: true, reason: "~/" + store + " " + ${yield* json(SESSIONS_CLOSED)} + "." };
+  });
+}
+`;
       yield* Effect.promise(() =>
         context.run(
           Effect.gen(function* () {

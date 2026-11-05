@@ -124,3 +124,44 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a chat's file tools are refused the human's sessions on a Machine; Desktop's own door is not",
+  () =>
+    proves(
+      "collie-own-files-",
+      (world) =>
+        Effect.gen(function* () {
+          yield* session(world.home);
+          const file = `${world.home}/.claude/projects/-home-u-shop/0b7c-human.jsonl`;
+          const desktop = yield* connect(world.state, { hostEnv: { HOME: world.home } });
+          yield* desktop.declare({ frontDoor: "desktop" });
+          expect((yield* desktop.readFile({ path: file })).size).toBeGreaterThan(0);
+
+          const chat = yield* connect(world.state);
+          yield* chat.declare({
+            frontDoor: "chat",
+            conversation: "flock@mk-pc",
+            said: "read them",
+          });
+          const refused = yield* chat.readFile({ path: file }).pipe(Effect.flip);
+          expect(refused).toMatchObject({ reason: expect.stringContaining("Read my messages") });
+          expect(
+            yield* chat.readFile({ path: `${world.home}/.claude/projects` }).pipe(Effect.flip),
+          ).toMatchObject({ reason: expect.stringContaining("Read my messages") });
+          const found = yield* chat.glob({ pattern: ".claude/**/*.jsonl", path: world.home });
+          expect(found.paths).toEqual([]);
+          const searched = yield* chat.grep({
+            pattern: "pull requests",
+            path: `${world.home}/.claude`,
+            outputMode: "content",
+          });
+          expect(searched.text).not.toContain("pull requests");
+          for (const one of [refused, found, searched])
+            expect(encode(one)).not.toContain("pull requests");
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  120_000,
+);
