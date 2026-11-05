@@ -121,6 +121,18 @@ that pre-dates this branch is `minor`.
 This ticket's speed-up criterion is proved by a Measurement, never by timing anything
 yourself. Its benchmark plan is `{{benchmark}}`, the JSON `collie measure --plan` takes:
 
+## measure.own
+
+A criterion that something is faster, smaller or lighter is a Measurement, never a timing
+script, as a planned ticket's `**Benchmark:**` is. Write its benchmark plan beside its
+ticket, `{{benchmark}}`, as the JSON `collie measure --plan` takes: the commands that
+exercise the work, its metrics with exactly one `primary`, and the harness's `paths` with
+no `commits` yet. Name it on the ticket's own line, `**Benchmark:** NN-<slug>.benchmark.json`,
+and write the criterion as the verdict its `final` Measurement gives: a `gain` on the
+primary metric with every guardrail held. Then:
+
+## measure.steps
+
 1. Commit the benchmark harness, touching only the plan's `harness.paths`, and add those
    commits to the plan's `harness.commits`.
 2. Before the speed-up, measure the base against itself:

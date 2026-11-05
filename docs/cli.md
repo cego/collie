@@ -526,9 +526,11 @@ does not rename it back. See [Using Collie](using.md#what-a-task-workspace-is-ca
 Runs are scoped by Task, not by workspace. `collie run list` inside a task workspace lists
 that Task's local Runs and live peers' Runs; elsewhere it lists every reachable Run. A
 command that names a Run, typed in a task workspace, reaches that Task's Runs, every Run on
-another Machine, and, from an agent's pane, any Run its own Run started (as `parent` or
+another Machine, and, from an agent's shell, any Run its own Run started (as `parent` or
 `requestedBy`) or was asked about (its goal, its inputs, or a steer it received, name the
-Run's id).
+Run's id). The agent is known as it is for the actor: by its pane in herdr's agent list, or
+by `COLLIE_AGENT` on a core terminal, and only then by `COLLIE_RUN`, so this holds in the
+agent's own shell and not only inside its MCP tools.
 Outside a task workspace every Run is reachable. Any other Run is `run_outside_task`, whose
 `details` name the Run's `task` and the `workspace` that reaches it; `--workspace <id>`
 picks that workspace.
