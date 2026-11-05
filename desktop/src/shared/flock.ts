@@ -752,6 +752,12 @@ export const DesktopRpcs = RpcGroup.make(
   Rpc.make("declineSetup", { payload: { forGood: Schema.Boolean }, error: ActionFailed }),
   /** Where each computer keeps the human's sessions, and how many; no message is read. */
   Rpc.make("setupInventory", { success: Schema.Array(ComputerStores) }),
+  /** The human's choice in the dialog, for the Flock chat in whichever window it is. */
+  Rpc.make("chooseSetup", { payload: { choice: SetupChoice } }),
+  /** The choice waiting for a Flock chat to take it, or null, now and as that changes. */
+  Rpc.make("setupChosen", { success: Schema.NullOr(SetupChoice), stream: true }),
+  /** The waiting choice, to the one chat that takes it, or null. */
+  Rpc.make("takeSetup", { success: Schema.NullOr(SetupChoice) }),
   /** The setup conversation the human chose, opened fresh, and its first turn as it streams. */
   Rpc.make("setUp", { payload: { choice: SetupChoice }, success: AguiEvent, stream: true }),
 );

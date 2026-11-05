@@ -72,10 +72,21 @@ export const setupOffer = Effect.fn("StandingSetup.offer")(function* (opts: {
   readonly save: (change: DesktopSettingsChange) => Effect.Effect<unknown, ActionFailed>;
 }) {
   const offered = yield* SubscriptionRef.make(false);
+  const chosen = yield* SubscriptionRef.make<SetupChoice | null>(null);
   const ask = (connected: boolean) =>
     Effect.suspend(() => SubscriptionRef.set(offered, offersSetup({ ...opts.facts(), connected })));
   return {
     offered,
+    /** The human's choice in the dialog, held for the Flock chat in whichever window it is. */
+    chosen,
+    choose: (choice: SetupChoice) =>
+      SubscriptionRef.set(offered, false).pipe(Effect.andThen(SubscriptionRef.set(chosen, choice))),
+    /** The choice, to one taker only. */
+    take: SubscriptionRef.getAndSet(chosen, null),
+    /** The Standing direction changed: a written one ends the offer. */
+    directionChanged: Effect.suspend(() =>
+      opts.facts().direction === undefined ? Effect.void : SubscriptionRef.set(offered, false),
+    ),
     /** Desktop launched, and a Machine is connected. */
     launched: ask(true),
     /** A finished onboarding has its Machine within reach. */

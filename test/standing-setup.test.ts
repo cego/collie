@@ -274,3 +274,37 @@ test("the setup turn holds at most 400 messages and 60,000 characters from all c
   expect(turn).toContain("400 messages over the caps of all computers together");
   expect(turn).toContain("vm: codex at /home/u/.codex/sessions: 1 sessions not read");
 });
+
+test("a choice made in one window waits for whichever window's Flock chat takes it, and starts one setup", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const offer = yield* setupOffer({
+        facts: () => ({ direction: undefined, version: "0.116.0", settings: {} }),
+        save: () => Effect.void,
+      });
+      yield* offer.launched;
+      yield* offer.choose("read");
+      expect(yield* SubscriptionRef.get(offer.offered)).toBe(false);
+      expect(yield* SubscriptionRef.get(offer.chosen)).toBe("read");
+      expect(yield* offer.take).toBe("read");
+      expect(yield* offer.take).toBeNull();
+      expect(yield* SubscriptionRef.get(offer.chosen)).toBeNull();
+    }),
+  ));
+
+test("the offer is withdrawn once the human has a Standing direction", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      let direction: typeof DIRECTION | undefined;
+      const offer = yield* setupOffer({
+        facts: () => ({ direction, version: "0.116.0", settings: {} }),
+        save: () => Effect.void,
+      });
+      yield* offer.launched;
+      yield* offer.directionChanged;
+      expect(yield* SubscriptionRef.get(offer.offered)).toBe(true);
+      direction = DIRECTION;
+      yield* offer.directionChanged;
+      expect(yield* SubscriptionRef.get(offer.offered)).toBe(false);
+    }),
+  ));

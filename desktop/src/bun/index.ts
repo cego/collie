@@ -981,6 +981,10 @@ const main = Effect.gen(function* () {
     doors.size > 0 ? Effect.void : Deferred.await(doors.changed).pipe(Effect.andThen(anyConnected)),
   );
   yield* anyConnected.pipe(Effect.andThen(offer.launched), Effect.forkIn(scope));
+  yield* SubscriptionRef.changes(flockSettings).pipe(
+    Stream.runForEach(() => offer.directionChanged),
+    Effect.forkIn(scope),
+  );
   /** The terminal open in the window, and what ends it. */
   let shownTerminal:
     | {
@@ -1567,6 +1571,9 @@ const main = Effect.gen(function* () {
     setupOffer: () => SubscriptionRef.changes(offer.offered),
     declineSetup: ({ forGood }) => offer.decline(forGood),
     setupInventory: () => offer.taken.pipe(Effect.andThen(setupInventory(setupPlaces()))),
+    chooseSetup: ({ choice }) => offer.choose(choice),
+    setupChosen: () => SubscriptionRef.changes(offer.chosen),
+    takeSetup: () => offer.take,
     setUp: ({ choice }) =>
       Stream.unwrap(
         Effect.map(chat, (opened) =>

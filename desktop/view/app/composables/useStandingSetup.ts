@@ -4,19 +4,22 @@
 import { useAtomSet } from "@effect/atom-vue";
 import { Exit } from "effect";
 import type { SetupChoice } from "../../../src/shared/standing-setup";
-import { FlockClient, setupOfferAtom } from "../flock";
+import { FlockClient, setupChosenAtom, setupOfferAtom } from "../flock";
 import { failureOf } from "./useActions";
 
 const inventoryAtom = FlockClient.mutation("setupInventory");
 const declineAtom = FlockClient.mutation("declineSetup");
+const chooseAtom = FlockClient.mutation("chooseSetup");
+const takeAtom = FlockClient.mutation("takeSetup");
 
 export const useStandingSetup = () => {
   const open = useState("standing-setup-open", () => false);
-  /** The choice made in the dialog, until the Flock chat takes it up. */
-  const chosen = useState<SetupChoice | null>("standing-setup-chosen", () => null);
   const { value: offered } = useHeld(() => setupOfferAtom);
+  const { value: waiting } = useHeld(() => setupChosenAtom);
   const inventory = useAtomSet(() => inventoryAtom, { mode: "promiseExit" });
   const decline = useAtomSet(() => declineAtom, { mode: "promiseExit" });
+  const chooseSetup = useAtomSet(() => chooseAtom, { mode: "promiseExit" });
+  const take = useAtomSet(() => takeAtom, { mode: "promiseExit" });
   return {
     offered: computed(() => offered.value === true),
     open,
@@ -29,10 +32,15 @@ export const useStandingSetup = () => {
         open.value = false;
         return Exit.isFailure(exit) ? failureOf(exit.cause).reason : null;
       }),
+    /** Held by Desktop for the Flock chat, which may be in another window. */
     choose: (choice: SetupChoice) => {
       open.value = false;
-      chosen.value = choice;
+      void chooseSetup({ payload: { choice } });
     },
-    chosen,
+    /** Whether a choice waits for a Flock chat to take it. */
+    waiting: computed(() => (waiting.value ?? null) !== null),
+    /** The waiting choice, if this chat is the one to take it. */
+    take: () =>
+      take({ payload: undefined }).then((exit) => (Exit.isSuccess(exit) ? exit.value : null)),
   };
 };

@@ -106,6 +106,14 @@ export const setupOfferAtom = FlockClient.runtime
   )
   .pipe(Atom.keepAlive);
 
+export const setupChosenAtom = FlockClient.runtime
+  .atom(
+    held(
+      Stream.unwrap(FlockClient.use((client) => Effect.succeed(client("setupChosen", undefined)))),
+    ),
+  )
+  .pipe(Atom.keepAlive);
+
 /** What the Flock chat holds, runs on and is offered, told again after each change. */
 export const chatChoicesAtom = FlockClient.runtime
   .atom(

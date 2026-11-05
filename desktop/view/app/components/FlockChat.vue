@@ -43,11 +43,12 @@ const {
 } = useFlockChat();
 const setup = useStandingSetup();
 watch(
-  setup.chosen,
-  (choice) => {
-    if (choice === null) return;
-    setup.chosen.value = null;
-    void setUp(choice);
+  setup.waiting,
+  (waiting) => {
+    if (waiting)
+      void setup.take().then((choice) => {
+        if (choice !== null) void setUp(choice);
+      });
   },
   { immediate: true },
 );
