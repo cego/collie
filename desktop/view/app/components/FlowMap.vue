@@ -57,19 +57,28 @@ const span = shallowRef(
   ),
 );
 let growing = 0;
+let gone = false;
 const grow = () => {
   growing = 0;
-  if (wholeWindow(span.value, order.value.length)) return;
+  if (gone || wholeWindow(span.value, order.value.length)) return;
   span.value = grownWindow(span.value, order.value.length);
   growing = requestAnimationFrame(grow);
 };
-// From the frame after the first is painted, so the first frame has only its own Steps to draw.
-onMounted(() => (growing = requestAnimationFrame(() => (growing = requestAnimationFrame(grow)))));
+// Once the first frame is painted and that frame's own work is done, so it draws only its Steps.
+onMounted(
+  () =>
+    (growing = requestAnimationFrame(
+      () => (growing = requestAnimationFrame(() => setTimeout(grow))),
+    )),
+);
 watch(
   () => order.value.length,
   () => growing === 0 && (growing = requestAnimationFrame(grow)),
 );
-onBeforeUnmount(() => cancelAnimationFrame(growing));
+onBeforeUnmount(() => {
+  gone = true;
+  cancelAnimationFrame(growing);
+});
 const asked = shallowRef<ReadonlySet<string>>(new Set());
 const shows = (run: string, node: string) => {
   const key = nodeKey(run, node);
