@@ -15,6 +15,7 @@ import { Registry, foundationLayer, registryLayer, runDir, type HostServices } f
 import { Store } from "../src/store";
 import { readAudit } from "../src/audit";
 import { factsOfView } from "../src/runs";
+import { laneFor } from "../src/flow-read";
 import { runWaits } from "../src/run-waits";
 import { buildBoard } from "../src/board";
 import { describeWaiting, nextAction } from "../src/lifecycle";
@@ -172,6 +173,54 @@ test(
           }),
         );
       }),
+    ),
+  120_000,
+);
+
+test(
+  "a question asked again in its place is done in the Flow once its revision moves the Run on",
+  () =>
+    runEffect(
+      hosted(
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          const store = yield* Store;
+          const asks = yield* registry.load(`${fixtures}/asks.workflow.ts`);
+          const { runId } = yield* registry.start({
+            generation: asks,
+            request: "r1",
+            project: rig.projectDir,
+            input: { goal: "pick" },
+            text: {},
+            task: null,
+          });
+          yield* suspended(runId);
+          yield* registry.supersede({
+            runId,
+            decision: "q1",
+            cause: "delivery-1",
+            by: { origin: "desktop" },
+            agent: "planner",
+          });
+          const [q1] = yield* store.asked(runId);
+          yield* store.revise({
+            run: runId,
+            decision: "q1",
+            name: "q1.r2",
+            messaged: q1!.messaged!,
+          });
+          yield* registry.answer({ runId, decision: "q1.r2", value: "yes", request: "a-1" });
+          const view = yield* until(
+            () => registry.view(runId),
+            (one) => Arr.some(one?.waiting ?? [], (row) => row.name === "q2"),
+          );
+
+          const lane = yield* laneFor(env(), factsOfView(dir(), view!));
+          const states = Arr.map(lane.nodes, (node) => [node.id, node.state]);
+          expect(states).toContainEqual(["q1", "done"]);
+          expect(states).toContainEqual(["q1.r2", "done"]);
+        }),
+      ),
     ),
   120_000,
 );

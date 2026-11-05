@@ -44,7 +44,7 @@ export interface AskedFact {
   readonly answered: string | null;
   readonly by: string | null;
   readonly open: boolean;
-  /** Set aside by a human's message while its work runs. */
+  /** Set aside by a human's message while its work runs, and not asked again yet. */
   readonly superseded?: boolean;
   readonly text?: string;
   readonly options?: FlowQuestion["options"];
