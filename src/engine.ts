@@ -7667,7 +7667,7 @@ const makeRegistry: (
   /**
    * A human's message submitted to `agent` sets its Run's Workflow questions and that
    * agent's own aside (D1, D4), and a Workflow's question already set aside then waits for
-   * that agent too. Only questions asked before `submitted`, and each submit once.
+   * that agent too.
    */
   const supersedeFor = Effect.fn("Engine.supersedeFor")(function* (
     runId: string,
@@ -7676,25 +7676,13 @@ const makeRegistry: (
     agent: string,
     submitted = Infinity,
   ) {
-    const rows = yield* store.asked(runId);
     const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
-    const supersede = (decision: string) =>
-      supersedeQuestion({ runId, decision, cause, by: actor, agent });
-    for (const one of rows) {
-      if (epochMs(one.asked) >= submitted) continue;
-      if (one.asker !== null) {
-        if (isUnanswered(one) && asksAs(launches, one.asker, agent)) yield* supersede(one.decision);
-        continue;
-      }
-      if (isUnanswered(one)) yield* supersede(one.decision);
-      else if (
-        isSuperseded(one) &&
-        !Arr.some(rows, (r) => r.revises === one.decision) &&
-        !Arr.some(one.messaged ?? [], (was) => was.agent === agent && epochMs(was.at) >= submitted)
-      ) {
-        seenWorking.delete(`${runId}/${one.decision}/${agent}`);
-        yield* store.alsoMessaged({ run: runId, decision: one.decision, agent });
-      }
+    const { aside, extended } = touchedBy(yield* store.asked(runId), launches, agent, submitted);
+    for (const one of aside)
+      yield* supersedeQuestion({ runId, decision: one.decision, cause, by: actor, agent });
+    for (const one of extended) {
+      seenWorking.delete(`${runId}/${one.decision}/${agent}`);
+      yield* store.alsoMessaged({ run: runId, decision: one.decision, agent });
     }
   });
 
@@ -7705,15 +7693,19 @@ const makeRegistry: (
 
   /** Typing into a Claude agent's pane, which its hook records as `external` (D1). */
   const paneSubmits = Effect.gen(function* () {
-    const runs = Arr.dedupe(Arr.map(yield* store.unanswered, (row) => row.run));
+    const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     for (const runId of runs) {
+      const rows = yield* store.asked(runId);
       const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
       for (const agent of Arr.dedupe(Arr.map(launches, (launch) => launch.agent))) {
         const submits = yield* externalSubmits(yield* controlDir(placing.env.stateDir, agent)).pipe(
           Effect.orElseSucceed(() => []),
         );
-        for (const at of submits)
-          yield* supersedeFor(runId, `${agent}:submit:${at}`, { origin: "cli-tty" }, agent, at);
+        for (const at of submits) {
+          const touched = touchedBy(rows, launches, agent, at);
+          if (touched.aside.length + touched.extended.length > 0)
+            yield* supersedeFor(runId, `${agent}:submit:${at}`, { origin: "cli-tty" }, agent, at);
+        }
       }
     }
   });
@@ -8820,6 +8812,34 @@ const makeRegistry: (
 const decodeOptions = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
+
+/**
+ * What a human's message submitted to `agent` at `submitted` does to its Run's questions
+ * asked before it: those it sets aside, and the set-aside ones it has not yet made wait for
+ * `agent`. Empty for a message already applied.
+ */
+const touchedBy = (
+  rows: ReadonlyArray<DecisionRow>,
+  launches: ReadonlyArray<{ readonly operation: string; readonly agent: string }>,
+  agent: string,
+  submitted: number,
+) => {
+  const before = Arr.filter(rows, (one) => epochMs(one.asked) < submitted);
+  return {
+    aside: Arr.filter(
+      before,
+      (one) => isUnanswered(one) && (one.asker === null || asksAs(launches, one.asker, agent)),
+    ),
+    extended: Arr.filter(
+      before,
+      (one) =>
+        one.asker === null &&
+        isSuperseded(one) &&
+        !Arr.some(rows, (r) => r.revises === one.decision) &&
+        !Arr.some(one.messaged ?? [], (was) => was.agent === agent && epochMs(was.at) >= submitted),
+    ),
+  };
+};
 
 const asksAs = (
   launches: ReadonlyArray<{ readonly operation: string; readonly agent: string }>,

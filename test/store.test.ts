@@ -274,6 +274,34 @@ test("a revision opens only for the agents its caller found finished, not one me
     }),
   ));
 
+test("only questions a human's message can still set aside or extend are supersedable", () =>
+  onStore(
+    "collie-store-supersedable-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-1", "run-a", { note: "asks" }));
+      const question = { run: "run-a", prompt: "Go?", options: ["yes"] };
+      const supersede = (decision: string) =>
+        store.supersede({ run: "run-a", decision, cause: "d-1", actor: human, agent: "planner" });
+      yield* store.asking({ ...question, decision: "open" });
+      yield* store.asking({ ...question, decision: "aside" });
+      yield* supersede("aside");
+      yield* store.asking({ ...question, decision: "own", asker: "build" });
+      yield* supersede("own");
+      yield* store.asking({ ...question, decision: "old" });
+      yield* supersede("old");
+      const [old] = Arr.filter(yield* store.asked("run-a"), (one) => one.decision === "old");
+      const messaged = old!.messaged ?? [];
+      yield* store.revise({ run: "run-a", decision: "old", name: "old.r2", messaged });
+      yield* store.settle({ run: "run-a", decision: "old.r2", value: "yes", request: "a-1" });
+
+      expect(Arr.map(yield* store.supersedable, (one) => one.decision).sort()).toEqual([
+        "aside",
+        "open",
+      ]);
+    }),
+  ));
+
 test("two requests with the same input are two runs", () =>
   onStore(
     "collie-store-separate-",
