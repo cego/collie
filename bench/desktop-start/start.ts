@@ -1,6 +1,3 @@
-// One Desktop start: launched with Record timing on, timed to its board usable, then its
-// whole process tree's RSS read once it has idled.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { type Duration, Effect, FileSystem, Option, Schedule, Schema } from "effect";
@@ -47,18 +44,20 @@ export const treeRssMib = (ps: string, root: number) =>
   Math.round(Arr.reduce(treeOf(ps, root, isCollie), 0, (sum, one) => sum + one.rssKib) / 102.4) /
   10;
 
-/** A process of the tree may have ended with its parent. */
-const signal = (pid: number, name: NodeJS.Signals) => {
+/** Whether `pid` took the signal; a process of the tree may have ended with its parent. */
+const signal = (pid: number, name: NodeJS.Signals | 0) => {
   try {
     process.kill(pid, name);
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const BoardUsable = Schema.fromJsonString(
   Schema.Struct({ name: Schema.Literal("board-usable"), at: Schema.Finite }),
 );
 
-/** How long a start may take to draw its board before it is given up on. */
 const BOARD_LIMIT = "2 minutes";
 
 /**
@@ -70,6 +69,8 @@ export const measureStart = (start: {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly desktopState: string;
   readonly idle: Duration.Input;
+  /** How long its tree has to end on SIGTERM before it is killed. */
+  readonly grace?: Duration.Input;
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -90,10 +91,19 @@ export const measureStart = (start: {
         Effect.gen(function* () {
           const tree = treeOf(snapshot(), app.pid, () => false);
           for (const { pid } of tree) signal(pid, "SIGTERM");
-          const ended = yield* Effect.promise(() => app.exited).pipe(
-            Effect.timeoutOption("10 seconds"),
+          // Until Bun reaps it, an exited app still takes signals.
+          const running = () =>
+            Arr.filter(tree, ({ pid }) =>
+              pid === app.pid ? app.exitCode === null && app.signalCode === null : signal(pid, 0),
+            );
+          yield* Effect.sync(running).pipe(
+            Effect.repeat({
+              until: (left) => left.length === 0,
+              schedule: Schedule.spaced("100 millis"),
+            }),
+            Effect.timeoutOption(start.grace ?? "10 seconds"),
           );
-          if (Option.isNone(ended)) for (const { pid } of tree) signal(pid, "SIGKILL");
+          for (const { pid } of running()) signal(pid, "SIGKILL");
         }).pipe(Effect.ignore),
     );
     const usableAt = yield* fs.readFileString(log).pipe(

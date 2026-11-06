@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Option, Schedule, Schema } from "effect";
 import { treeRssMib, measureStart } from "../bench/desktop-start/start";
 import { world } from "../bench/record-open/world";
 import { runEffect } from "./support/effect";
@@ -52,6 +52,50 @@ await child.exited;
         expect(printed.idle_rss_mib).toBeGreaterThan(0);
         const child = Number(yield* fs.readFileString(`${dir}/child.pid`));
         expect(() => process.kill(child, 0)).toThrow();
+      }),
+    ));
+
+  test("kills a process of the app's tree that ignores SIGTERM, though the app itself ended", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const app = `${dir}/app.ts`;
+        yield* fs.writeFileString(
+          app,
+          `import { appendFileSync, mkdirSync } from "node:fs";
+const own = process.env.XDG_STATE_HOME + "/collie-desktop";
+const child = Bun.spawn([process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"]);
+await Bun.write("${dir}/child.pid", String(child.pid));
+mkdirSync(own, { recursive: true });
+appendFileSync(own + "/record-timing.log", JSON.stringify({ name: "board-usable", at: performance.timeOrigin + performance.now(), card: "" }) + "\\n");
+await child.exited;
+`,
+        );
+        yield* measureStart({
+          argv: [process.execPath, app],
+          env: { PATH: Bun.env.PATH },
+          desktopState: `${dir}/state`,
+          idle: "500 millis",
+          grace: "1 second",
+        });
+        const child = Number(yield* fs.readFileString(`${dir}/child.pid`));
+        yield* Effect.addFinalizer(() =>
+          Effect.try(() => process.kill(child, "SIGKILL")).pipe(Effect.ignore),
+        );
+        const alive = () => {
+          try {
+            return process.kill(child, 0);
+          } catch {
+            return false;
+          }
+        };
+        // A killed process takes a moment to be gone.
+        const gone = yield* Effect.sync(alive).pipe(
+          Effect.repeat({ until: (running) => !running, schedule: Schedule.spaced("50 millis") }),
+          Effect.timeoutOption("2 seconds"),
+        );
+        expect(Option.isSome(gone)).toBe(true);
       }),
     ));
 
