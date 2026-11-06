@@ -585,7 +585,7 @@ function undeclaredNodes(
   childIn: ReadonlyMap<string, string>,
   ended: boolean,
 ): ReadonlyArray<{ readonly at: string; readonly node: FlowNode }> {
-  const { run, now } = facts;
+  const { run } = facts;
   const base = {
     description: "",
     role: null,
@@ -631,7 +631,7 @@ function undeclaredNodes(
         title: operation,
         kind: "agent",
         state,
-        said: undeclaredSaid(state, started, asked, facts, now),
+        said: undeclaredSaid(state, started, asked, facts),
         started,
         ranOn: ranOn(agentOf(last.launch)),
         agent: last.launch.agent,
@@ -656,7 +656,7 @@ function undeclaredNodes(
         title: one.name,
         kind: "question",
         state,
-        said: undeclaredSaid(state, one.asked, [one], facts, now),
+        said: undeclaredSaid(state, one.asked, [one], facts),
         started: one.asked,
         ranOn: null,
         questions: [flowQuestion(one)],
@@ -825,7 +825,6 @@ function undeclaredSaid(
   started: string | null,
   asked: ReadonlyArray<AskedFact>,
   facts: LaneFacts,
-  now: number,
 ): string | null {
   switch (state) {
     case "done":

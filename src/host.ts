@@ -1097,7 +1097,12 @@ const hostBoard = (dir: string) =>
       Duration.infinity,
     );
     let agentsRead: Effect.Success<typeof agentsCached> | undefined;
-    const agentsNow = Effect.map(agentsCached, (agents) => (agentsRead = agents));
+    /** Told synchronously of each new read, so a record opened after `aliveNow` draws it. */
+    const agentsSeen = new Set<(alive: ReadonlyArray<AgentInfo>) => void>();
+    const agentsNow = Effect.map(agentsCached, (agents) => {
+      if (agents !== agentsRead) for (const told of agentsSeen) told(agents.alive);
+      return (agentsRead = agents);
+    });
     // A record does not wait on herdr while the board reads it again.
     const agentsLast = Effect.suspend(() =>
       agentsRead === undefined ? agentsNow : Effect.succeed(agentsRead),
@@ -1291,6 +1296,7 @@ const hostBoard = (dir: string) =>
       factsOf,
       offered,
       herdrMoved,
+      agentsSeen,
       /** herdr's agents as the board last read them. */
       alive: aliveOf(agentsLast),
       /** herdr's agents read now, which the board reads from then on. */
@@ -1462,7 +1468,13 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
         Effect.forever,
         Effect.forkScoped,
       );
-      const { boards, kept, factsOf, offered, bun } = yield* SharedBoard;
+      const { boards, kept, factsOf, offered, bun, agentsSeen } = yield* SharedBoard;
+      const agents = (alive: ReadonlyArray<AgentInfo>) =>
+        door.post({ _tag: "Listed", runs: [], gone: [], order: null, alive, offers: [] });
+      yield* Effect.acquireRelease(
+        Effect.sync(() => agentsSeen.add(agents)),
+        () => Effect.sync(() => agentsSeen.delete(agents)),
+      );
       const registry = yield* Registry;
       /** The revision its view was read at, while that view is kept; a going Run's is not. */
       const readAt = (run: RunFacts) => {

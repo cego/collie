@@ -170,11 +170,11 @@ measured by hand.
 2. For each cell, open cards by clicking their names, then move the log aside under the
    cell's name, as in `mv record-timing.log first.log`:
 
-   | Cell     | Opens | What each opens                            |
-   | -------- | ----- | ------------------------------------------ |
-   | `first`  | 20    | a settled Run's card not opened before     |
-   | `repeat` | 20    | a card just opened and closed              |
-   | `large`  | 10    | a Run of over 200 Steps                    |
+   | Cell     | Opens | What each opens                        |
+   | -------- | ----- | -------------------------------------- |
+   | `first`  | 20    | a settled Run's card not opened before |
+   | `repeat` | 20    | a card just opened and closed          |
+   | `large`  | 10    | a Run of over 200 Steps                |
 
 3. `bun bench/record-open/summarize.ts first.log repeat.log large.log` prints each cell's
    p50, p95, max and n from click to usable, as the bench does. `unmatched` counts a usable

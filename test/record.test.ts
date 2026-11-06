@@ -14,6 +14,7 @@ import { recordFrames, type RecordSources } from "../src/record";
 import { makeRunModel } from "../src/run-model";
 import type { RunFacts } from "../src/runs";
 import { writeTask } from "../src/task";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 
@@ -243,11 +244,7 @@ test("a going Run's record shows an edit to its checkout on its next frame", () 
       const repo = `${dir}/repo`;
       yield* fs.makeDirectory(repo);
       const git = (...args: Array<string>) =>
-        Effect.sync(() =>
-          Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
-            cwd: repo,
-          }),
-        );
+        exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: repo });
       yield* git("init", "-q", "-b", "main");
       yield* fs.writeFileString(`${repo}/kept.txt`, "kept\n");
       yield* git("add", ".");

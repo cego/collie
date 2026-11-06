@@ -42,6 +42,7 @@ test("a Run's steps are remembered at a storm's pace beside ten Runs of 220 step
 
       expect((yield* usualStepTimes(dir, "large")).get("s220")).toBe(330_000);
       expect((yield* usualStepTimes(dir, "small")).get("s6")).toBe(120_000);
-      expect(took).toBeLessThan(1_000);
+      // The quadratic upkeep it replaced took 3.6 s locally, this 0.3 s; CI runners are slower.
+      expect(took).toBeLessThan(2_500);
     }).pipe(Effect.scoped),
   ));

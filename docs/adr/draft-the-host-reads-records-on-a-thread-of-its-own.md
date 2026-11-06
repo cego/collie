@@ -43,7 +43,8 @@ when its door stops.
 - With the listing go the offers its board read: a record's Flow shows only a ready plan's
   first offer, which is the card's. Reading every Run's offers for the door held its first
   listing back by 2.9 s on 520 Runs.
-- The engine sends the agents herdr last showed.
+- The engine sends the agents herdr last showed, as soon as it reads them anew. A drawer opened
+  after `run show` read herdr then draws the same liveness.
 - The engine sends every invalidation in its Run model.
 
 The door asks the engine in two cases:
