@@ -240,7 +240,6 @@ const NOTIFICATION_WORDS = {
   "needs-you": ["A Run needs you", "a Run stops to ask you something"],
   "run-done": ["A Run finished", "a Run finishes well"],
   "run-failed": ["A Run failed", "a Run fails"],
-  "output-unusable": ["An Output was unusable", "a Run stops on an agent's Output it cannot read"],
   "mr-opened": [
     "A merge request or pull request opened",
     "a Run opens a merge request or pull request",
