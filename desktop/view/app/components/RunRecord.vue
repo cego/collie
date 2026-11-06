@@ -59,9 +59,12 @@ onBeforeUnmount(() => keptRecords.closed(recordKey.value));
 const { value: read, trouble } = useHeld(() => runDetailAtom(recordKey.value));
 const detail = computed(() => read.value?.detail ?? null);
 // A record its host has not confirmed since its door went takes no action, as a saved card.
-const recordPlaced = computed(() => ({
+const freshPlaced = computed(() => ({
   ...props.placed,
   asOf: props.placed.asOf ?? read.value?.asOf ?? null,
+}));
+const recordPlaced = computed(() => ({
+  ...freshPlaced.value,
   task: { ...props.placed.task, run: shownRun.value },
 }));
 const flow = shallowRef<Flow | null>(null);
@@ -361,7 +364,7 @@ const locationOf = (file: string, line: number | null) =>
           v-show="tab === 'flow'"
           :flow="timed"
           :detail="detail"
-          :placed="placed"
+          :placed="freshPlaced"
           :shown="tab === 'flow'"
           @run="shownRun = $event"
           @open="openWork"
