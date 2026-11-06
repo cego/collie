@@ -4,6 +4,7 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { Console, Effect, FileSystem, Path, Schema } from "effect";
 import { summaryOf } from "./stats";
 
@@ -15,7 +16,7 @@ const Mark = Schema.fromJsonString(
 export const nativeSummary = (log: string) =>
   Effect.gen(function* () {
     const marks = yield* Effect.forEach(
-      Arr.filter(log.split("\n"), (line) => line.trim() !== ""),
+      Arr.filter(Str.split(log, "\n"), (line) => Str.trim(line) !== ""),
       (line) => Schema.decodeEffect(Mark)(line),
     );
     const samples: Array<number> = [];
@@ -38,8 +39,10 @@ if (import.meta.main)
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       for (const log of Arr.drop(Bun.argv, 2)) {
-        const summary = yield* nativeSummary(yield* fs.readFileString(log));
-        yield* Console.log(JSON.stringify({ cell: path.basename(log, ".log"), ...summary }));
+        const { p50, p95, max, n, unmatched } = yield* nativeSummary(yield* fs.readFileString(log));
+        yield* Console.log(
+          `${path.basename(log, ".log")}: p50 ${p50}, p95 ${p95}, max ${max}, n ${n}, unmatched ${unmatched}`,
+        );
       }
     }).pipe(Effect.provide(BunServices.layer)),
   );
