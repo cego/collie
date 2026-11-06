@@ -103,8 +103,10 @@ test("a Machine removed while its board is being saved is not saved again", () =
       yield* TestClock.adjust("1 second");
       yield* Deferred.await(renaming);
 
-      const removing = yield* dropBoardsOf(dir, machine.profile).pipe(Effect.forkScoped);
-      yield* TestClock.withLive(Effect.sleep("50 millis"));
+      // Started at once, so it waits for the save's permit before the rename is let go.
+      const removing = yield* dropBoardsOf(dir, machine.profile).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
       yield* Deferred.succeed(resume, undefined);
       yield* Deferred.await(renamed);
       yield* Fiber.join(removing);
