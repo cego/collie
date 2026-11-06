@@ -9,15 +9,16 @@ import { RunDetail } from "../src/board-model";
 import { frontDoor, socketOf } from "../src/host";
 import { stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
-import frozen from "./fixtures/run-detail-base.json";
+import frozenJson from "./fixtures/run-detail-base.json";
 
 // The record's wire schema on master at ec7ce76b, before revisions, as an older client decodes it.
-const baseRunDetail = SchemaRepresentation.fromRepresentation(
-  // SAFETY: the fixture is `SchemaRepresentation.toJson` of that schema's representation.
-  SchemaRepresentation.fromJson(frozen as Schema.Json),
-  {
-    revivers: [SchemaRepresentation.isFiniteReviver, SchemaRepresentation.isIntReviver],
-  },
+const frozen: unknown = frozenJson;
+const baseRunDetail = Schema.make<Schema.Codec<unknown, unknown>>(
+  SchemaRepresentation.fromRepresentation(
+    // SAFETY: the fixture is `SchemaRepresentation.toJson` of that schema's representation.
+    SchemaRepresentation.fromJson(frozen as Schema.Json),
+    { revivers: [SchemaRepresentation.isFiniteReviver, SchemaRepresentation.isIntReviver] },
+  ).ast,
 );
 
 const RunId = Schema.Struct({ data: Schema.Struct({ runId: Schema.String }) });
@@ -150,15 +151,14 @@ test(
             Effect.orDie,
           );
           expect(first._tag).toBe("Some");
-          const sent = Schema.encodeSync(Schema.NullOr(RunDetail))(
+          const sent = yield* Schema.encodeEffect(Schema.NullOr(RunDetail))(
             // SAFETY: an ask without `held` is answered with a record or null, never Unchanged.
             first._tag === "Some" ? (first.value as RunDetail | null) : null,
-          );
-          expect(
-            Schema.decodeUnknownExit(Schema.NullOr(baseRunDetail), { onExcessProperty: "error" })(
-              sent,
-            )._tag,
-          ).toBe("Success");
+          ).pipe(Effect.orDie);
+          const decoded = yield* Schema.decodeEffect(Schema.NullOr(baseRunDetail), {
+            onExcessProperty: "error",
+          })(sent).pipe(Effect.exit);
+          expect(decoded._tag).toBe("Success");
         }),
       ["plain.workflow.ts"],
     ),
