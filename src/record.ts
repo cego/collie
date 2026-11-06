@@ -4,7 +4,7 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Clock, Effect, FileSystem, Path, Result, Schema, Stream, flow } from "effect";
+import { Clock, Effect, FileSystem, Path, Queue, Result, Schema, Stream, flow } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type {
   MrPanel,
@@ -237,6 +237,13 @@ export const recordFrames = (
         return true;
       };
 
+      // Heard from before the first read, so a write while it is read is sent after it.
+      const heard = yield* Queue.sliding<void>(1);
+      yield* changes.pipe(
+        Stream.runForEach(() => Queue.offer(heard, undefined)),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+
       // Opening a record is interactive; a frame sent later for a change is not.
       const { serve } = yield* Foreground;
       const first = Stream.unwrap(
@@ -295,7 +302,7 @@ export const recordFrames = (
           );
         }),
       );
-      const again = changes.pipe(
+      const again = Stream.fromQueue(heard).pipe(
         Stream.mapEffect(() => whole),
         Stream.filter(unsent),
       );

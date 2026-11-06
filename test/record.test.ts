@@ -4,7 +4,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Latch, Queue, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Latch, PubSub, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { buildBoard } from "../src/board";
 import type { RecordUnchanged, RunDetail } from "../src/board-model";
@@ -281,5 +281,48 @@ test("a going Run's record shows an edit to its checkout on its next frame", () 
       let next = yield* Queue.take(frames);
       while (!isDone(next)) next = yield* Queue.take(frames);
       expect(Arr.map(next.diff?.files ?? [], (file) => file.path)).toEqual(["new.txt"]);
+    }),
+  ));
+
+test("a write while a record's first parts are read is sent once they are", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, runs } = yield* stateOf(1);
+      const model = yield* makeRunModel(dir, "installation");
+      const run = runs[0]!;
+      const writes = yield* PubSub.unbounded<void>();
+      const reading = yield* Deferred.make<void>();
+      const written = yield* Deferred.make<void>();
+      const frames = yield* Queue.unbounded<Frame>();
+      yield* recordFrames(
+        {
+          ...sourcesOf(dir, model, runs),
+          mr: () =>
+            Deferred.succeed(reading, undefined).pipe(
+              Effect.andThen(Deferred.await(written)),
+              Effect.as(null),
+            ),
+        },
+        { ...KEY, runId: run.id },
+        Stream.fromPubSub(writes),
+      ).pipe(
+        Stream.runForEach((frame) => Queue.offer(frames, frame)),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(reading);
+      yield* fs.makeDirectory(`${run.dir}/handoffs`, { recursive: true });
+      yield* model.writing.writeFileString(`${run.dir}/handoffs/next.md`, "the next step\n");
+      yield* PubSub.publish(writes, undefined);
+      yield* Deferred.succeed(written, undefined);
+
+      const handedOff = Effect.gen(function* () {
+        for (;;) {
+          const frame = yield* Queue.take(frames);
+          if (isDone(frame) && (frame.handoffFiles ?? []).length > 0) return frame.handoffFiles;
+        }
+      });
+      const shown = yield* handedOff.pipe(Effect.timeoutOption("3 seconds"));
+      expect(shown._tag === "Some" && shown.value).toEqual([{ name: "next.md", bytes: 14 }]);
     }),
   ));
