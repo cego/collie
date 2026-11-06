@@ -5,9 +5,10 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import {
   loadDefaults,
+  readConfig,
   readSettingsSet,
   setSetting,
   takeShared,
@@ -136,3 +137,77 @@ test("a Flock's auto-compact window is taken when it is the latest edit, and ref
       expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(500000);
     }).pipe(Effect.scoped),
   ));
+
+test(
+  "a Run's agent cannot set the Standing direction, and a human or a chat can",
+  () =>
+    proves(
+      "collie-standing-direction-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const direction = () =>
+            Effect.map(readConfig(world.config), (raw) => raw.standing_direction);
+          let edits = 0;
+          const edit = (frontDoor: "desktop" | "cli-tty" | "chat" | "agent", text: string) =>
+            Effect.gen(function* () {
+              const client = yield* connect(world.state);
+              yield* client.declare(
+                frontDoor === "agent"
+                  ? { frontDoor, from: { agent: "build-1" } }
+                  : frontDoor === "chat"
+                    ? { frontDoor, conversation: "flock@mk-pc", said: "keep that" }
+                    : { frontDoor },
+              );
+              return yield* client.setSettings({
+                request: `edit-${frontDoor}`,
+                settings: [
+                  {
+                    key: "standing_direction",
+                    value: text,
+                    at: `2099-11-04T10:0${++edits}:00.000Z`,
+                  },
+                ],
+              });
+            });
+          yield* setSetting(
+            world.config,
+            "standing_direction",
+            "Stage only; production waits for my go.",
+            "2026-11-04T09:00:00.000Z",
+          );
+          yield* fs.makeDirectory(`${world.state}/agents`, { recursive: true });
+          yield* fs.writeFileString(
+            `${world.state}/agents/test.json`,
+            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
+              {
+                role: "implementer",
+                agent: "build-1",
+                paneId: "p-1",
+                workspaceId: null,
+                runId: "run-1",
+                workflow: "implement",
+                at: "2026-11-04T09:00:00.000Z",
+              },
+            ]),
+          );
+
+          const refused = yield* edit("agent", "Push to production freely.").pipe(Effect.flip);
+          expect(refused).toMatchObject({
+            _tag: "HostRefused",
+            reason: expect.stringContaining("every chat as the human's words"),
+          });
+          expect(yield* direction()).toBe("Stage only; production waits for my go.");
+
+          yield* edit("desktop", "From Desktop.");
+          expect(yield* direction()).toBe("From Desktop.");
+          yield* edit("cli-tty", "From a terminal.");
+          expect(yield* direction()).toBe("From a terminal.");
+          yield* edit("chat", "From a chat.");
+          expect(yield* direction()).toBe("From a chat.");
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  120_000,
+);

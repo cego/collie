@@ -72,7 +72,8 @@ import { appWindowFor } from "./browser";
 import { applicationMenu } from "./menu";
 import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
-import { actionsLog } from "./sent";
+import { actionsLog, reasonOf } from "./sent";
+import { type Place, setUp, setupInventory, setupOffer, thisComputer } from "./standing-setup";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
 import { claudeCode, claudeModels } from "./claude";
 import { claudeDriver } from "./claude-driver";
@@ -99,6 +100,7 @@ import {
   editSetting,
   NO_FLOCK_SETTINGS,
   type FlockSettings,
+  standingDirectionOf,
 } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { changedLine } from "../../../src/schedule-model";
@@ -139,9 +141,7 @@ import {
 } from "./machine";
 import { recordKeeper } from "./records";
 import { givenCredentials } from "./given";
-import { saveSlackConnection, disconnectSlackConnection } from "./slack";
 import { slackUserSession } from "./slack-user";
-import { slackApi } from "../../../src/slack";
 import { connectionsOn, githubLogin, readBack, reuseGitlab } from "./connection-reuse";
 import { flockInSyncSaid, inSync } from "../shared/in-sync";
 import { attachCommand, inTerminal, launched, openTerminal } from "./terminal";
@@ -161,7 +161,6 @@ import {
   giveHelle,
   giveToken,
   giveGithub,
-  giveSlack,
   giveSlackUser,
   gitlabToken,
   helleOwner,
@@ -581,8 +580,7 @@ const main = Effect.gen(function* () {
     give: {
       gitlab: (route, text) => Effect.map(giveToken([route], gitlabHost(), text), firstFailure),
       helle: (route, text) => Effect.map(giveHelle([route], helle, text), firstFailure),
-      slack: (route, text) => Effect.map(giveSlack([route], text), firstFailure),
-      "slack-user": (route, text) => Effect.map(giveSlackUser([route], text), firstFailure),
+      slack: (route, text) => Effect.map(giveSlackUser([route], text), firstFailure),
     },
     tell: (item) => PubSub.publish(news, item).pipe(Effect.asVoid),
     skipped: (profile) =>
@@ -697,6 +695,7 @@ const main = Effect.gen(function* () {
       );
       const run =
         adding === undefined ? onboarded : yield* addedToCore(job, machine, onboarded, adding);
+      yield* offer.onboarded(run);
       if (run.ready === true && secrets !== "") yield* given.handed(machine, handed, run.steps);
       // Kept as skipped where the run ended before it, so the next run skips it too.
       const unreached = Arr.map(
@@ -791,7 +790,8 @@ const main = Effect.gen(function* () {
   };
   const slackUser = yield* slackUserSession({
     keyring,
-    give: (text) => given.giveEvery(everyRoute(), "slack-user", text),
+    give: (text) => given.giveEvery(everyRoute(), "slack", text),
+    retireBot: keyring.forgetSlackBot,
     open: openUrl,
   });
   yield* slackUser.keepSignedIn.pipe(Effect.forkIn(scope));
@@ -891,6 +891,14 @@ const main = Effect.gen(function* () {
         Effect.orDie,
         Effect.provide(BunServices.layer),
       ),
+    standingDirection: () => standingDirectionOf(SubscriptionRef.getUnsafe(flockSettings)),
+    setStandingDirection: (text) =>
+      editFlock("standing_direction", text).pipe(
+        Effect.as(null),
+        Effect.catchTag("ActionFailed", ({ reason }) => Effect.succeed(reason)),
+        Effect.orDie,
+        Effect.provide(BunServices.layer),
+      ),
     choice: () =>
       opensOn(settings(), SubscriptionRef.getUnsafe(flockSettings), readPiConfig(own), lists),
     offered: (harness) =>
@@ -951,6 +959,33 @@ const main = Effect.gen(function* () {
     chat.pipe(
       Effect.flatMap(Result.match({ onSuccess: use, onFailure: () => Effect.succeed(unstarted) })),
     );
+  const home = yield* Config.String("HOME");
+  const setupPlaces = (): ReadonlyArray<Place> => {
+    const machines = Arr.map([...doors.values()], ({ machine, desktop }): Place => ({
+      computer: machine.name,
+      inventory: desktop.ownInventory().pipe(Effect.mapError(reasonOf)),
+      read: desktop.ownWords().pipe(Effect.mapError(reasonOf)),
+    }));
+    return Arr.some([...doors.values()], ({ machine }) => machine.profile === "local")
+      ? machines
+      : [thisComputer(home), ...machines];
+  };
+  const offer = yield* setupOffer({
+    facts: () => ({
+      direction: standingDirectionOf(SubscriptionRef.getUnsafe(flockSettings)),
+      version: manifest.version,
+      settings: settings(),
+    }),
+    save: saveSettings,
+  });
+  const anyConnected: Effect.Effect<void> = Effect.suspend(() =>
+    doors.size > 0 ? Effect.void : Deferred.await(doors.changed).pipe(Effect.andThen(anyConnected)),
+  );
+  yield* anyConnected.pipe(Effect.andThen(offer.launched), Effect.forkIn(scope));
+  yield* SubscriptionRef.changes(flockSettings).pipe(
+    Stream.runForEach(() => offer.directionChanged),
+    Effect.forkIn(scope),
+  );
   /** The terminal open in the window, and what ends it. */
   let shownTerminal:
     | {
@@ -1155,29 +1190,12 @@ const main = Effect.gen(function* () {
         yield* SubscriptionRef.update(credentials, (now) => ({ ...now, helle: true }));
         return gave("Helle's token", yield* given.giveEvery(everyRoute(), "helle", said));
       }).pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
-    saveSlack: ({ token }) =>
-      saveSlackConnection(token, keyring, (text) =>
-        given.giveEvery(everyRoute(), "slack", text),
-      ).pipe(
-        Effect.map(
-          ({ identity, given }) =>
-            `Posts as ${identity.user} in ${identity.team}. ${gave("Slack's token", given)}`,
-        ),
-        Effect.mapError((reason) => new ActionFailed({ reason })),
-      ),
-    disconnectSlack: () =>
-      disconnectSlackConnection(keyring, (text) =>
-        given.giveEvery(everyRoute(), "slack", text),
-      ).pipe(
-        Effect.map((all) => gave("Slack disconnect", all)),
-        Effect.mapError((reason) => new ActionFailed({ reason })),
-      ),
     slackUser: () => slackUser.changes,
-    signInSlackUser: ({ clientId }) =>
-      slackUser.signIn(clientId).pipe(
+    signInSlackUser: () =>
+      slackUser.signIn.pipe(
         Effect.map(
           ({ grant, given }) =>
-            `Posts approval requests as ${grant.userName} in ${grant.teamName}. ${gave("Your Slack sign-in", given)}`,
+            `Posts as ${grant.userName} in ${grant.teamName}. ${gave("Your Slack sign-in", given)}`,
         ),
         Effect.mapError((reason) => new ActionFailed({ reason })),
       ),
@@ -1188,38 +1206,6 @@ const main = Effect.gen(function* () {
       ),
     slackUserChannels: () =>
       slackUser.channels.pipe(Effect.mapError((reason) => new ActionFailed({ reason }))),
-    slackChoices: () =>
-      Effect.gen(function* () {
-        const token = yield* keyring.lookup("slack-token");
-        if (token) {
-          const api = slackApi(token);
-          return {
-            identity: yield* api.auth(),
-            channels: yield* api.channels(),
-            people: yield* api.people(),
-          };
-        }
-        for (const source of doors.values()) {
-          const reading = Option.getOrUndefined(
-            Arr.findFirst(yield* source.desktop.connections(), (one) => one.id === "slack"),
-          );
-          if (reading?.reading.state === "ok") return yield* source.desktop.slackChoices();
-        }
-        return yield* Effect.fail(
-          "Connect Slack, under Connections below, to pick from the channels your Collie is in.",
-        );
-      }).pipe(
-        Effect.mapError(
-          (error) =>
-            new ActionFailed({
-              reason: isString(error)
-                ? error
-                : "reason" in error && isString(error.reason)
-                  ? error.reason
-                  : "The Machine's Slack choices could not be read",
-            }),
-        ),
-      ),
     claudeLogin: ({ profile }) =>
       Effect.gen(function* () {
         const route = routes.get(profile)?.route;
@@ -1591,6 +1577,22 @@ const main = Effect.gen(function* () {
             }),
           ).pipe(Effect.ignore)
         : Effect.void,
+    setupOffer: () => SubscriptionRef.changes(offer.offered),
+    declineSetup: ({ forGood }) => offer.decline(forGood),
+    setupInventory: () => offer.taken.pipe(Effect.andThen(setupInventory(setupPlaces()))),
+    chooseSetup: ({ choice }) => offer.choose(choice),
+    setupChosen: () => SubscriptionRef.changes(offer.chosen),
+    takeSetup: () => offer.take,
+    setUp: ({ choice }) =>
+      Stream.unwrap(
+        Effect.map(chat, (opened) =>
+          Result.match(opened, {
+            onSuccess: (conversation) => setUp(choice, setupPlaces(), conversation),
+            onFailure: (cause) =>
+              Stream.make(refusal(`The Flock chat could not start: ${String(cause)}`)),
+          }),
+        ),
+      ),
   });
   const servedOn = (channel: Channel<ToView, ToMain>) =>
     RpcServer.layer(DesktopRpcs).pipe(

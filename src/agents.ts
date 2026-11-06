@@ -110,7 +110,7 @@ import { shell } from "./mr";
 import type { ForgeHttp } from "./forge/http";
 import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
-import type { Asker } from "./proposals";
+import { humanOf, type Asker } from "./proposals";
 import { STOP, controlSet } from "./controls";
 import * as dispatch from "./dispatcher";
 import type * as Types from "effect/Types";
@@ -147,9 +147,11 @@ import {
   isSettled,
   RUN_LABEL,
   type AgentInfo,
+  type AgentStatus,
   HerdrError,
 } from "./herdr";
 import { promptAsync } from "./opencode";
+import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
@@ -497,7 +499,13 @@ export interface AgentsApi {
    * Puts on its Run every question an agent asked that no collection is reading — its Run
    * finished or parked, or the agent between steps — and sends it the answers.
    */
-  readonly tendQuestions: (questionsFor: (runId: string) => Questions) => Effect.Effect<void>;
+  readonly tendQuestions: (
+    questionsFor: (runId: string) => Questions,
+    /** Told of each queued message it submits now. */
+    submitted?: (queued: Queued, sent: Steered) => Effect.Effect<void>,
+  ) => Effect.Effect<void>;
+  /** What herdr says `agent` is doing now: `gone` where herdr no longer has it. */
+  readonly statusOf: (agent: string) => Effect.Effect<AgentStatus | "gone">;
   /**
    * Starts again, each in the session it had, every agent of this Run that core no longer
    * has. The one whose Output is still out is told to carry on with its step.
@@ -525,6 +533,8 @@ export type DeliveryMode = "boundary" | "now" | "interrupt";
 export interface Steered {
   readonly agent: string;
   readonly delivered: boolean;
+  /** The Delivery that carried it, where one was submitted. */
+  readonly delivery?: string;
   readonly detail: string;
   readonly queued?: boolean;
   /** Not delivered because no incarnation of the agent is alive. */
@@ -1687,6 +1697,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       cause: { kind: delivery.kind, ref: delivery.ref },
       mode: delivery.mode ?? "boundary",
       idleOnly: delivery.idleOnly,
+      human: delivery.kind === "steer" ? humanOf(fitted.actor) : null,
       // Work, a repair and a steer share a causal key per thing they are about, which is
       // what makes the second copy refusable; a correction's is its constraint's.
       intentVersion: delivery.intentVersion ?? 0,
@@ -1707,13 +1718,22 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           about.runId,
           `${about.agent}: its ${delivery.kind} ${outcome.id} did not start a turn on core, so Enter was pressed once`,
         );
+      const id = outcome.id;
       if (outcome.submission === "observed")
-        return { sent: true, why: "", observed: dispatch.TURN_STARTED, pane, kept: fitted.kept };
+        return {
+          sent: true,
+          why: "",
+          id,
+          observed: dispatch.TURN_STARTED,
+          pane,
+          kept: fitted.kept,
+        };
       if (delivery.kind !== "steer" && delivery.kind !== "correction")
-        return { sent: true, why: "" };
+        return { sent: true, why: "", id };
       return {
         sent: true,
         why: "",
+        id,
         observed: yield* observe(about, entry, draft, delivery.herdr),
         pane,
         kept: fitted.kept,
@@ -1725,6 +1745,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return {
         sent: true,
         why: outcome.detail,
+        id: outcome.id ?? undefined,
         observed: outcome.held === "acknowledged" ? "taken when it was first sent" : null,
         pane,
       };
@@ -2683,23 +2704,21 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               names: Arr.map(call.questions, () => agentQuestionName(stem, ++n)),
             }),
           );
-          const asked = yield* questions.asked;
-          const answers = new Map(Arr.map(asked, (one) => [one.name, one.answer]));
-          const answerers = new Map(Arr.map(asked, (one) => [one.name, one.by]));
+          const asked = new Map(Arr.map(yield* questions.asked, (one) => [one.name, one] as const));
           let open = false;
           const opened = openQuestions.get(launched.agent) ?? new Set<string>();
           openQuestions.set(launched.agent, opened);
           for (const { call, names } of calls) {
             for (const [at, question] of call.questions.entries()) {
               const name = names[at] ?? "";
-              if (answers.has(name)) continue;
+              if (asked.has(name)) continue;
               yield* questions.ask(
                 { name, prompt: questionPrompt(question), options: [] },
                 launched.operation,
               );
-              answers.set(name, null);
+              asked.set(name, { name, answer: null });
             }
-            const given = Arr.map(names, (name) => answers.get(name) ?? null);
+            const given = Arr.map(names, (name) => asked.get(name) ?? { name, answer: null });
             const key = `${launched.agent}\n${call.id}`;
             // Until its answers are sent, so Collie's next prompt cannot reach it first.
             const holds = (holding: boolean) => {
@@ -2708,18 +2727,20 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 else opened.delete(`${name} on ${launched.runId}`);
             };
             if (closing !== null) {
-              for (const [at, name] of names.entries())
-                if (given[at] === null) yield* questions.close(name, closing);
+              for (const one of given)
+                if (isUnanswered(one)) yield* questions.close(one.name, closing);
               holds(false);
               continue;
             }
-            if (Arr.some(given, (answer) => answer === null)) {
+            if (Arr.some(given, isUnanswered)) {
               open = true;
               holds(true);
               continue;
             }
+            // A superseded question's answer is never delivered: the agent asks again (D4).
             if (
-              Arr.some(given, (answer) => closings.includes(answer ?? "")) ||
+              Arr.some(given, isSuperseded) ||
+              Arr.some(given, (one) => Arr.some(closings, (closing) => closing === one.answer)) ||
               answeredCalls.has(key)
             ) {
               holds(false);
@@ -2729,13 +2750,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
               call.questions[at]?.header || call.questions[at]?.question || names[at];
-            for (const group of bySender(Arr.map(names, (name) => answerers.get(name)))) {
+            for (const group of bySender(Arr.map(given, (one) => one.by))) {
               const sent = yield* deliver(
                 launched,
                 group.at.length === 1
-                  ? `Your question ${label(group.at[0]!)} is answered: ${given[group.at[0]!]}`
+                  ? `Your question ${label(group.at[0]!)} is answered: ${given[group.at[0]!]?.answer}`
                   : `Your questions are answered: ${Arr.join(
-                      Arr.map(group.at, (at) => `${label(at)}: ${given[at]}`),
+                      Arr.map(group.at, (at) => `${label(at)}: ${given[at]?.answer}`),
                       "; ",
                     )}`,
                 {
@@ -2768,7 +2789,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         }).pipe(Effect.orElseSucceed(() => false));
     });
 
-  const tendQuestions = (questionsFor: (runId: string) => Questions) =>
+  const tendQuestions = (
+    questionsFor: (runId: string) => Questions,
+    submitted: (queued: Queued, sent: Steered) => Effect.Effect<void> = () => Effect.void,
+  ) =>
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -2784,7 +2808,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             ),
           )) {
             if (queued.result !== null) continue;
-            yield* steer({ ...queued, mode: "now" });
+            yield* submitted(queued, yield* steer({ ...queued, mode: "now" }));
           }
         }
         const named = yield* fs
@@ -3516,6 +3540,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           if (previous !== undefined) {
             const result = SENT_STATES.has(previous.state)
               ? receipt(previous.agent, {
+                  id: previous.id,
                   observed:
                     previous.state === "acknowledged" ? "taken when it was first sent" : null,
                 })
@@ -3694,6 +3719,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     repair,
     steer,
     tendQuestions,
+    statusOf: (agent) =>
+      under(host.herdr.agentStatus(agent)).pipe(
+        Effect.catch((cause) =>
+          Effect.succeed(
+            cause.code === "agent_not_found" ? ("gone" as const) : ("unknown" as const),
+          ),
+        ),
+      ),
     resumeLost,
     onLosses: (resumed) => under(Stream.runForEach(host.herdr.agentsEnded(), () => resumed)),
     atWork: (runId) =>
@@ -3729,6 +3762,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 const receipt = (
   agent: string,
   sent: {
+    readonly id?: string | undefined;
     readonly observed?: string | null;
     readonly pane?: string;
     readonly kept?: string | null;
@@ -3742,6 +3776,7 @@ const receipt = (
     observed: how !== null,
   };
   if (how !== null) steered.how = how;
+  if (sent.id !== undefined) steered.delivery = sent.id;
   if (sent.pane !== undefined) steered.pane = sent.pane;
   if (sent.kept !== undefined && sent.kept !== null) steered.kept = sent.kept;
   return steered;

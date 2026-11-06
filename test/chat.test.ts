@@ -11,6 +11,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   CHAT_HARNESS_KEY,
   chatArgs,
+  chatDir,
   chatHarnessOf,
   chatPath,
   DEFAULT_CHAT_HARNESS,
@@ -24,7 +25,10 @@ import {
   writeChat,
   type ChatRecord,
 } from "../src/chat";
-import { writeConfigValue } from "../src/config";
+import { setSetting, writeConfigValue } from "../src/config";
+import { chatContextFor } from "../src/statusline";
+import { selectionPath, writeSelection } from "../src/selection";
+import { herdOf } from "../src/steering";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { TOOLS } from "../src/tools";
@@ -332,6 +336,32 @@ test("the system prompt chat writes takes a reported review as a report, asks be
     }).pipe(Effect.scoped),
   ));
 
+test("the system prompt points chat at the setup procedure Desktop's Flock chat follows, by a path that reads", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "hw-chat-setup-" });
+      const files = yield* writeLaunchFiles({
+        dir: `${root}/chat`,
+        pluginRoot: `${import.meta.dir}/..`,
+        userDir: `${root}/user`,
+        home: `${root}/home`,
+        self: ["/bin/collie"],
+        serverEnv: {},
+        news: `${root}/news.jsonl`,
+        tools: [],
+        mcpConfig: "{}",
+      });
+      const named = /`([^`\s]+standing-direction-setup\.md)`/.exec(
+        yield* fs.readFileString(files.systemPrompt),
+      )?.[1];
+      expect(named).toBeDefined();
+      expect(yield* fs.readFileString(named!)).toContain(
+        "When work is ready, which next steps should Collie offer you without being asked",
+      );
+    }).pipe(Effect.scoped),
+  ));
+
 test("the shipped prompt has chat choose by description, with ad-hoc work as general", () =>
   runEffect(
     Effect.gen(function* () {
@@ -351,6 +381,8 @@ test("the shipped prompt has chat choose by description, with ad-hoc work as gen
 /** The chat started on Claude Code as a core terminal, against the fake core and a stand-in `claude`. */
 const launchedChat = (opts: {
   readonly config?: string;
+  readonly settingsSet?: string;
+  readonly harness?: "claude" | "pi";
   readonly help?: string;
   readonly recorded?: ChatRecord;
 }) =>
@@ -359,11 +391,13 @@ const launchedChat = (opts: {
     yield* rig.startCore();
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     yield* Effect.addFinalizer(() => bin.restore());
-    yield* bin.add("claude", "exit 0");
+    yield* bin.add(opts.harness ?? "claude", "exit 0");
     const fs = yield* FileSystem.FileSystem;
     const env = rig.pluginEnv();
     if (opts.config !== undefined)
       yield* fs.writeFileString(`${env.userDir}/config.json`, opts.config);
+    if (opts.settingsSet !== undefined)
+      yield* fs.writeFileString(`${env.userDir}/settings-set.json`, opts.settingsSet);
     if (opts.recorded !== undefined)
       yield* writeChat(yield* chatPath(env.stateDir, KEY), opts.recorded);
     const lines: string[] = [];
@@ -388,6 +422,9 @@ const launchedChat = (opts: {
       name: started?.params?.name,
       args: argv.slice(1),
       recorded: yield* readChat(yield* chatPath(env.stateDir, KEY)),
+      systemPrompt: yield* fs
+        .readFileString(`${yield* chatDir(env.stateDir, KEY)}/system-prompt.md`)
+        .pipe(Effect.orElseSucceed(() => "")),
     };
   }).pipe(Effect.scoped);
 
@@ -443,5 +480,68 @@ test("a window Claude Code would not take leaves the chat unavailable, naming it
       expect(why).toContain("claude_auto_compact_window");
       expect(why).toContain("50000");
       expect(chat.started).toBe(false);
+    }),
+  ));
+
+test("a Native chat's prompt context gives the Standing direction, dated, before the board's selection", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const rig = yield* Rig.scoped();
+      const env = rig.pluginEnv();
+      yield* writeSelection(yield* selectionPath(env.stateDir, yield* herdOf(env.socketPath)), {
+        task: "t1",
+        run: "r1",
+        name: "Strapi prod seeder",
+      });
+      const selected =
+        'Board: "Strapi prod seeder" is open (run r1). "It", "this one" and the like mean this card; a Herd-wide question is still Herd-wide.';
+      expect(yield* chatContextFor(env)).toBe(selected);
+
+      yield* setSetting(
+        env.userDir,
+        "standing_direction",
+        "Stage only; production waits for my go.",
+        "2026-10-02T09:30:00.000Z",
+      );
+      const context = yield* chatContextFor(env);
+      expect(context).toContain("Stage only; production waits for my go.");
+      expect(context).toContain("2026-10-02");
+      expect(context).toEndWith(`\n\n${selected}`);
+
+      yield* setSetting(
+        env.userDir,
+        "standing_direction",
+        "Ask before renovating.",
+        "2026-10-03T08:00:00.000Z",
+      );
+      const edited = yield* chatContextFor(env);
+      expect(edited).toContain("Ask before renovating.");
+      expect(edited).toContain("2026-10-03");
+      expect(edited).not.toContain("Stage only");
+
+      yield* setSetting(env.userDir, "standing_direction", "", "2026-10-04T08:00:00.000Z");
+      expect(yield* chatContextFor(env)).toBe(selected);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a Pi Native chat's launch prompt carries the Standing direction as it stands at launch, and Claude's does not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const promptOf = (harness: "claude" | "pi", config: string) =>
+        Effect.map(
+          launchedChat({ harness, config, settingsSet: STAMPED }),
+          ({ ensured, systemPrompt }) => {
+            expect(ensured.kind).toBe("launched");
+            return systemPrompt;
+          },
+        );
+      const STAMPED = `{ "set": { "standing_direction": "2026-10-02T09:30:00.000Z" } }`;
+      const set = (harness: string) =>
+        `{ "chat_harness": "${harness}", "standing_direction": "Stage only; production waits for my go." }`;
+      const pi = yield* promptOf("pi", set("pi"));
+      expect(pi).toContain("Stage only; production waits for my go.");
+      expect(pi).toContain("2026-10-02");
+      expect(yield* promptOf("claude", set("claude"))).not.toContain("Stage only");
+      expect(yield* promptOf("pi", `{ "chat_harness": "pi" }`)).not.toContain("standing direction");
     }),
   ));

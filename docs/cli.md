@@ -405,7 +405,10 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   go to the agent together as its next message. While one is open, the step's Output
   budget is paused. One still open when the step's Output comes is closed with
   `closed: <operation> finished before it was answered`, and nothing is sent
-  ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md)). A question no step is
+  ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md)). A human's message to
+  that agent supersedes its open questions instead: an answer to one is refused and never
+  sent, none is asked again, and Collie's next prompt to it no longer waits on them. A
+  question no step is
   waiting on — the Run finished, parked, or the agent between steps — is put on its Run
   and its answer sent back all the same, numbered under the work it was given last. One still
   open once its agent is gone is closed with `closed: <agent> is gone`. With no host
@@ -526,9 +529,11 @@ does not rename it back. See [Using Collie](using.md#what-a-task-workspace-is-ca
 Runs are scoped by Task, not by workspace. `collie run list` inside a task workspace lists
 that Task's local Runs and live peers' Runs; elsewhere it lists every reachable Run. A
 command that names a Run, typed in a task workspace, reaches that Task's Runs, every Run on
-another Machine, and, from an agent's pane, any Run its own Run started (as `parent` or
+another Machine, and, from an agent's shell, any Run its own Run started (as `parent` or
 `requestedBy`) or was asked about (its goal, its inputs, or a steer it received, name the
-Run's id).
+Run's id). The agent is known as it is for the actor: by its pane in herdr's agent list, or
+by `COLLIE_AGENT` on a core terminal, and only then by `COLLIE_RUN`, so this holds in the
+agent's own shell and not only inside its MCP tools.
 Outside a task workspace every Run is reachable. Any other Run is `run_outside_task`, whose
 `details` name the Run's `task` and the `workspace` that reaches it; `--workspace <id>`
 picks that workspace.
@@ -900,6 +905,16 @@ open, that is refused. The answer is one of the question's options, in any case 
 does. A refusal is `invalid_input` where your answer was the reason, and otherwise
 `operation_failed` with the host's own sentence.
 
+A message a human sends one of the run's agents while it waits — from the board, Desktop,
+a terminal, chat with the human's own words, or typed into a Claude agent's pane —
+supersedes the question: it carries
+`superseded` and no answer, nothing lists it as waiting, and an answer to it is refused.
+Only an agent that was messaged since may still answer it, as a planner told "go" does. Once
+every messaged agent's work ends, and the run is neither stopped nor moved on, the question
+is asked again under a new name with `revises` naming the old one; answer that one. A
+further message supersedes that one in turn. A message is never read as an answer, even one
+that is exactly an option.
+
 A run shows its question a moment before it stops to wait on it. An answer given in that
 moment is recorded at once and handed to the run once it has stopped, so it cannot wake the
 run out of a later park instead.
@@ -1084,7 +1099,8 @@ opened somewhere else carries no line about a board it is nowhere near.
 
 `chat context` is the same fact for the conversation: the Home's Claude Code runs it as a
 `UserPromptSubmit` hook, so each message you send carries one line naming the open card,
-and nothing at all while none is open. You never type it, and it is wired per launch —
+and nothing at all while none is open. Before that line it gives your Standing direction
+(`standing_direction`), dated, while one is set. You never type it, and it is wired per launch —
 nothing in your own Claude Code settings changes. A second hook beside it, `chat heard`,
 hands each message you send to Collie's tool host, so what `collie_do` carries out that
 turn is recorded with your words; the same command on Claude's `Stop` hook forgets them
@@ -2284,6 +2300,9 @@ An absent or broken Connection does not fail this command. Failure to reach its 
   Claude uses `.claude.json` and `.mcp.json`, Codex uses `config.toml`, and OpenCode uses
   `opencode.json` or `opencode.jsonc`. Their config-directory environment overrides apply.
 - **Helle:** the existing credentials and `/me` check, with the token owner's user id.
+- **Slack:** the human's own sign-in, which Desktop gives each Machine as `slack-user.env`;
+  Slack's `auth.test` has to name the same user and team, and not a bot. A Machine with only an
+  older Collie's bot token reads `absent`, and its fix is to sign in to Slack.
 
 Under `--json`, the envelope is:
 
@@ -2543,7 +2562,8 @@ its checkout is not moved.
 Secrets are never arguments. `--secrets-stdin` reads `KEY=value` lines from stdin —
 `GITLAB_TOKEN` and `HELLE_API_TOKEN` — and the token reaches glab on its
 stdin too. Helle and Linear count toward onboarded unless `--skip` names them; a skipped
-step reports `skipped`. Doctor's own checks for them stay optional.
+step reports `skipped`. Doctor's own checks for them stay optional. A `SLACK_BOT_TOKEN` given
+there is not written: its `slack` step reports `skipped` and says to sign in to Slack from Desktop.
 
 Each step prints a line when it starts and one when it ends. Under `--json` each is a JSON
 line, then the envelope:

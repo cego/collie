@@ -157,8 +157,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `connection-model.ts`  | Connection reading Schemas and the text the CLI and chat print (pure)                                                       |
 | `connection-probes.ts` | Linear MCP and Helle probes; reexports the forge adapters' probes                                                           |
 | `connection-login.ts`  | Reads a reusable login through its forge adapter for host-to-Desktop hand-over, without recording the token                 |
-| `slack.ts`             | Slack Web API adapter: identity, member channels, people, direct messages, posts, permalinks and user sign-in tokens        |
-| `slack-credentials.ts` | Reads and writes each Machine's Slack bot token, checks its user token, and supplies both readings and channel choices      |
+| `slack.ts`             | Slack Web API adapter: identity, member channels, posts, permalinks and user sign-in tokens                                 |
+| `slack-credentials.ts` | Checks each Machine's Slack user token, says when only an older bot token is left, and supplies the reading                 |
 | `connections.ts`       | The Connection registry: each probe isolated and bounded, shared by the host, doctor and workflow reads                     |
 | `schedule-model.ts`    | A Schedule as every door reads it, and when an occurrence starts and which comes next (pure)                                |
 | `schedules.ts`         | This Machine's Schedules: their records, the one write, and the `Schedule` workflow that fires them                         |
@@ -175,7 +175,9 @@ opener a front door runs, the host's `-O`-only handle and the sweep that closes 
 no longer names, and `-G`. `ssh-argv.ts` holds the argv and bounds Desktop shares with it, core's `via` for a Machine, the rider
 a session through the connection uses among them, so Desktop never loads the host's lock. `peers-model.ts` holds the peer records and states
 Desktop shares. `flock-settings.ts` holds the latest-edit rule and merge both hosts and
-Desktop use. `shared-definitions.ts` reads and writes the user Layer's files a Flock
+Desktop use. `standing-direction.ts` words the Standing direction block every chat,
+Native and Flock, is given. `own-words.ts` reads what the human typed in their harnesses' sessions
+and Collie's records, for drafting it; `own-words-model.ts` is what it answers. `shared-definitions.ts` reads and writes the user Layer's files a Flock
 shares, keeping replaced text under `replaced/`. `channel.ts` declares and pipes the channel the bridge and peer link share.
 
 `reports.ts` sends a settled Run's result to its recorded requester once, through the

@@ -13,6 +13,7 @@ import {
   budgetPath,
   causalKey,
   herdKey,
+  humanSubmits,
   ledgerPath,
   newestById,
   overrideActive,
@@ -339,5 +340,50 @@ test("the delivery schema is what is on disk, and an unknown state is refused", 
         `${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({ ...delivery(), state: "sent-ish" }).pipe(Effect.orDie)}\n`,
       );
       expect(yield* readLedger(file)).toEqual([]);
+    }),
+  ));
+
+test("a ledger that has not grown since the last scan is not read again; one that grew is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = yield* ledgerPath(stateDir, "term-1");
+      const sent = (id: string) =>
+        delivery({ id, state: "submitted", human: { origin: "desktop" } });
+      yield* appendLine(file, sent("d1"));
+      const scanned = new Map();
+      const ids = Effect.map(
+        humanSubmits(stateDir, scanned),
+        Arr.map((one) => one.id),
+      );
+      expect(yield* ids).toEqual(["d1"]);
+
+      // Same size, different words: only a reread could see "d2".
+      yield* fs.writeFileString(file, Str.replace('"d1"', '"d2"')(yield* fs.readFileString(file)));
+      expect(yield* ids).toEqual(["d1"]);
+
+      yield* appendLine(file, sent("d3"));
+      expect(yield* ids).toEqual(["d2", "d3"]);
+    }),
+  ));
+
+test("a ledger that could not be read is read again on the next scan", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = yield* ledgerPath(stateDir, "term-1");
+      yield* appendLine(
+        file,
+        delivery({ id: "d1", state: "submitted", human: { origin: "desktop" } }),
+      );
+      const scanned = new Map();
+      const ids = Effect.map(
+        humanSubmits(stateDir, scanned),
+        Arr.map((one) => one.id),
+      );
+      yield* fs.chmod(file, 0o000);
+      expect(yield* ids).toEqual([]);
+      yield* fs.chmod(file, 0o644);
+      expect(yield* ids).toEqual(["d1"]);
     }),
   ));

@@ -4,6 +4,7 @@
 // exactly the ones a real Helle will not produce on demand.
 
 import * as Arr from "effect/Array";
+import { PROTOCOL } from "../src/board-model";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -1424,7 +1425,7 @@ const claimedThroughDesktop = Effect.fn("test.claimedThroughDesktop")(function* 
       machines: () => [
         {
           name: "vm-mk",
-          board: { _tag: "Live", herds: [], tasks: [], protocol: 4, files: true },
+          board: { _tag: "Live", herds: [], tasks: [], protocol: PROTOCOL, files: true },
           door,
         },
       ],
@@ -1434,6 +1435,8 @@ const claimedThroughDesktop = Effect.fn("test.claimedThroughDesktop")(function* 
       uploaded: new Map(),
       machineRule: () => undefined,
       setMachineRule: () => Effect.void,
+      standingDirection: () => undefined,
+      setStandingDirection: () => Effect.succeed(null),
       inSync: () => Effect.succeed(""),
       helle: Effect.succeed({ url: server.base, token: "token-abc" }),
       chatHarness: () => ({ harness: "claude", model: undefined, effort: undefined }),

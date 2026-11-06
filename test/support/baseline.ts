@@ -83,8 +83,7 @@ import { readStepLines } from "../../src/steps";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { slackApi } from "../../src/slack";
-import { writeSlackToken } from "../../src/slack-credentials";
-import { fakeSlack, signedInToSlack } from "./slack";
+import { botLeftOver, fakeSlack, signedInToSlack } from "./slack";
 import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import {
@@ -4360,6 +4359,44 @@ for (const [kind, plan] of [
           });
           expect(said(result)).toBe(OPENED.mr_url);
           expect(yield* asked(runId, "review-1")).toContain(`Spec: ${runDir(dir, runId)}/plan\n`);
+        }).pipe((work) => (kind === "Linear issue" ? withLinear(work) : work), Effect.orDie),
+      ),
+    120_000,
+  );
+
+for (const kind of ["typed text", "Linear issue", "follow-up", "review"] as const)
+  scenario(
+    `a ${kind} builder writes a speed-up criterion's benchmark plan beside its ticket and takes it with collie measure`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* noMergeRequests;
+          yield* repository();
+          const fs = yield* FileSystem.FileSystem;
+          const runId = `r-measure-${pipe(kind, Str.replace(/\W/g, "-"))}`;
+          const reviewed = `${rig.root}/${runId}-reviewed`;
+          yield* fs.makeDirectory(reviewed, { recursive: true });
+          yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nIt is slow.\n");
+          yield* fs.writeFileString(`${reviewed}/findings.json`, "[]");
+          const plan = {
+            "typed text": "Make search answer in less time",
+            "Linear issue": "ABC-126",
+            "follow-up": "followup:r-measure-parent",
+            review: reviewed,
+          }[kind];
+          yield* approve(runId, ["unit"]);
+          yield* fs.makeDirectory(`${runDir(dir, runId)}/plan`, { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
+          yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+          yield* ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } });
+
+          const building = pipe(yield* asked(runId, "build"), Str.replace(/\s+/g, " "));
+          const benchmark = `${runDir(dir, runId)}/plan/issues/NN-<slug>.benchmark.json`;
+          expect(building).toContain(`beside its ticket, \`${benchmark}\``);
+          for (const pass of ["calibration", "final"])
+            expect(building).toContain(
+              `collie measure --base <merge-base> --plan ${benchmark} --pass ${pass}`,
+            );
         }).pipe((work) => (kind === "Linear issue" ? withLinear(work) : work), Effect.orDie),
       ),
     120_000,
@@ -10150,7 +10187,7 @@ const agentPush = (
 
 /**
  * Sharing for approval turned on as `collie settings set` writes it, in `channel` unless null,
- * with the bot connected and the human signed in to Slack as themselves.
+ * with an older Collie's bot token left over and the human signed in to Slack.
  */
 const sharingIn = (channel: string | null) =>
   FileSystem.FileSystem.pipe(
@@ -10165,7 +10202,7 @@ const sharingIn = (channel: string | null) =>
         }),
       ),
     ),
-    Effect.andThen(writeSlackToken(hostOf().env, "xoxb-fixture")),
+    Effect.andThen(botLeftOver(hostOf().env, true)),
     Effect.andThen(signedInToSlack(hostOf().env, "U456")),
     Effect.orDie,
   );
@@ -12020,7 +12057,7 @@ for (const name of ["gitlab", "github"] as const) {
           const { bin, changed } = yield* releasable("gitlab", UNAPPROVED.gitlab);
           const runId = "r-share-manually";
           yield* sharingIn("#frontend");
-          yield* writeSlackToken(hostOf().env, null);
+          yield* botLeftOver(hostOf().env, false);
           yield* signedInToSlack(hostOf().env, null);
           yield* rig.queueOutputs([PACKAGED]);
           const status = yield* driven({ ...options(runId), host: releaseHost() }, (run) =>
@@ -12028,7 +12065,7 @@ for (const name of ["gitlab", "github"] as const) {
               const share = yield* goAsked(run.asked, "share-for-approval");
               expect(share.prompt).toContain("Share it in #frontend yourself");
               expect(share.prompt).toContain(mr);
-              expect(share.prompt).toContain("Not signed in to Slack as yourself");
+              expect(share.prompt).toContain("Not signed in to Slack on this Machine");
               expect(optionsOf([share], "share-for-approval")).toEqual([
                 "I shared it",
                 "Wait for changes",
@@ -12204,12 +12241,12 @@ for (const name of ["gitlab", "github"] as const) {
     });
 
   once(
-    "release on gitlab: a working Slack bot without the human's Slack sign-in asks them to share it and posts nothing",
+    "release on gitlab: a Machine with only an older Collie's Slack bot token asks the human to sign in, share it by hand, and posts nothing",
     () =>
       runEffect(
         sharedByHand("r-share-bot-only", null, [
-          "Not signed in to Slack as yourself",
-          "Sign in to Slack as yourself in Desktop Settings › Connections",
+          "Collie no longer posts with a Slack bot token: sign in to Slack",
+          "Sign in to Slack in Desktop Settings › Connections",
         ]),
       ),
     120_000,

@@ -12,6 +12,9 @@ export function epochMs(iso: string): number {
   });
 }
 
+/** Epoch milliseconds as an ISO timestamp. */
+export const isoAt = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
+
 /** A recorded timestamp as the `Date` a file's times are set with. */
 export function fileTime(iso: string) {
   return DateTime.toDateUtc(DateTime.makeUnsafe(iso));

@@ -17,7 +17,7 @@ import type { Action, ActionKind } from "./actions";
 import { ActionSchema } from "./actions";
 import { appendJournal, readJournal } from "./journal";
 import { READ_WRITE_LOCK_BUDGET, ensureLockDir, withLock } from "./lock";
-import { herdDir } from "./steering";
+import { herdDir, type HumanDoor } from "./steering";
 import { nowIso, epochMs } from "./time";
 
 /** How long a proposal stands. After this the world has moved and it is re-asked. */
@@ -238,8 +238,20 @@ export function voiceOf({ conversation, said, attachments }: Voice): Voice {
   return voice;
 }
 
-export function isHuman(actor: Actor): boolean {
+export function isHuman(actor: Pick<Actor, "origin">): boolean {
   return actor.origin === "cli-tty" || actor.origin === "board" || actor.origin === "desktop";
+}
+
+/** A door a human types into, or chat carrying the human's own words of that turn. */
+export const speaksForHuman = (actor: Asker): boolean =>
+  isHuman(actor) || (actor.origin === "chat" && actor.said !== undefined);
+
+/** Who a Delivery of a human's words came from, as its ledger keeps it; null for anyone else's. */
+export function humanOf(actor: Asker | undefined): HumanDoor | null {
+  if (actor === undefined || !speaksForHuman(actor)) return null;
+  return actor.conversation === undefined
+    ? { origin: actor.origin }
+    : { origin: actor.origin, conversation: actor.conversation };
 }
 
 export function actorName(actor: Actor): string {

@@ -68,6 +68,7 @@ export type AutoCompactWindow = number | "auto";
 export const AUTO_COMPACT_WINDOW = 400_000;
 const AUTO_COMPACT_LEAST = 100_000;
 const AUTO_COMPACT_MOST = 1_000_000;
+const STANDING_DIRECTION_MOST = 4000;
 
 export interface Defaults {
   harness: string;
@@ -386,7 +387,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     group: "Notifications",
     label: "Post notifications to",
     description:
-      "The toasts you keep on also go to this Slack channel or person. Empty keeps toasts only.",
+      "The toasts you keep on also go to this Slack channel, posted as you. Empty keeps toasts only.",
   }),
   choice("scope", SCOPES, D.scope, {
     group: "Board",
@@ -423,6 +424,11 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     label: "Machine rule",
     description:
       "Which Machine each kind of work goes to, in your own words. The Flock chat starts work where it says, and asks where it does not say.",
+  }),
+  of("standing_direction", "text", "", {
+    group: "Chat",
+    label: "Standing direction",
+    description: `What every chat keeps of how you like to work, in your own words, up to ${STANDING_DIRECTION_MOST.toLocaleString("en")} characters. It goes with every message as something you said earlier, never as your go.`,
   }),
   of("proactive", "boolean", String(D.proactive), {
     group: "Chat",
@@ -527,6 +533,10 @@ export function parseSetting(
         const window = autoCompactWindowOf(typed);
         return "refused" in window ? window : { value: window.window };
       }
+      if (key === "standing_direction" && said.length > STANDING_DIRECTION_MOST)
+        return {
+          refused: `standing_direction takes at most ${STANDING_DIRECTION_MOST.toLocaleString("en")} characters, not ${said.length.toLocaleString("en")}`,
+        };
       return key === "gitlab_host" && !isHostName(said)
         ? {
             refused: `gitlab_host has to be a host name, such as gitlab.example.com, not "${typed}"`,

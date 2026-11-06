@@ -1,6 +1,7 @@
 // A module that declares its Steps and a path, taking one of several shapes so a test can
-// read its Flow at each: an agent, a question and an agent; a list; rounds; a Step off the
-// path; a new forecast; a stop, a crash or a park inside a Step; a durable timer.
+// read its Flow at each: an agent, a question and an agent; two agents, then the same; a list; rounds; a Step off the
+// path; a new forecast; a stop, a crash or a park inside a Step; a durable timer; a question
+// that becomes another once the gate `moved` opens, as a module changed under a restart does.
 //
 // A Step that waits on a gate goes on once the file `<gates>/<name>` exists.
 
@@ -42,6 +43,7 @@ const agent = (operation: string) =>
 
 const PATHS = {
   declared: [build, decide, ship],
+  pair: [build, decide, ship],
   items: [slice],
   rounds: [review],
   offpath: [build, ship],
@@ -50,10 +52,12 @@ const PATHS = {
   crash: [build, ship],
   parks: [build],
   timer: [nap],
+  moves: [build, decide, ship],
 };
 
 const Mode = Schema.Literals([
   "declared",
+  "pair",
   "items",
   "rounds",
   "offpath",
@@ -62,6 +66,7 @@ const Mode = Schema.Literals([
   "crash",
   "parks",
   "timer",
+  "moves",
 ]);
 
 export default defineWorkflow({
@@ -83,6 +88,12 @@ export default defineWorkflow({
           yield* decide(ask({ name: "go", prompt: "Ship it?", options: ["yes", "no"] }));
           yield* ship(agent("ship"));
           yield* agent("tidy");
+          break;
+        case "pair":
+          yield* build(agent("build"));
+          yield* agent("check");
+          yield* decide(ask({ name: "go", prompt: "Ship it?", options: ["yes", "no"] }));
+          yield* ship(agent("ship"));
           break;
         case "items": {
           const items = ["a", "b", "c"];
@@ -127,6 +138,20 @@ export default defineWorkflow({
         case "timer":
           yield* nap(DurableClock.sleep({ name: "nap", duration: "1 hour" }));
           break;
+        case "moves": {
+          yield* build(agent("build"));
+          const moved = yield* (yield* FileSystem.FileSystem)
+            .exists(`${gates}/moved`)
+            .pipe(Effect.orElseSucceed(() => false));
+          yield* decide(
+            ask(
+              moved
+                ? { name: "other", prompt: "Something else?", options: ["yes", "no"] }
+                : { name: "go", prompt: "Ship it?", options: ["yes", "no"] },
+            ),
+          );
+          break;
+        }
       }
       return input.mode;
     }),

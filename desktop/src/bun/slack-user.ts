@@ -1,4 +1,4 @@
-// The human signed in to Slack as themselves: OAuth with PKCE and no client secret, the
+// The human signed in to Slack: OAuth with PKCE and no client secret, the
 // grant kept by Desktop and renewed while it runs, and each Machine given the access token.
 
 import * as Str from "effect/String";
@@ -20,6 +20,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import { slackApi, slackOAuth, type SlackOAuthAnswer } from "../../../src/slack";
 import { redact } from "../../../src/redact";
 import {
+  SLACK_CLIENT_ID,
   SLACK_CALLBACK_PATH,
   SLACK_CALLBACK_PORT,
   SLACK_REDIRECT_URL,
@@ -133,6 +134,8 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
   /** Gives every Machine the grant, or "" to remove it, and says how each went. */
   readonly give: (text: string) => Effect.Effect<Given>;
   readonly open: (url: string) => Effect.Effect<void>;
+  /** Run each time a sign-in is kept, since nothing reads a bot token any more. */
+  readonly retireBot: Effect.Effect<unknown, string>;
   readonly client?: HttpClient.HttpClient;
 }) {
   // A refresh token works once, so renewals never overlap.
@@ -148,10 +151,14 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
       const text = yield* Schema.encodeEffect(GrantJson)(grant).pipe(
         Effect.mapError(() => "Slack's sign-in could not be kept"),
       );
-      yield* options.keyring.store("slack-user-grant", "Slack sign-in as you", text);
+      yield* options.keyring.store("slack-user-grant", "Slack sign-in", text);
       trouble = null;
       yield* tell;
-      return yield* options.give(text);
+      const given = yield* options.give(text);
+      yield* options.retireBot.pipe(
+        Effect.catch((reason) => Effect.logWarning(`Slack bot token removal: ${reason}`)),
+      );
+      return given;
     });
   const hidden = (grant: SlackUserGrant | null) => (reason: string) =>
     redact(
@@ -162,51 +169,48 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
       ),
     );
 
-  const signIn = (clientId: string) =>
-    Effect.gen(function* () {
-      const id = Str.trim(clientId) || ((yield* kept)?.clientId ?? "");
-      if (id === "")
-        return yield* Effect.fail(
-          "Paste the Collie app's Client ID, from Basic Information › App Credentials",
-        );
-      const state = secret();
-      const verifier = secret();
-      const code = yield* listen(
-        state,
-        options.open,
-        slackAuthorizeUrl(id, state, pkceChallenge(verifier)),
+  const signIn = Effect.gen(function* () {
+    // A grant from another app renews only against that app.
+    const id = (yield* kept)?.clientId ?? SLACK_CLIENT_ID;
+    const state = secret();
+    const verifier = secret();
+    const code = yield* listen(
+      state,
+      options.open,
+      slackAuthorizeUrl(id, state, pkceChallenge(verifier)),
+    );
+    const answer = yield* slackOAuth(
+      { client_id: id, code, code_verifier: verifier, redirect_uri: SLACK_REDIRECT_URL },
+      options.client,
+    );
+    if (answer.access_token !== undefined)
+      return yield* Effect.fail("Slack's answer carried a bot token, so nothing was kept");
+    const tokens = userTokens(answer);
+    if (answer.authed_user === undefined || tokens === null)
+      return yield* Effect.fail("Slack's answer had no user token, so nothing was kept");
+    if (!Arr.contains(Str.split(tokens.scope, ","), "chat:write"))
+      return yield* Effect.fail(
+        "Slack did not grant chat:write, so nothing was kept; sign in again and allow it",
       );
-      const answer = yield* slackOAuth(
-        { client_id: id, code, code_verifier: verifier, redirect_uri: SLACK_REDIRECT_URL },
-        options.client,
+    const owner = yield* slackApi(tokens.access, options.client).tokenOwner();
+    if (owner.bot_id !== undefined || owner.user_id !== answer.authed_user.id)
+      return yield* Effect.fail(
+        `Slack says the token is ${owner.user_id}'s, not ${answer.authed_user.id}'s, so nothing was kept`,
       );
-      if (answer.access_token !== undefined)
-        return yield* Effect.fail("Slack's answer carried a bot token, so nothing was kept");
-      const tokens = userTokens(answer);
-      if (answer.authed_user === undefined || tokens === null)
-        return yield* Effect.fail("Slack's answer had no user token, so nothing was kept");
-      if (!Arr.contains(Str.split(tokens.scope, ","), "chat:write"))
-        return yield* Effect.fail(
-          "Slack did not grant chat:write, so nothing was kept; sign in again and allow it",
-        );
-      const owner = yield* slackApi(tokens.access, options.client).tokenOwner();
-      if (owner.bot_id !== undefined || owner.user_id !== answer.authed_user.id)
-        return yield* Effect.fail(
-          `Slack says the token is ${owner.user_id}'s, not ${answer.authed_user.id}'s, so nothing was kept`,
-        );
-      const grant: SlackUserGrant = {
-        clientId: id,
-        accessToken: tokens.access,
-        refreshToken: tokens.refresh,
-        expiresAt: (yield* Clock.currentTimeMillis) + tokens.expiresIn * 1000,
-        userId: owner.user_id,
-        userName: owner.user,
-        teamId: owner.team_id,
-        teamName: owner.team,
-        scopes: tokens.scope,
-      };
-      return { grant, given: yield* lock.withPermits(1)(keep(grant)) };
-    }).pipe(Effect.mapError(hidden(null)));
+    const grant: SlackUserGrant = {
+      clientId: id,
+      accessToken: tokens.access,
+      refreshToken: tokens.refresh,
+      expiresAt: (yield* Clock.currentTimeMillis) + tokens.expiresIn * 1000,
+      userId: owner.user_id,
+      userName: owner.user,
+      teamId: owner.team_id,
+      teamName: owner.team,
+      scopes: tokens.scope,
+    };
+    const given = yield* lock.withPermits(1)(keep(grant));
+    return { grant, given };
+  }).pipe(Effect.mapError(hidden(null)));
 
   /** Renews when less than an hour is left, or now when `now`; null when nothing was due. */
   const renew = (now: boolean) =>
@@ -262,7 +266,6 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
   /** What the card says; no token. */
   const state = Effect.map(kept, (grant) => ({
     signedIn: grant === null ? null : { user: grant.userName, team: grant.teamName },
-    clientId: grant?.clientId ?? null,
     trouble,
   }));
 

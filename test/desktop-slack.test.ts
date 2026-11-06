@@ -1,11 +1,10 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import {
-  SLACK_MANIFEST_URL,
-  slackDestinationRow,
-  pickSlackDestination,
-} from "../desktop/src/shared/slack";
+import { slackDestinationRow, pickSlackDestination } from "../desktop/src/shared/slack";
+import { CONNECTION_NAMES } from "../desktop/src/shared/connections";
+import { CREDENTIAL_SAID } from "../desktop/src/shared/in-sync";
 import { slackApi } from "../src/slack";
 import { fakeSlack } from "./support/slack";
 import { runEffect } from "./support/effect";
@@ -16,42 +15,14 @@ import {
   NO_FLOCK_SETTINGS,
 } from "../desktop/src/shared/flock-settings";
 
-/** The bot's Slack choices and the human's own channels, as the fake answers each token. */
-const slackDestinations = Effect.gen(function* () {
-  const fake = fakeSlack();
-  const bot = slackApi("xoxb-fixture", fake.client);
-  return {
-    choices: {
-      identity: yield* bot.auth(),
-      channels: yield* bot.channels(),
-      people: yield* bot.people(),
-    },
-    yours: yield* slackApi("xoxe.xoxp-1-user-fixture", fake.client).channels(),
-  };
-});
+/** The channels the signed-in human is in, as the fake answers their token. */
+const yoursIn = Effect.suspend(() =>
+  slackApi("xoxe.xoxp-1-user-fixture", fakeSlack().client).channels(),
+);
 
-test("Add Collie keeps the five post-only bot scopes and lets a human sign in as themselves with PKCE, without events or Socket Mode", () => {
-  const url = new URL(SLACK_MANIFEST_URL);
-  expect(url.origin + url.pathname).toBe("https://api.slack.com/apps");
-  expect(url.searchParams.get("new_app")).toBe("1");
-  expect(JSON.parse(url.searchParams.get("manifest_json")!)).toEqual({
-    display_information: {
-      name: "Collie",
-      description: "Posts approval requests and notifications for Collie",
-    },
-    features: { bot_user: { display_name: "Collie", always_online: false } },
-    oauth_config: {
-      pkce_enabled: true,
-      redirect_urls: ["http://localhost:47328/slack/callback"],
-      scopes: {
-        bot: ["chat:write", "im:write", "channels:read", "groups:read", "users:read"],
-        user: ["chat:write", "channels:read", "groups:read"],
-      },
-    },
-  });
-});
+const SIGN_IN_TO_PICK = "Sign in to Slack under Connections to pick a channel you're in";
 
-test("the notification row disables until connected and stores a channel or a chosen person's id", () =>
+test("the notification row offers the channels the human is in, and no direct messages", () =>
   runEffect(
     Effect.gen(function* () {
       expect(
@@ -62,70 +33,55 @@ test("the notification row disables until connected and stores a channel or a ch
           ),
         )!.defaultSaid,
       ).toBe("Unset: toasts only");
-      const off = slackDestinationRow("slack.notification_channel", "#old-notices", null, null);
-      expect(off.disabled).toBe(true);
-      expect(off.hint).toBe(
-        "Connect Slack, under Connections below, to pick from the channels your Collie is in.",
-      );
-      expect(off.options).toContainEqual({
-        value: "#old-notices",
-        label: "#old-notices (not checked)",
-      });
-      const { choices, yours } = yield* slackDestinations;
-      const notify = slackDestinationRow("slack.notification_channel", "", choices, yours);
-      expect(notify).toEqual({
+      const yours = yield* yoursIn;
+      expect(slackDestinationRow("slack.notification_channel", "", yours)).toEqual({
         disabled: false,
         hint: null,
         options: [
           { value: "", label: "Nowhere: toasts only" },
-          { value: "C123", label: "#engineering" },
+          { value: "C456", label: "#design" },
           { value: "G234", label: "#releases" },
-          { value: "dm", label: "A direct message to you" },
         ],
       });
-      expect(pickSlackDestination("slack.notification_channel", "C123", choices, yours)).toEqual({
-        value: "C123",
-      });
-      expect(pickSlackDestination("slack.notification_channel", "C456", choices, yours)).toEqual({
-        refused: "Pick a channel Collie is in, or refresh Slack",
-      });
-      expect(pickSlackDestination("slack.notification_channel", "dm", choices, yours)).toEqual({
-        people: [
-          { value: "U456", label: "Sam" },
-          { value: "U789", label: "Alex Example" },
-        ],
-      });
-      expect(pickSlackDestination("slack.notification_channel", "U789", choices, yours)).toEqual({
-        value: "U789",
-      });
-      const pickedPerson = pickSlackDestination(
-        "slack.notification_channel",
-        "U789",
-        choices,
-        yours,
-      );
-      const savedPerson = editSetting(
+      const picked = pickSlackDestination("C456", yours);
+      expect(picked).toEqual({ value: "C456" });
+      const saved = editSetting(
         NO_FLOCK_SETTINGS,
         "slack.notification_channel",
-        "value" in pickedPerson ? pickedPerson.value : "refused",
-        "2026-10-29T14:00:00Z",
+        "value" in picked ? picked.value : "refused",
+        "2026-11-03T14:00:00Z",
       );
       expect(
-        "refused" in savedPerson
-          ? savedPerson.refused
-          : savedPerson.settings["slack.notification_channel"]?.value,
-      ).toBe("U789");
-      expect(
-        slackDestinationRow("slack.notification_channel", "U789", choices, yours).options,
-      ).toContainEqual({ value: "U789", label: "A direct message to Alex Example" });
+        "refused" in saved ? saved.refused : saved.settings["slack.notification_channel"]?.value,
+      ).toBe("C456");
+      for (const outside of ["C123", "dm", "U789"])
+        expect(pickSlackDestination(outside, yours)).toEqual({
+          refused: "Pick a channel you're in, or refresh Slack",
+        });
     }),
   ));
 
-test("the approval row offers the channels the human is in, not the bot's, and refuses any other", () =>
+test("a person or direct message chosen before is kept and said to be no longer sent to, and a channel the human left stays unchecked", () =>
   runEffect(
     Effect.gen(function* () {
-      const { choices, yours } = yield* slackDestinations;
-      expect(slackDestinationRow("release.approval_channel", "", choices, yours)).toEqual({
+      const yours = yield* yoursIn;
+      expect(
+        slackDestinationRow("slack.notification_channel", "U789", yours).options,
+      ).toContainEqual({ value: "U789", label: "U789 (direct messages are no longer sent)" });
+      expect(
+        slackDestinationRow("slack.notification_channel", "D123", yours).options,
+      ).toContainEqual({ value: "D123", label: "D123 (direct messages are no longer sent)" });
+      expect(
+        slackDestinationRow("slack.notification_channel", "C123", yours).options,
+      ).toContainEqual({ value: "C123", label: "C123 (not checked)" });
+    }),
+  ));
+
+test("the approval row offers the channels the human is in and refuses any other", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const yours = yield* yoursIn;
+      expect(slackDestinationRow("release.approval_channel", "", yours)).toEqual({
         disabled: false,
         hint: null,
         options: [
@@ -134,45 +90,38 @@ test("the approval row offers the channels the human is in, not the bot's, and r
           { value: "G234", label: "#releases" },
         ],
       });
-      const picked = pickSlackDestination("release.approval_channel", "C456", choices, yours);
-      expect(picked).toEqual({ value: "C456" });
-      const saved = editSetting(
-        NO_FLOCK_SETTINGS,
-        "release.approval_channel",
-        "value" in picked ? picked.value : "refused",
-        "2026-10-29T14:00:00Z",
-      );
-      expect(
-        "refused" in saved ? saved.refused : saved.settings["release.approval_channel"]?.value,
-      ).toBe("C456");
+      expect(pickSlackDestination("C456", yours)).toEqual({
+        value: "C456",
+      });
       for (const outside of ["C123", "C999"])
-        expect(pickSlackDestination("release.approval_channel", outside, choices, yours)).toEqual({
+        expect(pickSlackDestination(outside, yours)).toEqual({
           refused: "Pick a channel you're in, or refresh Slack",
         });
-      expect(pickSlackDestination("release.approval_channel", "", choices, yours)).toEqual({
-        value: "",
-      });
+      expect(pickSlackDestination("", yours)).toEqual({ value: "" });
     }),
   ));
 
-test("without the human's Slack sign-in the approval row is disabled with the sign-in hint, and a stored value stays unchecked", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { choices, yours } = yield* slackDestinations;
-      const off = slackDestinationRow("release.approval_channel", "#old-releases", choices, null);
-      expect(off).toEqual({
-        disabled: true,
-        hint: "Sign in to Slack as yourself under Connections to pick a channel you're in",
-        options: [
-          { value: "", label: "Nowhere: shares nothing" },
-          { value: "#old-releases", label: "#old-releases (not checked)" },
-        ],
-      });
-      expect(
-        pickSlackDestination("release.approval_channel", "C123", choices, null),
-      ).toHaveProperty("refused");
-      expect(
-        slackDestinationRow("release.approval_channel", "C123", choices, yours).options,
-      ).toContainEqual({ value: "C123", label: "C123 (not checked)" });
-    }),
-  ));
+test("without the human's Slack sign-in both rows are disabled with the sign-in hint, and stored values stay", () => {
+  for (const [key, stored] of [
+    ["release.approval_channel", "#old-releases"],
+    ["slack.notification_channel", "#old-notices"],
+  ] as const) {
+    const off = slackDestinationRow(key, stored, null);
+    expect(off.disabled).toBe(true);
+    expect(off.hint).toBe(SIGN_IN_TO_PICK);
+    expect(off.options).toContainEqual({ value: stored, label: `${stored} (not checked)` });
+    expect(pickSlackDestination("C456", null)).toEqual({ refused: SIGN_IN_TO_PICK });
+  }
+});
+
+test("Slack is called Slack, never Slack as you", () => {
+  expect(CONNECTION_NAMES.slack).toBe("Slack");
+  for (const said of [
+    ...Rec.values(CONNECTION_NAMES),
+    ...Arr.flatMap(Rec.values(CREDENTIAL_SAID), (one) => [one.lacks, one.none]),
+    slackDestinationRow("release.approval_channel", "", null).hint,
+    slackDestinationRow("slack.notification_channel", "", null).hint,
+  ]) {
+    expect(said).not.toMatch(/as you\b|yourself/);
+  }
+});

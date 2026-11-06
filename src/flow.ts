@@ -44,6 +44,8 @@ export interface AskedFact {
   readonly answered: string | null;
   readonly by: string | null;
   readonly open: boolean;
+  /** Set aside by a human's message while its work runs, and not asked again yet. */
+  readonly superseded?: boolean;
   readonly text?: string;
   readonly options?: FlowQuestion["options"];
 }
@@ -643,7 +645,9 @@ function undeclaredNodes(
       ? "needs-you"
       : one.answered == null && (run.state === "stopped" || run.state === "failed")
         ? run.state
-        : "done";
+        : one.superseded === true && !ended
+          ? "running"
+          : "done";
     nodes.push({
       at: one.asked ?? "",
       node: {

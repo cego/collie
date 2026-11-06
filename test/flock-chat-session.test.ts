@@ -1,7 +1,14 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, type Scope, Stream } from "effect";
+import { homedir } from "node:os";
+/* oxlint-disable effecttsgo/node-builtin-import -- the guard is handed Node's own functions, as in production. */
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+/* oxlint-enable effecttsgo/node-builtin-import */
+import { Effect, FileSystem, type Scope, Stream } from "effect";
+import { platformLayer } from "../src/platform";
+import { SESSION_STORES, sessionStoreReached } from "../src/own-words";
 import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
 import type { DriverContext } from "../desktop/src/bun/driver";
 import { sessionOptions, userMcpServers } from "../desktop/src/bun/session";
@@ -10,6 +17,7 @@ import type { DesktopSettings } from "../desktop/src/shared/flock";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 let noticed: string | undefined;
 let rule: string | undefined;
+let direction: { readonly text: string; readonly at: string } | undefined;
 const machines = [
   { name: "mk-pc", local: true },
   { name: "vm-mk", local: false },
@@ -29,6 +37,7 @@ const options = sessionOptions({
   },
   noticed: () => noticed,
   placement: () => (rule === undefined ? undefined : { rule, machines }),
+  standing: () => direction,
 });
 const permission = {
   signal: new AbortController().signal,
@@ -187,6 +196,7 @@ test("the human's own servers are read from Claude Code's config, and Collie's k
     ask: () => Promise.resolve(null),
     noticed: () => undefined,
     placement: () => undefined,
+    standing: () => undefined,
   });
   expect(shadowed.mcpServers.collie).toMatchObject({ type: "sdk" });
 });
@@ -302,6 +312,7 @@ test("a question in a turn nobody is watching is refused, so the turn ends rathe
         ask: () => Promise.resolve(null),
         noticed: () => undefined,
         placement: () => undefined,
+        standing: () => undefined,
       });
       const answer = yield* Effect.promise(() =>
         unwatched.canUseTool("AskUserQuestion", { questions: [] }, permission),
@@ -330,6 +341,41 @@ test("the Machine rule goes with every message, in the human's words, beside the
       expect(second).toContain("Everything is on the vm");
       expect(second).not.toContain("Frontend");
       rule = undefined;
+    }),
+  ));
+
+test("the Standing direction goes with every message, in the human's words and dated, beside the Machine rule and News", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const contextNow = () =>
+        Effect.map(submitted(), (hook) => hook.hookSpecificOutput?.additionalContext ?? "");
+      rule = undefined;
+      noticed = undefined;
+      direction = { text: "", at: "2026-11-02T08:00:00.000Z" };
+      expect(yield* submitted()).toEqual({});
+      rule = "Everything is on the vm";
+      noticed = "- [routine] vm-mk:r-2: Run r-2 ended.";
+      expect(Str.toLowerCase(yield* contextNow())).not.toContain("standing direction");
+
+      direction = {
+        text: "Stage only;\nproduction waits for my go.",
+        at: "2026-11-03T09:30:00.000Z",
+      };
+      const first = yield* contextNow();
+      expect(first).toContain("Stage only;\nproduction waits for my go.");
+      expect(first).toContain("2026-11-03");
+      expect(first).toContain("Everything is on the vm");
+      expect(first).toContain("vm-mk:r-2: Run r-2 ended.");
+
+      direction = { text: "Ask before any merge.", at: "2026-11-04T10:00:00.000Z" };
+      const second = yield* contextNow();
+      expect(second).toContain("Ask before any merge.");
+      expect(second).toContain("2026-11-04");
+      expect(second).not.toContain("Stage only");
+      expect(second).not.toContain("2026-11-03");
+      rule = undefined;
+      noticed = undefined;
+      direction = undefined;
     }),
   ));
 
@@ -372,3 +418,69 @@ test("the system prompt has the chat take a reported review as a report, ask bef
     `When you read a merge request's review, read the replies on it too, and tell the human what a Collie Run replied there in their name: its reply ends "Posted by Collie's Run <run> on <machine>."`,
   );
 });
+
+test("the chat's own file tools and shell are refused where the human's sessions are kept", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const home = homedir();
+      const decide = (tool_name: string, tool_input: Readonly<Record<string, string>>) =>
+        Effect.promise(() =>
+          options.hooks.PreToolUse[0]!.hooks[0]!({
+            tool_name,
+            tool_input,
+            cwd: "/state/collie-desktop",
+          }),
+        );
+      const refused = {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: expect.stringContaining("Read my messages"),
+        },
+      };
+      expect(
+        yield* decide("Read", { file_path: `${home}/.claude/projects/-x/1.jsonl` }),
+      ).toMatchObject(refused);
+      expect(
+        yield* decide("Bash", { command: "tail ~/.codex/sessions/2026/*/*.jsonl" }),
+      ).toMatchObject(refused);
+      expect(yield* decide("Grep", { pattern: "deploy", path: home })).toMatchObject(refused);
+      expect(
+        yield* decide("Glob", { pattern: "**/*.jsonl", path: `${home}/.pi/agent/sessions` }),
+      ).toMatchObject(refused);
+      expect(yield* decide("Read", { file_path: `${home}/work/notes.md` })).toEqual({});
+      expect(yield* decide("Grep", { pattern: "deploy", path: `${home}/work` })).toEqual({});
+      expect(
+        yield* decide("Read", { file_path: `${home}/.claude/./projects/-x/1.jsonl` }),
+      ).toMatchObject(refused);
+      expect(yield* decide("Read", { file_path: "~/.claude/projects/-x/1.jsonl" })).toMatchObject(
+        refused,
+      );
+      expect(
+        yield* decide("Bash", { command: "cat ~/.claude/./projects//-x/1.jsonl" }),
+      ).toMatchObject(refused);
+      expect(
+        yield* decide("mcp__collie__collie_direction", {
+          text: "Never read ~/.claude/projects without asking me.",
+        }),
+      ).toEqual({});
+    }),
+  ));
+
+test("a link to a session store is followed to it", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "sessions-linked-" });
+      const home = `${root}/home`;
+      yield* fs.makeDirectory(`${home}/.claude/projects/-x`, { recursive: true });
+      yield* fs.writeFileString(`${home}/.claude/projects/-x/1.jsonl`, "{}\n");
+      yield* fs.symlink(`${home}/.claude`, `${root}/link`);
+      const reached = (call: Parameters<typeof sessionStoreReached>[3]) =>
+        sessionStoreReached(SESSION_STORES, home, { realpath: realpathSync, resolve }, call);
+      expect(reached({ cwd: root, path: "link/projects/-x/1.jsonl" })).toBe(".claude/projects");
+      expect(reached({ cwd: root, path: "link/projects/-y/new.jsonl" })).toBe(".claude/projects");
+      expect(reached({ cwd: root, root: "link" })).toBe(".claude/projects");
+      expect(reached({ cwd: root, path: "link/settings.json" })).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+  ));

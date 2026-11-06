@@ -1072,7 +1072,7 @@ test("a card reads its branch, head and dirtiness from one status, asking git on
       expect(card.revision.head_sha).toHaveLength(40);
       expect(
         Arr.filter(yield* starts, (line) =>
-          /^(rev-parse (?!--git-path index$)|status --porcelain$)/.test(line),
+          /^(rev-parse (?!--git-path index --show-cdup$)|status --porcelain$)/.test(line),
         ),
       ).toEqual([]);
       expect(

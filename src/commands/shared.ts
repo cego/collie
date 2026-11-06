@@ -60,13 +60,15 @@ export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: 
   return (yield* taskOfWorkspace(env.stateDir, yield* selected(global)))?.id ?? null;
 });
 
-/** Whom a Run lookup is for, built once from the command line: the Task, and the pane's Run. */
+/** Whom a Run lookup is for, built once from the command line: the Task, and the calling agent's Run. */
 export type RunScope = { readonly task: string | null; readonly caller: string | null };
 
 export const runScope = Effect.fn("collie.runScope")(function* (global: Global) {
+  const env = yield* currentEnv;
+  const door = yield* cliDoor(env);
   return {
     task: yield* selectedTask(global),
-    caller: (yield* currentEnv).raw["COLLIE_RUN"] || null,
+    caller: Schema.is(FrontDoor)(door) ? env.raw["COLLIE_RUN"] || null : door.from.run,
   } satisfies RunScope;
 });
 

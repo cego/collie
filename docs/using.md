@@ -1548,7 +1548,7 @@ that Machine skips it too.
 
 ### Connections
 
-**Settings → Every Machine → Connections** shows GitLab, GitHub, Linear, Helle, Slack, and Slack as you.
+**Settings → Every Machine → Connections** shows GitLab, GitHub, Linear, Helle and Slack.
 Each card names its account and the Machines that can reach it. The index counts cards that need you.
 **Details** lists each Machine's reading and fix, plus the workflows that declare the Connection.
 The **With it** and **Without it** text comes from those declarations; a **needs** row says **Does not start**.
@@ -1577,7 +1577,7 @@ unless that is set), readable by you alone and replaced whole on every save — 
 gh and Helle already keep the same tokens on every Machine, so nothing has to be installed
 for it. A Desktop that kept them in the Secret Service through `secret-tool` before has them
 copied into that file the first time, where `secret-tool` is there. It keeps the GitLab token,
-Helle's token, and Slack's bot token. **Make one on GitLab** opens GitLab's token page with the
+Helle's token, and your Slack sign-in. **Make one on GitLab** opens GitLab's token page with the
 `api` and `write_repository` scopes filled in. Helle's URL is always
 `https://helle.cego.dk` and is never asked for. Desktop takes a token only once GitLab
 accepts it with those scopes, and gives it at once to glab on every Machine it reaches
@@ -1606,96 +1606,85 @@ Machine's.
 
 #### Slack
 
-Open **Connections → Slack → Connect**. One shared **Collie** app serves your Slack workspace.
-Choose **Add Collie to your Slack** and install the prefilled app.
-Skip this step if a teammate already installed it.
-Under the app's **OAuth & Permissions**, copy the **Bot User OAuth Token** (`xoxb-…`).
-Paste it into **Bot token** and choose **Connect**.
-
-Collie checks the token with Slack before keeping it. A refusal appears beside the field with Slack's reason.
-The card reads, for example, **Posts as collie in Example Co**, from Slack's answer.
-Slack does not identify the installer, so Collie does not name one.
-The app has only five bot scopes: `chat:write`, `im:write`, `channels:read`, `groups:read`, and `users:read`.
-It has no event subscriptions, Socket Mode or hosted relay. Its one sign-in callback is [Slack as you](#slack-as-you)'s, on this computer.
-Talking to Collie in Slack is not built.
-
-Desktop keeps the token with its other credentials and gives it to every Machine on stdin.
-Each Machine keeps it in `$XDG_CONFIG_HOME/collie/slack.env` (`~/.config/collie/slack.env` by default), readable by its owner alone.
-An unreachable Machine gets it when it connects.
-**Disconnect** removes the token Desktop gave each Machine, including when it next reconnects.
-It does not uninstall the shared app or revoke a teammate's token.
-For a Machine configured without Desktop, give `SLACK_BOT_TOKEN=…` through `collie onboard --secrets-stdin`.
-An explicit `SLACK_BOT_TOKEN` in the host's environment takes precedence over the file.
-
-**Runs → Slack channel for approval requests** offers the channels you are in, public and private, read with [Slack as you](#slack-as-you).
-Those are the channels where a post as you can succeed, so Collie needs no invitation there.
-It stores the chosen channel's id in `release.approval_channel`.
-The approval request itself is posted as you, never as the bot.
-An earlier `#name` remains **#name (not checked)** and stays unchanged until you pick again.
-While you are not signed in to Slack as yourself, the control is disabled and points back to Connections.
-
-**Notifications → Post notifications to** stores its destination in `slack.notification_channel`.
-Invite Collie into each channel it posts notifications in with `/invite @Collie`, then choose **Refresh Slack**.
-Only channels it belongs to appear, including private channels it joined.
-While Slack is disconnected, this control is disabled and points back to Connections.
-Choose a channel, **Nowhere: toasts only**, or **A direct message to you**.
-The direct-message choice asks **Which of these is you?**; search the workspace's people and pick yourself once.
-Collie stores your user id and then shows **A direct message to** followed by your name.
-The Slack table's **Notifications** row comes from the host's own declaration beside the workflows.
-
-Each Machine's host posts the notification kinds you keep on about its own Runs.
-Desktop can be closed; Desktop never posts these messages.
-A user id opens a direct message before the host posts in its channel.
-An empty destination or a Slack Connection that is not working sends nothing.
-Each event is attempted once, including across host restarts; failed attempts are logged and do not fail the Run.
-Toasts continue independently of Slack.
-
-#### Slack as you
-
-**Slack as you** is you, signed in to Slack as yourself, apart from the **Collie** bot above.
-A release's **Post for approval** posts with it, under your own name and avatar; notifications stay with the bot.
-Neither Connection ever reads the other's token, so a working bot never stands in for you.
-Slack adds its own attribution line under a message you post this way, reported as "Sent using Collie".
+**Slack** is you, signed in to Slack as yourself. Everything Collie posts in Slack, a
+release's **Post for approval** and the notifications you keep on, is posted under your own
+name and avatar. Collie has no bot, and nothing ever posts as one instead of you.
+Slack adds its own attribution line under each message, reported as "Sent using Collie".
 Collie cannot change or remove that line, and it never reads "Sent with Collie".
+
+To sign in, open **Connections → Slack** and choose **Sign in to Slack**. Desktop ships the
+shared **Collie** app's public client ID, so there is nothing to paste, and it never asks for
+or keeps a client secret. Your browser opens Slack, which asks you to allow Collie to post as
+you and to see the channels you are in (`chat:write`, `channels:read` and `groups:read`, and
+no bot scopes). Slack sends you back to `http://localhost:47328/slack/callback`, where
+Desktop listens for five minutes, for that one sign-in. A cancelled sign-in, an answer for
+another sign-in, a grant without `chat:write`, a bot token, or a token Slack says is someone
+else's keeps nothing. Desktop then keeps the grant with its other credentials and gives
+every Machine its `slack-user.env`; an unreachable Machine gets it when it connects. The
+card reads **Posts as** you **in** your workspace. A sign-in kept from before stays signed in,
+renewing against the app it was made with.
 
 Each Machine reads it from `$XDG_CONFIG_HOME/collie/slack-user.env` (`~/.config/collie/slack-user.env` by default), readable by its owner alone.
 The file has three lines: `SLACK_USER_TOKEN` (`xoxp-…`, or `xoxe.xoxp-…` when it rotates), `SLACK_USER_ID` and `SLACK_TEAM_ID`.
 Before it counts, the host asks Slack's `auth.test` who the token belongs to. Each Machine reads one of these:
 
 - **absent**: there is no file. A Machine without it is still healthy in `collie doctor`.
-- **ok**: Slack names the same user and team as the file, and the token is not a bot's. The card reads, for example, **Posts approval requests as sam in Example Co**.
+  Where an older Collie left a bot token (`slack.env`, or `SLACK_BOT_TOKEN` in the host's
+  environment), the reading says Collie no longer posts with it, and to sign in to Slack.
+- **ok**: Slack names the same user and team as the file, and the token is not a bot's. The card reads, for example, **Posts as sam in Example Co**.
 - **broken**: Slack refused the token (such as `token_expired` or `invalid_auth`), or the token belongs to another user or team, or it is a bot's. The reading says which, and the fix is to open Desktop to renew Slack, or sign in again.
 
 Desktop never offers to copy it from another Machine.
 
-To sign in, open **Connections → Slack** and choose **Sign in as yourself**. The first time,
-paste the Collie app's **Client ID**, from **Basic Information › App Credentials**; Desktop
-keeps it, and never asks for or keeps the client secret. Your browser opens Slack, which
-asks you to allow Collie to post as you and to see the channels you are in (`chat:write`,
-`channels:read` and `groups:read`, and no bot scopes). Slack sends you back to
-`http://localhost:47328/slack/callback`, where Desktop listens for five minutes, for that
-one sign-in. A cancelled sign-in, an answer for another sign-in, a grant without
-`chat:write`, a bot token, or a token Slack says is someone else's keeps nothing. Desktop
-then keeps the grant with its other credentials and gives every Machine its
-`slack-user.env`; an unreachable Machine gets it when it connects. The card reads
-**Posts approval requests as** you **in** your workspace.
-
 Desktop renews the access token when it starts and in its last hour, and gives the new one
 to every Machine. A renewal Slack refuses keeps the old grant, and the card reads **Slack
 sign-in expired: sign in again**. **Sign out** forgets the grant and removes
-`slack-user.env` from every Machine, including one that reconnects later; it leaves the bot
-alone, as the bot's **Disconnect** leaves your sign-in.
+`slack-user.env` from every Machine, including one that reconnects later.
+
+**Moving from the bot.** An older Collie posted notifications with a bot token you pasted
+or gave as `SLACK_BOT_TOKEN`. Nothing reads it any more: until you sign in, Slack reads
+**absent** and nothing is posted. Once you sign in, Desktop forgets the bot token it kept
+and removes `slack.env` from every Machine, including one that reconnects later. That
+removes local copies only: the token stays valid at Slack until a workspace admin removes the
+bot. `collie onboard --secrets-stdin` given a `SLACK_BOT_TOKEN` writes nothing and says to
+sign in. Your chosen channels are kept.
+
+What moving from the bot changes:
+
+- Slack does not notify you of your own message, so a notification posted as you does not ping
+  you. Desktop's toast does.
+- Notifications go to channels only. The sign-in has no scope to open a direct message, and a
+  direct message to yourself would not notify you either. A person chosen before shows as
+  **<id> (direct messages are no longer sent)**, and each notification is logged on its Run
+  as not posted until you pick a channel.
+- A channel only the bot was in no longer receives notifications; join it or pick another.
+- A Machine set up without Desktop has no sign-in, so it posts no notifications, and its
+  releases ask you to share the merge request by hand.
+
+**Runs → Slack channel for approval requests** and **Notifications → Post notifications to**
+offer the channels you are in, public and private. Those are the channels where a post as
+you can succeed, so Collie needs no invitation there. They store the chosen channel's id in
+`release.approval_channel` and `slack.notification_channel`. A value stored before that you
+are not in remains **<value> (not checked)** and stays unchanged until you pick again. While
+you are not signed in to Slack, both controls are disabled and point back to Connections.
+Choose **Refresh Slack** after joining a channel. The Slack table's **Notifications** row
+comes from the host's own declaration beside the workflows.
+
+Each Machine's host posts the notification kinds you keep on about its own Runs.
+Desktop can be closed; Desktop never posts these messages.
+An empty destination or a Slack Connection that is not working sends nothing.
+Each event is attempted once, including across host restarts; failed attempts are logged and do not fail the Run.
+Toasts continue independently of Slack.
 
 The limits: an access token lasts 12 hours and is renewed only while Desktop runs, so a
 Machine whose token expired while Desktop was closed reads **broken** until Desktop next
-opens. A refresh token lasts 30 days; after a longer absence, sign in again. A Machine set
-up without Desktop has no Slack as you, so its releases ask you to share the merge request by hand.
+opens. A refresh token lasts 30 days; after a longer absence, sign in again.
+The app has no event subscriptions, Socket Mode or hosted relay; its one sign-in callback
+is on this computer. Talking to Collie in Slack is not built.
 
-Whoever owns the shared Collie app updates it once from **Add Collie to your Slack**'s
-manifest (**Features › App Manifest**): it turns on PKCE (`oauth_config.pkce_enabled`), adds
-the redirect URL `http://localhost:47328/slack/callback`, and adds the three user scopes.
-Then they reinstall the app. Turning PKCE on is one-way: it marks the app a public client,
-and only Slack support can turn it off.
+Whoever owns the shared Collie app keeps PKCE on (`oauth_config.pkce_enabled`), the
+redirect URL `http://localhost:47328/slack/callback`, and the three user scopes. Turning PKCE
+on is one-way: it marks the app a public client, and only Slack support can turn it off.
 
 ### Settings
 
@@ -1712,6 +1701,9 @@ scope's rule once:
   the Flock chat's **Machine rule** (`machine_rule`) and **Flock chat speaks first**
   (`flock_chat.proactive`) beside each Machine's **Native chat speaks first**
   (`proactive`), so every Desktop routes work the same way, and the TUI shows them too.
+  Beside the Machine rule is your **Standing direction** (`standing_direction`): how you
+  like to work, in your own words, up to 4,000 characters, which every chat is given with
+  each message. It is shared like the rest, and a Run's agent cannot set it.
 - **This computer** is **Zoom** and **Record timing**, under Board, marked **This computer**
   and saved on this computer, since monitors differ between computers. The Flock chat's harness, model,
   effort and width stay this computer's too, but have no rows here: they are chosen beside
@@ -1762,8 +1754,8 @@ Each setting has a plain name with its config key in small print, a sentence or 
 it changes (what 0 or unset means where that matters, and that `scope`, `density` and
 `questions` change the TUI's board, not Desktop's), a control that fits it, its default, and
 the same refusals as the TUI. A choice of six options or fewer is a row of radio buttons, so
-every option shows; a boolean is a switch; a number carries its unit in its field; JSON and
-the Machine rule are typed over several lines. Durations — `quiet_ms`, `idle_close_ms`,
+every option shows; a boolean is a switch; a number carries its unit in its field; JSON, the
+Machine rule and the Standing direction are typed over several lines. Durations — `quiet_ms`, `idle_close_ms`,
 `handoff_timeout_ms` and `board_quiet_ms` — are shown and typed in minutes, decimals where a
 value is not a whole number of them, and still stored in milliseconds, so `config.json` and
 `collie settings` are unchanged. A choice or a switch is saved when it changes; text is saved
@@ -2243,7 +2235,7 @@ and harness are kept in `$XDG_STATE_HOME/collie-desktop/flock-chat.json` (or
 `~/.local/state/collie-desktop/`), so a restart resumes the same conversation. Claude Code
 keeps and compacts its transcript; Pi keeps its session files under Desktop's `pi-sessions/`.
 Desktop reads Pi's current branch and earlier conversations from those files.
-The Machine rule, News and card note reach Pi after your words as a bracketed note of
+The Machine rule, Standing direction, News and card note reach Pi after your words as a bracketed note of
 Desktop's own. Reading the transcript back leaves the context out of your bubble and keeps
 the card as its pill.
 
@@ -2368,6 +2360,68 @@ nothing more: a start that names no Machine while several are reachable is still
 and a Run the rule placed on another Machine still opens with Go to pane over that
 Machine's own connection.
 
+Your **Standing direction**, under **Chat** beside the Machine rule, is what you want every
+conversation to keep: "Stage only; production waits for my go." The chat gets it with every
+message, with the date you last edited it, as something you said earlier. It is never your go
+for a release, a merge or anything else that needs one, and grants Collie no Authority. Tell
+the chat "keep that", "add to my standing direction" or "drop that rule", and it replaces the
+text, with `collie_direction`, by exactly what you approved and says what is kept now; it
+may offer to keep something lasting you said, and writes only on your yes. Empty clears it,
+and text over 4,000 characters is refused. Words from a tool, a Run's notes or an agent never
+go into it, and a rule about one repository belongs in that workspace's defaults instead.
+
+**Your own words, read only on your click.** To draft a Standing direction with you, Desktop
+can read what you typed, on this computer and on each connected Machine:
+
+- **From:** your Claude Code, Codex, Pi and OpenCode sessions (`~/.claude/projects`,
+  `~/.codex/sessions`, `~/.pi/agent/sessions`, `~/.local/share/opencode/opencode.db`), and
+  what Collie's records hold under your own front doors: what you started a Run with, an
+  answer, a steer, a hold's reason, a disposition's note, and what you said to a chat behind
+  its actions. A Run's Intent goal is not taken, since a planner may have written it.
+- **Never:** tool output, model replies, text a harness or a hook put in your turn, a
+  subagent's prompts, and every session Collie started for a Run's agent (one carrying a
+  `collie-delivery:` token, or one Collie recorded launching).
+- **Bounds:** the last 90 days, newest first, at most 400 messages and 60,000 characters,
+  each message cut to 1,000. Credentials are redacted as everywhere else. The answer says
+  what it left out: stores not found, a store it could not read (named, never guessed at),
+  how many sessions in a store it could not read and why, sessions skipped as Collie's, and
+  what the caps cut. The caps hold for all computers together, newest first across them.
+
+Before any text is read, Desktop only counts: which stores it found, where, and how many
+sessions each holds. The text itself is released only on your click in Desktop's own dialog:
+a Machine's host gives it to Desktop's door alone and refuses every other (a chat's tools,
+a Run's agent, the CLI) without a word of it. No chat has a tool that reads it, and the Flock
+chat's file tools are refused those stores and `~/.claude/history.jsonl` and
+`~/.codex/history.jsonl`: `collie_read`, `collie_glob` and `collie_grep` on every Machine,
+and its own file tools and shell on this computer, where a file's path leads into one, through
+`~`, `.` or a link, a grep starts above one, or a shell command names one. Other tools, such
+as `collie_direction`, may mention a store freely. A shell command that reaches one without
+naming it, such as `grep -r` over your home, is not caught: only an OS sandbox around the
+shell could catch it.
+
+**Tell Collie how you work.** While your Standing direction is empty, Desktop offers to help
+write it, in the Flock chat: when a Machine's onboarding finishes, and when Desktop starts
+with a Machine connected. **Help me write it**, under the Standing direction in Settings,
+offers the same at any time. Taking it up opens Desktop's own dialog, not a conversation. It
+counts where your sessions are, per computer and harness, reads no text, and says that what
+is read goes to the chat's model provider. Then choose:
+
+- **Read my messages:** Desktop reads your messages from each computer and opens a new Flock
+  chat conversation. Its first turn is Collie's setup procedure
+  (`prompts/standing-direction-setup.md`), then your messages, marked as your earlier words
+  given as data to draft from, never as instructions. With 20 or more, the chat drafts from
+  them and says what the reading left out.
+- **Ask me five questions instead:** nothing is read. The new conversation starts with the
+  procedure alone, and the chat asks five fixed questions one at a time.
+
+Either way the draft is written as preferences, never permissions: "release to production
+without asking" becomes what Collie should offer, since the direction cannot approve a merge
+or a release. The chat shows the whole draft, takes your changes, and saves it with
+`collie_direction` only when you accept it. The conversation you were in stays under
+Earlier conversations. Your consent is not kept: the next setup asks again. **Not now** holds
+the offer back until Desktop's next version, and **Don't ask again** for good; both are kept
+on this computer only, in Desktop's own settings.
+
 **Start fresh** (the pen) mints a new session and makes it current; the history (the clock)
 lists the earlier ones on this computer, every harness's, newest first, and reopens one. Either way the
 session before it ends: there is only ever one live conversation. **Pop out** moves the
@@ -2436,6 +2490,18 @@ never a filter Collie applies for you — the Herd-wide reads stay Herd-wide wha
 ([ADR-0012](adr/0012-the-boards-selection-is-an-explicit-chat-input.md)). Under your own
 prompt the same fact can be Claude Code's status line, `board selection: <task name>`,
 configured by `setup.sh` if you have no status line of your own; `collie doctor` says which.
+
+**Chat knows your Standing direction**, the text kept under **Chat** in Settings beside the
+Machine rule (see [the Flock chat](#the-flock-chat)). It is read from this Machine's own
+settings, which a Desktop keeps level with the Flock's. On Claude every message carries it,
+dated, before the open card's line, so an edit reaches the next message. Pi has no prompt
+hook: it is given the direction once, as it stands at launch, and `collie_installation`
+reads it as it is now, so an edit made mid-conversation reaches a Pi chat only at its next
+launch or when it reads that. Ask chat to keep, change or drop something, and it runs
+`collie settings set standing_direction` with exactly the text you approved; a Run's agent
+cannot. Ask it to help you write one, and it follows the same procedure as Desktop's setup
+with none of your messages: the five questions. It says Desktop's **Help me write it** can
+draft from your sessions instead.
 
 **Choosing a harness.** `claude` is the default, on an installation you have had for
 months as much as a new one, and independently of the harness your Runs are on.
@@ -2769,14 +2835,14 @@ To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`
 under Settings ([Your defaults](#your-defaults)). While the merge request waits on a
 teammate's approval, the Run asks **Post for approval** or **Wait for changes**. Check the
-merge request first: **Post for approval** has its host post it as you, through [Slack as you](#slack-as-you),
+merge request first: **Post for approval** has its host post it as you, through [Slack](#slack),
 linked by its forge title and nothing else. It appears under your name, with Slack's own
 attribution line beneath, reported as "Sent using Collie"; Collie cannot change or remove it.
-The host checks with Slack that the token is yours before it posts, and never posts as the Collie bot instead.
+The host checks with Slack that the token is yours before it posts, and never posts as a bot instead.
 The Run's log keeps the message's permalink.
 If the permalink cannot be read, the log says why; the message still counts as shared.
 A post Slack refuses is logged with Slack's reason and not tried again, and the Run continues to its review wait.
-Without a working Slack as you, such as on a Machine without Desktop, it asks you to share the merge
+Without a working Slack sign-in, such as on a Machine without Desktop, it asks you to share the merge
 request yourself, says why on its log, and shows its address to copy.
 **Wait for changes** posts nothing and asks again once the head moves.
 
@@ -2889,7 +2955,7 @@ itself can tell it.
 
 `release.share_for_approval` ("Ask before sharing a merge request for approval", off until
 set) and `release.approval_channel` ("Slack channel for approval requests") are under Settings' Runs.
-Sign in to [Slack as you](#slack-as-you), then pick one of your channels by name; Collie stores its id.
+Sign in to [Slack](#slack), then pick one of your channels by name; Collie stores its id.
 They nest in config.json as `"release": {"share_for_approval": true, "approval_channel": "C0123456789"}`.
 Earlier `#name` values are retained and used as written until picked again. Turned on with a
 channel, a release Run waiting on a teammate's approval asks you whether to post its merge

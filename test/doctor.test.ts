@@ -255,13 +255,12 @@ test("a healthy machine passes every check and says so", () =>
         "helle",
         "linear mcp",
         "slack connection",
-        "slack-user connection",
       ]);
       expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
     }),
   ));
 
-test("a Machine whose bot posts but that is not signed in to Slack as its human stays healthy", () =>
+test("a Machine with only a bot token stays healthy and is told to sign in to Slack", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
@@ -275,15 +274,10 @@ test("a Machine whose bot posts but that is not signed in to Slack as its human 
       expect(check(result, "slack connection")).toEqual({
         name: "slack connection",
         ok: true,
-        detail: "Posts as collie in Example Co",
-        fix: "",
+        detail: "Collie no longer posts with a Slack bot token: sign in to Slack",
+        fix: "Sign in to Slack in Desktop Settings › Connections",
       });
-      expect(check(result, "slack-user connection")).toEqual({
-        name: "slack-user connection",
-        ok: true,
-        detail: "Not signed in to Slack as yourself on this Machine",
-        fix: "Sign in to Slack as yourself in Desktop Settings › Connections",
-      });
+      expect(fake.calls).toEqual([]);
     }),
   ));
 

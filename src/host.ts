@@ -150,9 +150,8 @@ import { sideJobs } from "./side-jobs";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
 import { connectionsOnMachine } from "./connections";
+import { SLACK_BOT_RETIRED } from "./slack-credentials";
 import { readConnectionLogin } from "./connection-login";
-import { slackChoicesOnMachine } from "./slack-credentials";
-import { isString } from "./schema";
 import { Schedules, schedulesLayer } from "./schedules";
 import { dataHomeOf, desktopRootOf } from "./desktop";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
@@ -286,6 +285,7 @@ import { VERIFYING_FILE, verifyingIn } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
+import { ownInventory, readOwnWords, SESSION_STORES } from "./own-words";
 import {
   loadDefaults,
   SettingRefused,
@@ -1713,6 +1713,11 @@ const frontDoorHandlers = (
         ...askerOf(client),
         ...stampOf(client),
       });
+      /** Where a door's file tools may not go: the human's sessions, but on Desktop's own. */
+      const closedTo = (client: { readonly id: number }) =>
+        whoOf(client).origin === "desktop"
+          ? []
+          : Arr.map(SESSION_STORES, (store) => `${env.home}/${store}`);
       /** An agent settled while Collie waits on its Output is told its verify ended, or it would wait forever. */
       const toldVerifyEnded = (
         client: { readonly id: number },
@@ -2269,10 +2274,35 @@ const frontDoorHandlers = (
             Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
             Effect.provideContext(bun),
           ),
+        ownInventory: () =>
+          ownInventory({ home: env.home, stateDir: env.stateDir }).pipe(Effect.provideContext(bun)),
+        ownWords: (_, { client }) =>
+          whoOf(client).origin === "desktop"
+            ? Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) =>
+                  readOwnWords({ home: env.home, stateDir: env.stateDir }, now),
+                ),
+                Effect.provideContext(bun),
+              )
+            : Effect.fail(
+                new HostRefused({
+                  reason:
+                    "the human's own words are given only to Desktop, on their click there; no chat, agent or command reads them",
+                }),
+              ),
         setSettings: ({ settings, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
               const who = whoOf(client);
+              // AGENTS.md's first invariant allows this one exception: a harm only an agent could cause.
+              if (
+                who.origin === "agent" &&
+                Arr.some(settings, ({ key }) => key === "standing_direction")
+              )
+                return yield* new HostRefused({
+                  reason:
+                    "a Run's agent cannot set standing_direction: it reads repositories and trackers, and what it wrote there would reach every chat as the human's words",
+                });
               const trail = (yield* Path.Path).join(env.stateDir, "settings");
               const taken = yield* once(
                 trail,
@@ -2380,16 +2410,7 @@ const frontDoorHandlers = (
           ),
         models: () => harnesses.catalogues,
         connections: () => connectionsOnMachine(env),
-        slackChoices: () =>
-          slackChoicesOnMachine(env).pipe(
-            Effect.mapError(
-              (error) =>
-                new HostRefused({
-                  reason: isString(error) ? error : "Slack's credentials could not be read",
-                }),
-            ),
-            Effect.provideContext(bun),
-          ),
+        slackChoices: () => Effect.fail(new HostRefused({ reason: SLACK_BOT_RETIRED })),
         connectionLogin: ({ id }) =>
           readConnectionLogin(env, id).pipe(
             Effect.mapError(
@@ -2487,11 +2508,14 @@ const frontDoorHandlers = (
               return { path: got.path };
             }),
           ),
-        readFile: ({ path, offset, length }) =>
-          readPart(path, offset, length).pipe(Effect.provideContext(bun)),
-        glob: ({ pattern, path }) => refusedPlainly(globFiles(pattern, path ?? env.home)),
-        grep: ({ path, ...asked }) =>
-          refusedPlainly(grepFiles({ ...asked, path: path ?? env.home })),
+        readFile: ({ path, offset, length }, { client }) =>
+          readPart(path, offset, length, closedTo(client)).pipe(Effect.provideContext(bun)),
+        glob: ({ pattern, path }, { client }) =>
+          refusedPlainly(globFiles(pattern, path ?? env.home, undefined, closedTo(client))),
+        grep: ({ path, ...asked }, { client }) =>
+          refusedPlainly(
+            grepFiles({ ...asked, path: path ?? env.home }, undefined, closedTo(client)),
+          ),
         writeFile: ({ path, content, request }, { client }) =>
           refusedPlainly(
             filesOnce(
@@ -3888,6 +3912,12 @@ const scheduleSeconds = Config.option(Config.String("COLLIE_HOST_SCHEDULE_SECOND
   Effect.orDie,
 );
 
+/** How long a test has a messaged agent take to start a turn before its work counts as ended. */
+const supersedeGraceMs = Config.option(Config.Int("COLLIE_HOST_SUPERSEDE_GRACE_MS")).pipe(
+  Effect.map(Option.getOrUndefined),
+  Effect.orDie,
+);
+
 const own = (
   dir: string,
   checks: CheckProcessesApi,
@@ -3899,6 +3929,7 @@ const own = (
     const fs = yield* FileSystem.FileSystem;
     const env = yield* currentEnv.pipe(Effect.orDie);
     const crashAt = yield* crashPoint;
+    const graceMs = yield* supersedeGraceMs;
     const seconds = yield* scheduleSeconds;
     const bun = yield* Effect.context<PlatformServices>();
     const herdr = new Herdr(env);
@@ -4017,6 +4048,7 @@ const own = (
                       locate: locateIn(env),
                       userDir: env.userDir,
                       crashAt,
+                      supersedeGraceMs: graceMs,
                       namesTasks: true,
                       placing: { herdr, env: { ...env, stateDir: dir } },
                     }),

@@ -242,8 +242,14 @@ test("Zoom and Record timing are the rows kept on this computer, and the Flock c
   ).toEqual([
     ["flock_chat.proactive", true],
     ["machine_rule", true],
+    ["standing_direction", true],
     ["proactive", true],
   ]);
+  expect(row("standing_direction")).toMatchObject({
+    multiline: true,
+    set: false,
+    defaultSaid: "Unset: nothing kept",
+  });
   expect(row("machine_rule")).toMatchObject({
     multiline: true,
     set: false,

@@ -60,7 +60,6 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
             ),
           helle: () => Effect.succeed(null),
           slack: () => Effect.succeed(null),
-          "slack-user": () => Effect.succeed(null),
         },
       });
       yield* writeConfigValue(rig.userDir, "gitlab_host", "gitlab.example.org");
@@ -146,7 +145,6 @@ test("Use glab's login from the laptop reaches a VM whose glab defaults to gitla
             giveToken([route], GITLAB_HOST, token).pipe(Effect.map((each) => each[0]!.failed)),
           helle: () => Effect.succeed(null),
           slack: () => Effect.succeed(null),
-          "slack-user": () => Effect.succeed(null),
         },
       });
       const before = yield* desktop;

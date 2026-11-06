@@ -36,18 +36,7 @@ const {
 const connectionsNeedYou = computed(
   () => Arr.filter(connectionCards.value, (card) => card.needsYou).length,
 );
-const {
-  choices: slackChoices,
-  yours: slackYours,
-  trouble: slackTrouble,
-  loading: slackLoading,
-  refresh: refreshSlack,
-} = useSlack();
-const slackDestinations = computed(() =>
-  Arr.some(connectionCards.value, (card) => card.id === "slack" && card.account !== null)
-    ? slackChoices.value
-    : null,
-);
+const { yours: slackYours, loading: slackLoading, refresh: refreshSlack } = useSlack();
 watch(connectionCards, () => Effect.runPromise(Effect.promise(() => refreshSlack())));
 const refreshSlackConnection = () =>
   Effect.runPromise(
@@ -57,6 +46,7 @@ const refreshSlackConnection = () =>
     }),
   );
 const { desktopSettings, change } = useDesktopSettings();
+const standingSetup = useStandingSetup();
 const { rows: machines, own, now } = useFlock();
 const { machines: catalogues, problem: catalogueProblem } = useCatalogues();
 const { machines: usage } = useUsage();
@@ -704,7 +694,6 @@ const drawnLine = computed(() =>
                         :id="idOf(row)"
                         :setting="row.key"
                         :value="row.value"
-                        :choices="slackDestinations"
                         :yours="slackYours"
                         @choose="(value) => set(row, value)"
                       />
@@ -798,6 +787,16 @@ const drawnLine = computed(() =>
                         </UInput>
                         <div class="flex justify-end gap-2">
                           <UButton
+                            v-if="row.key === 'standing_direction'"
+                            class="me-auto"
+                            color="neutral"
+                            variant="outline"
+                            icon="i-lucide-sparkles"
+                            label="Help me write it"
+                            data-testid="standing-setup-help"
+                            @click="standingSetup.open.value = true"
+                          />
+                          <UButton
                             v-if="row.multiline && dirty(row)"
                             color="neutral"
                             variant="ghost"
@@ -858,8 +857,6 @@ const drawnLine = computed(() =>
                 </div>
               </section>
               <SettingsConnections
-                :slack="slackChoices"
-                :slack-trouble="slackTrouble"
                 :slack-loading="slackLoading"
                 @refresh-slack="refreshSlackConnection"
                 v-if="showConnections"
@@ -888,7 +885,6 @@ const drawnLine = computed(() =>
                       id="slack-notify-in-card"
                       :setting="row.key"
                       :value="row.value"
-                      :choices="slackDestinations"
                       :yours="slackYours"
                       @choose="(value) => set(row, value)"
                     />

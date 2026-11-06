@@ -62,6 +62,10 @@ const Asked = RpcGroup.make(
     payload: { runId: Schema.String },
     success: RunMetrics,
   }),
+  Rpc.make("agentRun", {
+    payload: { agent: Schema.String },
+    success: Schema.NullOr(Schema.String),
+  }),
 );
 
 const view = (runId: string, task: string, more: Partial<RunView> = {}): RunView => ({
@@ -93,8 +97,12 @@ const view = (runId: string, task: string, more: Partial<RunView> = {}): RunView
   landing: null,
 });
 
-/** A host listening on `socket` for state directory `dir`, holding `views`; its `run` calls are counted. */
-const hostOf = (socket: string, dir: string, views: ReadonlyArray<RunView>) =>
+const hostOf = (
+  socket: string,
+  dir: string,
+  views: ReadonlyArray<RunView>,
+  agents: Readonly<Record<string, string>> = {},
+) =>
   Effect.gen(function* () {
     const asked = { run: 0 };
     const find = (runId: string) =>
@@ -119,6 +127,7 @@ const hostOf = (socket: string, dir: string, views: ReadonlyArray<RunView>) =>
             progress: () => Effect.succeed(null),
             watch: ({ runId }) => Stream.make(find(runId)),
             runMetrics: () => Effect.succeed([]),
+            agentRun: ({ agent }) => Effect.succeed(agents[agent] ?? null),
           }),
         ),
         Layer.provide(RpcServer.layerProtocolSocketServer),
@@ -177,6 +186,7 @@ const world = <A, E>(
       workspace: string | null,
       args: ReadonlyArray<string>,
       caller?: string,
+      more?: Readonly<Record<string, string>>,
     ) => Effect.Effect<typeof Envelope.Type, never, PlatformServices | Scope.Scope>;
     readonly shownRun: (
       workspace: string,
@@ -196,7 +206,12 @@ const world = <A, E>(
       const command = yield* collieCommand;
       const suite = yield* suiteEnv;
       const path = yield* Config.String("PATH").pipe(Config.withDefault("/usr/bin:/bin"));
-      const said = (workspace: string | null, args: ReadonlyArray<string>, caller?: string) =>
+      const said = (
+        workspace: string | null,
+        args: ReadonlyArray<string>,
+        caller?: string,
+        more: Readonly<Record<string, string>> = {},
+      ) =>
         exec([...command, "--json", ...args], {
           cwd: ROOT,
           env: {
@@ -209,10 +224,16 @@ const world = <A, E>(
             ...suite,
             HERDR_WORKSPACE_ID: workspace ?? "",
             COLLIE_RUN: caller ?? "",
+            ...more,
           },
         }).pipe(Effect.map((done) => done.stdout));
-      const collie = (workspace: string | null, args: ReadonlyArray<string>, caller?: string) =>
-        said(workspace, args, caller).pipe(
+      const collie = (
+        workspace: string | null,
+        args: ReadonlyArray<string>,
+        caller?: string,
+        more?: Readonly<Record<string, string>>,
+      ) =>
+        said(workspace, args, caller, more).pipe(
           Effect.flatMap(Schema.decodeEffect(Envelope)),
           Effect.orDie,
         );
@@ -385,6 +406,76 @@ test(
             Effect.map(() => here.run),
           );
         expect(yield* runCalls("run-a")).toBe((yield* runCalls()) + 1);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "an agent known by its pane or COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run started and no other Task's",
+  () =>
+    world(({ state, collie }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        for (const one of ["a", "b", "e"])
+          yield* writeTask(state, task(`task-${one}`, `ws-${one}`));
+        yield* fs.writeFileString(`${state}/host.db`, "");
+        yield* hostOf(
+          socketOf(state),
+          state,
+          [
+            view("run-a", "task-a"),
+            view("run-b", "task-b", {
+              requestedBy: {
+                run: "run-a",
+                agent: "run-a-agent",
+                machine: { installation: "here", name: "here" },
+              },
+            }),
+            view("run-e", "task-e"),
+          ],
+          { "run-a-agent": "run-a" },
+        );
+        const herdr = `${state}/herdr`;
+        yield* fs.writeFileString(
+          herdr,
+          `#!/bin/sh\necho '{"result":{"agents":[{"name":"run-a-agent","pane_id":"pane-a","agent_status":"idle"}]}}'\n`,
+        );
+        yield* fs.chmod(herdr, 0o755);
+        const shells = {
+          pane: { HERDR_BIN_PATH: herdr, HERDR_PANE_ID: "pane-a", COLLIE_AGENT: "" },
+          core: { HERDR_PANE_ID: "", COLLIE_AGENT: "run-a-agent" },
+        } as const;
+
+        const answers = yield* Effect.all(
+          Arr.flatMap(["pane", "core"] as const, (shell) =>
+            Arr.flatMap([["run", "show"] as const, ["run", "wait"] as const], (door) =>
+              Arr.map(["run-b", "run-e"], (run) =>
+                collie("ws-a", [...door, run], undefined, shells[shell]).pipe(
+                  Effect.map((said) => ({ shell, door, run, said })),
+                ),
+              ),
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        for (const { shell, door, run, said } of answers)
+          expect({ shell, door, run, said }).toEqual({
+            shell,
+            door,
+            run,
+            said:
+              run === "run-e"
+                ? {
+                    ok: false,
+                    error: {
+                      code: "run_outside_task",
+                      message: `Run "run-e" is in task "task-e", not task "task-a": \`--workspace ws-e\` reaches it.`,
+                      details: { run: "run-e", task: "task-e", workspace: "ws-e" },
+                    },
+                  }
+                : { ok: true },
+          });
       }),
     ),
   60_000,

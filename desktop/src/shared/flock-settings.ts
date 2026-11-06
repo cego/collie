@@ -31,10 +31,20 @@ export {
   takeFrom,
 } from "../../../src/flock-settings";
 import type { FlockSettings } from "../../../src/flock-settings";
+import type { StandingDirection } from "../../../src/standing-direction";
+import { isString } from "../../../src/schema";
 
 const valueOf = (value: Schema.Json | null) =>
   Option.getOrNull(Schema.decodeUnknownOption(SettingValue)(value));
 const GIVEN_ONLY = "gitlab_host";
+
+/** The Flock's Standing direction and its last edit, or undefined while it is empty. */
+export const standingDirectionOf = (flock: FlockSettings): StandingDirection | undefined => {
+  const held = flock.settings.standing_direction;
+  return held !== undefined && isString(held.value) && held.value !== ""
+    ? { text: held.value, at: held.at }
+    : undefined;
+};
 
 /** An edit made in Desktop's Settings, checked as the TUI checks one, at `now`. */
 export const editSetting = (
@@ -110,6 +120,7 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
 const UNSET_SAID = new Map([
   ["zoom", "Default: 100%, the size of your other apps"],
   ["machine_rule", "Unset: no rule"],
+  ["standing_direction", "Unset: nothing kept"],
   ["release.approval_channel", "Unset: shares nothing"],
   ["slack.notification_channel", "Unset: toasts only"],
 ]);
@@ -223,7 +234,8 @@ const flockRow = (
     set: value !== "",
     edit,
     shared: true,
-    multiline: setting.kind === "json" || setting.key === "machine_rule",
+    multiline:
+      setting.kind === "json" || ["machine_rule", "standing_direction"].includes(setting.key),
     hint: consequenceOf(setting.key, value),
   };
 };

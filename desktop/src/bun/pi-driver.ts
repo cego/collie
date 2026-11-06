@@ -21,9 +21,11 @@ import type { ChatDriver, DriverContext, DriverSession, TurnCost } from "./drive
 import type { JsonObject } from "../../../src/schema";
 import type { ChatEndpoint } from "./chat-endpoint";
 import { childEnv, which } from "./login-env";
+import { SESSION_STORES, SESSIONS_CLOSED, sessionStoreReached } from "../../../src/own-words";
 import { decodePiRecord, piEvents, piToolName } from "./pi-agui";
 import { piPrompt, piSessions } from "./pi-transcript";
 import { noticedContext, placementContext, systemPrompt } from "./session";
+import { standingDirectionContext } from "../../../src/standing-direction";
 
 const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
 const TOOL_TIMEOUT = 24 * 60 * 60;
@@ -47,7 +49,31 @@ export const piDriver = (
         Str.replaceAll("-", ""),
       )}`;
       const extension = `${context.dir}/pi-collie.ts`;
-      const source = `export default function(pi) { pi.registerMcpServer("${server}", { url: ${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(url).pipe(Effect.orDie)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } }); }\n`;
+      const json = (value: Schema.Json) =>
+        Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(value).pipe(Effect.orDie);
+      const source = `import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+const reached = ${String(sessionStoreReached)};
+const touched = {
+  read: (given) => ({ path: given("path") }),
+  edit: (given) => ({ path: given("path") }),
+  write: (given) => ({ path: given("path") }),
+  ls: (given) => ({ path: given("path") ?? "." }),
+  find: (given) => ({ path: given("path") ?? "." }),
+  grep: (given) => ({ root: given("path") ?? "." }),
+  bash: (given) => ({ command: given("command") }),
+};
+export default function(pi) {
+  pi.registerMcpServer("${server}", { url: ${yield* json(url)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } });
+  pi.on("tool_call", (event, ctx) => {
+    const input = event.input ?? {};
+    const call = Object.hasOwn(touched, event.toolName) ? touched[event.toolName]((key) => typeof input[key] === "string" ? input[key] : undefined) : undefined;
+    const store = call === undefined ? undefined : reached(${yield* json(SESSION_STORES)}, homedir(), { realpath: realpathSync, resolve }, { cwd: ctx.cwd, ...call });
+    return store === undefined ? undefined : { block: true, reason: "~/" + store + " " + ${yield* json(SESSIONS_CLOSED)} + "." };
+  });
+}
+`;
       yield* Effect.promise(() =>
         context.run(
           Effect.gen(function* () {
@@ -125,6 +151,7 @@ export const piDriver = (
             Arr.filter(
               [
                 placement === undefined ? "" : placementContext(placement),
+                standingDirectionContext(context.flock.standingDirection()) ?? "",
                 noticed === undefined ? "" : noticedContext(noticed),
               ],
               (text) => text !== "",

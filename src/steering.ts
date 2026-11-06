@@ -11,11 +11,12 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
-import { appendJournal, readJournal, readJournalWhole } from "./journal";
+import { appendJournal, journalOf, readJournal, readJournalWhole } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { nowIso, epochMs } from "./time";
 import { terminalBackend } from "./config";
 import { coreSocket } from "./hc";
+import { FrontDoor } from "./board-model";
 
 /** What a delivery is about. The work, not the words. */
 const CauseSchema = Schema.Struct({
@@ -78,6 +79,12 @@ export function toldIn(log: string, agent: string): string | null {
 /** States nothing follows: a causal key with one of these is free for a new delivery. */
 const TERMINAL_STATES: ReadonlySet<string> = new Set(["failed", "superseded"]);
 
+const HumanDoorSchema = Schema.Struct({
+  origin: FrontDoor,
+  conversation: Schema.optionalKey(Schema.String),
+});
+export type HumanDoor = typeof HumanDoorSchema.Type;
+
 export const DeliverySchema = Schema.Struct({
   id: Schema.String,
   at: Schema.String,
@@ -96,6 +103,8 @@ export const DeliverySchema = Schema.Struct({
   /** herdr's own code for a refusal it answered with. */
   code: Schema.optionalKey(Schema.String),
   note: Schema.optionalKey(Schema.String),
+  /** Where its words are a human's, whose: a host that dies before acting on it still can. */
+  human: Schema.optionalKey(HumanDoorSchema),
 });
 export type Delivery = Schema.Schema.Type<typeof DeliverySchema>;
 
@@ -224,6 +233,58 @@ export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (
       if (delivery.run === run) found.push({ file, delivery });
   return found;
 });
+
+type HumanSubmit = Delivery & { readonly human: HumanDoor };
+
+/** Each ledger's submits at the size it was read: a ledger only grows, so the same size holds the same. */
+export type LedgerScan = Map<
+  string,
+  { readonly size: bigint; readonly submits: ReadonlyArray<HumanSubmit> }
+>;
+
+/** Every Delivery of a human's words herdr took, at its first line saying so. */
+export const humanSubmits = Effect.fn("Steering.humanSubmits")(function* (
+  stateDir: string,
+  scanned: LedgerScan,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const files = yield* ledgerFiles(stateDir);
+  for (const file of scanned.keys()) if (!files.includes(file)) scanned.delete(file);
+  const first = new Map<string, HumanSubmit>();
+  for (const file of files) {
+    const size = yield* fs.stat(file).pipe(
+      Effect.map((info) => info.size),
+      Effect.option,
+    );
+    if (Option.isNone(size)) continue;
+    let known = scanned.get(file);
+    if (known?.size !== size.value) {
+      const raw = yield* fs.readFileString(file).pipe(Effect.option);
+      if (Option.isSome(raw)) {
+        known = {
+          size: size.value,
+          submits: submitsIn(journalOf(raw.value, LedgerLineJson).lines),
+        };
+        scanned.set(file, known);
+      }
+    }
+    for (const one of known?.submits ?? []) if (!first.has(one.id)) first.set(one.id, one);
+  }
+  return [...first.values()];
+});
+
+const submitsIn = (lines: ReadonlyArray<LedgerLine>): ReadonlyArray<HumanSubmit> => {
+  const first = new Map<string, HumanSubmit>();
+  for (const line of lines)
+    if (
+      isDelivery(line) &&
+      line.human !== undefined &&
+      SENT_STATES.has(line.state) &&
+      !first.has(line.id)
+    )
+      first.set(line.id, { ...line, human: line.human });
+  return [...first.values()];
+};
 
 /** Every delivery this state directory's ledgers hold, newest state each, read once for a board. */
 export const everyDelivery = Effect.fn("Steering.everyDelivery")(function* (stateDir: string) {

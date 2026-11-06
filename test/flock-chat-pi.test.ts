@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
+import { homedir } from "node:os";
 import { platformLayer } from "../src/platform";
 import { Effect, FileSystem, Path, Schema, Scope, Stream, flow, Result } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -25,6 +26,8 @@ import { readPiModels } from "../desktop/src/bun/pi-models";
 import { changeSettings } from "../desktop/src/bun/settings";
 import { chatSelects, choiceNotices } from "../desktop/src/shared/chat-choices";
 import { callFlockTool } from "../desktop/src/bun/flock-tools";
+
+let direction: { readonly text: string; readonly at: string } | undefined;
 
 const withPi = <A, E>(
   body: (
@@ -63,6 +66,8 @@ const withPi = <A, E>(
           uploaded: new Map(),
           machineRule: () => "",
           setMachineRule: () => Effect.void,
+          standingDirection: () => direction,
+          setStandingDirection: () => Effect.succeed(null),
           inSync: () => Effect.succeed(""),
           chatHarness: () => ({ harness: "pi", model: undefined, effort: undefined }),
           chatChoices: Effect.die("not asked"),
@@ -196,6 +201,42 @@ test("Pi's start isolates resources, keeps the token in its environment and send
       expect(details.prompt.message).toContain("Here");
       expect(details.prompt.message).toContain("A Run ended");
       expect(details.prompt.message).not.toContain("cGRm");
+    }),
+  ));
+
+test("Pi's note carries the Standing direction's words and date beside the Machine rule, and leaves it out while empty", () =>
+  withPi((driver) =>
+    Effect.gen(function* () {
+      const noteOf = (id: string) =>
+        Effect.gen(function* () {
+          const session = yield* driver.open(id, "openai-codex/gpt-6.1-sol", "medium");
+          yield* session.offer("inspect");
+          const events = yield* Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)));
+          yield* session.close;
+          const text = Option.getOrUndefined(
+            Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
+          );
+          if (text?.type !== "TEXT_MESSAGE_CONTENT")
+            return yield* Effect.die(new Error("No reply"));
+          return (yield* Schema.decodeEffect(
+            Schema.fromJsonString(
+              Schema.Struct({ prompt: Schema.Struct({ message: Schema.String }) }),
+            ),
+          )(text.delta).pipe(Effect.orDie)).prompt.message;
+        });
+      direction = {
+        text: "Stage only; production waits for my go.",
+        at: "2026-11-03T09:30:00.000Z",
+      };
+      const kept = yield* noteOf("pi-standing");
+      expect(kept).toContain("Stage only; production waits for my go.");
+      expect(kept).toContain("2026-11-03");
+      expect(kept).toContain("Here");
+      direction = { text: "", at: "2026-11-04T10:00:00.000Z" };
+      const cleared = yield* noteOf("pi-standing-cleared");
+      expect(cleared).toContain("Here");
+      expect(Str.toLowerCase(cleared)).not.toContain("standing direction");
+      direction = undefined;
     }),
   ));
 
@@ -473,6 +514,8 @@ test("Pi's configuration is read as a session opens, so a level changed since De
         proactive: () => false,
         machineRule: () => "",
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         inSync: () => Effect.succeed(""),
         choice: () => opensOn(settings, NO_FLOCK_SETTINGS, readPiConfig(context.dir)),
         offered: (harness) =>
@@ -643,6 +686,8 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
         proactive: () => false,
         machineRule: () => "",
         setMachineRule: () => Effect.void,
+        standingDirection: () => undefined,
+        setStandingDirection: () => Effect.succeed(null),
         inSync: () => Effect.succeed(""),
         choice: () =>
           Effect.succeed({ ok: true, choice: { harness: "pi", model: "default", effort: null } }),
@@ -677,4 +722,53 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
         content: expect.stringContaining("Here"),
       });
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+  ));
+
+/** Pi's `tool_call` event and its answer, as far as Collie's extension uses them. */
+type ToolCallHandler = (
+  event: { readonly toolName: string; readonly input: Readonly<Record<string, string>> },
+  ctx: { readonly cwd: string },
+) => { readonly block: true; readonly reason: string } | undefined;
+interface PiApi {
+  readonly registerMcpServer: () => void;
+  readonly on: (event: string, handler: ToolCallHandler) => void;
+}
+
+test("Pi's file tools and shell are refused where the human's sessions are kept", () =>
+  withPi((driver, context) =>
+    Effect.gen(function* () {
+      const session = yield* driver.open("pi-closed", "openai-codex/gpt-6.1-sol", "medium");
+      yield* Effect.addFinalizer(() => session.close);
+      const handlers = new Map<string, ToolCallHandler>();
+      const extension = yield* Effect.promise(
+        (): Promise<{ readonly default: (pi: PiApi) => void }> =>
+          import(`${context.dir}/pi-collie.ts`),
+      );
+      extension.default({
+        registerMcpServer: () => undefined,
+        on: (event, handler) => handlers.set(event, handler),
+      });
+      const home = homedir();
+      const call = (toolName: string, input: Readonly<Record<string, string>>) =>
+        Effect.promise(() =>
+          Promise.resolve(handlers.get("tool_call")!({ toolName, input }, { cwd: context.dir })),
+        );
+      const blocked = { block: true, reason: expect.stringContaining("Read my messages") };
+      expect(yield* call("read", { path: `${home}/.claude/projects/-x/1.jsonl` })).toMatchObject(
+        blocked,
+      );
+      expect(yield* call("bash", { command: "cat ~/.claude/history.jsonl" })).toMatchObject(
+        blocked,
+      );
+      expect(yield* call("grep", { pattern: "deploy", path: home })).toMatchObject(blocked);
+      expect(yield* call("read", { path: `${home}/work/notes.md` })).toBeUndefined();
+      expect(yield* call("read", { path: `${home}/.claude/./projects/-x/1.jsonl` })).toMatchObject(
+        blocked,
+      );
+      expect(
+        yield* call("cf-0_collie_direction", {
+          text: "Never read ~/.claude/projects without asking me.",
+        }),
+      ).toBeUndefined();
+    }),
   ));

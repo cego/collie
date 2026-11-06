@@ -45,6 +45,7 @@ import {
   withLedgerLock,
   type Cause,
   type Delivery,
+  type HumanDoor,
   type LedgerBusy,
 } from "./steering";
 import { gate, interruptKeys } from "./steering-caps";
@@ -162,6 +163,8 @@ export interface DeliveryDraft {
   readonly actor?: Asker;
   readonly note?: string;
   readonly idleOnly?: boolean;
+  /** Whose words it carries, where they are a human's. */
+  readonly human?: HumanDoor | null;
   /**
    * How long a refusal herdr calls momentary may hold before this sender gives up, from
    * the first one. Absent, it is not waited out: the refusal fails the delivery at once.
@@ -429,7 +432,7 @@ function deliveryOf(
   at: string,
   state: Delivery["state"],
 ): Delivery {
-  return {
+  const line: Delivery = {
     id: `${draft.requestId}-${draft.attempt}`,
     at,
     run: draft.run,
@@ -444,6 +447,7 @@ function deliveryOf(
     attempt: draft.attempt,
     state,
   };
+  return draft.human == null ? line : { ...line, human: draft.human };
 }
 
 const send = Effect.fn("Dispatcher.send")(function* (
@@ -478,7 +482,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
       `not sent to ${entry.agent}: ${inFlight.state} delivery ${inFlight.id} is already about this work`,
     );
     return {
-      ...refuse(null, "blocked", `${inFlight.id} is ${inFlight.state}`),
+      ...refuse(inFlight.id, "blocked", `${inFlight.id} is ${inFlight.state}`),
       held: inFlight.state,
     };
   }
