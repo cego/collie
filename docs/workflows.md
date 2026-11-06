@@ -1029,16 +1029,17 @@ It proves the fixed `performance` outcome, which no other workflow can be asked 
 
 **Inputs**, each optional:
 
-| Input        | Default                       | What it is                                                                               |
-| ------------ | ----------------------------- | ---------------------------------------------------------------------------------------- |
-| `repository` | the checkout it is started in | The checkout to tune. See below.                                                         |
-| `focus`      | empty, the whole              | A journey, endpoint or page to spend the Cycles on.                                      |
-| `cycles`     | `5`                           | How many Cycles at most, a whole number from 1 to 20. A reverted Cycle counts.           |
-| `threshold`  | `5`                           | The smallest gain, in percent, that counts.                                              |
-| `tolerance`  | `2`                           | How far, in percent, a guardrail may worsen and still hold.                              |
-| `samples`    | `10`                          | Samples per side of each Measurement, at least 2.                                        |
-| `wall_time`  | none                          | A duration, such as `2 hours`, after which no new Cycle starts.                          |
-| `external`   | `ask`                         | `ask` puts each external finding to you, `report` only writes them, `off` collects none. |
+| Input        | Default                       | What it is                                                                                    |
+| ------------ | ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `repository` | the checkout it is started in | The checkout to tune. See below.                                                              |
+| `focus`      | empty, the whole              | A journey, endpoint or page to spend the Cycles on.                                           |
+| `cycles`     | `5`                           | How many Cycles at most, a whole number from 1 to 20. A reverted Cycle counts.                |
+| `threshold`  | `5`                           | The smallest gain, in percent, that counts, unless the plan gives the primary its own.        |
+| `tolerance`  | `2`                           | How far, in percent, a guardrail may worsen and still hold, unless the plan gives it its own. |
+| `samples`    | `10`                          | Samples per side of each Measurement, at least 2.                                             |
+| `wall_time`  | none                          | A duration, such as `2 hours`, after which no new Cycle starts.                               |
+| `external`   | `ask`                         | `ask` puts each external finding to you, `report` only writes them, `off` collects none.      |
+| `from`       | none                          | An earlier tune-up Run to carry the findings and benchmark plan of. See below.                |
 
 A `cycles` of 0, 21 or 2.5, or a `wall_time` that is not a duration, is refused at the
 start, before any Run exists. The Run works on
@@ -1046,6 +1047,15 @@ a branch of its own, in a worktree of the checkout it is started in, and never c
 Home, a repository URL or path places it in the local checkout it names. From the CLI or
 another Run's agent, start it in the checkout you want tuned: a `repository` naming any
 other checkout, or a URL, is refused at the start.
+
+With `from` naming an earlier tune-up Run, the Run does not discover again. It carries that
+Run's Discover Output and its latest benchmark plan, the last repair's where it made one and
+otherwise Harness's, and says so in its log. No Discover or Harness agent runs. The harness
+commits stay where that Run made them. Every Measurement applies them in a scratch tree, so
+the branch carries only product changes, and calibration measures the branch, still at its
+merge base, against the base. A repair of the harness itself cherry-picks them onto the branch
+first and commits its fix on top. A `from` with no Discover or Harness Output fails the Run,
+naming the files it looked for.
 
 **What happens:**
 

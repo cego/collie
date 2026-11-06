@@ -1065,6 +1065,13 @@ export default defineWorkflow({
         default: DEFAULTS.external,
       }),
     ),
+    from: Schema.optionalKey(
+      text.annotate({
+        description:
+          "An earlier tune-up Run whose findings and benchmark plan this one carries instead of discovering again; empty is none",
+        default: "",
+      }),
+    ),
   }),
   output: Schema.String,
   agents: { roles: { tuner: IMPLEMENTER, reviewer: REVIEWER } },
@@ -1110,46 +1117,94 @@ export default defineWorkflow({
       );
       const told = { inputs: { focus: input.focus ?? "" }, run: { dir: place.dir, id: runId } };
 
-      const found = yield* discover(
-        agentWork({
-          operation: "discover",
-          agent: TUNER,
-          role: "tuner",
-          instructions: prompts.discover,
-          input: told,
-          output: Discovered,
-        }),
-      );
+      const from = input.from ?? "";
+      const agents = yield* Agents;
+      /** The earlier Run's Output of the first of `operations` it has, decoded as `schema`. */
+      const carried = <S extends Schema.Codec<unknown, unknown>>(
+        name: string,
+        operations: ReadonlyArray<string>,
+        schema: S,
+      ) =>
+        Activity.make({
+          name: `${name}.carried`,
+          success: schema,
+          error: WorkflowError,
+          execute: Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const files = Arr.map(operations, (one) => agents.outputFor(from, one));
+            const file = Option.getOrUndefined(
+              yield* Effect.findFirst(files, (one) =>
+                fs.exists(one).pipe(Effect.orElseSucceed(() => false)),
+              ),
+            );
+            if (file === undefined)
+              return yield* new WorkflowError({
+                reason: `${from} has no ${name} Output to carry: none of ${Arr.join(files, ", ")}`,
+              });
+            const read = yield* fs.readFileString(file).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(schema))),
+              Effect.mapError(
+                (cause) =>
+                  new WorkflowError({ reason: `${file} cannot be carried: ${cause.message}` }),
+              ),
+            );
+            yield* host.record(runId, `${name} carried from ${from}: ${file}`);
+            return read;
+          }),
+        });
+
+      const found =
+        from === ""
+          ? yield* discover(
+              agentWork({
+                operation: "discover",
+                agent: TUNER,
+                role: "tuner",
+                instructions: prompts.discover,
+                input: told,
+                output: Discovered,
+              }),
+            )
+          : yield* discover(carried("discover", ["discover"], Discovered));
       for (const one of found.telemetry) yield* host.record(runId, telemetryLine(one));
       for (const one of found.research) yield* host.record(runId, researchLine(one));
 
-      const written = yield* harness(
-        agentWork({
-          operation: "harness",
-          agent: TUNER,
-          role: "tuner",
-          instructions: prompts.harness,
-          input: {
-            ...told,
-            discovered: Arr.join(
-              [
-                ...Arr.map(found.journeys, (one) => `- journey: ${one.name}`),
-                ...Arr.map(
-                  found.opportunities,
-                  (one, at) => `${at + 1}. ${one.title} (${one.evidence})`,
-                ),
-              ],
-              "\n",
-            ),
-            budget: {
-              samples: String(budget.samples),
-              threshold: String(budget.threshold),
-              tolerance: String(budget.tolerance),
-            },
-          },
-          output: Harnessed,
-        }),
-      );
+      const written =
+        from === ""
+          ? yield* harness(
+              agentWork({
+                operation: "harness",
+                agent: TUNER,
+                role: "tuner",
+                instructions: prompts.harness,
+                input: {
+                  ...told,
+                  discovered: Arr.join(
+                    [
+                      ...Arr.map(found.journeys, (one) => `- journey: ${one.name}`),
+                      ...Arr.map(
+                        found.opportunities,
+                        (one, at) => `${at + 1}. ${one.title} (${one.evidence})`,
+                      ),
+                    ],
+                    "\n",
+                  ),
+                  budget: {
+                    samples: String(budget.samples),
+                    threshold: String(budget.threshold),
+                    tolerance: String(budget.tolerance),
+                  },
+                },
+                output: Harnessed,
+              }),
+            )
+          : yield* harness(
+              carried(
+                "harness",
+                [...Arr.reverse(Arr.map(Arr.range(1, REPAIRS), (n) => `repair-${n}`)), "harness"],
+                Harnessed,
+              ),
+            );
 
       let plans = 0;
       const reasons: string[] = [];
@@ -1165,19 +1220,22 @@ export default defineWorkflow({
           yield* host.record(runId, `benchmark plan ${plans}: ${reason}`);
           return planned.plan;
         });
-      const planOf = (from: Harnessed): Plan => ({
-        harness: from.harness,
-        prepare: from.prepare,
-        commands: from.commands,
-        metrics: Arr.map(from.metrics, Struct.omit(["counter"])),
-        warmup: from.warmup,
-        samples: Math.max(budget.samples, from.samples ?? 0),
+      const planOf = (harnessed: Harnessed): Plan => ({
+        harness: harnessed.harness,
+        prepare: harnessed.prepare,
+        commands: harnessed.commands,
+        metrics: Arr.map(harnessed.metrics, Struct.omit(["counter"])),
+        warmup: harnessed.warmup,
+        samples: Math.max(budget.samples, harnessed.samples ?? 0),
         threshold: budget.threshold,
         tolerance: budget.tolerance,
       });
       const encodePlan = (one: Plan) =>
         Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(one).pipe(Effect.orDie);
-      let plan = yield* recordPlan(planOf(written), "written by Harness");
+      let plan = yield* recordPlan(
+        planOf(written),
+        from === "" ? "written by Harness" : `carried from ${from}`,
+      );
 
       const base = yield* Activity.make({
         name: "base",
@@ -1207,10 +1265,11 @@ export default defineWorkflow({
           }),
         );
         calibrations.push(measured);
-        if (
-          measured.result._tag === "Judged" &&
-          measured.base.content !== measured.candidate.content
-        )
+        const itself =
+          measured.candidate.harness_applied === undefined
+            ? measured.base.content === measured.candidate.content
+            : measured.candidate.head_sha === measured.base.commit;
+        if (measured.result._tag === "Judged" && !itself)
           return yield* new WorkflowError({
             reason: `calibration ${measured.id} did not measure the base against itself: ${cwd} at ${measured.candidate.head_sha} holds more than the harness commits ${Arr.join(plan.harness.commits, ", ")}`,
           });
@@ -1785,7 +1844,6 @@ export default defineWorkflow({
       const findingsOf = (name: string, ending: string) =>
         Effect.map(findings(name, ending), (report) => `${report}: ${ending}`);
 
-      const agents = yield* Agents;
       const checksNow = Effect.map(host.approved(runId), renderApproved);
       const report = `${place.dir}/handoffs/tune-up-findings.md`;
       const delivering = {

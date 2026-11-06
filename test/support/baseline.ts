@@ -16466,6 +16466,56 @@ scenario(
   120_000,
 );
 
+scenario(
+  "a tune-up started from an earlier one carries its Discover and plan, launches neither, and calibrates with that harness applied",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        // The second Run's one prompt is its Cycle's: it is handed the last of these.
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [STEADY_PRIMARY]),
+          EXHAUSTED,
+          EXHAUSTED,
+        ]);
+        expect((yield* tunedUp("r-tune-first"))._tag).toBe("Success");
+        // The second Run's checkout holds none of the harness: it lives on the first's branch.
+        yield* exec(["git", "reset", "-q", "--hard", `${commit}~1`], { cwd: rig.projectDir });
+        const runId = "r-tune-carried";
+        const result = yield* tunedUp(runId, { from: "r-tune-first" });
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("no gain:");
+        expect(yield* wasAsked(runId, "discover")).toBe(false);
+        expect(yield* wasAsked(runId, "harness")).toBe(false);
+        const log = yield* runLog(runId);
+        expect(log).toContain("discover carried from r-tune-first");
+        expect(log).toContain("harness carried from r-tune-first");
+        expect(log).toContain("telemetry APM: unavailable: no APM access from this Machine");
+        expect(log).toContain("calibrated on bench.count");
+        const [calibration] = yield* calibrations(runId);
+        expect(calibration!.candidate.harness_applied).toEqual([commit]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up started from a Run with no Discover Output fails, naming what it could not read",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const result = yield* tunedUp("r-tune-orphan", { from: "r-tune-nowhere" });
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("r-tune-nowhere");
+        expect(reasonOf(result)).toContain("discover.json");
+        expect(yield* wasAsked("r-tune-orphan", "discover")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
 const UNBUILDABLE = (code: number) => ({ executable: "sh", argv: ["-c", `exit ${code}`] });
 
 scenario(
@@ -18070,6 +18120,7 @@ once("tune-up declares every input with its default, and its path", () =>
         samples: 10,
         wall_time: "",
         external: "ask",
+        from: "",
       });
       expect(
         Option.getOrUndefined(
