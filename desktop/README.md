@@ -180,4 +180,55 @@ measured by hand.
    p50, p95, max and n from click to usable, as the bench does. `unmatched` counts a usable
    mark whose click the log does not have; it is not counted as an open.
 
-Run it on macOS (mk-laptop) and on Linux, and add the summaries to the Run's evidence.
+With Record timing on, Desktop also logs these marks, each with the time in epoch
+milliseconds and a `card` naming what it is about:
+
+| Mark                             | When                                                                        |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| `launch`                         | Desktop's main process started                                              |
+| `board-usable`                   | the first board with its cards drawn, the frame after they were             |
+| `terminal-key`, `terminal-drawn` | a key sent to a Go to pane terminal, and the frame its echo drew            |
+| `chat-chunk`, `chat-drawn`       | a Flock chat text chunk the view received, and the frame drew it            |
+| `frame`                          | each frame while the Log tab or the Diff tab scrolls, one `card` per scroll |
+
+A key or chunk typed or received before the last one was drawn is not marked again. These
+cells are measured by hand, each into a log of its own as above:
+
+| Cell   | What to do                                                                            | Metric           |
+| ------ | ------------------------------------------------------------------------------------- | ---------------- |
+| `echo` | in a Go to pane terminal on a local pane's shell, type 50 keys, one at a time         | `key_to_echo`    |
+| `chat` | ask the Flock chat for a reply of about 4k tokens with code blocks, and let it stream | `chunk_to_drawn` |
+| `log`  | scroll a Run's Log tab of at least 2,000 lines, top to bottom and back                | `frame_interval` |
+| `diff` | scroll a merge request's Diff tab of at least 5,000 lines, top to bottom and back     | `frame_interval` |
+
+There is no checked-in log or diff fixture: pick a Run of your own and a merge request of
+your own, and write the Run's id, the merge request, and their real line counts into the
+summary. Use the same Run and merge request for any later comparison; a frame figure from
+another log or diff is not comparable.
+
+The summariser prints, beside a cell's opens, p50, p95, max and n of `launch_to_board_usable`,
+`key_to_echo`, `chunk_to_drawn` and `frame_interval` wherever the log has them. `unmatched`
+counts a start never ended, or an end never started, under its `card`; neither is a sample.
+
+Run it on macOS (mk-laptop) and on Linux, and add the summaries to the Run's evidence, each
+naming the device, OS, display scale and Desktop commit.
+
+## Measuring Desktop's start
+
+`bench/desktop-start/run.ts` launches the built Desktop and prints, as its last stdout line,
+`{"board_usable_ms":…,"idle_rss_mib":…}` for `collie measure`:
+
+```sh
+bun run --cwd desktop build
+bun bench/desktop-start/run.ts            # or --app <launcher>
+```
+
+It refuses the user's own state directory and waits while another process holds the Machine
+Measurement lock. In `bench/record-open`'s world (a state directory of its own and the fake
+herdr) it prepares a board of 50 Runs, one of 40 Steps, starts the host, then launches
+Desktop with Record timing on. `board_usable_ms` is from the launch to the `board-usable`
+mark; `idle_rss_mib` is the RSS of Desktop's whole process tree (main process, webview and
+CEF helpers) 60 seconds later, leaving out `collie bridge` and the host. It then ends the
+app. Without `--app` it takes the launcher under `desktop/build`. Take it cold (after a
+reboot or a cache drop) and warm, with 2 warm-ups and 10 samples, as
+`collie measure` does by a plan whose command is `bun bench/desktop-start/run.ts`.

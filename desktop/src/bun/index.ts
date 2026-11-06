@@ -188,6 +188,7 @@ import {
 import { applyAtLaunch, restartToUpdate, updatesOf } from "./updates";
 // The version Desktop keeps every Machine on: the Collie it was built from.
 import manifest from "../../../herdr-plugin.toml";
+import { timingLine } from "../shared/record";
 
 type Frames = RPCSchema<FrameSchema>;
 
@@ -339,6 +340,16 @@ const main = Effect.gen(function* () {
       offersOf(now, SubscriptionRef.getUnsafe(flockSettings), readPiConfig(own), lists),
   );
   const settings = desktop.now;
+  const timed = (mark: { readonly name: string; readonly at: number; readonly card: string }) => {
+    const line = timingLine(settings(), mark);
+    return line === null
+      ? Effect.void
+      : Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.writeFileString(`${own}/record-timing.log`, line, { flag: "a" }),
+        ).pipe(Effect.ignore);
+  };
+  // oxlint-disable-next-line no-restricted-globals -- When this process started, as the view's marks count time.
+  yield* timed({ name: "launch", at: performance.timeOrigin, card: "" });
   // The GitLab host an earlier Desktop kept as its own becomes the Flock's.
   const ownGitlabHost = settings().gitlabHost;
   const seeded =
@@ -1569,14 +1580,7 @@ const main = Effect.gen(function* () {
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.choices), Stream.empty)),
     drawn: () => SubscriptionRef.changes(drawn).pipe(Stream.filter((now) => now !== null)),
     setSettings: saveSettings,
-    recordMark: (mark) =>
-      settings().recordTiming === true
-        ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
-            fs.writeFileString(`${own}/record-timing.log`, `${JSON.stringify(mark)}\n`, {
-              flag: "a",
-            }),
-          ).pipe(Effect.ignore)
-        : Effect.void,
+    recordMark: timed,
     setupOffer: () => SubscriptionRef.changes(offer.offered),
     declineSetup: ({ forGood }) => offer.decline(forGood),
     setupInventory: () => offer.taken.pipe(Effect.andThen(setupInventory(setupPlaces()))),

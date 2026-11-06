@@ -79,6 +79,11 @@ const { chip, choose } = useChip();
 const pageId = (open: typeof page.value) =>
   open === null ? null : open.kind === "record" ? open.key : open.kind;
 const timing = useRecordTiming();
+watch(
+  () => !connecting.value && board.value.tasks.length > 0,
+  (drawn) => drawn && timing.boardDrawn(),
+  { immediate: true, flush: "post" },
+);
 /** Every board gesture, decided by `afterGesture` and applied to the chip and the page. */
 const gesture = (done: Gesture, tab: string | null = null, clickedAt?: number) => {
   const about = chip.value;

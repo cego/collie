@@ -62,6 +62,7 @@ const lastSaid = (messages: ReadonlyArray<UIMessage | ModelMessage>) => {
 
 export const useFlockChat = () => {
   const registry = injectRegistry();
+  const timing = useRecordTiming();
   const turn = (
     { text, about, attachments }: ReturnType<typeof lastSaid>,
     now: boolean,
@@ -87,7 +88,17 @@ export const useFlockChat = () => {
       // SAFETY: AG-UI's event types are string enums whose values are these events' `type`s.
       connect: (messages, body, signal) =>
         replyEvents(
-          turn(lastSaid(messages), body?.now === true, Option.getOrNull(decodeSetup(body?.setup))),
+          turn(
+            lastSaid(messages),
+            body?.now === true,
+            Option.getOrNull(decodeSetup(body?.setup)),
+          ).pipe(
+            Stream.tap((event) =>
+              Effect.sync(
+                () => event.type === "TEXT_MESSAGE_CONTENT" && timing.chunk(event.messageId),
+              ),
+            ),
+          ),
           signal,
         ) as AsyncIterable<StreamChunk>,
     },

@@ -9,6 +9,8 @@ import {
   type KeyFacts,
   keyAction,
   recordTiming,
+  desktopTiming,
+  timingLine,
   landingOf,
   logPlaceOf,
   logScrollTop,
@@ -497,6 +499,103 @@ describe("timing a record open", () => {
       "record:mounted@14",
       "record:frame@90",
       "record:usable@130",
+    ]);
+  });
+});
+
+describe("timing Desktop's launch, board, terminal, chat and scrolling", () => {
+  const timed = () => {
+    const marks: Array<readonly [string, number, string]> = [];
+    const timing = desktopTiming((name, at, card) => marks.push([name, at, card]));
+    return { marks, timing };
+  };
+
+  test("logs every mark while Record timing is on, and none while it is off or unset", () => {
+    const { marks, timing } = timed();
+    timing.boardUsable(500);
+    timing.key("run-1", 600);
+    timing.echoed(612);
+    timing.chunk("m1", 700);
+    timing.chatDrawn(709);
+    timing.scrolled("log", 800);
+    timing.frame(805);
+    timing.frame(822);
+    const every = [
+      { name: "launch", at: 1, card: "" },
+      ...Arr.map(marks, ([name, at, card]) => ({ name, at, card })),
+    ];
+    const logged = (settings: { readonly recordTiming?: boolean }) =>
+      Arr.flatMap(every, (mark) => {
+        const line = timingLine(settings, mark);
+        return line === null ? [] : [line];
+      });
+    expect(logged({ recordTiming: true })).toEqual(
+      Arr.map(every, (mark) => `${JSON.stringify(mark)}\n`),
+    );
+    expect(Arr.map(every, ({ name }) => name)).toEqual([
+      "launch",
+      "board-usable",
+      "terminal-key",
+      "terminal-drawn",
+      "chat-chunk",
+      "chat-drawn",
+      "frame",
+      "frame",
+    ]);
+    expect(logged({ recordTiming: false })).toEqual([]);
+    expect(logged({})).toEqual([]);
+  });
+
+  test("marks the board usable once, at its first draw", () => {
+    const { marks, timing } = timed();
+    timing.boardUsable(500);
+    timing.boardUsable(900);
+    expect(marks).toEqual([["board-usable", 500, ""]]);
+  });
+
+  test("marks a draw only after a key, under the key's pane, and no other key until it is drawn", () => {
+    const { marks, timing } = timed();
+    timing.echoed(590);
+    timing.key("run-1", 600);
+    timing.key("run-1", 605);
+    timing.echoed(612);
+    timing.echoed(630);
+    timing.key("run-2", 700);
+    timing.echoed(711);
+    expect(marks).toEqual([
+      ["terminal-key", 600, "run-1"],
+      ["terminal-drawn", 612, "run-1"],
+      ["terminal-key", 700, "run-2"],
+      ["terminal-drawn", 711, "run-2"],
+    ]);
+  });
+
+  test("marks a chunk's draw under its message, once", () => {
+    const { marks, timing } = timed();
+    timing.chunk("m1", 700);
+    timing.chunk("m1", 703);
+    timing.chatDrawn(709);
+    timing.chatDrawn(725);
+    expect(marks).toEqual([
+      ["chat-chunk", 700, "m1"],
+      ["chat-drawn", 709, "m1"],
+    ]);
+  });
+
+  test("marks each frame of a scroll under one name until it settles, and the next scroll under another", () => {
+    const { marks, timing } = timed();
+    expect(timing.frame(790)).toBe(false);
+    expect(timing.scrolled("log", 800)).toBe(true);
+    expect(timing.frame(805)).toBe(true);
+    expect(timing.scrolled("log", 815)).toBe(false);
+    expect(timing.frame(822)).toBe(true);
+    expect(timing.frame(1200)).toBe(false);
+    expect(timing.scrolled("diff", 2000)).toBe(true);
+    expect(timing.frame(2010)).toBe(true);
+    expect(marks).toEqual([
+      ["frame", 805, "log:1"],
+      ["frame", 822, "log:1"],
+      ["frame", 2010, "diff:2"],
     ]);
   });
 });

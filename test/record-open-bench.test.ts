@@ -11,7 +11,7 @@ import {
   paintedOf,
 } from "../bench/record-open/compare";
 import { barFailures, summaryOf } from "../bench/record-open/stats";
-import { nativeSummary } from "../bench/record-open/summarize";
+import { desktopSummary, nativeSummary } from "../bench/record-open/summarize";
 import { runEffect } from "./support/effect";
 import { flowNode } from "./support/flow";
 
@@ -234,5 +234,22 @@ test("a native timing log is summarised click to usable, and a usable with no cl
         n: 3,
         unmatched: 2,
       });
+    }),
+  ));
+
+test("a native timing log is summarised launch to board, key to echo, chunk to drawn and frame to frame, with each unmatched start or end reported apart", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const log = yield* fs.readFileString(
+        new URL("./fixtures/desktop-timing.log", import.meta.url).pathname,
+      );
+      expect(yield* desktopSummary(log)).toEqual({
+        launch_to_board_usable: { p50: 900, p95: 1200, max: 1200, n: 2, unmatched: 1 },
+        key_to_echo: { p50: 12, p95: 30, max: 30, n: 3, unmatched: 1 },
+        chunk_to_drawn: { p50: 5, p95: 16, max: 16, n: 2, unmatched: 1 },
+        frame_interval: { p50: 17, p95: 50, max: 50, n: 4 },
+      });
+      expect(yield* nativeSummary(log)).toMatchObject({ n: 1, unmatched: 0 });
     }),
   ));

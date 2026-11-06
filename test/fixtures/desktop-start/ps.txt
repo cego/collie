@@ -1,0 +1,12 @@
+    1     0 12000 /sbin/init splash
+ 3990     1  8000 /usr/bin/bun bench/desktop-start/run.ts
+ 4100  3990  2100 /home/mk/collie-desktop/bin/launcher
+ 4101  4100 98000 /home/mk/collie-desktop/bin/bun /home/mk/collie-desktop/Resources/main.js
+ 4102  4101 60000 /usr/local/bin/collie bridge --as desktop --client 4101
+ 4103  4101 61000 /home/mk/.bun/bin/bun /home/mk/collie/src/main.ts bridge --as desktop --client 4101
+ 4104  4103  9000 /bin/sh -c git status
+ 4120  4101 151000 /home/mk/collie-desktop/bin/cef-helper --type=gpu-process --no-sandbox
+ 4121  4101 180000 /home/mk/collie-desktop/bin/cef-helper --type=renderer --lang=en-US
+ 4122  4121 40000 /home/mk/collie-desktop/bin/cef-helper --type=utility --utility-sub-type=network.mojom.NetworkService
+ 4130     1 200000 /home/mk/.bun/bin/bun /home/mk/collie/src/main.ts host
+ 5000     1 70000 /home/mk/collie-desktop/bin/bun /home/mk/other/main.js

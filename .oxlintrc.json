@@ -117,6 +117,8 @@
     {
       // The benchmark's drivers speak to Chrome, processes and sockets on their own terms.
       "files": [
+        "bench/desktop-start/run.ts",
+        "bench/desktop-start/start.ts",
         "bench/record-open/cdp.ts",
         "bench/record-open/desktop.ts",
         "bench/record-open/electrobun-bun.ts",

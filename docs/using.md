@@ -1838,7 +1838,9 @@ compositor or an X11 session, it says the scale is not known and why, and Zoom a
 marks to `record-timing.log` in Desktop's state directory: `record:click`, `record:mounted`,
 `record:frame` and `record:usable`, one JSON line each with the card and the time. Desktop
 sets the same marks as User Timing marks either way ([Measuring a record
-open](internals.md#measuring-a-record-open)).
+open](internals.md#measuring-a-record-open)). It also logs Desktop's launch, its first usable
+board, a terminal key and its echo, a chat chunk and its draw, and each frame of a scroll
+(`desktop/README.md`, Measuring a record open natively).
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with

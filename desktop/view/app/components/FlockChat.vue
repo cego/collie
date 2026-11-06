@@ -92,7 +92,9 @@ const follow = () => {
   const at = list.value;
   if (at !== undefined) following = at.scrollHeight - at.scrollTop - at.clientHeight <= NEAR_BOTTOM;
 };
+const timing = useRecordTiming();
 const arrived = new MutationObserver(() => {
+  timing.chatDrawn();
   if (following && list.value !== undefined) list.value.scrollTop = list.value.scrollHeight;
 });
 onMounted(() => {

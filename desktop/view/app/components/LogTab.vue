@@ -32,7 +32,9 @@ const place = defineModel<LogPlace>("place", { default: () => FOLLOWING_LOG });
 let at = place.value;
 onBeforeUnmount(() => (place.value = at));
 const shown = ref<HTMLElement | null>(null);
+const timing = useRecordTiming();
 const scrolled = () => {
+  timing.scrolled("log");
   if (shown.value !== null) at = logPlaceOf(shown.value);
 };
 const showPlace = (box: HTMLElement | null) =>

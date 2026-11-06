@@ -37,6 +37,7 @@ import { settledResizes } from "../../../src/shared/terminal-size";
 const props = defineProps<{ placed: PlacedTask; wentToPane: boolean; agent?: string }>();
 const emit = defineEmits<{ focus: [] }>();
 const { terminal, terminalSend, openLink } = useActions();
+const timing = useRecordTiming();
 const panes = usePanes();
 const toast = useToast();
 
@@ -134,7 +135,10 @@ const shown = (event: TerminalEvent) => {
       focused.value = event.at.agent;
       return panes.showing(props.placed, event.at);
     case "Frame":
-      return term?.write(Result.getOrElse(Base64.decode(event.bytes), () => new Uint8Array()));
+      return term?.write(
+        Result.getOrElse(Base64.decode(event.bytes), () => new Uint8Array()),
+        timing.echoed,
+      );
     case "Ended":
       ended.value = event.reason;
       return;
@@ -236,9 +240,11 @@ onMounted(() => {
   term.open(element);
   fit.fit();
   listening = [
-    term.onData(
-      (text) => (isMouseReport(text) && !onCore) || send({ type: "terminal.input", text }),
-    ),
+    term.onData((text) => {
+      if (isMouseReport(text) && !onCore) return;
+      timing.key(props.placed.task.run);
+      send({ type: "terminal.input", text });
+    }),
     term.onResize(({ cols, rows }) => sizes.resized(cols, rows)),
     term.registerLinkProvider({ provideLinks: (line, links) => links(linksOn(line)) }),
   ];

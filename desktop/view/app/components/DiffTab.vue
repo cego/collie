@@ -260,6 +260,7 @@ const setExpanded = (keys: ReadonlyArray<string>) => {
 };
 
 const scroller = inject<Ref<HTMLElement | null>>("recordScroller", ref(null));
+const timing = useRecordTiming();
 const treeBox = ref<HTMLElement | null>(null);
 const visibleHeight = ref<number | null>(null);
 
@@ -304,10 +305,12 @@ watch(
         release();
     };
     const releaseOnScrollbar = (event: PointerEvent) => event.target === box && release();
+    const timed = () => timing.scrolled("diff");
     const resized = new ResizeObserver(measure);
     resized.observe(box);
     resized.observe(column);
     box.addEventListener("scroll", measure, { passive: true });
+    box.addEventListener("scroll", timed, { passive: true });
     box.addEventListener("wheel", release, { passive: true });
     box.addEventListener("touchmove", release, { passive: true });
     box.addEventListener("keydown", releaseOnKey);
@@ -316,6 +319,7 @@ watch(
     onCleanup(() => {
       resized.disconnect();
       box.removeEventListener("scroll", measure);
+      box.removeEventListener("scroll", timed);
       box.removeEventListener("wheel", release);
       box.removeEventListener("touchmove", release);
       box.removeEventListener("keydown", releaseOnKey);
