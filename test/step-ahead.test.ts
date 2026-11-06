@@ -9,6 +9,7 @@ import { everyRegistered } from "../src/registry";
 import { deliveriesOf } from "../src/steering";
 import { collie, proves } from "./support/world";
 import { until } from "./support/host";
+import { recordIn } from "../src/board-model";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const runIdOf = flow(
@@ -60,7 +61,7 @@ test(
           const detail = () =>
             door
               .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-              .pipe(Stream.runHead, Effect.map(Option.getOrNull));
+              .pipe(Stream.map(recordIn), Stream.runHead, Effect.map(Option.getOrNull));
           expect(
             Option.getOrUndefined(
               Option.flatMap(Option.fromNullishOr(yield* detail()), (present) =>
@@ -205,7 +206,7 @@ test(
           const detail = () =>
             door
               .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-              .pipe(Stream.runHead, Effect.map(Option.getOrNull));
+              .pipe(Stream.map(recordIn), Stream.runHead, Effect.map(Option.getOrNull));
           yield* until(detail, (one) => one?.flow?.lanes[0]?.nodes[0]?.state === "failed");
           expect(
             (yield* collie(world, [
@@ -276,7 +277,7 @@ test(
           const detail = () =>
             door
               .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-              .pipe(Stream.runHead, Effect.map(Option.getOrNull));
+              .pipe(Stream.map(recordIn), Stream.runHead, Effect.map(Option.getOrNull));
           const node = Option.getOrUndefined(
             Arr.findFirst((yield* detail())!.flow!.lanes[0]!.nodes, (one) => one.id === "b"),
           )!;

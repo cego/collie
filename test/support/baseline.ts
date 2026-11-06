@@ -10422,12 +10422,15 @@ scenario(
           expect(Arr.flatMap(lines, (line) => (line.kind === "enter" ? [line.key] : []))).toEqual([
             "checkout",
           ]);
+          // Not toMatchObject: Bun writes its matchers into the cached lines it is given.
           expect(
             Option.getOrUndefined(Arr.findFirst(lines, (line) => line.kind === "fail")),
-          ).toMatchObject({
-            key: "checkout",
-            why: expect.stringContaining(refused),
-          });
+          ).toEqual(
+            expect.objectContaining({
+              key: "checkout",
+              why: expect.stringContaining(refused),
+            }),
+          );
           const lane = yield* laneNow(runId, "failed");
           expect(lane.nodes[0]).toMatchObject({
             id: "checkout",

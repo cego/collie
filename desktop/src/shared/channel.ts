@@ -25,6 +25,19 @@ const HELLO: Hello = { _tag: "Hello" };
 export type ToMain = RpcMessage.FromClientEncoded | Hello;
 export type ToView = RpcMessage.FromServerEncoded;
 
+/** A channel end's inbox, for a transport that delivers frames before anything listens. */
+export const heldUntilListened = <In>() => {
+  const held: In[] = [];
+  let receive: (frame: In) => void = (frame) => void held.push(frame);
+  return {
+    receive: (frame: In) => receive(frame),
+    listen: (listener: (frame: In) => void) => {
+      receive = listener;
+      for (const frame of held.splice(0)) listener(frame);
+    },
+  };
+};
+
 /** What each end tells Electrobun its RPC carries: one `frame` message each way. */
 export type FrameSchema = { requests: {}; messages: { frame: ToMain | ToView } };
 

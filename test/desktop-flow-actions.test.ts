@@ -5,6 +5,7 @@ import {
   desktopLaneAction,
   nextMove,
   retryCaption,
+  shownAt,
 } from "../desktop/src/shared/flow-actions";
 import { flowNode, mainFlow } from "./support/flow";
 import { nodeName } from "../desktop/src/shared/flow";
@@ -174,4 +175,22 @@ test("the next move is the current node's primary, and saved Flows offer no acti
       action: "Watch the builder",
     }),
   ).toBe("Build, running, Slice 4 of 6, Watch the builder");
+});
+
+test("a hold or a note from the record names the revision it was shown at; other acts do not", () => {
+  const revision = { epoch: "e1", seq: 7 };
+  const hold = {
+    _tag: "Control",
+    runId: "r1",
+    control: "hold",
+    set: true,
+    before: "ship",
+  } as const;
+  const note = { _tag: "Deliver", runId: "r1", step: "build", text: "look again" } as const;
+  const resume = { _tag: "Resume", runId: "r1" } as const;
+
+  expect(shownAt(hold, revision)).toEqual({ ...hold, shown: revision });
+  expect(shownAt(note, revision)).toEqual({ ...note, shown: revision });
+  expect(shownAt(resume, revision)).toEqual(resume);
+  expect(shownAt(hold, undefined)).toEqual(hold);
 });

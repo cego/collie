@@ -84,7 +84,9 @@ Machine, or a failed line in a Run's own log, is a warning. A cleanup listing
 or sweep over 2 s in all, counting the time spent gathering what its sweepers judge, also
 says that time and how long each kind took to judge, slowest first:
 `the cleanup listing took 4000 ms; gathering took 500 ms; judging took task 3000 ms, worktree 500 ms`. A stream, such as
-the board's, is never timed: it is meant to stay open. Lines are flushed
+the board's or a record's `runDetail`, is meant to stay open, so only its first value is timed:
+one that took over 2 s is logged as `the runDetail stream took 4900 ms to send its first value`,
+or `the door's runDetail stream took …` for a record the door's thread sent. Lines are flushed
 every 100 ms, so a host killed outright can lose its last few. Past 1 MiB the file starts
 again and the previous one is kept as `host.log.1`. Look there first when a host stops
 answering. What a host started by a client writes to its stdout and stderr, a stack trace
@@ -1863,13 +1865,86 @@ its time.
   A timer tick requests a board refresh without advancing its write coverage. Readers
   wait for writes the host has seen, while an idle timer refresh can finish in the
   background. A write during that refresh still requires a subsequent covering build.
-  Board builds and Run views reuse disk inputs per Run (`src/read-model.ts`). Host writes
-  invalidate before and after the write; external file events invalidate before the
-  board's debounce. A read overtaken by invalidation retries. If the recursive watch
-  fails, reuse is disabled. Engine status and clock-derived fields remain live.
+  The board is read from the host's Run model (`src/run-model.ts`,
+  [ADR-draft-a-runs-record-is-read-from-its-hosts-run-model](adr/draft-a-runs-record-is-read-from-its-hosts-run-model.md)).
+  It keeps each Run's disk inputs in memory, and a change dirties only the Runs it names:
+  host writes before and after the write; the state directory's watch, before the
+  board's debounce; another process's SQLite commit, seen within 250 ms through
+  `PRAGMA data_version`; and a branch moving in a checkout whose head a card reads, through
+  a watch on that checkout's git directories. A read overtaken by invalidation retries. A missing file is kept as its error's data, not as
+  the error, since every live `Error` slows each collection of the heap. If the recursive watch
+  fails, the model reads from disk, and every read takes a new revision, so nothing derived
+  before is reused. Engine status and clock-derived
+  fields remain live. Each change to a Run takes the next number of the host's one sequence,
+  and each board item carries the highest of its Runs' as its revision. `run_model: false`
+  restores the from-disk build at the next host start; the model is then never filled. The
+  Run views `collie run list`, `run show` and the `runs` RPC answer still read from disk;
+  the Flow that `run show` and `collie_run` carry is the record's, below.
+- **A Run's record is read from the model** (`src/record.ts`, D3 to D5 of that ADR). It
+  reads only the Runs its Task's rows name (`related` in `src/engine.ts`): the Task's, their
+  parents and children, Runs they asked for, and the Runs sharing its plan. A `runDetail`
+  request with `parts` is sent the Flow first, at a revision, with `pending` naming the parts
+  still coming: `texts` (review and plan), `diff`, `mr` and `tail`. Each part then arrives in
+  a frame of its own, and the frame with `pending` empty is stamped with the record's
+  revision. A record that moved while none of its Runs did, as a merge request or an agent
+  moves it, moves its own Run. After that a frame is sent only when a write the host saw
+  changes what the record carries; the 5 s tick is not one of them. A minute count is sent
+  as a `clock` beside a `said` left empty, and the front door says it (`timedFlow` in
+  `src/flow-timing.ts`). A going Run's diff is taken again for every frame, so an edit not yet committed shows; a
+  settled Run's is kept until its checkout's git directories move. A request with `held` at the current epoch and revision is answered
+  `Unchanged`; any other is sent the record. `act` and `control` take the revision an act
+  was `shown` at, and refuse one whose Step has finished since that revision with `StaleAct` (a Step a record
+  shows going again finishes anew; one already finished when shown is not stale), which the CLI
+  says as `invalid_state`; each act's result carries the Run's revision after it, which the
+  caller's next frame is at least. A request without `parts` is sent whole records, their
+  minutes said, on every change and tick, as an older Desktop expects.
+  Desktop's view keeps records subscribed after they close (`desktop/src/shared/kept-records.ts`
+  says which, `desktop/view/app/kept.ts` holds them): the open one, the last 8 opened and a
+  card pointed at for 150 ms, at most 16 MB of frames as Desktop weighs them, the least
+  recently opened going first and never the open one. A kept record opened again has its
+  frame as it mounts. Desktop's main process holds a record's host subscription for as long
+  as the view does (`desktop/src/bun/records.ts`). Its door gone, a record is sent with the
+  time its host last confirmed it, and the record says so and takes no action, until the
+  next door answers its `held` revision with `Unchanged` or a frame. A host that ends a
+  record its door still serves leaves it current.
   A host's `collie_run` answer uses one local Run listing for its facts and Flow, with
   local offers and the same write-covered readiness as `progress`. Flow relationship
   indexes, installation identity and usual Step times are shared across a board build.
+- **Records are read on the host's door thread**
+  ([ADR-draft-the-host-reads-records-on-a-thread-of-its-own](adr/draft-the-host-reads-records-on-a-thread-of-its-own.md)).
+  `src/door.ts` is a Bun Worker. It owns `host.sock` and answers `identity` and `runDetail`
+  itself, on a heap and a loop of its own. It passes every other frame to the engine on the
+  main thread, by its connection, so the engine's collections and Steps never hold a record
+  back. The door keeps a second Run model:
+  - Its revisions come from the same counter in shared memory as the engine's.
+  - It forgets what the engine's model invalidates.
+  - It takes each Run the engine listed, with the revision its view was read at, and the
+    offers the engine's board read since the last listing (a plan ready to implement's).
+  - It asks the engine (`doorFeedLayer` in `src/host.ts`) when a record's Runs are older than
+    their revision, or still going, when a record's Run has a merge request, or for the
+    offers of a Run the board has not read.
+  - A store write moves the revision of the Runs it names.
+  - A Step a record first showed finished is told to the engine, which judges acts.
+  - At its first listing it reads the first ten Runs' records, for its JIT, and the engine
+    logs how long that took ("the door has read 10 records to warm it").
+- **Interactive reads come first** (D6 of that ADR). The board keeps each Task's card with the
+  key it was derived from (`KeptCards` in `src/board.ts`): its Runs' revisions, markers,
+  agents, pending work and merge request states. A build derives a card again only when its
+  key moves or the time it shows is due to change, so a write derives one card and a tick
+  none. The Run views are kept the same way once their execution has finished (`KeptViews`
+  in `src/engine.ts`). A pass over many Runs (the model's fill, a board re-derive, the
+  engine's sweep, `tendQuestions`, Cleanup) takes `Foreground`'s `boundary` before each Run
+  (`src/foreground.ts`). A record's first frame and parts, an offer, an answer, a control and
+  an act run under `serve`, and while one does, every boundary holds its pass, for at most
+  250 ms. The host runs on `TurnScheduler` (`src/turns.ts`), which ends a turn of the event
+  loop once its fibers have run for 8 ms. A fiber under `serve` queues its tasks ahead of
+  every other fiber's, and the others yield while one waits, so a Run start's work steps
+  aside for a read at its next yield. Cleanup's sweepers judge and remove through the
+  model's reading (`sweepingWith` in `src/cleanup.ts`), so a sweep reads from disk no Run
+  file the board has not, beyond those it removes. A record takes herdr's agents as the board
+  last read them, rather than waiting on a read in flight. What lag is left is
+  JavaScriptCore's Eden collections, 11 to 27 ms each about once a second at a ~100 MB heap;
+  the ADR says why no worker thread was built.
 - **A test waits for a state.** It waits with `until` (`test/support/host.ts`) for what it
   needs: a run `suspended`, a file written, a pane gone. Real IO takes the time it takes,
   and a fixed sleep is too long on an idle machine and too short on a busy one. Work that
@@ -1924,6 +1999,124 @@ its time.
   `effect/http` by module rather than through their index. `test/startup.test.ts`
   holds the first and keeps the engine and the board out of the compaction helper; lint
   holds the second.
+
+### Measuring a record open
+
+`bench/record-open/` times a click on a board card to its record's Flow painted, usable and
+correct, in Desktop's own view. It is a benchmark, not a test: the suite never runs it.
+
+```sh
+bun install && (cd desktop && bun install)
+bun bench/record-open/run.ts --cells local --samples 20 --warmup 2 --bar 200
+```
+
+On today's record path every open takes seconds, so 20 opens settle each cell's verdict; at
+the default 200 a run held the Machine for over 14 h. The 200-open matrix, the command without
+`--samples` and `--warmup`, is run on the delivered tree by ticket 07.
+
+What one run does:
+
+- **Refuses** to start where its state directory or socket would be the user's own.
+- **Waits** while another process holds the Machine Measurement lock and says so, then holds
+  it. Inside a Measurement it leaves the lock to the host that took it.
+- **Builds** the tree's own view through a Nuxt layer in `bench/record-open/view` that
+  swaps Electrobun's transport for a WebSocket. It also turns on Vue's production devtools
+  hooks, on every tree alike, so the harness can read what FlowMap rendered.
+- **Prepares** a host on a state directory of its own under `$TMPDIR/cro-<hash>`, on the
+  fake herdr: 520 Runs of `bench-steps`, most taking 6 Steps. 5 of them take 220 Steps and 3
+  are live, taking a Step every 2 s while the samples run. 40 are moved 40 days back, each
+  with a plan ticket nobody built: landed work older than a day leaves Desktop's board.
+- **Starts Desktop.** Desktop's own main process, `desktop/src/bun/index.ts`, starts with
+  `electrobun/bun` mapped to `bench/record-open/electrobun-bun.ts`. That stand-in serves
+  the view and its frames on loopback.
+- **Launches Chrome:** the Chrome for Testing that Puppeteer or Playwright installed, as
+  `--headless=new` with a 1600×1000 window and its own profile, killed when the run ends.
+  It runs without the sandbox, which Ubuntu's AppArmor refuses. `--chrome <binary>` names
+  another; `--cdp <endpoint>` uses a Chrome already running, which must share this Machine's
+  loopback. The shared Chrome at `127.0.0.1:9222` on vm-mk is an SSH tunnel to another
+  computer, so it cannot load the view.
+
+Each sample:
+
+1. Sends a real `Input.dispatchMouseEvent` click on the card's name.
+2. `probe.js`, injected before the page loads, takes the click's `timeStamp`. It waits for
+   the frame where the record's Flow has a place for every node of that Run and draws each
+   one in view, then two more frames, until the Flow's buttons are enabled. The sample's
+   time runs to that point. A large Flow draws its other Steps over the frames after.
+3. Once every node is drawn, reads the painted Flow: each row, node and action by
+   accessible name, and each node's attempts and wait from FlowMap's props.
+4. Compares it with the host's Flow, read over the front door after the paint. A mismatch
+   fails the sample. A live Run is read once more, half a second later, before it fails.
+
+A Flow of another Run shown after the click also fails the sample. While a cell runs, the
+harness times an `identity` RPC every 50 ms; its p99 is a proxy for the host's event-loop lag.
+
+| Cell           | What each sample opens                                             |
+| -------------- | ------------------------------------------------------------------ |
+| `first`        | a settled Run's card not opened before                             |
+| `repeat`       | a card just opened and closed                                      |
+| `rapid`        | 10 cards at 10 a second; the last is timed                         |
+| `large`        | a Run of 220 Steps                                                 |
+| `old`          | a Run settled 40 days ago                                          |
+| `live`         | a live Run                                                         |
+| `checks`       | a settled card while 4 Checks run on a live Run                    |
+| `desktop-cold` | a settled card in a new tab, after Desktop's main process restarts |
+| `host-cold`    | a settled card after the host restarts and the board paints again  |
+| `storm`        | a settled card while a Run starts every 200 ms                     |
+
+In `desktop-cold` the click comes 3 s after the board paints: in a tab's first seconds,
+Chrome gives a card's button the click's pointer events but not the click.
+
+`first-host` times the record's own build: each sample opens a settled Run not opened before
+over the host's front door, with `parts` on, from request sent to first frame received. It
+starts no view, Chrome or Desktop, so it runs only with the other host-only cells, and it
+fails a sample whose first frame has no Flow. A tree whose host ignores `parts` sends the whole
+record first, so it runs on the base tree too.
+
+`checks-host` and `storm-host` time the same opens with `checks`' and `storm`'s load beside
+them. Each host-only cell opens 205 Runs not opened before, and the fixture's 472 recent
+settled Runs hold two cells' worth, so the three take two runs.
+
+`--cells` takes `local` or a comma-separated list. `--samples` sets the timed opens per cell
+(200), and `--warmup` the opens before them (5), which are kept but not counted. `--runs`
+sets the fixture's size (520), which must leave settled Runs beside the 40 old ones. An open
+that has not painted in 60 s fails, recorded at 60 s.
+
+The run writes `samples.jsonl`, every sample with its marks and differences, and
+`summary.json` to `.scratch/record-open/<time>/`, or to `--out`. Per cell, the summary gives:
+
+- p50, p95, max and n by nearest rank, and `failed`, the samples whose Flow was wrong;
+- `lag_p99_ms`, `lag_max_ms` and `lag_probes`: a trivial RPC every 50 ms, from after the
+  warm-up (and, for the host-only cells, after the host's Run model has filled) until the window
+  holds at least 2000 probes. The cell's opens go on, untimed, until it does. GC pauses are
+  not excluded. The RPC is `identity`, which the host's door thread answers, the thread that
+  reads records;
+- `engine_lag_p99_ms`, `engine_lag_max_ms` and `engine_lag_probes`: the same, over the same
+  window, with `registrations`, which the engine's thread answers;
+- for `host-cold`, `started_to_painted`: p50, p95 and max from the host's start to its
+  record painted;
+- `stages`: where Desktop's `record:*` marks exist, `mount` (click to mounted),
+  `bridge_and_host` (mounted to first value) and `render` (first value to usable). A tree
+  without the marks reports `absent`;
+- `stages.split`: `bridge_and_host` cut where the host emitted the record's first frame
+  (`host_emit`, from mounted), where the bridge passed it on (`bridge`), where Desktop's Bun
+  process decoded it (`desktop_read`), and on to the view's first value (`to_view`). The
+  harness sets `COLLIE_RECORD_MARKS`, and the host, the bridge and Desktop append those marks
+  to it in whole epoch milliseconds (`src/record-marks.ts`). A tree without them has no
+  `split`.
+
+It also records the tree, the fixture, the opens and warm-up per cell, the run's wall time in
+`wall_s`, and the Chrome: its version, its flags, and that it is
+headless and software-rendered. These are Chrome numbers on a build with Vue's devtools hooks
+on, not native Desktop numbers, nor headed or GPU ones.
+
+The last stdout line is one JSON object of numbers, such as `first_local_p95`, for
+`collie measure`. With `--bar 200` the run exits 1 when any cell's p95 or max is 200 ms or
+more, or any sample failed.
+
+Native Desktop has no CDP. Its Settings has **Record timing** (off by default), which appends
+the same marks to `record-timing.log` in Desktop's state directory, one JSON line each.
+`bench/record-open/summarize.ts` summarises such logs; `desktop/README.md` says how to make them.
 
 ### Test-suite measurements, 26 October 2026
 

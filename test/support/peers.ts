@@ -199,7 +199,8 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
   const manifest = yield* (yield* FileSystem.FileSystem).readFileString(`${root}herdr-plugin.toml`);
   const built = yield* Effect.promise(() =>
     Bun.build({
-      entrypoints: [`${root}src/main.ts`],
+      // A release carries the host door's Worker entry, as tools/build.ts builds it.
+      entrypoints: [`${root}src/main.ts`, `${root}src/door.ts`],
       target: "bun",
       bytecode: true,
       format: "esm",

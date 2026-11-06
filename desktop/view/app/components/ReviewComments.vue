@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import type { BoardAgent, RunAgent } from "../../../../src/board-model";
+import { refusal } from "../../../src/shared/kept-records";
 import { addressOf, deliveryChoices } from "../../../src/shared/record-terminal";
 import { compose, counted, locationOf, quoteOf } from "../../../src/shared/review-comments";
 
@@ -13,6 +14,8 @@ const props = defineProps<{
   live: ReadonlyArray<BoardAgent>;
   /** The board protocol the Run's Machine last spoke; null where none is known. */
   protocol: number | null;
+  /** When the record was last confirmed; asked again on every try. */
+  asOf: () => number | null;
 }>();
 const { drafts, edit, remove, clear } = useReviewDrafts(() => props);
 const { run } = useActions();
@@ -32,14 +35,18 @@ const choice = computed(
     Option.getOrUndefined(Arr.findFirst(offered.value, (one) => one.key === picked.value)) ??
     offered.value[0],
 );
+const refused = computed(() =>
+  refusal(choice.value === undefined ? "This Run has no live agent to tell" : null, props.asOf()),
+);
 
 const sending = ref(false);
 const send = () => {
   return Effect.runPromise(
     Effect.gen(function* () {
-      if (choice.value === undefined) return;
+      if (choice.value === undefined || refused.value !== null) return;
       const who = addressOf(choice.value);
       const sent = [...drafts.value];
+      const { asOf } = props;
       sending.value = true;
       yield* Effect.promise(() =>
         Promise.resolve(
@@ -53,6 +60,7 @@ const send = () => {
             },
             undefined,
             () => clear(sent),
+            () => refusal(null, asOf()) ?? undefined,
           ),
         ),
       );
@@ -92,14 +100,14 @@ const send = () => {
         @update:model-value="(name: string) => (picked = name)"
         data-testid="recipient"
       />
-      <p v-else class="text-sm text-muted" data-testid="no-recipient">
-        This Run has no live agent to tell
+      <p v-if="refused !== null" class="text-sm text-muted" data-testid="no-recipient">
+        {{ refused }}
       </p>
       <UButton
         label="Send"
         icon="i-lucide-send"
         size="sm"
-        :disabled="choice === undefined"
+        :disabled="refused !== null"
         :loading="sending"
         data-testid="send-comments"
         @click="send"

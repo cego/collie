@@ -49,6 +49,15 @@ const opened = computed(() =>
 const pageShown = computed(
   () => page.value !== null && (page.value.kind !== "record" || opened.value !== undefined),
 );
+const board = useHeldWhile(
+  () => ({
+    tasks: tasks.value,
+    sections: sections.value,
+    waiting: waiting.value,
+    finished: finished.value,
+  }),
+  () => pageShown.value,
+);
 // A page opened takes focus to its back button, but Go to pane leaves it in the pane; back
 // returns it to where it was.
 let focusedBefore: Element | null = null;
@@ -60,7 +69,8 @@ watch(page, (now, before) => {
       yield* Effect.promise(() => Promise.resolve(nextTick()));
       const target =
         now === null ? focusedBefore : document.querySelector('[data-testid="page-back"]');
-      if (target instanceof HTMLElement && target.isConnected) target.focus();
+      if (target instanceof HTMLElement && target.isConnected)
+        target.focus({ preventScroll: true });
     }),
   );
 });
@@ -68,8 +78,9 @@ watch(page, (now, before) => {
 const { chip, choose } = useChip();
 const pageId = (open: typeof page.value) =>
   open === null ? null : open.kind === "record" ? open.key : open.kind;
+const timing = useRecordTiming();
 /** Every board gesture, decided by `afterGesture` and applied to the chip and the page. */
-const gesture = (done: Gesture, tab: string | null = null) => {
+const gesture = (done: Gesture, tab: string | null = null, clickedAt?: number) => {
   const about = chip.value;
   // A chip whose card has left the board stays selected under a key no card has.
   const selected =
@@ -95,7 +106,10 @@ const gesture = (done: Gesture, tab: string | null = null) => {
   for (const { installation, action } of seenOnOpening(before, after, placedBy))
     void run(installation, action);
   if (after.page === null) back();
-  else showRecord(after.page, tab);
+  else {
+    showRecord(after.page, tab);
+    if (clickedAt !== undefined) timing.click(after.page, clickedAt);
+  }
 };
 provide("gesture", gesture);
 const { run } = useActions();
@@ -112,9 +126,10 @@ watch(
 );
 
 const targetOf = (event: Event) => (event.target instanceof Element ? event.target : null);
-const click = (event: MouseEvent) => gesture({ kind: "click", landed: landedOn(targetOf(event)) });
+const click = (event: MouseEvent) =>
+  gesture({ kind: "click", landed: landedOn(targetOf(event)) }, null, event.timeStamp);
 const doubleClick = (event: MouseEvent) =>
-  gesture({ kind: "double-click", landed: landedOn(targetOf(event)) });
+  gesture({ kind: "double-click", landed: landedOn(targetOf(event)) }, null, event.timeStamp);
 const escape = (event: KeyboardEvent) => {
   if (event.key === "Escape") gesture(escapeOn(targetOf(event), document));
 };
@@ -293,9 +308,11 @@ watch(update, (now) => {
         />
       </header>
       <div class="relative min-h-0 flex-1">
+        <!-- Out of layout while a page covers it, or every card is laid out again for the page. -->
         <main
           class="flex h-full flex-col gap-6 overflow-y-auto p-4"
           :inert="pageShown"
+          :style="pageShown ? { contentVisibility: 'hidden' } : undefined"
           @click="click"
           @dblclick="doubleClick"
         >
@@ -331,20 +348,23 @@ watch(update, (now) => {
                   : []
               "
             />
-            <p v-if="tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
+            <p v-if="board.tasks.length === 0" class="text-muted">Nothing on the board yet.</p>
             <template v-for="[section, label] in SECTIONS" :key="section">
               <section
-                v-if="sections[section].length > 0"
+                v-if="board.sections[section].length > 0"
                 :data-testid="section"
                 class="flex flex-col gap-2"
               >
                 <template v-if="section === 'finished'">
-                  <BoardGrid v-if="finished.unseen.length > 0" :tasks="finished.unseen" />
+                  <BoardGrid
+                    v-if="board.finished.unseen.length > 0"
+                    :tasks="board.finished.unseen"
+                  />
                   <details>
                     <summary class="cursor-pointer text-sm font-semibold text-muted">
-                      {{ label }} · {{ sections.finished.length }}
+                      {{ label }} · {{ board.sections.finished.length }}
                     </summary>
-                    <BoardGrid :tasks="finished.seen" class="mt-2" />
+                    <BoardGrid :tasks="board.finished.seen" class="mt-2" />
                   </details>
                 </template>
                 <template v-else>
@@ -354,12 +374,14 @@ watch(update, (now) => {
                   >
                     {{ label }}
                   </h2>
-                  <BoardGrid :tasks="section === 'waiting' ? waiting.recent : sections[section]" />
-                  <details v-if="section === 'waiting' && waiting.older.length > 0">
+                  <BoardGrid
+                    :tasks="section === 'waiting' ? board.waiting.recent : board.sections[section]"
+                  />
+                  <details v-if="section === 'waiting' && board.waiting.older.length > 0">
                     <summary class="cursor-pointer text-sm text-muted">
-                      {{ waiting.older.length }} older than a week
+                      {{ board.waiting.older.length }} older than a week
                     </summary>
-                    <BoardGrid :tasks="waiting.older" class="mt-2" />
+                    <BoardGrid :tasks="board.waiting.older" class="mt-2" />
                   </details>
                 </template>
               </section>

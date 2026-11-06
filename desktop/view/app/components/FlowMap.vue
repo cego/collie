@@ -1,26 +1,19 @@
 <script setup lang="ts">
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
-import { pipe } from "effect/Function";
-import * as Str from "effect/String";
 import type { ComponentPublicInstance } from "vue";
-import type { Flow, FlowRun } from "../../../../src/board-model";
-import { stepSteering } from "../../../src/shared/step-steering";
+import * as Arr from "effect/Array";
+import { Effect, Fiber } from "effect";
+import type { Flow } from "../../../../src/board-model";
+import type { FlowActionView } from "../../../src/shared/flow-actions";
 import {
-  desktopFlowAction,
-  desktopLaneAction,
-  type FlowActionView,
-} from "../../../src/shared/flow-actions";
-import {
-  cardForLink,
   flowRows,
-  inspectorOf,
   isFlowMenuKey,
-  nodeName,
   type FlowCard,
   type FlowSelection,
   type FlowSpot,
 } from "../../../src/shared/flow";
+import { nodeKey, stepHover, useFlowNodes } from "../composables/useFlowNodes";
+import { CLOSED, tipAfter, type StepTip, type TipEvent } from "../../../src/shared/step-tip";
+import { firstWindow, grownWindow, wholeWindow } from "../../../src/shared/flow-window";
 const props = defineProps<{
   flow: Flow;
   focused: FlowSpot | null;
@@ -46,89 +39,169 @@ const remember = (spot: FlowSpot, element: Element | ComponentPublicInstance | n
   if (element instanceof HTMLElement) buttons.set(keyOf(spot), element);
   else buttons.delete(keyOf(spot));
 };
-const rowFor = (run: string) =>
-  Option.getOrUndefined(Arr.findFirst(props.flow.lanes, (row) => row.run === run)) ??
-  props.flow.lanes.at(-1);
-const primary = (run: string, node: FlowRun) => {
-  const row = rowFor(run);
-  return row === undefined || node.primary == null
-    ? null
-    : desktopFlowAction(node.primary, node, row, props.installation, props.live);
+const drawn = useFlowNodes(props);
+/** What is drawn of a node, which every node of `rows` has. */
+const view = (run: string, node: string) => drawn.value.nodes[nodeKey(run, node)]!;
+const laneMenu = (run: string) => drawn.value.laneMenus[run] ?? [];
+
+// A large Flow draws the Steps around where the work is first and the rest a few a frame after;
+// one not drawn yet holds its place. The current, focused and selected Steps are always drawn.
+const order = computed(() =>
+  Arr.flatMap(rows.value, (row) => Arr.map(row.nodes, (node) => nodeKey(row.run, node.id))),
+);
+const place = computed(() => new Map(Arr.map(order.value, (key, at) => [key, at] as const)));
+const anchor = props.selected ?? props.focused ?? props.flow.current;
+const span = shallowRef(
+  firstWindow(
+    order.value.length,
+    anchor === null ? 0 : (place.value.get(nodeKey(anchor.run, anchor.node)) ?? 0),
+  ),
+);
+let growing = 0;
+let gone = false;
+const grow = () => {
+  growing = 0;
+  if (gone || wholeWindow(span.value, order.value.length)) return;
+  span.value = grownWindow(span.value, order.value.length);
+  growing = requestAnimationFrame(grow);
 };
-const menu = (run: string, node: FlowRun) => {
-  const row = rowFor(run);
-  if (row === undefined) return [];
-  return Arr.flatMap([node.primary, ...(node.actions ?? [])], (kind) => {
-    if (kind == null) return [];
-    const one = desktopFlowAction(kind, node, row, props.installation, props.live);
-    return one === null
-      ? []
-      : [
-          {
-            label: one.label,
-            icon: one.icon,
-            onSelect: () =>
-              emit("act", one, {
-                run,
-                node: node.id,
-              }),
-          },
-        ];
-  });
+// Once the first frame is painted and that frame's own work is done, so it draws only its Steps.
+onMounted(
+  () =>
+    (growing = requestAnimationFrame(
+      () =>
+        (growing = requestAnimationFrame(
+          () => void Effect.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(grow)))),
+        )),
+    )),
+);
+watch(
+  () => order.value.length,
+  () => growing === 0 && (growing = requestAnimationFrame(grow)),
+);
+onBeforeUnmount(() => {
+  gone = true;
+  cancelAnimationFrame(growing);
+});
+const asked = shallowRef<ReadonlySet<string>>(new Set());
+const shows = (run: string, node: string) => {
+  const key = nodeKey(run, node);
+  const at = place.value.get(key) ?? 0;
+  return (
+    (at >= span.value.from && at < span.value.to) ||
+    asked.value.has(key) ||
+    matches(props.flow.current, run, node) ||
+    matches(props.focused, run, node) ||
+    matches(props.selected, run, node)
+  );
 };
-const laneMenu = (run: string) => {
-  const row = Option.getOrUndefined(Arr.findFirst(props.flow.lanes, (one) => one.run === run));
-  return Arr.flatMap(
-    Option.getOrUndefined(Option.map(Option.fromNullishOr(row), (present) => present.actions)) ??
-      [],
-    (kind) => {
-      const one =
-        row === undefined ? null : desktopLaneAction(kind, row, props.installation, props.live);
-      return one === null
-        ? []
-        : [
-            {
-              label: one.label,
-              icon: one.icon,
-              onSelect: () => emit("act", one),
-            },
-          ];
+/** Draws `spot` if it is not yet, then does `then` with it drawn. */
+const whenDrawn = (spot: FlowSpot, then: (button: HTMLElement | undefined) => void) => {
+  if (!shows(spot.run, spot.node))
+    asked.value = new Set(asked.value).add(nodeKey(spot.run, spot.node));
+  void nextTick(() => then(buttons.get(keyOf(spot))));
+};
+
+/** The Step a DOM event is on, read from the attributes FlowStep sets on its button. */
+const stepOf = (target: EventTarget | null): FlowSpot | null => {
+  const button = target instanceof Element ? target.closest("[data-step-node]") : null;
+  const run = button?.getAttribute("data-step-run");
+  const node = button?.getAttribute("data-step-node");
+  return run == null || node == null ? null : { run, node };
+};
+const laneOf = (target: EventTarget | null) =>
+  (target instanceof Element ? target.closest("[data-lane-run]") : null)?.getAttribute(
+    "data-lane-run",
+  ) ?? null;
+
+// One menu for every Step and lane, aimed at what was right-clicked, rather than one each.
+const menuFor = shallowRef<{ actions: ReadonlyArray<FlowActionView>; spot?: FlowSpot }>({
+  actions: [],
+});
+const menu = computed(() =>
+  Arr.map(menuFor.value.actions, (one) => ({
+    label: one.label,
+    icon: one.icon,
+    onSelect: () => {
+      const spot = menuFor.value.spot;
+      if (spot === undefined) emit("act", one);
+      else emit("act", one, spot);
     },
-  );
+  })),
+);
+const aimMenu = (event: MouseEvent) => {
+  const spot = stepOf(event.target);
+  const lane = spot === null ? laneOf(event.target) : null;
+  const actions =
+    spot !== null ? view(spot.run, spot.node).menu : lane !== null ? laneMenu(lane) : [];
+  menuFor.value = spot === null ? { actions } : { actions, spot };
+  // Where there is nothing to offer, the window's own menu shows, as a disabled menu left it.
+  if (actions.length === 0) event.stopPropagation();
 };
-const name = (run: string, node: FlowRun) =>
-  Arr.join(
-    Arr.filter(
-      [
-        nodeName(node, {
-          missing: node.link !== undefined && cardForLink(node, props.cards) === undefined,
-          notLive: Option.exists(
-            Option.fromNullishOr(node.link),
-            ({ machine }) => machine != null && props.away.has(machine),
-          ),
-          action: Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(primary(run, node)), (present__) => present__.label),
-          ),
-        }),
-        stepSteering(node).pause,
-        stepSteering(node).badge,
-      ],
-      (part): part is string => Boolean(part),
-    ),
-    ". ",
-  );
-const hover = (run: string, node: string) => {
-  const info = inspectorOf(props.flow, { run, node, item: null }, props.now);
-  return info === null
-    ? ""
-    : Arr.join(
-        Arr.filter(
-          [info.title, pipe(info.state, Str.replaceAll("-", " ")), info.said, ...info.lines],
-          (part): part is string => Boolean(part),
-        ),
-        "\n",
-      );
+const laneItems = (run: string) =>
+  Arr.map(laneMenu(run), (one) => ({
+    label: one.label,
+    icon: one.icon,
+    onSelect: () => emit("act", one),
+  }));
+
+// One tooltip for every Step, rather than one each; `tipAfter` decides when it shows.
+const tip = shallowRef<StepTip>(CLOSED);
+let due: Fiber.Fiber<void> | undefined;
+const cancelDue = () => due !== undefined && void Effect.runFork(Fiber.interrupt(due));
+const send = (event: TipEvent) => {
+  const next = tipAfter(tip.value, event);
+  if (next.tip.waiting !== tip.value.waiting) cancelDue();
+  tip.value = next.tip;
+  const waiting = next.tip.waiting;
+  if (next.wait !== null && waiting !== null)
+    due = Effect.runFork(
+      Effect.sleep(next.wait).pipe(
+        Effect.andThen(Effect.sync(() => send({ kind: "due", step: waiting }))),
+      ),
+    );
 };
+onBeforeUnmount(cancelDue);
+const tipButton = computed(() =>
+  tip.value.open === null ? null : (buttons.get(tip.value.open) ?? null),
+);
+const tipText = computed(() => {
+  const spot = stepOf(tipButton.value);
+  return spot === null ? "" : stepHover(props.flow, spot, props.now);
+});
+const stepKey = (target: EventTarget | null) => {
+  const spot = stepOf(target);
+  return spot === null ? null : keyOf(spot);
+};
+const tipOver = (event: PointerEvent) => {
+  const step = stepKey(event.target);
+  if (event.pointerType !== "touch" && step !== null && step !== stepKey(event.relatedTarget))
+    send({ kind: "enter", step, at: event.timeStamp });
+};
+const tipOut = (event: PointerEvent) => {
+  const step = stepKey(event.target);
+  if (step !== null && step !== stepKey(event.relatedTarget))
+    send({ kind: "leave", at: event.timeStamp });
+};
+const tipFocus = (event: FocusEvent) => {
+  const step = stepKey(event.target);
+  if (step !== null) send({ kind: "focus", step });
+};
+const tipBlur = (event: FocusEvent) => {
+  if (stepKey(event.target) !== null) send({ kind: "blur", at: event.timeStamp });
+};
+const tipPress = (event: PointerEvent) => {
+  if (stepKey(event.target) === null) return;
+  send({ kind: "press", at: event.timeStamp });
+  document.addEventListener("pointerup", () => send({ kind: "release" }), { once: true });
+};
+const tipClick = (event: MouseEvent) => {
+  if (stepKey(event.target) !== null) send({ kind: "dismiss", at: event.timeStamp });
+};
+const tipShown = (open: boolean) => open || send({ kind: "dismiss", at: Number.NEGATIVE_INFINITY });
+const onFocus = (spot: FlowSpot) => emit("focus", spot);
+const onChoose = (spot: FlowSpot) => emit("choose", spot);
+const onAct = (action: FlowActionView, spot: FlowSpot) => emit("act", action, spot);
 const matches = (spot: FlowSpot | null, run: string, node: string) =>
   spot?.run === run && spot.node === node;
 const showMenu = (element: HTMLElement | undefined) => {
@@ -150,7 +223,7 @@ const rowKey = (event: KeyboardEvent) => {
   if (event.currentTarget instanceof HTMLElement) showMenu(event.currentTarget);
 };
 const reveal = (spot: FlowSpot) =>
-  buttons.get(keyOf(spot))?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  whenDrawn(spot, (button) => button?.scrollIntoView({ block: "nearest", inline: "nearest" }));
 // A map that changes size, with the window or the inspector, keeps the selected Step in view.
 const box = ref<HTMLElement | null>(null);
 let resized: ResizeObserver | undefined;
@@ -160,178 +233,114 @@ onMounted(() => {
 });
 onBeforeUnmount(() => resized?.disconnect());
 defineExpose({
-  focus: (spot: FlowSpot) => buttons.get(keyOf(spot))?.focus(),
+  focus: (spot: FlowSpot) => whenDrawn(spot, (button) => button?.focus()),
   reveal,
-  menu: (spot: FlowSpot) => showMenu(buttons.get(keyOf(spot))),
+  menu: (spot: FlowSpot) => whenDrawn(spot, showMenu),
 });
 </script>
 
 <template>
-  <div ref="box" role="group" aria-label="Flow" class="overflow-y-auto">
-    <section
-      v-for="row in rows"
-      :key="row.run"
+  <UContextMenu :items="menu"
+    ><div
+      ref="box"
       role="group"
-      :aria-label="row.name"
-      class="flex border-t border-default first:border-0 first:pt-0"
-      :class="rail ? 'items-center gap-2 py-1.5' : 'flex-col gap-2 py-3'"
+      aria-label="Flow"
+      class="overflow-y-auto"
+      @contextmenu.capture="aimMenu"
+      @pointerover="tipOver"
+      @pointerout="tipOut"
+      @focusin="tipFocus"
+      @focusout="tipBlur"
+      @pointerdown.capture="tipPress"
+      @click.capture="tipClick"
     >
-      <div
-        class="flex text-xs text-muted"
-        :class="rail ? 'w-40 shrink-0 flex-col items-start' : 'flex-wrap items-baseline gap-x-2'"
+      <section
+        v-for="row in rows"
+        :key="row.run"
+        role="group"
+        :aria-label="row.name"
+        class="flex border-t border-default first:border-0 first:pt-0"
+        :class="rail ? 'items-center gap-2 py-1.5' : 'flex-col gap-2 py-3'"
       >
-        <h3 class="max-w-full truncate text-sm font-semibold text-highlighted">
-          <UContextMenu :items="laneMenu(row.run)" :disabled="laneMenu(row.run).length === 0"
-            ><UDropdownMenu :items="laneMenu(row.run)" :disabled="laneMenu(row.run).length === 0"
+        <div
+          class="flex text-xs text-muted"
+          :class="rail ? 'w-40 shrink-0 flex-col items-start' : 'flex-wrap items-baseline gap-x-2'"
+        >
+          <h3 class="max-w-full truncate text-sm font-semibold text-highlighted">
+            <UDropdownMenu :items="laneItems(row.run)" :disabled="laneMenu(row.run).length === 0"
               ><button
                 type="button"
                 tabindex="-1"
+                :data-lane-run="row.run"
                 class="text-left hover:underline"
                 @keydown="rowKey"
               >
                 {{ row.title }}
               </button></UDropdownMenu
-            ></UContextMenu
-          >
-        </h3>
-        <span
-          :class="{ 'max-w-full truncate': rail }"
-          :title="rail ? `${row.machine} · ${row.execution}` : undefined"
-          >{{
-            rail ? `${row.execution} · ${row.machine}` : `${row.machine} · ${row.execution}`
-          }}</span
-        >
-        <button
-          v-if="row.requestedBy"
-          type="button"
-          tabindex="-1"
-          class="max-w-full truncate text-left text-xs text-primary hover:underline"
-          @click="emit('origin', row.requestedBy.run, row.requestedBy.machine.name)"
-        >
-          Started by {{ row.requestedBy.run }} on {{ row.requestedBy.machine.name }}
-        </button>
-        <button
-          v-else-if="row.startedBy"
-          type="button"
-          tabindex="-1"
-          class="max-w-full truncate text-left text-xs text-primary hover:underline"
-          @click="emit('origin', row.startedBy.run, row.machine)"
-        >
-          Started by {{ row.startedBy.run
-          }}<template v-if="row.startedBy.step"> · {{ row.startedBy.step }}</template>
-        </button>
-      </div>
-      <ol
-        class="gap-x-6 pl-6"
-        :class="
-          rail
-            ? 'flex min-w-0 flex-1 overflow-x-auto py-1 pr-1 [scrollbar-width:thin]'
-            : 'grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-y-2'
-        "
-      >
-        <li
-          v-for="(node, at) in row.nodes"
-          :key="node.id"
-          class="relative flex"
-          :class="{ 'max-w-64 shrink-0': rail }"
-        >
+            >
+          </h3>
           <span
-            aria-hidden="true"
-            class="absolute top-1/2 right-full flex w-6 items-center justify-center"
+            :class="{ 'max-w-full truncate': rail }"
+            :title="rail ? `${row.machine} · ${row.execution}` : undefined"
+            >{{
+              rail ? `${row.execution} · ${row.machine}` : `${row.machine} · ${row.execution}`
+            }}</span
           >
-            <span
-              v-if="at > 0"
-              class="w-full border-t-2 border-default"
-              :class="{ 'border-dashed': node.state === 'expected' }"
+          <button
+            v-if="row.requestedBy"
+            type="button"
+            tabindex="-1"
+            class="max-w-full truncate text-left text-xs text-primary hover:underline"
+            @click="emit('origin', row.requestedBy.run, row.requestedBy.machine.name)"
+          >
+            Started by {{ row.requestedBy.run }} on {{ row.requestedBy.machine.name }}
+          </button>
+          <button
+            v-else-if="row.startedBy"
+            type="button"
+            tabindex="-1"
+            class="max-w-full truncate text-left text-xs text-primary hover:underline"
+            @click="emit('origin', row.startedBy.run, row.machine)"
+          >
+            Started by {{ row.startedBy.run
+            }}<template v-if="row.startedBy.step"> · {{ row.startedBy.step }}</template>
+          </button>
+        </div>
+        <ol
+          class="gap-x-6 pl-6"
+          :class="
+            rail
+              ? 'flex min-w-0 flex-1 overflow-x-auto py-1 pr-1 [scrollbar-width:thin]'
+              : 'grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-y-2'
+          "
+        >
+          <template v-for="(node, at) in row.nodes" :key="node.id">
+            <FlowStep
+              v-if="shows(row.run, node.id)"
+              :run="row.run"
+              :node="node"
+              :view="view(row.run, node.id)"
+              :rail="rail"
+              :joined="at > 0"
+              :current="matches(flow.current, row.run, node.id)"
+              :selected="matches(selected, row.run, node.id)"
+              :focused="matches(focused, row.run, node.id)"
+              :dimmed="node.link?.machine != null && away.has(node.link.machine)"
+              :remember="remember"
+              @focus="onFocus"
+              @choose="onChoose"
+              @act="onAct"
             />
-            <UIcon
-              v-if="stepSteering(node).pause !== null"
-              name="i-lucide-pause"
-              class="absolute bg-default text-highlighted"
-            />
-          </span>
-          <div class="relative min-w-0 flex-1">
-            <UContextMenu :items="menu(row.run, node)" :disabled="menu(row.run, node).length === 0"
-              ><UTooltip
-                :text="hover(row.run, node.id)"
-                :delay-duration="300"
-                :ui="{ content: 'whitespace-pre-line' }"
-              >
-                <button
-                  :ref="(el) => remember({ run: row.run, node: node.id }, el)"
-                  type="button"
-                  class="flex w-full items-center gap-2 rounded border bg-default px-2.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-primary"
-                  :class="[
-                    rail ? 'min-h-9' : 'min-h-12',
-                    node.state === 'failed'
-                      ? 'border-2 border-error'
-                      : node.state === 'needs-you'
-                        ? 'border-2 border-warning'
-                        : matches(flow.current, row.run, node.id)
-                          ? 'border-2 border-info'
-                          : 'border-default',
-                    {
-                      'border-dashed': node.state === 'expected' || node.kind === 'offer',
-                      'bg-muted': node.link !== undefined,
-                      'border-success': node.kind === 'offer',
-                      'ring-2 ring-primary/30': matches(selected, row.run, node.id),
-                      'pr-11': primary(row.run, node) !== null,
-                      'opacity-50': node.link?.machine != null && away.has(node.link.machine),
-                    },
-                  ]"
-                  :tabindex="matches(focused, row.run, node.id) ? 0 : -1"
-                  :aria-label="name(row.run, node)"
-                  :aria-current="matches(flow.current, row.run, node.id) ? 'step' : undefined"
-                  :aria-pressed="matches(selected, row.run, node.id)"
-                  @focus="emit('focus', { run: row.run, node: node.id })"
-                  @click="emit('choose', { run: row.run, node: node.id })"
-                >
-                  <FlowGlyph :state="node.state" />
-                  <span class="min-w-0 flex-1" :class="{ 'flex items-baseline gap-2': rail }"
-                    ><span
-                      class="block truncate text-sm font-semibold"
-                      :class="{ 'max-w-40 shrink-0': rail }"
-                      >{{ node.title }}</span
-                    ><span
-                      v-if="stepSteering(node).badge !== null"
-                      class="inline-block shrink-0 rounded-full bg-elevated px-2 text-xs"
-                      :class="{ 'mt-1': !rail }"
-                      >{{ stepSteering(node).badge }}</span
-                    ><span
-                      v-if="node.said && (node.state !== 'expected' || node.pause != null)"
-                      class="block truncate text-xs text-muted"
-                      >{{ node.said }}</span
-                    ><span
-                      v-if="
-                        node.link?.machine != null &&
-                        away.has(node.link.machine) &&
-                        node.link.asOf != null
-                      "
-                      class="block truncate text-xs text-muted"
-                      >as of {{ node.link.asOf }}</span
-                    ></span
-                  >
-                  <UIcon
-                    v-if="node.link !== undefined"
-                    name="i-lucide-arrow-up-right"
-                    class="ml-auto shrink-0 text-muted"
-                  />
-                </button> </UTooltip
-            ></UContextMenu>
-            <UButton
-              v-if="primary(row.run, node) !== null"
-              :icon="primary(row.run, node)!.icon"
-              :color="primary(row.run, node)!.color"
-              :aria-label="primary(row.run, node)!.label"
-              variant="outline"
-              size="xs"
-              tabindex="-1"
-              class="absolute right-2 top-1/2 -translate-y-1/2 rounded-full"
-              @click="emit('act', primary(row.run, node)!, { run: row.run, node: node.id })"
-            />
-          </div>
-        </li>
-      </ol>
-    </section>
-  </div>
+            <li v-else aria-hidden="true" :class="rail ? 'min-h-9 w-40 shrink-0' : 'min-h-12'" />
+          </template>
+        </ol>
+      </section>
+      <UTooltip
+        :open="tipText !== ''"
+        :reference="tipButton ?? undefined"
+        :text="tipText"
+        :ui="{ content: 'whitespace-pre-line' }"
+        @update:open="tipShown"
+      /></div
+  ></UContextMenu>
 </template>

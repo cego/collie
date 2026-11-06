@@ -1,0 +1,4 @@
+view/.nuxt/
+view/.output/
+view/node_modules
+view/dist

@@ -7,7 +7,7 @@
 
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
 export interface Journal<A> {
   readonly lines: A[];
@@ -15,12 +15,27 @@ export interface Journal<A> {
   readonly corrupt: number;
 }
 
+const textsOf = (raw: string) => Arr.filter(Str.split(raw, "\n"), (text) => Str.trim(text) !== "");
+
+const tally = <A>(decoded: ReadonlyArray<Option.Option<A>>): Journal<A> => {
+  const lines: A[] = [];
+  let corrupt = 0;
+  for (const [at, one] of decoded.entries()) {
+    if (one._tag === "Some") lines.push(one.value);
+    else if (at < decoded.length - 1) corrupt += 1;
+  }
+  return { lines, corrupt };
+};
+
 export const readJournalWhole = Effect.fn("Journal.readWhole")(function* <A>(
   file: string,
   json: Schema.Codec<A, string, never, never>,
 ): Effect.fn.Return<Journal<A>, never, FileSystem.FileSystem> {
   const fs = yield* FileSystem.FileSystem;
-  return journalOf(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")), json);
+  const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  const decode = Schema.decodeUnknownOption(json);
+  // A line at a time, so a long journal is read in the scheduler's turns.
+  return tally(yield* Effect.forEach(textsOf(raw), (text) => Effect.sync(() => decode(text))));
 });
 
 export const journalOf = <A>(
@@ -28,15 +43,7 @@ export const journalOf = <A>(
   json: Schema.Codec<A, string, never, never>,
 ): Journal<A> => {
   const decode = Schema.decodeUnknownOption(json);
-  const texts = Arr.filter(Str.split(raw, "\n"), (text) => Str.trim(text) !== "");
-  const lines: A[] = [];
-  let corrupt = 0;
-  for (const [at, text] of texts.entries()) {
-    const decoded = decode(text);
-    if (decoded._tag === "Some") lines.push(decoded.value);
-    else if (at < texts.length - 1) corrupt += 1;
-  }
-  return { lines, corrupt };
+  return tally(Arr.map(textsOf(raw), (text) => decode(text)));
 };
 
 export const readJournal = <A>(file: string, json: Schema.Codec<A, string, never, never>) =>

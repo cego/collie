@@ -9,8 +9,10 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
-import { Effect, Fiber, FileSystem, Layer, Stream } from "effect";
+import * as SqlClient from "effect/sql/SqlClient";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Order, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
+import { RunModel, runModelLayer } from "../src/run-model";
 import { Store, storeLayer } from "../src/store";
 import { runEffect } from "./support/effect";
 
@@ -42,7 +44,7 @@ const admission = (
 });
 
 /** A database of its own, and the store on it, for the length of one question. */
-const onStore = <A, E>(prefix: string, body: Effect.Effect<A, E, Store>) =>
+const onStore = <A, E>(prefix: string, body: Effect.Effect<A, E, Store | SqlClient.SqlClient>) =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -388,4 +390,176 @@ test("a subscriber is told once the change is committed", () =>
         ["run-a", "run-b"],
       ]);
     }),
+  ));
+
+test("a Run's near rows are its Task's, their parents and children, and the Runs asked for", () =>
+  onStore(
+    "collie-store-near-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const admit = (run: string, belongs: { task?: string; parent?: string }, placing?: string) =>
+        store.admit({ ...admission(`req-${run}`, run, {}, belongs), ...(placing && { placing }) });
+      yield* admit("parent", { task: "elsewhere" });
+      yield* admit("lead", { task: "t1" });
+      yield* admit("follow", { task: "t1", parent: "parent" });
+      yield* admit("child", { task: "t2", parent: "lead" });
+      yield* admit("asked", { task: "t3" }, '{"requestedBy":{"run":"lead"}}');
+      yield* admit("unrelated", { task: "t4" });
+      yield* admit("alone", {});
+
+      const near = (run: string) =>
+        Effect.map(store.near(run), (rows) =>
+          Arr.sort(
+            Arr.map(rows, (row) => row.run),
+            Order.String,
+          ),
+        );
+
+      expect(yield* near("lead")).toEqual(["asked", "child", "follow", "lead", "parent"]);
+      expect(yield* near("alone")).toEqual(["alone", "asked"]);
+    }),
+  ));
+
+test("a Run's near rows, with nothing written, are the rows read before", () =>
+  onStore(
+    "collie-store-near-kept-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-lead", "lead", {}, { task: "t1" }));
+      yield* store.admit(admission("req-follow", "follow", {}, { task: "t1" }));
+      const every = yield* store.runs;
+
+      const near = yield* store.near("lead");
+      expect(near.length).toBe(2);
+      for (const row of near) expect(every).toContain(row);
+    }),
+  ));
+
+test("Runs read again with nothing written are the rows read before, and a write renews only its Run's", () =>
+  onStore(
+    "collie-store-kept-rows-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-a", "run-a", { note: "a" }));
+      yield* store.admit(admission("req-b", "run-b", { note: "b" }));
+      const before = yield* store.runs;
+      expect(yield* store.runs).toBe(before);
+
+      yield* store.accepted("run-b");
+      const after = yield* store.runs;
+      expect(after[0]).toBe(before[0]);
+      expect(after[1]).not.toBe(before[1]);
+      expect(after[1]?.accepted).not.toBeNull();
+    }),
+  ));
+
+test("a write reads again only the rows of the Runs it wrote, and an announce none", () =>
+  onStore(
+    "collie-store-written-rows-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const sql = yield* SqlClient.SqlClient;
+      yield* store.admit(admission("req-a", "run-a", { note: "a" }));
+      yield* store.admit(admission("req-b", "run-b", { note: "b" }));
+      const before = yield* store.runs;
+
+      // Unseen by the store, as no write through it names run-a.
+      yield* sql`UPDATE collie_runs SET project = '/elsewhere' WHERE run = 'run-a'`;
+      yield* store.announce;
+      yield* store.accepted("run-b");
+      yield* store.admit(admission("req-c", "run-c", { note: "c" }));
+      const after = yield* store.runs;
+
+      expect(after[0]).toBe(before[0]);
+      expect(after[1]?.accepted).not.toBeNull();
+      expect(Arr.map(after, (row) => row.run)).toEqual(["run-a", "run-b", "run-c"]);
+    }),
+  ));
+
+/** An accepted run-a whose next read of the Runs waits on the connection until `release`. */
+const waitingRead = Effect.gen(function* () {
+  const store = yield* Store;
+  const sql = yield* SqlClient.SqlClient;
+  yield* store.admit(admission("req-a", "run-a", { note: "a" }));
+  yield* store.runs;
+  yield* store.accepted("run-a");
+  const held = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  yield* sql
+    .withTransaction(Effect.andThen(Deferred.succeed(held, undefined), Deferred.await(release)))
+    .pipe(Effect.forkChild({ startImmediately: true }));
+  yield* Deferred.await(held);
+  const first = yield* store.runs.pipe(Effect.forkChild({ startImmediately: true }));
+  return { store, first, release: Deferred.succeed(release, undefined) };
+});
+
+test("a read of the Runs made while another is reading them again has the writes before it", () =>
+  onStore(
+    "collie-store-overlap-",
+    Effect.gen(function* () {
+      const { store, first, release } = yield* waitingRead;
+      const second = yield* store.runs.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* release;
+      expect((yield* Fiber.join(second))[0]?.accepted).not.toBeNull();
+      expect((yield* Fiber.join(first))[0]?.accepted).not.toBeNull();
+    }),
+  ));
+
+test("a read of the Runs interrupted while reading them again leaves the writes to the next", () =>
+  onStore(
+    "collie-store-interrupted-",
+    Effect.gen(function* () {
+      const { store, first, release } = yield* waitingRead;
+      yield* Fiber.interrupt(first);
+      yield* release;
+      expect((yield* store.runs)[0]?.accepted).not.toBeNull();
+    }),
+  ));
+
+test("a question asked of one Run moves that Run's decisions alone, and an announce moves none", () =>
+  onStore(
+    "collie-store-decided-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-a", "run-a", {}));
+      yield* store.admit(admission("req-b", "run-b", {}));
+      const decided = yield* store.decided;
+      const a = decided("run-a");
+      const b = decided("run-b");
+
+      yield* store.asking({ run: "run-a", decision: "go", prompt: "Go?", options: ["yes"] });
+      yield* store.announce;
+      expect(decided("run-a")).not.toBe(a);
+      expect(decided("run-b")).toBe(b);
+    }),
+  ));
+
+test("a write to a Run's row moves that Run's revision in the host's Run model, and no other", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-store-model-" });
+      yield* Effect.gen(function* () {
+        const store = yield* Store;
+        const model = yield* RunModel;
+        yield* store.admit(admission("req-a", "run-a", {}));
+        yield* store.admit(admission("req-b", "run-b", {}));
+        const a = model.revision("run-a").seq;
+        const b = model.revision("run-b").seq;
+        yield* store.recordPlacing("run-a", "{}");
+        expect(model.revision("run-a").seq).toBeGreaterThan(a);
+        expect(model.revision("run-b").seq).toBe(b);
+      }).pipe(
+        Effect.provide(
+          storeLayer.pipe(
+            Layer.provideMerge(runModelLayer(dir, "installation")),
+            Layer.provide(
+              SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
+                Layer.provideMerge(Reactivity.layer),
+              ),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
   ));

@@ -18,6 +18,7 @@ import { runEffect } from "./support/effect";
 import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
 import { twoMachines } from "./support/peers";
+import { recordIn } from "../src/board-model";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const result = {
@@ -468,7 +469,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const door = yield* frontDoor(socketOf(first.world.state));
           const detail = yield* door
             .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-            .pipe(Stream.runHead);
+            .pipe(Stream.map(recordIn), Stream.runHead);
           expect(Option.getOrNull(detail)).toMatchObject({
             requestedBy: { run: requesterRun, agent: requester.agent },
             report: { state: report!.state, closed: true },

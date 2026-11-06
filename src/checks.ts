@@ -57,6 +57,12 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
       );
 
+/** Each Run's marker as last read, at the revision it was read at. */
+export interface KeptMarkers {
+  readonly revision: (run: string) => number;
+  readonly markers: Map<string, { readonly revision: number; readonly marker: Verifying | null }>;
+}
+
 /**
  * Every Run's marker, read once for a whole board. A Run with none whose check still runs,
  * as an agent's own verify does, is read from that check's record.
@@ -64,16 +70,31 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
 export const markersOf = Effect.fn("Checks.markersOf")(function* (
   runs: ReadonlyArray<RunFacts>,
   records: ReadonlyArray<CheckRecord> = [],
+  kept?: KeptMarkers,
 ) {
   const found = new Map<string, Verifying>();
+  const unread: Array<RunFacts> = [];
+  for (const run of runs) {
+    const was = kept?.markers.get(run.id);
+    if (was === undefined || was.revision !== kept!.revision(run.id)) unread.push(run);
+    else if (was.marker !== null) found.set(run.id, was.marker);
+  }
   yield* Effect.forEach(
-    runs,
-    (run) =>
-      Effect.map(verifyingIn(run.dir), (marker) => {
+    unread,
+    (run) => {
+      // Taken before the read, so a write during it reads again next time.
+      const revision = kept?.revision(run.id) ?? 0;
+      return Effect.map(verifyingIn(run.dir), (marker) => {
+        kept?.markers.set(run.id, { revision, marker });
         if (marker !== null) found.set(run.id, marker);
-      }),
+      });
+    },
     { concurrency: 8, discard: true },
   );
+  if (kept !== undefined && unread.length > 0) {
+    const present = new Set(Arr.map(runs, (run) => run.id));
+    for (const run of kept.markers.keys()) if (!present.has(run)) kept.markers.delete(run);
+  }
   for (const record of records)
     if (!found.has(record.run))
       found.set(record.run, {

@@ -4,6 +4,7 @@ import { Effect, Exit } from "effect";
 import { actionRunner, type ActionNotice } from "../src/shared/actions";
 import { ActionFailed, type DesktopAction } from "../src/shared/flock";
 import { clearSent, type Draft, editDraft } from "../src/shared/review-comments";
+import { refusal } from "../src/shared/kept-records";
 
 test("a successful toast retry clears the original sent drafts and preserves later edits", () =>
   Effect.runPromise(
@@ -96,5 +97,30 @@ test("every try, Try again's too, says when it starts and how it ended", () =>
       );
       yield* Effect.promise(() => notices[0]!.actions![0]!.onClick());
       expect(tries).toEqual([null, false, null, true]);
+    }),
+  ));
+
+test("Try again asks again why not to send, so a record gone stale since is refused, not sent", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const sent: Array<string | undefined> = [];
+      const notices: ActionNotice[] = [];
+      const run = actionRunner(
+        ({ payload }) => {
+          sent.push(payload.unsent);
+          return Promise.resolve(
+            Exit.fail(new ActionFailed({ reason: "connection lost", request: payload.request })),
+          );
+        },
+        (notice) => notices.push(notice),
+      );
+      let asOf: number | null = null;
+      const action: DesktopAction = { _tag: "Invoke", runId: "r", offer: "release", input: {} };
+      yield* Effect.promise(() =>
+        run("local", action, undefined, undefined, () => refusal(null, asOf) ?? undefined),
+      );
+      asOf = 1_791_000_000_000;
+      yield* Effect.promise(() => notices[0]!.actions![0]!.onClick());
+      expect(sent).toEqual([undefined, refusal(null, asOf)!]);
     }),
   ));

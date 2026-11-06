@@ -57,6 +57,14 @@ export const FlowState = Schema.Literals([
 ]);
 export type FlowState = typeof FlowState.Type;
 
+/** A fact line's minutes since `from`, between `before` and `after`, said where it is shown. */
+export const FlowClock = Schema.Struct({
+  from: Schema.Finite,
+  before: Schema.String,
+  after: Schema.String,
+});
+export type FlowClock = typeof FlowClock.Type;
+
 export const FlowAction = Schema.Literals([
   "pause",
   "note",
@@ -299,6 +307,10 @@ export const Reopened = Schema.Struct({
 });
 export type Reopened = typeof Reopened.Type;
 
+/** A Run revision: its host's epoch, and that host's change sequence when it last changed. */
+export const RunRevision = Schema.Struct({ epoch: Schema.String, seq: Schema.Finite });
+export type RunRevision = typeof RunRevision.Type;
+
 /** One Task as the board draws it. */
 export const TaskView = Schema.Struct({
   /** The Task's id, or the Run's own where it belongs to no Task. */
@@ -360,6 +372,8 @@ export const TaskView = Schema.Struct({
   at: Schema.Finite,
   /** The strip its card draws of its Flow; absent from an older host. */
   flow: Schema.optionalKey(FlowStrip),
+  /** The highest revision of its Runs; absent from an older host or one with its Run model off. */
+  revision: Schema.optionalKey(RunRevision),
 });
 export type TaskView = typeof TaskView.Type;
 
@@ -700,6 +714,7 @@ export const FlowLink = Schema.Struct({
   /** When its host last told us; null on this host. */
   asOf: Schema.optionalKey(Schema.NullOr(Schema.String)),
   canResume: Schema.optional(Schema.Boolean),
+  clock: Schema.optionalKey(FlowClock),
 });
 export type FlowLink = typeof FlowLink.Type;
 
@@ -714,6 +729,7 @@ const FlowNodeFields = {
   state: FlowState,
   /** Its fact line, worded once by the host. */
   said: Schema.NullOr(Schema.String),
+  clock: Schema.optionalKey(FlowClock),
   wait: Schema.NullOr(FlowWait),
   produces: Schema.NullOr(Schema.Literals(["plan", "review", "evidence", "merge-request"])),
   offPath: Schema.Boolean,
@@ -805,8 +821,16 @@ export const RunReply = Schema.Struct({
 });
 export type RunReply = typeof RunReply.Type;
 
+/** A part of a Run's record that comes after its Flow, in a later frame of the same stream. */
+export const RecordPart = Schema.Literals(["diff", "tail", "mr", "texts"]);
+export type RecordPart = typeof RecordPart.Type;
+
 export const RunDetail = Schema.Struct({
   id: Schema.String,
+  /** The record's revision; absent from a host without the Run model. */
+  revision: Schema.optionalKey(RunRevision),
+  /** Its parts still to come, each shown as loading until a later frame brings it. */
+  pending: Schema.optionalKey(Schema.Array(RecordPart)),
   requestedBy: Schema.optional(RequestedBy),
   /** Who started it, as a sentence; absent where nothing records it, and from an older host. */
   startedBy: Schema.optional(Schema.String),
@@ -890,6 +914,14 @@ export const RunDetail = Schema.Struct({
   flow: Schema.optional(Flow),
 });
 export type RunDetail = typeof RunDetail.Type;
+
+/** The answer to a request that holds the record at the host's current revision. */
+export const RecordUnchanged = Schema.TaggedStruct("Unchanged", { revision: RunRevision });
+export type RecordUnchanged = typeof RecordUnchanged.Type;
+
+/** The record a `runDetail` value carries; `Unchanged` carries none. */
+export const recordIn = (value: RunDetail | RecordUnchanged | null): RunDetail | null =>
+  value === null || "_tag" in value ? null : value;
 
 /** One offer as a front door shows it, over the wire. */
 export const OfferView = Schema.Struct({
@@ -1045,6 +1077,12 @@ export class HostRefused extends Schema.TaggedError<
   reason: Schema.String,
 }) {}
 
+/** An act on a Step that has finished since the revision it was shown at. */
+export class StaleAct extends Schema.TaggedError<StaleAct, { readonly brand: unique symbol }>()(
+  "StaleAct",
+  { run: Schema.String, step: Schema.String, reason: Schema.String },
+) {}
+
 /**
  * A request id that was accepted for other arguments. Schema-backed, so a host can fail a
  * client with this value rather than a sentence about it: the caller is retrying something
@@ -1185,6 +1223,8 @@ export const ActionResult = Schema.Struct({
   kind: Schema.String,
   state: Schema.String,
   note: Schema.String,
+  /** Its Run's revision once it was carried out, which the Run's next record frame is at least. */
+  revision: Schema.optionalKey(RunRevision),
 });
 export type ActionResult = typeof ActionResult.Type;
 
@@ -1347,6 +1387,42 @@ export const ShellRequest = Schema.Struct({
 });
 export type ShellRequest = typeof ShellRequest.Type;
 
+/** Which host answers, and what it serves. */
+export const IdentityRpc = Rpc.make("identity", {
+  success: Schema.Struct({
+    build: Schema.String,
+    pid: Schema.Int,
+    dir: Schema.String,
+    /** The installation it serves; absent from a host older than the field. */
+    root: Schema.optionalKey(Schema.String),
+    /** `<version>+<sha>` for a development checkout; absent for a release. */
+    development: Schema.optionalKey(Schema.String),
+    /** The board protocol it speaks; absent from a host older than the field. */
+    protocol: Schema.optionalKey(Schema.Int),
+    /** The state directory's own id; absent from a host older than the field. */
+    installation: Schema.optionalKey(Schema.String),
+  }),
+});
+
+/**
+ * One Run's details while a drawer is open: current first, then again whenever they
+ * change. `refreshMr` asks the merge watch again rather than taking what it last read.
+ */
+export const RunDetailRpc = Rpc.make("runDetail", {
+  payload: {
+    runId: Schema.String,
+    tail: Schema.Boolean,
+    pages: Schema.Int,
+    refreshMr: Schema.Boolean,
+    /** The Flow first, then each part as it comes; absent, every value is the whole record. */
+    parts: Schema.optionalKey(Schema.Boolean),
+    /** The revision of a record already held, answered `Unchanged` while it is current. */
+    held: Schema.optionalKey(RunRevision),
+  },
+  success: Schema.Union([RunDetail, RecordUnchanged, Schema.Null]),
+  stream: true,
+});
+
 /**
  * What any front door, on this computer or another, may ask a host. Every operation takes
  * a request id: the same one twice is one operation, and with other arguments is refused.
@@ -1424,9 +1500,10 @@ export const FrontDoorRpcs = RpcGroup.make(
       /** Why, in the asker's own words: what a held card's drawer says beside who held it. */
       reason: Schema.optional(Schema.String),
       before: Schema.optional(Schema.String),
+      shown: Schema.optional(RunRevision),
     },
     success: Controlled,
-    error: Schema.Union([HostRefused, RequestConflict]),
+    error: Schema.Union([HostRefused, RequestConflict, StaleAct]),
   }),
   /** Picks a Run up again: what current files allow is registered, then its stop cleared. */
   Rpc.make("withdrawNote", {
@@ -1444,20 +1521,7 @@ export const FrontDoorRpcs = RpcGroup.make(
     payload: { runId: Schema.String },
     success: Schema.NullOr(RunProgress),
   }),
-  /**
-   * One Run's details while a drawer is open: current first, then again whenever they
-   * change. `refreshMr` asks the merge watch again rather than taking what it last read.
-   */
-  Rpc.make("runDetail", {
-    payload: {
-      runId: Schema.String,
-      tail: Schema.Boolean,
-      pages: Schema.Int,
-      refreshMr: Schema.Boolean,
-    },
-    success: Schema.NullOr(RunDetail),
-    stream: true,
-  }),
+  RunDetailRpc,
   /**
    * A large item of a Run's, by reference: `log`, `review`, `diff:<path>`, `evidence:<name>`,
    * `verification:<id>`, `plan:<file>`, read-only from its checkout `file:<path>`, and
@@ -1497,9 +1561,14 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   /** The board's own actions the human asked for by name, carried out with no proposal. */
   Rpc.make("act", {
-    payload: { actions: Schema.Array(Schema.Json), request: Schema.String },
+    payload: {
+      actions: Schema.Array(Schema.Json),
+      request: Schema.String,
+      /** The record revision the acts were shown at, so a Step finished since refuses them. */
+      shown: Schema.optional(RunRevision),
+    },
     success: Schema.Array(ActionResult),
-    error: HostRefused,
+    error: Schema.Union([HostRefused, StaleAct]),
   }),
   /** A proposal step nobody can account for, settled by the person who knows. */
   Rpc.make("reconcile", {

@@ -215,7 +215,7 @@ test("Settings shows every setting with its control, its value and its default",
   expect(Arr.map(rows, (one) => one.key)).not.toContain("gitlab_host");
 });
 
-test("Zoom is the one row kept on this computer, and the Flock chat's rule and switch are every Machine's", () => {
+test("Zoom and Record timing are the rows kept on this computer, and the Flock chat's rule and switch are every Machine's", () => {
   const rows = Arr.flatMap(
     settingSections(NO_FLOCK_SETTINGS, { zoom: 1.1 }, epochMs(at(12)), "UTC"),
     (section) => section.rows,
@@ -230,7 +230,10 @@ test("Zoom is the one row kept on this computer, and the Flock chat's rule and s
       set: true,
       edit: "Saved on this computer",
     }),
+    expect.objectContaining({ key: "record_timing", group: "Board", value: "off", set: false }),
   ]);
+  expect(desktopChange("record_timing", "on")).toEqual({ recordTiming: true });
+  expect(desktopChange("record_timing", "")).toEqual({ recordTiming: false });
   expect(
     Arr.map(
       Arr.filter(rows, (one) => one.group === "Chat"),

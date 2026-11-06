@@ -37,6 +37,7 @@ import {
   PaneAt,
   RunDetail,
   RunFile,
+  RunRevision,
   sortBoard,
   TaskView,
 } from "../../../src/board-model";
@@ -277,6 +278,8 @@ export const DesktopAction = Schema.Union([
     control: Schema.Literals(["hold", "stop"]),
     set: Schema.Boolean,
     before: Schema.optional(Schema.String),
+    /** The record revision it was shown at, from a record. */
+    shown: Schema.optionalKey(RunRevision),
   }),
   Schema.TaggedStruct("Resume", { runId: Schema.String }),
   Schema.TaggedStruct("Confirm", { proposal: Schema.String, hash: Schema.String }),
@@ -298,6 +301,7 @@ export const DesktopAction = Schema.Union([
     agent: Schema.optionalKey(Schema.String),
     to: Schema.optionalKey(Schema.String),
     text: Schema.String,
+    shown: Schema.optionalKey(RunRevision),
   }),
   Schema.TaggedStruct("WithdrawNote", { runId: Schema.String, note: Schema.String }),
   Schema.TaggedStruct("FollowUp", { runId: Schema.String, text: Schema.String }),
@@ -317,6 +321,8 @@ export class ActionFailed extends Schema.TaggedError<
   reason: Schema.String,
   /** The id it was asked under, which a retry sends again so the host does it once. */
   request: Schema.optional(Schema.String),
+  /** The Step an act was refused over because it finished since it was shown. */
+  step: Schema.optional(Schema.String),
 }) {}
 
 /** `command` is the herdr client that shows the pane, to copy where no terminal opened it. */
@@ -406,6 +412,8 @@ export const DesktopSettings = Schema.Struct({
   chatEffort: Schema.optionalKey(Schema.String),
   /** The Flock chat's width beside the board in CSS pixels; unset is `chatWidth`'s start. */
   chatWidth: Schema.optionalKey(Schema.Finite),
+  /** Whether each record open's timing marks are also logged; unset is off. */
+  recordTiming: Schema.optionalKey(Schema.Boolean),
   /** The Desktop version the human said "Not now" to the Standing direction's setup at. */
   setupNotNow: Schema.optionalKey(Schema.String),
   /** The human said "Don't ask again" to it. */
@@ -424,6 +432,7 @@ export const DesktopSettingsChange = Schema.Struct({
   chatEffort: Schema.optionalKey(Schema.String),
   /** Null unsets it. */
   chatWidth: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  recordTiming: Schema.optionalKey(Schema.Boolean),
   setupNotNow: Schema.optionalKey(Schema.String),
   setupNever: Schema.optionalKey(Schema.Boolean),
 });
@@ -442,6 +451,15 @@ export const machineToAdd = (typed: MachineToAdd): MachineToAdd | null => {
   );
   return target && label && session ? { target, label, session } : null;
 };
+
+/** A record as Desktop keeps it: `asOf` is when its host last confirmed it, while it has not since. */
+export const KeptRecord = Schema.Struct({
+  detail: Schema.NullOr(RunDetail),
+  asOf: Schema.NullOr(Schema.Finite),
+  /** Its latest frame's encoded size, which bounds how many records the view keeps. */
+  bytes: Schema.Finite,
+});
+export type KeptRecord = typeof KeptRecord.Type;
 
 export const DesktopRpcs = RpcGroup.make(
   Rpc.make("flock", { success: FlockItem, stream: true }),
@@ -651,7 +669,7 @@ export const DesktopRpcs = RpcGroup.make(
   /** One Run's details while its record is open, with its log's tail, again as they change. */
   Rpc.make("runDetail", {
     payload: { installation: Schema.String, runId: Schema.String },
-    success: Schema.NullOr(RunDetail),
+    success: KeptRecord,
     error: ActionFailed,
     stream: true,
   }),
@@ -745,6 +763,10 @@ export const DesktopRpcs = RpcGroup.make(
     payload: DesktopSettingsChange,
     success: DesktopSettings,
     error: ActionFailed,
+  }),
+  /** One of a record open's timing marks, logged where the record timing setting is on. */
+  Rpc.make("recordMark", {
+    payload: { name: Schema.String, at: Schema.Finite, card: Schema.String },
   }),
   /** Whether Desktop offers to help write the Standing direction, now and as that changes. */
   Rpc.make("setupOffer", { success: Schema.Boolean, stream: true }),
@@ -1012,14 +1034,41 @@ export interface PlacedTask {
   readonly asOf: number | null;
 }
 
+export interface FlockCards {
+  readonly tasks: ReadonlyArray<TaskView>;
+  readonly placedOf: (task: TaskView) => PlacedTask;
+  readonly byKey: ReadonlyMap<string, PlacedTask>;
+  /** Each live Machine by its display name, and whether it is this computer's. */
+  readonly machines: ReadonlyArray<{
+    readonly installation: string;
+    readonly name: string;
+    readonly local: boolean;
+  }>;
+  /** The names of the Machines whose cards are saved ones, not live. */
+  readonly away: ReadonlySet<string>;
+}
+
+const samePlace = (one: PlacedTask, other: Omit<PlacedTask, "task">) =>
+  one.key === other.key &&
+  one.installation === other.installation &&
+  one.machine === other.machine &&
+  one.where === other.where &&
+  one.asOf === other.asOf;
+
 /**
  * Every Task of the Flock in the board's own order, and where it is: its Machine once there
- * is more than one, and its Herd only when its Machine runs several.
+ * is more than one, and its Herd only when its Machine runs several. A Task placed as it was
+ * in `before` is the same object, so what draws it is not drawn again.
  */
-export const flockCards = (flock: Flock) => {
+export const flockCards = (flock: Flock, before?: FlockCards): FlockCards => {
   const names = shownNames(flock);
   const placed = new Map<TaskView, PlacedTask>();
+  const byKey = new Map<string, PlacedTask>();
+  const away = new Set<string>();
   for (const [installation, { herds, tasks, asOf }] of flock.machines) {
+    // SAFETY: `names` holds every Machine of this Flock.
+    const machine = names.get(installation)!;
+    if (asOf !== null) away.add(machine);
     for (const task of tasks.values()) {
       const herd =
         herds.length > 1
@@ -1029,33 +1078,43 @@ export const flockCards = (flock: Flock) => {
         flock.machines.size > 1 ? names.get(installation) : undefined,
         herd === undefined ? undefined : (herd.name ?? herd.id),
       ];
-      placed.set(task, {
+      const place = {
         key: `${installation}:${task.id}`,
         installation,
-        // SAFETY: `names` holds every Machine of this Flock.
-        machine: names.get(installation)!,
-        task,
+        machine,
         where: Arr.join(
           Arr.filter(where, (part) => part !== undefined),
           " · ",
         ),
         asOf,
-      });
+      };
+      const was = before?.byKey.get(place.key);
+      const one =
+        was !== undefined && was.task === task && samePlace(was, place) ? was : { ...place, task };
+      placed.set(task, one);
+      byKey.set(one.key, one);
     }
   }
+  const machines = Arr.map(
+    Arr.filter([...flock.machines], ([, { asOf }]) => asOf === null),
+    ([installation, { machine }]) => ({
+      installation,
+      name: names.get(installation)!,
+      local: machine.profile === "local",
+    }),
+  );
   return {
     tasks: sortBoard([...placed.keys()]),
     // SAFETY: the board's helpers filter and sort these Tasks; they never make new ones.
     placedOf: (task: TaskView) => placed.get(task)!,
-    /** Each live Machine by its display name, and whether it is this computer's. */
-    machines: Arr.map(
-      Arr.filter([...flock.machines], ([, { asOf }]) => asOf === null),
-      ([installation, { machine }]) => ({
-        installation,
-        name: names.get(installation)!,
-        local: machine.profile === "local",
-      }),
-    ),
+    byKey,
+    machines,
+    away:
+      before !== undefined &&
+      before.away.size === away.size &&
+      Arr.every([...away], (name) => before.away.has(name))
+        ? before.away
+        : away,
   };
 };
 

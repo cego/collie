@@ -13,6 +13,7 @@ import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
 import { hosted, settledRun } from "./support/hosted";
 import { collie, collieCommand } from "./support/world";
+import { recordIn } from "../src/board-model";
 
 const launched = (runId: string, over: Partial<Launched>): Launched => ({
   agent: `${runId}-build-r1`,
@@ -149,7 +150,7 @@ test(
 
         const detail = yield* (yield* frontDoor(socketOf(world.state)))
           .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
-          .pipe(Stream.runHead, Effect.timeout("30 seconds"));
+          .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
         expect(
           Option.getOrUndefined(
             Option.flatMap(Option.fromNullishOr(Option.getOrNull(detail)), (present) =>

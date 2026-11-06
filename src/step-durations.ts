@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { pipe as pipe_ } from "effect/Function";
+import * as Order from "effect/Order";
 import { Effect, FileSystem, Schema, Semaphore } from "effect";
 import { readStepLines, type StepLine } from "./steps";
 import { epochMs } from "./time";
@@ -18,13 +18,19 @@ type Sample = typeof Sample.Type;
 const Index = Schema.fromJsonString(Schema.Array(Sample));
 const lock = Semaphore.makeUnsafe(1);
 const file = (dir: string) => `${dir}/step-durations.json`;
+/** The last text read and what it decoded to: a host's cached read hands back the same text. */
+let decoded: { readonly text: string; readonly samples: ReadonlyArray<Sample> } | undefined;
 const read = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    return yield* fs.readFileString(file(dir)).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Index)),
+    const text = yield* fs.readFileString(file(dir)).pipe(Effect.option);
+    if (text._tag === "None") return null;
+    if (decoded?.text === text.value) return decoded.samples;
+    const samples = yield* Schema.decodeEffect(Index)(text.value).pipe(
       Effect.orElseSucceed(() => null),
     );
+    if (samples !== null) decoded = { text: text.value, samples };
+    return samples;
   });
 const samples = (run: string, workflow: string, lines: ReadonlyArray<StepLine>): Sample[] =>
   Arr.flatMap(lines, (line) => {
@@ -40,24 +46,30 @@ const samples = (run: string, workflow: string, lines: ReadonlyArray<StepLine>):
   });
 const latest = (all: ReadonlyArray<Sample>) => {
   const kept: Sample[] = [];
-  for (const one of [...all].sort((a, b) => pipe_(b.at, Str.localeCompare(a.at)))) {
-    if (Arr.some(kept, (other) => other.run === one.run && other.key === one.key)) continue;
-    if (
-      Arr.filter(kept, (other) => other.workflow === one.workflow && other.step === one.step)
-        .length < 10
-    )
-      kept.push(one);
+  const runs = new Set<string>();
+  const perStep = new Map<string, number>();
+  for (const one of Arr.sort(
+    all,
+    Order.mapInput(Order.flip(Str.Order), (one: Sample) => one.at),
+  )) {
+    const run = JSON.stringify([one.run, one.key]);
+    const step = JSON.stringify([one.workflow, one.step]);
+    const count = perStep.get(step) ?? 0;
+    if (runs.has(run) || count >= 10) continue;
+    runs.add(run);
+    perStep.set(step, count + 1);
+    kept.push(one);
   }
   return kept;
 };
 const write = (dir: string, values: ReadonlyArray<Sample>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(
-      `${file(dir)}.tmp`,
-      yield* Schema.encodeEffect(Index)(latest(values)).pipe(Effect.orDie),
-    );
+    const samples = latest(values);
+    const text = yield* Schema.encodeEffect(Index)(samples).pipe(Effect.orDie);
+    yield* fs.writeFileString(`${file(dir)}.tmp`, text);
     yield* fs.rename(`${file(dir)}.tmp`, file(dir));
+    decoded = { text, samples };
   }).pipe(Effect.orDie);
 
 /** Rebuild once when absent; board reads never visit historical Run records. */
@@ -88,13 +100,12 @@ export const rememberStepDurations = (
     }),
   );
 const usualOf = (samples: ReadonlyArray<Sample>, workflow: string) => {
-  const all = Arr.filter(samples, (one) => one.workflow === workflow);
+  const byStep = new Map<string, number[]>();
+  for (const one of samples)
+    if (one.workflow === workflow) byStep.set(one.step, [...(byStep.get(one.step) ?? []), one.ms]);
   const usual = new Map<string, number>();
-  for (const step of new Set(Arr.map(all, (one) => one.step))) {
-    const values = Arr.map(
-      Arr.filter(all, (one) => one.step === step),
-      (one) => one.ms,
-    ).sort((a, b) => a - b);
+  for (const [step, unsorted] of byStep) {
+    const values = unsorted.sort((a, b) => a - b);
     if (values.length < 3) continue;
     const middle = Math.floor(values.length / 2);
     usual.set(
@@ -105,16 +116,25 @@ const usualOf = (samples: ReadonlyArray<Sample>, workflow: string) => {
   return usual;
 };
 
+let usual:
+  | {
+      readonly samples: ReadonlyArray<Sample>;
+      readonly byWorkflow: ReadonlyMap<string, ReadonlyMap<string, number>>;
+    }
+  | undefined;
 export const stepTimesByWorkflow = (dir: string) =>
   read(dir).pipe(
     Effect.map((samples) => {
+      if (samples !== null && usual?.samples === samples) return usual.byWorkflow;
       const all = samples ?? [];
-      return new Map(
+      const byWorkflow = new Map(
         Arr.map([...new Set(Arr.map(all, (one) => one.workflow))], (workflow) => [
           workflow,
           usualOf(all, workflow),
         ]),
       );
+      if (samples !== null) usual = { samples, byWorkflow };
+      return byWorkflow;
     }),
   );
 

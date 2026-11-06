@@ -96,12 +96,20 @@ export const boardMessages = <R>(options: {
   Stream.unwrap(
     Effect.sync(() => {
       let seq = 0;
-      let told: Map<string, string> | null = null;
+      let told: Map<string, { readonly view: TaskView; readonly text: string }> | null = null;
       const changesTo = (views: ReadonlyArray<TaskView>): BoardMessage[] => {
-        const now = new Map(Arr.map(views, (view) => [view.id, JSON.stringify(view)]));
+        const now = new Map(
+          Arr.map(views, (view) => {
+            const was = told?.get(view.id);
+            return [
+              view.id,
+              was?.view === view ? was : { view, text: JSON.stringify(view) },
+            ] as const;
+          }),
+        );
         const out: BoardMessage[] = [];
         for (const view of views) {
-          if (told?.get(view.id) !== now.get(view.id))
+          if (told?.get(view.id)?.text !== now.get(view.id)!.text)
             out.push({ _tag: "Upsert", seq: ++seq, task: view });
         }
         for (const id of told?.keys() ?? []) {

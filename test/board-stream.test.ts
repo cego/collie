@@ -29,12 +29,14 @@ import {
   PROTOCOL,
   TaskView,
   type BoardSnapshot,
+  recordIn,
 } from "../src/board-model";
 import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
-import { BUILD, boardWrites, connect, drawerWrites, frontDoor, socketOf } from "../src/host";
+import { BUILD, boardWrites, connect, frontDoor, socketOf } from "../src/host";
+import { drawerWrites } from "../src/record";
 import { handoffsIn } from "../src/handoffs";
 import { followDetail } from "../src/run-detail";
 import { foundationLayer } from "../src/engine";
@@ -251,6 +253,7 @@ const readsOnlyOnTicks = (drawer: boolean) =>
         if (drawer) {
           const opened = yield* Deferred.make<void>();
           yield* door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+            Stream.map(recordIn),
             Stream.tap(() => Deferred.succeed(opened, undefined)),
             Stream.runDrain,
             Effect.ignore,
@@ -363,6 +366,7 @@ test(
           const door = yield* frontDoor(socketOf(world.state));
           const drawn = () =>
             door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+              Stream.map(recordIn),
               Stream.runHead,
               Effect.map((one) => actionsOf(Option.getOrNull(one)?.flow, agent)),
             );

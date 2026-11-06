@@ -10,7 +10,7 @@ export const failureOf = (cause: Cause.Cause<Failed>) => {
   const found = Cause.findError(cause);
   return Result.isSuccess(found) && found.success._tag === "ActionFailed"
     ? found.success
-    : { reason: saidOf(cause), request: undefined };
+    : { reason: saidOf(cause), request: undefined, step: undefined };
 };
 
 /** A gesture's request, sent again on every Try again. */
@@ -36,7 +36,7 @@ export const actionRunner = (
   /**
    * One gesture is one request, minted here so every Try again sends it again, whatever
    * failed: the host takes it once. `unsent` says, at each try, why not to send it;
-   * `tried` hears each try start (null) and end.
+   * `tried` hears each try start (null) and end, and what refused it.
    */
   const run = (
     installation: string,
@@ -44,7 +44,7 @@ export const actionRunner = (
     again?: string,
     applied?: () => void,
     unsent?: () => string | undefined,
-    tried?: (done: boolean | null) => void,
+    tried?: (done: boolean | null, failed?: ReturnType<typeof failureOf>) => void,
   ): Promise<boolean> => {
     const request = again ?? newRequest();
     const why = unsent?.();
@@ -61,9 +61,10 @@ export const actionRunner = (
         tell({ title: exit.value, color: "success" });
         return true;
       }
-      tried?.(false);
+      const failed = failureOf(exit.cause);
+      tried?.(false, failed);
       tell({
-        title: failureOf(exit.cause).reason,
+        title: failed.reason,
         color: "error",
         actions: [
           {

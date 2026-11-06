@@ -3,19 +3,24 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Exit, Fiber, Queue, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Queue, Result, Stream } from "effect";
 import {
   act,
   definitionsIn,
   DoorMap,
   type Door,
+  type Doors,
   offersOn,
-  runDetailOn,
+  recordEvents,
+  type RecordEvent,
 } from "../desktop/src/bun/machine";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import { HostRefused, type RunDetail } from "../src/board-model";
 import type { HostDefinitions } from "../src/definitions-model";
-import { ActionFailed } from "../desktop/src/shared/flock";
+import { ActionFailed, type KeptRecord } from "../desktop/src/shared/flock";
+import { recordKeeper } from "../desktop/src/bun/records";
+import { asOfSaid, recordStanding, refusal } from "../desktop/src/shared/kept-records";
+import { frameAt, recordDoor, unchanged, type Asked } from "./support/record-doors";
 import { fastForward } from "./support/effect";
 
 const machine = { profile: "vm", name: "vm-mk" };
@@ -24,6 +29,13 @@ const reached = (fake: Partial<Door>) => {
   const desktop = fake as Door;
   return { machine, desktop };
 };
+/** A Run's details as its record's frames carry them. */
+const runDetailOn = (doors: DoorMap<Pick<Doors, "record">>, installation: string, runId: string) =>
+  recordEvents(doors, installation, runId).pipe(
+    Stream.filterMap((event: RecordEvent) =>
+      event._tag === "Frame" ? Result.succeed(event.detail) : Result.failVoid,
+    ),
+  );
 const titles = (details: ReadonlyArray<{ readonly title: string } | null>) =>
   Arr.map(details, (detail) => detail?.title);
 
@@ -68,27 +80,30 @@ const detailDoor = (name: string, open: Set<string>) =>
     Queue.unbounded<string, { readonly _tag: "Closed" | "Broken" | "Died" }>(),
     (queue) => ({
       queue,
-      door: reached({
-        // SAFETY: a stream, as the client gives one when not asked for a queue.
-        runDetail: (() =>
-          Stream.fromQueue(queue).pipe(
-            // SAFETY: the tests read only a detail's title.
-            Stream.map((title) => ({ title }) as RunDetail),
-            Stream.catch(({ _tag }) =>
-              _tag === "Died"
-                ? Stream.die(new Error("the Run could not be read"))
-                : _tag === "Broken"
-                  ? Stream.fail(
-                      new RpcClientError({
-                        reason: new RpcClientDefect({ message: "socket closed", cause: null }),
-                      }),
-                    )
-                  : Stream.fromEffect(Effect.interrupt),
-            ),
-            Stream.onStart(Effect.sync(() => open.add(name))),
-            Stream.ensuring(Effect.sync(() => open.delete(name))),
-          )) as Door["runDetail"],
-      }),
+      door: {
+        // SAFETY: the tests read only a record's details.
+        record: {
+          // SAFETY: a stream, as the client gives one when not asked for a queue.
+          runDetail: (() =>
+            Stream.fromQueue(queue).pipe(
+              // SAFETY: the tests read only a detail's title.
+              Stream.map((title) => ({ title }) as RunDetail),
+              Stream.catch(({ _tag }) =>
+                _tag === "Died"
+                  ? Stream.die(new Error("the Run could not be read"))
+                  : _tag === "Broken"
+                    ? Stream.fail(
+                        new RpcClientError({
+                          reason: new RpcClientDefect({ message: "socket closed", cause: null }),
+                        }),
+                      )
+                    : Stream.fromEffect(Effect.interrupt),
+              ),
+              Stream.onStart(Effect.sync(() => open.add(name))),
+              Stream.ensuring(Effect.sync(() => open.delete(name))),
+            )) as Door["runDetail"],
+        } as Door,
+      },
     }),
   );
 
@@ -96,7 +111,7 @@ test("a Run's details follow its Machine from door to door, closed or broken, wi
   Effect.runPromise(
     Effect.gen(function* () {
       const open = new Set<string>();
-      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const doors = new DoorMap<Pick<Doors, "record">>();
       const a = yield* detailDoor("a", open);
       const b = yield* detailDoor("b", open);
       const c = yield* detailDoor("c", open);
@@ -120,7 +135,7 @@ test("a Run's details wait for a Machine with no door yet, and end with nothing 
   Effect.runPromise(
     Effect.gen(function* () {
       const open = new Set<string>();
-      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const doors = new DoorMap<Pick<Doors, "record">>();
       const a = yield* detailDoor("a", open);
       const reading = yield* runDetailOn(doors, "i-1", "r-1").pipe(
         Stream.take(1),
@@ -147,7 +162,7 @@ test("a Run's details wait for a Machine with no door yet, and end with nothing 
 test("a door that breaks and stays fails a Run's details", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const doors = new DoorMap<Pick<Doors, "record">>();
       const a = yield* detailDoor("a", new Set());
       doors.set("i-1", a.door);
       yield* Queue.fail(a.queue, { _tag: "Broken" });
@@ -162,7 +177,7 @@ test("a door that breaks and stays fails a Run's details", () =>
 test("a host that cannot read a Run still fails its details", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const doors = new DoorMap<ReturnType<typeof reached>>();
+      const doors = new DoorMap<Pick<Doors, "record">>();
       const a = yield* detailDoor("a", new Set());
       doors.set("i-1", a.door);
       yield* Queue.fail(a.queue, { _tag: "Died" });
@@ -189,4 +204,69 @@ test("a Machine's definitions are read over its door, as its other reads are", (
         "that Machine is not connected",
       );
     }),
+  ));
+
+const keptTitles = (records: ReadonlyArray<KeptRecord>) =>
+  Arr.map(records, ({ detail, asOf }) => ({ title: detail?.title, labelled: asOf !== null }));
+
+test("a kept record is labelled while its door is gone, and current again once the next door says it is unchanged", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Array<Asked> = [];
+      const doors = new DoorMap<Pick<Doors, "record">>();
+      const a = yield* recordDoor(asked);
+      doors.set("i-1", a.door);
+      const keeper = yield* recordKeeper(doors);
+      const pull = yield* keeper.open("i-1", "r-1").pipe(Stream.toPull);
+      yield* a.offer("r-1", frameAt("one", 4));
+      const [current] = yield* pull;
+      expect(keptTitles([current!])).toEqual([{ title: "one", labelled: false }]);
+      expect(recordStanding(current!.asOf, null)).toBeNull();
+
+      doors.delete("i-1");
+      yield* a.close;
+      const [lost] = yield* pull;
+      expect(keptTitles([lost!])).toEqual([{ title: "one", labelled: true }]);
+      const standing = recordStanding(lost!.asOf, null);
+      expect(standing?.title).toBe("Reconnecting");
+      expect(standing?.asOf).toBe(lost!.asOf);
+
+      const b = yield* recordDoor(asked);
+      doors.set("i-1", b.door);
+      yield* b.offer("r-1", unchanged(4));
+      const [again] = yield* pull;
+      expect(keptTitles([again!])).toEqual([{ title: "one", labelled: false }]);
+      expect(Arr.map(asked, ({ held }) => held?.seq)).toEqual([undefined, 4]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a record its host has not confirmed since its door went refuses every action, saying since when", () => {
+  const at = 1_791_000_000_000;
+  expect(refusal(null, null)).toBeNull();
+  expect(refusal("Nothing to follow up", null)).toBe("Nothing to follow up");
+  expect(refusal(null, at)).toBe(`Not current: showing what it last said, ${asOfSaid(at)}`);
+  expect(refusal("Nothing to follow up", at)).toBe("Nothing to follow up");
+});
+
+test("a kept record whose Machine stays out of reach is labelled as its Machine is", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const doors = new DoorMap<Pick<Doors, "record">>();
+      const a = yield* recordDoor([]);
+      doors.set("i-1", a.door);
+      const keeper = yield* recordKeeper(doors);
+      const pull = yield* keeper.open("i-1", "r-1").pipe(Stream.toPull);
+      yield* a.offer("r-1", frameAt("one", 4));
+      yield* pull;
+      doors.delete("i-1");
+      yield* a.close;
+      const [lost] = yield* pull;
+      const outOfReach = { icon: "i-lucide-unplug", title: "vm-mk is out of reach", reason: "" };
+      expect(recordStanding(lost!.asOf, outOfReach)).toEqual({
+        ...outOfReach,
+        asOf: lost!.asOf,
+      });
+      const waited = yield* pull.pipe(Effect.timeoutOption("200 millis"));
+      expect(waited._tag).toBe("None");
+    }).pipe(Effect.scoped),
   ));

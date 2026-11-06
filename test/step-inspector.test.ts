@@ -7,6 +7,7 @@ import { readLaunches } from "../src/launches";
 import { everyRegistered } from "../src/registry";
 import { until } from "./support/host";
 import { collie, proves } from "./support/world";
+import { recordIn } from "../src/board-model";
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 test(
@@ -60,7 +61,7 @@ test(
           const read = () =>
             door
               .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
-              .pipe(Stream.runHead, Effect.map(Option.getOrNull));
+              .pipe(Stream.map(recordIn), Stream.runHead, Effect.map(Option.getOrNull));
           const detail = (yield* until(
             read,
             (one) =>

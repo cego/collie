@@ -100,6 +100,15 @@ export interface Sweeper {
   ) => Effect.Effect<{ freed: number } | { kept: string }, never, PlatformServices>;
 }
 
+/** `sweeper`, judging and removing through `fs`. */
+export const sweepingWith =
+  (fs: FileSystem.FileSystem) =>
+  (sweeper: Sweeper): Sweeper => ({
+    kind: sweeper.kind,
+    judge: Effect.provideService(sweeper.judge, FileSystem.FileSystem, fs),
+    remove: (item) => Effect.provideService(sweeper.remove(item), FileSystem.FileSystem, fs),
+  });
+
 const DAY_MS = 24 * 60 * 60_000;
 const GENERATION_UNUSED_MS = 7 * DAY_MS;
 const JOURNAL_KEEP_MS = 30 * DAY_MS;
@@ -589,9 +598,11 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
         return yield* quiet(target, "nothing reads it any more");
       if (top === "agents") {
         if (pipe(name, Str.endsWith(".json")) || name === "deliveries.log") return null;
-        const ledger = `${target}/${LEDGER_FILE}`;
-        if (yield* fs.exists(ledger).pipe(Effect.orElseSucceed(() => false))) {
-          const runs = yield* readJournal(ledger, LedgerRuns);
+        const inside = yield* fs
+          .readDirectory(target)
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+        if (inside.includes(LEDGER_FILE)) {
+          const runs = yield* readJournal(`${target}/${LEDGER_FILE}`, LedgerRuns);
           return Arr.some(runs, (line) => owned(line.run))
             ? null
             : yield* quiet(target, "a ledger of Runs none of which has a row");
@@ -1686,9 +1697,11 @@ export const retentionSweeper = (opts: {
       const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
       const found: string[] = [];
       for (const name of names) {
-        const ledger = `${root}/${name}/${LEDGER_FILE}`;
-        if (!(yield* fs.exists(ledger).pipe(Effect.orElseSucceed(() => false)))) continue;
-        const lines = yield* readJournal(ledger, LedgerRuns);
+        const inside = yield* fs
+          .readDirectory(`${root}/${name}`)
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+        if (!inside.includes(LEDGER_FILE)) continue;
+        const lines = yield* readJournal(`${root}/${name}/${LEDGER_FILE}`, LedgerRuns);
         if (lines.length > 0 && Arr.every(lines, (line) => gone.has(line.run)))
           found.push(`${root}/${name}`);
       }

@@ -13,7 +13,21 @@
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Context, Effect, Layer, Option, Schema, Stream, flow, Result } from "effect";
+import {
+  Context,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Order,
+  Schedule,
+  type Scope,
+  Schema,
+  Semaphore,
+  Stream,
+  flow,
+  Result,
+} from "effect";
 import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
 import * as Migrator from "effect/sql/Migrator";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -51,6 +65,36 @@ const Run = Schema.Struct({
   accepted: Schema.NullOr(Schema.String),
 });
 export type RunRow = typeof Run.Type;
+
+const RUN_FIELDS = Struct.keys(Run.fields);
+
+/** The Run's Task's rows, their parents and children, and every Run another asked for. */
+const nearOf = (rows: ReadonlyArray<RunRow>, run: string) => {
+  const self = Option.getOrUndefined(Arr.findFirst(rows, (row) => row.run === run));
+  const own = Arr.filter(rows, (row) =>
+    self?.task == null ? row === self : row.task === self.task,
+  );
+  const runs = new Set(Arr.map(own, (row) => row.run));
+  const parents = new Set(Arr.map(own, (row) => row.parent));
+  return Arr.filter(
+    rows,
+    (row) =>
+      runs.has(row.run) ||
+      parents.has(row.run) ||
+      (row.parent !== null && runs.has(row.parent)) ||
+      /requestedby/i.test(row.placing ?? ""),
+  );
+};
+
+/** As every Run is read: by admission, then id. */
+const byAdmission = Order.mapInput(
+  Order.Tuple([Order.String, Order.String]),
+  (row: RunRow) => [row.admitted, row.run] as const,
+);
+
+/** Whether two reads of a Run's row read the same. */
+export const sameRow = (one: RunRow, other: RunRow) =>
+  one === other || Arr.every(RUN_FIELDS, (field) => one[field] === other[field]);
 
 /**
  * A question one run is waiting on: what was asked, what may answer it, and the answer it
@@ -267,15 +311,28 @@ export interface StoreApi {
   /** The run a request id was already admitted as, or null. */
   readonly requested: (request: string) => Effect.Effect<RunRow | null>;
   readonly runs: Effect.Effect<ReadonlyArray<RunRow>>;
+  /**
+   * The rows a Run's record may read, a superset its reader narrows: the Run's Task's, or the
+   * Run's alone outside one, their parents and children, and every Run another asked for.
+   */
+  readonly near: (run: string) => Effect.Effect<ReadonlyArray<RunRow>>;
   /** Whatever this reads, again, whenever a run changes. */
   readonly watching: <A, E>(read: Effect.Effect<A, E>) => Stream.Stream<A, E>;
   /** Every run, again, whenever one is committed. */
   readonly changes: Stream.Stream<ReadonlyArray<RunRow>>;
   /** A run changed where the change was not one of these writes, so readers reread. */
   readonly announce: Effect.Effect<void>;
+  /** Moves whenever the Run's decisions may have changed, which no Run's row shows. Read when called. */
+  readonly decided: Effect.Effect<(run: string) => number>;
 }
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
+
+/** Told the Runs each write of this store's names. */
+export class StoreWrites extends Context.Service<
+  StoreWrites,
+  (runs: ReadonlyArray<string>) => void
+>()("collie/StoreWrites") {}
 
 export const storeLayer: Layer.Layer<Store, never, SqlClient.SqlClient | Reactivity.Reactivity> =
   Layer.effect(Store)(makeStore());
@@ -365,7 +422,14 @@ const MIGRATIONS = {
   }),
 };
 
-function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | Reactivity.Reactivity> {
+/** How often a commit by another connection, another process's, is looked for. */
+const ELSEWHERE_EVERY = "250 millis";
+
+function makeStore(): Effect.Effect<
+  StoreApi,
+  never,
+  SqlClient.SqlClient | Reactivity.Reactivity | Scope.Scope
+> {
   return Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const reactivity = yield* Reactivity.Reactivity;
@@ -375,6 +439,44 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       loader: Migrator.fromRecord(MIGRATIONS),
       table: "collie_migrations",
     }).pipe(Effect.orDie);
+    // SQLite moves `data_version` only for another connection's commits.
+    const dataVersion = sql<{ readonly data_version: number }>`PRAGMA data_version`.pipe(
+      Effect.map((rows) => rows[0]?.data_version ?? 0),
+      Effect.orElseSucceed(() => 0),
+    );
+    let seen = yield* dataVersion;
+    /** Moves with every write to the Runs, so a read of them stands until the next. */
+    let written = 0;
+    /** The Runs written since the last read, or every Run where that is not known. */
+    let dirty: Set<string> | "all" = "all";
+    const told = Option.getOrUndefined(yield* Effect.serviceOption(StoreWrites));
+    const wrote = (runs?: ReadonlyArray<string>) =>
+      Effect.sync(() => {
+        written++;
+        // Another connection's commit names no Run, and only the host writes a Run's row (ADR-0040).
+        if (runs !== undefined) told?.(runs);
+        if (runs === undefined) dirty = "all";
+        else if (dirty !== "all") for (const run of runs) dirty.add(run);
+      });
+    const invalidate = Effect.andThen(wrote(), reactivity.invalidate(RUNS));
+    const mutation = <A, E, R>(runs: ReadonlyArray<string>, effect: Effect.Effect<A, E, R>) =>
+      reactivity.mutation(RUNS, Effect.ensuring(effect, wrote(runs)));
+    let elsewhere = 0;
+    const decisions = new Map<string, number>();
+    const decide = (run: string) =>
+      Effect.sync(() => {
+        decisions.set(run, (decisions.get(run) ?? 0) + 1);
+        told?.([run]);
+      });
+    yield* Effect.forkScoped(
+      Effect.gen(function* () {
+        const now = yield* dataVersion;
+        if (now === seen) return;
+        seen = now;
+        elsewhere++;
+        yield* invalidate;
+      }).pipe(Effect.repeat(Schedule.spaced(ELSEWHERE_EVERY))),
+    );
 
     const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, provenance, options, checkout, asked, placing, admitted, accepted`;
 
@@ -465,7 +567,54 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       execute: () => sql`SELECT name, workflow, entry FROM collie_generations ORDER BY rowid`,
     });
 
-    const all = everyRun().pipe(Effect.orDie);
+    let read: { readonly at: number; readonly rows: ReadonlyArray<RunRow> } | null = null;
+    /** Every Run, read again only after a write, each unchanged row the one read before. */
+    const refreshing = Semaphore.makeUnsafe(1);
+    const refresh = Effect.suspend(() => {
+      if (read?.at === written) return Effect.succeed(read.rows);
+      const at = written;
+      const which = dirty;
+      dirty = new Set();
+      const kept = read?.rows ?? [];
+      const fresh =
+        which === "all" || read === null
+          ? everyRun()
+          : Effect.map(
+              Effect.forEach([...which], (run) => byRun(run)),
+              (written) => {
+                const now = new Map(Arr.map(written.flat(), (row) => [row.run, row] as const));
+                const rows = Arr.filter(kept, (row) => !which.has(row.run) || now.has(row.run));
+                const known = new Set(Arr.map(rows, (row) => row.run));
+                const added = Arr.filter([...now.values()], (row) => !known.has(row.run));
+                const merged = Arr.map(rows, (row) => now.get(row.run) ?? row);
+                return added.length === 0 ? merged : Arr.sort([...merged, ...added], byAdmission);
+              },
+            );
+      return fresh.pipe(
+        Effect.orDie,
+        Effect.map((fresh) => {
+          const before = new Map(Arr.map(kept, (row) => [row.run, row] as const));
+          const rows = Arr.map(fresh, (row) => {
+            const was = before.get(row.run);
+            return was !== undefined && sameRow(was, row) ? was : row;
+          });
+          // Writes made since `at` are in `dirty`, so these rows stand for every one before.
+          read = { at, rows };
+          return rows;
+        }),
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : Effect.sync(() => {
+                if (which === "all") dirty = "all";
+                else if (dirty !== "all") for (const run of which) dirty.add(run);
+              }),
+        ),
+      );
+    });
+    const all = Effect.suspend(() =>
+      read?.at === written ? Effect.succeed(read.rows) : refreshing.withPermit(refresh),
+    );
 
     return {
       remember: (generation: GenerationRow) =>
@@ -493,6 +642,8 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
               ON CONFLICT(run, decision) DO UPDATE SET reached = excluded.reached
                 WHERE excluded.reached IS NOT NULL
             `;
+          yield* decide(question.run);
+          yield* wrote([question.run]);
           yield* reactivity.invalidate(RUNS);
         }).pipe(Effect.orDie),
 
@@ -504,13 +655,13 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
           answer.answerer?.origin === "agent" && answer.answerer.from?.run === answer.run
             ? (answer.answerer.from.agent ?? null)
             : null;
+        yield* decide(answer.run);
         // One write over the row while it is still open. Whoever it returns a row to is the
         // answer; everybody else reads what landed and is told so. A superseded workflow
         // question with no revision still takes the messaged agent's answer (D8).
-        const settled = yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
+        const settled = yield* mutation(
+          [answer.run],
+          sql`
               UPDATE collie_decisions
               SET answer = ${answer.value}, request = ${answer.request}, answered = ${at},
                 answerer = ${answer.answerer === undefined ? null : answererText(answer.answerer)}
@@ -527,8 +678,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
                 ))
               RETURNING decision
             `,
-          )
-          .pipe(Effect.orDie);
+        ).pipe(Effect.orDie);
         const [row] = yield* decisionRow({ run: answer.run, decision: answer.decision }).pipe(
           Effect.orDie,
         );
@@ -547,20 +697,19 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
       supersede: Effect.fn("Store.supersede")(function* (superseding) {
         const at = yield* nowIso;
-        const written = yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
-              UPDATE collie_decisions
-              SET superseded = ${at}, cause = ${superseding.cause},
-                superseder = ${answererText(superseding.actor)},
-                messaged = ${asJsonText([{ agent: superseding.agent, at }])}
-              WHERE run = ${superseding.run} AND decision = ${superseding.decision}
-                AND answer IS NULL AND superseded IS NULL
-              RETURNING decision
-            `,
-          )
-          .pipe(Effect.orDie);
+        yield* decide(superseding.run);
+        const written = yield* mutation(
+          [superseding.run],
+          sql`
+            UPDATE collie_decisions
+            SET superseded = ${at}, cause = ${superseding.cause},
+              superseder = ${answererText(superseding.actor)},
+              messaged = ${asJsonText([{ agent: superseding.agent, at }])}
+            WHERE run = ${superseding.run} AND decision = ${superseding.decision}
+              AND answer IS NULL AND superseded IS NULL
+            RETURNING decision
+          `,
+        ).pipe(Effect.orDie);
         const [row] = yield* decisionRow({
           run: superseding.run,
           decision: superseding.decision,
@@ -577,25 +726,24 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
       revise: Effect.fn("Store.revise")(function* (revising) {
         const at = yield* nowIso;
-        const opened = yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
-              INSERT INTO collie_decisions (run, decision, prompt, options, asked, revises)
-              SELECT run, ${revising.name}, prompt, options, ${at}, decision
-              FROM collie_decisions
-              WHERE run = ${revising.run} AND decision = ${revising.decision}
-                AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL
-                AND json(messaged) = json(${asJsonText(revising.messaged)})
-                AND NOT EXISTS (
-                  SELECT 1 FROM collie_decisions revision
-                  WHERE revision.run = ${revising.run} AND revision.revises = ${revising.decision}
-                )
-              ON CONFLICT(run, decision) DO NOTHING
-              RETURNING decision
-            `,
-          )
-          .pipe(Effect.orDie);
+        yield* decide(revising.run);
+        const opened = yield* mutation(
+          [revising.run],
+          sql`
+            INSERT INTO collie_decisions (run, decision, prompt, options, asked, revises)
+            SELECT run, ${revising.name}, prompt, options, ${at}, decision
+            FROM collie_decisions
+            WHERE run = ${revising.run} AND decision = ${revising.decision}
+              AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL
+              AND json(messaged) = json(${asJsonText(revising.messaged)})
+              AND NOT EXISTS (
+                SELECT 1 FROM collie_decisions revision
+                WHERE revision.run = ${revising.run} AND revision.revises = ${revising.decision}
+              )
+            ON CONFLICT(run, decision) DO NOTHING
+            RETURNING decision
+          `,
+        ).pipe(Effect.orDie);
         return opened.length > 0;
       }),
 
@@ -605,26 +753,25 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
       alsoMessaged: Effect.fn("Store.alsoMessaged")(function* (messaging) {
         const at = yield* nowIso;
-        const written = yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
-              UPDATE collie_decisions
-              SET messaged = json_insert(
-                (SELECT json_group_array(json(value)) FROM json_each(collie_decisions.messaged)
-                  WHERE json_extract(value, '$.agent') <> ${messaging.agent}),
-                '$[#]', json_object('agent', ${messaging.agent}, 'at', ${at})
+        yield* decide(messaging.run);
+        const written = yield* mutation(
+          [messaging.run],
+          sql`
+            UPDATE collie_decisions
+            SET messaged = json_insert(
+              (SELECT json_group_array(json(value)) FROM json_each(collie_decisions.messaged)
+                WHERE json_extract(value, '$.agent') <> ${messaging.agent}),
+              '$[#]', json_object('agent', ${messaging.agent}, 'at', ${at})
+            )
+            WHERE run = ${messaging.run} AND decision = ${messaging.decision}
+              AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM collie_decisions revision
+                WHERE revision.run = ${messaging.run} AND revision.revises = ${messaging.decision}
               )
-              WHERE run = ${messaging.run} AND decision = ${messaging.decision}
-                AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL
-                AND NOT EXISTS (
-                  SELECT 1 FROM collie_decisions revision
-                  WHERE revision.run = ${messaging.run} AND revision.revises = ${messaging.decision}
-                )
-              RETURNING decision
-            `,
-          )
-          .pipe(Effect.orDie);
+            RETURNING decision
+          `,
+        ).pipe(Effect.orDie);
         return written.length > 0;
       }),
 
@@ -641,10 +788,9 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         // The claim is the insert, and what it returns is whether this caller made it:
         // one request id, one row, decided by the database rather than by a read another
         // caller could be between.
-        const claimed = yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
+        const claimed = yield* mutation(
+          [admission.run],
+          sql`
               INSERT INTO collie_runs
                 (run, request, workflow, project, input, generation, execution,
                  task, parent, provenance, options, asked, placing, admitted)
@@ -658,8 +804,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
               ON CONFLICT(request) DO NOTHING
               RETURNING run
             `,
-          )
-          .pipe(Effect.orDie);
+        ).pipe(Effect.orDie);
 
         const [row] = yield* byRequest(admission.request).pipe(Effect.orDie);
         if (row === undefined) {
@@ -683,62 +828,56 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       accepted: (run: string) =>
         Effect.gen(function* () {
           const at = yield* nowIso;
-          yield* reactivity.mutation(
-            RUNS,
-            sql`UPDATE collie_runs SET accepted = ${at} WHERE run = ${run}`,
-          );
+          yield* mutation([run], sql`UPDATE collie_runs SET accepted = ${at} WHERE run = ${run}`);
         }).pipe(Effect.orDie),
 
       place: Effect.fn("Store.place")(function* (run, placed) {
-        yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
+        yield* mutation(
+          [run],
+          sql`
               UPDATE collie_runs
               SET checkout = ${placed.checkout}, task = COALESCE(${placed.task}, task)
               WHERE run = ${run}
             `,
-          )
-          .pipe(Effect.orDie);
+        ).pipe(Effect.orDie);
         const [row] = yield* byRun(run).pipe(Effect.orDie);
         if (row === undefined) return yield* Effect.die(new Error(`run "${run}" is not admitted`));
         return row;
       }),
 
       recordPlacing: (run, placing) =>
-        reactivity
-          .mutation(
-            RUNS,
-            sql`UPDATE collie_runs SET placing = ${placing} WHERE run = ${run} AND checkout IS NULL`,
-          )
-          .pipe(Effect.asVoid, Effect.orDie),
+        mutation(
+          [run],
+          sql`UPDATE collie_runs SET placing = ${placing} WHERE run = ${run} AND checkout IS NULL`,
+        ).pipe(Effect.asVoid, Effect.orDie),
 
       forget: (run: string) =>
-        reactivity
-          .mutation(RUNS, sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`)
-          .pipe(Effect.asVoid, Effect.orDie),
+        mutation([run], sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`).pipe(
+          Effect.asVoid,
+          Effect.orDie,
+        ),
       retire: <E>(runs: ReadonlyArray<string>, clear: (row: RunRow) => Effect.Effect<void, E>) =>
-        reactivity
-          .mutation(
-            RUNS,
-            sql.withTransaction(
-              Effect.gen(function* () {
-                const gone: string[] = [];
-                for (const run of runs) {
-                  const row = (yield* byRun(run).pipe(Effect.orDie))[0];
-                  if (row === undefined || row.accepted === null) continue;
-                  yield* clear(row);
-                  yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
-                  yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
-                  gone.push(run);
-                }
-                return gone;
-              }),
-            ),
-          )
-          .pipe(Effect.catchTag("SqlError", Effect.die)),
+        mutation(
+          runs,
+          sql.withTransaction(
+            Effect.gen(function* () {
+              const gone: string[] = [];
+              for (const run of runs) {
+                const row = (yield* byRun(run).pipe(Effect.orDie))[0];
+                if (row === undefined || row.accepted === null) continue;
+                yield* clear(row);
+                yield* decide(run);
+                yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
+                gone.push(run);
+              }
+              return gone;
+            }),
+          ),
+        ).pipe(Effect.catchTag("SqlError", Effect.die)),
       pending: unaccepted().pipe(Effect.orDie),
       runs: all,
+      near: (run: string) => Effect.map(all, (rows) => nearOf(rows, run)),
       run: (run: string) =>
         byRun(run).pipe(
           Effect.map((rows) => rows[0] ?? null),
@@ -751,7 +890,9 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         ),
       watching: (read) => reactivity.stream(RUNS, read),
       changes: sql.reactive(RUNS, all),
+      // Only this store writes the Runs, so an announce moves none of their rows.
       announce: reactivity.invalidate(RUNS),
+      decided: Effect.succeed((run: string) => elsewhere + (decisions.get(run) ?? 0)),
     } satisfies StoreApi;
   });
 }

@@ -19,6 +19,7 @@ import {
 } from "effect";
 import { startedBy, type AuditLine } from "../src/audit";
 import type { RunDetail } from "../src/board-model";
+import { recordIn } from "../src/board-model";
 import { evidenceDir, runDir } from "../src/engine";
 import { currentEnv } from "../src/env";
 import { appState } from "../src/flows";
@@ -68,6 +69,7 @@ test(
           const reading = yield* door
             .runDetail({ runId, tail: true, pages: 1, refreshMr: false })
             .pipe(
+              Stream.map(recordIn),
               Stream.tap((detail) => Effect.sync(() => seen.push(detail))),
               Stream.takeUntil(
                 (detail) =>
@@ -139,7 +141,7 @@ test(
           const door = yield* frontDoor(socketOf(world.state));
           const detail = yield* door
             .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-            .pipe(Stream.runHead, Effect.timeout("30 seconds"));
+            .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
           expect(Option.getOrNull(detail)?.handoffFiles).toEqual([
             { name: "review/notes.md", bytes: 17 },
           ]);
@@ -188,7 +190,7 @@ test(
 
           const detail = yield* (yield* frontDoor(socketOf(world.state)))
             .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-            .pipe(Stream.runHead, Effect.timeout("30 seconds"));
+            .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
           expect(Option.getOrNull(detail)?.replies).toEqual(replies);
           yield* stopHost(world.state);
         }).pipe(Effect.orDie),
@@ -225,6 +227,7 @@ test(
           const detail = yield* door
             .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
             .pipe(
+              Stream.map(recordIn),
               Stream.filter((one) => one?.mr?._tag === "Details"),
               Stream.runHead,
               Effect.timeout("30 seconds"),
@@ -728,7 +731,7 @@ test(
           const door = yield* frontDoor(socketOf(world.state));
           const detail = yield* door
             .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
-            .pipe(Stream.runHead, Effect.timeout("30 seconds"));
+            .pipe(Stream.map(recordIn), Stream.runHead, Effect.timeout("30 seconds"));
           expect(Option.getOrNull(detail)?.startedBy).toBe("Started from the CLI");
           const shown = yield* collie(world, ["run", "show", runId]);
           expect(shown.envelope).toMatchObject({

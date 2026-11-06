@@ -13,6 +13,7 @@ import { Herdr } from "./herdr";
 import { HostUnavailable, connect, peerChannel, socketOf } from "./host";
 import { ensurePaired, riding } from "./lifecycle";
 import { machineName } from "./peers";
+import { recordMarks, relayedRecords } from "./record-marks";
 /** Where this channel came from: the computer the front door names, and the SSH client sshd saw. */
 const whereFrom = Effect.fn("Bridge.whereFrom")(function* (client: string | null) {
   const connection = yield* Config.option(Config.String("SSH_CONNECTION")).pipe(
@@ -67,15 +68,28 @@ export const bridge = Effect.fn("Bridge")(function* (
             ),
           ),
         );
+  const mark = yield* recordMarks;
+  const run = Effect.runForkWith(yield* Effect.context<never>());
+  const relayed = relayedRecords();
+  const fromHost = new TextDecoder();
+  const toHost = new TextDecoder();
   return yield* channelInto(socket, declaration, {
     ready: () => process.stdout.write(`${BRIDGE_READY}\n`),
-    write: (chunk) => process.stdout.write(chunk),
+    write: (chunk) => {
+      process.stdout.write(chunk);
+      if (mark !== null)
+        for (const runId of relayed.answered(fromHost.decode(chunk, { stream: true })))
+          run(mark("bridge:relay", runId));
+    },
     end: (done) => {
       process.stdin.destroy();
       process.stdout.write("", done);
     },
     read: (deliver, done) => {
-      process.stdin.on("data", deliver);
+      process.stdin.on("data", (chunk: Buffer) => {
+        if (mark !== null) relayed.asked(toHost.decode(chunk, { stream: true }));
+        deliver(chunk);
+      });
       process.stdin.on("end", done);
     },
   }).pipe(

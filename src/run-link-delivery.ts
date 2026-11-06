@@ -4,11 +4,12 @@ import type { RunView } from "./engine";
 import type { PluginEnv } from "./env";
 import { currentOf, linkSaid, linkState } from "./flow";
 import { laneFor } from "./flow-read";
+import { settledSaid } from "./flow-timing";
 import { asksRun } from "./lifecycle";
 import { machineName, peersOf } from "./peers";
 import { readLinkDeliveries, recordLinkDelivery, type RunLinkNotice } from "./run-links";
 import { factsOfView } from "./runs";
-import { nowIso } from "./time";
+import { epochMs, nowIso } from "./time";
 
 export const notifyRunLink = Effect.fn("RunLinks.notify")(function* (
   env: PluginEnv,
@@ -41,14 +42,17 @@ export const notifyRunLink = Effect.fn("RunLinks.notify")(function* (
       phase,
       state: linkState(run.state),
       at,
-      said: linkSaid({
-        ...run,
-        finished: phase === "settled" ? at : null,
-        mrState: null,
-        current:
-          Option.getOrUndefined(Arr.findFirst(lane.nodes, (one) => one.id === current?.node))
-            ?.said ?? null,
-      }),
+      said: settledSaid(
+        linkSaid({
+          ...run,
+          finished: phase === "settled" ? at : null,
+          mrState: null,
+          current:
+            Option.getOrUndefined(Arr.findFirst(lane.nodes, (one) => one.id === current?.node))
+              ?.said ?? null,
+        }),
+        epochMs(at),
+      ).said,
     };
     const sent = yield* asksRun(
       { ...env, machine: peer.name, pairs: false },

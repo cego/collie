@@ -8,7 +8,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
-import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
 import { AUDIT_FILE, readAudit } from "./audit";
 import { FINAL_DIFF, planDirOf } from "./run-detail";
 import { openReports, readDrift } from "./drift";
@@ -38,7 +38,7 @@ import {
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
-import { markersOf, runningCheck } from "./checks";
+import { type KeptMarkers, markersOf, runningCheck } from "./checks";
 import { recordsIn } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
@@ -56,6 +56,7 @@ import type {
   RunningCheck,
 } from "./board-model";
 import { laneWaitOf, stripOf } from "./flow";
+import { Foreground } from "./foreground";
 import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName } from "./peers";
 import { everyDelivery, SENT_STATES, toldIn, type Delivery } from "./steering";
@@ -640,18 +641,24 @@ export function checksAt(
 }
 
 /** The commit the Run's branch is at now in its checkout, or null where that cannot be read. */
-const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
+export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: RunFacts) {
   if (run.branch === null) return null;
-  const key = `${run.cwd}\0${run.branch}`;
-  const known = heads.get(key);
-  if (known !== undefined && now - known.at < HEAD_FOR_MS) return known.sha;
   const read = yield* shell(
     "git",
     ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
     run.cwd,
   );
   const sha = Str.trim(read.stdout);
-  const head = read.code === 0 && sha !== "" ? sha : null;
+  return read.code === 0 && sha !== "" ? sha : null;
+});
+
+/** `readBranchHead`, read again only once `HEAD_FOR_MS` has passed. */
+const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
+  if (run.branch === null) return null;
+  const key = `${run.cwd}\0${run.branch}`;
+  const known = heads.get(key);
+  if (known !== undefined && now - known.at < HEAD_FOR_MS) return known.sha;
+  const head = yield* readBranchHead(run);
   heads.set(key, { at: now, sha: head });
   return head;
 });
@@ -944,6 +951,44 @@ const READS_AT_ONCE = 8;
 /** How long a Run has been going by default before silence is worth saying. */
 const DEFAULT_QUIET_MS = 5 * 60_000;
 
+/** How often a going card is derived again with nothing of it written: the host's tick. */
+const GOING_EVERY_MS = 5_000;
+
+/** A Task's card as a build derived it, kept until what it was derived from moves. */
+export interface KeptCard {
+  readonly key: string;
+  /** When time alone next changes what the card says. */
+  readonly due: number;
+  readonly view: TaskView | null;
+  /** The card said again at a later time, where only its ages move; null once it leaves the board. */
+  readonly retimed?: ((now: number) => Retimed | null) | undefined;
+}
+
+interface Retimed {
+  readonly view: TaskView;
+  readonly due: number;
+}
+
+/** Cards kept from one build to the next, and the revision a set of Runs is at. */
+export interface KeptCards {
+  readonly revision: (runs: ReadonlyArray<string>) => number;
+  readonly kept: Map<string, KeptCard>;
+  readonly markers: KeptMarkers["markers"];
+}
+
+const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+
+/** When an age measured from `then` next reads differently: each second, minute, hour or day. */
+const nextChange = (then: number, now: number) => {
+  if (!(then > 0)) return Infinity;
+  if (now < then) return then;
+  const size = Option.getOrElse(
+    Arr.findFirst([86_400_000, 3_600_000, 60_000], (unit) => now - then >= unit),
+    () => 1_000,
+  );
+  return then + (Math.floor((now - then) / size) + 1) * size;
+};
+
 /**
  * Every Task on the Herd's board, Herd-wide, in the order the board draws them.
  *
@@ -974,9 +1019,15 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   only?: string;
   /** Where each Task's whole Flow is put, by the Task's id. */
   flows?: Map<string, Flow>;
+  /** The commit a Run's branch is at; read through a minute's cache where not given. */
+  head?: (run: RunFacts) => Effect.Effect<string | null>;
+  /** Cards from the last build, reused where nothing they were derived from moved. */
+  cards?: KeptCards;
 }) {
   const { stateDir } = opts.env;
-  const now = opts.now ?? (yield* Clock.currentTimeMillis);
+  const { boundary } = yield* Foreground;
+  const wall = yield* Clock.currentTimeMillis;
+  const now = opts.now ?? wall;
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(
@@ -989,7 +1040,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
   const records = yield* recordsIn(stateDir);
-  const markers = yield* markersOf(all, records);
+  const keptCards = opts.only === undefined ? opts.cards : undefined;
+  const markers = yield* markersOf(
+    all,
+    records,
+    keptCards && { revision: (run) => keptCards.revision([run]), markers: keptCards.markers },
+  );
   const checked = new Set(Arr.map(records, (record) => record.run));
   // Every agent's ledger, read only once a card has a finished Run to look for a steer to.
   const deliveries =
@@ -1028,6 +1084,47 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only))
           return null;
         const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
+        const cards = opts.only === undefined ? opts.cards : undefined;
+        const key =
+          cards === undefined
+            ? ""
+            : cardKey([
+                cards.revision(
+                  Arr.flatMap(everyRun, (run) => [
+                    run.id,
+                    ...(run.parent === null ? [] : [run.parent]),
+                    ...Arr.map(flowInputs.children.get(run.id) ?? [], (child) => child.id),
+                  ]),
+                ),
+                Arr.map(everyRun, (run) => [
+                  run.id,
+                  markers.get(run.id) ?? null,
+                  checked.has(run.id),
+                ]),
+                tasks.get(runs[0]!.task ?? "") ?? null,
+                agentsOf(everyRun, registered, live),
+                pending,
+                Arr.map(
+                  Arr.filter(Arr.map(everyRun, mrOf), (one) => one !== null),
+                  (one) => [mrStates.get(mrLabel(one)) ?? null, forge.get(mrLabel(one)) ?? null],
+                ),
+                since,
+                quietMs,
+              ]);
+        const kept = cards?.kept.get(id);
+        if (kept !== undefined && kept.key === key) {
+          if (now < kept.due) return kept.view;
+          const again = kept.retimed?.(now);
+          if (again != null) {
+            cards!.kept.set(id, { ...kept, ...again });
+            return again.view;
+          }
+        }
+        const keep = (view: TaskView | null, due: number, retimed?: KeptCard["retimed"]) => {
+          cards?.kept.set(id, { key, due, view, retimed });
+          return view;
+        };
+        yield* boundary;
         const touched = new Map<string, number>();
         for (const run of everyRun) touched.set(run.id, yield* lastActivityAt(stateDir, run));
         // A Run records no end of its own: its last activity is when it ended, and a Run
@@ -1077,7 +1174,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           (disposition !== null || (yield* nothingToFile(runs))) &&
           !(yield* unseenReport(leader))
         )
-          return null;
+          return keep(null, Infinity);
         const agents = agentsOf(everyRun, registered, live);
         const waits = new Map(
           yield* Effect.forEach(everyRun, (run) =>
@@ -1209,7 +1306,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               records: yield* readVerifications(merging.evidence).pipe(
                 Effect.orElseSucceed(() => []),
               ),
-              head: forged?.head ?? (yield* branchHead(merging, now)),
+              head: forged?.head ?? (yield* opts.head?.(merging) ?? branchHead(merging, now)),
               approved: yield* Effect.forEach(
                 approvedFor(
                   yield* approvedIn(merging.evidence),
@@ -1279,6 +1376,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                 check: running,
                 awaiting: waits.awaiting !== null,
                 machine: opts.env.machine ?? machineName(),
+                // A check's minutes are counted on the clock its Flow is said by.
+                now: wall,
                 sleeping:
                   (run.engine?.wakes ?? null) !== null ||
                   Arr.some(flowInputs.children.get(run.id) ?? [], (one) => !ended(one)),
@@ -1301,21 +1400,19 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           },
           flowInputs,
         );
-        const view: TaskView = {
-          id,
-          name,
-          project,
-          state,
-          steps: glyphsOf(runs),
-          sentence: sentenceFor({
+        // A stop the host made for a merge is the merge, never the human's stop.
+        const said =
+          state === "stopped" &&
+          disposition?.kind === "merged" &&
+          (yield* lastStopBy(leader)) === "host"
+            ? ("done" as const)
+            : state;
+        const resumed = going ? yield* resumedWith(stateDir, leader) : null;
+        const sentenceAt = (now: number) =>
+          sentenceFor({
             mr,
             mrState,
-            // A stop the host made for a merge is the merge, never the human's stop.
-            ...(state === "stopped" &&
-            disposition?.kind === "merged" &&
-            (yield* lastStopBy(leader)) === "host"
-              ? { state: "done" as const }
-              : { state }),
+            state: said,
             checks,
             readiness,
             summary: leader.summary,
@@ -1336,7 +1433,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             wave: fan !== null && fanned === leader ? fan.wave : null,
             failure,
             note: leader.note,
-            resumed: going ? yield* resumedWith(stateDir, leader) : null,
+            resumed,
             stalled,
             disposition:
               disposition === null
@@ -1348,7 +1445,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                     ago: ago(disposition.at, now),
                     by: disposition.by,
                   },
-          }),
+          });
+        const view: TaskView = {
+          id,
+          name,
+          project,
+          state,
+          steps: glyphsOf(runs),
+          sentence: sentenceAt(now),
           age: agoShort(first, now),
           // The leading Run's own open drift: what an earlier Run of this Task drifted from
           // was judged against a tree that has moved since.
@@ -1409,10 +1513,33 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             ),
           ),
         );
-        return task?.herd ? { ...view, herd: task.herd } : view;
+        const shown = task?.herd ? { ...view, herd: task.herd } : view;
+        // Going, a card is read again at the tick's pace; settled, its only clock is its ages,
+        // said again without reading anything until it leaves the board.
+        const quiet =
+          settledNow && check === null && decision === null && !busy && pending.length === 0;
+        if (!quiet) return keep(shown, now + GOING_EVERY_MS);
+        const leaves = last + FINISHED_FOR_MS + 1;
+        const retimed = (now: number): Retimed | null =>
+          now >= leaves
+            ? null
+            : {
+                view: { ...shown, sentence: sentenceAt(now), age: agoShort(first, now) },
+                due: Math.min(
+                  nextChange(first, now),
+                  nextChange(at, now),
+                  nextChange(finishedAt, now),
+                  disposition === null ? Infinity : nextChange(epochMs(disposition.at), now),
+                  leaves,
+                ),
+              };
+        return keep(shown, retimed(now)?.due ?? Infinity, retimed);
       }),
-    { concurrency: READS_AT_ONCE },
+    // The host's own build goes one Task at a time, so the loop stays free between them.
+    { concurrency: opts.cards === undefined ? READS_AT_ONCE : 1 },
   );
+  if (opts.only === undefined && opts.cards !== undefined)
+    for (const id of opts.cards.kept.keys()) if (!groups.has(id)) opts.cards.kept.delete(id);
   return sortBoard(Arr.filter(views, (view) => view !== null));
 });
 

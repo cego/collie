@@ -968,6 +968,11 @@ when `NO_COLOR` disables CLI colour. OpenTUI draws those styles in the board's p
 Comark's security plugin drops scripts and embedded content first, because what an agent
 writes is untrusted. Tables and rules are drawn to the drawer's width. The log is shown as plain text.
 
+Desktop keeps the last records you opened, and one whose card you rest on, up to date in
+the background, so opening one again shows it at once. A record whose Machine's connection
+dropped says **Reconnecting** (or why its Machine is out of reach) with the time it was last
+current, and offers no action until its Machine confirms it again.
+
 The record scrolls with the wheel wherever the pointer is over it, and a new record — or a
 new tab — starts at the top, because how far the last one had been scrolled says nothing
 about this one.
@@ -1290,7 +1295,7 @@ newer collie serves that Desktop cannot decode, is not shown, and its row says *
 Desktop to see _name_**.
 
 A host that is not running needs nothing from you, because the bridge starts it. Desktop
-saves each Machine's last board on this computer, under
+saves each Machine's last board on this computer, at most once a second, under
 `$XDG_DATA_HOME/dk.cego.collie.desktop/<channel>/machines/` on Linux, or
 `~/Library/Application Support/dk.cego.collie.desktop/<channel>/machines/` on macOS. At launch it shows those boards
 dimmed, marked "as of", until each Machine's connection is live; a board saved through a
@@ -1699,8 +1704,8 @@ scope's rule once:
   Beside the Machine rule is your **Standing direction** (`standing_direction`): how you
   like to work, in your own words, up to 4,000 characters, which every chat is given with
   each message. It is shared like the rest, and a Run's agent cannot set it.
-- **This computer** is **Zoom** alone, under Board, marked **This computer** and saved on
-  this computer, since monitors differ between computers. The Flock chat's harness, model,
+- **This computer** is **Zoom** and **Record timing**, under Board, marked **This computer**
+  and saved on this computer, since monitors differ between computers. The Flock chat's harness, model,
   effort and width stay this computer's too, but have no rows here: they are chosen beside
   its message box ([The Flock chat](#the-flock-chat)).
 - **Each Machine's own** is a read-only table: the Machine and where it is, its settings
@@ -1767,7 +1772,7 @@ how far the edit reached, after a fresh exchange with connected Machines: "Given
 read, an edit to them is not sent, and the row says "Not set: the Flock's settings could not
 be read"; Zoom is still saved. A malformed settings file is kept without overwriting it;
 repair it and restart Desktop to read it again. A Machine that has not exchanged settings
-yet stays behind. Zoom says "Saved on this computer".
+yet stays behind. Zoom and Record timing say "Saved on this computer".
 
 A Desktop from before kept the Machine rule and whether the Flock chat speaks first as its
 own. The first start of this one carries each into the Flock's settings once, as an edit
@@ -1776,7 +1781,7 @@ Flock chat left speaking first, the default, carries nothing.
 
 The groups, names, descriptions and units live with each key in the one list of settings
 (`src/settings.ts`) that the TUI's Settings reads too, so a new setting shows up in both,
-except Zoom, whose is in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI
+except Zoom's and Record timing's, which are in `DESKTOP_SETTINGS` (`desktop/src/shared/flock-settings.ts`); the TUI
 does not show the names, descriptions or minutes yet. Desktop keeps the Flock's in
 `flock-settings.json` beside its chat, and gives them to every Machine through that
 Machine's host, never by editing a file over SSH. A Machine is synced each time it
@@ -1828,6 +1833,12 @@ board's window is drawn — "Drawn at 1.5× on DP-1 (3840×2160, Hyprland scale 
 at 2×, so zoom 75% × your 100%." — and says so where the window's pixel ratio is not what
 that zoom should give. Where Desktop cannot read the monitor's scale, as on another
 compositor or an X11 session, it says the scale is not known and why, and Zoom alone applies.
+
+**Record timing**, under **Board** and off by default, appends each record open's timing
+marks to `record-timing.log` in Desktop's state directory: `record:click`, `record:mounted`,
+`record:frame` and `record:usable`, one JSON line each with the card and the time. Desktop
+sets the same marks as User Timing marks either way ([Measuring a record
+open](internals.md#measuring-a-record-open)).
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
@@ -2915,6 +2926,7 @@ the claims ([`stage`](workflows.md#stage)).
   "idle_close_ms": 3600000,
   "memory_hold": 10,
   "board_quiet_ms": 300000,
+  "run_model": true,
   "compact_at_tokens": 150000,
   "claude_auto_compact_window": 400000,
   "notifications": { "run-done": false },
@@ -3035,6 +3047,11 @@ evidence — may go unchanged, with no agent of it working and no check running,
 reads `…but silent for 9m` and takes the quiet edge. Five minutes by default. Nothing is
 nudged and nothing is given up on — it is shown, so a hung run is visible before you notice
 by accident.
+
+`run_model` ("Run model", under Settings' Board) is whether the host keeps every Run in
+memory and serves the board from that [Run model](../CONTEXT.md). On by default; `false`
+reads every Run from disk again on each change, as before the model, and takes effect when
+the host next starts. It is there to turn the model off if it misbehaves, for one release.
 
 `compact_at_tokens` is where compaction between pieces of work kicks in, and
 `claude_auto_compact_window` is where Claude Code compacts by itself: 400000 tokens until

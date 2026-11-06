@@ -10,7 +10,9 @@ root's `test/desktop-*.test.ts` and `test/flock-*.test.ts`; the view's logic in 
 and accessible name. `FlowGlyph.vue` draws the eight states with Nuxt UI tokens.
 `src/shared/flow.ts` owns `selectNode`, `selectEntry`, `inspectorOf`, `openIn`,
 `flowKey`, `nodeName` and `flowAnnouncements`. `FlowMap`, `FlowInspector` and
-`FlowTab` render those decisions. `recordTabs` puts Flow first where the host sends
+`FlowTab` render those decisions. `src/shared/flow-window.ts` says which Steps FlowMap
+has drawn yet: a large Flow draws those around where the work is first, and the rest a
+few a frame after. `recordTabs` puts Flow first where the host sends
 one; RunRecord can keep that map while subscribing to an earlier Run of its Task.
 `src/shared/flow-actions.ts` maps the host's node and lane capabilities to labels,
 icons and existing Desktop routes; `nextMove` and `retryCaption` supply their context.
@@ -31,6 +33,8 @@ sends a terminal's size once a resize settles.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `src/bun/machine.ts`                    | A Machine reached through `collie bridge`; `act` carries out an action, `Deliver` as one `deliver`, word for word (`test/desktop-deliver.test.ts`)                                                                                                     |
 | `src/bun/index.ts`                      | The window, and its navigation rule                                                                                                                                                                                                                    |
+| `src/bun/records.ts`                    | A record's host subscription while the view holds it, resumed from the revision it holds, and how current it is (`test/desktop-kept-records.test.ts`, `test/desktop-reconnect.test.ts`)                                                                |
+| `src/shared/kept-records.ts`            | Which records the view keeps, and `keptHolder`, which holds them: the open one, the last 8, a card pointed at for 150 ms, under 16 MB (`desktop/test/kept-records.test.ts`); `view/app/kept.ts` holds them in the view                                 |
 | `src/shared/`                           | The view's RPC and the Flock it folds                                                                                                                                                                                                                  |
 | `view/app/components/RunRecord.vue`     | A card's record, one of the pages `usePage` lays over the board's column, with `SettingsPage.vue`, `MachinesPage.vue`, `UsagePage.vue` and `WorkflowsPage.vue` (the Flock's Workflows and Personas, read with `definitionsIn` in `src/bun/machine.ts`) |
 | `src/shared/markdown.ts`                | What agent markdown may keep (`desktop/test/markdown.test.ts`)                                                                                                                                                                                         |
@@ -154,3 +158,26 @@ knows the delivery cap or the paste budget.
 
 Checked by the root's `tools/verify-mac-app.sh`, `test/desktop-mac-signing.test.ts` and
 `test/desktop-build-hook.test.ts`; the installer by `test/install-desktop.test.ts`.
+
+## Measuring a record open natively
+
+`bench/record-open/` times record opens in headless Chrome; WKWebView and WebKitGTK are
+measured by hand.
+
+1. In Settings, turn **Record timing** on. Desktop then appends each open's marks to
+   `record-timing.log` in `$XDG_STATE_HOME/collie-desktop`, else
+   `~/.local/state/collie-desktop`, on macOS and Linux alike.
+2. For each cell, open cards by clicking their names, then move the log aside under the
+   cell's name, as in `mv record-timing.log first.log`:
+
+   | Cell     | Opens | What each opens                        |
+   | -------- | ----- | -------------------------------------- |
+   | `first`  | 20    | a settled Run's card not opened before |
+   | `repeat` | 20    | a card just opened and closed          |
+   | `large`  | 10    | a Run of over 200 Steps                |
+
+3. `bun bench/record-open/summarize.ts first.log repeat.log large.log` prints each cell's
+   p50, p95, max and n from click to usable, as the bench does. `unmatched` counts a usable
+   mark whose click the log does not have; it is not counted as an open.
+
+Run it on macOS (mk-laptop) and on Linux, and add the summaries to the Run's evidence.

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import * as Option from "effect/Option";
+import { DateTime } from "effect";
 import * as Arr from "effect/Array";
 import { inField, overlayOpen } from "../../../src/shared/board-clicks";
 import { offersTerminal, opensHerdrWithoutPane } from "../../../src/shared/record-terminal";
@@ -19,7 +20,11 @@ import {
   typedIn,
 } from "../../../src/shared/record";
 import { runDetailAtom, runDetailKey } from "../flock";
+import { kept as keptRecords } from "../kept";
 import type { Flow } from "../../../../src/board-model";
+import { timedFlow } from "../../../../src/flow-timing";
+import { keepFlow } from "../../../src/shared/flow";
+import { asOfSaid, recordStanding } from "../../../src/shared/kept-records";
 import type { DiffTarget } from "./DiffTab.vue";
 
 const props = defineProps<{ placed: PlacedTask }>();
@@ -36,25 +41,72 @@ watch(
   },
   { immediate: true },
 );
-const recordPlaced = computed(() => ({
-  ...props.placed,
-  task: { ...props.placed.task, run: shownRun.value },
-}));
+const timing = useRecordTiming();
+timing.mounted(props.placed.key);
 
-const { value: read, trouble } = useHeld(() =>
-  runDetailAtom(runDetailKey({ installation: props.placed.installation, runId: shownRun.value })),
+const recordKey = computed(() =>
+  runDetailKey({ installation: props.placed.installation, runId: shownRun.value }),
 );
-const detail = computed(() => read.value ?? null);
-const flow = shallowRef<Flow | null>(null);
 watch(
-  detail,
-  (shown) => {
-    if (shown?.flow !== undefined) flow.value = shown.flow;
+  recordKey,
+  (key, was) => {
+    if (was !== undefined) keptRecords.closed(was);
+    keptRecords.opened(key);
   },
   { immediate: true },
 );
-const { notLive, protocolOf } = useFlock();
-const away = computed(() => notLive(props.placed.installation));
+onBeforeUnmount(() => keptRecords.closed(recordKey.value));
+const { value: read, trouble } = useHeld(() => runDetailAtom(recordKey.value));
+const detail = computed(() => read.value?.detail ?? null);
+// A record its host has not confirmed since its door went takes no action, as a saved card.
+const freshPlaced = computed(() => ({
+  ...props.placed,
+  asOf: props.placed.asOf ?? read.value?.asOf ?? null,
+}));
+const recordPlaced = computed(() => ({
+  ...freshPlaced.value,
+  task: { ...props.placed.task, run: shownRun.value },
+}));
+const flow = shallowRef<Flow | null>(null);
+/** When the Flow last came, so its minutes are never said as of an older tick of `now`. */
+const arrived = ref(0);
+watch(
+  detail,
+  (shown) => {
+    if (shown?.flow === undefined) return;
+    flow.value = shown.flow;
+    arrived.value = DateTime.toEpochMillis(DateTime.nowUnsafe());
+  },
+  { immediate: true },
+);
+// A record shown as of an earlier time is not opened yet.
+let counted = false;
+watch(
+  read,
+  (kept) => {
+    if (counted || kept?.asOf !== null || flow.value === null) return;
+    counted = true;
+    const card = props.placed.key;
+    timing.frame(card);
+    void nextTick(() =>
+      requestAnimationFrame(() => requestAnimationFrame(() => timing.usable(card))),
+    );
+  },
+  { immediate: true },
+);
+const { notLive, protocolOf, now } = useFlock();
+let timedBefore: Flow | null = null;
+const timed = computed(() =>
+  flow.value === null
+    ? null
+    : (timedBefore = keepFlow(
+        timedFlow(flow.value, Math.max(now.value, arrived.value)),
+        timedBefore,
+      )),
+);
+const away = computed(() =>
+  recordStanding(read.value?.asOf ?? null, notLive(props.placed.installation)),
+);
 const loading = computed(
   () =>
     trouble.value === null &&
@@ -106,9 +158,18 @@ const tabs = computed(() => {
     target: target.value !== null,
     diff: Boolean(shown?.diff),
     terminal: offersTerminal(props.placed.asOf, chosen.value),
-    mr: shown?.mr ? mrTab(props.placed.task.mr) : null,
+    mr: shown?.mr || shown?.pending?.includes("mr") ? mrTab(props.placed.task.mr) : null,
+    pending: shown?.pending,
   });
 });
+const tabItems = computed(() =>
+  Arr.map(tabs.value, (one) => (one.loading ? { ...one, icon: "i-lucide-loader-circle" } : one)),
+);
+const tabLoading = computed(
+  () =>
+    Arr.findFirst(tabs.value, (one) => one.value === tab.value).pipe(Option.getOrUndefined)
+      ?.loading === true,
+);
 /** The chosen tab while present, else the first the host supports. */
 const chosen = ref<string>();
 const { asked: tabAsked, taken } = usePage();
@@ -265,10 +326,10 @@ const locationOf = (file: string, line: number | null) =>
           color="warning"
           variant="subtle"
           :icon="away.icon"
-          :title="`${away.title}; showing what it last said`"
+          :title="`${away.title}; showing what it last said${away.asOf === null ? '' : `, ${asOfSaid(away.asOf)}`}`"
           :description="away.reason"
         />
-        <p v-else-if="read === null" class="text-muted text-sm">
+        <p v-else-if="read?.detail === null" class="text-muted text-sm">
           This Run's details are not on its Machine.
         </p>
         <div v-if="loading" data-testid="record-loading" class="flex flex-col gap-4">
@@ -284,7 +345,7 @@ const locationOf = (file: string, line: number | null) =>
           v-else
           v-show="!(flowFocusing && tab === 'flow')"
           v-model="tab"
-          :items="tabs"
+          :items="tabItems"
           :content="false"
           variant="link"
         />
@@ -299,16 +360,21 @@ const locationOf = (file: string, line: number | null) =>
         ]"
       >
         <FlowTab
-          v-if="flow !== null && kept.has('flow')"
+          v-if="timed !== null && kept.has('flow')"
           v-show="tab === 'flow'"
-          :flow="flow"
+          :flow="timed"
           :detail="detail"
-          :placed="placed"
+          :placed="freshPlaced"
           :shown="tab === 'flow'"
           @run="shownRun = $event"
           @open="openWork"
           @focusing="flowFocusing = $event"
         />
+        <div v-if="tabLoading" data-testid="part-loading" class="flex flex-col gap-2">
+          <USkeleton class="h-4 w-1/3" />
+          <USkeleton class="h-4 w-full" />
+          <USkeleton class="h-4 w-5/6" />
+        </div>
         <template v-if="detail !== null">
           <ReviewComments
             v-if="tab === 'plan' || tab === 'diff'"
@@ -317,6 +383,7 @@ const locationOf = (file: string, line: number | null) =>
             :launches="detail.agents"
             :live="placed.task.agents"
             :protocol="protocolOf(placed.installation)"
+            :as-of="() => freshPlaced.asOf"
           />
           <SummaryTab v-if="kept.has('summary')" v-show="tab === 'summary'" :detail="detail" />
           <PlanTab
@@ -380,7 +447,7 @@ const locationOf = (file: string, line: number | null) =>
             :installation="placed.installation"
           />
           <LogTab
-            v-if="tab === 'log'"
+            v-if="tab === 'log' && !tabLoading"
             v-model:place="logPlace"
             v-model:search="logSearch"
             :tail="detail.tail"

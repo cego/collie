@@ -10,8 +10,15 @@ import type {
   FlowRun,
   Proposal,
   Question,
+  RunRevision,
 } from "../../../src/board-model";
 import type { DesktopAction } from "./flock";
+
+/** A hold or a note with the record revision it was pressed at, which the host checks it against. */
+export const shownAt = (action: DesktopAction, revision: RunRevision | undefined): DesktopAction =>
+  revision !== undefined && (action._tag === "Control" || action._tag === "Deliver")
+    ? { ...action, shown: revision }
+    : action;
 
 export type FlowEffect =
   | { readonly kind: "write"; readonly installation: string; readonly write: DesktopAction }

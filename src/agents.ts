@@ -14,6 +14,7 @@ import * as Cause from "effect/Cause";
 //
 // `docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md` is why.
 
+import { Foreground } from "./foreground";
 import * as Struct from "effect/Struct";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
@@ -2798,7 +2799,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const pendingRuns = yield* fs
           .readDirectory(launchDir(host.dir, ""))
           .pipe(Effect.orElseSucceed(() => []));
+        const { boundary } = yield* Foreground;
         for (const run of pendingRuns) {
+          yield* boundary;
           for (const queued of yield* readQueue(dirFor(run)).pipe(
             Effect.catch((cause) =>
               log(run, `Delivery queue could not be read: ${reason(cause)}`).pipe(Effect.as([])),

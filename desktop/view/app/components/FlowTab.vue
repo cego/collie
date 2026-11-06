@@ -13,10 +13,12 @@ import {
   flowKey,
   flowRows,
   inspectorOf,
+  linkedCards,
   nodeAt,
   rowOrigin,
   selectEntry,
   selectNode,
+  type FlowCard,
   type FlowPick,
   type FlowSelection,
   type FlowSpot,
@@ -33,23 +35,9 @@ const emit = defineEmits<{
   open: [run: string, tab: string, agent?: string];
   focusing: [focusing: boolean];
 }>();
-const { everyTask, now } = useFlock();
-const cards = computed(() =>
-  Arr.map(everyTask.value, (one) => ({
-    key: one.key,
-    machine: one.machine,
-    runs: one.task.runs,
-  })),
-);
-const away = computed(
-  () =>
-    new Set(
-      Arr.map(
-        Arr.filter(everyTask.value, (one) => one.asOf !== null),
-        (one) => one.machine,
-      ),
-    ),
-);
+const { everyTask, now, away } = useFlock();
+let shownCards: ReadonlyArray<FlowCard> | undefined;
+const cards = computed(() => (shownCards = linkedCards(props.flow, everyTask.value, shownCards)));
 const selected = ref<FlowSelection | null>(null);
 const first = () => {
   const row = Option.getOrUndefined(
@@ -88,6 +76,7 @@ const controls = useFlowActions(
     } else if (effect.kind === "run") origin(effect.run, effect.machine ?? props.placed.machine);
     else if (effect.kind === "offer") offering.value = { run: effect.run, offer: effect.offer };
   },
+  () => props.detail?.revision,
 );
 const { asking } = controls;
 const lane = computed(
@@ -352,7 +341,15 @@ watch(
               :installation="placed.installation"
               :live="placed.asOf === null"
               @act="press"
-          /></template>
+            />
+            <p
+              v-if="controls.stale.value !== null && controls.stale.value.step === info.node.id"
+              data-testid="stale-act"
+              class="text-xs text-error"
+            >
+              {{ controls.stale.value.reason }}
+            </p></template
+          >
           <template #notes>
             <FlowNotes
               :node="
@@ -416,6 +413,7 @@ watch(
       :installation="placed.installation"
       :run-id="offering.run"
       :chosen="offering.offer"
+      :as-of="() => placed.asOf"
       @close="offering = null"
     />
     <TextDialog

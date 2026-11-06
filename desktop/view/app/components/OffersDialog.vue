@@ -3,8 +3,15 @@ import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { type OfferView, offerFields, offerInput } from "../../../../src/board-model";
+import { refusal } from "../../../src/shared/kept-records";
 
-const props = defineProps<{ installation: string; runId: string; chosen: string | null }>();
+const props = defineProps<{
+  installation: string;
+  runId: string;
+  chosen: string | null;
+  /** When the record was last confirmed; asked again on every try, after the dialog closes too. */
+  asOf: () => number | null;
+}>();
 const emit = defineEmits<{ close: [] }>();
 const { run, offersOf } = useActions();
 
@@ -12,19 +19,28 @@ const offers = ref<ReadonlyArray<OfferView> | null>(null);
 const picked = ref<OfferView | null>(null);
 const typed = ref<Record<string, string>>({});
 const fields = computed(() => offerFields(picked.value?.arguments ?? null));
+const refused = (offer: OfferView) => refusal(offer.unavailable, props.asOf());
 
 const make = (offer: OfferView) => {
   return Effect.runPromise(
     Effect.gen(function* () {
+      if (refused(offer) !== null) return;
+      const { asOf } = props;
       emit("close");
       yield* Effect.promise(() =>
         Promise.resolve(
-          run(props.installation, {
-            _tag: "Invoke",
-            runId: props.runId,
-            offer: offer.id,
-            input: offerInput(offer.arguments, typed.value),
-          }),
+          run(
+            props.installation,
+            {
+              _tag: "Invoke",
+              runId: props.runId,
+              offer: offer.id,
+              input: offerInput(offer.arguments, typed.value),
+            },
+            undefined,
+            undefined,
+            () => refusal(null, asOf()) ?? undefined,
+          ),
         ),
       );
     }),
@@ -35,7 +51,7 @@ const make = (offer: OfferView) => {
 const pick = (offer: OfferView) => {
   picked.value = offer;
   typed.value = {};
-  if (offer.unavailable === null && offerFields(offer.arguments).length === 0) void make(offer);
+  if (offerFields(offer.arguments).length === 0) void make(offer);
 };
 
 onMounted(() => {
@@ -71,12 +87,12 @@ onMounted(() => {
           :data-testid="`offer-${offer.id}`"
           color="neutral"
           variant="outline"
-          :disabled="offer.unavailable !== null"
-          :label="offer.unavailable === null ? offer.title : `${offer.title}: ${offer.unavailable}`"
+          :disabled="refused(offer) !== null"
+          :label="refused(offer) === null ? offer.title : `${offer.title}: ${refused(offer)}`"
           @click="pick(offer)"
         />
       </div>
-      <p v-else-if="picked.unavailable !== null" class="text-muted">{{ picked.unavailable }}</p>
+      <p v-else-if="refused(picked) !== null" class="text-muted">{{ refused(picked) }}</p>
       <form v-else class="flex flex-col gap-3" @submit.prevent="make(picked)">
         <UFormField
           v-for="field in fields"

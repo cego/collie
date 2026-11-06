@@ -201,7 +201,7 @@ describe("Each setting explains itself", () => {
       "release.share_for_approval",
       "release.approval_channel",
     ],
-    Board: ["scope", "density", "board_quiet_ms"],
+    Board: ["scope", "density", "board_quiet_ms", "run_model"],
     Chat: ["flock_chat.proactive", "machine_rule", "standing_direction", "proactive"],
     Notifications: [
       "questions",

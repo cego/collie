@@ -6,6 +6,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import type { Flow, FlowNode, FlowRun } from "../../../src/board-model";
 import { epochMs } from "../../../src/time";
+import { keepEqual, keepList } from "./keep-equal";
 import { stepTiming } from "./step-timing";
 export interface FlowSpot {
   readonly run: string;
@@ -147,20 +148,27 @@ export type FlowEntry = {
   readonly folded: boolean;
   readonly wave?: number;
 };
+const formats = new Map<string | undefined, Intl.DateTimeFormat>();
+/** One formatter per zone: building one costs more than a record's whole Flow of instants. */
+const formatIn = (timeZone: string | undefined) => {
+  let format = formats.get(timeZone);
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    formats.set(timeZone, format);
+  }
+  return format;
+};
 const dateParts = (ms: number, timeZone: string | undefined) =>
   Rec.fromEntries(
-    Arr.map(
-      new Intl.DateTimeFormat("en-GB", {
-        timeZone,
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        hourCycle: "h23",
-      }).formatToParts(ms),
-      (part) => [part.type, part.value] as const,
-    ),
+    Arr.map(formatIn(timeZone).formatToParts(ms), (part) => [part.type, part.value] as const),
   );
 
 /** An instant on this Machine's clock: `11:22` today, `24 Oct, 11:22` on another day. */
@@ -327,6 +335,46 @@ export const owningRun = (flow: Flow, spot: FlowSpot) =>
   spot.run === "release" ? (flow.lanes.at(-1)?.run ?? spot.run) : spot.run;
 const sameSpot = (one: FlowSpot | null, other: FlowSpot | null) =>
   one?.run === other?.run && one?.node === other?.node;
+const sameRuns = Arr.makeEquivalence<string>((one, other) => one === other);
+const sameCard = (one: FlowCard, other: FlowCard) =>
+  one.key === other.key && one.machine === other.machine && sameRuns(one.runs, other.runs);
+
+/**
+ * The cards a Flow's links, nested links and Runs' origins can open, in the board's order. While they show what `before`
+ * shows they are `before`, so a change to a Task the Flow does not link to draws nothing.
+ */
+export const linkedCards = (
+  flow: Flow,
+  placed: ReadonlyArray<{
+    readonly key: string;
+    readonly machine: string;
+    readonly task: { readonly runs: ReadonlyArray<string> };
+  }>,
+  before?: ReadonlyArray<FlowCard>,
+): ReadonlyArray<FlowCard> => {
+  const runOf = (node: FlowRun) => (node.link?.run == null ? [] : [node.link.run]);
+  const linked = new Set([
+    ...Arr.flatMap(flowRows(flow), (row) =>
+      Arr.flatMap(row.nodes, (node) => [
+        ...runOf(node),
+        ...Arr.flatMap([...node.runs, ...(node.links ?? [])], runOf),
+      ]),
+    ),
+    ...Arr.flatMap(flow.lanes, (lane) => {
+      const origin = rowOrigin(flow, lane.run);
+      return origin === null ? [] : [origin.run];
+    }),
+  ]);
+  const cards = Arr.flatMap(placed, ({ key, machine, task }) =>
+    Arr.some(task.runs, (run) => linked.has(run)) ? [{ key, machine, runs: task.runs }] : [],
+  );
+  return before !== undefined &&
+    before.length === cards.length &&
+    Arr.every(cards, (card, at) => sameCard(card, before[at]!))
+    ? before
+    : cards;
+};
+
 export const cardForLink = (node: FlowRun, cards: ReadonlyArray<FlowCard>) =>
   Option.getOrUndefined(
     Arr.findFirst(
@@ -388,4 +436,22 @@ export const selectNode = (
   return sameSpot(spot, selected)
     ? { kind: "close" }
     : { kind: "inspect", run: owningRun(flow, spot), selection: { ...spot, item: null } };
+};
+
+/**
+ * `next`, with each lane and Step equal to the one already drawn being that one, so a Flow sent
+ * or timed again draws only what changed.
+ */
+export const keepFlow = (next: Flow, before: Flow | null): Flow => {
+  if (before === null) return next;
+  const lanes = keepList(next.lanes, before.lanes, (lane, was) => {
+    const nodes = keepList(lane.nodes, was?.nodes);
+    return keepEqual(nodes === lane.nodes ? lane : { ...lane, nodes }, was);
+  });
+  const release =
+    next.release === null ? null : keepList(next.release, before.release ?? undefined);
+  return keepEqual(
+    lanes === next.lanes && release === next.release ? next : { ...next, lanes, release },
+    before,
+  );
 };

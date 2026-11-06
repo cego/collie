@@ -5,7 +5,7 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { Deferred, Effect, Fiber, FileSystem, Schedule, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Option, Schedule, Stream } from "effect";
 import { BunServices } from "@effect/platform-bun";
 import { signRelease } from "../src/signing";
 import {
@@ -439,5 +439,27 @@ test("an update readied before Desktop quit is applied as it launches, and only 
       expect(tampered.calls).toContain("discard");
       expect(tampered.calls).not.toContain("apply");
     }),
+  );
+});
+
+test("a checkout's update news is told once and stays open, as a released Desktop's does", () => {
+  const key = pair();
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port } = yield* fakeUpdater(dir, {
+        channel: "dev",
+        signature: signRelease(TAR, key.privateKey),
+        preparedAtStart: true,
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      const told = yield* updates.news.pipe(
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.timeoutOption("200 millis"),
+      );
+      expect(told._tag).toBe("None");
+      const first = yield* Stream.runHead(updates.news);
+      expect(Option.map(first, ({ _tag }) => _tag)).toEqual(Option.some("Never"));
+    }).pipe(Effect.scoped),
   );
 });

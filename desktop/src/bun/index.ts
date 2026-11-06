@@ -40,6 +40,7 @@ import Electrobun, {
 import {
   type Channel,
   type FrameSchema,
+  heldUntilListened,
   serverProtocol,
   type ToMain,
   type ToView,
@@ -113,7 +114,6 @@ import {
   doorTo,
   focusOn,
   offersOn,
-  runDetailOn,
   usageOn,
   cataloguesOn,
   machineOwnOn,
@@ -139,6 +139,7 @@ import {
   type RouteChange,
   syncNow,
 } from "./machine";
+import { recordKeeper } from "./records";
 import { givenCredentials } from "./given";
 import { slackUserSession } from "./slack-user";
 import { connectionsOn, githubLogin, readBack, reuseGitlab } from "./connection-reuse";
@@ -192,14 +193,15 @@ type Frames = RPCSchema<FrameSchema>;
 
 /** A window on the view, and the channel its RPC rides. */
 const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => {
-  let receive: (frame: ToMain) => void = () => {};
+  // The view loads while Desktop starts, so it asks before anything serves it.
+  const inbox = heldUntilListened<ToMain>();
   const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
     maxRequestTime: 10_000,
     handlers: {
       requests: {},
       messages: {
         // SAFETY: only the view sends on this channel, and the view sends nothing but `ToMain`.
-        frame: (frame) => receive(frame as ToMain),
+        frame: (frame) => inbox.receive(frame as ToMain),
       },
     },
   });
@@ -210,9 +212,7 @@ const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => 
   window.webview.setNavigationRules(["^*", url, "about:srcdoc"]);
   const channel: Channel<ToView, ToMain> = {
     send: (frame) => window.webview.rpc?.send.frame(frame),
-    listen: (listener) => {
-      receive = listener;
-    },
+    listen: inbox.listen,
   };
   return { window, channel };
 };
@@ -294,6 +294,7 @@ const main = Effect.gen(function* () {
   }).pipe(Effect.ignore({ log: "Warn" }));
   const logged = yield* actionsLog(own);
   const doors = new DoorMap<Doors>();
+  const records = yield* recordKeeper(doors);
   /** A harness's list from this computer's Machine; its own reader's where it has none or an older one. */
   const fromMachine = (harness: string, own: Effect.Effect<ReadonlyArray<ListedModel>, string>) =>
     Effect.suspend(() => {
@@ -1331,7 +1332,7 @@ const main = Effect.gen(function* () {
         Effect.mapError((reason) => new ActionFailed({ reason })),
         Effect.provide(BunServices.layer),
       ),
-    runDetail: ({ installation, runId }) => runDetailOn(doors, installation, runId),
+    runDetail: ({ installation, runId }) => records.open(installation, runId),
     usage: () =>
       Effect.forEach(doors.values(), (door) => usageOn(door.machine, door.desktop), {
         concurrency: "unbounded",
@@ -1568,6 +1569,14 @@ const main = Effect.gen(function* () {
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.choices), Stream.empty)),
     drawn: () => SubscriptionRef.changes(drawn).pipe(Stream.filter((now) => now !== null)),
     setSettings: saveSettings,
+    recordMark: (mark) =>
+      settings().recordTiming === true
+        ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
+            fs.writeFileString(`${own}/record-timing.log`, `${JSON.stringify(mark)}\n`, {
+              flag: "a",
+            }),
+          ).pipe(Effect.ignore)
+        : Effect.void,
     setupOffer: () => SubscriptionRef.changes(offer.offered),
     declineSetup: ({ forGood }) => offer.decline(forGood),
     setupInventory: () => offer.taken.pipe(Effect.andThen(setupInventory(setupPlaces()))),

@@ -125,7 +125,8 @@ const program = Effect.gen(function* () {
 
   yield* Effect.promise(() =>
     Bun.build({
-      entrypoints: ["src/main.ts"],
+      // The host's door runs on a Worker of its own, so the binary carries its entry too.
+      entrypoints: ["src/main.ts", "src/door.ts"],
       target: "bun",
       plugins: [solidPlugin],
       define: { "process.env.OPENTUI_LIBC": libcDefine },
