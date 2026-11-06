@@ -74,6 +74,7 @@ import {
 } from "./record";
 import { markFirst } from "./record-marks";
 import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from "./door";
+import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
 import { TurnScheduler } from "./turns";
 import { Foreground, foregroundLayer, servedNow } from "./foreground";
 import * as References from "effect/References";
@@ -589,9 +590,6 @@ export const HostRpcs = RpcGroup.make(
 /** Everything this build serves; a client of another build uses `FrontDoorRpcs` alone. */
 const AllRpcs = HostRpcs.merge(FrontDoorRpcs);
 
-/** How long an RPC may take to answer before the host log says so. */
-const SLOW_RPC_MS = 2_000;
-
 /** Logs an RPC slow to answer. A stream is meant to stay open, so `timingFirstValues` times it. */
 export class SlowRpcs extends RpcMiddleware.Service<SlowRpcs>()("collie/SlowRpcs") {}
 
@@ -621,26 +619,12 @@ export const timingFirstValues = <
   // SAFETY: each handler is replaced by one taking its arguments and answering its type.
   Rec.map(handlers, (handler, name) => (...args: ReadonlyArray<never>) => {
     const answer = handler(...args);
-    return Stream.isStream(answer) ? firstValueTimed(name, answer) : answer;
+    return Stream.isStream(answer)
+      ? firstValueTimed(answer, (ms) =>
+          Effect.logWarning(`the ${name} stream took ${ms} ms to send its first value`),
+        )
+      : answer;
   }) as H;
-
-const firstValueTimed = <A, E, R>(name: string, stream: Stream.Stream<A, E, R>) =>
-  Stream.unwrap(
-    Effect.map(Clock.currentTimeMillis, (started) => {
-      let first = true;
-      return Stream.tap(stream, () => {
-        if (!first) return Effect.void;
-        first = false;
-        return Effect.flatMap(Clock.currentTimeMillis, (now) =>
-          now - started > SLOW_RPC_MS
-            ? Effect.logWarning(
-                `the ${name} stream took ${now - started} ms to send its first value`,
-              )
-            : Effect.void,
-        );
-      });
-    }),
-  );
 
 export type HostClient = RpcClient.RpcClient<
   RpcGroup.Rpcs<typeof AllRpcs>,
@@ -1469,6 +1453,13 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
         Effect.flatMap(({ runs, ms }) =>
           Effect.logInfo(`the door has read ${runs} records to warm it, in ${ms} ms`),
         ),
+        Effect.forkScoped,
+      );
+      yield* Queue.take(door.slow).pipe(
+        Effect.flatMap(({ rpc, ms }) =>
+          Effect.logWarning(`the door's ${rpc} stream took ${ms} ms to send its first value`),
+        ),
+        Effect.forever,
         Effect.forkScoped,
       );
       const { boards, kept, factsOf, offered, bun } = yield* SharedBoard;

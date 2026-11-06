@@ -18,6 +18,7 @@ import { foregroundLayer } from "./foreground";
 import type { AgentInfo } from "./herdr";
 import { platformLayer, type PlatformServices } from "./platform";
 import { drawerWrites, recordFrames, type RecordSources } from "./record";
+import { firstValueTimed } from "./first-value";
 import { markFirst } from "./record-marks";
 import { RunModel, runModelLayer, type ModelLink } from "./run-model";
 import type { RunFacts } from "./runs";
@@ -93,7 +94,8 @@ export type FromDoor =
   | { readonly _tag: "Finished"; readonly run: string; readonly step: string; readonly seq: number }
   | { readonly _tag: "Unfinished"; readonly run: string; readonly step: string }
   | { readonly _tag: "Ask"; readonly ask: number; readonly asked: Asked }
-  | { readonly _tag: "Warmed"; readonly runs: number; readonly ms: number };
+  | { readonly _tag: "Warmed"; readonly runs: number; readonly ms: number }
+  | { readonly _tag: "Slow"; readonly rpc: string; readonly ms: number };
 
 /** What the door answers itself; every other request is the engine's. */
 const DoorRpcs = RpcGroup.make(IdentityRpc, RunDetailRpc);
@@ -129,6 +131,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
     const asks = yield* Queue.unbounded<{ readonly ask: number; readonly asked: Asked }>();
     const listening = yield* Deferred.make<void>();
     const warmed = yield* Deferred.make<{ readonly runs: number; readonly ms: number }>();
+    const slow = yield* Queue.unbounded<{ readonly rpc: string; readonly ms: number }>();
     const clients = new Set<number>();
     let model: EngineModel | undefined;
     port.listen((message) => {
@@ -152,6 +155,8 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
           return Queue.offerUnsafe(asks, message);
         case "Warmed":
           return Deferred.doneUnsafe(warmed, Effect.succeed(message));
+        case "Slow":
+          return Queue.offerUnsafe(slow, message);
       }
     });
     const protocol = RpcServer.Protocol.make((writeRequest) =>
@@ -193,6 +198,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
       },
       asks,
       warmed: Deferred.await(warmed),
+      slow,
       post: port.post,
     };
   });
@@ -442,7 +448,15 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                 changes,
                 drawerWrites(env.stateDir, key.runId).pipe(Stream.provideContext(bun)),
               ),
-            ).pipe(markFirst("host:emit", key.runId), Stream.provideContext(bun), Stream.orDie),
+            ).pipe(
+              markFirst("host:emit", key.runId),
+              (frames) =>
+                firstValueTimed(frames, (ms) =>
+                  Effect.sync(() => port.post({ _tag: "Slow", rpc: "runDetail", ms })),
+                ),
+              Stream.provideContext(bun),
+              Stream.orDie,
+            ),
     });
     // A new heap runs the record's code slowly until its JIT has compiled it.
     if (sources !== undefined) {

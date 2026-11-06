@@ -85,7 +85,8 @@ or sweep over 2 s in all, counting the time spent gathering what its sweepers ju
 says that time and how long each kind took to judge, slowest first:
 `the cleanup listing took 4000 ms; gathering took 500 ms; judging took task 3000 ms, worktree 500 ms`. A stream, such as
 the board's or a record's `runDetail`, is meant to stay open, so only its first value is timed:
-one that took over 2 s is logged as `the runDetail stream took 4900 ms to send its first value`. Lines are flushed
+one that took over 2 s is logged as `the runDetail stream took 4900 ms to send its first value`,
+or `the door's runDetail stream took …` for a record the door's thread sent. Lines are flushed
 every 100 ms, so a host killed outright can lose its last few. Past 1 MiB the file starts
 again and the previous one is kept as `host.log.1`. Look there first when a host stops
 answering. What a host started by a client writes to its stdout and stderr, a stack trace

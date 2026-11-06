@@ -280,3 +280,47 @@ test("the door reads the Runs of a record as the engine chooses them, and none i
   // A Run asked of the engine before any listing named it is not yet in the listing's order.
   expect(relatedOf(facts, ["b", "p"], "a", [])).toBeNull();
 });
+
+test(
+  "a record the door is slow to send first tells the engine how long it took",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-slow-" });
+        const run = yield* madeRun(dir, {
+          id: "r1",
+          state: "succeeded",
+          created: "2026-10-30T09:00:00Z",
+          finished: "2026-10-30T09:30:00Z",
+        });
+        const socket = `${dir}/host.sock`;
+        // Told of no Run, so the door asks the engine for the record's Runs.
+        const { heard, tell } = yield* silentEngine(dir, socket, []);
+        const client = yield* frontDoor(socket);
+        const first = yield* client
+          .runDetail({ runId: "r1", tail: false, pages: 1, refreshMr: false, parts: true })
+          .pipe(Stream.runHead, Effect.forkScoped);
+        yield* until(() => Arr.some(heard, (one) => one._tag === "Ask"));
+        const asked = Arr.findFirst(heard, (one) => one._tag === "Ask");
+        // The engine answers past the door's slow mark.
+        yield* Effect.sleep("2100 millis");
+        tell({
+          _tag: "Answer",
+          ask: asked._tag === "Some" && asked.value._tag === "Ask" ? asked.value.ask : 0,
+          value: [{ fact: run, seq: 0 }],
+        });
+        yield* Fiber.join(first);
+
+        yield* until(() => Arr.some(heard, (one) => one._tag === "Slow"));
+        const slow = Arr.findFirst(heard, (one) => one._tag === "Slow");
+        expect(slow._tag === "Some" && slow.value._tag === "Slow" && slow.value.rpc).toBe(
+          "runDetail",
+        );
+        expect(slow._tag === "Some" && slow.value._tag === "Slow" && slow.value.ms).toBeGreaterThan(
+          2_000,
+        );
+      }).pipe(Effect.scoped),
+    ),
+  15_000,
+);
