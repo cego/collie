@@ -36,6 +36,9 @@ const FakeState = Schema.fromJsonString(
 );
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
+/** An agent question's options, to standard so it is posted as asked. */
+const PICKS = [{ label: "Postgres (Recommended)" }, { label: "SQLite" }, { label: "JSONL" }];
+
 const GRACE_MS = 3_000;
 /** Past the grace and two of the host's board ticks: long enough for a revision to have opened. */
 const SETTLED = "14 seconds";
@@ -781,7 +784,7 @@ test(
                 hook_event_name: "PreToolUse",
                 tool_name: "AskUserQuestion",
                 tool_use_id: `toolu-${agent}`,
-                tool_input: { questions: [{ question, header: question, options: [] }] },
+                tool_input: { questions: [{ question, header: question, options: PICKS }] },
               }),
             ).pipe(Effect.orDie);
           yield* until(
@@ -877,7 +880,7 @@ test(
             tool_name: "AskUserQuestion",
             tool_use_id: "toolu-own",
             tool_input: {
-              questions: [{ question: "Which database?", header: "Database", options: [] }],
+              questions: [{ question: "Which database?", header: "Database", options: PICKS }],
             },
           }),
         ).pipe(Effect.orDie);
@@ -891,6 +894,29 @@ test(
         yield* revised(at);
         yield* Effect.sleep(SETTLED);
         expect(revisionOf(yield* waitingOf(at), "ask-build-1")).toBeUndefined();
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "a workflow Choice's steering entry names the agent `run steer` reaches, and blank words are refused and supersede nothing",
+  () =>
+    atQuestion("collie-steer-entry-", (at) =>
+      Effect.gen(function* () {
+        // herdr's live agents are read again at the board's next tick.
+        const card = yield* until(
+          () => cardOf(at),
+          (one) => one?.questions?.[0]?.steer?.agent != null,
+        );
+        expect(Arr.map(card?.questions ?? [], (one) => one.steer)).toEqual([
+          { agent: at.agent, why: null },
+        ]);
+
+        const blank = yield* tell(at, " \n\t ", desktop("blank-1"));
+        expect(blank?.state).not.toBe("applied");
+        expect(blank?.note).toContain("nothing to send");
+        expect(rowOf(yield* waitingOf(at), "go")).toMatchObject({ answer: null, superseded: null });
       }),
     ),
   180_000,

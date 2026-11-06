@@ -19,16 +19,21 @@ const TWO = [
     question: "Which database?",
     header: "Database",
     options: [
-      { label: "Postgres", description: "the one ops runs" },
+      { label: "Postgres (Recommended)", description: "the one ops runs" },
       { label: "SQLite", description: "a file beside the app" },
+      { label: "JSONL", description: "no migration" },
     ],
     multiSelect: false,
   },
   {
     question: "Which checks?",
     header: "Checks",
-    options: [{ label: "lint", description: "oxlint" }],
-    multiSelect: true,
+    options: [
+      { label: "lint (Recommended)", description: "oxlint" },
+      { label: "typecheck", description: "tsgo" },
+      { label: "none", description: "CI runs them" },
+    ],
+    multiSelect: false,
   },
 ];
 

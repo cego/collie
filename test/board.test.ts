@@ -737,6 +737,10 @@ test("a Task's card lists every question its Runs have open, in the order it ask
         topic: "team",
         text: "Which Linear team?",
         options: [],
+        steer: {
+          agent: null,
+          why: "no agent of this Run is live to redirect: pick a solution or stop the Run",
+        },
       });
       expect(view!.decision).toEqual(view!.questions![0]!);
     }),

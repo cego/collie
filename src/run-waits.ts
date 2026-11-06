@@ -11,6 +11,9 @@ import { memoryWaitOf, type MemoryWait } from "./memory-wait";
 import { pendingFor, type ProposalLine, type ProposalRecord } from "./proposals";
 import { settled, type RunFacts } from "./runs";
 
+const NO_AGENT_TO_STEER =
+  "no agent of this Run is live to redirect: pick a solution or stop the Run";
+
 export interface RunWaits {
   /** In asked order. */
   readonly questions: ReadonlyArray<Question>;
@@ -44,6 +47,9 @@ export const runWaits = Effect.fn("RunWaits.of")(function* (
       };
       if (asked.hold !== undefined) question.hold = asked.hold;
       if (asked.shortfall !== undefined) question.shortfall = asked.shortfall;
+      question.steer = Arr.some(agents, (agent) => agent.name === asked.steer)
+        ? { agent: asked.steer ?? null, why: null }
+        : { agent: null, why: NO_AGENT_TO_STEER };
       return question;
     }),
     proposals: pendingFor(proposals, run.id, now),

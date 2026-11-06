@@ -6,6 +6,7 @@ import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Result, Schema, flow } from "effect";
 import { connect } from "../src/host";
 import { RunView } from "../src/engine";
+import { TaskView } from "../src/board-model";
 import { describeWaiting } from "../src/lifecycle";
 import { factsOfView } from "../src/runs";
 import { runWaits } from "../src/run-waits";
@@ -21,6 +22,18 @@ const shown = (world: World, runId: string) =>
   collie(world, ["run", "show", runId]).pipe(
     Effect.map(({ envelope }) => decodeShown(envelope.data).run),
   );
+
+const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
+
+/** The board's Questions for `runId`, as `collie board` prints them. */
+const boardQuestions = (world: World, runId: string) =>
+  Effect.gen(function* () {
+    const printed = yield* collie(world, ["board"]);
+    const { tasks } = yield* Schema.decodeUnknownEffect(Board)(printed.envelope.data).pipe(
+      Effect.orDie,
+    );
+    return Arr.flatMap(tasks, (task) => (task.run === runId ? (task.questions ?? []) : []));
+  });
 
 const question = (world: World, view: RunView) =>
   Effect.gen(function* () {
@@ -77,6 +90,12 @@ test(
             ["Drop", undefined],
           ]);
           expect(describeWaiting(view)).toContain("  ⚠ this workflow recommended none");
+          expect(Arr.map(yield* boardQuestions(world, runId), (one) => one.steer)).toEqual([
+            {
+              agent: null,
+              why: "no agent of this Run is live to redirect: pick a solution or stop the Run",
+            },
+          ]);
           expect(yield* logOf(world, runId)).toContain('"pick": this workflow recommended none');
           expect(yield* answered(world, runId, "wait")).toMatchObject({ value: "took Wait" });
         }).pipe(Effect.orDie),

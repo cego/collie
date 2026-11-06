@@ -34,7 +34,16 @@ const asked = encode({
   tool_use_id: "toolu_1",
   tool_input: {
     questions: [
-      { question: "Which database?", header: "Database", options: [], multiSelect: false },
+      {
+        question: "Which database?",
+        header: "Database",
+        options: [
+          { label: "Postgres (Recommended)", description: "the one ops runs" },
+          { label: "SQLite", description: "a file beside the app" },
+          { label: "JSONL", description: "no migration" },
+        ],
+        multiSelect: false,
+      },
     ],
   },
 });

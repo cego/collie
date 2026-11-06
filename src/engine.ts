@@ -276,6 +276,7 @@ import {
   StepNote as SteeringNote,
 } from "./step-steering";
 import { readLaunches } from "./launches";
+import { steerTarget } from "./steer-target";
 import { ensureStepDurations, rememberStepDurations } from "./step-durations";
 import {
   CurrentStep,
@@ -5856,6 +5857,8 @@ export const OpenDecision = Schema.Struct({
   revises: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** What keeps it short of standard, or null where nothing does. */
   shortfall: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** While open, the agent a human's words about it would reach; null where none was launched. */
+  steer: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type OpenDecision = typeof OpenDecision.Type;
 
@@ -7477,7 +7480,7 @@ const makeRegistry: (
       worktree,
       outcome,
       created: row.admitted,
-      waiting: yield* asked(row.run),
+      waiting: yield* steered(row.run),
       controls: yield* controlsOf(row.run),
       parked: yield* fs
         .readFileString(controlPath(dir, PARKED, row.run))
@@ -7625,6 +7628,37 @@ const makeRegistry: (
       ),
     );
   });
+
+  /**
+   * Its questions, each open one naming the agent a human's words about it reach: the
+   * agent that asked it, or the one `run steer` reaches by default.
+   */
+  const steered = Effect.fn("Engine.steered")(function* (runId: string) {
+    const waiting = yield* asked(runId);
+    if (!Arr.some(waiting, isUnanswered)) return waiting;
+    const fs = yield* FileSystem.FileSystem;
+    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+    const candidates = yield* Effect.forEach(launches, (one) =>
+      fs.exists(one.output).pipe(
+        Effect.orElseSucceed(() => false),
+        Effect.map((done) => ({ ...one, done })),
+      ),
+    );
+    const steer = steerTarget(candidates, {})?.agent ?? null;
+    return Arr.map(waiting, (one) =>
+      isUnanswered(one)
+        ? {
+            ...one,
+            steer:
+              one.asker === null
+                ? steer
+                : (Option.getOrUndefined(
+                    Arr.findLast(launches, (launch) => launch.operation === one.asker),
+                  )?.agent ?? null),
+          }
+        : one,
+    );
+  }, Effect.provideContext(bun));
 
   /** The Run's view kept where its row, decisions and files are as they were, else undefined. */
   const keptHit = (row: RunRow, decided: (run: string) => number, kept: KeptViews) => {

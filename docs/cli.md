@@ -399,10 +399,22 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   `--request-id` again is the same answer rather than another.
 - **An agent's question is answered the same way.** A Claude agent Collie launched that
   calls `AskUserQuestion` is told its question is on its Run and ends its turn. Each
-  question is a decision named `ask-<operation>-<n>`, numbered from 1 in the order asked,
-  whose prompt lists its options. It takes any words, an option's label among them. Once
+  question is a decision named `ask-<operation>-<n>`, numbered from 1 in the order asked.
+  Its options are solutions with ids `1`, `2`, … and the option label as the title; the one
+  whose label ends ` (Recommended)` (Claude's own marker, which Codex and pi agents are told)
+  comes first, without the marker, and each option's description is its detail. It takes an
+  id or a title, and refuses other words with the titles: free words go to the agent as a
+  steer instead. A question with no options takes any words. Once
   every question of that one call is answered, from here, the card or chat, the answers
-  go to the agent together as its next message. While one is open, the step's Output
+  go to the agent together as its next message, each as the title picked:
+  `Your question <header> is answered: <title>`.
+- **A question short of standard is repaired once.** To standard is exactly one recommended
+  option among at least three, single-select, no two titles alike. A call with a question
+  that falls short is not posted: Claude's hook denies it and pi's tool returns, each with
+  what is missing and how to offer distinct paths (proceed, defer, change approach); a
+  Codex agent, whose tool has already returned, is sent the same text as a `repair`
+  Delivery. The call after a repair is posted as asked, and a question in it still short
+  carries a `shortfall` saying what it lacks. While one is open, the step's Output
   budget is paused. One still open when the step's Output comes is closed with
   `closed: <operation> finished before it was answered`, and nothing is sent
   ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md)). A human's message to
@@ -469,8 +481,9 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   or `Sent to <agent>, not observed.` with how to go to its pane, and `data.observed` and
   `data.how` say the same. An unproven `now` mode keeps the message durably until the agent
   is idle, returning `data.queued: true, data.delivered: false` with an explicit queued
-  receipt. The host submits it automatically without answering any Run Choice.
-  Other messages not sent are `operation_failed`, with why. The agent sees who sent it on its
+  receipt. The host submits it automatically without answering any Run Choice. A message
+  with no words, once credentials are taken out, and no attachment is refused and
+  supersedes nothing. Other messages not sent are `operation_failed`, with why. The agent sees who sent it on its
   first line. A message whose typed form would pass 3 lines or 700 characters is kept whole
   as a file in the Run's `attachments/`, the agent is told where to read it, and the
   receipt says to ask for an action auto mode must clear in a shorter message
@@ -920,7 +933,10 @@ Only an agent that was messaged since may still answer it, as a planner told "go
 every messaged agent's work ends, and the run is neither stopped nor moved on, the question
 is asked again under a new name with `revises` naming the old one; answer that one. A
 further message supersedes that one in turn. A message is never read as an answer, even one
-that is exactly an option.
+that is exactly an option. The board's question names the agent its steering entry reaches as `steer`: the agent
+that asked it, or for a workflow's Choice the one `run steer` reaches with no `--to`; with
+no such agent live, `steer.agent` is null and `steer.why` says to pick a solution or stop
+the Run.
 
 A run shows its question a moment before it stops to wait on it. An answer given in that
 moment is recorded at once and handed to the run once it has stopped, so it cannot wake the

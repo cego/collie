@@ -144,6 +144,10 @@ test("a Run waiting with no question open is parked, and one with a question is 
             { id: "api", title: "api", subtitle: null },
             { id: "web", title: "web", subtitle: null },
           ],
+          steer: {
+            agent: null,
+            why: "no agent of this Run is live to redirect: pick a solution or stop the Run",
+          },
         },
       ]);
     }),

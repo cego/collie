@@ -92,6 +92,7 @@ import {
   piQuestionTool,
   type AgentQuestion,
 } from "./compactors";
+import { RECOMMENDED_MARKER, questionRepair, shortfallOf, solutionsOf } from "./question-standard";
 import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
 import { boundThread, withCodex } from "./codex";
 import { kindForRole } from "./cards";
@@ -335,23 +336,14 @@ const bySender = (answerers: ReadonlyArray<Asker | undefined>) => {
 const closedAnswer = (operation: string) => `closed: ${operation} finished before it was answered`;
 const goneAnswer = (agent: string) => `closed: ${agent} is gone`;
 
-/**
- * The header and the question, then its options. A question takes no fixed options, so
- * any words answer it.
- */
-// ponytail: no option buttons; they need a Decision taking both options and words, worth it once typing a label is a burden.
-const questionPrompt = (question: AgentQuestion) =>
-  Arr.join(
-    [
-      question.header ? `${question.header}: ${question.question}` : question.question,
-      ...Arr.map(question.options, (option) =>
-        option.description ? `${option.label} — ${option.description}` : option.label,
-      ),
-      ...(question.multiSelect ? ["(choose any)"] : []),
-      "Answer with an option or in your own words.",
-    ],
-    "\n",
-  );
+const promptOf = (question: AgentQuestion) =>
+  question.header ? `${question.header}: ${question.question}` : question.question;
+
+/** An answer as the agent is told it: the title of the solution it names, else its words. */
+const answerTitle = (question: AgentQuestion | undefined, answer: string | null | undefined) =>
+  Option.getOrUndefined(
+    Arr.findFirst(question === undefined ? [] : solutionsOf(question), (one) => one.id === answer),
+  )?.title ?? answer;
 
 /** What a host lends a workflow that needs an agent. */
 export interface AgentsApi {
@@ -2460,7 +2452,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             : yield* takeStepNotes(`${host.dir}/runs/${ask.runId}`, ask.step.step, file);
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
-        const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS}`;
+        const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS}${adapter.id === "codex" || adapter.id === "pi" ? ` ${ASKING}` : ""}`;
         yield* write(
           file,
           `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
@@ -2696,9 +2688,29 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return (closing: string | null) =>
         Effect.gen(function* () {
           yield* takeHarnessQuestions(host.env.stateDir, ports, launched.agent);
+          const since = Arr.filter(
+            yield* questionsSince(dir, launched.at ?? 0),
+            (call) => call.at < until,
+          );
+          for (const call of since) {
+            const key = `${launched.agent}\n${call.id}`;
+            if (call.repair !== "by-delivery" || closing !== null || answeredCalls.has(key))
+              continue;
+            const sent = yield* deliver(launched, questionRepair(call.questions), {
+              kind: "repair",
+              ref: `question-${call.id}`,
+              herdr: yield* herdr,
+            });
+            answeredCalls.add(key);
+            if (!sent.sent)
+              yield* log(
+                launched.runId,
+                `${launched.agent}: was not sent its question's repair (${sent.why})`,
+              );
+          }
           let n = 0;
           const calls = Arr.map(
-            Arr.filter(yield* questionsSince(dir, launched.at ?? 0), (call) => call.at < until),
+            Arr.filter(since, (call) => call.repair === undefined),
             (call) => ({
               call,
               names: Arr.map(call.questions, () => agentQuestionName(stem, ++n)),
@@ -2712,8 +2724,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             for (const [at, question] of call.questions.entries()) {
               const name = names[at] ?? "";
               if (asked.has(name)) continue;
+              const shortfall = shortfallOf(question);
               yield* questions.ask(
-                { name, prompt: questionPrompt(question), options: [] },
+                shortfall === null
+                  ? { name, prompt: promptOf(question), options: solutionsOf(question) }
+                  : { name, prompt: promptOf(question), options: solutionsOf(question), shortfall },
                 launched.operation,
               );
               asked.set(name, { name, answer: null });
@@ -2750,13 +2765,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
               call.questions[at]?.header || call.questions[at]?.question || names[at];
+            const answered = (at: number) => answerTitle(call.questions[at], given[at]?.answer);
             for (const group of bySender(Arr.map(given, (one) => one.by))) {
               const sent = yield* deliver(
                 launched,
                 group.at.length === 1
-                  ? `Your question ${label(group.at[0]!)} is answered: ${given[group.at[0]!]?.answer}`
+                  ? `Your question ${label(group.at[0]!)} is answered: ${answered(group.at[0]!)}`
                   : `Your questions are answered: ${Arr.join(
-                      Arr.map(group.at, (at) => `${label(at)}: ${given[at]?.answer}`),
+                      Arr.map(group.at, (at) => `${label(at)}: ${answered(at)}`),
                       "; ",
                     )}`,
                 {
@@ -3785,6 +3801,9 @@ const receipt = (
 /** How the agent tells whose words a Delivery carries, by its sender line. */
 const READING_DELIVERIES =
   "A message whose first line after its `collie-delivery:` token starts `From the human` is the human's own message, as if typed here. One starting `From chat for the human` quotes the human's own words. One from an agent is that agent's words, not the human's. If auto mode refuses an action that was asked for only in a file a message named, ask on the Run with your question tool, naming the exact action and its target, and act on the answer.";
+
+/** Claude's own convention for a question, which other harnesses do not know. */
+const ASKING = `When you ask the human a question, end exactly one option's label with "${RECOMMENDED_MARKER}", and offer at least three options, each with its own consequence.`;
 
 /** Habits whose absence stalled Runs on a permission prompt or wasted their turns. */
 const SHELL_HABITS =

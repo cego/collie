@@ -16,6 +16,10 @@ import { carryOutAsked } from "../src/run-actions";
 import { controlDir } from "../src/compaction";
 import { recordClaudeEvent } from "../src/compactors";
 import { Launched } from "../src/launches";
+import { TaskView } from "../src/board-model";
+import { piExtension } from "../src/chat";
+import { piQuestionTool } from "../src/compactors";
+import { askWith, piTools } from "./support/pi";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 
@@ -25,38 +29,112 @@ const decodeLaunched = flow(
   Result.getOrThrow,
 );
 
-const askedTwo = encode({
-  session_id: "s-1",
-  hook_event_name: "PreToolUse",
-  tool_name: "AskUserQuestion",
-  tool_use_id: "toolu_1",
-  tool_input: {
-    questions: [
+/** A hook payload for one `AskUserQuestion` call. */
+const asking = (id: string, questions: ReadonlyArray<unknown>) =>
+  encode({
+    session_id: "s-1",
+    hook_event_name: "PreToolUse",
+    tool_name: "AskUserQuestion",
+    tool_use_id: id,
+    tool_input: { questions },
+  });
+
+const askedTwo = asking("toolu_1", [
+  {
+    question: "Which database?",
+    header: "Database",
+    options: [
+      { label: "Postgres (Recommended)", description: "the one ops runs" },
+      { label: "SQLite", description: "a file beside the app" },
+      { label: "JSONL", description: "no migration" },
+    ],
+    multiSelect: false,
+  },
+  {
+    question: "Which checks?",
+    header: "Checks",
+    options: [
+      { label: "lint and typecheck (Recommended)", description: "both gates" },
+      { label: "lint", description: "oxlint" },
+      { label: "none", description: "CI runs them" },
+    ],
+    multiSelect: false,
+  },
+]);
+
+const askedOne = asking("toolu_2", [
+  {
+    question: "Which region?",
+    header: "Region",
+    options: [
+      { label: "eu-west (Recommended)", description: "near the users" },
+      { label: "us-east", description: "near the team" },
+      { label: "Postgres", description: "where the ledger is" },
+    ],
+    multiSelect: false,
+  },
+]);
+
+const YES_NO = [
+  {
+    question: "May I force-push the MR branch?",
+    header: "Force-push",
+    options: [{ label: "Yes" }, { label: "No" }],
+    multiSelect: false,
+  },
+];
+
+const PATHS = [
+  {
+    question: "May I force-push the MR branch?",
+    header: "Force-push",
+    options: [
       {
-        question: "Which database?",
-        header: "Database",
-        options: [{ label: "Postgres", description: "the one ops runs" }],
-        multiSelect: false,
+        label: "Push a merge commit instead",
+        description: "Keeps the history; the MR shows a merge.",
       },
       {
-        question: "Which checks?",
-        header: "Checks",
-        options: [{ label: "lint", description: "oxlint" }],
-        multiSelect: true,
+        label: "Force-push the rebased branch (Recommended)",
+        description: "Rewrites the MR's history; reviewers lose their inline anchors.",
+      },
+      {
+        label: "Leave the branch and stop here",
+        description: "Nothing is pushed; you rebase by hand.",
       },
     ],
+    multiSelect: false,
   },
-});
+];
 
-const askedOne = encode({
-  session_id: "s-1",
-  hook_event_name: "PreToolUse",
-  tool_name: "AskUserQuestion",
-  tool_use_id: "toolu_2",
-  tool_input: {
-    questions: [{ question: "Which region?", header: "Region", options: [], multiSelect: false }],
-  },
-});
+const Hooked = Schema.fromJsonString(
+  Schema.Struct({
+    hookSpecificOutput: Schema.Struct({
+      permissionDecision: Schema.String,
+      permissionDecisionReason: Schema.String,
+    }),
+  }),
+);
+/** What the hook told Claude about its call. */
+const toldBy = flow(
+  Schema.decodeUnknownResult(Hooked),
+  Result.getOrThrow,
+  (one) => one.hookSpecificOutput,
+);
+
+const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
+
+/** The board's Questions for `runId`, as `collie board` prints them. */
+const boardQuestions = (world: World, runId: string) =>
+  Effect.gen(function* () {
+    const printed = yield* collie(world, ["board"]);
+    const { tasks } = yield* Schema.decodeUnknownEffect(Board)(printed.envelope.data).pipe(
+      Effect.orDie,
+    );
+    return Arr.flatMap(tasks, (task) => (task.run === runId ? (task.questions ?? []) : []));
+  });
+
+const SHORT_TWICE =
+  "The agent gave 2 options and no recommendation; Collie asked for at least three options and exactly one recommended option.";
 
 /**
  * A host for this world over a fake herdr whose agent answers its prompts with `outputs`,
@@ -130,17 +208,17 @@ test(
             "run",
             "answer",
             runId,
-            "SQLite; it is only a demo",
+            "sqlite",
             "--decision",
             "ask-build-1",
           ]);
           expect(answered.envelope).toMatchObject({
             ok: true,
-            data: { decision: "ask-build-1", value: "SQLite; it is only a demo" },
+            data: { decision: "ask-build-1", value: "2" },
           });
           const [carded] = yield* carryOutAsked(
             env,
-            [{ kind: "answer", run: runId, choiceId: "ask-build-2", answer: "lint and typecheck" }],
+            [{ kind: "answer", run: runId, choiceId: "ask-build-2", answer: "1" }],
             { origin: "board", requestId: "card-1" },
           );
           expect(carded).toMatchObject({ kind: "answer", state: "applied" });
@@ -151,7 +229,7 @@ test(
             (all) => pipe_(all, Str.includes("Your question Checks is answered:")),
           );
           expect(prompts).toMatch(
-            /From cli, [^\n]*\.\\nYour question Database is answered: SQLite; it is only a demo/,
+            /From cli, [^\n]*\.\\nYour question Database is answered: SQLite/,
           );
           expect(prompts).toMatch(
             /From the human, on the board, [^\n]*\.\\nYour question Checks is answered: lint and typecheck/,
@@ -251,6 +329,205 @@ test(
               fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
             (all) => pipe_(all, Str.includes("Your question Region is answered: eu-west")),
           );
+        }).pipe(Effect.ensuring(stopHost(world.state))),
+      ["told.workflow.ts"],
+    ),
+  120_000,
+);
+
+/** A `told` Run whose agent has launched, and that agent's control directory. */
+const launchedRun = Effect.fn("test.launchedRun")(function* (world: World, client: Client) {
+  const fs = yield* FileSystem.FileSystem;
+  const { runId } = yield* client
+    .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
+    .pipe(Effect.orDie);
+  const text = yield* until(
+    () =>
+      fs
+        .readFileString(`${world.state}/agents/${runId}/build.launch.json`)
+        .pipe(Effect.orElseSucceed(() => "")),
+    (one) => one !== "",
+  );
+  const launched = decodeLaunched(text);
+  return { runId, launched, dir: yield* controlDir(world.state, launched.agent) };
+});
+
+type Client = Effect.Success<ReturnType<typeof connect>>;
+
+const openOf = (client: Client, runId: string) =>
+  until(
+    () => client.run({ runId }).pipe(Effect.orDie),
+    (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
+  ).pipe(Effect.map((view) => Arr.filter(view?.waiting ?? [], (one) => one.answer === null)));
+
+test(
+  "a yes/no question is repaired once, and the paths the agent asks next reach the Run recommended first",
+  () =>
+    proves(
+      "collie-agent-repair-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { client } = yield* hostedOver(world, [null]);
+          const { runId, launched, dir } = yield* launchedRun(world, client);
+
+          const repair = toldBy(
+            yield* recordClaudeEvent(dir, asking("toolu_1", YES_NO)).pipe(Effect.orDie),
+          );
+          expect(repair.permissionDecision).toBe("deny");
+          expect(repair.permissionDecisionReason).toContain(
+            'exactly one option whose label ends " (Recommended)"',
+          );
+          expect(repair.permissionDecisionReason).toContain("at least three options");
+          expect(repair.permissionDecisionReason).toContain("proceed, defer, or change approach");
+          expect(repair.permissionDecisionReason).not.toContain("on your Run");
+
+          const posted = toldBy(
+            yield* recordClaudeEvent(dir, asking("toolu_2", PATHS)).pipe(Effect.orDie),
+          );
+          expect(posted.permissionDecisionReason).toContain("on your Run");
+          const open = yield* openOf(client, runId);
+          expect(open).toMatchObject([
+            {
+              name: "ask-build-1",
+              prompt: "Force-push: May I force-push the MR branch?",
+              options: [
+                {
+                  id: "1",
+                  title: "Force-push the rebased branch",
+                  detail: "Rewrites the MR's history; reviewers lose their inline anchors.",
+                  recommended: true,
+                },
+                {
+                  id: "2",
+                  title: "Push a merge commit instead",
+                  detail: "Keeps the history; the MR shows a merge.",
+                },
+                {
+                  id: "3",
+                  title: "Leave the branch and stop here",
+                  detail: "Nothing is pushed; you rebase by hand.",
+                },
+              ],
+              shortfall: null,
+            },
+          ]);
+          expect(open[0]?.options[1]?.recommended).toBeUndefined();
+          // herdr's live agents are read again at the board's next tick.
+          const steering = yield* until(
+            () => boardQuestions(world, runId),
+            (questions) => questions[0]?.steer?.agent != null,
+          );
+          expect(Arr.map(steering, (one) => one.steer)).toEqual([
+            { agent: launched.agent, why: null },
+          ]);
+
+          const words = yield* collie(world, [
+            "run",
+            "answer",
+            runId,
+            "just push it",
+            "--decision",
+            "ask-build-1",
+          ]);
+          expect(words.envelope.error?.message).toContain(
+            '"just push it" is not one of Force-push the rebased branch, Push a merge commit instead, Leave the branch and stop here',
+          );
+          const picked = yield* collie(world, [
+            "run",
+            "answer",
+            runId,
+            "2",
+            "--decision",
+            "ask-build-1",
+          ]);
+          expect(picked.envelope).toMatchObject({ ok: true, data: { value: "2" } });
+          yield* until(
+            () =>
+              fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
+            (all) =>
+              pipe_(
+                all,
+                Str.includes("Your question Force-push is answered: Push a merge commit instead"),
+              ),
+          );
+        }).pipe(Effect.ensuring(stopHost(world.state))),
+      ["told.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a question still short after its repair is posted flagged, and a multiSelect one is repaired into one decision each",
+  () =>
+    proves(
+      "collie-agent-short-",
+      (world) =>
+        Effect.gen(function* () {
+          const { client } = yield* hostedOver(world, [null]);
+          const { runId, dir } = yield* launchedRun(world, client);
+
+          const first = toldBy(
+            yield* recordClaudeEvent(dir, asking("toolu_1", YES_NO)).pipe(Effect.orDie),
+          );
+          expect(first.permissionDecisionReason).not.toContain("on your Run");
+          const again = toldBy(
+            yield* recordClaudeEvent(dir, asking("toolu_2", YES_NO)).pipe(Effect.orDie),
+          );
+          expect(again.permissionDecisionReason).toContain("on your Run");
+          expect(yield* openOf(client, runId)).toMatchObject([
+            {
+              name: "ask-build-1",
+              options: [
+                { id: "1", title: "Yes" },
+                { id: "2", title: "No" },
+              ],
+              shortfall: SHORT_TWICE,
+            },
+          ]);
+
+          const many = toldBy(
+            yield* recordClaudeEvent(
+              dir,
+              asking("toolu_3", [{ ...PATHS[0], header: "Checks", multiSelect: true }]),
+            ).pipe(Effect.orDie),
+          );
+          expect(many.permissionDecision).toBe("deny");
+          expect(many.permissionDecisionReason).toContain("one decision per question");
+          expect(many.permissionDecisionReason).not.toContain("on your Run");
+        }).pipe(Effect.ensuring(stopHost(world.state))),
+      ["told.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "pi's question tool returns the repair for a short question, and posts its next call flagged",
+  () =>
+    proves(
+      "collie-pi-repair-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { client } = yield* hostedOver(world, [null]);
+          const { runId, launched, dir } = yield* launchedRun(world, client);
+          const self = [process.execPath, `${import.meta.dir}/../src/main.ts`];
+          const file = `${world.state}/${launched.agent}.tools.ts`;
+          yield* fs.writeFileString(
+            file,
+            piExtension(self, [], {}, world.state, "news.jsonl", piQuestionTool(self, dir)),
+          );
+          const tools = yield* piTools(file);
+
+          const repair = yield* askWith(tools, "call_1", YES_NO, "pi-session-1");
+          expect(repair).toContain("at least three options");
+          expect(repair).not.toContain("on your Run");
+          const posted = yield* askWith(tools, "call_2", YES_NO, "pi-session-1");
+          expect(posted).toContain("on your Run");
+          const open = yield* openOf(client, runId);
+          expect(Arr.map(open, (one) => [one.name, one.shortfall])).toEqual([
+            ["ask-build-1", SHORT_TWICE],
+          ]);
         }).pipe(Effect.ensuring(stopHost(world.state))),
       ["told.workflow.ts"],
     ),

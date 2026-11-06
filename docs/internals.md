@@ -940,7 +940,10 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   pi has no question tool, so its per-launch `.tools.ts` registers Collie's
   `ask_user_question` (`piQuestionTool` in `src/compactors.ts`). The tool hands its call to
   `collie herdr compaction <control dir>` as the payload Claude's `AskUserQuestion` hook
-  gets, so it is recorded in the same `questions.jsonl` and becomes the same Decisions.
+  gets, so it is recorded in the same `questions.jsonl` and becomes the same Decisions, and
+  a call short of standard gets the hook's repair as the tool's result. A call repaired
+  rather than posted is recorded with `repair` (`in-reply`, or `by-delivery` for a Codex
+  call whose repair goes as a Delivery), so the call after it is posted whatever it holds.
 - **Stop** at the Run's end is `terminal.kill`.
 - **Resume.** What each agent was started with, less its credentials and its Run's
   authority, is kept in `relaunch/<run>/<agent>.json` under the state directory until it is

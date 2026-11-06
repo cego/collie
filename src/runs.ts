@@ -35,6 +35,8 @@ export interface Asked {
   readonly options: ReadonlyArray<Solution>;
   readonly hold?: { readonly offered: boolean; readonly why: string | null };
   readonly shortfall?: string;
+  /** The agent a human's words about it would reach. */
+  readonly steer?: string;
 }
 
 export interface RunFacts {
@@ -158,6 +160,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       const hold = holdPath(one, view.controls.includes(HOLD));
       if (hold !== undefined) asked.hold = hold;
       if (one.shortfall != null) asked.shortfall = one.shortfall;
+      if (one.steer != null) asked.steer = one.steer;
       return asked;
     },
   ),
