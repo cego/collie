@@ -100,9 +100,7 @@ so make this one count.
    noise is wider than its limits.
 2. Repair the harness or the plan, never the product:
    - a broken harness: fix it in new commits touching only the harness paths, and list
-     every harness commit, old and new. Where this branch carries none of the harness, as
-     when it was carried from an earlier Run, cherry-pick the plan's harness commits onto it
-     first, so your fix lands on the whole harness, and list the cherry-picked commits;
+     every harness commit, old and new;
    - a noisy metric: more `samples` (the Run takes {{samples}} at least), a longer or
      steadier window, a counter of the same work, or limits of its own with the `why` they
      rest on. A limit is a statement of what matters, not of what this calibration happened

@@ -16108,7 +16108,6 @@ const tunePlan = (
 const NOISY_PRIMARY = { name: "bench.value", direction: "lower", role: "primary" } as const;
 const STEADY_PRIMARY = { name: "bench.count", direction: "lower", role: "primary" } as const;
 
-/** A calibration repair answering with this plan and why. */
 const repaired = (plan: Readonly<Record<string, Schema.Json>>, reason: string) => ({
   ...plan,
   reason,
@@ -16357,6 +16356,53 @@ scenario(
   120_000,
 );
 
+scenario(
+  "a tune-up repair that changes only a metric's why is the same plan, and is not calibrated again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-reworded";
+        const guardrail = (why: string) => ({ ...NOISY_GUARDRAIL, tolerance: 2, why });
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [STEADY_PRIMARY, guardrail("a guess")]),
+          repaired(
+            tunePlan(commit, [STEADY_PRIMARY, guardrail("a better-worded guess")]),
+            "explained it better",
+          ),
+        ]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("repair 1 left the plan as it was");
+        expect(yield* calibrations(runId)).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose noisy primary names itself as its counter is repaired, never switched to the same plan",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-self-counter";
+        const written = tunePlan(commit, [
+          { ...NOISY_PRIMARY, counter: { name: "bench.value", direction: "lower" } },
+        ]);
+        yield* rig.queueOutputs([TUNE_DISCOVERED, written, repaired(written, "again")]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("proof unavailable: bench.value is inconclusive");
+        expect(reasonOf(result)).toContain("repair 1 left the plan as it was");
+        expect(yield* runLog(runId)).not.toContain("switched bench.value");
+        expect(yield* calibrations(runId)).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
 for (const [what, unusable] of [
   ["no research", { ...TUNE_DISCOVERED, research: [] }],
   [
@@ -16467,20 +16513,21 @@ scenario(
 );
 
 scenario(
-  "a tune-up started from an earlier one carries its Discover and plan, launches neither, and calibrates with that harness applied",
+  "a tune-up started from an earlier one carries its Discover and plan, launches neither, cherry-picks its harness, and can be carried on in turn",
   () =>
     runEffect(
       Effect.gen(function* () {
         const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
-        // The second Run's one prompt is its Cycle's: it is handed the last of these.
+        // The later Runs' one prompt each is their Cycle's: they are handed the last of these.
         yield* rig.queueOutputs([
           TUNE_DISCOVERED,
           tunePlan(commit, [STEADY_PRIMARY]),
           EXHAUSTED,
           EXHAUSTED,
+          EXHAUSTED,
         ]);
         expect((yield* tunedUp("r-tune-first"))._tag).toBe("Success");
-        // The second Run's checkout holds none of the harness: it lives on the first's branch.
+        // The later Runs' checkouts hold none of the harness: it lives on the first's branch.
         yield* exec(["git", "reset", "-q", "--hard", `${commit}~1`], { cwd: rig.projectDir });
         const runId = "r-tune-carried";
         const result = yield* tunedUp(runId, { from: "r-tune-first" });
@@ -16491,10 +16538,21 @@ scenario(
         const log = yield* runLog(runId);
         expect(log).toContain("discover carried from r-tune-first");
         expect(log).toContain("harness carried from r-tune-first");
+        expect(log).toContain(`harness commits ${commit} carried onto`);
         expect(log).toContain("telemetry APM: unavailable: no APM access from this Machine");
         expect(log).toContain("calibrated on bench.count");
         const [calibration] = yield* calibrations(runId);
-        expect(calibration!.candidate.harness_applied).toEqual([commit]);
+        expect(calibration!.candidate.harness_applied).toBeUndefined();
+        const onBranch = yield* exec(
+          ["git", "show", `${calibration!.candidate.head_sha}:bench/bench.sh`],
+          { cwd: rig.projectDir },
+        );
+        expect(onBranch.stdout).toBe(NOISY_BENCH);
+
+        const again = yield* tunedUp("r-tune-recarried", { from: runId });
+        expect(again._tag).toBe("Success");
+        expect(yield* wasAsked("r-tune-recarried", "discover")).toBe(false);
+        expect(yield* runLog("r-tune-recarried")).toContain("harness carried from r-tune-carried");
       }),
     ),
   120_000,

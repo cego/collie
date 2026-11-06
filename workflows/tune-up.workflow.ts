@@ -43,6 +43,7 @@ import {
   FileSystem,
   Hash,
   Option,
+  Path,
   Schema,
   flow,
   Result,
@@ -307,7 +308,6 @@ const Harnessed = Schema.Struct({
 });
 type Harnessed = typeof Harnessed.Type;
 
-/** A plan the tuner repaired after a calibration, and what it changed. */
 const Repaired = Schema.Struct({
   ...Harnessed.fields,
   reason: text.annotate({
@@ -415,7 +415,6 @@ const readAnswer = (said: string) => {
   return { yes: Str.toLowerCase(read[1] ?? "") === "yes", words: words === "" ? null : words };
 };
 const MERGE_TRIES = 2;
-/** Repairs of a calibration that ruled proof out, before the Run fails. */
 const REPAIRS = 2;
 const IGNORE = "Ignore";
 const POST = "Post";
@@ -901,6 +900,36 @@ const bodyOf = (got: {
   );
 };
 
+/** Each of `commits` cherry-picked onto `cwd`, but one whose change it already holds. */
+const carryHarness = ({
+  cwd,
+  from,
+  commits,
+}: {
+  readonly cwd: string;
+  readonly from: string;
+  readonly commits: ReadonlyArray<string>;
+}) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const git = (args: ReadonlyArray<string>) => ChildProcess.make("git", [...args], { cwd });
+    for (const commit of commits) {
+      const missing = yield* spawner.string(git(["cherry", "HEAD", commit, `${commit}~1`]));
+      if (!pipe(missing, Str.startsWith("+"))) continue;
+      if ((yield* spawner.exitCode(git(["cherry-pick", commit]))) === 0) continue;
+      yield* spawner.exitCode(git(["cherry-pick", "--abort"]));
+      return yield* new WorkflowError({
+        reason: `harness commit ${commit} of ${from} does not apply to ${cwd}`,
+      });
+    }
+  }).pipe(
+    Effect.catchTag("PlatformError", (cause) =>
+      Effect.fail(
+        new WorkflowError({ reason: `the harness could not be carried: ${cause.message}` }),
+      ),
+    ),
+  );
+
 interface Archived {
   readonly runId: string;
   readonly cwd: string;
@@ -1141,13 +1170,17 @@ export default defineWorkflow({
               return yield* new WorkflowError({
                 reason: `${from} has no ${name} Output to carry: none of ${Arr.join(files, ", ")}`,
               });
-            const read = yield* fs.readFileString(file).pipe(
-              Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(schema))),
-              Effect.mapError(
-                (cause) =>
-                  new WorkflowError({ reason: `${file} cannot be carried: ${cause.message}` }),
-              ),
+            const unreadable = (cause: { readonly message: string }) =>
+              new WorkflowError({ reason: `${file} cannot be carried: ${cause.message}` });
+            const raw = yield* fs.readFileString(file).pipe(Effect.mapError(unreadable));
+            const read = yield* Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
+              Effect.mapError(unreadable),
             );
+            // Kept as this Run's own, so a later `from` naming this Run finds it.
+            const own = agents.outputFor(runId, name);
+            yield* fs
+              .makeDirectory((yield* Path.Path).dirname(own), { recursive: true })
+              .pipe(Effect.andThen(fs.writeFileString(own, raw)), Effect.mapError(unreadable));
             yield* host.record(runId, `${name} carried from ${from}: ${file}`);
             return read;
           }),
@@ -1206,6 +1239,21 @@ export default defineWorkflow({
               ),
             );
 
+      if (from !== "")
+        yield* Activity.make({
+          name: "harness.carried.onto",
+          success: Schema.Void,
+          error: WorkflowError,
+          execute: carryHarness({ cwd, from, commits: written.harness.commits }).pipe(
+            Effect.andThen(
+              host.record(
+                runId,
+                `harness commits ${Arr.join(written.harness.commits, ", ")} carried onto ${cwd}`,
+              ),
+            ),
+          ),
+        });
+
       let plans = 0;
       const reasons: string[] = [];
       const recordPlan = (plan: Plan, reason: string) =>
@@ -1232,6 +1280,8 @@ export default defineWorkflow({
       });
       const encodePlan = (one: Plan) =>
         Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(one).pipe(Effect.orDie);
+      const experimentOf = (one: Plan) =>
+        encodePlan({ ...one, metrics: Arr.map(one.metrics, Struct.omit(["why"])) });
       let plan = yield* recordPlan(
         planOf(written),
         from === "" ? "written by Harness" : `carried from ${from}`,
@@ -1248,7 +1298,7 @@ export default defineWorkflow({
         });
 
       const calibrations: Measurement[] = [];
-      const tried = new Set<string>([yield* encodePlan(plan)]);
+      const tried = new Set<string>([yield* experimentOf(plan)]);
       let counted = written;
       let ending: string | null = null;
       let calibrated = false;
@@ -1301,17 +1351,24 @@ export default defineWorkflow({
                 )?.counter,
               }))
             : [];
-        if (counters.length > 0 && Arr.every(counters, (one) => one.counter !== undefined)) {
+        const switched: Plan = {
+          ...plan,
+          metrics: Arr.map(plan.metrics, (metric) => {
+            const counter = Option.getOrUndefined(
+              Arr.findFirst(counters, (one) => one.metric === metric.name),
+            )?.counter;
+            return counter === undefined ? metric : { ...counter, role: metric.role };
+          }),
+        };
+        const switchedKey = yield* experimentOf(switched);
+        if (
+          counters.length > 0 &&
+          Arr.every(counters, (one) => one.counter !== undefined) &&
+          !tried.has(switchedKey)
+        ) {
+          tried.add(switchedKey);
           plan = yield* recordPlan(
-            {
-              ...plan,
-              metrics: Arr.map(plan.metrics, (metric) => {
-                const counter = Option.getOrUndefined(
-                  Arr.findFirst(counters, (one) => one.metric === metric.name),
-                )?.counter;
-                return counter === undefined ? metric : { ...counter, role: metric.role };
-              }),
-            },
+            switched,
             Arr.join(
               Arr.map(
                 counters,
@@ -1320,7 +1377,6 @@ export default defineWorkflow({
               "; ",
             ),
           );
-          tried.add(yield* encodePlan(plan));
           continue;
         }
         const failed = `${kind}: ${why} (calibration ${measured.id})`;
@@ -1353,7 +1409,7 @@ export default defineWorkflow({
           }),
         );
         const next = planOf(repaired);
-        const encoded = yield* encodePlan(next);
+        const encoded = yield* experimentOf(next);
         if (tried.has(encoded)) {
           ending = `${failed}; repair ${repairs} left the plan as it was, and a plan is never calibrated twice`;
           break;

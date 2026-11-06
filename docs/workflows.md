@@ -1050,12 +1050,11 @@ other checkout, or a URL, is refused at the start.
 
 With `from` naming an earlier tune-up Run, the Run does not discover again. It carries that
 Run's Discover Output and its latest benchmark plan, the last repair's where it made one and
-otherwise Harness's, and says so in its log. No Discover or Harness agent runs. The harness
-commits stay where that Run made them. Every Measurement applies them in a scratch tree, so
-the branch carries only product changes, and calibration measures the branch, still at its
-merge base, against the base. A repair of the harness itself cherry-picks them onto the branch
-first and commits its fix on top. A `from` with no Discover or Harness Output fails the Run,
-naming the files it looked for.
+otherwise Harness's, and says so in its log. No Discover or Harness agent runs. It
+cherry-picks that plan's harness commits onto its own branch, skipping any the branch already
+holds, so the branch is where Harness would have left it. A commit that does not apply fails
+the Run, naming it. A Run started this way can itself be named by a later `from`. A `from`
+with no Discover or Harness Output fails the Run, naming the files it looked for.
 
 **What happens:**
 
