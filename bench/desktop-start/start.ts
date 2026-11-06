@@ -43,7 +43,7 @@ export const treeRssMib = (ps: string, root: number) =>
   Math.round(Arr.reduce(treeOf(ps, root, isCollie), 0, (sum, one) => sum + one.rssKib) / 102.4) /
   10;
 
-/** Whether `pid` took the signal; a process of the tree may have ended with its parent. */
+/** Whether `pid`, or the group of `-pid`, took the signal; it may have ended already. */
 const signal = (pid: number, name: NodeJS.Signals | 0) => {
   try {
     process.kill(pid, name);
@@ -84,25 +84,19 @@ export const measureStart = (start: {
         Bun.spawn([...start.argv], {
           env: { ...start.env, XDG_STATE_HOME: start.desktopState },
           stdio: ["ignore", "ignore", "inherit"],
+          detached: true,
         }),
       ),
+      // Its own process group still holds what it started once it has ended itself.
       (app) =>
         Effect.gen(function* () {
-          const tree = treeOf(snapshot(), app.pid, () => false);
-          for (const { pid } of tree) signal(pid, "SIGTERM");
-          // Until Bun reaps it, an exited app still takes signals.
-          const running = () =>
-            Arr.filter(tree, ({ pid }) =>
-              pid === app.pid ? app.exitCode === null && app.signalCode === null : signal(pid, 0),
-            );
-          yield* Effect.sync(running).pipe(
-            Effect.repeat({
-              until: (left) => left.length === 0,
-              schedule: Schedule.spaced("100 millis"),
-            }),
+          const group = -app.pid;
+          signal(group, "SIGTERM");
+          yield* Effect.sync(() => signal(group, 0)).pipe(
+            Effect.repeat({ until: (left) => !left, schedule: Schedule.spaced("100 millis") }),
             Effect.timeoutOption(start.grace ?? "10 seconds"),
           );
-          for (const { pid } of running()) signal(pid, "SIGKILL");
+          signal(group, "SIGKILL");
         }).pipe(Effect.ignore),
     );
     const usableAt = yield* fs.readFileString(log).pipe(

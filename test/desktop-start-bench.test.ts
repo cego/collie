@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, FileSystem, Option, Schedule, Schema } from "effect";
+import { Effect, Exit, FileSystem, Option, Schedule, Schema } from "effect";
 import { treeRssMib, measureStart } from "../bench/desktop-start/start";
 import { world } from "../bench/record-open/world";
 import { runEffect } from "./support/effect";
@@ -93,6 +93,47 @@ await child.exited;
           }
         };
         // A killed process takes a moment to be gone.
+        const gone = yield* Effect.sync(alive).pipe(
+          Effect.repeat({ until: (running) => !running, schedule: Schedule.spaced("50 millis") }),
+          Effect.timeoutOption("2 seconds"),
+        );
+        expect(Option.isSome(gone)).toBe(true);
+      }),
+    ));
+
+  test("ends what the app started even when the app ended before its board", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const app = `${dir}/app.ts`;
+        yield* fs.writeFileString(
+          app,
+          `const child = Bun.spawn(["sleep", "30"], { stdio: ["ignore", "ignore", "ignore"] });
+child.unref();
+await Bun.write("${dir}/child.pid", String(child.pid));
+process.exit(1);
+`,
+        );
+        const ended = yield* measureStart({
+          argv: [process.execPath, app],
+          env: { PATH: Bun.env.PATH },
+          desktopState: `${dir}/state`,
+          idle: "0 millis",
+          grace: "1 second",
+        }).pipe(Effect.exit);
+        expect(Exit.isFailure(ended)).toBe(true);
+        const child = Number(yield* fs.readFileString(`${dir}/child.pid`));
+        yield* Effect.addFinalizer(() =>
+          Effect.try(() => process.kill(child, "SIGKILL")).pipe(Effect.ignore),
+        );
+        const alive = () => {
+          try {
+            return process.kill(child, 0);
+          } catch {
+            return false;
+          }
+        };
         const gone = yield* Effect.sync(alive).pipe(
           Effect.repeat({ until: (running) => !running, schedule: Schedule.spaced("50 millis") }),
           Effect.timeoutOption("2 seconds"),
