@@ -232,3 +232,8 @@ CEF helpers) 60 seconds later, leaving out `collie bridge` and the host. It then
 app. Without `--app` it takes the launcher under `desktop/build`. Take it cold (after a
 reboot or a cache drop) and warm, with 2 warm-ups and 10 samples, as
 `collie measure` does by a plan whose command is `bun bench/desktop-start/run.ts`.
+
+## The Rune spike
+
+[`desktop-rune/`](../desktop-rune/README.md) is an experiment that no release ships. It draws
+the board in a Rune shell, and it runs this main process unchanged as its core over stdio.

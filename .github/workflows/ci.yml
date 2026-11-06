@@ -110,3 +110,27 @@ jobs:
       # The release builds the view on a fresh checkout, so CI does too.
       - run: bun run view
         working-directory: desktop
+
+  # The Rune spike (desktop-rune/README.md), which no release ships, so `test` does not need
+  # it. Its view test draws on lavapipe, Mesa's software Vulkan.
+  desktop-rune:
+    runs-on: ubuntu-latest
+    env:
+      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev mesa-vulkan-drivers
+      # Installs the toolchain desktop-rune/rust-toolchain.toml pins.
+      - run: rustup toolchain install
+        working-directory: desktop-rune
+      - run: cargo fmt --all --check
+        working-directory: desktop-rune
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: desktop-rune
+      - run: cargo test --workspace
+        working-directory: desktop-rune
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - run: bun install --frozen-lockfile
+      - run: bun test test/rune-contract.test.ts test/rune-types.test.ts

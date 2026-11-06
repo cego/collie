@@ -59,6 +59,8 @@ here are in [`src/README.md`](src/README.md).
   `src/lifecycle.ts`, `test/machines-core.test.ts`.
 - **Desktop**, its Flock chat, record and Diff tab → [`desktop/README.md`](desktop/README.md),
   [`docs/using.md`](docs/using.md#collie-desktop), `test/desktop-*.test.ts`, `test/flock-*.test.ts`.
+- **Rune spike** (no release ships it) → [`desktop-rune/README.md`](desktop-rune/README.md),
+  `tools/rune-types.ts`, `tools/rune-fixtures.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),
   [`docs/using.md`](docs/using.md#what-collies-agents-get), `src/profile.ts`, `src/agents.ts`,
   `test/profile.test.ts`, `test/agents.test.ts`.
