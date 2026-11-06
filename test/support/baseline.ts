@@ -16108,6 +16108,12 @@ const tunePlan = (
 const NOISY_PRIMARY = { name: "bench.value", direction: "lower", role: "primary" } as const;
 const STEADY_PRIMARY = { name: "bench.count", direction: "lower", role: "primary" } as const;
 
+/** A calibration repair answering with this plan and why. */
+const repaired = (plan: Readonly<Record<string, Schema.Json>>, reason: string) => ({
+  ...plan,
+  reason,
+});
+
 type Driving = Parameters<Parameters<typeof driven>[1]>[0];
 
 /** Each progress question answered as it opens, with the next of `answers` and then Yes, until the Run ends. */
@@ -16220,31 +16226,39 @@ scenario(
 );
 
 scenario(
-  "a tune-up whose base is too noisy against itself, with no counter, completes with its findings and no merge request",
+  "a tune-up whose base stays too noisy against itself through its repairs fails as proof unavailable, keeping every calibration and plan",
   () =>
     runEffect(
       Effect.gen(function* () {
         const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
         const runId = "r-tune-noisy";
-        yield* rig.queueOutputs([TUNE_DISCOVERED, tunePlan(commit, [NOISY_PRIMARY])]);
+        const noisy = tunePlan(commit, [NOISY_PRIMARY]);
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          noisy,
+          repaired({ ...noisy, samples: 12 }, "more samples to narrow the interval"),
+          repaired({ ...noisy, samples: 14 }, "more samples again"),
+        ]);
         const result = yield* tunedUp(runId);
-        expect(result._tag).toBe("Success");
-        expect(said(result)).toContain("proof unavailable: bench.value is inconclusive");
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("proof unavailable: bench.value is inconclusive");
+        expect(reasonOf(result)).toContain("2 repairs spent");
         expect(yield* persona(runId, "discover")).toContain("tuner");
         const log = yield* runLog(runId);
         expect(log).toContain("cycles 5");
         expect(log).toContain("proof unavailable: bench.value is inconclusive");
+        expect(log).toContain("repair 1 of 2");
+        expect(log).toContain("benchmark plan 3: repair 2: more samples again");
         // Every telemetry source Discover could not use, with why.
         expect(log).toContain("telemetry APM: unavailable: no APM access from this Machine");
         expect(log).toContain("telemetry Kibana logs: unavailable: no Kibana credentials here");
         expect(yield* wasAsked(runId, "mr")).toBe(false);
-        const [calibration, ...more] = yield* calibrations(runId);
-        expect(more).toEqual([]);
+        const measured = yield* calibrations(runId);
         // Base against base: the base tree is the merge base with the harness on it.
-        expect(calibration!.candidate.content).toBe(calibration!.base.content);
-        expect(calibration!.base.commit).toBe(yield* revParse(`${commit}~1`));
-        expect(calibration!.plan.samples).toBe(10);
-        const report = yield* readText(Str.split(said(result), ": ")[0]!);
+        expect(measured[0]!.candidate.content).toBe(measured[0]!.base.content);
+        expect(measured[0]!.base.commit).toBe(yield* revParse(`${commit}~1`));
+        expect(Arr.map(measured, (one) => one.plan.samples)).toEqual([10, 12, 14]);
+        const report = yield* readText(Str.split(reasonOf(result), ": ")[0]!);
         expect(report).toContain("no APM access from this Machine");
       }),
     ),
@@ -16281,23 +16295,62 @@ scenario(
   120_000,
 );
 
+const NOISY_GUARDRAIL = { ...NOISY_PRIMARY, role: "guardrail" } as const;
+
 scenario(
-  "a tune-up whose guardrail is not held against itself, with no counter for it, ends naming that guardrail",
+  "a tune-up whose guardrail is not held against itself repairs its plan with a justified absolute slack, calibrates on it and ends with no gain",
   () =>
     runEffect(
       Effect.gen(function* () {
         const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
         const runId = "r-tune-guardrail";
+        const written = tunePlan(commit, [STEADY_PRIMARY, NOISY_GUARDRAIL]);
         yield* rig.queueOutputs([
           TUNE_DISCOVERED,
-          tunePlan(commit, [STEADY_PRIMARY, { ...NOISY_PRIMARY, role: "guardrail" }]),
+          written,
+          repaired(
+            tunePlan(commit, [
+              STEADY_PRIMARY,
+              { ...NOISY_GUARDRAIL, absolute: 10, why: "a value read in steps of 10" },
+            ]),
+            "bench.value moves in steps of 10, so a step is its resolution",
+          ),
+          EXHAUSTED,
         ]);
         const result = yield* tunedUp(runId);
         expect(result._tag).toBe("Success");
-        expect(said(result)).toContain(
+        expect(said(result)).toContain("no gain: no measured opportunity is left");
+        const log = yield* runLog(runId);
+        expect(log).toContain(
           "proof unavailable: guardrail bench.value is not held against itself",
         );
-        expect(said(result)).not.toContain("bench.count");
+        expect(log).toContain("calibrated on bench.count");
+        const [first, second] = yield* calibrations(runId);
+        expect(first!.result._tag === "Judged" && first!.result.verdicts[1]!.held).toBe(false);
+        expect(second!.plan.metrics[1]).toMatchObject({ absolute: 10 });
+        expect(second!.result._tag === "Judged" && second!.result.verdicts[1]!.held).toBe(true);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up repair that leaves the plan as it was is not calibrated again, and the Run fails naming the guardrail",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-unrepaired";
+        const written = tunePlan(commit, [STEADY_PRIMARY, NOISY_GUARDRAIL]);
+        yield* rig.queueOutputs([TUNE_DISCOVERED, written, repaired(written, "try it again")]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain(
+          "proof unavailable: guardrail bench.value is not held against itself",
+        );
+        expect(reasonOf(result)).toContain("repair 1 left the plan as it was");
+        expect(reasonOf(result)).not.toContain("guardrail bench.count");
+        expect(yield* calibrations(runId)).toHaveLength(1);
         expect(yield* wasAsked(runId, "mr")).toBe(false);
       }),
     ),
@@ -16321,10 +16374,11 @@ for (const [what, unusable] of [
         Effect.gen(function* () {
           const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
           const runId = "r-tune-research";
-          yield* rig.queueOutputs([unusable, TUNE_DISCOVERED, tunePlan(commit, [NOISY_PRIMARY])]);
+          const noisy = tunePlan(commit, [NOISY_PRIMARY]);
+          yield* rig.queueOutputs([unusable, TUNE_DISCOVERED, noisy, repaired(noisy, "again")]);
           const result = yield* tunedUp(runId);
-          expect(result._tag).toBe("Success");
-          expect(yield* agentPrompts()).toHaveLength(3);
+          expect(result._tag).toBe("Failure");
+          expect(yield* agentPrompts()).toHaveLength(4);
           const log = yield* runLog(runId);
           expect(log).toContain(
             "research https://bun.sh/docs/api/sqlite raised prepared statements",
@@ -16332,7 +16386,7 @@ for (const [what, unusable] of [
           expect(log).toContain(
             "research https://gitlab.example.com/group/project/-/issues/7 ruled out an index on name",
           );
-          const report = yield* readText(Str.split(said(result), ": ")[0]!);
+          const report = yield* readText(Str.split(reasonOf(result), ": ")[0]!);
           // Each source on the line under the opportunity it changed.
           const lines = Str.split(report, "\n");
           const under = (opportunity: string) =>
@@ -16412,21 +16466,56 @@ scenario(
   120_000,
 );
 
+const UNBUILDABLE = (code: number) => ({ executable: "sh", argv: ["-c", `exit ${code}`] });
+
 scenario(
-  "a tune-up whose base cannot be built fails the Run, naming the tree",
+  "a tune-up whose base cannot be built through its repairs fails as a broken harness, naming the tree",
   () =>
     runEffect(
       Effect.gen(function* () {
         const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
         yield* rig.queueOutputs([
           TUNE_DISCOVERED,
-          tunePlan(commit, [STEADY_PRIMARY], { executable: "sh", argv: ["-c", "exit 3"] }),
+          tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(3)),
+          repaired(tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(4)), "a different prepare"),
+          repaired(tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(5)), "another prepare"),
         ]);
         const result = yield* tunedUp("r-tune-unbuildable");
         expect(result._tag).toBe("Failure");
         expect(reasonOf(result)).toContain(
-          `the base tree at ${yield* revParse(`${commit}~1`)} could not be built`,
+          `harness broken: the base tree at ${yield* revParse(`${commit}~1`)} could not be built`,
         );
+        expect(reasonOf(result)).toContain("exited 5");
+        expect(yield* calibrations("r-tune-unbuildable")).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose harness is broken is repaired by the tuner, calibrates and goes on to its Cycles",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-mended";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(3)),
+          repaired(tunePlan(commit, [STEADY_PRIMARY]), "the prepare needs nothing built"),
+          EXHAUSTED,
+        ]);
+        const result = yield* tunedUp(runId);
+        expect(result._tag).toBe("Success");
+        expect(said(result)).toContain("no gain:");
+        const log = yield* runLog(runId);
+        expect(log).toContain("harness broken: the base tree at");
+        expect(log).toContain("benchmark plan 2: repair 1: the prepare needs nothing built");
+        expect(log).toContain("calibrated on bench.count");
+        expect(Arr.map(yield* calibrations(runId), (one) => one.result._tag)).toEqual([
+          "Failed",
+          "Judged",
+        ]);
       }),
     ),
   120_000,
@@ -17815,14 +17904,16 @@ scenario(
   120_000,
 );
 
-/** A tune-up that ends on its noisy calibration, with Discover's `external` findings. */
+/** A tune-up that fails on its noisy calibration, with Discover's `external` findings. */
 const noisyWith = (external: ReadonlyArray<Schema.Json>, turns: ReadonlyArray<Schema.Json> = []) =>
   Effect.gen(function* () {
     const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
     yield* emptyTracker();
+    const noisy = tunePlan(commit, [NOISY_PRIMARY]);
     yield* rig.queueOutputs([
       { ...TUNE_DISCOVERED, external },
-      tunePlan(commit, [NOISY_PRIMARY]),
+      noisy,
+      repaired(noisy, "unchanged"),
       ...turns,
     ]);
   });
@@ -17845,7 +17936,7 @@ scenario(
             }),
           );
           const status = yield* driven({ ...options, restarted: true }, (run) => ended(run.status));
-          expect(status.status).toBe("complete");
+          expect(status.status).toBe("failed");
           expect(yield* externalPrompts(runId)).toEqual([
             `${key}-search`,
             `${key}-create`,
@@ -17894,7 +17985,7 @@ scenario(
               return yield* ended(run.status);
             }),
           );
-          expect(status.status).toBe("complete");
+          expect(status.status).toBe("failed");
           expect(yield* externalPrompts(runId)).toEqual([
             `${key}-search`,
             `${key}-create`,
@@ -17916,7 +18007,7 @@ scenario(
         const runId = "r-tune-no-linear";
         yield* noisyWith([POOLING]);
         const result = yield* tunedUp(runId);
-        expect(result._tag).toBe("Success");
+        expect(result._tag).toBe("Failure");
         expect(yield* questions(runId)).toEqual([]);
         const file = `${runDir(dir, runId)}/handoffs/tune-up-external.md`;
         expect(yield* readText(file)).toContain(POOLING.title);
@@ -17933,7 +18024,7 @@ scenario(
       withLinear(
         Effect.gen(function* () {
           yield* noisyWith([POOLING]);
-          expect((yield* tunedUp("r-tune-report", { external: "report" }))._tag).toBe("Success");
+          expect((yield* tunedUp("r-tune-report", { external: "report" }))._tag).toBe("Failure");
           expect(yield* questions("r-tune-report")).toEqual([]);
           expect(
             yield* readText(`${runDir(dir, "r-tune-report")}/handoffs/tune-up-external.md`),
@@ -17951,7 +18042,7 @@ scenario(
       withLinear(
         Effect.gen(function* () {
           yield* noisyWith([POOLING]);
-          expect((yield* tunedUp("r-tune-off", { external: "off" }))._tag).toBe("Success");
+          expect((yield* tunedUp("r-tune-off", { external: "off" }))._tag).toBe("Failure");
           expect(yield* questions("r-tune-off")).toEqual([]);
           const fs = yield* FileSystem.FileSystem;
           expect(
@@ -17992,6 +18083,7 @@ once("tune-up declares every input with its default, and its path", () =>
         "Discover",
         "Harness",
         "Calibrate",
+        "Repair",
         "Cycles",
         "Progress",
         "Cleanup",

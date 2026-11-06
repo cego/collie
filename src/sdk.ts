@@ -107,7 +107,9 @@ export { IntegrationSchema, type Integration } from "./integrate";
 export {
   MeasurementJson as MeasurementSchema,
   BenchmarkPlan,
+  calibrationOf,
   decodeBenchmarkPlan,
+  type Calibration,
   type Measurement,
 } from "./measurement-model";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";

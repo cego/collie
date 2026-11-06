@@ -21,6 +21,7 @@ import {
   WorkflowError,
   agentWork,
   ask,
+  calibrationOf,
   contentOf,
   defineWorkflow,
   endsWithoutPatchOf,
@@ -89,6 +90,13 @@ const prompts = {
     ...Told,
     discovered: text,
     budget: Schema.Struct({ samples: text, threshold: text, tolerance: text }),
+  }),
+  repair: content.template("repair", {
+    ...Told,
+    repair: Schema.Struct({ n: text, of: text, class: text, why: text, measurement: text }),
+    noise: text,
+    plan: text,
+    samples: text,
   }),
   cycle: content.template("cycle", {
     ...Told,
@@ -263,6 +271,25 @@ const Harnessed = Schema.Struct({
   metrics: Schema.NonEmptyArray(
     Schema.Struct({
       ...Metric.fields,
+      threshold: Schema.optionalKey(
+        Schema.Finite.annotate({ description: "the primary's own threshold, in percent" }),
+      ),
+      tolerance: Schema.optionalKey(
+        Schema.Finite.annotate({ description: "this guardrail's own tolerance, in percent" }),
+      ),
+      absolute: Schema.optionalKey(
+        Schema.Finite.annotate({
+          description: "a difference in the metric's own units too small to count",
+        }),
+      ),
+      exact: Schema.optionalKey(
+        Schema.Boolean.annotate({
+          description: "a deterministic count, such as mismatches, judged by its value",
+        }),
+      ),
+      why: Schema.optionalKey(
+        text.annotate({ description: "why its own limits are these; needed with any of them" }),
+      ),
       counter: Schema.optionalKey(
         Schema.Struct({ name: text, direction: Direction }).annotate({
           description: "a low-variance count of the same work, to judge this metric by instead",
@@ -271,7 +298,21 @@ const Harnessed = Schema.Struct({
     }),
   ),
   warmup: Schema.Int,
+  samples: Schema.optionalKey(
+    Schema.Int.annotate({
+      description: "samples per side, where the Run's own are too few to prove this plan",
+    }),
+  ),
   harness: Harness,
+});
+type Harnessed = typeof Harnessed.Type;
+
+/** A plan the tuner repaired after a calibration, and what it changed. */
+const Repaired = Schema.Struct({
+  ...Harnessed.fields,
+  reason: text.annotate({
+    description: "what you changed, and why it makes the plan provable on this Machine",
+  }),
 });
 
 /** A benchmark plan as the host measures by it, and why it is the plan now. */
@@ -374,6 +415,8 @@ const readAnswer = (said: string) => {
   return { yes: Str.toLowerCase(read[1] ?? "") === "yes", words: words === "" ? null : words };
 };
 const MERGE_TRIES = 2;
+/** Repairs of a calibration that ruled proof out, before the Run fails. */
+const REPAIRS = 2;
 const IGNORE = "Ignore";
 const POST = "Post";
 
@@ -399,6 +442,14 @@ const calibrate = step({
   description: "The host measures the base against itself, to learn this Machine's noise floor.",
   kind: "check",
   produces: "evidence",
+});
+const repair = step({
+  id: "repair",
+  title: "Repair",
+  description:
+    "Where calibration finds the harness broken or proof unavailable, the tuner repairs the harness or plan, a bounded number of times.",
+  kind: "agent",
+  role: "tuner",
 });
 const cycles = step({
   id: "cycles",
@@ -437,20 +488,6 @@ const externalReport = step({
 
 type Judged = Extract<Measurement["result"], { readonly _tag: "Judged" }>;
 type Unjudged = Exclude<Measurement["result"], Judged>;
-
-/** Why calibration rules out proof for each metric it does. */
-const unprovable = (plan: Plan, verdicts: Judged["verdicts"]) =>
-  Arr.flatMap(plan.metrics, (metric) => {
-    const judged = Option.getOrUndefined(
-      Arr.findFirst(verdicts, (one) => one.metric === metric.name),
-    );
-    if (judged === undefined) return [];
-    if (metric.role === "primary" && judged.verdict === "inconclusive")
-      return [{ metric: metric.name, why: `${metric.name} is inconclusive against itself` }];
-    if (metric.role === "guardrail" && !judged.held)
-      return [{ metric: metric.name, why: `guardrail ${metric.name} is not held against itself` }];
-    return [];
-  });
 
 /** How a Measurement ended without a verdict, naming the tree it ended on. */
 const unjudged = (measured: Measurement, result: Unjudged) => {
@@ -704,7 +741,7 @@ const bodyOf = (got: {
   readonly finals: ReadonlyArray<Measurement>;
   readonly plans: ReadonlyArray<string>;
   readonly planFile: string;
-  readonly written: typeof Harnessed.Type;
+  readonly written: Harnessed;
   readonly found: Discovered;
   readonly cycles: ReadonlyArray<Cycled>;
   readonly evidence: string;
@@ -1036,6 +1073,7 @@ export default defineWorkflow({
     discover,
     harness,
     calibrate,
+    repair,
     cycles,
     progress,
     cleanup,
@@ -1127,23 +1165,19 @@ export default defineWorkflow({
           yield* host.record(runId, `benchmark plan ${plans}: ${reason}`);
           return planned.plan;
         });
-      let plan = yield* recordPlan(
-        {
-          harness: written.harness,
-          prepare: written.prepare,
-          commands: written.commands,
-          metrics: Arr.map(written.metrics, ({ name, direction, role }) => ({
-            name,
-            direction,
-            role,
-          })),
-          warmup: written.warmup,
-          samples: budget.samples,
-          threshold: budget.threshold,
-          tolerance: budget.tolerance,
-        },
-        "written by Harness",
-      );
+      const planOf = (from: Harnessed): Plan => ({
+        harness: from.harness,
+        prepare: from.prepare,
+        commands: from.commands,
+        metrics: Arr.map(from.metrics, Struct.omit(["counter"])),
+        warmup: from.warmup,
+        samples: Math.max(budget.samples, from.samples ?? 0),
+        threshold: budget.threshold,
+        tolerance: budget.tolerance,
+      });
+      const encodePlan = (one: Plan) =>
+        Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(one).pipe(Effect.orDie);
+      let plan = yield* recordPlan(planOf(written), "written by Harness");
 
       const base = yield* Activity.make({
         name: "base",
@@ -1156,9 +1190,11 @@ export default defineWorkflow({
         });
 
       const calibrations: Measurement[] = [];
+      const tried = new Set<string>([yield* encodePlan(plan)]);
+      let counted = written;
       let ending: string | null = null;
       let calibrated = false;
-      for (;;) {
+      for (let repairs = 0; ;) {
         const measured = yield* calibrate(
           Activity.make({
             name: `calibration.${calibrations.length + 1}`,
@@ -1171,16 +1207,15 @@ export default defineWorkflow({
           }),
         );
         calibrations.push(measured);
-        if (measured.result._tag !== "Judged")
-          return yield* new WorkflowError({
-            reason: `calibration ${measured.id} ended without a verdict: ${unjudged(measured, measured.result)}`,
-          });
-        if (measured.base.content !== measured.candidate.content)
+        if (
+          measured.result._tag === "Judged" &&
+          measured.base.content !== measured.candidate.content
+        )
           return yield* new WorkflowError({
             reason: `calibration ${measured.id} did not measure the base against itself: ${cwd} at ${measured.candidate.head_sha} holds more than the harness commits ${Arr.join(plan.harness.commits, ", ")}`,
           });
-        const lost = unprovable(plan, measured.result.verdicts);
-        if (lost.length === 0) {
+        const read = calibrationOf(measured);
+        if (read._tag === "Calibrated") {
           const primary =
             Option.getOrUndefined(Arr.findFirst(plan.metrics, (one) => one.role === "primary"))
               ?.name ?? "";
@@ -1188,35 +1223,85 @@ export default defineWorkflow({
           calibrated = true;
           break;
         }
-        const counters = Arr.map(lost, (one) => ({
-          ...one,
-          counter: Option.getOrUndefined(
-            Arr.findFirst(written.metrics, (metric) => metric.name === one.metric),
-          )?.counter,
-        }));
-        if (Arr.some(counters, (one) => one.counter === undefined)) {
-          ending = `proof unavailable: ${Arr.join(
-            Arr.map(lost, (one) => one.why),
-            "; ",
-          )} (calibration ${measured.id})`;
+        const kind = read._tag === "HarnessBroken" ? "harness broken" : "proof unavailable";
+        const why =
+          read._tag === "ProofUnavailable"
+            ? Arr.join(
+                Arr.map(read.lost, (one) => one.why),
+                "; ",
+              )
+            : measured.result._tag === "Judged"
+              ? Arr.join(read.why, "; ")
+              : unjudged(measured, measured.result);
+        const counters =
+          read._tag === "ProofUnavailable"
+            ? Arr.map(read.lost, (one) => ({
+                ...one,
+                counter: Option.getOrUndefined(
+                  Arr.findFirst(counted.metrics, (metric) => metric.name === one.metric),
+                )?.counter,
+              }))
+            : [];
+        if (counters.length > 0 && Arr.every(counters, (one) => one.counter !== undefined)) {
+          plan = yield* recordPlan(
+            {
+              ...plan,
+              metrics: Arr.map(plan.metrics, (metric) => {
+                const counter = Option.getOrUndefined(
+                  Arr.findFirst(counters, (one) => one.metric === metric.name),
+                )?.counter;
+                return counter === undefined ? metric : { ...counter, role: metric.role };
+              }),
+            },
+            Arr.join(
+              Arr.map(
+                counters,
+                (one) => `switched ${one.metric} to its counter ${one.counter?.name}: ${one.why}`,
+              ),
+              "; ",
+            ),
+          );
+          tried.add(yield* encodePlan(plan));
+          continue;
+        }
+        const failed = `${kind}: ${why} (calibration ${measured.id})`;
+        if (repairs >= REPAIRS) {
+          ending = `${failed}; ${REPAIRS} repairs spent`;
           break;
         }
-        const switched = Arr.map(
-          counters,
-          (one) => `switched ${one.metric} to its counter ${one.counter?.name}: ${one.why}`,
+        repairs += 1;
+        yield* host.record(runId, `${failed}; repair ${repairs} of ${REPAIRS}`);
+        const repaired = yield* repair(
+          agentWork({
+            operation: `repair-${repairs}`,
+            agent: TUNER,
+            role: "tuner",
+            instructions: prompts.repair,
+            input: {
+              ...told,
+              repair: {
+                n: String(repairs),
+                of: String(REPAIRS),
+                class: kind,
+                why,
+                measurement: measured.id,
+              },
+              noise: intervalsLine(measured),
+              plan: yield* encodePlan(plan),
+              samples: String(budget.samples),
+            },
+            output: Repaired,
+          }),
         );
-        plan = yield* recordPlan(
-          {
-            ...plan,
-            metrics: Arr.map(plan.metrics, (metric) => {
-              const counter = Option.getOrUndefined(
-                Arr.findFirst(counters, (one) => one.metric === metric.name),
-              )?.counter;
-              return counter === undefined ? metric : { ...counter, role: metric.role };
-            }),
-          },
-          Arr.join(switched, "; "),
-        );
+        const next = planOf(repaired);
+        const encoded = yield* encodePlan(next);
+        if (tried.has(encoded)) {
+          ending = `${failed}; repair ${repairs} left the plan as it was, and a plan is never calibrated twice`;
+          break;
+        }
+        tried.add(encoded);
+        counted = repaired;
+        plan = yield* recordPlan(next, `repair ${repairs}: ${repaired.reason}`);
       }
       yield* host.record(runId, ending);
 
@@ -1386,7 +1471,7 @@ export default defineWorkflow({
         });
       if (!calibrated) {
         const report = yield* findings("findings", ending);
-        return yield* handOn(`${report}: ${ending}`);
+        return yield* new WorkflowError({ reason: yield* handOn(`${report}: ${ending}`) });
       }
 
       const wall =
@@ -1646,7 +1731,7 @@ export default defineWorkflow({
         (one) => `Cycle ${one.n}`,
       );
       if (kept.length === 0) {
-        const done = `${stop}; no Cycle was kept, so the Run is back on its base tree`;
+        const done = `no gain: ${stop}; no Cycle was kept, so the Run is back on its base tree`;
         const report = yield* findings("findings", done);
         return yield* handOn(`${report}: ${done}`);
       }
@@ -1864,7 +1949,7 @@ export default defineWorkflow({
           });
           return yield* findingsOf(
             "findings",
-            `the final Measurement ${measured.id} against ${measured.base.commit}: ${why}; the change was dropped back to the base tree, so no merge request is opened`,
+            `no gain: the final Measurement ${measured.id} against ${measured.base.commit}: ${why}; the change was dropped back to the base tree, so no merge request is opened`,
           );
         });
 

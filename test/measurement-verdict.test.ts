@@ -3,8 +3,7 @@
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema, flow, Result } from "effect";
-import { limitsOf } from "../src/measurement";
-import { BenchmarkPlan, decodeBenchmarkPlan } from "../src/measurement-model";
+import { BenchmarkPlan, decodeBenchmarkPlan, limitsOf } from "../src/measurement-model";
 import {
   Judgement,
   JudgementJson,

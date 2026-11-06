@@ -1061,15 +1061,35 @@ other checkout, or a URL, is refused at the start.
 2. **Harness.** The tuner commits a benchmark harness on commits of its own, touching only
    the harness paths it declares, and writes the benchmark plan: journeys, cases, commands,
    prepare, metrics with direction and role, warmup, and for a metric this Machine may be
-   too noisy to prove, a low-variance counter of the same work. The Run's `samples`,
-   `threshold` and `tolerance` complete it. The plan is recorded before anything is
-   measured by it, and a later change is a new plan with its reason.
+   too noisy to prove, a low-variance counter of the same work. A metric may carry limits
+   of its own, each with the `why` it rests on: a `threshold` or `tolerance`, an `absolute`
+   slack in its own units for a value near zero, or `exact` for a deterministic count such
+   as a correctness check's mismatches (see [`collie measure`](cli.md#measure)). It may ask
+   for more `samples` than the Run's. The Run's `samples`, `threshold` and `tolerance`
+   complete it. The plan is recorded before anything is measured by it, and a later change
+   is a new plan with its reason.
 3. **Calibrate.** The host measures the base, the merge base with the harness commits on
-   it, against the Run's own checkout, which holds nothing else yet. A primary metric that
-   comes back `inconclusive` there, or a guardrail that is not held, cannot be proved on
-   this Machine. Where the plan declared a counter for it, the Run switches to the counter,
-   records the switch as a new plan and calibrates again; otherwise it ends.
-4. **Cycles**, at most `cycles` of them. In each, the tuner is given the ranked
+   it, against the Run's own checkout, which holds nothing else yet. The calibration is one
+   of three:
+   - **calibrated**: the primary shows no change against itself and every guardrail holds;
+   - **harness broken**: a prepare or sample failed or timed out, a metric went unread, or
+     an `exact` metric is not the same number on every sample of identical trees;
+   - **proof unavailable**: the primary is `inconclusive` or differs from itself, or a
+     guardrail is not held. Each metric is named with its interval and how far it reaches
+     past its limit.
+
+   Where proof is unavailable and the plan declared a counter for every metric lost, the
+   Run switches to the counters, records the switch as a new plan and calibrates again.
+
+4. **Repair**, at most twice. Otherwise the tuner is shown the class, each metric's
+   interval against itself and the plan, and repairs the harness, in new commits on the
+   harness paths, or the plan: more samples, a steadier window, a counter, or limits of a
+   metric's own with their `why`. Its answer is recorded as a new plan with its reason and
+   calibrated again. A repair that leaves the plan as it was is not calibrated again. Once
+   the repairs are spent, or one changed nothing, the Run **fails**, its reason the findings
+   file, then `harness broken:` or `proof unavailable:` and each metric. Every calibration,
+   plan and harness commit stays on the record.
+5. **Cycles**, at most `cycles` of them. In each, the tuner is given the ranked
    opportunities and every earlier Cycle's result, and commits one change on the Run's
    branch. Collie runs the Run's checks, all but those left to CI, and measures the
    checkout against the tree the Cycle started on. The Cycle is kept only where those checks pass,
@@ -1087,7 +1107,7 @@ other checkout, or a URL, is refused at the start.
    Harness or Calibrate, or anything after the Cycles. Spent by the end of Calibrate, it
    means no Cycle runs before the question below.
 
-5. **Progress.** Once automatic cycling stops, and calibration did not rule proof out, the
+6. **Progress.** Once automatic cycling stops, and calibration did not rule proof out, the
    Run asks **Are you happy with the progress?** The question shows each Cycle, kept or
    reverted, with each metric's verdict, ratio and 95% interval as the host measured it,
    and why the Cycles stopped. It takes your own words, starting with Yes or No. An answer
@@ -1110,7 +1130,7 @@ other checkout, or a URL, is refused at the start.
    A restarted host never asks again a question already answered, and never runs a Cycle,
    the cleanup or a `final` Measurement twice.
 
-6. **Integrate.** With a Cycle kept, Collie merges the default branch where it has moved,
+7. **Integrate.** With a Cycle kept, Collie merges the default branch where it has moved,
    and the tuner settles a conflict. The host makes the base tree again at the merge base
    the merge request will target, and takes a `final` Measurement of the branch against it.
    The branch no longer carries the harness, so the host measures it in a scratch worktree
@@ -1118,13 +1138,13 @@ other checkout, or a URL, is refused at the start.
    that ships.
    Where the default branch moved, the branch is also measured against the base the Run
    started from, for the merge request.
-7. **Review.** The shared review, with a Tune-up prompt, judges `behavior_preserved`
+8. **Review.** The shared review, with a Tune-up prompt, judges `behavior_preserved`
    (behaviour, APIs, accessibility, reliability, security, data integrity, no weakened test
    or disabled validation) and `measurement_valid` (realistic fixtures, no hidden caching
    tradeoff, the harness apart from the product, no secret or personal data in what is
    published). The tuner fixes what blocks in the same bounded rally as `implement`'s, and
    each review round starts with a new `final` Measurement of the tree it reads.
-8. **Checks** and **Merge request**, through the delivery `implement` uses: Collie runs the
+9. **Checks** and **Merge request**, through the delivery `implement` uses: Collie runs the
    Run's checks on the tree, the tuner fixes what they lack, opens the merge request and
    fixes what a check left to CI fails on its head. A gate or CI fix that moves the tree is
    measured and reviewed again before the outcome is read. The merge request's description
@@ -1135,42 +1155,46 @@ other checkout, or a URL, is refused at the start.
    and Cycles not kept, the checks and the review, the opportunities left, what to monitor after
    deploying, and, collapsed, every sample of the `final` Measurement, the frozen plan,
    every plan and `final` Measurement, the commands to reproduce it and the Run id.
-9. **External report**, at whichever end the Run reaches, after the merge request or with
-   its findings alone. Discover and each Cycle hand on what only another repository could
-   change, and Collie writes each to `handoffs/tune-up-external.md`: the owning repository
-   and team where known, evidence links, the journey, the change it needs, its estimated
-   impact apart from anything measured, acceptance criteria and how it relates to the local
-   change. Each is keyed by a digest of its repository and change, the same in any Run.
-   With `external` at `ask`, each finding is put to you one at a time, with `Ignore` and
-   `Post` only, its question showing the finding. A finding with no known team asks for the
-   team in your own words first. Post has the tuner search Linear, read-only, for the issue
-   carrying the key's marker and for open issues asking for the same change, and file one
-   issue carrying the marker only where it found none. A finding that already matched an
-   issue when it was found is recorded as `existing` and not asked. Your answer and the
-   issue's URL go in the Run's log. A host restarted while an issue was being filed never
-   files blind: it searches again, records the issue it finds, and otherwise asks again,
-   saying an earlier Post may have filed it. With no Linear MCP server in Claude Code, the
-   report is written, nothing is asked, and the log says why. `report` writes the report
-   and asks nothing, and `off` writes none. None of it counts toward a Measurement, the
-   outcome or the merge request's readiness.
+10. **External report**, at whichever end the Run reaches, after the merge request or with
+    its findings alone. Discover and each Cycle hand on what only another repository could
+    change, and Collie writes each to `handoffs/tune-up-external.md`: the owning repository
+    and team where known, evidence links, the journey, the change it needs, its estimated
+    impact apart from anything measured, acceptance criteria and how it relates to the local
+    change. Each is keyed by a digest of its repository and change, the same in any Run.
+    With `external` at `ask`, each finding is put to you one at a time, with `Ignore` and
+    `Post` only, its question showing the finding. A finding with no known team asks for the
+    team in your own words first. Post has the tuner search Linear, read-only, for the issue
+    carrying the key's marker and for open issues asking for the same change, and file one
+    issue carrying the marker only where it found none. A finding that already matched an
+    issue when it was found is recorded as `existing` and not asked. Your answer and the
+    issue's URL go in the Run's log. A host restarted while an issue was being filed never
+    files blind: it searches again, records the issue it finds, and otherwise asks again,
+    saying an earlier Post may have filed it. With no Linear MCP server in Claude Code, the
+    report is written, nothing is asked, and the log says why. `report` writes the report
+    and asks nothing, and `off` writes none. None of it counts toward a Measurement, the
+    outcome or the merge request's readiness.
 
 **Ends:** with `handoffs/tune-up-findings.md` in its Run directory, and with a merge request
 only where `performance` is proved: a `final` Measurement of the delivered head against the
 merge base showing a `gain` with every guardrail held, the checks passing, and a review of
-that same tree reporting both `behavior_preserved` and `measurement_valid`. Where
-calibration rules out proof, no Cycle was kept, or the `final` Measurement shows no gain or
-a guardrail not held, there is no merge request and the Run is not failed. Its result names
-that file and why it ended: `proof unavailable`, naming each metric, why the Cycles stopped,
-or the `final` Measurement's verdict. The Run is then back on its base tree: with no kept
-Cycle the branch already is, and a change that lost its gain is dropped back to the base
+that same tree reporting both `behavior_preserved` and `measurement_valid`. Each end says
+which of four it is:
+
+- **verified gain**: the merge request;
+- **no gain**: no Cycle was kept, or the `final` Measurement shows no gain or a guardrail not
+  held. There is no merge request and the Run is not failed. Its result is that file, then
+  `no gain:` and why the Cycles stopped or the `final` Measurement's verdict;
+- **harness broken** and **proof unavailable**: calibration and its repairs could not make
+  the plan provable. The Run fails, its reason that file, then the class and each metric.
+
+With no gain, the Run is back on its base tree: with no kept Cycle the branch already is, and a change that lost its gain is dropped back to the base
 tree at the latest merge base, in a commit that changes only the files it needs, keeps
 uncommitted work, and takes back nothing once a commit not the Run's own is on the branch,
 which Collie checks from the trees, failing the Run naming both where the drop did not land. A fix after the merge
 request is open that loses the gain or a reviewer's verdict fails the Run, saying the merge
 request is not ready and why, on the merge request too. A forge that refuses the merge
 request fails the Run with the forge's reason. A harness commit touching a path outside its
-harness paths, a base that cannot be built, or a calibration that ends without a verdict
-fails the Run, naming the paths or the tree. A cleanup that leaves a harness path fails the
+harness paths fails the Run, naming the paths. A cleanup that leaves a harness path fails the
 Run, naming it.
 
 A tradeoff you accepted with your Yes keeps a `final` Measurement whose primary gains but
@@ -1182,7 +1206,7 @@ the description stay for you to open the merge request yourself.
 **Never:** load against production, which it only reads, bounded; auto-merge; a deploy; a
 change to another repository; or an issue filed without your Post.
 
-Its Flow forecasts Discover, Harness, Calibrate, Cycles, Progress, Cleanup, Integrate,
+Its Flow forecasts Discover, Harness, Calibrate, Repair, Cycles, Progress, Cleanup, Integrate,
 Review, Checks, Merge request and External report.
 
 Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its

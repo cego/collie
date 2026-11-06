@@ -92,6 +92,14 @@ excludes no-change about 5% of the time, as a 95% interval should, so the interv
   count, such as a correctness check's mismatches, judged by its value rather than by an
   interval: correctness is not a statistic. Each needs a `why` in the plan, so a limit is
   justified before anything is measured by it. A plan without them is judged as before.
+- **Calibration has three results.** Calibrated; **harness broken**, where a prepare or
+  sample failed or timed out, a metric went unread, or an `exact` metric varies against
+  itself; and **proof unavailable**, where the primary is `inconclusive` or differs from
+  itself, or a guardrail is
+  not held against itself. Either failure gives the tuner a bounded number of repairs, each
+  a new plan with its reason. An unchanged plan is refused rather than measured again, so a
+  repair can never be a re-roll. A Run whose repairs are spent fails, naming the class, and
+  never reads as a completed tune-up. A Run that ends without a kept change says `no gain`.
 
 ## Considered
 
