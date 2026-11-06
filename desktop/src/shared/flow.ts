@@ -340,7 +340,7 @@ const sameCard = (one: FlowCard, other: FlowCard) =>
   one.key === other.key && one.machine === other.machine && sameRuns(one.runs, other.runs);
 
 /**
- * The cards a Flow's links can open, in the board's order. While they show what `before`
+ * The cards a Flow's links, nested links and Runs' origins can open, in the board's order. While they show what `before`
  * shows they are `before`, so a change to a Task the Flow does not link to draws nothing.
  */
 export const linkedCards = (
@@ -352,11 +352,19 @@ export const linkedCards = (
   }>,
   before?: ReadonlyArray<FlowCard>,
 ): ReadonlyArray<FlowCard> => {
-  const linked = new Set(
-    Arr.flatMap(flowRows(flow), (row) =>
-      Arr.flatMap(row.nodes, (node) => (node.link?.run == null ? [] : [node.link.run])),
+  const runOf = (node: FlowRun) => (node.link?.run == null ? [] : [node.link.run]);
+  const linked = new Set([
+    ...Arr.flatMap(flowRows(flow), (row) =>
+      Arr.flatMap(row.nodes, (node) => [
+        ...runOf(node),
+        ...Arr.flatMap([...node.runs, ...(node.links ?? [])], runOf),
+      ]),
     ),
-  );
+    ...Arr.flatMap(flow.lanes, (lane) => {
+      const origin = rowOrigin(flow, lane.run);
+      return origin === null ? [] : [origin.run];
+    }),
+  ]);
   const cards = Arr.flatMap(placed, ({ key, machine, task }) =>
     Arr.some(task.runs, (run) => linked.has(run)) ? [{ key, machine, runs: task.runs }] : [],
   );

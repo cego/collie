@@ -4,6 +4,7 @@ import {
   flowAnnouncements,
   flowKey,
   inspectorOf,
+  linkedCards,
   nodeName,
   openIn,
   rowOrigin,
@@ -398,4 +399,56 @@ test.each([
     epochMs("2026-10-23T09:09:00.000Z"),
   )!;
   expect(info.status).toBe(status);
+});
+
+test("a Flow's cards include every Task its nested links and its Runs' origins open", () => {
+  const link = (id: string, run: string) =>
+    flowNode(id, { kind: "link", link: { run, machine: "vm", state: "running", said: null } });
+  const node = flowNode("repos", {
+    kind: "workflow",
+    runs: [link("repo:a", "repo-run")],
+    links: [link("child", "child-run")],
+  });
+  const base = mainFlow([node]);
+  const flow = {
+    ...base,
+    lanes: Arr.map(base.lanes, (lane, at) =>
+      at === 0
+        ? {
+            ...lane,
+            requestedBy: {
+              run: "requester-run",
+              agent: "builder",
+              machine: { installation: "vm-id", name: "vm" },
+            },
+          }
+        : { ...lane, startedBy: { run: "parent-run", step: "build" } },
+    ),
+  };
+  const placed = (run: string) => ({ key: `vm:${run}`, machine: "vm", task: { runs: [run] } });
+  const cards = linkedCards(flow, [
+    placed("repo-run"),
+    placed("child-run"),
+    placed("requester-run"),
+    placed("parent-run"),
+    placed("unrelated-run"),
+  ]);
+  const selection = { run: "build-run", node: "repos", item: null };
+
+  expect(selectEntry(flow, selection, "repo:a", cards)).toEqual({
+    kind: "open",
+    card: "vm:repo-run",
+    run: "repo-run",
+  });
+  expect(selectEntry(flow, selection, "child", cards)).toEqual({
+    kind: "open",
+    card: "vm:child-run",
+    run: "child-run",
+  });
+  expect(Arr.map(cards, (card) => card.key)).toEqual([
+    "vm:repo-run",
+    "vm:child-run",
+    "vm:requester-run",
+    "vm:parent-run",
+  ]);
 });
