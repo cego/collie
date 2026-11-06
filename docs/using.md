@@ -3015,9 +3015,9 @@ work, naming its thread, turn and server, and a resume tries again. Usage never 
 holds or delays work: only an agent that may still be writing does.
 
 `notifications` turns a kind of toast off: `{"run-done": false}`, and a kind left out is on.
-The host raises one when a run finishes (`run-done`), fails (`run-failed`, or
-`output-unusable` where an agent's Output could not be used after its repair), asks you
-something or parks until you act (`needs-you`), or records a merge request it opened
+The host raises one when a run finishes (`run-done`), fails (`run-failed`), asks you
+something or parks until you act (`needs-you`, as where an agent's Output could not be used
+after its repair), or records a merge request it opened
 (`mr-opened`); when a card is something you could go and try (`slice-ready`); and when
 Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
 (`drift-unresolved`) — each once per run and thing, however often the work is replayed or

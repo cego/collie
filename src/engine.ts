@@ -2571,11 +2571,7 @@ const told = (runId: string, status: typeof RunStatus.Type) =>
         );
       }
       if (status.status !== "failed") return Effect.void;
-      return found.value.notify(
-        runId,
-        pipe(status.reason, Str.startsWith("output-unusable:")) ? "output-unusable" : "run-failed",
-        status.reason,
-      );
+      return found.value.notify(runId, "run-failed", status.reason);
     }),
   );
 

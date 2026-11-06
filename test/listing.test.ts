@@ -13,19 +13,28 @@
 import * as Arr from "effect/Array";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Path, Result, Schema } from "effect";
+import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
-import { Children, Host, WorkflowError } from "../src/sdk";
-import { answerDecision, foundationLayer, loadEntry } from "../src/engine";
+import { Children, Host } from "../src/sdk";
+import {
+  PARKED,
+  answerDecision,
+  controlPath,
+  foundationLayer,
+  loadEntry,
+  pollStatus,
+} from "../src/engine";
 import { Store } from "../src/store";
 import { events, fixtures, until } from "./support/host";
 
 let rig: Rig;
 let dir: string;
 let plan: string;
+/** Each toast the host raised, as `sound|title|body`. */
+let toasts: string[];
 
 beforeEach(() =>
   runEffect(
@@ -34,6 +43,7 @@ beforeEach(() =>
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       plan = `${rig.root}/plan`;
+      toasts = [];
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
@@ -115,6 +125,8 @@ const session = <A, E>(
         Layer.provideMerge(
           foundationLayer({
             dir,
+            toast: (title, body, sound) =>
+              Effect.sync(() => toasts.push(`${sound}|${title}|${body}`)),
           }),
         ),
       ),
@@ -183,9 +195,6 @@ const answered = (runId: string, value: string, entry = "roster.workflow.ts") =>
 
 const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
   result._tag === "Success" ? String(result.success) : "";
-
-const failed = (result: Result.Result<unknown, unknown>) =>
-  Result.isFailure(result) && Schema.is(WorkflowError)(result.failure) ? result.failure.reason : "";
 
 const prompts = () =>
   rig.calls().pipe(Effect.map((calls) => Arr.filter(calls, (call) => call.cmd === "agent prompt")));
@@ -334,23 +343,74 @@ test(
   120_000,
 );
 
+/** Work submitted until it settles, which has to be parked rather than failed. */
+const parkedAt = (runId: string, entry = "roster.workflow.ts") =>
+  session(
+    Effect.gen(function* () {
+      const made = yield* loaded(entry, runId);
+      const engine = yield* WorkflowEngine.WorkflowEngine;
+      return yield* Effect.gen(function* () {
+        yield* made.workflow.execute(payloadFor(runId), { discard: true });
+        const id = yield* made.workflow.executionId(payloadFor(runId));
+        const status = yield* until(
+          () => engine.poll(made.workflow, id).pipe(Effect.map((one) => pollStatus(one, entry))),
+          (one) => one.status === "failed" || one.status === "suspended",
+        );
+        expect(status.status).toBe("suspended");
+      }).pipe(Effect.provide(made.layer));
+    }),
+  );
+
+/** The parked work resumed, as `run resume` does, in a host that never saw it park. */
+const resumed = (runId: string, entry = "roster.workflow.ts") =>
+  session(
+    Effect.gen(function* () {
+      const made = yield* loaded(entry, runId);
+      const engine = yield* WorkflowEngine.WorkflowEngine;
+      const payload = payloadFor(runId);
+      return yield* Effect.gen(function* () {
+        yield* engine.resume(made.workflow, yield* made.workflow.executionId(payload));
+        // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
+        return yield* made.workflow.execute(payload).pipe(Effect.result);
+      }).pipe(Effect.provide(made.layer));
+    }),
+  );
+
 test(
-  "an Output nothing can be made of stops the list where it is",
+  "an Output still unusable after its repair parks the list at its item, and a resume goes on from it",
   () =>
     runEffect(
       Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
         yield* ticket("01-api.md", "Serve the thing");
         yield* ticket("02-ui.md", "Show the thing");
         yield* ticket("03-docs.md", "Say what it does");
         // The second item answers with something the contract refuses, twice: the repair
-        // is the one more attempt it gets, and then the list is over.
-        yield* rig.queueOutputs([built("api"), { verdict: "maybe" }, { verdict: "maybe" }]);
+        // is the one more attempt it gets, and then the list waits for someone to correct it.
+        yield* rig.queueOutputs([
+          built("api"),
+          { verdict: "maybe" },
+          { verdict: "maybe" },
+          built("docs"),
+        ]);
 
-        const result = yield* worked("r-unusable");
-        expect(failed(result)).toContain("output-unusable");
-        // Two prompts and one repair; the third ticket was never handed to anyone.
+        yield* parkedAt("r-unusable");
+        // Two prompts and one repair; the third ticket was not handed to anyone yet.
         expect(yield* prompts()).toHaveLength(3);
-        expect(yield* events(dir, "r-unusable")).toEqual([]);
+        const why = yield* fs.readFileString(controlPath(dir, PARKED, "r-unusable"));
+        expect(why).toContain(`${dir}/agents/r-unusable/02-ui.md.json`);
+        expect(toasts).toEqual([expect.stringMatching(/^request\|.* needs you\|/)]);
+        expect(toasts[0]).toEndWith(`|${why}`);
+
+        yield* fs.writeFileString(
+          `${dir}/agents/r-unusable/02-ui.md.json`,
+          `{"verdict":"clean","fixed":[{"title":"ui"}],"findings":[],"checks":[{"name":"test"}]}`,
+        );
+        const done = yield* resumed("r-unusable");
+        expect(said(done)).toBe("3 of 3: 01-api.md=api+02-ui.md=ui+03-docs.md=docs, 0 finding(s)");
+        // Only the third item's prompt: nothing before it was asked again.
+        expect(yield* prompts()).toHaveLength(4);
+        expect(yield* starts()).toHaveLength(1);
       }),
     ),
   120_000,
