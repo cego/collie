@@ -107,6 +107,10 @@ export const asOfSaid = (at: number) => {
   return `as of ${two(hour)}:${two(minute)}`;
 };
 
+/** Why an action on a record is refused: its own `reason`, else that its host has not confirmed it since `asOf`. */
+export const refusal = (reason: string | null, asOf: number | null) =>
+  reason ?? (asOf === null ? null : `Not current: showing what it last said, ${asOfSaid(asOf)}`);
+
 /** Holds the kept set's records: `hold` subscribes one, and what it returns lets it go. */
 export const keptHolder = (
   hold: (key: string, sized: (bytes: number) => void) => () => void,

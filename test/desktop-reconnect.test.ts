@@ -19,7 +19,7 @@ import { HostRefused, type RunDetail } from "../src/board-model";
 import type { HostDefinitions } from "../src/definitions-model";
 import { ActionFailed, type KeptRecord } from "../desktop/src/shared/flock";
 import { recordKeeper } from "../desktop/src/bun/records";
-import { recordStanding } from "../desktop/src/shared/kept-records";
+import { asOfSaid, recordStanding, refusal } from "../desktop/src/shared/kept-records";
 import { frameAt, recordDoor, unchanged, type Asked } from "./support/record-doors";
 import { fastForward } from "./support/effect";
 
@@ -239,6 +239,14 @@ test("a kept record is labelled while its door is gone, and current again once t
       expect(Arr.map(asked, ({ held }) => held?.seq)).toEqual([undefined, 4]);
     }).pipe(Effect.scoped),
   ));
+
+test("a record its host has not confirmed since its door went refuses every action, saying since when", () => {
+  const at = 1_791_000_000_000;
+  expect(refusal(null, null)).toBeNull();
+  expect(refusal("Nothing to follow up", null)).toBe("Nothing to follow up");
+  expect(refusal(null, at)).toBe(`Not current: showing what it last said, ${asOfSaid(at)}`);
+  expect(refusal("Nothing to follow up", at)).toBe("Nothing to follow up");
+});
 
 test("a kept record whose Machine stays out of reach is labelled as its Machine is", () =>
   Effect.runPromise(
