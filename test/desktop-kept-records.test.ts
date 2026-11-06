@@ -97,3 +97,18 @@ test("a record its host ends while its door stays is kept current", () =>
       expect(after._tag).toBe("None");
     }).pipe(Effect.scoped),
   ));
+
+test("a kept record is weighed in the bytes its frame encodes to", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const doors = new DoorMap<Pick<Doors, "record">>();
+      const door = yield* recordDoor([]);
+      doors.set("i-1", door.door);
+      const keeper = yield* recordKeeper(doors);
+      const pull = yield* keeper.open("i-1", "r-1").pipe(Stream.toPull);
+      // `{"title":"ææææ"}`: twelve ASCII bytes and four two-byte letters.
+      yield* door.offer("r-1", frame("ææææ"));
+      const [record] = yield* pull;
+      expect(record?.bytes).toBe(20);
+    }).pipe(Effect.scoped),
+  ));

@@ -33,7 +33,7 @@ const sameFlow = Schema.toEquivalence(Flow);
 // ponytail: a frame is encoded again to be weighed; the bytes the door read, once it hands them on.
 const weighed = (detail: RunDetail | null) =>
   Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(detail).pipe(
-    Effect.map((text) => text.length),
+    Effect.map((text) => Buffer.byteLength(text, "utf8")),
     Effect.orDie,
   );
 /**
