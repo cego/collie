@@ -901,7 +901,7 @@ const bodyOf = (got: {
   );
 };
 
-/** Each of `commits` cherry-picked onto `cwd`, but one whose change it already holds. */
+/** Each of `commits` cherry-picked onto `cwd`, but one whose files it already holds as that commit left them. */
 const carryHarness = ({
   cwd,
   from,
@@ -914,9 +914,24 @@ const carryHarness = ({
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const git = (args: ReadonlyArray<string>) => ChildProcess.make("git", [...args], { cwd });
+    const touched = (commit: string) =>
+      Effect.map(
+        spawner.string(git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", commit])),
+        (out) => Arr.filter(Str.split(out, "\n"), Str.isNonEmpty),
+      );
+    const holds = (commit: string, files: ReadonlyArray<string>) =>
+      files.length === 0
+        ? Effect.succeed(true)
+        : Effect.map(
+            spawner.exitCode(git(["diff", "--quiet", commit, "HEAD", "--", ...files])),
+            (exit) => exit === 0,
+          );
+    const last = commits.at(-1);
+    if (last === undefined) return;
+    const all = Arr.flatten(yield* Effect.forEach(commits, touched));
+    if (yield* holds(last, all)) return;
     for (const commit of commits) {
-      const missing = yield* spawner.string(git(["cherry", "HEAD", commit, `${commit}~1`]));
-      if (!pipe(missing, Str.startsWith("+"))) continue;
+      if (yield* holds(commit, yield* touched(commit))) continue;
       if ((yield* spawner.exitCode(git(["cherry-pick", commit]))) === 0) continue;
       yield* spawner.exitCode(git(["cherry-pick", "--abort"]));
       return yield* new WorkflowError({

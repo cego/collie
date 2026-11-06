@@ -16582,7 +16582,16 @@ scenario(
         const again = yield* tunedUp("r-tune-recarried", { from: runId });
         expect(again._tag).toBe("Success");
         expect(yield* wasAsked("r-tune-recarried", "discover")).toBe(false);
-        expect(yield* runLog("r-tune-recarried")).toContain("harness carried from r-tune-carried");
+        const recarried = yield* runLog("r-tune-recarried");
+        expect(recarried).toContain("harness carried from r-tune-carried");
+        // Its checkout holds the harness commits in its history, and Cleanup's removal after them.
+        expect(recarried).toContain(`harness commits ${commit} carried onto`);
+        const [recalibration] = yield* calibrations("r-tune-recarried");
+        const held = yield* exec(
+          ["git", "show", `${recalibration!.candidate.head_sha}:bench/bench.sh`],
+          { cwd: rig.projectDir },
+        );
+        expect(held.stdout).toBe(NOISY_BENCH);
       }),
     ),
   120_000,
