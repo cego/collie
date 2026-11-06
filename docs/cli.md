@@ -1876,9 +1876,8 @@ it keeps the Machine's 1, 5 and 15 minute load and its memory reading. It judges
 by the ratio of the candidate's median to the base's, with a 95% bootstrap interval seeded
 from the Measurement's id: `gain`, `no-change`, `regression` or `inconclusive`. Each metric
 is also `held`, where the interval's worse bound is within its `tolerance` or its `absolute`.
-A metric is `inconclusive` where its interval is wider than twice the larger of its
-`threshold` and `tolerance`, and, where it has an `absolute`, the interval of its difference
-is wider than twice that too.
+A metric is `inconclusive` where its interval is wider than twice its `threshold`, and,
+where it has an `absolute`, the interval of its difference is wider than twice that too.
 
 **A comparison is measured once.** A request whose base commit, candidate tree (its commit
 and fingerprint, as `collie verify` reads them) and plan match a recorded Measurement of the

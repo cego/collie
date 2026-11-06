@@ -65,6 +65,14 @@ describe("a metric's verdict", () => {
     expect(judged.held).toBe(false);
   });
 
+  test("a tolerance wider than the threshold leaves the inconclusive width at twice the threshold", () => {
+    const samples = [80, 90, 100, 110, 120];
+    const judged = run(latency(samples, samples), ID, { threshold: 5, tolerance: 50 });
+    expect(judged.interval[1] - judged.interval[0]).toBeGreaterThan(0.1);
+    expect(judged.verdict).toBe("inconclusive");
+    expect(judged.held).toBe(true);
+  });
+
   test("a higher-is-better metric gains when the candidate's median is the larger", () => {
     const throughput = (
       base: ReadonlyArray<number>,
@@ -214,10 +222,7 @@ describe("a metric's own limits", () => {
   test("a guardrail's own tolerance decides whether it holds", () => {
     const rss = latency([100, 104, 97, 110, 99], [103, 112, 96, 108, 101]);
     expect(run(rss).held).toBe(false);
-    expect(run(rss, ID, { threshold: 5, tolerance: 25 })).toMatchObject({
-      verdict: "no-change",
-      held: true,
-    });
+    expect(run(rss, ID, { threshold: 5, tolerance: 25 }).held).toBe(true);
   });
 });
 

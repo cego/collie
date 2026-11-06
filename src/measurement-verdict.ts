@@ -124,7 +124,6 @@ export const judge = (
     const bestGain = Math.max(gainOf(low), gainOf(high));
     const worstBy = Math.min(better * lowBy, better * highBy);
     const beyondSlack = (by: number) => absolute === 0 || by > absolute;
-    const resolution = Math.max(threshold, tolerance) / 100;
     const verdict: Judgement["verdict"] =
       worstGain > 0 &&
       gainOf(ratio) >= threshold / 100 - ROUNDING &&
@@ -134,7 +133,7 @@ export const judge = (
             -gainOf(ratio) > tolerance / 100 + ROUNDING &&
             beyondSlack(-better * difference)
           ? "regression"
-          : high - low > 2 * resolution && (absolute === 0 || highBy - lowBy > 2 * absolute)
+          : high - low > (2 * threshold) / 100 && (absolute === 0 || highBy - lowBy > 2 * absolute)
             ? "inconclusive"
             : "no-change";
     return {
