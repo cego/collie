@@ -78,6 +78,21 @@ Measurement and does not sample again. Instrumentation that a metric needs stays
 harness paths, so applying the harness brings it back. A metric still missing a reading is
 an unjudged Measurement, never a pass.
 
+## Amended 2026-11-06: a metric's limits are its own
+
+run-ff23b932 calibrated identical code against itself and found nothing provable. Every
+sample ran, and the result processing judged what it was given. One plan-wide `tolerance`
+of 2% was applied to every guardrail, while at five samples a side the A/A intervals were
+±5% for host CPU, up to +22% for listing latency, and 0.6 to 1.7 for a lag p99 of 6 to 17 ms.
+No such guardrail can ever be held at 2%. A simulation of this judgement on A/A samples
+excludes no-change about 5% of the time, as a 95% interval should, so the interval stays.
+
+- **A metric may carry its own `threshold`, `tolerance` and `absolute`**, the last in its
+  own units, for a value near zero or read in coarse steps. **`exact`** marks a deterministic
+  count, such as a correctness check's mismatches, judged by its value rather than by an
+  interval: correctness is not a statistic. Each needs a `why` in the plan, so a limit is
+  justified before anything is measured by it. A plan without them is judged as before.
+
 ## Considered
 
 - **Benchmarks as Checks.** A Check is a pass or fail on one tree, and the host does not
@@ -86,5 +101,12 @@ an unjudged Measurement, never a pass.
 - **The agent measures and the reviewer judges.** A reviewer would then be judging numbers
   whose selection nobody saw. The proof would rest on an Output field, which Invariant 8
   rules out.
+- **Pairing adjacent base and candidate samples.** It cancels slow drift, but a sample of
+  the at-rest harness takes almost three minutes and vm-mk's load swung from 10 to 34 within
+  one calibration, so a pair does not share its load. The samples stay alternated, A B B A,
+  and the judgement stays on all of them.
+- **Lowering the confidence or re-calibrating until it passes.** Both make the gate say
+  what was hoped for. A limit is written into the plan before it is measured by, and an
+  unchanged plan is never measured twice.
 - **Production telemetry as proof.** It ranks what to try, but a production window is not
   a controlled comparison of two trees.

@@ -25,7 +25,7 @@ import { CheckProcesses, type CheckOf } from "./check-processes";
 import type { PluginEnv } from "./env";
 import { appendJournal, readJournal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
-import { judge, MeasurementRefused } from "./measurement-verdict";
+import { judge, MeasurementRefused, type Limits } from "./measurement-verdict";
 import {
   BenchmarkPlan,
   decodeBenchmarkPlan,
@@ -336,6 +336,17 @@ const reportedBy = (stdout: string) => {
     Schema.is(Schema.Finite)(value) ? [[key, value] as const] : [],
   );
 };
+
+/** A metric's own limits, and the plan's where it declares none. */
+export const limitsOf = (
+  plan: BenchmarkPlan,
+  metric: BenchmarkPlan["metrics"][number],
+): Limits => ({
+  threshold: metric.threshold ?? plan.threshold,
+  tolerance: metric.tolerance ?? plan.tolerance,
+  absolute: metric.absolute ?? 0,
+  exact: metric.exact ?? false,
+});
 
 /** A B B A …: base first, then each pair turned round, so drift falls on both sides alike. */
 export const sampleOrder = (samples: number): ReadonlyArray<"base" | "candidate"> =>
@@ -740,7 +751,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
           base: of("base"),
           candidate: of("candidate"),
         },
-        plan,
+        limitsOf(plan, metric),
       );
     }).pipe(Effect.result);
     return yield* record(

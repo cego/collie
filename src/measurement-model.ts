@@ -2,6 +2,7 @@
 // (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement).
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { Effect, Schema, flow } from "effect";
 import { Judgement } from "./measurement-verdict";
@@ -25,6 +26,15 @@ export const BenchmarkPlan = Schema.Struct({
       name: Schema.String,
       direction: Schema.Literals(["lower", "higher"]),
       role: Schema.Literals(["primary", "guardrail"]),
+      /** The plan's own, for this metric alone. */
+      threshold: Schema.optionalKey(Schema.Finite),
+      tolerance: Schema.optionalKey(Schema.Finite),
+      /** In the metric's units: a difference this small is neither a gain nor a regression. */
+      absolute: Schema.optionalKey(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
+      /** A deterministic count, such as a correctness check's mismatches: judged by value. */
+      exact: Schema.optionalKey(Schema.Boolean),
+      /** Why its limits are these, written before anything is measured by them. */
+      why: Schema.optionalKey(Schema.String),
     }),
   ),
   warmup: Schema.Int.pipe(
@@ -52,9 +62,25 @@ export const decodeBenchmarkPlan = flow(
   Effect.mapError((cause) => `the plan is not one: ${cause.message}`),
   Effect.flatMap((plan) => {
     const primaries = Arr.filter(plan.metrics, (one) => one.role === "primary").length;
-    return primaries === 1
+    if (primaries !== 1)
+      return Effect.fail(`a plan declares exactly one primary metric, not ${primaries}`);
+    const unjustified = Arr.filter(
+      plan.metrics,
+      (one) =>
+        (one.threshold !== undefined ||
+          one.tolerance !== undefined ||
+          one.absolute !== undefined ||
+          one.exact !== undefined) &&
+        Str.trim(one.why ?? "") === "",
+    );
+    return unjustified.length === 0
       ? Effect.succeed(plan)
-      : Effect.fail(`a plan declares exactly one primary metric, not ${primaries}`);
+      : Effect.fail(
+          `a metric's own limits need their why: ${Arr.join(
+            Arr.map(unjustified, (one) => one.name),
+            ", ",
+          )}`,
+        );
   }),
 );
 

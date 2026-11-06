@@ -21,6 +21,10 @@ export interface MetricSamples {
 export interface Limits {
   readonly threshold: number;
   readonly tolerance: number;
+  /** In the metric's units: a difference this small is neither a gain nor a regression. */
+  readonly absolute?: number;
+  /** Every sample of a tree must be the same number, judged by that value. */
+  readonly exact?: boolean;
 }
 
 export const Judgement = Schema.Struct({
@@ -73,35 +77,64 @@ const refusal = (samples: MetricSamples) => {
   return null;
 };
 
+const varies = (values: ReadonlyArray<number>) => Arr.some(values, (one) => one !== values[0]);
+
 export const judge = (
   measurement: string,
   samples: MetricSamples,
-  { threshold, tolerance }: Limits,
+  { threshold, tolerance, absolute = 0, exact = false }: Limits,
 ): Effect.Effect<Judgement, MeasurementRefused> =>
   Effect.gen(function* () {
     const reason = refusal(samples);
     if (reason !== null) return yield* new MeasurementRefused({ metric: samples.metric, reason });
 
+    const ratio = ratioOf(median(samples.candidate), median(samples.base));
+    const difference = median(samples.candidate) - median(samples.base);
+    if (exact && (varies(samples.base) || varies(samples.candidate)))
+      return {
+        metric: samples.metric,
+        ratio,
+        interval: [ratio, ratio] as const,
+        verdict: "inconclusive" as const,
+        held: false,
+      };
+
     const random = yield* Random.Random;
     const resample = (values: ReadonlyArray<number>) =>
       median(Arr.map(values, () => values[Math.floor(random.nextDoubleUnsafe() * values.length)]!));
-    const ratios = Array.from({ length: RESAMPLES }, () =>
-      ratioOf(resample(samples.candidate), resample(samples.base)),
-    ).sort((a, b) => a - b);
-    const low = ratios[Math.floor(RESAMPLES * 0.025)]!;
-    const high = ratios[Math.ceil(RESAMPLES * 0.975) - 1]!;
-    const ratio = ratioOf(median(samples.candidate), median(samples.base));
+    const ratios: Array<number> = [];
+    const differences: Array<number> = [];
+    for (let at = 0; at < RESAMPLES; at++) {
+      const candidate = resample(samples.candidate);
+      const base = resample(samples.base);
+      ratios.push(ratioOf(candidate, base));
+      differences.push(candidate - base);
+    }
+    const bounds = (values: Array<number>): [number, number] => {
+      values.sort((a, b) => a - b);
+      return [values[Math.floor(RESAMPLES * 0.025)]!, values[Math.ceil(RESAMPLES * 0.975) - 1]!];
+    };
+    const [low, high] = bounds(ratios);
+    const [lowBy, highBy] = bounds(differences);
 
-    // How much better than no change a ratio is: negative is worse.
-    const gainOf = (value: number) => (samples.direction === "lower" ? 1 - value : value - 1);
+    // How much better than no change a ratio or a difference is: negative is worse.
+    const better = samples.direction === "lower" ? -1 : 1;
+    const gainOf = (value: number) => better * (value - 1);
     const worstGain = Math.min(gainOf(low), gainOf(high));
     const bestGain = Math.max(gainOf(low), gainOf(high));
+    const worstBy = Math.min(better * lowBy, better * highBy);
+    const beyondSlack = (by: number) => absolute === 0 || by > absolute;
+    const resolution = Math.max(threshold, tolerance) / 100;
     const verdict: Judgement["verdict"] =
-      worstGain > 0 && gainOf(ratio) >= threshold / 100 - ROUNDING
+      worstGain > 0 &&
+      gainOf(ratio) >= threshold / 100 - ROUNDING &&
+      beyondSlack(better * difference)
         ? "gain"
-        : bestGain < 0 && -gainOf(ratio) > tolerance / 100 + ROUNDING
+        : bestGain < 0 &&
+            -gainOf(ratio) > tolerance / 100 + ROUNDING &&
+            beyondSlack(-better * difference)
           ? "regression"
-          : high - low > (2 * threshold) / 100
+          : high - low > 2 * resolution && (absolute === 0 || highBy - lowBy > 2 * absolute)
             ? "inconclusive"
             : "no-change";
     return {
@@ -109,6 +142,6 @@ export const judge = (
       ratio,
       interval: [low, high] as const,
       verdict,
-      held: worstGain >= -tolerance / 100 - ROUNDING,
+      held: worstGain >= -tolerance / 100 - ROUNDING || (absolute > 0 && worstBy >= -absolute),
     };
   }).pipe(Random.withSeed(`${measurement}/${samples.metric}`));
