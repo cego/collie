@@ -3396,8 +3396,9 @@ test("a Machine lock left by a dead Measurement keeps no tree", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { tree, sweeper } = yield* failedRunsTree();
-      const dead = Bun.spawnSync(["true"]).pid;
-      yield* fs.writeFileString(machineLock(), `{"pid":${dead},"start":null}\n`);
+      const gone = Bun.spawn(["true"]);
+      yield* Effect.promise(() => gone.exited);
+      yield* fs.writeFileString(machineLock(), `{"pid":${gone.pid},"start":null}\n`);
 
       const report = yield* sweep([sweeper], rig.stateDir, "host");
       expect(Arr.map(report.remove, (item) => item.target)).toEqual([tree]);
