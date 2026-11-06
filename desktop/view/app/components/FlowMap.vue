@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ComponentPublicInstance } from "vue";
 import * as Arr from "effect/Array";
+import { Effect, Fiber } from "effect";
 import type { Flow } from "../../../../src/board-model";
 import type { FlowActionView } from "../../../src/shared/flow-actions";
 import {
@@ -68,7 +69,10 @@ const grow = () => {
 onMounted(
   () =>
     (growing = requestAnimationFrame(
-      () => (growing = requestAnimationFrame(() => setTimeout(grow))),
+      () =>
+        (growing = requestAnimationFrame(
+          () => void Effect.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(grow)))),
+        )),
     )),
 );
 watch(
@@ -143,16 +147,21 @@ const laneItems = (run: string) =>
 
 // One tooltip for every Step, rather than one each; `tipAfter` decides when it shows.
 const tip = shallowRef<StepTip>(CLOSED);
-let due: ReturnType<typeof setTimeout> | undefined;
+let due: Fiber.Fiber<void> | undefined;
+const cancelDue = () => due !== undefined && void Effect.runFork(Fiber.interrupt(due));
 const send = (event: TipEvent) => {
   const next = tipAfter(tip.value, event);
-  if (next.tip.waiting !== tip.value.waiting) clearTimeout(due);
+  if (next.tip.waiting !== tip.value.waiting) cancelDue();
   tip.value = next.tip;
   const waiting = next.tip.waiting;
   if (next.wait !== null && waiting !== null)
-    due = setTimeout(() => send({ kind: "due", step: waiting }), next.wait);
+    due = Effect.runFork(
+      Effect.sleep(next.wait).pipe(
+        Effect.andThen(Effect.sync(() => send({ kind: "due", step: waiting }))),
+      ),
+    );
 };
-onBeforeUnmount(() => clearTimeout(due));
+onBeforeUnmount(cancelDue);
 const tipButton = computed(() =>
   tip.value.open === null ? null : (buttons.get(tip.value.open) ?? null),
 );
