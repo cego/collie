@@ -101,5 +101,5 @@ on lavapipe. Its first frame took 387 ms. The live board was one Snapshot of 21 
 - **Card titles.** rune-kit's `Card` title neither wraps nor truncates, and a long task name runs
   past the card. The board leaves the title unset and draws the name as body text that wraps
   (`card` in `board/src/lib.rs`), with the card's accessible label set by hand. Upstream
-  issue: not filed yet. Filing was refused by this Run's permissions, so the draft waits for
-  a human. It is in the Run's `handoffs/rune-card-title-issue.md`.
+  issue: not filed, by the human's decision. The draft, with a repro and a suggested fix, is
+  in the Run's `handoffs/rune-card-title-issue.md`.
