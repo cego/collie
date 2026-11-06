@@ -1794,8 +1794,11 @@ Machine on many samples
 ([ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md)).
 The host makes the **base tree** as a detached worktree at `--base` with the plan's harness
 commits applied, under `measurements/trees/<run>/` in its state directory, and keeps it for
-the Run's later Measurements of the same base. The **candidate** is the Run's checkout, or
-`--cwd` inside it. A candidate that holds every harness path is sampled where it is. One
+the Run's later Measurements of the same base. It also keeps every such tree, whatever its
+Run's state, while a Measurement is running on this Machine, so `--run` may name a Run that
+has ended; once none is running, an ended Run's trees are removed. The **candidate** is the
+Run's checkout, or `--cwd` inside it. A candidate that holds every harness path is sampled
+where it is. One
 that holds none, such as a branch cleaned up for release, is sampled in a scratch worktree
 the host makes at its head with the harness commits applied, kept and removed as a base tree
 is. The checkout is left as it was, and the record names the commits applied as
@@ -2158,8 +2161,9 @@ it running, because a check's result is thrown away
 A check this host is collecting is kept, with "this host is collecting it".
 
 The `measurement-tree` kind is a base tree [`collie measure`](#measure) made, whose target
-is its directory. It is kept while its Run has not ended, and a sweep removes it with git's
-record of the worktree.
+is its directory. It is kept while its Run has not ended, and, whatever its Run's state,
+while a Measurement is running on this Machine. Once neither holds, a sweep removes it with
+git's record of the worktree.
 
 ## Usage
 
