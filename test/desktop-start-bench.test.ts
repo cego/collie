@@ -10,13 +10,15 @@ const Started = Schema.fromJsonString(
 );
 
 describe("the Desktop start harness", () => {
-  test("sums the RSS of Desktop's process tree, leaving out Collie's bridge and host and what they started", () =>
+  test("sums the RSS of Desktop's process tree, leaving out the Collie processes it started", () =>
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const ps = yield* fs.readFileString(`${repo}test/fixtures/desktop-start/ps.txt`);
-        // launcher 2100 + main 98000 + GPU 151000 + renderer 180000 + utility 40000 KiB.
-        expect(treeRssMib(ps, 4100)).toBe(460.1);
+        // Recorded on vm-mk under Xvfb: launcher 2032 + main 492772 + zygotes 71072 + 71076
+        // + GPU 120268 + network 105860 + storage 47120 + renderers 122384 + 153832 + 282296
+        // + 71896 KiB; three bridges and a doctor are Collie's.
+        expect(treeRssMib(ps, 2910617)).toBe(1504.5);
       }),
     ));
 

@@ -42,6 +42,26 @@ if (app === undefined) {
   process.exit(2);
 }
 
+/**
+ * On Linux a build's launcher only installs Desktop under `$HOME`, which here is the world's,
+ * and Desktop runs only from there.
+ */
+const installed = (build: string) =>
+  Effect.gen(function* () {
+    if (Bun.env.HOME !== world.home)
+      return yield* Effect.die(
+        new Error(`HOME is not the world's; not installing over the user's`),
+      );
+    yield* say(`installing ${build} under ${world.home}`);
+    // The world's HOME reaches a child only when its env is given.
+    const ran = Bun.spawnSync([build], {
+      env: { ...Bun.env },
+      stdio: ["ignore", "ignore", "inherit"],
+    });
+    if (ran.exitCode !== 0) return yield* Effect.die(new Error(`installing ${build} failed`));
+    return `${world.home}/.local/share/dk.cego.collie.desktop/stable/app/bin/launcher`;
+  });
+
 const line = await runEffect(
   measuring(
     `${userStateDir(homedir(), userEnv)}/measurements/machine.lock`,
@@ -54,9 +74,10 @@ const line = await runEffect(
       yield* prepare({ ...COUNTS, runs: 50, large: 1, old: 10, live: 0, largeSteps: 40 });
       // Running before Desktop starts, so the host is not in Desktop's tree.
       yield* Effect.scoped(connect(world.state));
-      yield* say(`launching ${app}`);
+      const launcher = process.platform === "linux" ? yield* installed(app) : app;
+      yield* say(`launching ${launcher}`);
       return yield* measureStart({
-        argv: [app],
+        argv: [launcher],
         env: {
           ...Bun.env,
           COLLIE_DESKTOP_COLLIE: JSON.stringify([process.execPath, `${root}src/main.ts`]),

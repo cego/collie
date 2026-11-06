@@ -228,8 +228,11 @@ Measurement lock. In `bench/record-open`'s world (a state directory of its own a
 herdr) it prepares a board of 50 Runs, one of 40 Steps, starts the host, then launches
 Desktop with Record timing on. `board_usable_ms` is from the launch to the `board-usable`
 mark; `idle_rss_mib` is the RSS of Desktop's whole process tree (main process, webview and
-CEF helpers) 60 seconds later, leaving out `collie bridge` and the host. It then ends the
-app. Without `--app` it takes the launcher under `desktop/build`. Take it cold (after a
+CEF helpers) 60 seconds later, leaving out the Collie processes Desktop starts (its bridges and
+`collie doctor`) and the host. It then ends the
+app. Without `--app` it takes the launcher under `desktop/build`. On Linux that launcher only
+installs Desktop under `$HOME`, from where alone Desktop runs, so the harness first runs it,
+untimed, to install into the world's home, then times the installed one. Take it cold (after a
 reboot or a cache drop) and warm, with 2 warm-ups and 10 samples, as
 `collie measure` does by a plan whose command is `bun bench/desktop-start/run.ts`.
 

@@ -21,9 +21,8 @@ const processesIn = (ps: string): ReadonlyArray<Process> =>
 const PS = ["ps", "-A", "-o", "pid=,ppid=,rss=,args="];
 const snapshot = () => Bun.spawnSync(PS).stdout.toString();
 
-/** Collie's bridge or host: Desktop starts them, but they are not Desktop. */
-const isCollie = ({ args }: Process) =>
-  /(?:^|[\s/])(?:collie|main\.ts)\s+(?:bridge|host)(?:\s|$)/.test(args);
+/** Collie's CLI, such as its bridges and doctor: Desktop starts them, but they are not Desktop. */
+const isCollie = ({ args }: Process) => /(?:^|[\s/])(?:collie|src\/main\.ts)(?:\s|$)/.test(args);
 
 /** `root` and every process under it, but for any `left` and everything under that. */
 const treeOf = (ps: string, root: number, left: (process: Process) => boolean) => {
