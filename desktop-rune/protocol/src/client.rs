@@ -41,6 +41,7 @@ impl<E: fmt::Debug> std::error::Error for RpcError<E> {}
 enum Reply {
     Chunk(Vec<Value>),
     Exit(Exit),
+    Broken(String),
 }
 
 /// Each open call's inbox by request id; `None` once the core is gone.
@@ -68,22 +69,34 @@ impl Client {
         let open = client.open.clone();
         std::thread::spawn(move || {
             for line in input.lines().map_while(Result::ok) {
-                let (id, reply) = match serde_json::from_str(&line) {
-                    Ok(FromCore::Chunk { request_id, values }) => {
-                        (request_id, Reply::Chunk(values))
-                    }
-                    Ok(FromCore::Exit { request_id, exit }) => (request_id, Reply::Exit(exit)),
-                    _ => continue,
-                };
+                let frame = serde_json::from_str(&line);
                 let mut open = open.lock().unwrap();
                 let Some(calls) = open.as_mut() else { break };
-                let call = if matches!(reply, Reply::Exit(_)) {
-                    calls.remove(&id)
-                } else {
-                    calls.get(&id).cloned()
-                };
-                // A call whose caller has gone has nobody to tell.
-                call.map(|inbox| inbox.send(reply));
+                // A call whose caller has gone has nobody to tell, so sends are not checked.
+                match frame {
+                    Ok(FromCore::Chunk { request_id, values }) => {
+                        calls
+                            .get(&request_id)
+                            .map(|inbox| inbox.send(Reply::Chunk(values)));
+                    }
+                    Ok(FromCore::Exit { request_id, exit }) => {
+                        calls
+                            .remove(&request_id)
+                            .map(|inbox| inbox.send(Reply::Exit(exit)));
+                    }
+                    Ok(FromCore::Defect { defect }) => calls.drain().for_each(|(_, inbox)| {
+                        let cause = vec![Reason::Die {
+                            defect: defect.clone(),
+                        }];
+                        let _ = inbox.send(Reply::Exit(Exit::Failure { cause }));
+                    }),
+                    Ok(FromCore::ClientProtocolError { error }) => {
+                        calls.drain().for_each(|(_, inbox)| {
+                            let _ = inbox.send(Reply::Broken(error.to_string()));
+                        })
+                    }
+                    Ok(FromCore::Pong) | Err(_) => {}
+                }
             }
             open.lock().unwrap().take();
         });
@@ -130,6 +143,7 @@ impl Client {
         match replies.recv() {
             Ok(Reply::Exit(exit)) => decoded(ended(exit)?.unwrap_or(Value::Null)),
             Ok(Reply::Chunk(_)) => Err(RpcError::Protocol(format!("{tag} answered with a chunk"))),
+            Ok(Reply::Broken(why)) => Err(RpcError::Protocol(why)),
             Err(_) => Err(RpcError::CoreGone),
         }
     }
@@ -215,6 +229,10 @@ impl<A: DeserializeOwned, E: DeserializeOwned> Iterator for Subscription<A, E> {
                 Ok(Reply::Exit(exit)) => {
                     self.ended = true;
                     return ended(exit).err().map(Err);
+                }
+                Ok(Reply::Broken(why)) => {
+                    self.ended = true;
+                    return Some(Err(RpcError::Protocol(why)));
                 }
                 Err(_) => {
                     self.ended = true;

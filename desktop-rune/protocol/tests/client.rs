@@ -4,9 +4,11 @@
 
 use collie_desktop_protocol::client::{Client, RpcError};
 use collie_desktop_protocol::generated::{ActionFailed, FlockItem, SyncNowPayload, SyncNowSuccess};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
+use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures");
 
@@ -55,6 +57,52 @@ fn against(transcript: &str) -> (Client, JoinHandle<Result<(), String>>) {
         Client::new(BufReader::new(shell_reads), shell_writes).unwrap(),
         core,
     )
+}
+
+/// A core that says `frames` once the shell has sent `heard` frames, and keeps running.
+fn still_running(heard: usize, frames: Vec<Value>) -> (Client, JoinHandle<()>) {
+    let (shell_reads, core_writes) = std::io::pipe().unwrap();
+    let (core_reads, shell_writes) = std::io::pipe().unwrap();
+    let core = std::thread::spawn(move || {
+        let mut said = BufReader::new(core_reads).lines();
+        let mut out = core_writes;
+        said.by_ref().take(heard).for_each(drop);
+        frames
+            .iter()
+            .for_each(|frame| writeln!(out, "{frame}").unwrap());
+        said.for_each(drop);
+    });
+    (
+        Client::new(BufReader::new(shell_reads), shell_writes).unwrap(),
+        core,
+    )
+}
+
+type Synced = Result<SyncNowSuccess, RpcError<ActionFailed>>;
+type Taken = Option<Result<FlockItem, RpcError<Value>>>;
+
+/// What a request and a stream, both open, end with after `frame` from a core that keeps running.
+fn open_calls_after(frame: Value) -> (Synced, Taken) {
+    // Hello, flock and syncNow.
+    let (client, core) = still_running(3, vec![frame]);
+    let (done, outcome) = channel();
+    let asker = client.clone();
+    std::thread::spawn(move || {
+        let mut flock = asker.stream::<_, FlockItem, Value>("flock", ());
+        let build = SyncNowPayload {
+            profile: "build".into(),
+        };
+        let synced = asker.request::<_, SyncNowSuccess, ActionFailed>("syncNow", &build);
+        let ended = flock.next();
+        assert!(flock.next().is_none());
+        done.send((synced, ended)).unwrap();
+    });
+    let outcome = outcome
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the open calls ended");
+    drop(client);
+    core.join().unwrap();
+    outcome
 }
 
 fn the_flock() -> Vec<FlockItem> {
@@ -123,4 +171,19 @@ fn the_core_exiting_mid_stream_ends_it_with_an_error_naming_the_core() {
     assert!(flock.next().is_none());
     drop((flock, client));
     core.join().unwrap().unwrap();
+}
+
+#[test]
+fn a_defect_from_the_core_fails_every_open_call() {
+    let (synced, ended) = open_calls_after(json!({"_tag": "Defect", "defect": "the server died"}));
+    assert_eq!(synced, Err(RpcError::Defect(json!("the server died"))));
+    assert_eq!(ended, Some(Err(RpcError::Defect(json!("the server died")))));
+}
+
+#[test]
+fn a_protocol_error_from_the_core_fails_every_open_call() {
+    let (synced, ended) =
+        open_calls_after(json!({"_tag": "ClientProtocolError", "error": "bad frame"}));
+    assert!(matches!(synced, Err(RpcError::Protocol(why)) if why.contains("bad frame")));
+    assert!(matches!(ended, Some(Err(RpcError::Protocol(why))) if why.contains("bad frame")));
 }
