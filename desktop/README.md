@@ -220,7 +220,8 @@ naming the device, OS, display scale and Desktop commit.
 
 ```sh
 bun run --cwd desktop build
-bun bench/desktop-start/run.ts            # or --app <launcher>
+bun bench/desktop-start/run.ts --install  # Linux only, once per build
+bun bench/desktop-start/run.ts            # or --app <launcher> on macOS
 ```
 
 It refuses the user's own state directory and waits while another process holds the Machine
@@ -230,10 +231,12 @@ Desktop with Record timing on. `board_usable_ms` is from the launch to the `boar
 mark; `idle_rss_mib` is the RSS of Desktop's whole process tree (main process, webview and
 CEF helpers) 60 seconds later, leaving out the Collie processes Desktop starts (its bridges and
 `collie doctor`) and the host. It then ends the
-app. Without `--app` it takes the launcher under `desktop/build`. On Linux that launcher only
-installs Desktop under `$HOME`, from where alone Desktop runs, so the harness first runs it,
-untimed, to install into the world's home, then times the installed one. Take it cold (after a
-reboot or a cache drop) and warm, with 2 warm-ups and 10 samples, as
+app, its whole process group included, which holds what it started even after it has ended.
+Without `--app` it takes the launcher under `desktop/build`. On Linux that launcher only
+installs Desktop under its data home, from where alone Desktop runs, and installing warms the
+page cache, so `--install` installs it, untimed, into a home kept between samples
+(`.scratch/desktop-start/home`, or `--home <dir>`), and a sample times that install and refuses
+without one. Install before a cold sample's reboot or cache drop. Take it cold and warm, with 2 warm-ups and 10 samples, as
 `collie measure` does by a plan whose command is `bun bench/desktop-start/run.ts`.
 
 ## The Rune spike

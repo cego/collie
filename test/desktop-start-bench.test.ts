@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as Str from "effect/String";
 import { Effect, Exit, FileSystem, Option, Schedule, Schema } from "effect";
 import { treeRssMib, measureStart } from "../bench/desktop-start/start";
 import { world } from "../bench/record-open/world";
@@ -141,6 +142,60 @@ process.exit(1);
         expect(Option.isSome(gone)).toBe(true);
       }),
     ));
+
+  describe.skipIf(process.platform !== "linux")("on Linux, where a build installs itself", () => {
+    // Like a build's launcher: it installs Desktop under its data home and starts nothing.
+    const build = (dir: string) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${dir}/launcher`,
+          `#!/bin/sh
+echo "$HOME" > "${dir}/installed-for"
+mkdir -p "$XDG_DATA_HOME/dk.cego.collie.desktop/stable/app/bin"
+touch "$XDG_DATA_HOME/dk.cego.collie.desktop/stable/app/bin/launcher"
+`,
+          { mode: 0o755 },
+        );
+        return `${dir}/launcher`;
+      });
+    const harness = (args: ReadonlyArray<string>) =>
+      Bun.spawnSync([process.execPath, `${repo}bench/desktop-start/run.ts`, ...args], {
+        cwd: repo,
+        env: Bun.env,
+        stderr: "pipe",
+        stdout: "pipe",
+      });
+
+    test("installs Desktop, untimed, under the home it keeps between samples", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const dir = yield* fs.makeTempDirectoryScoped();
+          const ran = harness(["--install", "--app", yield* build(dir), "--home", `${dir}/kept`]);
+          expect(ran.exitCode).toBe(0);
+          expect(ran.stdout.toString()).toBe("");
+          expect(Str.trim(yield* fs.readFileString(`${dir}/installed-for`))).toBe(`${dir}/kept`);
+          expect(
+            yield* fs.exists(
+              `${dir}/kept/.local/share/dk.cego.collie.desktop/stable/app/bin/launcher`,
+            ),
+          ).toBe(true);
+        }),
+      ));
+
+    test("a sample never installs: without an install it refuses and says how", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const dir = yield* fs.makeTempDirectoryScoped();
+          const ran = harness(["--app", yield* build(dir), "--home", `${dir}/kept`]);
+          expect(ran.exitCode).toBe(2);
+          expect(ran.stderr.toString()).toContain("--install");
+          expect(yield* fs.exists(`${dir}/installed-for`)).toBe(false);
+        }),
+      ));
+  });
 
   test("refuses to run its host in the user's own state directory", () => {
     const ran = Bun.spawnSync([process.execPath, `${repo}bench/desktop-start/run.ts`], {
