@@ -8,6 +8,11 @@ import { recordKeeper } from "../desktop/src/bun/records";
 import type { KeptRecord } from "../desktop/src/shared/flock";
 import { frame, frameAt, recordDoor, type Asked } from "./support/record-doors";
 
+const shownBy = (done: () => boolean) =>
+  Effect.gen(function* () {
+    while (!done()) yield* Effect.sleep("5 millis");
+  }).pipe(Effect.timeout("2 seconds"));
+
 const said = (records: ReadonlyArray<KeptRecord>) =>
   Arr.map(records, ({ detail, asOf }) => `${detail?.title}${asOf === null ? "" : " (as of)"}`);
 
@@ -41,13 +46,14 @@ test("with A, B and C selected 100 ms apart and A's frame last, C's record shows
       yield* door.offer("C", frameAt("C", 1));
       yield* door.offer("B", frameAt("B", 1));
       yield* door.offer("A", frameAt("A", 1));
-      yield* Effect.sleep("50 millis");
+      yield* shownBy(() => shown.C.length > 0);
       expect(said(shown.C)).toEqual(["C"]);
-      expect(said(shown.A)).toEqual([]);
       yield* Fiber.interrupt(c);
 
+      // A's frame has reached the record the view holds, and the record shown before it had none.
       const again = yield* keeper.open("i-1", "A").pipe(Stream.runHead);
       expect(said(Arr.fromOption(again))).toEqual(["A"]);
+      expect(said(shown.A)).toEqual([]);
       expect(Arr.map(asked, ({ runId }) => runId).sort()).toEqual(["A", "B", "C"]);
     }).pipe(Effect.scoped),
   ));
@@ -64,20 +70,20 @@ test("against a host that ignores what is held, a kept record is labelled until 
         Stream.runForEach((record) => Effect.sync(() => shown.push(record))),
         Effect.forkChild,
       );
-      const settle = Effect.sleep("50 millis");
       yield* older.offer("r-1", frame("one"));
-      yield* settle;
+      yield* shownBy(() => shown.length === 1);
       doors.delete("i-1");
       yield* older.close;
-      yield* settle;
+      yield* shownBy(() => shown.length === 2);
       expect(said(shown)).toEqual(["one", "one (as of)"]);
 
-      const back = yield* recordDoor([]);
+      const askedBack: Array<Asked> = [];
+      const back = yield* recordDoor(askedBack);
       doors.set("i-1", back.door);
-      yield* Effect.sleep("100 millis");
+      yield* shownBy(() => askedBack.length > 0);
       expect(said(shown)).toEqual(["one", "one (as of)"]);
       yield* back.offer("r-1", frame("two"));
-      yield* settle;
+      yield* shownBy(() => shown.length === 3);
       expect(said(shown)).toEqual(["one", "one (as of)", "two"]);
     }).pipe(Effect.scoped),
   ));
