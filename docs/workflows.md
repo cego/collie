@@ -1094,7 +1094,9 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    interval against itself and the plan, and repairs the harness, in new commits on the
    harness paths, or the plan: more samples, a steadier window, a counter, or limits of a
    metric's own with their `why`. Its answer is recorded as a new plan with its reason and
-   calibrated again. A repair that leaves the plan as it was is not calibrated again. Once
+   calibrated again. A repair that leaves the plan as it was is not calibrated again: one
+   that only rewords a `why`, or declares limits a metric already had from the plan, leaves
+   it as it was. Once
    the repairs are spent, or one changed nothing, the Run **fails**, its reason the findings
    file, then `harness broken:` or `proof unavailable:` and each metric. Every calibration,
    plan and harness commit stays on the record.

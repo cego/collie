@@ -203,7 +203,7 @@ export const MeasureEvent = Schema.Union([
 
 /** A metric's own limits, and the plan's where it declares none. */
 export const limitsOf = (
-  plan: BenchmarkPlan,
+  plan: Pick<BenchmarkPlan, "threshold" | "tolerance">,
   metric: BenchmarkPlan["metrics"][number],
 ): Limits => ({
   threshold: metric.threshold ?? plan.threshold,

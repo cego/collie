@@ -16381,6 +16381,36 @@ scenario(
   120_000,
 );
 
+for (const [what, declared] of [
+  ["the plan's threshold", { threshold: 5 }],
+  ["the plan's tolerance", { tolerance: 2 }],
+  ["no absolute slack", { absolute: 0 }],
+  ["it is not exact", { exact: false }],
+] as const)
+  scenario(
+    `a tune-up repair that declares ${what} for a metric is the same plan, and is not calibrated again`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+          const runId = `r-tune-redeclared-${Object.keys(declared)[0]}`;
+          yield* rig.queueOutputs([
+            TUNE_DISCOVERED,
+            tunePlan(commit, [STEADY_PRIMARY, NOISY_GUARDRAIL]),
+            repaired(
+              tunePlan(commit, [STEADY_PRIMARY, { ...NOISY_GUARDRAIL, ...declared }]),
+              "declared it",
+            ),
+          ]);
+          const result = yield* tunedUp(runId);
+          expect(result._tag).toBe("Failure");
+          expect(reasonOf(result)).toContain("repair 1 left the plan as it was");
+          expect(yield* calibrations(runId)).toHaveLength(1);
+        }),
+      ),
+    120_000,
+  );
+
 scenario(
   "a tune-up whose noisy primary names itself as its counter is repaired, never switched to the same plan",
   () =>

@@ -109,6 +109,7 @@ export {
   BenchmarkPlan,
   calibrationOf,
   decodeBenchmarkPlan,
+  limitsOf,
   type Calibration,
   type Measurement,
 } from "./measurement-model";

@@ -26,6 +26,7 @@ import {
   defineWorkflow,
   endsWithoutPatchOf,
   evidenceGapsOf,
+  limitsOf,
   owedLocally,
   redact,
   renderApproved,
@@ -1281,7 +1282,13 @@ export default defineWorkflow({
       const encodePlan = (one: Plan) =>
         Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(one).pipe(Effect.orDie);
       const experimentOf = (one: Plan) =>
-        encodePlan({ ...one, metrics: Arr.map(one.metrics, Struct.omit(["why"])) });
+        encodePlan({
+          ...one,
+          metrics: Arr.map(one.metrics, (metric) => ({
+            ...pipe(metric, Struct.omit(["why"])),
+            ...limitsOf(one, metric),
+          })),
+        });
       let plan = yield* recordPlan(
         planOf(written),
         from === "" ? "written by Harness" : `carried from ${from}`,
