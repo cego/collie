@@ -11,6 +11,7 @@ import {
   paintedOf,
 } from "../bench/record-open/compare";
 import { barFailures, summaryOf } from "../bench/record-open/stats";
+import { nativeSummary } from "../bench/record-open/summarize";
 import { runEffect } from "./support/effect";
 import { flowNode } from "./support/flow";
 
@@ -203,3 +204,26 @@ test("the benchmark waits for the fill of the host it times, not of one it stopp
   expect(filledSinceStart(log([started(1), filled(16), started(2), filled(520)]))).toBe(true);
   expect(filledSinceStart("")).toBe(false);
 });
+
+test("a native timing log is summarised click to usable, and a usable with no click is reported apart", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const mark = (name: string, at: number, card: string) => JSON.stringify({ name, at, card });
+      const log = [
+        mark("record:usable", 900, "before-the-log"),
+        mark("record:click", 1000, "a"),
+        mark("record:mounted", 1010, "a"),
+        mark("record:frame", 1050, "a"),
+        mark("record:usable", 1120, "a"),
+        mark("record:click", 2000, "b"),
+        mark("record:usable", 2080, "b"),
+        mark("record:click", 3000, "c"),
+        mark("record:click", 3005, "d"),
+        mark("record:usable", 3200, "d"),
+        mark("record:usable", 3300, "c"),
+        mark("record:click", 4000, "never-painted"),
+        "",
+      ].join("\n");
+      expect(yield* nativeSummary(log)).toEqual({ p50: 120, p95: 195, max: 195, n: 3, unmatched: 2 });
+    }),
+  ));

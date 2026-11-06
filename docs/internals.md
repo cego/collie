@@ -2116,6 +2116,7 @@ more, or any sample failed.
 
 Native Desktop has no CDP. Its Settings has **Record timing** (off by default), which appends
 the same marks to `record-timing.log` in Desktop's state directory, one JSON line each.
+`bench/record-open/summarize.ts` summarises such logs; `desktop/README.md` says how to make them.
 
 ### Test-suite measurements, 26 October 2026
 

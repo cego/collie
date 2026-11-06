@@ -158,3 +158,26 @@ knows the delivery cap or the paste budget.
 
 Checked by the root's `tools/verify-mac-app.sh`, `test/desktop-mac-signing.test.ts` and
 `test/desktop-build-hook.test.ts`; the installer by `test/install-desktop.test.ts`.
+
+## Measuring a record open natively
+
+`bench/record-open/` times record opens in headless Chrome; WKWebView and WebKitGTK are
+measured by hand.
+
+1. In Settings, turn **Record timing** on. Desktop then appends each open's marks to
+   `record-timing.log` in `$XDG_STATE_HOME/collie-desktop`, else
+   `~/.local/state/collie-desktop`, on macOS and Linux alike.
+2. For each cell, open cards by clicking their names, then move the log aside under the
+   cell's name, as in `mv record-timing.log first.log`:
+
+   | Cell     | Opens | What each opens                            |
+   | -------- | ----- | ------------------------------------------ |
+   | `first`  | 20    | a settled Run's card not opened before     |
+   | `repeat` | 20    | a card just opened and closed              |
+   | `large`  | 10    | a Run of over 200 Steps                    |
+
+3. `bun bench/record-open/summarize.ts first.log repeat.log large.log` prints each cell's
+   p50, p95, max and n from click to usable, as the bench does. `unmatched` counts a usable
+   mark whose click the log does not have; it is not counted as an open.
+
+Run it on macOS (mk-laptop) and on Linux, and add the summaries to the Run's evidence.

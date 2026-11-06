@@ -1,0 +1,45 @@
+// Summarises the record timing logs a human made on native Desktop, one log per cell:
+// `bun bench/record-open/summarize.ts first.log repeat.log large.log` (desktop/README.md).
+
+import * as BunRuntime from "@effect/platform-bun/BunRuntime";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import * as Arr from "effect/Array";
+import { Console, Effect, FileSystem, Path, Schema } from "effect";
+import { summaryOf } from "./stats";
+
+const Mark = Schema.fromJsonString(
+  Schema.Struct({ name: Schema.String, at: Schema.Finite, card: Schema.String }),
+);
+
+/** Each open's click to usable; a usable whose click is not the last one logged is `unmatched`. */
+export const nativeSummary = (log: string) =>
+  Effect.gen(function* () {
+    const marks = yield* Effect.forEach(
+      Arr.filter(log.split("\n"), (line) => line.trim() !== ""),
+      (line) => Schema.decodeEffect(Mark)(line),
+    );
+    const samples: Array<number> = [];
+    let unmatched = 0;
+    let clicked: { readonly card: string; readonly at: number } | null = null;
+    for (const { name, at, card } of marks) {
+      if (name === "record:click") clicked = { card, at };
+      if (name !== "record:usable") continue;
+      if (clicked?.card === card) samples.push(at - clicked.at);
+      else unmatched++;
+      clicked = null;
+    }
+    const { p50, p95, max, n } = summaryOf(samples, 0);
+    return { p50, p95, max, n, unmatched };
+  });
+
+if (import.meta.main)
+  BunRuntime.runMain(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      for (const log of Arr.drop(Bun.argv, 2)) {
+        const summary = yield* nativeSummary(yield* fs.readFileString(log));
+        yield* Console.log(JSON.stringify({ cell: path.basename(log, ".log"), ...summary }));
+      }
+    }).pipe(Effect.provide(BunServices.layer)),
+  );
