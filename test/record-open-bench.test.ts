@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, flow, Result, Schema } from "effect";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import type { Flow } from "../src/board-model";
 import { processStartTime } from "../src/lock";
 import { filledSinceStart, measuring, refusal } from "../bench/record-open/guards";
@@ -195,6 +196,41 @@ describe("the record-open benchmark's guards", () => {
       }).pipe(Effect.scoped),
     ));
 });
+
+test("inside a Measurement, on a Machine without /proc, the host's lock is the benchmark's to sample under", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const hidden = (path: string) => path === "/proc" || Str.startsWith("/proc/")(path);
+      const noProc: FileSystem.FileSystem = {
+        ...fs,
+        exists: (path) => (hidden(path) ? Effect.succeed(false) : fs.exists(path)),
+        readFileString: (path, encoding) =>
+          hidden(path) ? fs.readFileString("/nonexistent/proc") : fs.readFileString(path, encoding),
+      };
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const lock = `${dir}/machine.lock`;
+      // The process that started this test stands in for the Measurement's host.
+      yield* fs.writeFileString(
+        lock,
+        encodeClaim({ pid: process.ppid, start: yield* processStartTime(process.ppid) }),
+      );
+      const said: string[] = [];
+      let sampled = false;
+      const sampling = yield* Effect.forkScoped(
+        measuring(
+          lock,
+          (line) => Effect.sync(() => said.push(line)),
+          Effect.sync(() => (sampled = true)),
+        ).pipe(Effect.provideService(FileSystem.FileSystem, noProc)),
+      );
+      yield* Effect.sleep("1500 millis");
+      yield* Fiber.interrupt(sampling);
+      expect(said).toEqual([]);
+      expect(sampled).toBe(true);
+      expect(yield* fs.exists(lock)).toBe(true);
+    }).pipe(Effect.scoped),
+  ));
 
 test("the benchmark waits for the fill of the host it times, not of one it stopped", () => {
   const started = (pid: number) => `message="collie 0.111.2 host started, pid ${pid}"`;
