@@ -7,7 +7,14 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, Option, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { boardOption, type RequestedBy, type RunReport, type Solution } from "./board-model";
+import type * as Types from "effect/Types";
+import {
+  boardOption,
+  holdPath,
+  type RequestedBy,
+  type RunReport,
+  type Solution,
+} from "./board-model";
 import type { PluginEnv } from "./env";
 import { resultText, runView, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
@@ -26,6 +33,8 @@ export interface Asked {
   readonly name: string;
   readonly prompt: string;
   readonly options: ReadonlyArray<Solution>;
+  readonly hold?: { readonly offered: boolean; readonly why: string | null };
+  readonly shortfall?: string;
 }
 
 export interface RunFacts {
@@ -140,7 +149,17 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   evidence: evidenceDir(stateDir, view.runId),
   asking: Arr.map(
     Arr.filter(view.waiting, (one) => isAsking(view, one)),
-    (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
+    (one) => {
+      const asked: Types.Mutable<Asked> = {
+        name: one.name,
+        prompt: one.prompt,
+        options: one.options,
+      };
+      const hold = holdPath(one, view.controls.includes(HOLD));
+      if (hold !== undefined) asked.hold = hold;
+      if (one.shortfall != null) asked.shortfall = one.shortfall;
+      return asked;
+    },
   ),
   superseding:
     Option.getOrUndefined(Arr.findLast(view.waiting, (one) => isSetAside(view.waiting, one)))

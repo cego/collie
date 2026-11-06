@@ -507,7 +507,14 @@ export const renovation = (landing: Landing = shippedLanding) =>
             adopting: ask({
               name: "adopt-claim",
               prompt: "You already hold or are queued for this project's claim. Take it over?",
-              options: ["yes", "no"],
+              options: [
+                "yes",
+                {
+                  id: "no",
+                  detail: "Leaves the other holder's work untouched.",
+                  recommended: true,
+                },
+              ],
             }).pipe(Effect.map((answer) => answer === "yes")),
             say: (line) => host.record(runId, line),
           }),

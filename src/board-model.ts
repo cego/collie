@@ -115,6 +115,22 @@ export const RecordedSolution = Schema.Union([
   ),
 ]);
 
+/** A solution as a workflow's `ask` authors it: a bare string is its id and title. */
+export const AuthoredSolution = Schema.Union([
+  Schema.String.pipe(
+    Schema.decodeTo(Solution, {
+      decode: SchemaGetter.transform((id) => ({ id, title: id })),
+      encode: SchemaGetter.forbidden(() => "an authored solution is only read"),
+    }),
+  ),
+  Schema.Struct({ ...Solution.fields, title: Schema.optionalKey(Schema.String) }).pipe(
+    Schema.decodeTo(Solution, {
+      decode: SchemaGetter.transform((one) => ({ ...one, title: one.title ?? one.id })),
+      encode: SchemaGetter.forbidden(() => "an authored solution is only read"),
+    }),
+  ),
+]);
+
 /** The recommended solution first, the rest in the order they were authored. */
 export const recommendedFirst = (solutions: ReadonlyArray<Solution>): ReadonlyArray<Solution> => [
   ...Arr.filter(solutions, (one) => one.recommended === true),
@@ -130,6 +146,21 @@ export const boardOption = (solution: Solution) => ({
 /** A solution's title as text front doors print it. */
 export const solutionTitle = (solution: Solution): string =>
   solution.recommended === true ? `${solution.title} (Recommended)` : solution.title;
+
+export const holdReason = (decision: string): string => `held at question ${decision}`;
+
+/**
+ * Hold the Run as a workflow Choice's third path where its authors gave fewer than three
+ * options; undefined where it is no path at all.
+ */
+export const holdPath = (
+  question: { readonly options: ReadonlyArray<unknown>; readonly asker?: string | null },
+  held: boolean,
+): { readonly offered: boolean; readonly why: string | null } | undefined => {
+  if (question.asker != null || question.options.length === 0 || question.options.length >= 3)
+    return undefined;
+  return held ? { offered: false, why: "Run already held" } : { offered: true, why: null };
+};
 
 /** A question a Run's Driver is holding open, with the options to answer it with. */
 export const Question = Schema.Struct({

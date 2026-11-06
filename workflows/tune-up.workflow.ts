@@ -1297,7 +1297,7 @@ export default defineWorkflow({
               prompt: again
                 ? `An earlier Post of this finding may have filed it: a search found no issue carrying ${markerOf(key)}, so Post files one now.\n\n${finding}`
                 : finding,
-              options: [IGNORE, POST],
+              options: [IGNORE, { id: POST, recommended: true }],
             });
             if (chosen !== POST) return yield* recorded(decided, `external ${key}: ignored`);
             const known = foundIn(yield* search(named(`${key}-search`)), false);

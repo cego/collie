@@ -82,6 +82,7 @@ test("a Run stopped or failed on its question asks nobody, and keeps the questio
         { id: "Post", title: "Post" },
         { id: "Don't post", title: "Don't post" },
       ],
+      hold: { offered: true, why: null },
     },
   ]);
 

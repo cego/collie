@@ -3,6 +3,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect } from "effect";
+import type * as Types from "effect/Types";
 import type { Awaiting } from "./awaiting";
 import { boardOption, type BoardAgent, type Question } from "./board-model";
 import type { UsageWait } from "./flow";
@@ -31,15 +32,20 @@ export const runWaits = Effect.fn("RunWaits.of")(function* (
   now: number,
 ) {
   const waits: RunWaits = {
-    questions: Arr.map(run.asking, (asked) => ({
-      kind: "question",
-      run: run.id,
-      id: asked.name,
-      step: run.workflow,
-      topic: asked.name,
-      text: asked.prompt,
-      options: Arr.map(asked.options, boardOption),
-    })),
+    questions: Arr.map(run.asking, (asked) => {
+      const question: Types.Mutable<Question> = {
+        kind: "question",
+        run: run.id,
+        id: asked.name,
+        step: run.workflow,
+        topic: asked.name,
+        text: asked.prompt,
+        options: Arr.map(asked.options, boardOption),
+      };
+      if (asked.hold !== undefined) question.hold = asked.hold;
+      if (asked.shortfall !== undefined) question.shortfall = asked.shortfall;
+      return question;
+    }),
     proposals: pendingFor(proposals, run.id, now),
     blocked:
       Option.getOrUndefined(

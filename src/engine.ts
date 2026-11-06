@@ -1329,19 +1329,44 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     definition: Definition<Fields, Output, Err, Provided>,
   ): Definition<Fields, Output, Err, Provided>;
 
+  /** One solution a question offers; an answer names its id or its title. */
+  export interface Solution {
+    readonly id: string;
+    readonly title: string;
+    readonly detail?: string;
+    readonly recommended?: boolean;
+  }
+
   /** A question as the host records it: its identity, what it asks, what it takes. */
   export interface DecisionSpec {
     readonly name: string;
     readonly prompt: string;
-    readonly options: ReadonlyArray<string>;
+    readonly options: ReadonlyArray<string | Solution>;
+    /** What keeps it short of standard, flagged wherever it is shown. */
+    readonly shortfall?: string;
   }
 
-  /** A question this Run waits on, asked when the work reaches it. The name is its identity. */
+  /** One answer an \`ask\` takes: a bare string is its id and title. */
+  export type AskOption =
+    | string
+    | {
+        readonly id: string;
+        readonly title?: string;
+        /** One line on why it matters or what it leads to. */
+        readonly detail?: string;
+        readonly recommended?: boolean;
+      };
+
+  /**
+   * A question this Run waits on, asked when the work reaches it. The name is its identity,
+   * and it returns the chosen option's id. Exactly one option is recommended; none or more
+   * than one is posted unmarked with a shortfall, and the Run goes on.
+   */
   export function ask(question: {
     readonly name: string;
     readonly prompt?: string;
     /** The answers it takes; none is a question answered in the operator's own words. */
-    readonly options?: ReadonlyArray<string>;
+    readonly options?: ReadonlyArray<AskOption>;
   }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
 
   /** What a parent asks for when part of its own work is another workflow. */
@@ -4285,6 +4310,7 @@ export const hostLayer = (options: {
               prompt: question.prompt,
               options: question.options,
               asker,
+              shortfall: question.shortfall,
             })
             .pipe(
               Effect.andThen(
@@ -5828,6 +5854,8 @@ export const OpenDecision = Schema.Struct({
   messaged: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The question this one asks again, or null for an original. */
   revises: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** What keeps it short of standard, or null where nothing does. */
+  shortfall: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type OpenDecision = typeof OpenDecision.Type;
 
@@ -7592,6 +7620,7 @@ const makeRegistry: (
           cause: row.cause,
           messaged: Arr.map(row.messaged ?? [], (one) => one.agent),
           revises: row.revises,
+          shortfall: row.shortfall,
         })),
       ),
     );

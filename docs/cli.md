@@ -797,7 +797,7 @@ Its `run` object carries:
 | `cwd`, `branch`, `workspace`, `worktree` | Where it works: its own worktree on `branch`, or the checkout it started from; a workspace of its own, or its Task's.                                                                                |
 | `outcome`                                | What it has to prove.                                                                                                                                                                                |
 | `created`, `status`                      | When it was admitted, and where the engine says it is: `pending`, `suspended`, `complete` with its `value` — the result as the workflow's success schema encodes it — or `failed` with its `reason`. |
-| `waiting`                                | Every question asked, oldest first: `name`, `prompt`, `answer` (`null` while open), and `options`, recommended first, each `id`, `title`, `detail?`, `recommended?`.                                 |
+| `waiting`                                | Every question asked, oldest first: `name`, `prompt`, `answer` (`null` while open), `shortfall?`, and `options`, recommended first, each `id`, `title`, `detail?`, `recommended?`.                   |
 | `controls`                               | A `hold` or a `stop` someone set over it.                                                                                                                                                            |
 | `parked`                                 | Why it parked its own work and what picks it up again, or `null`.                                                                                                                                    |
 | `awaiting`                               | What it waits for that comes without anyone repairing anything: `on`, `who` acts (`null` for nobody) and `since`, or `null`. It is not attention, and `run wait` waits through it.                   |
@@ -905,8 +905,12 @@ open, that is refused. The answer names one of the question's options by its `id
 recorded as that option's `id`. One it does not take is refused with the titles it does. A
 second, different answer is refused naming who answered. `run show` lists the options
 recommended first, with `(Recommended)` after that one's title and each option's detail on a
-line of its own. A refusal is `invalid_input` where your answer was the reason, and otherwise
-`operation_failed` with the host's own sentence.
+line of its own. A workflow's Choice of fewer than three options adds `Hold the Run` and the
+command that does it, `collie run hold <run> --reason "held at question <name>"`: the Run is
+held, nothing is answered, and the question stays open; on a Run already held it reads
+`unavailable, Run already held`. A Choice that recommends none, or more than one, has a
+`shortfall` saying so, shown as a `⚠` line. A refusal is `invalid_input` where your answer was
+the reason, and otherwise `operation_failed` with the host's own sentence.
 
 A message a human sends one of the run's agents while it waits — from the board, Desktop,
 a terminal, chat with the human's own words, or typed into a Claude agent's pane —

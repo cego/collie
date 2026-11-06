@@ -122,10 +122,16 @@ test(
           const other = yield* answer(world, runId, "jsonl", "first", "a-3");
           expect(other.envelope.error?.message).toContain('already answered "postgres" by');
 
-          yield* until(
+          const done = yield* until(
             () => host.status({ runId }),
             (status) => status.status === "complete",
           );
+          expect(done).toMatchObject({
+            value: "first moved to Postgres, second moved to SQLite",
+          });
+          expect(Arr.map(yield* boardQuestions(world, view), (one) => one.shortfall)).toEqual([
+            undefined,
+          ]);
         }).pipe(Effect.orDie),
       ["solutions.workflow.ts"],
     ),
@@ -176,6 +182,7 @@ test(
           const view = yield* shown(world, runId);
           expect(describeWaiting(view)).toEqual([
             `waiting on "first": Which database should the ledger use? (Go | Wait)`,
+            `  Hold the Run: collie run hold ${runId} --reason "held at question first"`,
             `waiting on "ask-op-1": Which region?`,
           ]);
           const questions = yield* boardQuestions(world, view);
