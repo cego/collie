@@ -3,7 +3,7 @@
 // marks (desktop/README.md, Measuring a record open natively).
 
 import { useAtomSet } from "@effect/atom-vue";
-import { desktopTiming, recordTiming } from "../../../src/shared/record";
+import { afterPaint, desktopTiming, recordTiming } from "../../../src/shared/record";
 import { FlockClient } from "../flock";
 
 const recordMarkAtom = FlockClient.mutation("recordMark");
@@ -27,8 +27,7 @@ const desktop = desktopTiming((name, at, card) => {
 });
 
 const now = () => userTiming.now();
-/** At the frame after this one, which draws what was just changed. */
-const drawn = (mark: (at: number) => void) => requestAnimationFrame(() => mark(now()));
+const drawn = (mark: (at: number) => void) => afterPaint(requestAnimationFrame, () => mark(now()));
 
 export const useRecordTiming = () => {
   const { desktopSettings } = useDesktopSettings();

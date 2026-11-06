@@ -5,6 +5,7 @@ import { pipe } from "effect/Function";
 import { describe, expect, test } from "bun:test";
 import { inField } from "../desktop/src/shared/board-clicks";
 import {
+  afterPaint,
   FOLLOWING_LOG,
   type KeyFacts,
   keyAction,
@@ -597,5 +598,23 @@ describe("timing Desktop's launch, board, terminal, chat and scrolling", () => {
       ["frame", 822, "log:1"],
       ["frame", 2010, "diff:2"],
     ]);
+  });
+});
+
+describe("a drawn mark", () => {
+  test("is taken after the frame that draws the change is painted", () => {
+    const seen: Array<string> = [];
+    let queued: Array<() => void> = [];
+    const frame = (callback: () => void) => queued.push(callback);
+    const render = () => {
+      const due = queued;
+      queued = [];
+      for (const callback of due) callback();
+      seen.push("painted");
+    };
+    afterPaint(frame, () => seen.push("marked"));
+    render();
+    render();
+    expect(seen).toEqual(["painted", "marked", "painted"]);
   });
 });

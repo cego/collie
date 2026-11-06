@@ -257,6 +257,10 @@ export const timingLine = (
 /** A scroll with no other this long after it has ended. */
 const SCROLL_SETTLED_MS = 150;
 
+/** Runs `then` once the change just made is painted; a frame's callbacks run before its paint. */
+export const afterPaint = (frame: (callback: () => void) => void, then: () => void) =>
+  frame(() => frame(then));
+
 /**
  * Marks the board's first draw; a key or chat chunk and the first draw after it, with no
  * other start marked before that draw; and each frame of a scroll, named once per scroll.

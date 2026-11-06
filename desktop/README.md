@@ -186,9 +186,9 @@ milliseconds and a `card` naming what it is about:
 | Mark                             | When                                                                        |
 | -------------------------------- | --------------------------------------------------------------------------- |
 | `launch`                         | Desktop's main process started                                              |
-| `board-usable`                   | the first board with its cards drawn, the frame after they were             |
-| `terminal-key`, `terminal-drawn` | a key sent to a Go to pane terminal, and the frame its echo drew            |
-| `chat-chunk`, `chat-drawn`       | a Flock chat text chunk the view received, and the frame drew it            |
+| `board-usable`                   | the first board with its cards drawn, once that frame was painted           |
+| `terminal-key`, `terminal-drawn` | a key sent to a Go to pane terminal, and its echo painted                   |
+| `chat-chunk`, `chat-drawn`       | a Flock chat text chunk the view received, and it painted                   |
 | `frame`                          | each frame while the Log tab or the Diff tab scrolls, one `card` per scroll |
 
 A key or chunk typed or received before the last one was drawn is not marked again. These
