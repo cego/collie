@@ -383,7 +383,7 @@ const locationOf = (file: string, line: number | null) =>
             :launches="detail.agents"
             :live="placed.task.agents"
             :protocol="protocolOf(placed.installation)"
-            :as-of="freshPlaced.asOf"
+            :as-of="() => freshPlaced.asOf"
           />
           <SummaryTab v-if="kept.has('summary')" v-show="tab === 'summary'" :detail="detail" />
           <PlanTab

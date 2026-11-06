@@ -413,7 +413,7 @@ watch(
       :installation="placed.installation"
       :run-id="offering.run"
       :chosen="offering.offer"
-      :as-of="placed.asOf"
+      :as-of="() => placed.asOf"
       @close="offering = null"
     />
     <TextDialog

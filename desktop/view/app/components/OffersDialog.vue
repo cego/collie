@@ -9,7 +9,8 @@ const props = defineProps<{
   installation: string;
   runId: string;
   chosen: string | null;
-  asOf: number | null;
+  /** When the record was last confirmed; asked again on every try, after the dialog closes too. */
+  asOf: () => number | null;
 }>();
 const emit = defineEmits<{ close: [] }>();
 const { run, offersOf } = useActions();
@@ -18,21 +19,28 @@ const offers = ref<ReadonlyArray<OfferView> | null>(null);
 const picked = ref<OfferView | null>(null);
 const typed = ref<Record<string, string>>({});
 const fields = computed(() => offerFields(picked.value?.arguments ?? null));
-const refused = (offer: OfferView) => refusal(offer.unavailable, props.asOf);
+const refused = (offer: OfferView) => refusal(offer.unavailable, props.asOf());
 
 const make = (offer: OfferView) => {
   return Effect.runPromise(
     Effect.gen(function* () {
       if (refused(offer) !== null) return;
+      const { asOf } = props;
       emit("close");
       yield* Effect.promise(() =>
         Promise.resolve(
-          run(props.installation, {
-            _tag: "Invoke",
-            runId: props.runId,
-            offer: offer.id,
-            input: offerInput(offer.arguments, typed.value),
-          }),
+          run(
+            props.installation,
+            {
+              _tag: "Invoke",
+              runId: props.runId,
+              offer: offer.id,
+              input: offerInput(offer.arguments, typed.value),
+            },
+            undefined,
+            undefined,
+            () => refusal(null, asOf()) ?? undefined,
+          ),
         ),
       );
     }),

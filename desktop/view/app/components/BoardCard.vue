@@ -400,7 +400,7 @@ const menu = computed(() =>
     :installation="installation"
     :run-id="task.run"
     :chosen="offering.offer"
-    :as-of="asOf"
+    :as-of="() => asOf"
     @close="offering = null"
   />
 </template>

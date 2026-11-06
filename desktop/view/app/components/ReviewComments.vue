@@ -14,7 +14,8 @@ const props = defineProps<{
   live: ReadonlyArray<BoardAgent>;
   /** The board protocol the Run's Machine last spoke; null where none is known. */
   protocol: number | null;
-  asOf: number | null;
+  /** When the record was last confirmed; asked again on every try. */
+  asOf: () => number | null;
 }>();
 const { drafts, edit, remove, clear } = useReviewDrafts(() => props);
 const { run } = useActions();
@@ -35,7 +36,7 @@ const choice = computed(
     offered.value[0],
 );
 const refused = computed(() =>
-  refusal(choice.value === undefined ? "This Run has no live agent to tell" : null, props.asOf),
+  refusal(choice.value === undefined ? "This Run has no live agent to tell" : null, props.asOf()),
 );
 
 const sending = ref(false);
@@ -45,6 +46,7 @@ const send = () => {
       if (choice.value === undefined || refused.value !== null) return;
       const who = addressOf(choice.value);
       const sent = [...drafts.value];
+      const { asOf } = props;
       sending.value = true;
       yield* Effect.promise(() =>
         Promise.resolve(
@@ -58,6 +60,7 @@ const send = () => {
             },
             undefined,
             () => clear(sent),
+            () => refusal(null, asOf()) ?? undefined,
           ),
         ),
       );
