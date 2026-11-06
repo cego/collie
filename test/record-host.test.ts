@@ -3,13 +3,22 @@
 // Imports only what the base had, so it fails there on what the host sends.
 
 import * as Arr from "effect/Array";
-import * as Struct from "effect/Struct";
 import { expect, test } from "bun:test";
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Schema, SchemaRepresentation, Stream } from "effect";
 import { RunDetail } from "../src/board-model";
 import { frontDoor, socketOf } from "../src/host";
 import { stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
+import frozen from "./fixtures/run-detail-base.json";
+
+// The record's wire schema on master at ec7ce76b, before revisions, as an older client decodes it.
+const baseRunDetail = SchemaRepresentation.fromRepresentation(
+  // SAFETY: the fixture is `SchemaRepresentation.toJson` of that schema's representation.
+  SchemaRepresentation.fromJson(frozen as Schema.Json),
+  {
+    revivers: [SchemaRepresentation.isFiniteReviver, SchemaRepresentation.isIntReviver],
+  },
+);
 
 const RunId = Schema.Struct({ data: Schema.Struct({ runId: Schema.String }) });
 
@@ -140,14 +149,14 @@ test(
             Effect.timeout("30 seconds"),
             Effect.orDie,
           );
-          const base = Schema.NullOr(
-            Schema.Struct(Struct.omit(RunDetail.fields, ["revision", "pending"])),
-          );
-
           expect(first._tag).toBe("Some");
+          const sent = Schema.encodeSync(Schema.NullOr(RunDetail))(
+            // SAFETY: an ask without `held` is answered with a record or null, never Unchanged.
+            first._tag === "Some" ? (first.value as RunDetail | null) : null,
+          );
           expect(
-            Schema.decodeUnknownExit(base, { onExcessProperty: "error" })(
-              first._tag === "Some" ? first.value : undefined,
+            Schema.decodeUnknownExit(Schema.NullOr(baseRunDetail), { onExcessProperty: "error" })(
+              sent,
             )._tag,
           ).toBe("Success");
         }),
