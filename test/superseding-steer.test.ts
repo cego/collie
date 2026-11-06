@@ -315,7 +315,10 @@ test(
         expect(revision.name).not.toBe("go");
         expect(revision).toMatchObject({
           prompt: "Ship it?",
-          options: ["yes", "no"],
+          options: [
+            { id: "yes", title: "yes" },
+            { id: "no", title: "no" },
+          ],
           answer: null,
         });
         expect(yield* notified(at)).toContain(`needs-you:ask:${revision.name}`);
@@ -686,7 +689,14 @@ test(
         expect(set?.superseded ?? null).not.toBeNull();
 
         const third = yield* revised(at, second.name);
-        expect(third).toMatchObject({ prompt: "Ship it?", options: ["yes", "no"], answer: null });
+        expect(third).toMatchObject({
+          prompt: "Ship it?",
+          options: [
+            { id: "yes", title: "yes" },
+            { id: "no", title: "no" },
+          ],
+          answer: null,
+        });
         for (const name of ["go", second.name]) {
           const refused = yield* answer(at, "yes", name);
           expect(refused.envelope.error?.message).toContain(`"${name}" was superseded`);

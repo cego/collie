@@ -101,6 +101,7 @@ export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
 export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 export { forgeOfRef, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
+import type { Solution } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
 /** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */
@@ -1288,8 +1289,11 @@ export interface AskedQuestion {
 export interface DecisionSpec {
   readonly name: string;
   readonly prompt: string;
-  /** The answers it takes. Empty is a question answered in the operator's own words. */
-  readonly options: ReadonlyArray<string>;
+  /**
+   * The answers it takes: a plain title, or a solution. Empty is a question answered in the
+   * operator's own words.
+   */
+  readonly options: ReadonlyArray<string | Solution>;
 }
 
 /**

@@ -95,6 +95,42 @@ export const FlowStrip = Schema.Struct({
 });
 export type FlowStrip = typeof FlowStrip.Type;
 
+/** One solution a question offers; an answer names its `id` or its `title`. */
+export const Solution = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  detail: Schema.optionalKey(Schema.String),
+  recommended: Schema.optionalKey(Schema.Boolean),
+});
+export type Solution = typeof Solution.Type;
+
+/** A solution as recorded, an older host's plain title among them. */
+export const RecordedSolution = Schema.Union([
+  Solution,
+  Schema.String.pipe(
+    Schema.decodeTo(Solution, {
+      decode: SchemaGetter.transform((title) => ({ id: title, title })),
+      encode: SchemaGetter.forbidden(() => "a solution is recorded in its current shape"),
+    }),
+  ),
+]);
+
+/** The recommended solution first, the rest in the order they were authored. */
+export const recommendedFirst = (solutions: ReadonlyArray<Solution>): ReadonlyArray<Solution> => [
+  ...Arr.filter(solutions, (one) => one.recommended === true),
+  ...Arr.filter(solutions, (one) => one.recommended !== true),
+];
+
+/** A solution as a board option, `subtitle` kept for readers older than `detail`. */
+export const boardOption = (solution: Solution) => ({
+  ...solution,
+  subtitle: solution.detail ?? null,
+});
+
+/** A solution's title as text front doors print it. */
+export const solutionTitle = (solution: Solution): string =>
+  solution.recommended === true ? `${solution.title} (Recommended)` : solution.title;
+
 /** A question a Run's Driver is holding open, with the options to answer it with. */
 export const Question = Schema.Struct({
   kind: Schema.Literal("question"),
@@ -111,8 +147,20 @@ export const Question = Schema.Struct({
       id: Schema.String,
       title: Schema.String,
       subtitle: Schema.NullOr(Schema.String),
+      detail: Schema.optionalKey(Schema.String),
+      recommended: Schema.optionalKey(Schema.Boolean),
     }),
   ),
+  /** Whether Hold the Run is offered as a path, and why not where it is not. */
+  hold: Schema.optionalKey(
+    Schema.Struct({ offered: Schema.Boolean, why: Schema.NullOr(Schema.String) }),
+  ),
+  /** The agent the steering entry redirects, or why there is none. */
+  steer: Schema.optionalKey(
+    Schema.Struct({ agent: Schema.NullOr(Schema.String), why: Schema.NullOr(Schema.String) }),
+  ),
+  /** What keeps the question short of standard, as its flag says it. */
+  shortfall: Schema.optionalKey(Schema.String),
 });
 export type Question = typeof Question.Type;
 

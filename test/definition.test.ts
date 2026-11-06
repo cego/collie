@@ -104,7 +104,15 @@ test(
                 Arr.map(present_.waiting, (one) => [one.name, one.options]),
               ),
             ),
-          ).toEqual([["approach", ["quick", "review-first"]]]);
+          ).toEqual([
+            [
+              "approach",
+              [
+                { id: "quick", title: "quick" },
+                { id: "review-first", title: "review-first" },
+              ],
+            ],
+          ]);
           yield* client
             .answer({
               runId: big.runId,

@@ -797,7 +797,7 @@ Its `run` object carries:
 | `cwd`, `branch`, `workspace`, `worktree` | Where it works: its own worktree on `branch`, or the checkout it started from; a workspace of its own, or its Task's.                                                                                |
 | `outcome`                                | What it has to prove.                                                                                                                                                                                |
 | `created`, `status`                      | When it was admitted, and where the engine says it is: `pending`, `suspended`, `complete` with its `value` — the result as the workflow's success schema encodes it — or `failed` with its `reason`. |
-| `waiting`                                | Every question it has been asked, oldest first: `name`, `prompt`, `options`, and `answer`, `null` while it is open.                                                                                  |
+| `waiting`                                | Every question asked, oldest first: `name`, `prompt`, `answer` (`null` while open), and `options`, recommended first, each `id`, `title`, `detail?`, `recommended?`.                                 |
 | `controls`                               | A `hold` or a `stop` someone set over it.                                                                                                                                                            |
 | `parked`                                 | Why it parked its own work and what picks it up again, or `null`.                                                                                                                                    |
 | `awaiting`                               | What it waits for that comes without anyone repairing anything: `on`, `who` acts (`null` for nobody) and `since`, or `null`. It is not attention, and `run wait` waits through it.                   |
@@ -900,9 +900,12 @@ collie --json run show <run-id>                            # confirm it took
 `--decision` names the question you are answering, so an answer that arrives after the run
 has moved on cannot land on another one: a question already answered is refused with what
 the run already has. Leave it out and the one open question is answered; with more than one
-open, that is refused. The answer is one of the question's options, in any case — `Yes`,
-`yes` and `YES` are the same answer — and one it does not take is refused with the ones it
-does. A refusal is `invalid_input` where your answer was the reason, and otherwise
+open, that is refused. The answer names one of the question's options by its `id` or its
+`title`, ids first, in any case — `Yes`, `yes` and `YES` are the same answer — and is
+recorded as that option's `id`. One it does not take is refused with the titles it does. A
+second, different answer is refused naming who answered. `run show` lists the options
+recommended first, with `(Recommended)` after that one's title and each option's detail on a
+line of its own. A refusal is `invalid_input` where your answer was the reason, and otherwise
 `operation_failed` with the host's own sentence.
 
 A message a human sends one of the run's agents while it waits — from the board, Desktop,

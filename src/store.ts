@@ -33,8 +33,8 @@ import * as Migrator from "effect/sql/Migrator";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
-import { AuditLine } from "./audit";
-import { RequestConflict } from "./board-model";
+import { AuditLine, whoActed } from "./audit";
+import { RequestConflict, type Solution } from "./board-model";
 import { nowIso } from "./time";
 
 /** A run as it was admitted: the claim, the arguments and the execution it became. */
@@ -224,7 +224,7 @@ export interface StoreApi {
     readonly run: string;
     readonly decision: string;
     readonly prompt: string;
-    readonly options: ReadonlyArray<string>;
+    readonly options: ReadonlyArray<string | Solution>;
     readonly asker?: string;
     readonly revises?: string;
   }) => Effect.Effect<void>;
@@ -548,7 +548,8 @@ function makeStore(): Effect.Effect<
 
     /** Why `row` takes no answer now, naming the question asked in its place. */
     const whyClosed = Effect.fn("Store.whyClosed")(function* (row: DecisionRow) {
-      if (row.answer !== null) return `"${row.decision}" was already answered "${row.answer}"`;
+      if (row.answer !== null)
+        return `"${row.decision}" was already answered "${row.answer}"${row.answerer === null ? "" : ` by ${whoActed(row.answerer)}`}`;
       const rows = yield* decisionsOf(row.run).pipe(Effect.orDie);
       let newest: DecisionRow | undefined;
       let next = Arr.findFirst(rows, (one) => one.revises === row.decision);

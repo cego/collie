@@ -7,7 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, Option, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import type { RequestedBy, RunReport } from "./board-model";
+import { boardOption, type RequestedBy, type RunReport, type Solution } from "./board-model";
 import type { PluginEnv } from "./env";
 import { resultText, runView, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
@@ -25,7 +25,7 @@ export type RunState = "running" | "waiting" | "succeeded" | "failed" | "stopped
 export interface Asked {
   readonly name: string;
   readonly prompt: string;
-  readonly options: ReadonlyArray<string>;
+  readonly options: ReadonlyArray<Solution>;
 }
 
 export interface RunFacts {
@@ -173,7 +173,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       open: isAsking(view, one),
       superseded: isSetAside(view.waiting, one),
       text: one.prompt,
-      options: Arr.map(one.options, (value) => ({ id: value, title: value, subtitle: null })),
+      options: Arr.map(one.options, boardOption),
     })),
     wakes: view.wakes ?? null,
     execution: executionOf(view),

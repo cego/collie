@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect } from "effect";
 import type { Awaiting } from "./awaiting";
-import type { BoardAgent, Question } from "./board-model";
+import { boardOption, type BoardAgent, type Question } from "./board-model";
 import type { UsageWait } from "./flow";
 import { memoryWaitOf, type MemoryWait } from "./memory-wait";
 import { pendingFor, type ProposalLine, type ProposalRecord } from "./proposals";
@@ -38,7 +38,7 @@ export const runWaits = Effect.fn("RunWaits.of")(function* (
       step: run.workflow,
       topic: asked.name,
       text: asked.prompt,
-      options: Arr.map(asked.options, (option) => ({ id: option, title: option, subtitle: null })),
+      options: Arr.map(asked.options, boardOption),
     })),
     proposals: pendingFor(proposals, run.id, now),
     blocked:

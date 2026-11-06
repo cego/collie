@@ -67,12 +67,22 @@ test("a Run stopped or failed on its question asks nobody, and keeps the questio
   const post = {
     name: "post-1",
     prompt: "What next?",
-    options: ["Post", "Don't post"],
+    options: [
+      { id: "Post", title: "Post" },
+      { id: "Don't post", title: "Don't post" },
+    ],
     answer: null,
   };
   const asking = view({ status: { status: "suspended" }, waiting: [post] });
   expect(factsOfView("/state", asking).asking).toEqual([
-    { name: "post-1", prompt: "What next?", options: ["Post", "Don't post"] },
+    {
+      name: "post-1",
+      prompt: "What next?",
+      options: [
+        { id: "Post", title: "Post" },
+        { id: "Don't post", title: "Don't post" },
+      ],
+    },
   ]);
 
   const stopped = factsOfView("/state", { ...asking, controls: ["stop"] });
@@ -100,18 +110,27 @@ test("a finished Run's agent that asks after a steer is still asking, unless the
   const region = {
     name: "ask-build-1",
     prompt: "Which region?",
-    options: ["eu-west"],
+    options: [{ id: "eu-west", title: "eu-west" }],
     answer: null,
     asker: "build",
   };
-  const post = { name: "post-1", prompt: "What next?", options: ["Post"], answer: null };
+  const post = {
+    name: "post-1",
+    prompt: "What next?",
+    options: [{ id: "Post", title: "Post" }],
+    answer: null,
+  };
   const done = factsOfView(
     "/state",
     view({ status: { status: "complete", value: "done" }, waiting: [post, region] }),
   );
   expect(done.state).toBe("succeeded");
   expect(done.asking).toEqual([
-    { name: "ask-build-1", prompt: "Which region?", options: ["eu-west"] },
+    {
+      name: "ask-build-1",
+      prompt: "Which region?",
+      options: [{ id: "eu-west", title: "eu-west" }],
+    },
   ]);
   expect(done.engine?.questions).toMatchObject([
     { name: "post-1", open: false },

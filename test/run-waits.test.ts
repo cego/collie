@@ -113,7 +113,16 @@ test("a Run waiting with no question open is parked, and one with a question is 
           workflow: "plan",
           state: "waiting",
           parked: reason,
-          asking: [{ name: "scope", prompt: "Which repo?", options: ["api", "web"] }],
+          asking: [
+            {
+              name: "scope",
+              prompt: "Which repo?",
+              options: [
+                { id: "api", title: "api" },
+                { id: "web", title: "web" },
+              ],
+            },
+          ],
         }),
         [],
         [],

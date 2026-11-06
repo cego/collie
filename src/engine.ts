@@ -165,8 +165,17 @@ import {
 import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
-import type { Metrics } from "./board-model";
-import { forgeOfRef, mrLabel, mrRefOf, mrWords, parseMrTarget, readMrRef } from "./board-model";
+import type { Metrics, Solution } from "./board-model";
+import {
+  forgeOfRef,
+  mrLabel,
+  mrRefOf,
+  mrWords,
+  parseMrTarget,
+  readMrRef,
+  RecordedSolution,
+  recommendedFirst,
+} from "./board-model";
 import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
@@ -5801,8 +5810,8 @@ const launchOptions = (generation: Generation, asked: Readonly<Record<string, st
 export const OpenDecision = Schema.Struct({
   name: Schema.String,
   prompt: Schema.String,
-  /** The answers it takes; empty is a question answered in the operator's own words. */
-  options: Schema.Array(Schema.String),
+  /** The solutions it takes, recommended first; empty is a question answered in words. */
+  options: Schema.Array(RecordedSolution),
   /** What settled it, or null while it is still open. */
   answer: Schema.NullOr(Schema.String),
   /** When it was asked and answered; absent from an older host. */
@@ -7566,14 +7575,14 @@ const makeRegistry: (
   /** Every question this run has been asked, with the answers its options allow. */
   const asked = Effect.fn("Engine.asked")(function* (runId: string) {
     const rows = yield* store.asked(runId);
-    const none: ReadonlyArray<string> = [];
+    const none: ReadonlyArray<Solution> = [];
     return yield* Effect.forEach(rows, (row) =>
       decodeOptions(row.options).pipe(
         Effect.orElseSucceed(() => none),
         Effect.map((options) => ({
           name: row.decision,
           prompt: row.prompt,
-          options,
+          options: recommendedFirst(options),
           answer: row.answer,
           asked: row.asked,
           answered: row.answered,
@@ -8736,19 +8745,24 @@ const makeRegistry: (
           reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
         });
       }
-      // An option is its own title: taken in any case, kept as declared.
+      // Taken in any case, ids before titles, and recorded as the option's id.
+      const said = Str.toLowerCase(options.value);
       const named = Option.getOrUndefined(
-        Arr.findFirst(
-          question.options,
-          (option) => Str.toLowerCase(option) === Str.toLowerCase(options.value),
+        Arr.findFirst(question.options, (option) => Str.toLowerCase(option.id) === said).pipe(
+          Option.orElse(() =>
+            Arr.findFirst(question.options, (option) => Str.toLowerCase(option.title) === said),
+          ),
         ),
       );
       if (question.options.length > 0 && named === undefined) {
         return yield* new HostRefused({
-          reason: `"${options.value}" is not one of ${Arr.join(question.options, ", ")}`,
+          reason: `"${options.value}" is not one of ${Arr.join(
+            Arr.map(question.options, (option) => option.title),
+            ", ",
+          )}`,
         });
       }
-      const value = named ?? options.value;
+      const value = named?.id ?? options.value;
       // An agent's question needs no workflow to wake: a finished Run's module may be gone.
       const byAgent = Arr.some(
         yield* store.asked(options.runId),
@@ -8980,7 +8994,7 @@ const makeRegistry: (
 });
 
 const decodeOptions = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Array(Schema.String)),
+  Schema.fromJsonString(Schema.Array(RecordedSolution)),
 );
 
 /**
