@@ -1066,10 +1066,12 @@ for (const wave of plan.waves) {
 }
 ```
 
-`readPlanRepos` (and `planReposOf`, against a directory) says which repositories a plan
-changes and in what order their Runs may start — a wave waits on the one before it — or
-refuses the whole plan: a cycle, a ticket number claimed twice, a repository with no
-checkout to work in. Refuse at the parent, where no child exists yet and there is nothing
+`readPlanRepos` (and `planReposOf`, against a directory) says which Changes a plan names —
+each a repository, its `change` where a `Change:` line named one, and the Change it is
+`stacked` on — and in what order their Runs may start, by `changeKey`: a wave waits on the
+one before it. It refuses the whole plan instead for a cycle, a ticket number claimed twice,
+a Change name git would refuse, or a repository with no checkout to work in. A plan with no
+`Change:` lines reads exactly as one repository per Change. Refuse at the parent, where no child exists yet and there is nothing
 to clean up. A Run whose work source is such a plan, and which was given no `repo`, is
 placed as that parent: the host cuts it no checkout, since each repository's Run cuts its
 own, and refuses to start it at all where the plan cannot fan out.

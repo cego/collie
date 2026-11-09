@@ -1228,6 +1228,63 @@ scenario(
 );
 
 scenario(
+  "a plan of two Changes in one repository is two Change runs, the stacked one started once the first has ended",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-changes";
+        const fs = yield* FileSystem.FileSystem;
+        const plan = `${runDir(dir, runId)}/plan`;
+        yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+        yield* fs.makeDirectory(`${rig.projectDir}/.git`, { recursive: true });
+        yield* fs.writeFileString(`${plan}/SPEC.md`, "# The spec\n");
+        yield* fs.writeFileString(
+          `${plan}/issues/01-api.md`,
+          "# 01-api.md\n\n**Repo:** .\n\n**Blocked by:** None\n",
+        );
+        yield* fs.writeFileString(
+          `${plan}/issues/02-schema.md`,
+          "# 02-schema.md\n\n**Repo:** .\n\n**Change:** schema\n\n**Blocked by:** 01\n",
+        );
+        const first = yield* Deferred.make<void>();
+        childWaits.set("implement-.", first);
+
+        const running = yield* Effect.forkChild(
+          ran({
+            entry: shipped("implement"),
+            runId,
+            input: { plan, ...FINISH },
+            options: { task: "one-registry" },
+          }),
+        );
+        yield* until(
+          () => Effect.sync(() => started.length),
+          (count) => count > 0,
+        );
+        expect(Arr.map(started, (one) => one.invocation)).toEqual(["implement-."]);
+        yield* Deferred.succeed(first, undefined);
+        const result = yield* Fiber.join(running);
+
+        expect(said(result)).toContain("2 Changes built in 2 wave(s)");
+        expect(Arr.map(started, (one) => [one.invocation, one.options])).toEqual([
+          ["implement-.", { task: "one-registry", repo: ".", workspace: rig.projectDir }],
+          [
+            "implement-.--schema",
+            {
+              task: "one-registry",
+              repo: ".",
+              change: "schema",
+              stacked: ".",
+              workspace: rig.projectDir,
+            },
+          ],
+        ]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a repository that does not build starts no further wave",
   () =>
     runEffect(
@@ -4828,6 +4885,73 @@ scenario(
         // What was collected, by whom — Collie ran it, so it is not the agent's claim.
         expect(opening).toContain("unit");
         expect(opening).toContain("by collie");
+      }),
+    ),
+  120_000,
+);
+
+/** The host, with the Run's checkout on `branch`, as placement leaves a Change run's. */
+const placedOn = (branch: string): HostOverride =>
+  Layer.effect(Host)(
+    Effect.gen(function* () {
+      const host = yield* Host;
+      return Host.of({
+        ...host,
+        place: (runId) => Effect.map(host.place(runId), (at) => ({ ...at, branch })),
+      });
+    }),
+  );
+
+/** The command a Change run's merge request is opened with, as its prompt gives it. */
+const changeRunOpening = (runId: string, options: Readonly<Record<string, string>>) =>
+  Effect.gen(function* () {
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* noGitlabMrs(bin);
+    yield* repository();
+    const plan = yield* planOf([
+      {
+        file: "01-schema.md",
+        title: "the schema",
+        checks: "unit",
+        body: "\n**Repo:** .\n\n**Change:** schema\n",
+      },
+    ]);
+    yield* approve(runId, ["unit"]);
+    yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+    yield* ran({
+      entry: shipped("implement"),
+      runId,
+      input: { plan, ...FINISH },
+      options: { task: "one-registry", repo: ".", change: "schema", ...options },
+      host: placedOn("mk/one-registry--schema"),
+    });
+    yield* bin.restore();
+    return Arr.filter(Str.split(yield* asked(runId, "mr"), "\n"), (line) =>
+      pipe(line, Str.includes("glab mr create")),
+    );
+  });
+
+scenario(
+  "a stacked Change run opens its merge request against its blocker's branch",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        expect(yield* changeRunOpening("r-impl-stacked", { stacked: "." })).toEqual([
+          'glab mr create --assignee tester --target-branch mk/one-registry --title "<title>" --description "<title>" --yes',
+        ]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an unstacked Change run opens its merge request against the default branch, as any Run does",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        expect(yield* changeRunOpening("r-impl-unstacked", {})).toEqual([
+          'glab mr create --assignee tester --title "<title>" --description "<title>" --yes',
+        ]);
       }),
     ),
   120_000,

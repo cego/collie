@@ -18,7 +18,7 @@ import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
 import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
-import { planIssuesIn, planReposOf } from "./plan";
+import { changeKey, planIssuesIn, planReposOf } from "./plan";
 import { everyJournal, pendingFor, type ProposalLine } from "./proposals";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
@@ -809,10 +809,12 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
     planDir === null
       ? null
       : yield* planReposOf(planDir, parent.cwd).pipe(Effect.orElseSucceed(() => null));
-  // Newest first, so a repository retried is shown by its newest Run.
+  // Newest first, so a Change retried is shown by its newest Run.
   const started = new Map<string, RunFacts>();
-  for (const child of children)
-    if (!started.has(child.repo ?? "")) started.set(child.repo ?? "", child);
+  for (const child of children) {
+    const key = changeKey({ path: child.repo ?? "", change: child.change ?? undefined });
+    if (!started.has(key)) started.set(key, child);
+  }
   const planned = plan === null || plan.refusal !== null ? [] : plan.waves;
   const unplanned = Arr.filter([...started.keys()], (repo) => !planned.flat().includes(repo));
   const waves = unplanned.length === 0 ? planned : [...planned, unplanned];

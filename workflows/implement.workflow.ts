@@ -35,6 +35,7 @@ import {
   answerFor,
   ask,
   benchmarkFile,
+  changeKey,
   classifyWorkSource,
   contentOf,
   criteriaIn,
@@ -50,6 +51,7 @@ import {
   renderProgress,
   forecast,
   sameTree,
+  stackedBranch,
   step,
   unmetCriteria,
   type Criterion,
@@ -58,7 +60,17 @@ import {
   type Integration,
   type Slice,
 } from "collie";
-import { DateTime, Deferred, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
+import {
+  DateTime,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Predicate,
+  Schema,
+  flow,
+  Result,
+} from "effect";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
@@ -171,10 +183,20 @@ const Built = Schema.Struct({
   }),
 });
 
-/** Which repositories a plan names, as a reading of it records them. */
+/** One Change a plan names, by the key its waves name it by. */
+const ChangeReading = Schema.Struct({
+  key: Schema.String,
+  repo: Schema.String,
+  change: Schema.optional(Schema.String),
+  stacked: Schema.optional(Schema.String),
+});
+
+/** Which Changes a plan names, as a reading of it records them. */
 const Reading = Schema.Struct({
   single: Schema.Boolean,
   waves: Schema.Array(Schema.Array(Schema.String)),
+  /** A reading journaled before Changes names only repositories, each its own default Change. */
+  changes: Schema.optionalKey(Schema.Array(ChangeReading)),
   refusal: Schema.NullOr(Schema.String),
 });
 
@@ -237,8 +259,8 @@ const next = step({
 });
 const repoRuns = step({
   id: "repo-runs",
-  title: "Repo runs",
-  description: "One Run per repository the plan names, a Wave at a time.",
+  title: "Change runs",
+  description: "One Run per Change the plan names, a Wave at a time.",
   kind: "workflow",
 });
 
@@ -342,6 +364,12 @@ export default defineWorkflow({
             Effect.map((read) => ({
               single: isSingleRepo(read),
               waves: Arr.map(read.waves, (wave) => [...wave]),
+              changes: Arr.map(read.repos, ({ path, change, stacked }) => ({
+                key: changeKey({ path, change }),
+                repo: path,
+                change,
+                stacked,
+              })),
               refusal: read.refusal?.message ?? null,
             })),
             // A plan that cannot be read is refused by name, not a defect the Run dies of.
@@ -367,6 +395,7 @@ export default defineWorkflow({
             plan: source.value,
             root: cwd,
             waves: plan.waves,
+            changes: plan.changes ?? [],
             // One branch in every repository: the one asked for, or one named after this Run.
             options:
               carried.branch !== undefined || carried.task !== undefined
@@ -494,7 +523,11 @@ export default defineWorkflow({
         const read = yield* Activity.make({
           name: `tickets.${readings}`,
           success: Schema.Array(SliceRecord),
-          execute: orderedTicketsOf(source.value, place.options.repo ?? ""),
+          execute: orderedTicketsOf(
+            source.value,
+            place.options.repo ?? "",
+            place.options.change ?? "",
+          ),
         });
         return Arr.map(read, (one) => ({
           ...one,
@@ -802,9 +835,18 @@ export default defineWorkflow({
         return yield* unbuilt(rallied.halted);
       }
 
+      const onto =
+        place.options.stacked === undefined || place.branch === null
+          ? null
+          : stackedBranch(place.branch, {
+              repo: place.options.repo ?? ".",
+              change: place.options.change,
+              stacked: place.options.stacked,
+            });
       const delivered = yield* deliver({
         cwd,
         source: { value: source.value, kind: source.kind },
+        onto: onto ?? undefined,
         agent: BUILDER,
         role: "implementer",
         input,
@@ -935,70 +977,84 @@ const releasing = (delivered: {
   });
 
 /**
- * One Run of this workflow per repository the plan names, a wave at a time: a repository
- * starts once every one its tickets wait on is built. One that fails or cannot start
- * starts no further wave; the rest of its own wave is still waited on.
+ * One Run of this workflow per Change the plan names, a wave at a time: a Change starts
+ * once every one its tickets wait on is built. One that fails or cannot start starts no
+ * further wave; the rest of its own wave is still waited on.
  */
 const buildEach = (fan: {
   readonly plan: string;
   readonly root: string;
   readonly waves: ReadonlyArray<ReadonlyArray<string>>;
-  /** The launch options every repository's Run is started with, beside its own. */
+  readonly changes: ReadonlyArray<typeof ChangeReading.Type>;
+  /** The launch options every Change's Run is started with, beside its own. */
   readonly options: Readonly<Record<string, string>>;
 }) =>
   Effect.gen(function* () {
     const host = yield* Host;
     const children = yield* Children;
     const runId = (yield* Run).id;
-    const invocation = (repo: string) => `implement-${pipe_(repo, Str.replaceAll("/", "-"))}`;
+    const invocation = (key: string) => `implement-${pipe_(key, Str.replaceAll("/", "-"))}`;
     const clash = identityProblem(Arr.map(fan.waves.flat(), invocation));
     if (clash !== null) return yield* new WorkflowError({ reason: clash });
+    const changeOf = (key: string) =>
+      Option.getOrElse(
+        Arr.findFirst(fan.changes, (one) => one.key === key),
+        (): typeof ChangeReading.Type => ({ key, repo: key }),
+      );
     const built: string[] = [];
-    const repos = fan.waves.flat();
+    const keys = fan.waves.flat();
     for (const [at, wave] of fan.waves.entries()) {
-      // Each repository's Run is its Step's from its start to its end; they start in the
+      // Each Change's Run is its Step's from its start to its end; they start in the
       // Wave's order and are waited on together.
       const running = [];
-      for (const repo of wave) {
+      for (const key of wave) {
+        const { repo, change, stacked } = changeOf(key);
+        const options = {
+          ...fan.options,
+          repo,
+          workspace: repo === "." ? fan.root : `${fan.root}/${repo}`,
+          ...Rec.filter({ change, stacked }, Predicate.isNotUndefined),
+        };
         const begun = yield* Deferred.make<void>();
         const share = Effect.gen(function* () {
           const child = yield* children
             .start({
-              invocation: invocation(repo),
+              invocation: invocation(key),
               workflow: "self",
-              // Nobody attends a repository's share, so it ends at its merge request.
+              // Nobody attends a Change's share, so it ends at its merge request.
               // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
               input: { plan: fan.plan, then: "finish" },
-              options: { ...fan.options, repo, workspace: `${fan.root}/${repo}` },
+              options,
             })
             .pipe(Effect.result, Effect.ensuring(Deferred.succeed(begun, undefined)));
           if (child._tag === "Failure")
-            return { repo, built: null, why: `not started: ${child.failure.reason}` };
+            return { key, built: null, why: `not started: ${child.failure.reason}` };
           return yield* children.result(child.success).pipe(
-            Effect.map((value) => ({ repo, built: String(value), why: "" })),
-            Effect.catch((failure) => Effect.succeed({ repo, built: null, why: failure.reason })),
+            Effect.map((value) => ({ key, built: String(value), why: "" })),
+            Effect.catch((failure) => Effect.succeed({ key, built: null, why: failure.reason })),
           );
         });
-        const building = yield* Effect.forkChild(repoRuns(share, { item: repo, items: repos }));
+        const building = yield* Effect.forkChild(repoRuns(share, { item: key, items: keys }));
         running.push(building);
         yield* Effect.raceFirst(Deferred.await(begun), Fiber.join(building));
       }
       const ended = yield* Fiber.joinAll(running);
       for (const one of ended) {
-        built.push(`${one.repo}: ${one.built ?? one.why}`);
-        yield* host.record(runId, `${one.repo}: ${one.built ?? one.why}`);
+        built.push(`${one.key}: ${one.built ?? one.why}`);
+        yield* host.record(runId, `${one.key}: ${one.built ?? one.why}`);
       }
       const stopped = Option.getOrUndefined(Arr.findFirst(ended, (one) => one.built === null));
       if (stopped !== undefined) {
         const left = fan.waves.slice(at + 1).flat();
         const waiting =
-          left.length === 0 ? "" : ` Not run: ${Arr.join(left, ", ")}, waiting on ${stopped.repo}.`;
+          left.length === 0 ? "" : ` Not run: ${Arr.join(left, ", ")}, waiting on ${stopped.key}.`;
         return yield* new WorkflowError({
-          reason: `${stopped.repo} did not build.${waiting} ${Arr.join(built, "; ")}`,
+          reason: `${stopped.key} did not build.${waiting} ${Arr.join(built, "; ")}`,
         });
       }
     }
-    return `${fan.waves.flat().length} repositories built in ${fan.waves.length} wave(s): ${Arr.join(built, "; ")}`;
+    const named = Arr.some(fan.changes, (one) => one.change !== undefined);
+    return `${keys.length} ${named ? "Changes" : "repositories"} built in ${fan.waves.length} wave(s): ${Arr.join(built, "; ")}`;
   });
 
 /** What the slice claims it built, or the ticket's own name where it named nothing. */

@@ -33,6 +33,7 @@ import { readRunLinks } from "./run-links";
 import { settleFlow } from "./flow-timing";
 import { epochMs } from "./time";
 import { readVerifications } from "./verify";
+import { changeKey } from "./plan";
 
 const executionOfState = (state: RunState): Execution => {
   switch (state) {
@@ -288,7 +289,10 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
     for (const repo of [...repos].sort((one, other) => planned(one) - planned(other)))
       children.push({
         id: repo.id,
-        title: repo.repo ?? repo.id,
+        title:
+          repo.repo === null
+            ? repo.id
+            : changeKey({ path: repo.repo, change: repo.change ?? undefined }),
         created: repo.created,
         link: yield* linkOf(repo),
         wave: Option.getOrUndefined(Arr.findFirst(waves, (one) => one.run === repo.id))?.wave ?? 1,

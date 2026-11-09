@@ -209,7 +209,7 @@ import {
 } from "./intent";
 import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
-import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
+import { changeKey, changeOfKey, isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
@@ -475,6 +475,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** A Run as the host admitted it: where it works, where its work belongs, what it was given. */
   export interface Place {
     readonly cwd: string;
+    /** The branch its checkout is on, where it was given one. */
+    readonly branch: string | null;
     readonly dir: string;
     /** The host's own launch options — the RESERVED_INPUTS names — as a caller gave them. */
     readonly options: Readonly<Record<string, string>>;
@@ -912,6 +914,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly target?: string;
       readonly source?: { readonly value: string; readonly kind: string };
+      /** The branch a new merge request targets, where it is not the default branch. */
+      readonly onto?: string | undefined;
     }) => Effect.Effect<MrReady>;
     /**
      * The checkout's branch's open merge request where it merges itself once green, else null.
@@ -2088,23 +2092,41 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What only CI, a merge or a deploy can show: the items under a ticket's ## After merge. */
   export function afterMergeIn(text: string): string[];
 
-  /** A plan's tickets in an order they can be built in, narrowed to one repository. */
+  /** A plan's tickets in an order they can be built in, narrowed to one repository's Change. */
   export function orderedTickets(
     tickets: ReadonlyArray<{ readonly file: string; readonly text: string }>,
     repo?: string,
+    change?: string,
   ): Slice[];
 
   /** The same reading, against a plan directory on disk. */
   export function orderedTicketsOf(
     planDir: string,
     repo?: string,
+    change?: string,
   ): Effect.Effect<Slice[], never, FileSystem.FileSystem | Path.Path>;
 
-  /** One repository a plan changes, and the tickets that change it, in plan order. */
+  /** One Change of a plan: its repository, its name, and its tickets in plan order. */
   export interface PlanRepo {
     readonly path: string;
+    /** Absent for the repository's default Change. */
+    readonly change?: string;
+    /** The key of the Change in the same repository this one is cut from. */
+    readonly stacked?: string;
     readonly tickets: ReadonlyArray<string>;
   }
+
+  /**
+   * The branch a stacked Change run builds on and opens its merge request against, named
+   * from its own branch; null where its own is not the one its Change is given.
+   */
+  export function stackedBranch(
+    own: string,
+    run: { readonly repo: string; readonly change?: string; readonly stacked: string },
+  ): string | null;
+
+  /** How a Change is named in waves, refusals and invocations: api, or api--schema. */
+  export function changeKey(one: { readonly path: string; readonly change?: string | undefined }): string;
 
   /** Why this plan cannot be fanned out. The message is what the human is shown. */
   export interface PlanRefusal {
@@ -2114,13 +2136,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       | "missing-checkout"
       | "outside-root"
       | "unknown-blocker"
-      | "duplicate-ticket";
+      | "duplicate-ticket"
+      | "bad-change";
     readonly message: string;
   }
 
   export interface PlanRepos {
     readonly repos: ReadonlyArray<PlanRepo>;
-    /** Repo paths in the order their runs may start; each wave waits on the one before. */
+    /** Change keys in the order their runs may start; each wave waits on the one before. */
     readonly waves: ReadonlyArray<ReadonlyArray<string>>;
     readonly refusal: PlanRefusal | null;
   }
@@ -4182,6 +4205,7 @@ export const hostLayer = (options: {
                 ),
                 Effect.map((admitted) => ({
                   cwd: admitted?.placed.cwd ?? dir,
+                  branch: admitted?.placed.branch ?? null,
                   dir: runDir(dir, runId),
                   options: admitted?.options ?? {},
                   task: admitted?.task ?? null,
@@ -4190,6 +4214,7 @@ export const hostLayer = (options: {
                 })),
                 Effect.orElseSucceed(() => ({
                   cwd: dir,
+                  branch: null,
                   dir: runDir(dir, runId),
                   options: {},
                   task: null,
@@ -6729,6 +6754,11 @@ const makeRegistry: (
       sources: ask.provenance,
       explicit: ask.options.branch ?? null,
       taskBranch,
+      change: ask.options.change,
+      stackedOn:
+        ask.options.stacked === undefined
+          ? undefined
+          : changeOfKey(ask.options.repo ?? ".", ask.options.stacked),
       login: placing.env.gitlabLogin,
       githubLogin: placing.env.githubLogin,
       gitlabHost: yield* gitlabHostOf(placing.env).pipe(Effect.orElseSucceed(() => undefined)),
@@ -8259,7 +8289,7 @@ const makeRegistry: (
           offer.id,
           read.success.refusal?.message ??
             `its plan spans repositories (${Arr.join(
-              Arr.map(read.success.repos, (one) => one.path),
+              Arr.map(read.success.repos, changeKey),
               ", ",
             )}), which a card does not fan out. \`collie run start ${offer.workflow === SELF ? row.workflow : offer.workflow} --input ${field}=${where}/plan\` does, one Run per repository.`,
         );

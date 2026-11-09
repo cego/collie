@@ -271,6 +271,7 @@ export {
   benchmarkFile,
   benchmarkIn,
   benchmarkRefusalOf,
+  changeKey,
   checksIn,
   criteriaIn,
   isSingleRepo,
@@ -278,6 +279,7 @@ export {
   orderedTicketsOf,
   planReposOf,
   readPlanRepos,
+  stackedBranch,
   type PlanRefusal,
   type PlanRepo,
   type PlanRepos,
@@ -879,6 +881,8 @@ export interface HostApi {
     readonly target?: string;
     /** The work it is building, so the issues it answers can be found. */
     readonly source?: { readonly value: string; readonly kind: string };
+    /** The branch a new merge request targets, where it is not the default branch. */
+    readonly onto?: string | undefined;
   }) => Effect.Effect<MrReady>;
   /**
    * The URL of the checkout's branch's open merge request where it merges itself once
@@ -1210,6 +1214,8 @@ export interface HostApi {
 /** A Run as the host admitted it: where it works, where its work belongs, and what it was given. */
 export interface Place {
   readonly cwd: string;
+  /** The branch its checkout is on, where it was given one. */
+  readonly branch: string | null;
   readonly dir: string;
   /**
    * The host's own launch options, plus agent preferences inherited from a parent Run.
@@ -1677,6 +1683,10 @@ export const RESERVED_INPUTS = {
   workspace:
     "Where the checkout comes from: `new` for a worktree workspace of its own, an existing checkout's absolute path, or `projects-root` for the Projects root; distinct from the CLI's workspace scope",
   repo: "One repository's share of a multi-repository work source",
+  change:
+    "One Change of that repository's share: its tickets, on the plan's branch with `--<change>` appended",
+  stacked:
+    "The Change of the same repository this one is cut from, whose branch its merge request targets",
   outcome: "The selectable outcome, where the workflow does not fix one",
   risks: "Additional review axes, passed as declared context",
   previous: "Previous review context attached to the selected work",

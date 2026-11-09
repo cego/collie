@@ -1719,6 +1719,48 @@ test("a fan-out's card lists its Repo runs and every repository still to come, b
     }),
   ));
 
+test("a fan-out's card lists each Change run of one repository, by wave", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, env } = yield* scratch();
+      const root = `${dir}/root`;
+      const parent = yield* madeRun(dir, { id: "r-fan", task: "task-1", cwd: root });
+      yield* fs.makeDirectory(`${parent.dir}/plan/issues`, { recursive: true });
+      yield* fs.makeDirectory(`${root}/.git`, { recursive: true });
+      yield* fs.writeFileString(
+        `${parent.dir}/plan/issues/01-api.md`,
+        "# 01-api.md\n\n**Blocked by:** None\n\n**Repo:** .\n",
+      );
+      yield* fs.writeFileString(
+        `${parent.dir}/plan/issues/02-schema.md`,
+        "# 02-schema.md\n\n**Blocked by:** 01\n\n**Repo:** .\n\n**Change:** schema\n",
+      );
+      const api = yield* madeRun(dir, {
+        id: "r-api",
+        task: "task-1",
+        parent: "r-fan",
+        repo: ".",
+        state: "succeeded",
+        mr: "mr:cego/api!4",
+      });
+      const schema = yield* madeRun(dir, {
+        id: "r-schema",
+        task: "task-1",
+        parent: "r-fan",
+        repo: ".",
+        change: "schema",
+      });
+
+      const views = yield* board(env, [schema, api, parent]);
+
+      expect(views[0]!.children).toEqual([
+        { repo: ".", run: "r-api", state: "done", mr: "mr:cego/api!4" },
+        { repo: ".--schema", run: "r-schema", state: "active", mr: null },
+      ]);
+    }),
+  ));
+
 const GITLAB = (repo: string, iid: number) =>
   `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;
 const idOf = (repo: string, iid: number) => `gitlab.cego.dk/cego/${repo}!${iid}`;

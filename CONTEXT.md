@@ -430,7 +430,7 @@ question tool, which Collie puts on the Run and whose answer it delivers to that
 Codex agent's is read from the App Server Collie runs it through. A pi agent's harness has
 none, so it asks with the one Collie gives it. While one is open,
 Collie's own prompts to that agent wait. Any of a
-Task's Runs can be waiting on one, a fan-out's Repo runs included, and each is answered on
+Task's Runs can be waiting on one, a fan-out's Change runs included, and each is answered on
 the Run that asked. Both are answered on the card, from the CLI or from chat, and survive
 the board closing. A Run's **Checks** are never one: nobody approves them (ADR-0055).
 A human's message to one of the Run's agents supersedes its open questions, which are then
@@ -757,15 +757,19 @@ whole `recheck` (ADR-0034, amended 2026-10-15).
 
 **Choice** — A question a Run asks the human with `ask`, from a closed set of options: what the answer does next — start another Workflow, prompt an agent, post a review, stop — is the Workflow's own code. An answer outside the options, or a second answer to one already answered, is refused and starts nothing. A human's message to the Run's agent supersedes an open one, and it is asked again once that work ends (**Superseded question**).
 
-**Chain** — Starting another Workflow from a Run, with `child`: typed input decoded against the child's schema before it is admitted, a stable invocation name, and the child recorded as this Run's. Replaying the parent reuses the child it already has. A child started as work of its own is a Task of its own, and still this Run's. A fan-out chains several at once, one per repository a plan touches; see Repo run.
+**Chain** — Starting another Workflow from a Run, with `child`: typed input decoded against the child's schema before it is admitted, a stable invocation name, and the child recorded as this Run's. Replaying the parent reuses the child it already has. A child started as work of its own is a Task of its own, and still this Run's. A fan-out chains several at once, one per Change a plan names; see Change run.
 
 **Plan directory** — The `plan/` folder inside a Run: SPEC.md and the ticket files. It is the hand-off from `plan` to `implement` and never lives in the repository. Every ticket names the repository it changes with a `Repo:` line: a path under the Run's root, `.` for the root itself, never absolute and never containing `..`.
 
 **Projects root** — The one directory every checkout a human works in lives under: the gitte folder by default, else a configured one. A Run started from the Home is rooted there, because the Home has no checkout of its own and the human names none; a plan's `Repo:` lines are then paths under it.
 
-**Repo run** — One child Run of a fan-out, owning one repository's branch and merge request and building only the tickets whose `Repo:` names that repository. Every Repo run of one plan uses the same branch name.
+**Change** — One merge request's worth of a plan's work in one repository. Its tickets are named by a `Change:` line, or belong to the repository's default Change. It has its own branch: the plan's for the default Change, else the plan's with `--<name>` appended. A Change is its repository and its name, so one name in two repositories is two Changes.
 
-**Wave** — The Repo runs a fan-out starts together: those whose tickets are blocked by no ticket of a Repo run still going. Ticket order inside a repository is the Repo run's; cross-repository order is the wave's. A plan whose repositories block each other in a cycle has no wave order and is refused, as is one whose "Blocked by" line names something that is not a ticket of the plan, or which numbers two tickets the same so that such a line cannot say which it means.
+**Change run** — One child Run of a fan-out, owning one Change's branch and merge request and building only that Change's tickets.
+
+**Stacked** — A Change blocked by another Change in the same repository. Its branch is cut from the blocker's, and its merge request targets the blocker's branch. When the blocker merges, Collie reads the retarget from the forge and never makes it itself.
+
+**Wave** — The Change runs a fan-out starts together: those whose tickets are blocked by no ticket of a Change run still going. Ticket order inside a Change is its Change run's; order between Changes, in one repository or several, is the wave's. A plan whose Changes block each other in a cycle has no wave order and is refused, as is one whose "Blocked by" line names something that is not a ticket of the plan, or which numbers two tickets the same so that such a line cannot say which it means.
 
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
@@ -793,7 +797,7 @@ file in its Run directory instead.
 
 **Flow** — A Task drawn as the work it took. Each of its Runs is shown on its Machine, as the
 **Steps** it ran and is running, each with its attempts, waits and evidence. Around them are
-the Steps its path still expects, its children and Repo runs by **Wave**, the follow-up it
+the Steps its path still expects, its children and Change runs by **Wave**, the follow-up it
 offers, and its merge request's way through CI, merge and deploy. The host builds it from
 what each Run recorded and what its module declares, so every front door reads one model. It
 draws what is recorded or declared and guesses nothing else. It is neither the forge's

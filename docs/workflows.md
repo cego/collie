@@ -106,14 +106,15 @@ work. What was resolved is recorded with its kind, and the build prompt reads bo
 before it builds, so every run leaves the same audit trail.
 
 `repo` is one repository's share of a plan that spans several, as the tickets' `Repo:`
-line names it: given one, the build step builds only the tickets naming it and leaves the
-rest to their own run. It is empty for every single-repository run, which builds the whole
-plan, and for the parent of a fan-out, which sets it on each repository's run; see
-[Plans that span repositories](#plans-that-span-repositories).
+line names it, and `change` is one Change of that share, as their `Change:` line names it:
+given them, the build step builds only those tickets and leaves the rest to their own run.
+Both are empty for every single-repository run, which builds the whole plan, and for the
+parent of a fan-out, which sets them on each Change's run; `stacked` names the Change of the
+same repository a run is cut from. See [Plans that span repositories](#plans-that-span-repositories).
 
 `then` says what follows the merge request: `finish` ends there, `release` releases it, and
 empty, the default, asks (see **Ends:**). A start nobody attends passes `finish`: plan's
-`then=implement`, and so a Self-improve Run's Improvements, and each Repo run of a fan-out.
+`then=implement`, and so a Self-improve Run's Improvements, and each Change run of a fan-out.
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the `<name>` of a `branch:<base>...<name>` target you gave, else
@@ -281,7 +282,7 @@ dispute rule are shared.
 **Its [Flow](../CONTEXT.md)** forecasts **Build**, a run per ticket, then **Review**, a run
 per review-and-fix round, **Checks**, the gate with its fix rounds, **Merge request** and
 **What next**. A CI fix round is drawn off the path. A plan that spans repositories forecasts
-again once it is read, to **Repo runs** alone, a run per repository. **What next** has a run
+again once it is read, to **Change runs** alone, a run per Change. **What next** has a run
 per question, and each Stage Run and the release Run it starts is a row of its own. Checks still unproved after the gate's fixes park the Run with **Checks** failed,
 and a resume runs them again.
 
@@ -299,23 +300,38 @@ A `plan` or `architecture` started from the Home runs at the
 [Projects root](../CONTEXT.md) — `workspace=projects-root` — and its agent is told the root
 is not a repository: it finds the repositories under it, and each `Repo:` is relative to it.
 
-A plan is single-repository only when its tickets all say `.`, or carry no line at all. A
-plan whose tickets all name one repository _by path_ is not one of those: that repository
-is somewhere under the root, and its run has to be rooted there.
+A ticket may also carry a `**Change:** <name>` line beside its `Repo:` line, to put it in a
+merge request of its own: one a reviewer should read apart from the rest of its repository's
+work. Every ticket of one repository and one Change is built on one branch and lands in one
+merge request. A ticket without the line is in its repository's default Change. A Change is
+its repository and its name, so `schema` in `api` and `schema` in `web` are two Changes, and a
+name git would refuse in a branch name stops the hand-off, quoting the ticket.
+
+A plan is single-repository only when its tickets all say `.`, or carry no line at all, and
+are all in one Change. A plan whose tickets all name one repository _by path_ is not one of
+those: that repository is somewhere under the root, and its run has to be rooted there. A
+plan of two or more Changes fans out, even when they are all in one repository.
 
 Every other plan fans out, whether **Implement now** hands it to `implement` or you start
 it yourself from the plan's root with `collie run start implement --input plan=<the plan
 directory>`. That `implement` cuts no checkout of its own and builds nothing itself: it
-starts one Run of itself per repository, each from that repository's checkout under the
-root, each with the shared plan directory, `then=finish`, its own `repo` and every other
-option it was started with — `risks`, `outcome` — and all on one branch name: the `branch` you gave,
-else `<login>/<task>`, else one named after the Run that fanned out, so the sibling merge
-requests are findable by it. Each is held to its own repository's `.collie/verify.json` at that
-repository's base, else the checks remembered for its remote, else the ones its builder names. See [Repo run](../CONTEXT.md) for the term.
+starts one Run of itself per Change, each from its repository's checkout under the root,
+each with the shared plan directory, `then=finish`, its own `repo` and `change` and every
+other option it was started with — `risks`, `outcome` — and all on one branch name: the
+`branch` you gave, else `<login>/<task>`, else one named after the Run that fanned out, so
+the sibling merge requests are findable by it. A named Change's run appends `--<name>` to
+that branch. Each is held to its own repository's `.collie/verify.json` at that
+repository's base, else the checks remembered for its remote, else the ones its builder names. See [Change run](../CONTEXT.md) for the term.
 
-They start in **waves**. A repository's run starts once every repository its tickets are
-blocked by has been built; repositories that block nothing start together. Ticket order
-inside a repository is that run's own business, as in a single-repository run. The
+They start in **waves**. A Change's run starts once every Change its tickets are blocked by
+has been built; Changes that block nothing start together. Ticket order inside a Change is
+that run's own business, as in a single-repository run. A Change blocked by another in its
+own repository is **stacked** on it: its branch is cut from the blocker's pushed branch, and
+its merge request is opened against that branch, so it shows only its own work. When the
+blocker merges and its branch is deleted, the forge retargets the stacked merge request to
+the default branch where the project allows it; Collie reads that and never retargets it
+itself. A Change blocked only by other repositories' Changes is cut from the default branch.
+The
 `implement` that fanned out is their parent until the last one ends, so stopping it stops
 them, resuming it goes on with the ones it already has rather than starting them again, and
 its result names what each repository ended as.
@@ -329,7 +345,8 @@ its result names what each repository ended as.
   is recorded and shown on the Run, and the menu comes back; started directly, the start is
   refused with it before any Run is admitted. The same reading checks
   the tickets when the planner writes them, and a plan it refuses goes back to the planner
-  once, so most of these never reach the menu. The reasons are a repository-level cycle, a
+  once, so most of these never reach the menu. The reasons are a cycle between Changes, a
+  `Change:` name git would refuse in a branch name, a
   ticket with no `Repo:` line where its siblings have one, a repository with no checkout
   under the root — Collie does not clone — a `Repo:` that is not a path under the root, two
   tickets wearing one number, or a "Blocked by" line naming something that is not a ticket

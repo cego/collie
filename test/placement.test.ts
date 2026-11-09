@@ -962,6 +962,79 @@ test(
   120_000,
 );
 
+/** One repository's plan in two Changes, the schema one waiting on the default one. */
+const twoChangePlan = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const plan = `${rig.root}/plan`;
+  yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+  yield* fs.writeFileString(`${plan}/SPEC.md`, "# The spec\n");
+  yield* fs.writeFileString(`${plan}/issues/01-api.md`, "# The api\n\n**Repo:** .\n");
+  yield* fs.writeFileString(
+    `${plan}/issues/02-schema.md`,
+    "# The schema\n\n**Repo:** .\n\n**Change:** schema\n\n**Blocked by:** 01\n",
+  );
+  return plan;
+});
+
+test(
+  "implement on a plan of two Changes in one repository builds the first on the plan's branch, and cuts the stacked one from its pushed branch",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const plan = yield* twoChangePlan;
+        yield* withOrigin;
+        const head = (cwd: string, ref = "HEAD") =>
+          committing(cwd, "rev-parse", ref).pipe(Effect.map((done) => Str.trim(done.stdout)));
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [implement] = yield* loaded(registry, [shipped("implement")]);
+            const started = yield* start(implement!, { request: "r1", text: { plan } });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const runId = started.success.runId;
+            const first = yield* until(
+              () => registry.view(`${runId}.implement-.`),
+              (view) => view?.branch != null,
+            );
+            const waiting = yield* registry.view(`${runId}.implement-.--schema`);
+            // The first Change's work, pushed, and a later commit of it that is not.
+            const at = first!.worktree!.path;
+            yield* committing(at, "commit", "--quiet", "--allow-empty", "-m", "the api");
+            yield* committing(at, "push", "--quiet", "origin", first!.branch!);
+            const pushed = yield* head(at);
+            yield* committing(at, "commit", "--quiet", "--allow-empty", "-m", "not pushed");
+            // Started as the fan-out starts a stacked Change once the first has ended.
+            const stacking = yield* start(implement!, {
+              request: "r2",
+              // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
+              text: { plan, then: "finish" },
+              options: {
+                task: runId,
+                repo: ".",
+                change: "schema",
+                stacked: ".",
+                workspace: rig.projectDir,
+              },
+            });
+            if (stacking._tag === "Failure") return yield* Effect.die(stacking.failure);
+            const stacked = yield* until(
+              () => registry.view(stacking.success.runId),
+              (view) => view?.branch != null,
+            );
+            return { runId, first, waiting, pushed, stacked };
+          }),
+        );
+        expect(seen.first?.branch).toBe(`${LOGIN}/${seen.runId}`);
+        expect(seen.first?.options).toMatchObject({ repo: "." });
+        // The stacked Change waits on the first, so nothing has started it yet.
+        expect(seen.waiting).toBeNull();
+        expect(seen.stacked?.branch).toBe(`${LOGIN}/${seen.runId}--schema`);
+        expect(yield* head(seen.stacked!.worktree!.path)).toBe(seen.pushed);
+      }),
+    ),
+  120_000,
+);
+
 test(
   "implement on a plan spanning repositories is admitted where one names no checks, and refuses one --verify for all",
   () =>

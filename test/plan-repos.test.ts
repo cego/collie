@@ -472,3 +472,111 @@ test("what only a merge can show is not a criterion, and is read as the ticket's
   expect(criteriaIn(Arr.join(headed, "\n"))).toEqual(["One."]);
   expect(afterMergeIn("# 01: a\n\n- [ ] One.\n")).toEqual([]);
 });
+
+/** A ticket in a named Change, beside its `Repo:` line. */
+function inChange(file: string, change: string, opts: { repo?: string; blockedBy?: string } = {}) {
+  const plain = ticket(file, opts);
+  return { file, text: `${plain.text}**Change:** ${change}\n` };
+}
+
+test("one repository's tickets in two Changes are two Changes in two waves, and not single", () => {
+  const plan = readPlanRepos(
+    [
+      ticket("01-api", { repo: "." }),
+      ticket("02-web", { repo: ".", blockedBy: "01" }),
+      inChange("03-table", "schema", { repo: ".", blockedBy: "01" }),
+      inChange("04-index", "schema", { repo: ".", blockedBy: "02, 03" }),
+    ],
+    new Set(["."]),
+  );
+
+  expect(plan.refusal).toBeNull();
+  expect(plan.repos).toEqual([
+    { path: ".", tickets: ["01-api", "02-web"] },
+    { path: ".", change: "schema", stacked: ".", tickets: ["03-table", "04-index"] },
+  ]);
+  expect(plan.waves).toEqual([["."], [".--schema"]]);
+  expect(isSingleRepo(plan)).toBe(false);
+});
+
+test("a plan of one Change is single, even when that Change is named", () => {
+  const plan = readPlanRepos(
+    [inChange("01-a", "schema", { repo: "." }), inChange("02-b", "schema", { blockedBy: "01" })],
+    new Set(["."]),
+  );
+  expect(plan.refusal).toBeNull();
+  expect(isSingleRepo(plan)).toBe(true);
+  expect(plan.repos).toEqual([{ path: ".", tickets: ["01-a", "02-b"] }]);
+});
+
+test("a Change is its repository and its name, so one name in two repositories is two Changes", () => {
+  const plan = readPlanRepos(
+    [inChange("01-api", "auth", { repo: "api" }), inChange("02-web", "auth", { repo: "web" })],
+    new Set(["api", "web"]),
+  );
+  expect(plan.refusal).toBeNull();
+  expect(plan.repos).toEqual([
+    { path: "api", change: "auth", tickets: ["01-api"] },
+    { path: "web", change: "auth", tickets: ["02-web"] },
+  ]);
+  expect(plan.waves).toEqual([["api--auth", "web--auth"]]);
+});
+
+test("two Changes of one repository that block each other are refused, naming both", () => {
+  const plan = readPlanRepos(
+    [
+      ticket("01-api", { repo: "api" }),
+      inChange("02-schema", "schema", { repo: "api", blockedBy: "01" }),
+      ticket("03-api", { repo: "api", blockedBy: "02" }),
+    ],
+    new Set(["api"]),
+  );
+  expect(plan.refusal?.kind).toBe("cycle");
+  expect(plan.refusal?.message).toContain("api, api--schema");
+  expect(plan.refusal?.message).toContain("03-api (blocked by api--schema)");
+  expect(plan.waves).toEqual([]);
+});
+
+test("a Change name git will not take in a branch name is refused, quoting the ticket", () => {
+  for (const name of ["two words", "a..b", "x~1", "trail.lock", "", "-ok/../no"]) {
+    const plan = readPlanRepos(
+      [ticket("01-api", { repo: "api" }), inChange("02-api", name, { repo: "api" })],
+      new Set(["api"]),
+    );
+    expect([name, plan.refusal?.kind]).toEqual([name, "bad-change"]);
+    expect(plan.refusal?.message).toContain(`02-api (Change: "${name}")`);
+  }
+  expect(
+    readPlanRepos([inChange("01-api", "fix/a-b_c.2", { repo: "api" })], new Set(["api"])).refusal,
+  ).toBeNull();
+});
+
+test("a Change blocked by one of its own repository's is stacked on it; one blocked across repositories is not", () => {
+  const plan = readPlanRepos(
+    [
+      ticket("01-api", { repo: "api" }),
+      inChange("02-schema", "schema", { repo: "api", blockedBy: "01" }),
+      ticket("03-web", { repo: "web", blockedBy: "01" }),
+      inChange("04-cli", "cli", { repo: "web", blockedBy: "02" }),
+    ],
+    new Set(["api", "web"]),
+  );
+  expect(plan.refusal).toBeNull();
+  expect(plan.waves).toEqual([["api"], ["api--schema", "web"], ["web--cli"]]);
+  expect(plan.repos).toEqual([
+    { path: "api", tickets: ["01-api"] },
+    { path: "api", change: "schema", stacked: "api", tickets: ["02-schema"] },
+    { path: "web", tickets: ["03-web"] },
+    { path: "web", change: "cli", tickets: ["04-cli"] },
+  ]);
+});
+
+test("only this Change's tickets are sliced for a Change run", () => {
+  const tickets = [
+    ticket("01-api", { repo: "api" }),
+    inChange("02-schema", "schema", { repo: "api", blockedBy: "01" }),
+    ticket("03-more", { repo: "api" }),
+  ];
+  expect(Arr.map(orderedTickets(tickets, "api"), (s) => s.file)).toEqual(["01-api", "03-more"]);
+  expect(Arr.map(orderedTickets(tickets, "api", "schema"), (s) => s.file)).toEqual(["02-schema"]);
+});

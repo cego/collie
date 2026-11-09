@@ -270,6 +270,8 @@ export interface Forge {
     readonly branch: string;
     readonly assignee: string;
     readonly existing: string | null;
+    /** The branch a new one targets, where it is not the default branch. */
+    readonly onto?: string | undefined;
   }) => Commands;
   /** How a pipeline or Actions run at `url` went, or null where the forge does not say. */
   readonly runStatus: <R>(
