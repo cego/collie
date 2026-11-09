@@ -874,10 +874,7 @@ scenario(
         yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
         yield* parked({ entry: shipped("plan"), runId: "r-plan", input: GOAL, decision: "next-1" });
         const planner = Option.getOrUndefined(
-          Arr.findFirst(
-            yield* registeredAt(hostOf().env.stateDir),
-            (one) => one.runId === "r-plan",
-          ),
+          Arr.findFirst(yield* registeredAt(dir), (one) => one.runId === "r-plan"),
         )!;
         const route = yield* session(
           Agents.pipe(Effect.flatMap((agents) => agents.askRoute("planner", ["r-impl", "r-plan"]))),
@@ -2664,7 +2661,7 @@ scenario(
           workflow: "implement",
           at: "2026-09-23T10:00:00Z",
           incarnation: { terminalId: "term-impl-live", agentSession: null },
-        }).pipe(Effect.provide(recordsAt(env.stateDir)), Effect.orDie);
+        }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         const target = "branch:main...HEAD";
         yield* parked({
           entry: shipped("review"),
@@ -4433,7 +4430,7 @@ scenario(
           workflow: "plan",
           at: "2026-09-23T10:00:00Z",
           incarnation: { terminalId: `term-${planner}`, agentSession: null },
-        }).pipe(Effect.provide(recordsAt(env.stateDir)), Effect.orDie);
+        }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         yield* approve("r-planned", ["unit"]);
         yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
         const running = yield* Effect.forkChild(
