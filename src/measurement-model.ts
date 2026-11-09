@@ -2,9 +2,10 @@
 // (ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement).
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { Effect, Schema, flow } from "effect";
-import { Judgement } from "./measurement-verdict";
+import { Judgement, type Limits } from "./measurement-verdict";
 
 const Command = Schema.Struct({ executable: Schema.String, argv: Schema.Array(Schema.String) });
 
@@ -25,6 +26,15 @@ export const BenchmarkPlan = Schema.Struct({
       name: Schema.String,
       direction: Schema.Literals(["lower", "higher"]),
       role: Schema.Literals(["primary", "guardrail"]),
+      /** The plan's own, for this metric alone. */
+      threshold: Schema.optionalKey(Schema.Finite),
+      tolerance: Schema.optionalKey(Schema.Finite),
+      /** In the metric's units: a difference this small is neither a gain nor a regression. */
+      absolute: Schema.optionalKey(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
+      /** A deterministic count, such as a correctness check's mismatches: judged by value. */
+      exact: Schema.optionalKey(Schema.Boolean),
+      /** Why its limits are these, written before anything is measured by them. */
+      why: Schema.optionalKey(Schema.String),
     }),
   ),
   warmup: Schema.Int.pipe(
@@ -52,9 +62,25 @@ export const decodeBenchmarkPlan = flow(
   Effect.mapError((cause) => `the plan is not one: ${cause.message}`),
   Effect.flatMap((plan) => {
     const primaries = Arr.filter(plan.metrics, (one) => one.role === "primary").length;
-    return primaries === 1
+    if (primaries !== 1)
+      return Effect.fail(`a plan declares exactly one primary metric, not ${primaries}`);
+    const unjustified = Arr.filter(
+      plan.metrics,
+      (one) =>
+        (one.threshold !== undefined ||
+          one.tolerance !== undefined ||
+          one.absolute !== undefined ||
+          one.exact !== undefined) &&
+        Str.trim(one.why ?? "") === "",
+    );
+    return unjustified.length === 0
       ? Effect.succeed(plan)
-      : Effect.fail(`a plan declares exactly one primary metric, not ${primaries}`);
+      : Effect.fail(
+          `a metric's own limits need their why: ${Arr.join(
+            Arr.map(unjustified, (one) => one.name),
+            ", ",
+          )}`,
+        );
   }),
 );
 
@@ -143,7 +169,7 @@ export type Measurement = typeof MeasurementSchema.Type;
 export const MeasurementJson = Schema.toCodecJson(MeasurementSchema);
 
 /** A Measurement's verdicts, or how it ended without one, as one phrase. */
-export const summaryOf = (measurement: Measurement) => {
+export const summaryOf = (measurement: Pick<Measurement, "result">) => {
   const result = measurement.result;
   switch (result._tag) {
     case "Judged":
@@ -174,3 +200,77 @@ export const MeasureEvent = Schema.Union([
   Schema.TaggedStruct("Said", { text: Schema.String }),
   Schema.TaggedStruct("Result", { measurement: MeasurementJson, ran: Schema.Boolean }),
 ]);
+
+/** A metric's own limits, and the plan's where it declares none. */
+export const limitsOf = (
+  plan: Pick<BenchmarkPlan, "threshold" | "tolerance">,
+  metric: BenchmarkPlan["metrics"][number],
+): Limits => ({
+  threshold: metric.threshold ?? plan.threshold,
+  tolerance: metric.tolerance ?? plan.tolerance,
+  absolute: metric.absolute ?? 0,
+  exact: metric.exact ?? false,
+});
+
+/** Each metric a calibration rules out proof for, and why. */
+export interface Lost {
+  readonly metric: string;
+  readonly why: string;
+}
+
+/**
+ * What a Measurement of the base against itself says of its plan. A harness that ran nothing
+ * to judge, or whose exact count differs on identical trees, is broken; a metric too noisy for
+ * its limits leaves proof unavailable.
+ */
+export type Calibration =
+  | { readonly _tag: "Calibrated" }
+  | { readonly _tag: "HarnessBroken"; readonly why: ReadonlyArray<string> }
+  | { readonly _tag: "ProofUnavailable"; readonly lost: ReadonlyArray<Lost> };
+
+const bounds = (interval: readonly [number, number]) =>
+  `[${Arr.join(
+    Arr.map(interval, (bound) => bound.toFixed(3)),
+    ", ",
+  )}]`;
+
+export const calibrationOf = (measured: Pick<Measurement, "plan" | "result">): Calibration => {
+  const { plan, result } = measured;
+  if (result._tag !== "Judged") return { _tag: "HarnessBroken", why: [summaryOf(measured)] };
+  const broken: Array<string> = [];
+  const noisy: Array<Lost> = [];
+  for (const metric of plan.metrics) {
+    const judged = Option.getOrUndefined(
+      Arr.findFirst(result.verdicts, (one) => one.metric === metric.name),
+    );
+    if (judged === undefined) continue;
+    const limits = limitsOf(plan, metric);
+    if (limits.exact) {
+      if (!judged.held || judged.verdict !== "no-change")
+        broken.push(
+          `exact ${metric.name} is not the same number on every sample of identical trees`,
+        );
+    } else if (metric.role === "primary") {
+      if (judged.verdict === "inconclusive")
+        noisy.push({
+          metric: metric.name,
+          why: `${metric.name} is inconclusive against itself: its 95% interval ${bounds(judged.interval)} is wider than twice its threshold of ${limits.threshold}%`,
+        });
+      else if (judged.verdict !== "no-change")
+        noisy.push({
+          metric: metric.name,
+          why: `${metric.name} differs from itself: its 95% interval ${bounds(judged.interval)} leaves out no change`,
+        });
+    } else if (!judged.held) {
+      const [low, high] = judged.interval;
+      const worse = metric.direction === "lower" ? high - 1 : 1 - low;
+      noisy.push({
+        metric: metric.name,
+        why: `guardrail ${metric.name} is not held against itself: its interval reaches ${(worse * 100).toFixed(1)}% worse, beyond its tolerance of ${limits.tolerance}%${limits.absolute ? ` and its absolute of ${limits.absolute}` : ""}`,
+      });
+    }
+  }
+  if (broken.length > 0) return { _tag: "HarnessBroken", why: broken };
+  if (noisy.length > 0) return { _tag: "ProofUnavailable", lost: noisy };
+  return { _tag: "Calibrated" };
+};

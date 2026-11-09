@@ -485,10 +485,13 @@ A module that has an agent do its work opens a tab and starts one on the harness
 permissions this installation is configured for, with the compaction controls every agent
 Collie starts gets. What it was actually sent and what it wrote are files under the host's state
 directory — `agents/<run>/<operation>.prompt.md` and `.json`, with the repair beside them —
-so a Run that ended `output-unusable` can be read rather than reconstructed. An Output the
+so an Output that could not be used can be read rather than reconstructed. An Output the
 workflow's schema refuses buys exactly one rewrite from that same agent, and a second
-unusable one ends the Run with the reasons named.
-[ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) is why.
+unusable one parks the Run at its Step with the reasons named. Correct the file, or not,
+and `run resume` it: the file is read again, and one still unusable gets one more rewrite.
+[ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) and
+[ADR-draft-a-fixable-failure-parks-its-step](adr/draft-a-fixable-failure-parks-its-step.md)
+are why.
 
 ### Tasks
 
@@ -1824,7 +1827,14 @@ its record keeps as `plan_reason`. A key left out takes its default.
   "commands": [{ "name": "api", "executable": "bun", "argv": ["bench/api.ts"] }],
   "metrics": [
     { "name": "api.p95", "direction": "lower", "role": "primary" },
-    { "name": "api.peak_kb", "direction": "lower", "role": "guardrail" }
+    { "name": "api.peak_kb", "direction": "lower", "role": "guardrail" },
+    {
+      "name": "api.errors",
+      "direction": "lower",
+      "role": "guardrail",
+      "exact": true,
+      "why": "a correctness count: every sample of a tree must agree"
+    }
   ],
   "warmup": 1,
   "samples": 10,
@@ -1853,12 +1863,24 @@ its record keeps as `plan_reason`. A key left out takes its default.
   the host's time to record and start each command included. A command still running at
   the limit is ended then, even while the host is still recording it.
 - **`threshold`** and **`tolerance`**: percents, as in [Outcomes](#outcomes).
+- A metric's own limits, each optional, and with a `why` whenever it declares one (a plan
+  without it is `invalid_input`, naming the metric). They are written before anything is
+  measured by the plan, and a later change is a new plan with its `--reason`:
+  - **`threshold`** or **`tolerance`**: the plan's percent, for this metric alone.
+  - **`absolute`**: a difference in the metric's own units too small to count, for a metric
+    near zero or read in coarse steps. A difference within it is never a `gain` or a
+    `regression`, and a metric whose interval's worse bound is within it is `held`.
+  - **`exact`**: a deterministic count, such as a correctness check's mismatches. It is
+    judged by its value, not by an interval. A tree whose samples of it differ is
+    `inconclusive` and not `held`: the harness is not deterministic.
 
 The host then samples alternately, A B B A …, base first, after the warmup. With each sample
 it keeps the Machine's 1, 5 and 15 minute load and its memory reading. It judges each metric
 by the ratio of the candidate's median to the base's, with a 95% bootstrap interval seeded
 from the Measurement's id: `gain`, `no-change`, `regression` or `inconclusive`. Each metric
-is also `held`, where the interval's worse bound is within `tolerance`.
+is also `held`, where the interval's worse bound is within its `tolerance` or its `absolute`.
+A metric is `inconclusive` where its interval is wider than twice its `threshold`, and,
+where it has an `absolute`, the interval of its difference is wider than twice that too.
 
 **A comparison is measured once.** A request whose base commit, candidate tree (its commit
 and fingerprint, as `collie verify` reads them) and plan match a recorded Measurement of the

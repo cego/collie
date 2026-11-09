@@ -95,6 +95,29 @@ opens that file for appending and `exec`s the host with its pid. The host keeps 
 by copying it to `host.out.1` and emptying it in place, checked each minute and at each
 start, since renaming a file the process still writes to would not move its writes.
 
+### Tracing the host
+
+A host makes no spans unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, since making them was most
+of what an idle host allocated. When it is set, the host sends its spans and logs as OTLP/JSON
+to that base URL, under the service `collie-host`. It sends only spans that took at least
+`COLLIE_TRACE_MIN_MS` (5 ms by default). A busy host makes thousands of sub-millisecond file
+reads a second, and that many spans stalled the exporter within a minute. A span's parent
+always lasts at least as long as the span, so every span sent arrives with its parents. Every `Effect.fn` name becomes a span, for
+example `Board.build`, `Engine.viewOf` and each RPC, so a trace shows where a slow board build
+or a slow answer spends its time, on the live host and without a benchmark.
+[motel](https://github.com/kitlangton/motel) is a local OTLP store that serves this. Run it from
+a clone with `bun install && bun src/motel.ts daemon`, which listens on `127.0.0.1:27686`. Then
+restart the host with the variable set:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:27686 collie host restart
+```
+
+Read the spans with `bun src/motel.ts trace-stats operation count collie-host`, or with
+`search-traces` or the TUI. A host started any other way, such as by a client or by
+`collie upgrade`, starts without the variable and so stops tracing. Spans cost time of their
+own, so compare durations within one trace rather than against an untraced host.
+
 A workflow is a TypeScript module, and the host runs it on Effect's own engine
 ([ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)): a
 `ClusterWorkflowEngine` over a `SingleRunner`, with execution state in `host.db`, a Bun
@@ -922,6 +945,13 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   started core. Its env is the launch env herdr's agents get, with the profile's file-held
   values read in, and `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` blanked, so `collie` in that
   terminal knows itself by `COLLIE_AGENT`, which the host confirms against its Runs.
+  Every `terminal.run` Collie sends, the board's and chat's too, carries the host's own
+  `PATH` under that env: core finds the program on the `PATH` it is handed, and a core that
+  another Machine's SSH dial started has a bare system one, without the harness.
+- **The board and chat** (`keepTerminals` in `src/side-jobs.ts`) are started again on each
+  terminal core says ended or was removed. A round that leaves either unstarted waits before
+  the next — a second, doubling to five minutes — since core says a terminal it could not
+  start was `removed`, and retrying on that is a start a few milliseconds, for good.
 - **Delivery** is `terminal.send`. One that answers `started: false` gets one Enter
   (`terminal.keys`), and the Run's log says so. Core's `blocked` refusal is herdr's
   `agent_blocked`, so the Dispatcher holds the send as it does on herdr.

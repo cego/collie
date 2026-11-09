@@ -81,6 +81,80 @@ test(
 );
 
 test(
+  "a chat core cannot start is tried again after a wait that grows, not on the removal its failure caused",
+  () =>
+    proves(
+      "collie-chat-backoff-",
+      (world) =>
+        Effect.gen(function* () {
+          const core = yield* serveFakeHc(
+            `${world.home}/hc.sock`,
+            yield* Config.String("FAKE_HERDR_LOG"),
+            yield* Effect.scope,
+          );
+          // As on a Machine whose core was started where the harness is not on its PATH.
+          core.startable("claude", false);
+          yield* connect(world.state, {
+            hostEnv: { HC_SOCKET: core.socketPath, HERDR_SOCKET_PATH: `${world.home}/herdr.sock` },
+          });
+          yield* until(
+            () => logged,
+            (calls) => runsOf(calls, "collie-chat").length > 0,
+          );
+          yield* Effect.sleep("3 seconds");
+          // Each failure makes core say a terminal was removed; retried on that, it is
+          // dozens of starts a second, and the host answers nothing else.
+          const failed = runsOf(yield* logged, "collie-chat").length;
+          expect(failed).toBeLessThanOrEqual(3);
+
+          // Once core can start it, the next try starts it, and a started chat is left be.
+          core.startable("claude", true);
+          yield* until(
+            () => logged,
+            (calls) => runsOf(calls, "collie-chat").length > failed,
+          );
+          yield* Effect.sleep("2 seconds");
+          expect(runsOf(yield* logged, "collie-chat")).toHaveLength(failed + 1);
+        }).pipe(Effect.orDie),
+      [],
+    ),
+  120_000,
+);
+
+test(
+  "the board and chat start on a core whose own PATH is bare, on the PATH the host passes them",
+  () =>
+    proves(
+      "collie-bare-core-",
+      (world) =>
+        Effect.gen(function* () {
+          const core = yield* serveFakeHc(
+            `${world.home}/hc.sock`,
+            yield* Config.String("FAKE_HERDR_LOG"),
+            yield* Effect.scope,
+          );
+          // As a core another Machine's SSH dial started, with no login shell's PATH.
+          core.barePath();
+          yield* connect(world.state, {
+            hostEnv: { HC_SOCKET: core.socketPath, HERDR_SOCKET_PATH: `${world.home}/herdr.sock` },
+          });
+          yield* until(
+            () => logged,
+            (calls) =>
+              runsOf(calls, "collie-board").length > 0 && runsOf(calls, "collie-chat").length > 0,
+          );
+          yield* Effect.sleep("2 seconds");
+          // Each was started at its first try: neither was refused and tried again.
+          const calls = yield* logged;
+          expect(runsOf(calls, "collie-board")).toHaveLength(1);
+          expect(runsOf(calls, "collie-chat")).toHaveLength(1);
+        }).pipe(Effect.orDie),
+      [],
+    ),
+  120_000,
+);
+
+test(
   "a whole Run on a Machine set to herdr asks herdr for no board, and no Home is recorded",
   () =>
     proves(

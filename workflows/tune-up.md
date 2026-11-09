@@ -57,11 +57,56 @@ What Discover found:
      command prints as its last stdout line as `<command>.<key>`;
    - the warmup;
    - for a metric this Machine may be too noisy to prove, a low-variance counter of the
-     same work (instructions, allocations, queries, bytes) to judge it by instead.
+     same work (instructions, allocations, queries, bytes) to judge it by instead;
+   - where a metric needs limits of its own, its `threshold` or `tolerance` in percent, an
+     `absolute` slack in its own units for a value near zero or read in coarse steps (10 ms
+     CPU ticks, a lag p99 of a few ms), or `exact` for a deterministic count such as a
+     correctness check's mismatches. Each needs a `why` naming what it rests on: a product
+     target, a resolution, or the noise you saw in your own trial samples. Choose them now:
+     nothing measured later may loosen them;
+   - `samples` per side, where the Run's own are too few for these limits.
+
+Make both trees comparable: each sample starts from the same fixture, warms up the same
+way and leaves nothing behind. A window that measures near-zero work must be long enough
+for the expected value to be many times its resolution. Correctness, such as whether every
+view still matches its fixture, is an `exact` metric, never a timing.
 
 The Run takes {{budget.samples}} samples per side and judges a gain of at least
-{{budget.threshold}}% against a tolerance of {{budget.tolerance}}%. The host then measures
-the base against itself to learn how noisy this Machine is.
+{{budget.threshold}}% against a tolerance of {{budget.tolerance}}%, unless a metric declares
+its own. The host then measures the base against itself to learn how noisy this Machine is.
+
+## repair
+
+Calibration {{repair.measurement}}, the base measured against itself, says: **{{repair.class}}**.
+
+{{repair.why}}
+
+Each metric as the host judged it against itself:
+
+{{noise}}
+
+The plan it measured:
+
+```json
+{{plan}}
+```
+
+This is repair {{repair.n}} of {{repair.of}}. After the last, the Run fails with this class,
+so make this one count.
+
+1. Find the cause in the Measurement's raw samples, under this Run's evidence, before you
+   change anything. Harness broken: a prepare or sample failed or timed out, a metric went
+   unread, or an `exact` count differs on identical trees. Proof unavailable: a metric's
+   noise is wider than its limits.
+2. Repair the harness or the plan, never the product:
+   - a broken harness: fix it in new commits touching only the harness paths, and list
+     every harness commit, old and new;
+   - a noisy metric: more `samples` (the Run takes {{samples}} at least), a longer or
+     steadier window, a counter of the same work, or limits of its own with the `why` they
+     rest on. A limit is a statement of what matters, not of what this calibration happened
+     to show: never widen one only until these intervals fit inside it.
+3. Answer with the whole plan, as Harness writes it, and `reason`: what you changed and why
+   it makes the plan provable. A plan left as it was is not measured again, and ends the Run.
 
 ## cycle
 
