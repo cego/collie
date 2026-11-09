@@ -1,10 +1,12 @@
-//! The spike's read-only board: each Machine `flock` names, its status and its cards.
+//! The spike's board: each Machine `flock` names, its status and its cards; pressing a card goes
+//! to its pane's terminal.
 //! The fold is a narrow copy of `applyItem` in `desktop/src/shared/flock.ts`, enough to
 //! draw; the TypeScript stays its owner.
 
-use collie_desktop_protocol::generated::{FlockItem, LostState, Message, Task};
+use collie_desktop_protocol::generated::{FlockItem, LostState, Message, Task, TerminalPayload};
+use collie_desktop_terminal::view::{Tab, terminal};
 use rune::{Cx, El, col, row, text};
-use rune_kit::{Badge, Card, Kit};
+use rune_kit::{Badge, Button, Card, Kit};
 
 /// A Machine as the board shows it, by herdr profile.
 #[derive(Debug, Clone, PartialEq)]
@@ -40,14 +42,46 @@ impl Shown {
     }
 }
 
-#[derive(Debug, Default)]
+/// Opens a pane's terminal on the core, named for its Machine, as the `opened`th.
+pub type GoTo = Box<dyn Fn(TerminalPayload, String, u64) -> Tab>;
+
+#[derive(Default)]
 pub struct Board {
     pub machines: Vec<Shown>,
     /// Why the board stopped hearing from the core, once it has.
     pub ended: Option<String>,
+    pub terminal: Option<Tab>,
+    /// Counts the terminals opened, so a closed one's late frames are dropped.
+    pub opened: u64,
+    pub go_to: Option<GoTo>,
 }
 
+/// The cols and rows a terminal opens at, until its layout says otherwise.
+const OPEN_AT: (i64, i64) = (100, 30);
+
 impl Board {
+    pub fn go_to_pane(&mut self, installation: String, run: String, machine: String) {
+        let Some(go_to) = &self.go_to else { return };
+        if let Some(open) = self.terminal.take() {
+            open.leave();
+        }
+        let payload = TerminalPayload {
+            installation,
+            run_id: run,
+            agent: None,
+            cols: OPEN_AT.0,
+            rows: OPEN_AT.1,
+        };
+        self.opened += 1;
+        self.terminal = Some(go_to(payload, machine, self.opened));
+    }
+
+    pub fn back(&mut self) {
+        if let Some(open) = self.terminal.take() {
+            open.leave();
+        }
+    }
+
     fn at_profile(&mut self, profile: &str, name: &str) -> &mut Shown {
         let at = match self.machines.iter().position(|m| m.profile == profile) {
             Some(at) => at,
@@ -125,7 +159,7 @@ impl Board {
     }
 }
 
-fn card(k: &Kit, task: &Task) -> El {
+fn card(k: &Kit, shown: &Shown, task: &Task) -> El {
     // Card's own title neither wraps nor truncates, so the name is body text that wraps.
     let name = text(task.name.clone())
         .font(k.ty.body_medium)
@@ -138,14 +172,23 @@ fn card(k: &Kit, task: &Task) -> El {
         .wrap()
         .max_lines(3)
         .w_full();
-    Card::new()
+    let card = Card::new()
         .child(name)
         .child(sentence)
         .build(k)
         .key(format!("card-{}", task.id))
         .role("article")
         .label(task.name.clone())
-        .w(280.0)
+        .w(280.0);
+    match shown.installation.clone() {
+        Some(installation) => {
+            let (run, machine) = (task.run.clone(), shown.name.clone());
+            card.focusable(true).on_press(move |board: &mut Board| {
+                board.go_to_pane(installation.clone(), run.clone(), machine.clone())
+            })
+        }
+        None => card,
+    }
 }
 
 fn machine(k: &Kit, shown: &Shown) -> El {
@@ -170,12 +213,29 @@ fn machine(k: &Kit, shown: &Shown) -> El {
                 .flex_wrap()
                 .items_start()
                 .gap(8.0)
-                .children(shown.cards.iter().map(|task| card(k, task))),
+                .children(shown.cards.iter().map(|task| card(k, shown, task))),
         )
+}
+
+fn tab_of(board: &mut Board) -> Option<&mut Tab> {
+    board.terminal.as_mut()
 }
 
 pub fn view(board: &Board, cx: &mut Cx<Board>) -> El {
     let k = Kit::neutral(cx.system_dark());
+    if let Some(tab) = &board.terminal {
+        let back = Button::new("Back to the board")
+            .on_press(Board::back)
+            .build(&k)
+            .key("back");
+        let body = col()
+            .padding(16.0)
+            .gap(8.0)
+            .fill(k.c.bg_base)
+            .child(back)
+            .child(terminal(tab, tab_of));
+        return rune_kit::root(body, []);
+    }
     let machines = board.machines.iter().map(|shown| machine(&k, shown));
     let ended = board
         .ended

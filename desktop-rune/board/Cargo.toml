@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 collie-desktop-protocol = { path = "../protocol" }
+collie-desktop-terminal = { path = "../terminal" }
 rune.workspace = true
 rune-kit.workspace = true
 serde_json.workspace = true

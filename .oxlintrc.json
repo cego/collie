@@ -6,6 +6,8 @@
     "./node_modules/@effect/tsgo/oxlint-presets/strict.json"
   ],
   "ignorePatterns": [
+    // Third-party sources, pinned as submodules and never edited here.
+    "desktop-rune/vendor/**",
     ".agent/**",
     ".agents/**",
     ".claude/**",
@@ -115,10 +117,11 @@
   },
   "overrides": [
     {
-      // The benchmark's drivers, and the Rune spike's stand-in for electrobun, speak to Chrome,
-      // processes and sockets on their own terms.
+      // The benchmark's drivers, and the Rune spike's stand-in for electrobun and its terminal
+      // recorder, speak to Chrome, processes and sockets on their own terms.
       "files": [
         "desktop-rune/core/electrobun-stdio.ts",
+        "desktop-rune/core/record-terminal.ts",
         "bench/desktop-start/run.ts",
         "bench/desktop-start/start.ts",
         "bench/record-open/cdp.ts",

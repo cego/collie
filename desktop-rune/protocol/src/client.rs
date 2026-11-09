@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, BufRead, Write};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
@@ -158,6 +158,11 @@ impl Client {
         Subscription {
             client: self.clone(),
             id,
+            release: Release {
+                client: self.clone(),
+                id,
+                sent: Arc::new(AtomicBool::new(false)),
+            },
             replies,
             taken: VecDeque::new(),
             ended: false,
@@ -187,6 +192,7 @@ fn ended<E: DeserializeOwned>(exit: Exit) -> Result<Option<Value>, RpcError<E>> 
 pub struct Subscription<A, E> {
     client: Client,
     id: u64,
+    release: Release,
     replies: Receiver<Reply>,
     taken: VecDeque<Value>,
     ended: bool,
@@ -201,6 +207,27 @@ impl<A, E> Subscription<A, E> {
         }
         self.ended = true;
         self.taken.clear();
+        self.release.interrupt();
+    }
+
+    /// Interrupts the stream from elsewhere, such as a view leaving while a thread reads it.
+    pub fn release(&self) -> Release {
+        self.release.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct Release {
+    client: Client,
+    id: u64,
+    sent: Arc<AtomicBool>,
+}
+
+impl Release {
+    pub fn interrupt(&self) {
+        if self.sent.swap(true, Ordering::Relaxed) {
+            return;
+        }
         // A core that is gone has nothing left to interrupt.
         let _ = self.client.send(&ToCore::Interrupt {
             request_id: self.id,

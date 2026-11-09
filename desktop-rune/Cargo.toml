@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["protocol", "board"]
+members = ["protocol", "board", "terminal", "ghostty-sys"]
 
 [workspace.package]
 edition = "2024"

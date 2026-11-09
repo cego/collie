@@ -1,10 +1,12 @@
 //! The spike app: starts Desktop's main process as its core, speaks `DesktopRpcs` to it over
-//! stdio, and draws the board `flock` streams.
+//! stdio, draws the board `flock` streams, and a pressed card's pane on the `terminal` stream.
 
 use collie_desktop_board::{Board, view};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::generated::FlockItem;
-use rune::{App, AppSpec};
+use collie_desktop_terminal::pane::Pane;
+use collie_desktop_terminal::view::Tab;
+use rune::{App, AppHandle, AppSpec};
 use serde_json::Value;
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -21,6 +23,46 @@ fn spike_state() -> PathBuf {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state")
         });
     base.join("collie-desktop-rune-spike")
+}
+
+/// Opens a pressed card's pane: its frames are read off the view's thread into the open Tab,
+/// and a tick sends each size once it has settled.
+fn go_to_panes(handle: &AppHandle<Board>, client: &Client) {
+    let (opener, shows) = (client.clone(), handle.clone());
+    handle.update(move |board, _| {
+        board.go_to = Some(Box::new(move |payload, machine, opened| {
+            let (cols, rows) = (payload.cols as u16, payload.rows as u16);
+            let (pane, frames) = Pane::open(&opener, payload);
+            let shows = shows.clone();
+            std::thread::spawn(move || {
+                for event in frames {
+                    shows.update(move |board, _| {
+                        let Some(tab) = board.terminal.as_mut().filter(|_| board.opened == opened)
+                        else {
+                            return;
+                        };
+                        match event {
+                            Ok(event) => tab.shown(event),
+                            Err(error) => tab.ended = Some(error.to_string()),
+                        }
+                    });
+                }
+            });
+            Tab::new(Some(pane), machine, cols, rows)
+        }));
+    });
+    let ticks = handle.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(40));
+            ticks.update_if(|board, _| {
+                if let Some(tab) = &mut board.terminal {
+                    tab.tick();
+                }
+                false
+            });
+        }
+    });
 }
 
 fn main() {
@@ -52,6 +94,7 @@ fn main() {
         view,
     ));
     let handle = app.handle();
+    go_to_panes(&handle, &client);
     let (live, first_live) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for item in client.stream::<_, FlockItem, Value>("flock", ()) {

@@ -26,6 +26,11 @@ const SPOKEN = [
   ["syncNow", "payload", "SyncNowPayload"],
   ["syncNow", "success", "SyncNowSuccess"],
   ["syncNow", "error", "ActionFailed"],
+  ["terminal", "payload", "TerminalPayload"],
+  ["terminal", "success", "TerminalEvent"],
+  ["terminal", "error", "ActionFailed"],
+  ["terminalSend", "payload", "TerminalSendPayload"],
+  ["terminalSend", "error", "ActionFailed"],
 ] as const;
 
 /** The JSON Schema keywords `Schema.toJsonSchemaDocument` writes for these RPCs. */

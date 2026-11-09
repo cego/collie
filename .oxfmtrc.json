@@ -1,6 +1,8 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "ignorePatterns": [
+    // Third-party sources, pinned as submodules and never edited here.
+    "desktop-rune/vendor/**",
     ".agent/**",
     ".agents/**",
     ".claude/**",

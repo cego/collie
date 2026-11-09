@@ -2,8 +2,11 @@
 //! its accessibility tree, without a window.
 
 use collie_desktop_board::{Board, view};
+use collie_desktop_protocol::generated::TerminalPayload;
+use collie_desktop_terminal::view::Tab;
 use rune::{Env, Runtime};
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
@@ -87,4 +90,65 @@ fn each_machine_says_its_status_and_shows_its_cards_by_name() {
             .collect();
         assert_eq!(shown, cards, "{key}'s cards");
     }
+}
+
+fn tap(runtime: &mut Runtime<Board>, key: &str, at: f64) {
+    let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
+    runtime.pointer_move(x, y);
+    runtime.frame(at);
+    runtime.pointer_down(x, y);
+    runtime.frame(at + 50.0);
+    runtime.pointer_up(x, y);
+    runtime.frame(at + 100.0);
+}
+
+fn keys(runtime: &Runtime<Board>) -> Vec<String> {
+    within(&runtime.accessibility_json())
+        .iter()
+        .filter_map(|node| node["key"].as_str().map(String::from))
+        .collect()
+}
+
+#[test]
+fn pressing_a_card_goes_to_its_runs_pane_and_back_leaves_it_for_the_board() {
+    let asked: Arc<Mutex<Vec<(TerminalPayload, String)>>> = Arc::default();
+    let mut board = board();
+    let said = asked.clone();
+    board.go_to = Some(Box::new(move |payload, machine, _| {
+        said.lock().unwrap().push((payload, machine.clone()));
+        Tab::new(None, machine, 100, 30)
+    }));
+    let mut runtime = Runtime::new(
+        board,
+        view,
+        (1280.0, 900.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    tap(&mut runtime, "card-b2", 100.0);
+    let asked_for = asked.lock().unwrap().clone();
+    assert_eq!(
+        asked_for,
+        [(
+            TerminalPayload {
+                installation: "inst-build".into(),
+                run_id: "r1".into(),
+                agent: None,
+                cols: 100,
+                rows: 30,
+            },
+            "Build box".to_string()
+        )]
+    );
+    let shown = keys(&runtime);
+    assert!(shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
+    assert!(!shown.iter().any(|k| k.starts_with("card-")), "{shown:?}");
+
+    tap(&mut runtime, "back", 1000.0);
+    let shown = keys(&runtime);
+    assert!(!shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
+    assert!(shown.iter().any(|k| k == "card-b2"), "{shown:?}");
 }
