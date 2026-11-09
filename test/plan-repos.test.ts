@@ -537,6 +537,19 @@ test("two Changes of one repository that block each other are refused, naming bo
   expect(plan.waves).toEqual([]);
 });
 
+test("a repository's Change named as another repository is refused, naming both, rather than run together", () => {
+  const plan = readPlanRepos(
+    [
+      inChange("01-api", "schema", { repo: "api" }),
+      ticket("02-api-schema", { repo: "api--schema" }),
+    ],
+    new Set(["api", "api--schema"]),
+  );
+  expect(plan.refusal?.kind).toBe("bad-change");
+  expect(plan.refusal?.message).toContain("01-api (api, Change: schema)");
+  expect(plan.refusal?.message).toContain("02-api-schema (api--schema)");
+});
+
 test("a Change name git will not take in a branch name is refused, quoting the ticket", () => {
   for (const name of ["two words", "a..b", "x~1", "trail.lock", "", "-ok/../no"]) {
     const plan = readPlanRepos(

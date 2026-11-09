@@ -421,6 +421,22 @@ export function readPlanRepos(
   // In the order the Changes first appear, which a Map keeps.
   const keyOf = (ticket: Placed) =>
     changeKey({ path: ticket.repo, change: ticket.change ?? undefined });
+  const named = (ticket: Placed) =>
+    `${ticket.file} (${ticket.change === null ? ticket.repo : `${ticket.repo}, Change: ${ticket.change}`})`;
+  const firstOf = new Map<string, Placed>();
+  const clashing: string[] = [];
+  for (const ticket of placed) {
+    const first = firstOf.get(keyOf(ticket));
+    if (first === undefined) firstOf.set(keyOf(ticket), ticket);
+    else if (first.repo !== ticket.repo || first.change !== ticket.change)
+      clashing.push(`${named(first)} and ${named(ticket)}`);
+  }
+  if (clashing.length > 0)
+    return refuse(
+      "bad-change",
+      `These tickets' Changes would share one name, and so one run and one branch: ${Arr.join(clashing, ", ")}. ` +
+        `Name the Change so that it is not "<repository>--<name>" of another repository.`,
+    );
   const ticketsOf = new Map<string, string[]>();
   const changeOf = new Map<string, { path: string; change?: string }>();
   const keyOfId = new Map<string, string>();

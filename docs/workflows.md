@@ -304,8 +304,10 @@ A ticket may also carry a `**Change:** <name>` line beside its `Repo:` line, to 
 merge request of its own: one a reviewer should read apart from the rest of its repository's
 work. Every ticket of one repository and one Change is built on one branch and lands in one
 merge request. A ticket without the line is in its repository's default Change. A Change is
-its repository and its name, so `schema` in `api` and `schema` in `web` are two Changes, and a
-name git would refuse in a branch name stops the hand-off, quoting the ticket.
+its repository and its name, so `schema` in `api` and `schema` in `web` are two Changes. A
+name git would refuse in a branch name stops the hand-off, quoting the ticket, and so does
+`schema` in `api` beside a repository called `api--schema`, since both would be run as
+`api--schema`.
 
 A plan is single-repository only when its tickets all say `.`, or carry no line at all, and
 are all in one Change. A plan whose tickets all name one repository _by path_ is not one of
@@ -346,7 +348,7 @@ its result names what each repository ended as.
   refused with it before any Run is admitted. The same reading checks
   the tickets when the planner writes them, and a plan it refuses goes back to the planner
   once, so most of these never reach the menu. The reasons are a cycle between Changes, a
-  `Change:` name git would refuse in a branch name, a
+  `Change:` name git would refuse in a branch name or that names another repository, a
   ticket with no `Repo:` line where its siblings have one, a repository with no checkout
   under the root — Collie does not clone — a `Repo:` that is not a path under the root, two
   tickets wearing one number, or a "Blocked by" line naming something that is not a ticket
