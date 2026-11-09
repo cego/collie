@@ -187,7 +187,6 @@ function withoutSearches(got: Collected, name: string): Collected {
 const onlySearched = (what: string) =>
   `${what}, whose only pass on this tree is a text search, which proves nothing`;
 
-/** A name's last pass, where it was on an earlier tree and nothing has run on this one. */
 function passedOnlyBefore(got: Collected, name: string): Verification | undefined {
   const proof = checkProof(withoutSearches(got, name), name);
   return proof.state === "earlier" ? proof.runs.at(-1) : undefined;

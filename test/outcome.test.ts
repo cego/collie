@@ -362,7 +362,6 @@ test("a regression that passed only before the tree moved says it has not run he
   expect(gaps([])).toEqual([
     'regression passed on abc055000000 but has not run on the current tree, so the fix is not proven: run "/usr/bin/true test a.test.ts" in /repo again here',
   ]);
-  // Failing here is a real failure, whatever passed before.
   expect(
     gaps([record({ name: "regression", argv: ["test", "a.test.ts"], exit: 1, result: "fail" })]),
   ).toEqual(["regression does not pass on the current tree, so the fix is not proven"]);
