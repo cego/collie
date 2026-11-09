@@ -111,6 +111,7 @@ here are in [`src/README.md`](src/README.md).
 - **Naming, host tests** → [ADR-0028](docs/adr/0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md),
   `test/support/host.ts`.
 - **Slow tests, front-door imports** → [`docs/internals.md`](docs/internals.md#keeping-the-suite-and-a-start-fast).
+- **Slow host, where its time goes** → [`docs/internals.md`](docs/internals.md#tracing-the-host): `OTEL_EXPORTER_OTLP_ENDPOINT` sends the live host's spans to motel.
 - **Module discovery** → [ADR-0016](docs/adr/0016-a-workflow-module-is-found-where-it-was-saved.md),
   [`docs/sdk.md`](docs/sdk.md#where-a-module-lives), `src/discovery.ts`, `test/discovery.test.ts`, `test/autoload.test.ts`;
   the user's directory: [ADR-draft-an-installation-is-the-release-its-runner-carries](docs/adr/draft-an-installation-is-the-release-its-runner-carries.md).

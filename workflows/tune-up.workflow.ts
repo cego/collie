@@ -21,10 +21,12 @@ import {
   WorkflowError,
   agentWork,
   ask,
+  calibrationOf,
   contentOf,
   defineWorkflow,
   endsWithoutPatchOf,
   evidenceGapsOf,
+  limitsOf,
   owedLocally,
   redact,
   renderApproved,
@@ -42,6 +44,7 @@ import {
   FileSystem,
   Hash,
   Option,
+  Path,
   Schema,
   flow,
   Result,
@@ -89,6 +92,13 @@ const prompts = {
     ...Told,
     discovered: text,
     budget: Schema.Struct({ samples: text, threshold: text, tolerance: text }),
+  }),
+  repair: content.template("repair", {
+    ...Told,
+    repair: Schema.Struct({ n: text, of: text, class: text, why: text, measurement: text }),
+    noise: text,
+    plan: text,
+    samples: text,
   }),
   cycle: content.template("cycle", {
     ...Told,
@@ -263,6 +273,25 @@ const Harnessed = Schema.Struct({
   metrics: Schema.NonEmptyArray(
     Schema.Struct({
       ...Metric.fields,
+      threshold: Schema.optionalKey(
+        Schema.Finite.annotate({ description: "the primary's own threshold, in percent" }),
+      ),
+      tolerance: Schema.optionalKey(
+        Schema.Finite.annotate({ description: "this guardrail's own tolerance, in percent" }),
+      ),
+      absolute: Schema.optionalKey(
+        Schema.Finite.annotate({
+          description: "a difference in the metric's own units too small to count",
+        }),
+      ),
+      exact: Schema.optionalKey(
+        Schema.Boolean.annotate({
+          description: "a deterministic count, such as mismatches, judged by its value",
+        }),
+      ),
+      why: Schema.optionalKey(
+        text.annotate({ description: "why its own limits are these; needed with any of them" }),
+      ),
       counter: Schema.optionalKey(
         Schema.Struct({ name: text, direction: Direction }).annotate({
           description: "a low-variance count of the same work, to judge this metric by instead",
@@ -271,7 +300,20 @@ const Harnessed = Schema.Struct({
     }),
   ),
   warmup: Schema.Int,
+  samples: Schema.optionalKey(
+    Schema.Int.annotate({
+      description: "samples per side, where the Run's own are too few to prove this plan",
+    }),
+  ),
   harness: Harness,
+});
+type Harnessed = typeof Harnessed.Type;
+
+const Repaired = Schema.Struct({
+  ...Harnessed.fields,
+  reason: text.annotate({
+    description: "what you changed, and why it makes the plan provable on this Machine",
+  }),
 });
 
 /** A benchmark plan as the host measures by it, and why it is the plan now. */
@@ -374,6 +416,7 @@ const readAnswer = (said: string) => {
   return { yes: Str.toLowerCase(read[1] ?? "") === "yes", words: words === "" ? null : words };
 };
 const MERGE_TRIES = 2;
+const REPAIRS = 2;
 const IGNORE = "Ignore";
 const POST = "Post";
 
@@ -399,6 +442,14 @@ const calibrate = step({
   description: "The host measures the base against itself, to learn this Machine's noise floor.",
   kind: "check",
   produces: "evidence",
+});
+const repair = step({
+  id: "repair",
+  title: "Repair",
+  description:
+    "Where calibration finds the harness broken or proof unavailable, the tuner repairs the harness or plan, a bounded number of times.",
+  kind: "agent",
+  role: "tuner",
 });
 const cycles = step({
   id: "cycles",
@@ -437,20 +488,6 @@ const externalReport = step({
 
 type Judged = Extract<Measurement["result"], { readonly _tag: "Judged" }>;
 type Unjudged = Exclude<Measurement["result"], Judged>;
-
-/** Why calibration rules out proof for each metric it does. */
-const unprovable = (plan: Plan, verdicts: Judged["verdicts"]) =>
-  Arr.flatMap(plan.metrics, (metric) => {
-    const judged = Option.getOrUndefined(
-      Arr.findFirst(verdicts, (one) => one.metric === metric.name),
-    );
-    if (judged === undefined) return [];
-    if (metric.role === "primary" && judged.verdict === "inconclusive")
-      return [{ metric: metric.name, why: `${metric.name} is inconclusive against itself` }];
-    if (metric.role === "guardrail" && !judged.held)
-      return [{ metric: metric.name, why: `guardrail ${metric.name} is not held against itself` }];
-    return [];
-  });
 
 /** How a Measurement ended without a verdict, naming the tree it ended on. */
 const unjudged = (measured: Measurement, result: Unjudged) => {
@@ -704,7 +741,7 @@ const bodyOf = (got: {
   readonly finals: ReadonlyArray<Measurement>;
   readonly plans: ReadonlyArray<string>;
   readonly planFile: string;
-  readonly written: typeof Harnessed.Type;
+  readonly written: Harnessed;
   readonly found: Discovered;
   readonly cycles: ReadonlyArray<Cycled>;
   readonly evidence: string;
@@ -863,6 +900,51 @@ const bodyOf = (got: {
     ),
   );
 };
+
+/** Each of `commits` cherry-picked onto `cwd`, but one whose files it already holds as that commit left them. */
+const carryHarness = ({
+  cwd,
+  from,
+  commits,
+}: {
+  readonly cwd: string;
+  readonly from: string;
+  readonly commits: ReadonlyArray<string>;
+}) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const git = (args: ReadonlyArray<string>) => ChildProcess.make("git", [...args], { cwd });
+    const touched = (commit: string) =>
+      Effect.map(
+        spawner.string(git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", commit])),
+        (out) => Arr.filter(Str.split(out, "\n"), Str.isNonEmpty),
+      );
+    const holds = (commit: string, files: ReadonlyArray<string>) =>
+      files.length === 0
+        ? Effect.succeed(true)
+        : Effect.map(
+            spawner.exitCode(git(["diff", "--quiet", commit, "HEAD", "--", ...files])),
+            (exit) => exit === 0,
+          );
+    const last = commits.at(-1);
+    if (last === undefined) return;
+    const all = Arr.flatten(yield* Effect.forEach(commits, touched));
+    if (yield* holds(last, all)) return;
+    for (const commit of commits) {
+      if (yield* holds(commit, yield* touched(commit))) continue;
+      if ((yield* spawner.exitCode(git(["cherry-pick", commit]))) === 0) continue;
+      yield* spawner.exitCode(git(["cherry-pick", "--abort"]));
+      return yield* new WorkflowError({
+        reason: `harness commit ${commit} of ${from} does not apply to ${cwd}`,
+      });
+    }
+  }).pipe(
+    Effect.catchTag("PlatformError", (cause) =>
+      Effect.fail(
+        new WorkflowError({ reason: `the harness could not be carried: ${cause.message}` }),
+      ),
+    ),
+  );
 
 interface Archived {
   readonly runId: string;
@@ -1028,6 +1110,13 @@ export default defineWorkflow({
         default: DEFAULTS.external,
       }),
     ),
+    from: Schema.optionalKey(
+      text.annotate({
+        description:
+          "An earlier tune-up Run whose findings and benchmark plan this one carries instead of discovering again; empty is none",
+        default: "",
+      }),
+    ),
   }),
   output: Schema.String,
   agents: { roles: { tuner: IMPLEMENTER, reviewer: REVIEWER } },
@@ -1036,6 +1125,7 @@ export default defineWorkflow({
     discover,
     harness,
     calibrate,
+    repair,
     cycles,
     progress,
     cleanup,
@@ -1072,46 +1162,113 @@ export default defineWorkflow({
       );
       const told = { inputs: { focus: input.focus ?? "" }, run: { dir: place.dir, id: runId } };
 
-      const found = yield* discover(
-        agentWork({
-          operation: "discover",
-          agent: TUNER,
-          role: "tuner",
-          instructions: prompts.discover,
-          input: told,
-          output: Discovered,
-        }),
-      );
+      const from = input.from ?? "";
+      const agents = yield* Agents;
+      /** The earlier Run's Output of the first of `operations` it has, decoded as `schema`. */
+      const carried = <S extends Schema.Codec<unknown, unknown>>(
+        name: string,
+        operations: ReadonlyArray<string>,
+        schema: S,
+      ) =>
+        Activity.make({
+          name: `${name}.carried`,
+          success: schema,
+          error: WorkflowError,
+          execute: Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const files = Arr.map(operations, (one) => agents.outputFor(from, one));
+            const file = Option.getOrUndefined(
+              yield* Effect.findFirst(files, (one) =>
+                fs.exists(one).pipe(Effect.orElseSucceed(() => false)),
+              ),
+            );
+            if (file === undefined)
+              return yield* new WorkflowError({
+                reason: `${from} has no ${name} Output to carry: none of ${Arr.join(files, ", ")}`,
+              });
+            const unreadable = (cause: { readonly message: string }) =>
+              new WorkflowError({ reason: `${file} cannot be carried: ${cause.message}` });
+            const raw = yield* fs.readFileString(file).pipe(Effect.mapError(unreadable));
+            const read = yield* Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
+              Effect.mapError(unreadable),
+            );
+            // Kept as this Run's own, so a later `from` naming this Run finds it.
+            const own = agents.outputFor(runId, name);
+            yield* fs
+              .makeDirectory((yield* Path.Path).dirname(own), { recursive: true })
+              .pipe(Effect.andThen(fs.writeFileString(own, raw)), Effect.mapError(unreadable));
+            yield* host.record(runId, `${name} carried from ${from}: ${file}`);
+            return read;
+          }),
+        });
+
+      const found =
+        from === ""
+          ? yield* discover(
+              agentWork({
+                operation: "discover",
+                agent: TUNER,
+                role: "tuner",
+                instructions: prompts.discover,
+                input: told,
+                output: Discovered,
+              }),
+            )
+          : yield* discover(carried("discover", ["discover"], Discovered));
       for (const one of found.telemetry) yield* host.record(runId, telemetryLine(one));
       for (const one of found.research) yield* host.record(runId, researchLine(one));
 
-      const written = yield* harness(
-        agentWork({
-          operation: "harness",
-          agent: TUNER,
-          role: "tuner",
-          instructions: prompts.harness,
-          input: {
-            ...told,
-            discovered: Arr.join(
-              [
-                ...Arr.map(found.journeys, (one) => `- journey: ${one.name}`),
-                ...Arr.map(
-                  found.opportunities,
-                  (one, at) => `${at + 1}. ${one.title} (${one.evidence})`,
-                ),
-              ],
-              "\n",
+      const written =
+        from === ""
+          ? yield* harness(
+              agentWork({
+                operation: "harness",
+                agent: TUNER,
+                role: "tuner",
+                instructions: prompts.harness,
+                input: {
+                  ...told,
+                  discovered: Arr.join(
+                    [
+                      ...Arr.map(found.journeys, (one) => `- journey: ${one.name}`),
+                      ...Arr.map(
+                        found.opportunities,
+                        (one, at) => `${at + 1}. ${one.title} (${one.evidence})`,
+                      ),
+                    ],
+                    "\n",
+                  ),
+                  budget: {
+                    samples: String(budget.samples),
+                    threshold: String(budget.threshold),
+                    tolerance: String(budget.tolerance),
+                  },
+                },
+                output: Harnessed,
+              }),
+            )
+          : yield* harness(
+              carried(
+                "harness",
+                [...Arr.reverse(Arr.map(Arr.range(1, REPAIRS), (n) => `repair-${n}`)), "harness"],
+                Harnessed,
+              ),
+            );
+
+      if (from !== "")
+        yield* Activity.make({
+          name: "harness.carried.onto",
+          success: Schema.Void,
+          error: WorkflowError,
+          execute: carryHarness({ cwd, from, commits: written.harness.commits }).pipe(
+            Effect.andThen(
+              host.record(
+                runId,
+                `harness commits ${Arr.join(written.harness.commits, ", ")} carried onto ${cwd}`,
+              ),
             ),
-            budget: {
-              samples: String(budget.samples),
-              threshold: String(budget.threshold),
-              tolerance: String(budget.tolerance),
-            },
-          },
-          output: Harnessed,
-        }),
-      );
+          ),
+        });
 
       let plans = 0;
       const reasons: string[] = [];
@@ -1127,22 +1284,29 @@ export default defineWorkflow({
           yield* host.record(runId, `benchmark plan ${plans}: ${reason}`);
           return planned.plan;
         });
-      let plan = yield* recordPlan(
-        {
-          harness: written.harness,
-          prepare: written.prepare,
-          commands: written.commands,
-          metrics: Arr.map(written.metrics, ({ name, direction, role }) => ({
-            name,
-            direction,
-            role,
+      const planOf = (harnessed: Harnessed): Plan => ({
+        harness: harnessed.harness,
+        prepare: harnessed.prepare,
+        commands: harnessed.commands,
+        metrics: Arr.map(harnessed.metrics, Struct.omit(["counter"])),
+        warmup: harnessed.warmup,
+        samples: Math.max(budget.samples, harnessed.samples ?? 0),
+        threshold: budget.threshold,
+        tolerance: budget.tolerance,
+      });
+      const encodePlan = (one: Plan) =>
+        Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(one).pipe(Effect.orDie);
+      const experimentOf = (one: Plan) =>
+        encodePlan({
+          ...one,
+          metrics: Arr.map(one.metrics, (metric) => ({
+            ...pipe(metric, Struct.omit(["why"])),
+            ...limitsOf(one, metric),
           })),
-          warmup: written.warmup,
-          samples: budget.samples,
-          threshold: budget.threshold,
-          tolerance: budget.tolerance,
-        },
-        "written by Harness",
+        });
+      let plan = yield* recordPlan(
+        planOf(written),
+        from === "" ? "written by Harness" : `carried from ${from}`,
       );
 
       const base = yield* Activity.make({
@@ -1156,9 +1320,11 @@ export default defineWorkflow({
         });
 
       const calibrations: Measurement[] = [];
+      const tried = new Set<string>([yield* experimentOf(plan)]);
+      let counted = written;
       let ending: string | null = null;
       let calibrated = false;
-      for (;;) {
+      for (let repairs = 0; ;) {
         const measured = yield* calibrate(
           Activity.make({
             name: `calibration.${calibrations.length + 1}`,
@@ -1171,16 +1337,16 @@ export default defineWorkflow({
           }),
         );
         calibrations.push(measured);
-        if (measured.result._tag !== "Judged")
-          return yield* new WorkflowError({
-            reason: `calibration ${measured.id} ended without a verdict: ${unjudged(measured, measured.result)}`,
-          });
-        if (measured.base.content !== measured.candidate.content)
+        const itself =
+          measured.candidate.harness_applied === undefined
+            ? measured.base.content === measured.candidate.content
+            : measured.candidate.head_sha === measured.base.commit;
+        if (measured.result._tag === "Judged" && !itself)
           return yield* new WorkflowError({
             reason: `calibration ${measured.id} did not measure the base against itself: ${cwd} at ${measured.candidate.head_sha} holds more than the harness commits ${Arr.join(plan.harness.commits, ", ")}`,
           });
-        const lost = unprovable(plan, measured.result.verdicts);
-        if (lost.length === 0) {
+        const read = calibrationOf(measured);
+        if (read._tag === "Calibrated") {
           const primary =
             Option.getOrUndefined(Arr.findFirst(plan.metrics, (one) => one.role === "primary"))
               ?.name ?? "";
@@ -1188,35 +1354,91 @@ export default defineWorkflow({
           calibrated = true;
           break;
         }
-        const counters = Arr.map(lost, (one) => ({
-          ...one,
-          counter: Option.getOrUndefined(
-            Arr.findFirst(written.metrics, (metric) => metric.name === one.metric),
-          )?.counter,
-        }));
-        if (Arr.some(counters, (one) => one.counter === undefined)) {
-          ending = `proof unavailable: ${Arr.join(
-            Arr.map(lost, (one) => one.why),
-            "; ",
-          )} (calibration ${measured.id})`;
+        const kind = read._tag === "HarnessBroken" ? "harness broken" : "proof unavailable";
+        const why =
+          read._tag === "ProofUnavailable"
+            ? Arr.join(
+                Arr.map(read.lost, (one) => one.why),
+                "; ",
+              )
+            : measured.result._tag === "Judged"
+              ? Arr.join(read.why, "; ")
+              : unjudged(measured, measured.result);
+        const counters =
+          read._tag === "ProofUnavailable"
+            ? Arr.map(read.lost, (one) => ({
+                ...one,
+                counter: Option.getOrUndefined(
+                  Arr.findFirst(counted.metrics, (metric) => metric.name === one.metric),
+                )?.counter,
+              }))
+            : [];
+        const switched: Plan = {
+          ...plan,
+          metrics: Arr.map(plan.metrics, (metric) => {
+            const counter = Option.getOrUndefined(
+              Arr.findFirst(counters, (one) => one.metric === metric.name),
+            )?.counter;
+            return counter === undefined ? metric : { ...counter, role: metric.role };
+          }),
+        };
+        const switchedKey = yield* experimentOf(switched);
+        if (
+          counters.length > 0 &&
+          Arr.every(counters, (one) => one.counter !== undefined) &&
+          !tried.has(switchedKey)
+        ) {
+          tried.add(switchedKey);
+          plan = yield* recordPlan(
+            switched,
+            Arr.join(
+              Arr.map(
+                counters,
+                (one) => `switched ${one.metric} to its counter ${one.counter?.name}: ${one.why}`,
+              ),
+              "; ",
+            ),
+          );
+          continue;
+        }
+        const failed = `${kind}: ${why} (calibration ${measured.id})`;
+        if (repairs >= REPAIRS) {
+          ending = `${failed}; ${REPAIRS} repairs spent`;
           break;
         }
-        const switched = Arr.map(
-          counters,
-          (one) => `switched ${one.metric} to its counter ${one.counter?.name}: ${one.why}`,
+        repairs += 1;
+        yield* host.record(runId, `${failed}; repair ${repairs} of ${REPAIRS}`);
+        const repaired = yield* repair(
+          agentWork({
+            operation: `repair-${repairs}`,
+            agent: TUNER,
+            role: "tuner",
+            instructions: prompts.repair,
+            input: {
+              ...told,
+              repair: {
+                n: String(repairs),
+                of: String(REPAIRS),
+                class: kind,
+                why,
+                measurement: measured.id,
+              },
+              noise: intervalsLine(measured),
+              plan: yield* encodePlan(plan),
+              samples: String(budget.samples),
+            },
+            output: Repaired,
+          }),
         );
-        plan = yield* recordPlan(
-          {
-            ...plan,
-            metrics: Arr.map(plan.metrics, (metric) => {
-              const counter = Option.getOrUndefined(
-                Arr.findFirst(counters, (one) => one.metric === metric.name),
-              )?.counter;
-              return counter === undefined ? metric : { ...counter, role: metric.role };
-            }),
-          },
-          Arr.join(switched, "; "),
-        );
+        const next = planOf(repaired);
+        const encoded = yield* experimentOf(next);
+        if (tried.has(encoded)) {
+          ending = `${failed}; repair ${repairs} left the plan as it was, and a plan is never calibrated twice`;
+          break;
+        }
+        tried.add(encoded);
+        counted = repaired;
+        plan = yield* recordPlan(next, `repair ${repairs}: ${repaired.reason}`);
       }
       yield* host.record(runId, ending);
 
@@ -1386,7 +1608,7 @@ export default defineWorkflow({
         });
       if (!calibrated) {
         const report = yield* findings("findings", ending);
-        return yield* handOn(`${report}: ${ending}`);
+        return yield* new WorkflowError({ reason: yield* handOn(`${report}: ${ending}`) });
       }
 
       const wall =
@@ -1646,7 +1868,7 @@ export default defineWorkflow({
         (one) => `Cycle ${one.n}`,
       );
       if (kept.length === 0) {
-        const done = `${stop}; no Cycle was kept, so the Run is back on its base tree`;
+        const done = `no gain: ${stop}; no Cycle was kept, so the Run is back on its base tree`;
         const report = yield* findings("findings", done);
         return yield* handOn(`${report}: ${done}`);
       }
@@ -1700,7 +1922,6 @@ export default defineWorkflow({
       const findingsOf = (name: string, ending: string) =>
         Effect.map(findings(name, ending), (report) => `${report}: ${ending}`);
 
-      const agents = yield* Agents;
       const checksNow = Effect.map(host.approved(runId), renderApproved);
       const report = `${place.dir}/handoffs/tune-up-findings.md`;
       const delivering = {
@@ -1864,7 +2085,7 @@ export default defineWorkflow({
           });
           return yield* findingsOf(
             "findings",
-            `the final Measurement ${measured.id} against ${measured.base.commit}: ${why}; the change was dropped back to the base tree, so no merge request is opened`,
+            `no gain: the final Measurement ${measured.id} against ${measured.base.commit}: ${why}; the change was dropped back to the base tree, so no merge request is opened`,
           );
         });
 
