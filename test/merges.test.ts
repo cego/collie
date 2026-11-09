@@ -1489,6 +1489,118 @@ test("a fan-out's Repo run's merge request is watched: its facts recorded, its m
     }),
   ));
 
+const API3 = "https://gitlab.cego.dk/cego/api/-/merge_requests/3";
+const WEB8 = "https://gitlab.cego.dk/cego/web/-/merge_requests/8";
+const given = (target: string) => ({
+  settled: { inputs: { target }, strategies: { target: "diff-target" as const } },
+});
+
+/**
+ * A running fan-out whose Repo runs share the plan branch: `api` opened api!3, which has
+ * merged, and `web` opened web!8, still open. One round of the watch, and what it stopped.
+ */
+const apiMerged = Effect.fn("merges.apiMerged")(function* (
+  others: ReadonlyArray<Partial<RunFacts>>,
+  /** The Run whose landing of api!3 is landed. */
+  lander?: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-own-work-" });
+  const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+  const of = (over: Partial<RunFacts>) =>
+    madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
+  const child = (repo: string, mr: string) =>
+    of({
+      id: `r-fan.${repo}`,
+      parent: "r-fan",
+      repo,
+      project: `/root/${repo}`,
+      state: "running",
+      branch: "mk/plan",
+      mr,
+    });
+  const runs = [
+    yield* of({ id: "r-fan", state: "running" }),
+    yield* child("api", API3),
+    yield* child("web", WEB8),
+  ];
+  for (const over of others) runs.push(yield* of(over));
+  if (lander !== undefined)
+    yield* writeLanding(
+      runDir(stateDir, lander),
+      attempt({ state: "landed", sha: "m1", mr: API3 }),
+    );
+  const mr = (project: string, iid: string, state: FakeMr["state"]): FakeMr => ({
+    project: `gitlab.cego.dk/cego/${project}`,
+    iid,
+    title: project,
+    state,
+    sourceBranch: "mk/plan",
+    targetBranch: "master",
+  });
+  const stops: Array<string> = [];
+  yield* settleMerges({
+    stateDir,
+    cwd: "/project",
+    run: forge("gitlab", {
+      mrs: [{ ...mr("api", "3", "merged"), mergedAt: MERGED_AT }, mr("web", "8", "open")],
+    }),
+    views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
+    runs,
+    record: () => Effect.void,
+    stop: (run) => Effect.sync(() => void stops.push(run)),
+    now: TEN,
+    checked: new Map(),
+    states: new Map(),
+    panels: new Map(),
+    making: new Set(),
+  });
+  return Arr.sort(stops, Order.String);
+});
+
+test("a merge stops the Follow-up Run on its branch, and not the Repo run working on another merge request", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const stops = yield* apiMerged([
+        {
+          id: "r-fan.api.follow-up",
+          parent: "r-fan.api",
+          project: "/root/api",
+          branch: "mk/plan",
+          state: "running",
+          created: "2026-10-15T08:30:00Z",
+        },
+      ]);
+      expect(stops).toEqual(["r-fan.api", "r-fan.api.follow-up"]);
+    }),
+  ));
+
+test("a merge stops a Run given it as its target, and not one given another merge request", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const stops = yield* apiMerged([
+        { id: "r-review-api", state: "running", ...given("mr:gitlab.cego.dk/cego/api!3") },
+        { id: "r-review-web", state: "running", ...given("mr:gitlab.cego.dk/cego/web!8") },
+      ]);
+      expect(stops).toEqual(["r-fan.api", "r-review-api"]);
+    }),
+  ));
+
+test("a Release Run landing a merge request of several is spared by its merge, with its parent", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const target = given("mr:gitlab.cego.dk/cego/api!3");
+      const stops = yield* apiMerged(
+        [
+          { id: "r-fan.api.release", parent: "r-fan.api", state: "running", ...target },
+          { id: "r-review-api", state: "running", ...target },
+        ],
+        "r-fan.api.release",
+      );
+      expect(stops).toEqual(["r-review-api"]);
+    }),
+  ));
+
 /** A finished fan-out whose plan has one repository, api, whose Repo run opened 65. */
 const singleRepo = Effect.fn("merges.singleRepo")(function* () {
   const fs = yield* FileSystem.FileSystem;

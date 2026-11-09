@@ -9,7 +9,7 @@ import * as Struct from "effect/Struct";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
-import { type ForgeFacts } from "./board";
+import { type ForgeFacts, mrOf } from "./board";
 import {
   ForgeChecks,
   Mergeability,
@@ -202,20 +202,46 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         ? epochMs(read.mergedAt)
         : yield* firstMerged(dirs, id);
     if (merged === null) continue;
+    const working = Arr.union(runs, yield* workingOn(id, owner, forge.get(id)?.source, opts));
     const going = Arr.filter(
       opts.runs,
       (run) =>
-        runs.includes(run.id) &&
+        working.includes(run.id) &&
         (run.state === "running" || run.state === "waiting") &&
         epochMs(run.created) < merged,
     );
     if (going.length === 0) continue;
-    const spared = yield* sparedBy(mr, id, runs, opts);
+    const spared = yield* sparedBy(mr, id, working, opts);
     // An attempt the forge cannot settle yet spares nothing and stops nothing.
     if (spared === null) continue;
     for (const run of going) if (!spared.has(run.id)) yield* opts.stop(run.id, `${label} merged`);
   }
   if (learned) yield* writeMrStates(opts.stateDir, opts.states, forge);
+});
+
+/**
+ * The ids of the Runs whose work is the merge request `id`, whichever Task they are in: its
+ * owner, each given it, and each on its source branch in its owner's checkout.
+ */
+const workingOn = Effect.fn("Merges.workingOn")(function* <R>(
+  id: string,
+  owner: string,
+  source: string | undefined,
+  opts: { readonly runs: ReadonlyArray<RunFacts>; readonly run: Runner<R> },
+) {
+  const owning = Option.getOrUndefined(Arr.findFirst(opts.runs, (run) => run.id === owner));
+  const branch = source ?? owning?.branch ?? null;
+  const ids: Array<string> = [];
+  for (const run of opts.runs) {
+    const mr = mrOf(run);
+    if (
+      run.id === owner ||
+      (branch !== null && run.branch === branch && run.project === owning?.project) ||
+      (mr !== null && (yield* mrIdIn(mr, run.cwd, opts.run)) === id)
+    )
+      ids.push(run.id);
+  }
+  return ids;
 });
 
 /**

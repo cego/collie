@@ -1166,8 +1166,11 @@ this call merged it, and withdrawn on a refusal, a moved head, or a merge someon
 first.
 
 **The merge watch** (`settleMerges` in `src/merges.ts`) stops every running or waiting Run
-of a Task that began before its merge request merged: the work landed, so what is still
-building it is done. It leaves running the Run that landed it, and every Run up that Run's
+whose work is a merge request, and that began before it merged: the work landed, so what is
+still building it is done. A Run's work is that merge request, by MR id and whatever Task it
+is in, when it opened it, was given it as its target, or is on its source branch in the
+owner's checkout. In a Task of one merge request, every Run of the Task is its work; in a
+Task of several, a Run of another one is not stopped. It leaves running the Run that landed it, and every Run up that Run's
 parent chain, since a Release Run under an implement Run has more to do after the merge
 (tag, stage, production), and its parents wait on it. It decides this from the recorded
 landing and the parent chain, never from a workflow's id
