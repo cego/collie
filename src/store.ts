@@ -450,13 +450,15 @@ const migrations = (imports: {
         run TEXT AS (${field("run")}),
         state TEXT AS (${field("state")}),
         kind TEXT AS (${field("kind")}),
-        human INTEGER AS (${field("human")} IS NOT NULL)
+        human INTEGER AS (${field("human")} IS NOT NULL),
+        causal_key TEXT AS (${field("causal_key")})
       )
     `);
     yield* sql`CREATE INDEX collie_deliveries_ledger ON collie_deliveries (ledger, seq)`;
     yield* sql`CREATE INDEX collie_deliveries_run ON collie_deliveries (run, ledger, id)`;
     yield* sql`CREATE INDEX collie_deliveries_kind ON collie_deliveries (ledger, seq) WHERE kind IS NOT NULL`;
     yield* sql`CREATE INDEX collie_deliveries_human ON collie_deliveries (id, seq) WHERE human = 1`;
+    yield* sql`CREATE INDEX collie_deliveries_causal ON collie_deliveries (ledger, causal_key, id)`;
     yield* imports.ledgers;
   }),
   "13_tasks": Effect.gen(function* () {
@@ -497,6 +499,22 @@ const migrations = (imports: {
     `;
     yield* sql`CREATE INDEX collie_proposals_journal ON collie_proposals (journal)`;
     yield* sql`CREATE INDEX collie_proposals_proposal ON collie_proposals (proposal)`;
+    // A proposal names its Runs in a JSON array, which no index reaches.
+    yield* sql`
+      CREATE TABLE collie_proposal_runs (
+        run TEXT NOT NULL,
+        proposal TEXT NOT NULL,
+        PRIMARY KEY (run, proposal)
+      )
+    `;
+    yield* sql`
+      CREATE TRIGGER collie_proposal_runs_of AFTER INSERT ON collie_proposals
+      WHEN NEW.kind = 'proposal'
+      BEGIN
+        INSERT OR IGNORE INTO collie_proposal_runs (run, proposal)
+        SELECT json_extract(value, '$.run'), NEW.proposal FROM json_each(NEW.line, '$.targets');
+      END
+    `;
     yield* imports.proposals;
   }),
 });

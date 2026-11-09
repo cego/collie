@@ -145,7 +145,9 @@ test("a Run's proposals are every one that names it, in any Herd, with what beca
         yield* confirm("herd-1", mine.id, mine.content_hash, human, new Map([["r1", 2]]));
         return { lines: yield* proposalsOf("r1"), mine, both };
       }).pipe(Effect.provide(recordsAt(stateDir)));
-      expect(Arr.map(lines, (line) => `${line.kind}:${line.id}`)).toEqual([
+      expect(
+        Arr.map(lines, (line) => `${line.kind}:${line.kind === "step" ? line.proposal : line.id}`),
+      ).toEqual([
         "proposal:p-old",
         `proposal:${mine.id}`,
         `proposal:${both.id}`,

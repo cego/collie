@@ -68,7 +68,7 @@ import { reason } from "./naming";
 import { appendPendingReport } from "./live";
 import { withDirLock, withLock } from "./lock";
 import { shell } from "./mr";
-import { pendingFor, read as readProposals, record as recordProposal } from "./proposals";
+import { pendingFor, proposalsOf, record as recordProposal } from "./proposals";
 import { appendLine, deliveriesOf, newestById, overrideActive, readLedger } from "./steering";
 import type { Records } from "./records";
 import { capabilitiesOf } from "./steering-caps";
@@ -134,10 +134,7 @@ const crossRunOf = Effect.fn("Oversight.crossRunOf")(function* (at: Watched) {
 
 /** Proposals about this Run nobody has answered. */
 const pendingProposals = Effect.fn("Oversight.pendingProposals")(function* (at: Watched) {
-  const key = at.herd;
-  if (key === null) return [];
-  const found = yield* readProposals(key);
-  return pendingFor(found, at.runId, yield* Clock.currentTimeMillis);
+  return pendingFor(yield* proposalsOf(at.runId), at.runId, yield* Clock.currentTimeMillis);
 });
 
 /**

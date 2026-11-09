@@ -202,7 +202,7 @@ import { isString, type JsonObject } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
-import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
+import { causalKey, deliveriesAbout, deliveriesOf, SENT_STATES, toldLine } from "./steering";
 import type { Records } from "./records";
 import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
@@ -2612,12 +2612,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const kind = unless === null ? "step" : "repair";
       const key = causalKey(launched.runId, { kind, ref: stemOf(launched) }, 0);
       // Only this agent's own ledger: another incarnation's is listed in no time order.
-      const last = Arr.filter(
-        yield* deliveriesOf(launched.runId),
-        (delivery) =>
-          delivery.causal_key === key &&
-          delivery.incarnation === found.entry?.incarnation?.terminalId,
-      ).at(-1);
+      const incarnation = found.entry.incarnation?.terminalId;
+      const last =
+        incarnation === undefined ? undefined : (yield* deliveriesAbout(incarnation, key)).at(-1);
       // Settled as not sent, or refused by herdr on the last resend: not delivered either way.
       const resend =
         Option.getOrUndefined(

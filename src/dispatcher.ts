@@ -36,6 +36,7 @@ import {
   deferralsOf,
   isUnobserved,
   newestById,
+  deliveriesAbout,
   readLedger,
   readLedgerWhole,
   settleStaleReservations,
@@ -474,7 +475,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
   }
   const line = deliveryOf(entry, terminalId, text, draft, at, "reserved");
   const id = line.id;
-  const inFlight = blocked(ledger.lines, key, id);
+  const inFlight = blocked(yield* deliveriesAbout(terminalId, key), key, id);
   if (inFlight) {
     yield* deps.log(
       `not sent to ${entry.agent}: ${inFlight.state} delivery ${inFlight.id} is already about this work`,

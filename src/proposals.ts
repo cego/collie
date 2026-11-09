@@ -128,6 +128,8 @@ export const PROPOSALS = "collie/proposals";
  */
 export interface ProposalsApi {
   readonly lines: (journal: string) => Effect.Effect<ReadonlyArray<ProposalLine>>;
+  /** Every line about a proposal that names this Run, in any journal, oldest first. */
+  readonly ofRun: (run: string) => Effect.Effect<ReadonlyArray<ProposalLine>>;
   /** Every journal's lines, oldest first. */
   readonly all: Effect.Effect<ReadonlyArray<ProposalLine>>;
   /** The journal a proposal was written to, or null where none has it. */
@@ -153,6 +155,12 @@ export const proposalsLayer = Layer.effect(Proposals)(
         sql<{ readonly line: string }>`
           SELECT line FROM collie_proposals WHERE journal = ${journal} ORDER BY seq
         `.pipe(Effect.map(decoded), Effect.orDie),
+      ofRun: (run) =>
+        sql<{ readonly line: string }>`
+          SELECT line FROM collie_proposals WHERE proposal IN (
+            SELECT proposal FROM collie_proposal_runs WHERE run = ${run}
+          ) ORDER BY seq
+        `.pipe(Effect.map(decoded), Effect.orDie),
       all: sql<{ readonly line: string }>`SELECT line FROM collie_proposals ORDER BY seq`.pipe(
         Effect.map(decoded),
         Effect.orDie,
@@ -173,6 +181,8 @@ export const proposalsLayer = Layer.effect(Proposals)(
     } satisfies ProposalsApi;
   }),
 );
+
+export const proposalsOf = (run: string) => Proposals.use((proposals) => proposals.ofRun(run));
 
 /** Every Herd's proposals, oldest first. */
 export const everyProposal = Proposals.use((proposals) => proposals.all);

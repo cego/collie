@@ -173,6 +173,11 @@ export interface DeliveriesApi {
    * `unknown` still has the entry blocking that causal key.
    */
   readonly ofRun: (run: string) => Effect.Effect<ReadonlyArray<Delivery>>;
+  /** This incarnation's deliveries of one piece of work, newest state each, in the order first written. */
+  readonly about: (
+    incarnation: string,
+    causalKey: string,
+  ) => Effect.Effect<ReadonlyArray<Delivery>>;
   /** Every Delivery of a human's words herdr took, at its first line saying so. */
   readonly humanSubmits: Effect.Effect<ReadonlyArray<HumanSubmit>>;
   /**
@@ -245,6 +250,15 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
           Effect.orDie,
         ),
       ofRun: (run) => newest(run).pipe(Effect.map(deliveriesIn), Effect.orDie),
+      about: (incarnation, causalKey) =>
+        sql<{ readonly line: string }>`
+          SELECT line FROM collie_deliveries
+          JOIN (
+            SELECT MIN(seq) AS first, MAX(seq) AS last FROM collie_deliveries
+            WHERE ledger = ${incarnationKey(incarnation)} AND causal_key = ${causalKey} GROUP BY id
+          ) ON seq = last
+          ORDER BY first
+        `.pipe(Effect.map(deliveriesIn), Effect.orDie),
       humanSubmits: sql<{ readonly line: string }>`
         SELECT line FROM collie_deliveries WHERE seq IN (
           SELECT MIN(seq) FROM collie_deliveries
@@ -308,6 +322,9 @@ export function newestById(lines: ReadonlyArray<LedgerLine>): Map<string, Delive
 export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (run: string) {
   return yield* Deliveries.use((ledgers) => ledgers.ofRun(run));
 });
+
+export const deliveriesAbout = (incarnation: string, causalKey: string) =>
+  Deliveries.use((ledgers) => ledgers.about(incarnation, causalKey));
 
 export const humanSubmits = Deliveries.use((ledgers) => ledgers.humanSubmits);
 
