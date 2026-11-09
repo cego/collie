@@ -33,6 +33,7 @@ import {
   viewRows,
   wideRows,
   type KeyContext,
+  type MenuItem,
   type Keypress,
   type AppState,
   type Row,
@@ -1306,7 +1307,7 @@ test("a Task pointed at a merge request can open it, however it got there", () =
   });
 });
 
-test("on a card of several merge requests, w and c ask which one, and each answer acts on its own", () => {
+test("on a card of several merge requests, w and y ask which one, and each answer acts on its own", () => {
   const app = taskMr("spilnu/app", 12, { run: "r-app" });
   const api = taskMr("spilnu/api", 7, { run: "r-api" });
   const menu = menuFor(task({ mr: app.mr, mrs: [app, api] }));
@@ -1327,7 +1328,7 @@ test("on a card of several merge requests, w and c ask which one, and each answe
       { _tag: "OpenMr", target: "mr:gitlab.cego.dk/spilnu/api!7", runId: "r1" },
     ],
   ]);
-  expect(Arr.map(chooser("c"), (one) => [one.key, one.command])).toEqual([
+  expect(Arr.map(chooser("y"), (one) => [one.key, one.command])).toEqual([
     ["1", { _tag: "CopyLink", url: app.url ?? "" }],
     ["2", { _tag: "CopyLink", url: api.url ?? "" }],
   ]);
@@ -1345,6 +1346,56 @@ test("on a card of several merge requests, w and c ask which one, and each answe
     _tag: "Do",
     command: { _tag: "ChooseMr", copy: true, mrs: [choice(app), choice(api)] },
   });
+});
+
+test("a card of several merge requests with a check running gives each menu item a key of its own", () => {
+  const app = taskMr("spilnu/app", 12, { run: "r-app" });
+  const api = taskMr("spilnu/api", 7, { run: "r-api" });
+  const check = {
+    name: "test",
+    pass: "gate",
+    round: null,
+    revision: "abc",
+    base: null,
+    elapsedMs: null,
+    usualMs: null,
+    others: 0,
+    sentence: "Running test on the branch.",
+    log: null,
+    lastLines: [],
+  } as const;
+  const keyed = Arr.filter(
+    Arr.map(menuFor(task({ mr: app.mr, mrs: [app, api], check })), (one) => one.key),
+    (key) => key !== "",
+  );
+  expect(keyed).toContain("c");
+  expect(new Set(keyed).size).toBe(keyed.length);
+});
+
+test("every one of more than nine merge requests is reachable from the chooser by its keys", () => {
+  const mrs = Arr.map(Arr.range(1, 11), (iid) => ({
+    short: `app!${iid}`,
+    target: `mr:gitlab.cego.dk/spilnu/app!${iid}`,
+    url: `https://gitlab.cego.dk/spilnu/app/-/merge_requests/${iid}`,
+    runId: `r${iid}`,
+  }));
+  for (const copy of [false, true]) {
+    const reached: Array<string> = [];
+    let page: ReadonlyArray<MenuItem> = mrChoices({ _tag: "ChooseMr", copy, mrs });
+    while (page.length > 0) {
+      const keys = Arr.map(page, (one) => one.key);
+      expect(Arr.every(keys, (key) => /^[1-9]$/.test(key))).toBe(true);
+      expect(new Set(keys).size).toBe(keys.length);
+      let next: ReadonlyArray<MenuItem> = [];
+      for (const { command } of page) {
+        if (command._tag === "ChooseMr") next = mrChoices(command);
+        if (command._tag === "OpenMr") reached.push(command.target);
+        if (command._tag === "CopyLink") reached.push(command.url);
+      }
+      page = next;
+    }
+    expect(reached).toEqual(Arr.map(mrs, (one) => (copy ? one.url : one.target)));
+  }
 });
 
 test("every key a card's menu offers is one the overlay advertises", () => {

@@ -1175,8 +1175,7 @@ export interface Windowed<T> {
   hidden: number;
 }
 
-/** One line of a card's menu: what it says, the key beside it, and what it does. */
-/** One of a card's merge requests, as `w` and `c` offer it. */
+/** One of a card's merge requests, as `w` and `y` offer it. */
 export interface MrChoice {
   readonly short: string;
   readonly target: string;
@@ -1184,26 +1183,43 @@ export interface MrChoice {
   readonly runId: string | null;
 }
 
-/** The answers to a `ChooseMr`, keyed 1 to 9 in the card's order. */
-export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" }>): MenuItem[] =>
-  Arr.flatMap(command.mrs, (one, at): MenuItem[] => {
-    const key = at < 9 ? String(at + 1) : "";
-    if (command.copy)
-      return one.url === null
-        ? []
-        : [{ key, label: `Copy ${one.short}'s link`, command: { _tag: "CopyLink", url: one.url } }];
-    const ref = readMrRef(one.target);
-    return ref === null
-      ? []
-      : [
+/** The answers to a `ChooseMr` in the card's order, keyed 1 to 9; past nine, 9 is "More…". */
+export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" }>): MenuItem[] => {
+  const usable = Arr.filter(command.mrs, (one) =>
+    command.copy ? one.url !== null : readMrRef(one.target) !== null,
+  );
+  const shown = usable.length > 9 ? usable.slice(0, 8) : usable;
+  const more: MenuItem[] =
+    usable.length > 9
+      ? [
           {
+            key: "9",
+            label: "More…",
+            command: { _tag: "ChooseMr", copy: command.copy, mrs: usable.slice(8) },
+          },
+        ]
+      : [];
+  return [
+    ...Arr.map(shown, (one, at): MenuItem => {
+      const key = String(at + 1);
+      const ref = readMrRef(one.target);
+      return command.copy || ref === null
+        ? {
+            key,
+            label: `Copy ${one.short}'s link`,
+            command: { _tag: "CopyLink", url: one.url ?? "" },
+          }
+        : {
             key,
             label: openMrLabel(ref, false, one.short),
             command: { _tag: "OpenMr", target: one.target, runId: one.runId },
-          },
-        ];
-  });
+          };
+    }),
+    ...more,
+  ];
+};
 
+/** One line of a card's menu: what it says, the key beside it, and what it does. */
 export interface MenuItem {
   key: string;
   label: string;
@@ -1299,7 +1315,7 @@ export function menuFor(view: TaskView): MenuItem[] {
             command: { _tag: "ChooseMr", copy: false, mrs } as const,
           },
           {
-            key: "c",
+            key: "y",
             label: "Copy a merge request's link…",
             command: { _tag: "ChooseMr", copy: true, mrs } as const,
           },
@@ -1362,7 +1378,7 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "s", what: "Steer…" },
   { key: "a", what: "Attach files…" },
   { key: "w", what: "Open merge request" },
-  { key: "c", what: "Copy a merge request's link" },
+  { key: "y", what: "Copy a merge request's link, on a card of several" },
   { key: "u", what: "Resume run" },
   { key: "o", what: "What its workflow offers next" },
   { key: "i", what: "The first of those, on a plan that is ready" },

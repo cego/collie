@@ -865,13 +865,15 @@ closes it, as does Esc, and the key beside each item does it from the keyboard:
 | `s`     | Steer…             | while something is still driving it                      |
 | `a`     | Attach files…      | while something is still driving it                      |
 | `w`     | Open merge request | when there is one; with several, asks which, keyed 1–9   |
-| `c`     | Copy its link…     | with several merge requests: asks which, keyed 1–9       |
+| `y`     | Copy its link…     | with several merge requests: asks which, keyed 1–9       |
 | `i`     | its first offer    | a plan that is ready, by its title                       |
 | `o`     | What it offers…    | always: the workflow's own offers, each MR's own too     |
 | `u`     | Resume run         | failed or stopped                                        |
 | `x`     | Follow-up run      | finished                                                 |
 | `h`     | Hold run           | working, quiet or waiting on you; Release hold once held |
 | `k`     | Stop run           | working, quiet or waiting on you                         |
+
+Past nine merge requests, `9` is More…, which asks the same of the rest.
 
 Only what that Task can be asked for is listed: an item that would come back "this run has
 already finished" is not offered at all. Nothing is offered on one board and withheld on
