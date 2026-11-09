@@ -12,6 +12,7 @@ import {
   everyProposal,
   journalOf,
   PROPOSALS,
+  proposalsOf,
   read,
   record,
   stepStarted,
@@ -121,6 +122,35 @@ test("the first host imports each Herd's journal once, less a torn last line, an
       yield* fs.writeFileString(journal, `${step(0)}\n${step(1)}\n${step(2)}\n`);
       expect(yield* Effect.provide(read("herd-1"), recordsAt(stateDir))).toHaveLength(2);
       expect(yield* fs.exists(journal)).toBe(true);
+    }),
+  ));
+
+test("a Run's proposals are every one that names it, in any Herd, with what became of each", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${stateDir}/herd/herd-0`, { recursive: true });
+      yield* fs.writeFileString(
+        `${stateDir}/herd/herd-0/proposals.jsonl`,
+        `{"kind":"proposal","id":"p-old","content_hash":"h","interpretation":"hold it","targets":[{"run":"r1"}],"actions":[{"kind":"hold","run":"r1"}],"allowed_now":[],"created_at":"2026-09-09T09:00:00Z","expires_at":"2026-09-09T09:30:00Z","intent_versions":{},"by":"evaluator:call-0","state":"pending"}\n`,
+      );
+      const { lines, mine, both } = yield* Effect.gen(function* () {
+        const mine = yield* record("herd-1", proposed);
+        yield* record("herd-1", { ...proposed, targets: [{ run: "r2" }], by: "evaluator:call-2" });
+        const both = yield* record("herd-2", {
+          ...proposed,
+          targets: [{ run: "r2" }, { run: "r1" }],
+          by: "evaluator:call-3",
+        });
+        yield* confirm("herd-1", mine.id, mine.content_hash, human, new Map([["r1", 2]]));
+        return { lines: yield* proposalsOf("r1"), mine, both };
+      }).pipe(Effect.provide(recordsAt(stateDir)));
+      expect(Arr.map(lines, (line) => `${line.kind}:${line.id}`)).toEqual([
+        "proposal:p-old",
+        `proposal:${mine.id}`,
+        `proposal:${both.id}`,
+        `confirmed:${mine.id}`,
+      ]);
     }),
   ));
 

@@ -14,6 +14,7 @@ import {
   blocked,
   budgetPath,
   causalKey,
+  deliveriesAbout,
   deliveriesOf,
   herdKey,
   humanSubmits,
@@ -194,6 +195,25 @@ test("the ledger round trips through the host's database", () =>
       const lines = yield* readLedger("term-1");
       expect(lines).toHaveLength(2);
       expect(newestById(lines).get("d1")?.state).toBe("submitted");
+    }).pipe(Effect.provide(recordsAt(stateDir))),
+  ));
+
+test("what an incarnation's ledger holds about one piece of work is each delivery's newest state", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const other = causalKey("r1", { kind: "correction", ref: "c2" }, 3);
+      yield* appendLine(delivery());
+      yield* appendLine(delivery({ id: "d2", causal_key: other }));
+      yield* appendLine(delivery({ id: "d3", at: "2026-09-09T10:00:01Z" }));
+      yield* appendLine(delivery({ id: "d4", incarnation: "term-2" }));
+      yield* appendLine(delivery({ at: "2026-09-09T10:00:02Z", state: "submitted" }));
+
+      const about = yield* deliveriesAbout("term-1", delivery().causal_key);
+      expect(Arr.map(about, (one) => `${one.id}:${one.state}`)).toEqual([
+        "d1:submitted",
+        "d3:reserved",
+      ]);
+      expect(yield* deliveriesAbout("term-2", other)).toEqual([]);
     }).pipe(Effect.provide(recordsAt(stateDir))),
   ));
 
