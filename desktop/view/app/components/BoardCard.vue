@@ -18,6 +18,7 @@ import {
 import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
 import { type Gesture, seenBy } from "../../../src/shared/board-clicks";
+import { offerKey } from "../../../src/shared/actions";
 import { cardQuestion, openQuestions } from "../../../src/shared/pending-answer";
 import { cardFlow } from "../../../src/shared/flow-strip";
 import { flockMrsAtom, runDetailKey } from "../flock";
@@ -150,7 +151,7 @@ const doing = (action: CardAction, primary: boolean) => {
         : { label: openMrLabel(action.mr, primary, action.named), press: () => openLink(url) };
     }
     case "offer": {
-      const offer = action.offer.id;
+      const offer = offerKey(action.offer);
       return { label: action.offer.title, press: () => (offering.value = { offer }) };
     }
     case "offers":

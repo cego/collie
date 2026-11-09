@@ -1,8 +1,10 @@
-import { Cause, Exit, Result } from "effect";
+import { Cause, Exit, Option, Result, type Schema } from "effect";
+import * as Arr from "effect/Array";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type { ActionFailed, DesktopAction } from "./flock";
 import { saidOf } from "./said";
+import type { OfferView } from "../../../src/board-model";
 
 export type Failed = ActionFailed | RpcClientError.RpcClientError;
 
@@ -79,3 +81,17 @@ export const actionRunner = (
 
   return run;
 };
+
+/** Which offer is meant: its id, on the Run that makes it where that is not the Run asked. */
+export const offerKey = (offer: Pick<OfferView, "id" | "run">): string =>
+  offer.run === undefined ? offer.id : `${offer.run}:${offer.id}`;
+
+export const chosenOffer = (offers: ReadonlyArray<OfferView>, chosen: string | null) =>
+  Option.getOrUndefined(Arr.findFirst(offers, (offer) => offerKey(offer) === chosen));
+
+/** Making `offer`, asked of `runId`: on the Run that owns its merge request, where another does. */
+export const invokeOf = (
+  runId: string,
+  offer: OfferView,
+  input: Readonly<Record<string, Schema.Json>>,
+) => ({ _tag: "Invoke" as const, runId: offer.run ?? runId, offer: offer.id, input });
