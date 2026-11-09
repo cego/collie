@@ -28,7 +28,6 @@ const now = computed(() => ({
 const sitting = ref(sittingStarts(now.value));
 watch(now, (seen) => (sitting.value = sittingSees(sitting.value, seen)));
 const view = computed(() => sittingView(sitting.value, now.value));
-// Once this one is settled, on to the next still unanswered.
 watch(
   () =>
     view.value.question !== null &&
@@ -39,7 +38,12 @@ const move = (by: number) => (sitting.value = sittingMoved(sitting.value, by));
 </script>
 
 <template>
-  <UModal :open="true" :title="title" @update:open="(open: boolean) => !open && emit('close')">
+  <UModal
+    :open="true"
+    :title="title"
+    :content="{ onOpenAutoFocus: (event: Event) => event.preventDefault() }"
+    @update:open="(open: boolean) => !open && emit('close')"
+  >
     <template #body>
       <div v-if="view.question !== null" class="flex flex-col gap-3" data-testid="question-dialog">
         <div class="flex items-baseline justify-between gap-2 text-sm">

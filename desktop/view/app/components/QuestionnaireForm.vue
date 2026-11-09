@@ -1,5 +1,4 @@
 <script setup lang="ts">
-// Draws one question's questionnaire and hands every gesture to it; it decides nothing.
 import type { Question } from "../../../../src/board-model";
 import { newRequest } from "../../../src/shared/actions";
 import { type Event, questionnaireView } from "../../../src/shared/questionnaire";
@@ -18,6 +17,8 @@ const uid = useId();
 const view = computed(() => questionnaireView(answering.of(props.installation, props.question)));
 const status = useTemplateRef<HTMLElement>("status");
 const rows = useTemplateRef<HTMLElement[]>("rows");
+// Focus starts on a row, nothing picked; the parent keys this form by question.
+onMounted(() => void nextTick(() => rows.value?.[view.value.focus]?.focus()));
 
 const step = (event: Event) => {
   const does = answering.step(props.installation, props.machine, props.question, event, props.act);
