@@ -18,6 +18,7 @@ import {
   Duration,
   Effect,
   Layer,
+  Random,
   Schema,
   Semaphore,
   flow,
@@ -216,9 +217,11 @@ export interface Recorded {
 export const record = Effect.fn("Proposals.record")(function* (journal: string, what: Recorded) {
   const now = yield* DateTime.now;
   const at = DateTime.formatIso(now);
+  // The instant alone does not tell two identical proposals apart.
+  const nonce = yield* Random.nextInt;
   const line: ProposalRecord = {
     kind: "proposal",
-    id: `p-${Bun.hash(`${at}${what.by}${contentHash(what.targets, what.actions)}`).toString(16)}`,
+    id: `p-${Bun.hash(`${at}${nonce}${what.by}${contentHash(what.targets, what.actions)}`).toString(16)}`,
     content_hash: contentHash(what.targets, what.actions),
     interpretation: what.interpretation,
     targets: [...what.targets],
