@@ -2663,11 +2663,9 @@ interface PiHost {
   readonly registerCommand: () => void;
 }
 
-/** Once `agent` has been given its work, Collie's pi extension sees a turn die on `error` and pi settle. */
-const stopsOnError = (agent: string, error: string) =>
+const stopsOnError = (agent: string, error: string, after = "Your task for this step") =>
   Effect.gen(function* () {
-    while (!(yield* prompted("Your task for this step")))
-      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    while (!(yield* prompted(after))) yield* TestClock.withLive(Effect.sleep("10 millis"));
     const control = yield* controlDir(rig.pluginEnv().stateDir, agent);
     yield* (yield* FileSystem.FileSystem).makeDirectory(control, { recursive: true });
     yield* COMPACTION_PORTS.pi!.install({
@@ -2765,6 +2763,54 @@ test(
     ),
   60_000,
 );
+
+test(
+  "a turn its harness will not retry while it repairs its Output parks the Run within a poll, quoting the harness",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* stopsOnError(agentFor("r1"), EXPIRED, "not usable");
+            yield* spend(5_000);
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+          }),
+          { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
+        );
+      }),
+    ),
+  60_000,
+);
+
+test("an agent that ran out with nothing to take over, and whose harness then stopped, is parked past its budget quoting the harness", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      yield* session(
+        Effect.gen(function* () {
+          yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+          yield* runsOut(agentFor("r1"));
+          yield* recordClaudeEvent(
+            yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")),
+            flow(
+              Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+              Result.getOrThrow,
+            )({
+              session_id: "s-out",
+              hook_event_name: "StopFailure",
+              error: "authentication_failed",
+              error_details: EXPIRED,
+            }),
+          ).pipe(Effect.orDie);
+          yield* until(parkedSays("ran out (rate_limit) before writing"));
+          expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+        }),
+        { fallbacks: Effect.succeed([]), collectMs: 2_000 },
+      );
+    }),
+  ));
 
 test("a replay rechecks a fallback after the earlier host recorded that nothing had room", () =>
   runEffect(

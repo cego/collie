@@ -401,8 +401,11 @@ export interface AgentsApi {
    * its Subscription reads Exhausted for it — why. Never succeeds otherwise.
    */
   readonly ranOut: (launched: Launched) => Effect.Effect<RanOut>;
-  /** What its harness said when a turn died on an error it will not retry; null where none has. */
-  readonly stopped: (launched: Launched) => Effect.Effect<string | null>;
+  /**
+   * What its harness said when a turn died on an error it will not retry, since `since` or
+   * its launch; null where none has.
+   */
+  readonly stopped: (launched: Launched, since?: number) => Effect.Effect<string | null>;
   /** Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone. */
   readonly retire: (launched: Launched, line: string) => Effect.Effect<void, AgentParked>;
   /** A line in the Run's log. */
@@ -848,20 +851,23 @@ export const agentWork = <
     const harnessSaid = (on: Launched, why: string) =>
       `its harness ${said(choiceOfLaunch(on))} said "${why}". Collie keeps collecting it; tell it to carry on once its harness is fixed.`;
     // An agent past its budget may still be working: park, and go on collecting.
-    const pastBudget = (on: Launched) =>
+    const pastBudget = (on: Launched, waiting?: string) =>
       Effect.map(agents.stopped(on), (why) => {
-        const idle = `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle`;
-        return why === null
+        const idle =
+          waiting ??
+          `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle`;
+        if (why !== null) return `${idle}; ${harnessSaid(on, why)}`;
+        return waiting === undefined
           ? `${idle}. Collie keeps collecting it; if it has stopped, ask it to write it.`
-          : `${idle}; ${harnessSaid(on, why)}`;
+          : `${idle}. Collie keeps collecting it.`;
       });
     // Never ends, so collecting goes on after it parks.
-    const parksOnStop = (on: Launched) =>
+    const parksOnStop = (on: Launched, since?: number) =>
       Effect.gen(function* () {
-        let why = yield* agents.stopped(on);
+        let why = yield* agents.stopped(on, since);
         while (why === null) {
           yield* Effect.sleep(Duration.millis(agents.pollMs));
-          why = yield* agents.stopped(on);
+          why = yield* agents.stopped(on, since);
         }
         yield* host.parked(
           runId,
@@ -909,7 +915,7 @@ export const agentWork = <
             Effect.filterOrElse(
               (text) => text !== null,
               () =>
-                (waiting === undefined ? pastBudget(on) : Effect.succeed(waiting)).pipe(
+                pastBudget(on, waiting).pipe(
                   Effect.flatMap((why) => host.parked(runId, why)),
                   Effect.andThen(late),
                 ),
@@ -1008,7 +1014,7 @@ export const agentWork = <
                   collecting(
                     current,
                     currentAsk,
-                    `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}. Collie keeps collecting it.`,
+                    `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}`,
                   ),
                   room,
                 ),
@@ -1072,11 +1078,30 @@ export const agentWork = <
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) return yield* carded(read.value);
 
+    // A harness that stopped is waited on past the budget, as its park says it is.
+    const recollecting = (unusable: string, since: number) =>
+      Effect.gen(function* () {
+        for (;;) {
+          const text = yield* watching(
+            agents.collect(
+              current,
+              unusable,
+              questions,
+              undefined,
+              (text) => decodeOutput(work.output, text, plain).ok,
+            ),
+          );
+          if (text !== null || (yield* agents.stopped(current, since)) === null) return text;
+          yield* reviving(currentAsk, unusable);
+        }
+      });
     // Each repair is its own Activity, so what a restart finds is a repair that happened
     // rather than an allowance that has come back.
     const repairing = (round: number, unusable: string, problem: string) =>
       Effect.gen(function* () {
         const suffix = round === 1 ? "" : `-${round}`;
+        // A stop before this repair was asked is not one its wait parks on.
+        const since = yield* Clock.currentTimeMillis;
         const asked = yield* Activity.make({
           name: `${work.operation}.repair${suffix}`,
           success: Schema.Boolean,
@@ -1104,15 +1129,7 @@ export const agentWork = <
                 parkedWhenStuck(
                   reviving(currentAsk, unusable).pipe(
                     Effect.andThen(
-                      watching(
-                        agents.collect(
-                          current,
-                          unusable,
-                          questions,
-                          undefined,
-                          (text) => decodeOutput(work.output, text, plain).ok,
-                        ),
-                      ),
+                      Effect.raceFirst(recollecting(unusable, since), parksOnStop(current, since)),
                     ),
                   ),
                   host,
@@ -3752,11 +3769,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     launch: (ask, note) => launch(ask, false, note),
     revive,
     ranOut,
-    stopped: (launched) =>
+    stopped: (launched, since) =>
       under(
         Effect.gen(function* () {
           const dir = yield* controlDir(host.env.stateDir, launched.agent);
-          return (yield* stoppedSince(dir, launched.at ?? 0))?.why ?? null;
+          return (yield* stoppedSince(dir, since ?? launched.at ?? 0))?.why ?? null;
         }).pipe(Effect.orDie),
       ),
     retire,
