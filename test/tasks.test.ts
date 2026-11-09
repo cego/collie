@@ -104,6 +104,22 @@ test("the first host imports each Task file once, and leaves the files in place"
     }),
   ));
 
+test("a Task file the first host cannot read fails its import, and the next host imports it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = `${stateDir}/tasks/task-1.json`;
+      yield* fs.makeDirectory(`${stateDir}/tasks`);
+      yield* fs.writeFileString(file, `${asJson(task())}\n`);
+      yield* fs.chmod(file, 0o000);
+
+      const refused = yield* Effect.exit(Effect.provide(listTasks, recordsAt(stateDir)));
+      expect(refused._tag).toBe("Failure");
+      yield* fs.chmod(file, 0o644);
+      expect(yield* Effect.provide(listTasks, recordsAt(stateDir))).toEqual([task()]);
+    }),
+  ));
+
 test("a Task written or removed tells the Run model which Task moved", () =>
   runEffect(
     Effect.gen(function* () {

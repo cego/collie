@@ -124,6 +124,25 @@ test("the first host imports each Herd's journal once, less a torn last line, an
     }),
   ));
 
+test("a Herd directory the first host cannot read fails its import, and the next host imports it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const herd = `${stateDir}/herd/herd-1`;
+      yield* fs.makeDirectory(herd, { recursive: true });
+      yield* fs.writeFileString(
+        `${herd}/proposals.jsonl`,
+        `{"kind":"step","proposal":"p-1","index":0,"state":"applied","at":"2026-09-09T09:00:00Z"}\n`,
+      );
+      yield* fs.chmod(herd, 0o000);
+
+      const refused = yield* Effect.exit(Effect.provide(read("herd-1"), recordsAt(stateDir)));
+      expect(refused._tag).toBe("Failure");
+      yield* fs.chmod(herd, 0o755);
+      expect(yield* Effect.provide(read("herd-1"), recordsAt(stateDir))).toHaveLength(1);
+    }),
+  ));
+
 test("another process reads a Herd's proposals, and one proposal, through the host", () =>
   proves(
     "collie-proposals-host-",
