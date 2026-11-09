@@ -321,18 +321,34 @@ export function pendingFor(
   );
 }
 
+/**
+ * The last answer of `unanswered`, by the journal it read: a board asks once for every Run
+ * against one journal and one clock, and each answer parses every proposal's expiry.
+ */
+const lastUnanswered = new WeakMap<
+  ReadonlyArray<ProposalLine>,
+  { readonly nowMs: number; readonly records: ReadonlyArray<ProposalRecord> }
+>();
+
 /** Proposals nobody has answered and nothing has expired, whatever they are about. */
-function unanswered(lines: ReadonlyArray<ProposalLine>, nowMs: number): ProposalRecord[] {
+function unanswered(
+  lines: ReadonlyArray<ProposalLine>,
+  nowMs: number,
+): ReadonlyArray<ProposalRecord> {
+  const kept = lastUnanswered.get(lines);
+  if (kept?.nowMs === nowMs) return kept.records;
   const answered = new Set(
     Arr.flatMap(lines, (line) =>
       line.kind === "confirmed" || line.kind === "declined" ? [line.id] : [],
     ),
   );
-  return Arr.filter(
+  const records = Arr.filter(
     lines,
     (line): line is ProposalRecord =>
       line.kind === "proposal" && !answered.has(line.id) && epochMs(line.expires_at) > nowMs,
   );
+  lastUnanswered.set(lines, { nowMs, records });
+  return records;
 }
 
 /**

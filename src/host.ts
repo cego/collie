@@ -3962,6 +3962,7 @@ const own = (
     const graceMs = yield* supersedeGraceMs;
     const seconds = yield* scheduleSeconds;
     const bun = yield* Effect.context<PlatformServices>();
+    const runModel = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
     const herdr = new Herdr(env);
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
@@ -4081,6 +4082,10 @@ const own = (
                       supersedeGraceMs: graceMs,
                       namesTasks: true,
                       placing: { herdr, env: { ...env, stateDir: dir } },
+                      keep:
+                        runModel === undefined
+                          ? undefined
+                          : { revision: runModel.factsAt, reading: runModel.reading },
                     }),
                   ),
                 ),

@@ -6255,6 +6255,13 @@ export interface RegistryOptions {
   readonly namesTasks?: boolean;
   /** How long a messaged agent may take to start a turn before its work counts as ended. */
   readonly supersedeGraceMs?: number | undefined;
+  /**
+   * The host's Run model, which every listing reads through and keeps settled Runs' views
+   * by: without it each one reads every Run from disk again.
+   */
+  readonly keep?:
+    | { readonly revision: (run: string) => number; readonly reading: FileSystem.FileSystem }
+    | undefined;
 }
 
 export const registryLayer = (
@@ -7402,6 +7409,9 @@ const makeRegistry: (
 
   /** A finished execution's status: it is never resumed, so it cannot change. */
   const finished = new Map<string, typeof RunStatus.Type>();
+  /** Settled Runs' views every listing that brings none of its own shares. */
+  const shared: KeptViews | undefined =
+    options?.keep === undefined ? undefined : { revision: options.keep.revision, views: new Map() };
   const polled = Effect.fn("Engine.polled")(function* (generation: Generation, execution: string) {
     const workflow = generation.registration.workflow;
     const status = pollStatus(
@@ -8586,26 +8596,29 @@ const makeRegistry: (
         }
         return dropped;
       }).pipe(Effect.orDie, Effect.provideContext(bun)),
-    views: (task: string | null, read?: FileSystem.FileSystem, kept?: KeptViews) =>
-      store.runs.pipe(
+    views: (task: string | null, read?: FileSystem.FileSystem, kept?: KeptViews) => {
+      const keeping = kept ?? shared;
+      return store.runs.pipe(
         Effect.flatMap((rows) =>
           keptViews(
             task === null ? rows : Arr.filter(rows, (row) => row.task === task),
             // The host's own background read goes one Run at a time, so the loop stays free.
             kept === undefined ? VIEW_CONCURRENCY : 1,
-            read,
-            kept,
+            read ?? (keeping === undefined ? undefined : options?.keep?.reading),
+            keeping,
           ).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
-                if (kept === undefined || task !== null) return;
+                if (keeping === undefined || task !== null) return;
                 const present = new Set(Arr.map(rows, (row) => row.run));
-                for (const run of kept.views.keys()) if (!present.has(run)) kept.views.delete(run);
+                for (const run of keeping.views.keys())
+                  if (!present.has(run)) keeping.views.delete(run);
               }),
             ),
           ),
         ),
-      ),
+      );
+    },
     related: (
       runId: string,
       also: ReadonlyArray<string>,
