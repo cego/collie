@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
+import { TestClock } from "effect/testing";
 import type { Action } from "../src/actions";
 import { connect } from "../src/host";
 import {
@@ -71,6 +72,16 @@ test("a proposal is found in its own Herd's journal, which keeps its lines in or
         "step",
       ]);
     }).pipe(Effect.provide(recordsAt(stateDir))),
+  ));
+
+test("two identical proposals recorded at the same instant are two proposals", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const first = yield* record("herd-1", proposed);
+      const second = yield* record("herd-1", proposed);
+      expect(second.created_at).toBe(first.created_at);
+      expect(second.id).not.toBe(first.id);
+    }).pipe(Effect.provide([recordsAt(stateDir), TestClock.layer()])),
   ));
 
 test("two confirmations of one proposal at once: one is the answer, the other is told so", () =>
