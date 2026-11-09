@@ -885,11 +885,18 @@ test("a merge an earlier host recorded under its hostless label is not recorded 
       const of = (over: Partial<RunFacts>) =>
         madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
       const runs = [
-        yield* of({ id: "r-build", workflow: "implement", state: "succeeded", mr: MR }),
+        yield* of({
+          id: "r-build",
+          workflow: "implement",
+          state: "succeeded",
+          branch: BRANCH,
+          mr: MR,
+        }),
         yield* of({
           id: "r-follow-up",
           workflow: "implement",
           state: "running",
+          branch: BRANCH,
           created: "2026-10-15T09:30:00Z",
         }),
       ];
