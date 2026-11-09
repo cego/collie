@@ -16381,11 +16381,11 @@ scenario(
   120_000,
 );
 
-for (const [what, declared] of [
-  ["the plan's threshold", { threshold: 5 }],
-  ["the plan's tolerance", { tolerance: 2 }],
-  ["no absolute slack", { absolute: 0 }],
-  ["it is not exact", { exact: false }],
+for (const [what, id, declared] of [
+  ["the plan's threshold", "threshold", { threshold: 5 }],
+  ["the plan's tolerance", "tolerance", { tolerance: 2 }],
+  ["no absolute slack", "absolute", { absolute: 0 }],
+  ["it is not exact", "exact", { exact: false }],
 ] as const)
   scenario(
     `a tune-up repair that declares ${what} for a metric is the same plan, and is not calibrated again`,
@@ -16393,7 +16393,7 @@ for (const [what, declared] of [
       runEffect(
         Effect.gen(function* () {
           const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
-          const runId = `r-tune-redeclared-${Rec.keys(declared)[0]}`;
+          const runId = `r-tune-redeclared-${id}`;
           const guardrail = { ...NOISY_GUARDRAIL, why: "the plan's limits are what matter here" };
           yield* rig.queueOutputs([
             TUNE_DISCOVERED,
