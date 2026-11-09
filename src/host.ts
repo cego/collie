@@ -78,6 +78,8 @@ import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
 import { TurnScheduler } from "./turns";
 import { Foreground, foregroundLayer, servedNow } from "./foreground";
 import * as References from "effect/References";
+import * as Otlp from "effect/observability/Otlp";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Scheduler from "effect/Scheduler";
 import {
   EntryError,
@@ -3751,10 +3753,27 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
   }).pipe(
     Effect.orDie,
     Effect.provideService(Scheduler.Scheduler, new TurnScheduler(servedNow)),
-    // Nothing reads a host's spans, and making them was most of what an idle host allocated.
-    Effect.provideService(References.TracerEnabled, false),
-    Effect.provide(foregroundLayer),
+    Effect.provide(Layer.merge(tracing, foregroundLayer)),
   );
+
+/**
+ * Where the host sends its spans and logs, by OpenTelemetry's own variable. Unset, it makes
+ * no spans: nothing reads them, and making them was most of what an idle host allocated.
+ */
+const tracing = Layer.unwrap(
+  Effect.gen(function* () {
+    const endpoint = yield* Config.option(Config.String("OTEL_EXPORTER_OTLP_ENDPOINT"));
+    return Option.match(endpoint, {
+      onNone: () => Layer.succeed(References.TracerEnabled)(false),
+      onSome: (baseUrl) =>
+        Otlp.layerJson({
+          baseUrl,
+          resource: { serviceName: "collie-host", serviceVersion: BUILD },
+          loggerMergeWithExisting: true,
+        }).pipe(Layer.provide(FetchHttpClient.layer)),
+    });
+  }),
+).pipe(Layer.orDie);
 
 /** How long a host told to stop waits for running steps before it exits anyway. */
 const stopGrace = Config.Duration("COLLIE_HOST_STOP_GRACE").pipe(
