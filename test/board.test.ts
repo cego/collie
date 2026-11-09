@@ -1892,6 +1892,49 @@ test("a Task of several merge requests lands once each merged or was disposed of
     }),
   ));
 
+test("a hostless Disposition an earlier host wrote names the merge request of its own Run's checkout, not one of the same path on another host", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, env } = yield* scratch();
+      const on = Effect.fn("board.on")(function* (host: string) {
+        const cwd = `${dir}/${host}`;
+        yield* fs.makeDirectory(cwd, { recursive: true });
+        yield* Effect.sync(() => {
+          Bun.spawnSync(["git", "init", "-q"], { cwd });
+          Bun.spawnSync(["git", "remote", "add", "origin", `git@${host}:group/app.git`], { cwd });
+        });
+        return yield* madeRun(dir, {
+          id: `r-${host}`,
+          task: "task-1",
+          cwd,
+          state: "succeeded",
+          mr: `https://${host}/group/app/-/merge_requests/42`,
+        });
+      });
+      const runs = [yield* on("gitlab-a.example"), yield* on("gitlab-b.example")];
+      yield* recordDisposition(runs[0]!.dir, {
+        at: "2026-09-14T10:00:00Z",
+        by: "gitlab",
+        kind: "merged",
+        ref: "group/app!42",
+        note: null,
+      });
+
+      const [view] = yield* board(env, runs);
+
+      expect(
+        Arr.sort(
+          Arr.map(view!.mrs ?? [], (one) => `${one.id} ${one.disposition}`),
+          Order.String,
+        ),
+      ).toEqual([
+        "gitlab-a.example/group/app!42 merged group/app!42",
+        "gitlab-b.example/group/app!42 null",
+      ]);
+    }),
+  ));
+
 test("a merge request of several that closed without merging, with nobody saying why, keeps its Task waiting on you by name", () =>
   runEffect(
     Effect.gen(function* () {

@@ -65,7 +65,6 @@ import {
   Answered,
   flowActions,
   mrId,
-  mrIdProject,
   waitsOnOf,
   mrLabel,
   mrWords,
@@ -1012,15 +1011,28 @@ export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArr
   }));
 });
 
+/** A Run's Dispositions, each with the MR id it names as read in that Run's checkout. */
+const ledgerOf = Effect.fn("Board.ledgerOf")(function* (run: RunFacts) {
+  const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
+  return yield* Effect.forEach(lines, (line) =>
+    Effect.map(line.ref === "" ? Effect.succeed(null) : mrIdIn(line.ref, run.cwd, shell), (id) => ({
+      line,
+      id,
+    })),
+  );
+});
+
 /** A merge request's latest Disposition: one naming it on any Run, or naming none on its owner. */
 function dispositionFor(
   entry: Carried & { readonly id: string },
-  ledgers: ReadonlyMap<string, ReadonlyArray<Disposition>>,
+  ledgers: ReadonlyMap<
+    string,
+    ReadonlyArray<{ readonly line: Disposition; readonly id: string | null }>
+  >,
 ): Disposition | null {
-  const project = mrIdProject(entry.id);
   const named = Arr.flatMap([...ledgers], ([run, lines]) =>
-    Arr.filter(lines, (line) =>
-      line.ref === "" ? run === entry.owner.id : mrId(line.ref, { project }) === entry.id,
+    Arr.flatMap(lines, ({ line, id }) =>
+      (line.ref === "" ? run === entry.owner.id : id === entry.id) ? [line] : [],
     ),
   );
   return named.sort((a, b) => epochMs(a.at) - epochMs(b.at)).at(-1) ?? null;
@@ -1432,10 +1444,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           entries.length === 0
             ? []
             : yield* Effect.forEach(everyRun, (run) =>
-                Effect.map(
-                  readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])),
-                  (lines) => [run.id, lines] as const,
-                ),
+                Effect.map(ledgerOf(run), (lines) => [run.id, lines] as const),
               ),
         );
         const fates = Arr.map(entries, (entry) => {
