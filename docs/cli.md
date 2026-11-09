@@ -1404,7 +1404,9 @@ outside the run, is not a reviewer's to change.
 A text search proves none of the rows above: a pass of `grep`, `egrep`, `fgrep`, `rg`, `ag`,
 `ack` or `git grep`, also as the first word of a `sh -c` or `bash -c` script, shows the text
 is there, not that anything works. A promised check, `regression`, documented command or
-migration step whose only pass on the tree is a text search is a gap that says so. The record
+migration step whose only pass on the tree is a text search is a gap that says so. A promised
+check or `regression` that passed on an earlier tree and has not run on this one, as after a
+fix moved the head, is a gap naming that tree and the command to run again, not a failure. The record
 stays in the journal, an agent may still run one for its own use, and the run's own checks,
 which are the project's configured commands, are left alone. A bug reproduced by one command
 and fixed by another is a gap naming both, each with the path its executable resolved to, so
