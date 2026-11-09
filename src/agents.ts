@@ -1100,8 +1100,12 @@ export const agentWork = <
     const repairing = (round: number, unusable: string, problem: string) =>
       Effect.gen(function* () {
         const suffix = round === 1 ? "" : `-${round}`;
-        // A stop before this repair was asked is not one its wait parks on.
-        const since = yield* Clock.currentTimeMillis;
+        // Recorded, so a restart's wait still parks on a stop since this repair was asked.
+        const since = yield* Activity.make({
+          name: `${work.operation}.repair${suffix}.since`,
+          success: Schema.Number,
+          execute: Clock.currentTimeMillis,
+        });
         const asked = yield* Activity.make({
           name: `${work.operation}.repair${suffix}`,
           success: Schema.Boolean,

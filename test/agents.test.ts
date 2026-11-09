@@ -2784,6 +2784,37 @@ test(
   60_000,
 );
 
+test(
+  "a harness stop during a repair still parks its wait after a restart, and a late Output finishes it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const over = { ...onPi, collectMs: 3_600_000, pollMs: 1_000 };
+        yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+        yield* interrupted(
+          "r1",
+          stopsOnError(agentFor("r1"), EXPIRED, "not usable").pipe(Effect.as(true)),
+          over,
+        );
+        yield* fs.remove(controlPath(dir, PARKED, "r1"), { force: true });
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* spend(5_000);
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"carried on"}`);
+            return yield* Fiber.join(fiber);
+          }),
+          over,
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("carried on");
+        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
 test("an agent that ran out with nothing to take over, and whose harness then stopped, is parked past its budget quoting the harness", () =>
   runEffect(
     Effect.gen(function* () {
