@@ -511,6 +511,26 @@ test(
 );
 
 test(
+  "a host doctor cannot ask is a warning, never reported as nothing on Herdr 1",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* healthy();
+        yield* rig.addPane("1-7", "1:1", rig.root, "builder");
+        yield* registered("builder-a", "1-7");
+
+        const result = yield* report();
+
+        expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+        expect(check(result, "herdr 1").detail).toContain(
+          "could not ask this Machine's host which agents it registered",
+        );
+      }),
+    ),
+  30_000,
+);
+
+test(
   "with no Herdr 1 setting and no live agent on it, doctor reports none",
   () =>
     runEffect(
