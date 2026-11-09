@@ -3568,7 +3568,7 @@ export const hostLayer = (options: {
             const task =
               row?.task == null
                 ? null
-                : yield* readTask(dir, row.task).pipe(Effect.orElseSucceed(() => null));
+                : yield* readTask(row.task).pipe(Effect.orElseSucceed(() => null));
             const title = notificationTitle(
               kind,
               cwd,
@@ -5022,7 +5022,7 @@ export const hostLayer = (options: {
           const task =
             row?.task == null
               ? null
-              : yield* readTask(dir, row.task).pipe(
+              : yield* readTask(row.task).pipe(
                   Effect.provideContext(bun),
                   Effect.orElseSucceed(() => null),
                 );
@@ -6940,9 +6940,7 @@ const makeRegistry: (
             : yield* openWorkspace;
     // A workspace an earlier attempt recorded may already have its Task.
     const known =
-      ask.workspace === undefined
-        ? null
-        : yield* taskOfWorkspace(placing.env.stateDir, workspace).pipe(Effect.orDie);
+      ask.workspace === undefined ? null : yield* taskOfWorkspace(workspace).pipe(Effect.orDie);
     const task =
       known ??
       (yield* newTask({
@@ -6952,7 +6950,7 @@ const makeRegistry: (
         rootPane,
         herd: yield* machineHerd(placing.env).pipe(Effect.orElseSucceed(() => null)),
       }).pipe(
-        Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
+        Effect.flatMap((made) => writeTask(made)),
         Effect.orDie,
       ));
     return { placed, task: task.id };
@@ -6997,7 +6995,7 @@ const makeRegistry: (
     );
     const tasks = new Map(
       Arr.map(
-        yield* listTasks(placing.env.stateDir).pipe(Effect.orElseSucceed(() => [])),
+        yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
         (task) => [task.id, task] as const,
       ),
     );

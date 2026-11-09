@@ -6,6 +6,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { decodeTaskOption } from "./task";
 
 const isJson = (text: string) =>
   Option.isSome(Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(text));
@@ -33,5 +34,22 @@ export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (state
       .pipe(Effect.orElseSucceed(() => ""));
     for (const line of journalLines(raw))
       yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${line})`;
+  }
+});
+
+/** Every `tasks/<id>.json` that is a Task. */
+export const importTasks = Effect.fn("RecordsImport.tasks")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sql = yield* SqlClient.SqlClient;
+  const root = path.join(stateDir, "tasks");
+  for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+    if (!Str.endsWith(".json")(name)) continue;
+    const raw = Str.trim(
+      yield* fs.readFileString(path.join(root, name)).pipe(Effect.orElseSucceed(() => "")),
+    );
+    const task = Option.getOrUndefined(decodeTaskOption(raw));
+    if (task !== undefined)
+      yield* sql`INSERT OR REPLACE INTO collie_tasks (id, record) VALUES (${task.id}, ${raw})`;
   }
 });

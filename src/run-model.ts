@@ -11,7 +11,7 @@ import type { RunRevision, TaskView } from "./board-model";
 import { readBranchHead } from "./board";
 import { shell } from "./mr";
 import type { RunFacts } from "./runs";
-import { StoreWrites } from "./store-writes";
+import { StoreWrites, TaskWrites } from "./store-writes";
 import { workSourceOf } from "./strategies";
 
 /** A path under a Run's own directories, by its Run. */
@@ -142,6 +142,10 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const wrote = (runs: ReadonlyArray<string>) => {
     for (const run of runs) touchFacts(run);
   };
+  /** The Tasks whose records were written, which are their Runs' as much as their own rows. */
+  const wroteTasks = (tasks: ReadonlyArray<string>) => {
+    for (const task of tasks) for (const run of indexes.byTask.get(task) ?? []) touchFacts(run);
+  };
   /** The other model moved the Run. */
   const heard = (run: string, at: number, facts: boolean) => {
     if (at > (revisions.get(run) ?? 0)) revisions.set(run, at);
@@ -199,13 +203,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       return;
     }
     groups.delete(group);
-    if (group === "shared") {
-      // A Task's record is its Runs' as much as their own files are.
-      const [top, name] = Str.split(inside, "/");
-      const task = top === "tasks" ? Str.replace(/\.json$/, "")(name ?? "") : "";
-      for (const run of indexes.byTask.get(task) ?? []) moving(run);
-      return;
-    }
+    if (group === "shared") return;
     moving(Str.slice(4)(group));
     // A Run's directory or control file coming or going changes the listing above it.
     if (Str.split(inside, "/").length <= 2) groups.delete("shared");
@@ -459,6 +457,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     forget,
     heard,
     wrote,
+    wroteTasks,
     disable,
     observe,
     note,
@@ -493,6 +492,7 @@ export const runModelLayer = (dir: string, installation: string, link?: ModelLin
           Layer.succeed(RunModel, model),
           Layer.succeed(FileSystem.FileSystem, model.writing),
           Layer.succeed(StoreWrites, model.wrote),
+          Layer.succeed(TaskWrites, model.wroteTasks),
         ),
       ),
     ),

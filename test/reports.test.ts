@@ -3,6 +3,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { createServer } from "node:net";
 import { fakeHerdr } from "./support/fake-herdr-core";
+import { hostRecords } from "./support/records";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { writeConfigValue } from "../src/config";
@@ -340,7 +341,9 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                 }),
               ),
             );
-          const task = yield* readTask(first.world.state, view!.task!);
+          const task = yield* hostRecords(first.world.state, readTask(view!.task!)).pipe(
+            Effect.orDie,
+          );
           let human: string | undefined;
           let sibling: string | undefined;
           if (mode === "sibling") {

@@ -1830,12 +1830,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const taskWorkspace = Effect.fn("Agents.taskWorkspace")(function* (ask: AgentAsk) {
     const id = ask.task;
     if (id === null) return null;
-    const stateDir = host.env.stateDir;
     return yield* withTaskLock(
-      stateDir,
       id,
       Effect.gen(function* () {
-        const task = yield* readTask(stateDir, id);
+        const task = yield* readTask(id);
         if (task === null) return null;
         const open = yield* host.herdr.workspaceList();
         if (Arr.some(open, (one) => one.workspaceId === task.workspace)) return task.workspace;
@@ -1850,7 +1848,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           cwd: ask.cwd,
           label: task.label,
         });
-        yield* writeTask(stateDir, {
+        yield* writeTask({
           ...task,
           workspace: reopened.workspaceId,
           root_pane: reopened.rootTab?.paneId ?? null,
@@ -1872,15 +1870,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const rootPane = Effect.fn("Agents.rootPane")(function* (ask: AgentAsk) {
     const id = ask.task;
     if (id === null) return null;
-    const stateDir = host.env.stateDir;
     const taken = yield* withTaskLock(
-      stateDir,
       id,
       Effect.gen(function* () {
-        const task = yield* readTask(stateDir, id);
+        const task = yield* readTask(id);
         const pane = task?.root_pane ?? null;
         if (task === null || pane === null) return null;
-        yield* writeTask(stateDir, { ...task, root_pane: null });
+        yield* writeTask({ ...task, root_pane: null });
         return pane;
       }),
     );

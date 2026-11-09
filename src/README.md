@@ -119,7 +119,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `plan.ts`              | A plan directory as repositories and waves, and the refusals that stop a fan-out                                            |
 | `lock.ts`              | The pid-lock discipline every single-owner file takes, the host's own lock among them                                       |
 | `script.ts`            | Literal shell arguments and a login under `script`'s pseudo-terminal on Linux or macOS                                      |
-| `task.ts`              | A Task: the work, its herdr workspace, and which Runs belong to it                                                          |
+| `task.ts`              | A Task, a row of the host's `collie_tasks`: the work, its herdr workspace, which Runs belong to it                          |
 | `tasknames.ts`         | What a task workspace is called, from the work and the session's own live labels                                            |
 | `naming.ts`            | herdr-legal agent names vs readable tab and pane labels, and which labels Collie still owns                                 |
 | `keys.ts`              | Raw keypresses, for the text board a pane falls back to when the renderer will not start                                    |

@@ -215,7 +215,7 @@ test("the Tasks a Run can be started into are something chat can read", () =>
         cwd: project,
         herd: null,
       });
-      yield* writeTask(stateDir, task);
+      yield* writeTask(task);
       const said = yield* call("collie_workspaces");
       expect(said).toContain(task.id);
       expect(said).toContain("picker");
@@ -1966,8 +1966,8 @@ test("where work can start lists the workspaces, the Home as no checkout, open T
         cwd: project,
         herd: null,
       });
-      yield* writeTask(stateDir, open);
-      yield* writeTask(stateDir, gone);
+      yield* writeTask(open);
+      yield* writeTask(gone);
 
       const said = yield* call("collie_workspaces");
       expect(said).toContain(`- workspace ${app.workspaceId} (app): ${project}`);

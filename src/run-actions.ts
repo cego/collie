@@ -527,12 +527,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         const owned = new Set(Arr.map(listing.runs, (run) => run.task));
         const gone =
           listing.unreadable === null
-            ? Arr.filter(
-                yield* listTasks(env.stateDir),
-                (task) => !isOpen(task, open) && !owned.has(task.id),
-              )
+            ? Arr.filter(yield* listTasks, (task) => !isOpen(task, open) && !owned.has(task.id))
             : [];
-        for (const task of gone) yield* removeTask(env.stateDir, task.id);
+        for (const task of gone) yield* removeTask(task.id);
         return {
           state: "applied" as const,
           note: `forgot ${gone.length} Tasks whose workspace is gone`,

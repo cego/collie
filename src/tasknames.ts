@@ -359,7 +359,7 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
   herdr: Herdr,
   runs: ReadonlyArray<RunFacts>,
 ) {
-  const tasks = yield* listTasks(env.stateDir);
+  const tasks = yield* listTasks;
   const herds = Arr.some(tasks, (task) => task.workspace !== null)
     ? yield* liveHerds(herdr, env)
     : [];
@@ -391,13 +391,12 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
     if (isGenericTitle(named.title, first.workflow)) continue;
     const label = `${project} | ${named.title}`;
     yield* withTaskLock(
-      env.stateDir,
       task.id,
       Effect.gen(function* () {
-        const now = yield* readTask(env.stateDir, task.id);
+        const now = yield* readTask(task.id);
         if (now === null || now.label !== task.label) return;
         if (now.workspace === null || herd === undefined)
-          return yield* writeTask(env.stateDir, { ...now, label });
+          return yield* writeTask({ ...now, label });
         const listed = yield* herd.herdr.workspaceList().pipe(Effect.option);
         // Unread, a workspace a human renamed is indistinguishable from one that is gone.
         if (listed._tag === "None") return;
@@ -405,7 +404,7 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
           Arr.findFirst(listed.value, (one) => one.workspaceId === now.workspace),
         )?.label;
         if (showing !== undefined && showing !== now.label) return;
-        const current = yield* readTask(env.stateDir, task.id);
+        const current = yield* readTask(task.id);
         if (current === null || current.label !== now.label || current.workspace !== now.workspace)
           return;
         if (showing !== undefined) {
@@ -414,11 +413,11 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
             .pipe(Effect.option);
           if (renamed._tag === "None") return;
         }
-        const latest = yield* readTask(env.stateDir, task.id);
+        const latest = yield* readTask(task.id);
         if (latest === null || latest.label !== now.label || latest.workspace !== now.workspace)
           return;
-        yield* writeTask(env.stateDir, { ...latest, label });
+        yield* writeTask({ ...latest, label });
       }),
-    ).pipe(Effect.catchTag("TaskBusy", () => Effect.void));
+    );
   }
 });

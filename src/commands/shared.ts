@@ -12,13 +12,12 @@ import { Herdr, type WorkspaceInfo } from "../herdr";
 import { unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, type Failure } from "../operations";
 import { evidenceDir, runDir, type Given, type RunView } from "../engine";
-import { asks, asksRun } from "../lifecycle";
+import { asks, asksRun, hostTaskOf, hostTasks } from "../lifecycle";
 import { readAudit, type AuditLine } from "../audit";
 import { readIntent } from "../intent";
 import { FrontDoor } from "../board-model";
 import { connect } from "../host";
 import { actorName } from "../proposals";
-import { readTask, taskOfWorkspace } from "../task";
 import { attempt, mutation, type CollieError, type Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 import { isHostName } from "../gitlab-token";
@@ -57,7 +56,7 @@ export const selected = Effect.fn("collie.selected")(function* (global: Global) 
  */
 export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: Global) {
   const env = yield* currentEnv;
-  return (yield* taskOfWorkspace(env.stateDir, yield* selected(global)))?.id ?? null;
+  return (yield* hostTaskOf(env, yield* selected(global)))?.id ?? null;
 });
 
 /** Whom a Run lookup is for, built once from the command line: the Task, and the calling agent's Run. */
@@ -117,8 +116,9 @@ export const outOfReach = Effect.fn("collie.outOfReach")(function* (
   const workspace =
     view.task === null
       ? null
-      : ((yield* readTask(env.stateDir, view.task).pipe(Effect.orElseSucceed(() => null)))
-          ?.workspace ?? null);
+      : (Option.getOrUndefined(
+          Arr.findFirst(yield* hostTasks(env), (task) => task.id === view.task),
+        )?.workspace ?? null);
   const where = view.task === null ? "in no task" : `in task "${view.task}"`;
   const reach =
     workspace === null ? "no workspace reaches it." : `\`--workspace ${workspace}\` reaches it.`;

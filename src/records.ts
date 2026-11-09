@@ -6,14 +6,15 @@ import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { deliveriesLayer, type Deliveries } from "./steering";
 import { storeLayer } from "./store";
+import { tasksLayer, type Tasks } from "./task";
 
-export type Records = Deliveries;
+export type Records = Deliveries | Tasks;
 
 /**
  * Over the host's own connection, which the Store has migrated. Fresh, or a layer provided
  * inside another would reuse the outer one's connection.
  */
-export const recordsLayer = Layer.fresh(deliveriesLayer);
+export const recordsLayer = Layer.fresh(Layer.mergeAll(deliveriesLayer, tasksLayer));
 
 /**
  * `stateDir`'s own `host.db`, migrated and its record files imported as a host's first start

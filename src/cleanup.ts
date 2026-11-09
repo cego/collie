@@ -1038,12 +1038,10 @@ export const taskWorkspacesSweeper = (opts: {
           if (judged === null) return { kept: "already closed" };
           if ("keep" in judged) return { kept: judged.keep };
           const closed = yield* withTaskLock(
-            opts.stateDir,
             task.id,
             Effect.gen(function* () {
-              const now = yield* readTask(opts.stateDir, task.id);
-              if (now !== null)
-                yield* writeTask(opts.stateDir, { ...now, closed_at: yield* nowIso });
+              const now = yield* readTask(task.id);
+              if (now !== null) yield* writeTask({ ...now, closed_at: yield* nowIso });
             }),
           ).pipe(Effect.result);
           return closed._tag === "Failure" ? { kept: "its Task is busy" } : { freed: 0 };
@@ -1734,7 +1732,6 @@ export const retentionSweeper = (opts: {
     remove: (item) =>
       Effect.suspend(() =>
         withTaskLock(
-          opts.stateDir,
           item.target,
           Effect.gen(function* () {
             const facts = yield* opts.facts;
@@ -1778,7 +1775,7 @@ export const retentionSweeper = (opts: {
               return {
                 kept: "a Run of it was never accepted by the engine",
               };
-            yield* removeTask(opts.stateDir, task.id).pipe(Effect.ignore);
+            yield* removeTask(task.id).pipe(Effect.ignore);
             return {
               freed,
             };

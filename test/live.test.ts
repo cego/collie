@@ -269,7 +269,7 @@ test("an undelivered report is read for its Run and never delivered by reading i
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const { stateDir, ledgers } = yield* rig();
+      const { stateDir } = yield* rig();
       const file = yield* pendingReportsPath(stateDir, "herd1", "r1");
       yield* fs.makeDirectory(path.dirname(file), { recursive: true });
       yield* fs.writeFileString(

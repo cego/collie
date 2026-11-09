@@ -79,7 +79,6 @@ import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from 
 import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
 import { TurnScheduler } from "./turns";
 import { Foreground, foregroundLayer, servedNow } from "./foreground";
-import * as References from "effect/References";
 import { tracingLayer } from "./tracing";
 import * as Scheduler from "effect/Scheduler";
 import {
@@ -284,7 +283,7 @@ import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { retitleGenericTasks } from "./tasknames";
 import { VerifySpecSchema } from "./verify-spec";
 import { everyRegistered } from "./registry";
-import { listTasks, readTask } from "./task";
+import { listTasks, readTask, taskKeptIn, TASKS, TaskSchema } from "./task";
 import { epochMs, nowIso } from "./time";
 import { appendLog } from "./oversight";
 import { VERIFYING_FILE, verifyingIn } from "./verify";
@@ -530,6 +529,8 @@ export const HostRpcs = RpcGroup.make(
   }),
   /** The Runs delivered to through an incarnation a human has taken over. */
   Rpc.make("overridden", { success: Schema.Array(Schema.String) }),
+  /** This Machine's Tasks, newest first. */
+  Rpc.make("tasks", { success: Schema.Array(TaskSchema) }),
   Rpc.make("runs", {
     payload: { task: Schema.NullOr(Schema.String) },
     success: Schema.Array(RunView),
@@ -848,6 +849,7 @@ const handlers = (
             return yield* deliveriesOf(runId);
           }),
         overridden: () => Effect.map(overriddenRuns, (runs) => [...runs]),
+        tasks: () => listTasks,
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
@@ -1199,7 +1201,7 @@ const hostBoard = (dir: string) =>
         const sessions = Arr.map(herds, (session) => session.herdr);
         const build = board.views(herds);
         const all = yield* board.runs;
-        const tasks = yield* listTasks(env.stateDir);
+        const tasks = yield* listTasks;
         return [
           // Before the worktrees: a checkout goes only once its Task's workspace has closed.
           taskWorkspacesSweeper({
@@ -1259,7 +1261,7 @@ const hostBoard = (dir: string) =>
             sessions,
             // Every read or none: a Task judged without its Runs would look forgettable.
             facts: Effect.all({
-              tasks: listTasks(env.stateDir),
+              tasks: listTasks,
               views: board.views(herds),
               runs: board.runs,
             }).pipe(
@@ -1388,7 +1390,7 @@ const sharedBoardLayer = (dir: string) =>
           ),
           // A signal alone: the rows are read by the build, not once more per write.
           store.watching(Effect.void),
-          reactivity.stream([DELIVERIES], Effect.void),
+          reactivity.stream([DELIVERIES, TASKS], Effect.void),
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
@@ -2087,6 +2089,7 @@ const frontDoorHandlers = (
             root,
             options,
             task,
+            here,
             parent,
             verify,
             attachments,
@@ -2111,8 +2114,16 @@ const frontDoorHandlers = (
                 Effect.flatMap((placed) =>
                   "error" in placed
                     ? Effect.fail(new HostRefused({ reason: `${REFUSED_INPUT}: ${placed.error}` }))
-                    : registry.resolve({ project: placed.project, id }).pipe(
-                        Effect.flatMap((generation) =>
+                    : Effect.all([
+                        registry.resolve({ project: placed.project, id }),
+                        here === undefined
+                          ? Effect.succeed(task)
+                          : taskKeptIn(here).pipe(
+                              Effect.map((kept) => kept.id),
+                              Effect.provideContext(bun),
+                            ),
+                      ]).pipe(
+                        Effect.flatMap(([generation, task]) =>
                           registry.start({
                             generation,
                             started: startedOf(
@@ -3353,7 +3364,7 @@ const frontDoorHandlers = (
           plainly(
             Effect.gen(function* () {
               const view = yield* known(runId);
-              const task = view.task === null ? null : yield* readTask(env.stateDir, view.task);
+              const task = view.task === null ? null : yield* readTask(view.task);
               const agents = Arr.filter(
                 Arr.map(
                   Arr.filter(
@@ -3401,7 +3412,7 @@ const frontDoorHandlers = (
             const view = yield* registry.view(runId);
             if (view === null)
               return { ok: false, code: "run_not_found", human: `No Run "${runId}".`, data: {} };
-            const task = view.task === null ? null : yield* readTask(env.stateDir, view.task);
+            const task = view.task === null ? null : yield* readTask(view.task);
             // Only an answer is kept against its request: a failure is retried under the same one.
             return yield* once(
               trail(runId),

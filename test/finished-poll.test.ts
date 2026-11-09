@@ -280,7 +280,7 @@ test(
           const registry = yield* Registry;
           const store = yield* Store;
           yield* rig.addWorkspace("wT", "Project | Picker", rig.projectDir);
-          yield* writeTask(dir(), {
+          yield* writeTask({
             id: "task-1",
             workspace: "wT",
             label: "Project | Picker",
@@ -391,7 +391,7 @@ test(
       hosted(
         Effect.gen(function* () {
           yield* rig.addWorkspace("wT", "Project | Picker", rig.projectDir);
-          yield* writeTask(dir(), {
+          yield* writeTask({
             id: "task-1",
             workspace: "wT",
             label: "Project | Picker",

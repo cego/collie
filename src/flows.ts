@@ -48,6 +48,8 @@ import {
   followRunDetail,
   runDetailNow,
   asks,
+  hostTaskOf,
+  hostTasks,
   type DetailKey,
   invokeOffer,
   type BoardRead,
@@ -71,7 +73,7 @@ import type { CompactionSettings } from "./compaction";
 import { statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
-import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
+import type { TaskChoice, TaskRecord } from "./task";
 import { newRequestId } from "./operations";
 import { typedPaths } from "./attachments";
 import {
@@ -169,7 +171,7 @@ export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
   env: PluginEnv,
   prompts: FlowPrompts,
 ) {
-  const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
+  const here = yield* hostTaskOf(env, env.workspaceId);
   const task =
     here === null ? yield* pickTask(env, prompts) : ({ mode: "continue", task: here } as const);
   if (task === null) return 0;
@@ -184,7 +186,7 @@ const HERE = "here";
  * work's Task rather than given a workspace of its own. Null is the human backing out.
  */
 const pickTask = Effect.fn("Flows.pickTask")(function* (env: PluginEnv, prompts: FlowPrompts) {
-  const tasks = yield* listTasks(env.stateDir);
+  const tasks = yield* hostTasks(env);
   const kept =
     env.workspaceId === null
       ? []
@@ -1054,7 +1056,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         (run.task === null
           ? null
           : (Option.getOrUndefined(
-              Arr.findFirst(yield* listTasks(env.stateDir), (task) => task.id === run.task),
+              Arr.findFirst(yield* hostTasks(env), (task) => task.id === run.task),
             )?.workspace ?? null));
       if (!workspace) return `${jump.label} has no tab to jump to`;
       return yield* went(session.herdr.workspaceFocus(workspace));
@@ -1099,7 +1101,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         (run.task === null
           ? null
           : (Option.getOrUndefined(
-              Arr.findFirst(yield* listTasks(env.stateDir), (task) => task.id === run.task),
+              Arr.findFirst(yield* hostTasks(env), (task) => task.id === run.task),
             )?.workspace ?? null));
       // The same state directory as this board's, whatever the pane's shell would default to.
       const follow = yield* Effect.orDie(
@@ -1610,7 +1612,7 @@ type RunsOf = (
 const scan = Effect.fn("Flows.scan")(function* (env: PluginEnv, runsOf: RunsOf = listRuns) {
   return {
     runs: yield* runsOf(env),
-    tasks: yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => [])),
+    tasks: yield* hostTasks(env),
     registered: yield* everyRegistered(env.stateDir),
   } satisfies Scanned;
 });

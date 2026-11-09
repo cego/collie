@@ -82,7 +82,7 @@ import { NEEDS_INPUT, REFUSED_INPUT, runDir, type Given, type RunView } from "./
 import type { OfferView } from "./board-model";
 import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
 import { voiceOf, type Asker } from "./proposals";
-import type { TaskChoice } from "./task";
+import type { TaskChoice, TaskRecord } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
 import { defaultsPath, readDefaults, readIntent, type Change, type IntentSeed } from "./intent";
@@ -414,6 +414,22 @@ export const asks = <A>(
     ),
   );
 
+/** This Machine's Tasks, newest first, as its host keeps them; none where it cannot be asked. */
+export const hostTasks = (
+  env: PluginEnv,
+): Effect.Effect<ReadonlyArray<TaskRecord>, never, Client> =>
+  asks({ ...env, machine: undefined }, (client) => client.tasks()).pipe(
+    Effect.map((answered) => (answered.ok ? answered.value : [])),
+  );
+
+/** The Task this Machine's host keeps in that workspace, which is what "the current Task" means. */
+export const hostTaskOf = (env: PluginEnv, workspace: string | null) =>
+  workspace === null
+    ? Effect.succeed(null)
+    : Effect.map(hostTasks(env), (tasks) =>
+        Option.getOrNull(Arr.findFirst(tasks, (task) => task.workspace === workspace)),
+      );
+
 /**
  * One question about a Run, asked of the Machine that has it: this host first, then each
  * peer, then each machine herdr lists that is not paired yet, paired on the way. A Run id
@@ -546,6 +562,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
         options: options.options,
         task: placed.task?.id,
         taskLabel: placed.label ?? undefined,
+        here: placed.here ?? undefined,
         parent: options.parent ?? undefined,
         intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
         verify: options.verify,

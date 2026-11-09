@@ -127,6 +127,14 @@ SQLite file. The registry in `engine.ts` loads a module into a generation of its
 value came from, its options, its decisions and its receipts. The request id is the claim:
 the same request twice is one Run, and a Run recorded and not yet handed to the engine is
 handed over when the host starts again ([ADR-0017](adr/0017-one-request-is-one-run.md)).
+A Task is a row of `collie_tasks` in the same file, looked up by id or by workspace and
+written only by the host
+([ADR-draft-collies-own-records-live-in-the-hosts-database](adr/draft-collies-own-records-live-in-the-hosts-database.md)):
+a start with `--here` sends the workspace it was given from, and the host keeps the Run in
+the Task already kept there or makes one. Other processes list Tasks through the host's
+`tasks` request. Each write tells the Run model which Task moved and invalidates the Tasks'
+Reactivity key, which the board follows. The first host on a state directory imports every
+`tasks/<id>.json` once and leaves the files in place.
 A starting host registers every saved generation before a Run it recovers looks one up, so a
 parent resumed in the swap reads a child of any generation.
 

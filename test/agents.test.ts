@@ -35,7 +35,7 @@ import {
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
-import { fastForward, runEffect as runLive } from "./support/effect";
+import { fastForward, memoryRecords, runEffect as runLive } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import {
   Agents,
@@ -77,7 +77,7 @@ import { deliveredTo, ledgerOf, recordsAt } from "./support/records";
 import { readLaunches } from "../src/launches";
 import { Store } from "../src/store";
 import type { AuditLine } from "../src/audit";
-import { readTask, withTaskLock, writeTask } from "../src/task";
+import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { Herdr, HerdrError } from "../src/herdr";
@@ -205,7 +205,7 @@ test(
         yield* rig.startSocket();
         yield* rig.queueOutputs([null]);
         yield* rig.addWorkspace("wT", "Project | Own task", rig.projectDir);
-        yield* writeTask(dir, {
+        yield* writeTask({
           id: "task-own",
           workspace: "wT",
           label: "Project | Own task",
@@ -248,7 +248,7 @@ test(
         );
         expect(tab?.argv).toEqual(expect.arrayContaining(["--workspace", "wT"]));
         expect(launched._tag).toBe("Success");
-      }).pipe(Effect.scoped),
+      }).pipe(Effect.provide(recordsAt(dir)), Effect.scoped),
     ),
   30_000,
 );
@@ -5139,7 +5139,7 @@ const sweeper = agentName("r1", "sweep", null, 1);
 const inTask = (runId: string) =>
   Effect.gen(function* () {
     yield* rig.addWorkspace("wT", "Project | Work", rig.projectDir);
-    yield* writeTask(hostOf().env.stateDir, {
+    yield* writeTask({
       id: "task-1",
       workspace: "wT",
       label: "Project | Work",
@@ -5235,7 +5235,7 @@ test(
         expect(Arr.filter(yield* rig.cmds(), closing)).toEqual([]);
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toEqual([]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
   120_000,
 );
@@ -5257,7 +5257,7 @@ test(
         // The first item was sent once, before the stop, and collected after it.
         expect(sent(yield* rig.calls(), "01-api.prompt.md")).toBe(1);
 
-        const task = yield* readTask(hostOf().env.stateDir, "task-1");
+        const task = yield* readTask("task-1");
         const reopened = task?.workspace ?? "";
         expect(reopened).not.toBe("wT");
         const create = Option.getOrUndefined(
@@ -5278,7 +5278,7 @@ test(
           Option.getOrUndefined(Arr.findFirst(registered, (entry) => entry.agent === sweeper))
             ?.workspaceId,
         ).toBe(reopened);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
   120_000,
 );
@@ -5318,7 +5318,7 @@ test(
           [],
         );
         expect(Arr.filter(cmds, (cmd) => cmd === "workspace create")).toEqual([]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
   120_000,
 );
@@ -5436,7 +5436,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
       yield* rig.addWorkspace("wH", "Offer banner, by hand", rig.projectDir);
       yield* rig.addWorkspace("wN", "Collie | Passkey bridge race", rig.projectDir);
       const kept = (id: string, workspace: string, label: string) =>
-        writeTask(env.stateDir, {
+        writeTask({
           id,
           workspace,
           label,
@@ -5474,8 +5474,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
 
       yield* retitleGenericTasks(env, new Herdr(env), runs);
 
-      const label = (id: string) =>
-        readTask(env.stateDir, id).pipe(Effect.map((task) => task?.label));
+      const label = (id: string) => readTask(id).pipe(Effect.map((task) => task?.label));
       const live = new Map(
         Arr.map(yield* new Herdr(env).workspaceList(), (one) => [one.workspaceId, one.label]),
       );
@@ -5487,7 +5486,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
       expect(live.get("wH")).toBe("Offer banner, by hand");
       expect(yield* label("task-n")).toBe("Collie | Passkey bridge race");
       expect(live.get("wN")).toBe("Collie | Passkey bridge race");
-    }),
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test("a Task on a core Machine is renamed in its record alone, and core is asked nothing", () =>
@@ -5498,7 +5497,7 @@ test("a Task on a core Machine is renamed in its record alone, and core is asked
       yield* fs.makeDirectory(rig.userDir, { recursive: true });
       yield* fs.writeFileString(`${rig.userDir}/config.json`, '{ "terminal_backend": "core" }');
       const env = rig.pluginEnv({ HERDR_SOCKET_PATH: "" });
-      yield* writeTask(env.stateDir, {
+      yield* writeTask({
         id: "task-k",
         workspace: null,
         label: "Collie | Plan new work",
@@ -5511,7 +5510,7 @@ test("a Task on a core Machine is renamed in its record alone, and core is asked
         runFacts({ id: "r-k", workflow: "plan", task: "task-k", settled: { inputs: goal } }),
       ]);
 
-      expect(yield* readTask(env.stateDir, "task-k")).toEqual({
+      expect(yield* readTask("task-k")).toEqual({
         id: "task-k",
         workspace: null,
         label: "Collie | Design Tune-up performance workflow",
@@ -5519,7 +5518,7 @@ test("a Task on a core Machine is renamed in its record alone, and core is asked
         created_at: "2026-10-26T00:00:00.000Z",
       });
       expect(yield* rig.calls()).toEqual([]);
-    }),
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test("a Task's workspace is looked for in its own Herd, where a workspace of the same id is another's", () =>
@@ -5543,7 +5542,7 @@ test("a Task's workspace is looked for in its own Herd, where a workspace of the
         rig.socketPath,
       );
       yield* rig.addWorkspace("w1", "Offer banner, by hand", rig.projectDir, false, other);
-      yield* writeTask(env.stateDir, {
+      yield* writeTask({
         id: "task-o",
         workspace: "w1",
         label: "Collie | Plan new work",
@@ -5557,10 +5556,10 @@ test("a Task's workspace is looked for in its own Herd, where a workspace of the
         runFacts({ id: "r-o", workflow: "plan", task: "task-o", settled: { inputs: goal } }),
       ]);
 
-      expect((yield* readTask(env.stateDir, "task-o"))?.label).toBe("Collie | Plan new work");
+      expect((yield* readTask("task-o"))?.label).toBe("Collie | Plan new work");
       const main = yield* new Herdr(env).workspaceList();
       expect(Arr.map(main, (one) => one.label)).toEqual(["Collie | Plan new work"]);
-    }),
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test.each(["listing", "renaming"] as const)(
@@ -5578,7 +5577,7 @@ test.each(["listing", "renaming"] as const)(
         };
         const edited = { ...task, label: "Collie | Renamed by hand", root_pane: "human-pane" };
         yield* rig.addWorkspace(task.workspace, task.label, task.cwd);
-        yield* writeTask(env.stateDir, task);
+        yield* writeTask(task);
         class EditingHerdr extends FakeHerdr {
           override sessionList() {
             return Effect.succeed([]);
@@ -5589,7 +5588,7 @@ test.each(["listing", "renaming"] as const)(
               .pipe(
                 Effect.tap(() =>
                   during === "listing"
-                    ? writeTask(env.stateDir, edited).pipe(Effect.orDie)
+                    ? writeTask(edited).pipe(Effect.provide(recordsAt(dir)), Effect.orDie)
                     : Effect.void,
                 ),
               );
@@ -5600,7 +5599,7 @@ test.each(["listing", "renaming"] as const)(
               .pipe(
                 Effect.tap(() =>
                   during === "renaming"
-                    ? writeTask(env.stateDir, edited).pipe(Effect.orDie)
+                    ? writeTask(edited).pipe(Effect.provide(recordsAt(dir)), Effect.orDie)
                     : Effect.void,
                 ),
               );
@@ -5614,10 +5613,10 @@ test.each(["listing", "renaming"] as const)(
             settled: { inputs: { goal: "Design the banner" } },
           }),
         ]);
-        expect(yield* readTask(env.stateDir, task.id)).toEqual(edited);
+        expect(yield* readTask(task.id)).toEqual(edited);
         if (during === "listing")
           expect((yield* new FakeHerdr(env).workspaceList())[0]?.label).toBe(task.label);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
 );
 
@@ -5627,7 +5626,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const env = rig.pluginEnv();
-        yield* writeTask(env.stateDir, {
+        yield* writeTask({
           id: "task-p",
           workspace: "wGone",
           label: "Collie | Plan new work",
@@ -5642,19 +5641,19 @@ test(
             settled: { inputs: { goal: "Design Tune-up performance workflow" } },
           }),
         ];
-        const label = readTask(env.stateDir, "task-p").pipe(Effect.map((task) => task?.label));
+        const label = readTask("task-p").pipe(Effect.map((task) => task?.label));
 
-        yield* withTaskLock(env.stateDir, "task-p", retitleGenericTasks(env, new Herdr(env), runs));
+        yield* withTaskLock("task-p", retitleGenericTasks(env, new Herdr(env), runs));
         expect(yield* label).toBe("Collie | Plan new work");
 
         yield* retitleGenericTasks(env, new Herdr(env), runs);
         expect(yield* label).toBe("Collie | Design Tune-up performance workflow");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
   30_000,
 );
 
-test("a start kept here is the workspace it was started from: its Task, or a new one kept there", () =>
+test("a start kept here is the workspace it was started from: its Task, or a new one the host keeps there", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.addWorkspace("wH", "Monorepo | Mine", rig.projectDir);
@@ -5662,22 +5661,25 @@ test("a start kept here is the workspace it was started from: its Task, or a new
       const about = { workflow: "implement", inputs: { plan: "FRO-343" } };
 
       const made = yield* taskFor(env, { mode: "here" }, about);
-      const task = made._tag === "Ok" ? made.task : null;
-      expect(task).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
+      const here = made._tag === "Ok" ? made.here : null;
+      expect(here).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
       // Nothing to open: the Run goes where whoever started it is.
       expect(made._tag === "Ok" ? made.label : "").toBeNull();
       expect(yield* rig.cmds()).not.toContain("workspace create");
+      // Only the host writes a Task.
+      expect(yield* listTasks).toEqual([]);
 
+      const task = yield* taskKeptIn(here!);
+      expect(task).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
       // Kept there, so a second start here is the same Task rather than another one.
-      const again = yield* taskFor(env, { mode: "here" }, about);
-      expect(again._tag === "Ok" && again.task?.id).toBe(task?.id);
-      expect(yield* readTask(env.stateDir, task!.id)).toEqual(task);
+      expect((yield* taskKeptIn(here!)).id).toBe(task.id);
+      expect(yield* readTask(task.id)).toEqual(task);
 
       const outside = yield* taskFor({ ...env, workspaceId: null }, { mode: "here" }, about);
       expect(
         outside._tag === "Rejected" && outside.result.ok === false && outside.result.error.code,
       ).toBe("workspace_required");
-    }),
+    }).pipe(Effect.provide(memoryRecords)),
   ));
 
 const encodeJson = flow(

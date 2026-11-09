@@ -36,7 +36,7 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { AuditLine } from "./audit";
-import { importLedgers } from "./records-import";
+import { importLedgers, importTasks } from "./records-import";
 import { StoreWrites } from "./store-writes";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
@@ -348,10 +348,11 @@ const RUNS = ["collie/runs"];
 const field = (name: string) =>
   `CASE WHEN json_valid(line) THEN json_extract(line, '$.${name}') END`;
 
-type ImportError = Effect.Error<ReturnType<typeof importLedgers>>;
+type ImportError = Effect.Error<ReturnType<typeof importLedgers | typeof importTasks>>;
 
 const migrations = (imports: {
   readonly ledgers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly tasks: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -452,6 +453,19 @@ const migrations = (imports: {
     yield* sql`CREATE INDEX collie_deliveries_human ON collie_deliveries (id, seq) WHERE human = 1`;
     yield* imports.ledgers;
   }),
+  "13_tasks": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_tasks (
+        id TEXT PRIMARY KEY,
+        record TEXT NOT NULL,
+        workspace TEXT AS (json_extract(record, '$.workspace')),
+        created_at TEXT AS (json_extract(record, '$.created_at'))
+      )
+    `;
+    yield* sql`CREATE INDEX collie_tasks_workspace ON collie_tasks (workspace)`;
+    yield* imports.tasks;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -480,7 +494,9 @@ function makeStore(
     // Before anything reads a table: a database that will not migrate is a broken host,
     // not a request that failed.
     yield* SqliteMigrator.run({
-      loader: Migrator.fromRecord(migrations({ ledgers: imported(importLedgers) })),
+      loader: Migrator.fromRecord(
+        migrations({ ledgers: imported(importLedgers), tasks: imported(importTasks) }),
+      ),
       table: "collie_migrations",
     }).pipe(Effect.orDie);
     // SQLite moves `data_version` only for another connection's commits.

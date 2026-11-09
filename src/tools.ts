@@ -63,12 +63,14 @@ import {
   catalogueReadings,
   connectionReadings,
   type Door,
+  hostTaskOf,
+  hostTasks,
 } from "./lifecycle";
 import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
 import { peersOf } from "./peers";
 import { cleanupLines } from "./cleanup";
-import { isOpen, taskOfWorkspace } from "./task";
+import { isOpen } from "./task";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
@@ -89,7 +91,6 @@ import { standingDirectionContext } from "./standing-direction";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeKey } from "./registry";
 import { readSelection, selectionPath } from "./selection";
-import { listTasks } from "./task";
 import { isString, type JsonObject } from "./schema";
 import { scheduleLines } from "./schedule-model";
 import { checkModule, readModule, type Checked as ModuleCheck, type Described } from "./authoring";
@@ -594,7 +595,7 @@ const holdsFor = Effect.fn("Tools.holdsFor")(function* (
   workspace: string,
   reason: string,
 ) {
-  const task = yield* taskOfWorkspace(env.stateDir, workspace);
+  const task = yield* hostTaskOf(env, workspace);
   if (task === null) return [];
   const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));
   return Arr.map(runs, (view) => ({ kind: "hold" as const, run: view.runId, reason }));
@@ -617,10 +618,7 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   // The Tasks too: a Task with no Run yet is in no Herd listing, so this is the only
   // place a conversation can find out the work a new Run could join.
   const open = new Set(Arr.map(all, (workspace) => workspace.workspaceId));
-  const tasks = Arr.filter(
-    yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => [])),
-    (task) => isOpen(task, open),
-  );
+  const tasks = Arr.filter(yield* hostTasks(env), (task) => isOpen(task, open));
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return Arr.join(
     [
