@@ -8,6 +8,7 @@ import { Effect, FileSystem, Option, Path, PlatformError, Schema } from "effect"
 import * as SqlClient from "effect/sql/SqlClient";
 import { decodeProposalLineOption } from "./proposals";
 import { decodeRegisterOption, encodeAgentEntry } from "./registry";
+import { LEDGER_FILE } from "./steering";
 import { decodeTaskOption } from "./task";
 
 /**
@@ -36,7 +37,7 @@ const journalLines = (raw: string) => {
 };
 
 /**
- * Every `agents/<incarnation key>/deliveries.jsonl`. A line that cannot be read is kept as it
+ * Every agent's delivery ledger file, `agents/<incarnation key>/`. A line that cannot be read is kept as it
  * is, so the ledger still counts it and still blocks the work it was about.
  */
 export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (stateDir: string) {
@@ -46,9 +47,7 @@ export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (state
   const root = path.join(stateDir, "agents");
   for (const ledger of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
     if (!/^[0-9a-f]+$/.test(ledger)) continue;
-    const raw = yield* fs
-      .readFileString(path.join(root, ledger, "deliveries.jsonl"))
-      .pipe(orMissing(""));
+    const raw = yield* fs.readFileString(path.join(root, ledger, LEDGER_FILE)).pipe(orMissing(""));
     for (const line of journalLines(raw))
       yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${line})`;
   }
